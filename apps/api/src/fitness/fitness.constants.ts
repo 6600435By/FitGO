@@ -1,0 +1,1 @@
+export const FITNESS_PROVIDER = 'FITNESS_PROVIDER';

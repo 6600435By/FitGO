@@ -1,0 +1,276 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CLIENT
+  TRAINER
+  ADMIN
+}
+
+enum NotificationType {
+  BOOKING_REMINDER
+  MEMBERSHIP_EXPIRING
+  INACTIVITY
+  MILESTONE
+  CHALLENGE
+  GENERAL
+}
+
+model Club {
+  id           String   @id @default(cuid())
+  name         String
+  slug         String   @unique
+  address      String?
+  externalId   String?  @unique
+  currency     String   @default("BYN")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  users                User[]
+  oneCConfig           Club1CConfig?
+  dailyReports         DailyReport[]
+  theme                ClubTheme?
+  challenges           Challenge[]
+  referralRewardDesc   String   @default("Скидка 10% на следующий абонемент")
+}
+
+model ClubTheme {
+  id           String  @id @default(cuid())
+  clubId       String  @unique
+  logoUrl      String?
+  primaryColor String  @default("#14b88a")
+  customDomain String?
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+}
+
+model Club1CConfig {
+  id        String   @id @default(cuid())
+  clubId    String   @unique
+  baseUrl   String
+  apiKey    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id         String   @id @default(cuid())
+  clubId     String
+  email      String
+  password   String
+  phone      String?
+  firstName  String
+  lastName   String
+  externalId String?
+  referralCode String? @unique
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  club                 Club                   @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  roles                UserRole[]
+  notifications        Notification[]
+  pushSubscriptions    PushSubscription[]
+  notificationPrefs    NotificationPreference?
+  badges               UserBadge[]
+  gamificationPoints   Int                    @default(0)
+  referredById         String?
+  referrals            Referral[]             @relation("Referrer")
+  referredBy           Referral?              @relation("Referred")
+  trainerNotes         TrainerNote[]          @relation("TrainerNotes")
+  clientNotes          TrainerNote[]          @relation("ClientNotes")
+  clientGoals          ClientGoal[]           @relation("ClientGoals")
+  trainerGoals         ClientGoal[]           @relation("TrainerGoals")
+  measurements         ClientMeasurement[]    @relation("ClientMeasurements")
+  recordedMeasurements ClientMeasurement[]    @relation("RecordedMeasurements")
+  challengeEntries     ChallengeEntry[]
+  wearableSyncs        WearableSync[]
+
+  @@unique([clubId, email])
+  @@index([externalId])
+}
+
+model UserRole {
+  id     String @id @default(cuid())
+  userId String
+  role   Role
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+}
+
+model DailyReport {
+  id        String   @id @default(cuid())
+  clubId    String
+  date      DateTime @db.Date
+  revenue   Float
+  problems  String?
+  ideas     String?
+  createdBy String
+  createdAt DateTime @default(now())
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, date])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, endpoint])
+}
+
+model NotificationPreference {
+  id                  String  @id @default(cuid())
+  userId              String  @unique
+  bookingReminders    Boolean @default(true)
+  membershipAlerts    Boolean @default(true)
+  inactivityAlerts    Boolean @default(true)
+  milestoneAlerts     Boolean @default(true)
+  marketingAlerts     Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Badge {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String
+  threshold   Int?
+
+  users UserBadge[]
+}
+
+model UserBadge {
+  id       String   @id @default(cuid())
+  userId   String
+  badgeId  String
+  earnedAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge Badge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, badgeId])
+}
+
+model Challenge {
+  id          String   @id @default(cuid())
+  clubId      String
+  title       String
+  description String?
+  targetVisits Int
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  club    Club             @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  entries ChallengeEntry[]
+}
+
+model ChallengeEntry {
+  id          String @id @default(cuid())
+  challengeId String
+  userId      String
+  visits      Int    @default(0)
+
+  challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([challengeId, userId])
+}
+
+model Referral {
+  id           String   @id @default(cuid())
+  referrerId   String
+  referredId   String   @unique
+  createdAt    DateTime @default(now())
+
+  referrer User @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  referred User @relation("Referred", fields: [referredId], references: [id], onDelete: Cascade)
+}
+
+model TrainerNote {
+  id        String   @id @default(cuid())
+  trainerId String
+  clientId  String
+  content   String
+  createdAt DateTime @default(now())
+
+  trainer User @relation("TrainerNotes", fields: [trainerId], references: [id], onDelete: Cascade)
+  client  User @relation("ClientNotes", fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+}
+
+model ClientGoal {
+  id        String   @id @default(cuid())
+  trainerId String
+  clientId  String
+  title     String
+  target    String?
+  progress  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  trainer User @relation("TrainerGoals", fields: [trainerId], references: [id], onDelete: Cascade)
+  client  User @relation("ClientGoals", fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+}
+
+model ClientMeasurement {
+  id         String   @id @default(cuid())
+  clientId   String
+  trainerId  String
+  weight     Float?
+  notes      String?
+  recordedAt DateTime @default(now())
+
+  client  User @relation("ClientMeasurements", fields: [clientId], references: [id], onDelete: Cascade)
+  trainer User @relation("RecordedMeasurements", fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+}
+
+model WearableSync {
+  id              String   @id @default(cuid())
+  userId          String
+  provider        String
+  visitsImported  Int      @default(0)
+  lastSyncAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+}
