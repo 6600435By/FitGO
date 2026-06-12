@@ -158,9 +158,26 @@ export class TrainerService {
   }
 
   async sendClientMessage(user: JwtPayload, clientId: string, message: string) {
-    return this.notifications.sendReminderToClient(
+    const client = await this.prisma.user.findFirst({
+      where: {
+        id: clientId,
+        clubId: user.clubId,
+        roles: { some: { role: Role.CLIENT } },
+      },
+    });
+    if (!client) throw new NotFoundException('Клиент не найден');
+
+    const trainer = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+    });
+    const trainerName = trainer
+      ? `${trainer.firstName} ${trainer.lastName}`.trim()
+      : 'тренера';
+
+    return this.notifications.sendDirectMessage(
       clientId,
-      `Сообщение от тренера: ${message}`,
+      `Сообщение от ${trainerName}`,
+      message,
     );
   }
 

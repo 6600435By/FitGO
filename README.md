@@ -46,6 +46,33 @@ pnpm dev
 
 ## Переключение на реальный 1С
 
+### Forma API v3 (виджет planvueplugin)
+
+В `apps/api/.env`:
+
+```env
+FITNESS_PROVIDER=forma
+FORMA_BASE_URL=https://your-club-server:444/forma/hs/api/v3
+FORMA_API_KEY=your-api-key
+FORMA_BASIC_AUTH=base64-credentials-without-Basic-prefix
+FORMA_DEFAULT_PASSWORD=club-client-password
+```
+
+`Club.externalId` в БД должен содержать UUID клуба из 1С (`club_id`).
+
+### WordPress proxy (рекомендуется, если 1С доступна только с сервера сайта)
+
+Тот же путь, что у виджета `planvueplugin` — через `admin-ajax.php`:
+
+```env
+FITNESS_PROVIDER=forma-wp
+FORMA_WP_AJAX_URL=https://your-club-site.com/wp-admin/admin-ajax.php
+```
+
+FitGO API вызывает те же action (`getGroups`, `authClient`, `clientToClass`, `clientFromClass`), что и виджет на WordPress. Credentials 1С остаются в PHP-плагине на сервере клуба.
+
+### Generic REST API
+
 В `apps/api/.env`:
 
 ```env
@@ -53,6 +80,10 @@ FITNESS_PROVIDER=1c
 ONEC_BASE_URL=https://your-club-1c.example.com
 ONEC_API_KEY=your-api-key
 ```
+
+## Персональные тренировки
+
+Запись к тренерам FitGO (без 1С): тренер заполняет график в `/trainer/work-schedule`, клиент записывается в `/client/personal-training`.
 
 ## Структура
 

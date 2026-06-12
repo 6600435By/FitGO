@@ -6,6 +6,7 @@ import { ClientModule } from './client/client.module';
 import { EngagementModule } from './engagement/engagement.module';
 import { FitnessModule } from './fitness/fitness.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { PersonalTrainingModule } from './personal-training/personal-training.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TrainerModule } from './trainer/trainer.module';
 
@@ -20,6 +21,7 @@ import { TrainerModule } from './trainer/trainer.module';
     AdminModule,
     NotificationsModule,
     EngagementModule,
+    PersonalTrainingModule,
   ],
 })
 export class AppModule {}

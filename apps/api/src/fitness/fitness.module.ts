@@ -14,10 +14,24 @@ import { FitnessService } from './fitness.service';
       provide: FITNESS_PROVIDER,
       inject: [ConfigService],
       useFactory: (config: ConfigService): IFitnessClubProvider => {
-        const type = config.get<'mock' | '1c'>('FITNESS_PROVIDER', 'mock');
+        const type = config.get<'mock' | '1c' | 'forma' | 'forma-wp'>(
+          'FITNESS_PROVIDER',
+          'mock',
+        );
         return createFitnessProvider(type, {
-          baseUrl: config.get('ONEC_BASE_URL', ''),
-          apiKey: config.get('ONEC_API_KEY', ''),
+          oneC: {
+            baseUrl: config.get('ONEC_BASE_URL', ''),
+            apiKey: config.get('ONEC_API_KEY', ''),
+          },
+          forma: {
+            baseUrl: config.get('FORMA_BASE_URL', ''),
+            apiKey: config.get('FORMA_API_KEY', ''),
+            basicAuth: config.get('FORMA_BASIC_AUTH', ''),
+            defaultPassword: config.get('FORMA_DEFAULT_PASSWORD', ''),
+          },
+          formaWordPress: {
+            ajaxUrl: config.get('FORMA_WP_AJAX_URL', ''),
+          },
         });
       },
     },

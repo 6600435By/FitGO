@@ -5,7 +5,7 @@ import {
   MOCK_SCHEDULE,
   MOCK_USERS,
 } from './fixtures';
-import type { IFitnessClubProvider, ScheduleFilters, VisitPeriod } from './types';
+import type { IFitnessClubProvider, ScheduleFilters, VisitPeriod, BookingContext } from './types';
 
 export class Mock1CProvider implements IFitnessClubProvider {
   private bookings = new Set<string>();
@@ -78,7 +78,7 @@ export class Mock1CProvider implements IFitnessClubProvider {
     return slots;
   }
 
-  async bookSession(externalId: string, sessionId: string) {
+  async bookSession(externalId: string, sessionId: string, _context?: BookingContext) {
     const slot = MOCK_SCHEDULE.find((s) => s.id === sessionId);
     if (!slot) {
       return { success: false, message: 'Занятие не найдено' };
@@ -100,7 +100,7 @@ export class Mock1CProvider implements IFitnessClubProvider {
     return { success: true };
   }
 
-  async getBookings(externalId: string): Promise<Booking[]> {
+  async getBookings(externalId: string, _context?: BookingContext): Promise<Booking[]> {
     const bookings: Booking[] = [];
     for (const key of this.bookings) {
       const [bookedExternalId, sessionId] = key.split(':');
@@ -120,7 +120,7 @@ export class Mock1CProvider implements IFitnessClubProvider {
     return bookings.sort((a, b) => a.startAt.localeCompare(b.startAt));
   }
 
-  async cancelBooking(externalId: string, sessionId: string) {
+  async cancelBooking(externalId: string, sessionId: string, _context?: BookingContext) {
     const key = `${externalId}:${sessionId}`;
     if (!this.bookings.has(key)) {
       return { success: false, message: 'Запись не найдена' };

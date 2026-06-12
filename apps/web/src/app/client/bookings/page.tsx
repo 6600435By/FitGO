@@ -27,17 +27,20 @@ export default function ClientBookingsPage() {
     load();
   }, []);
 
-  const handleCancel = async (sessionId: string) => {
+  const handleCancel = async (booking: Booking) => {
     const token = getToken();
     if (!token) return;
-    setCancellingId(sessionId);
+    setCancellingId(booking.sessionId);
     try {
-      const result = await api.clientCancelBooking(token, sessionId);
+      const result =
+        booking.source === 'fitgo'
+          ? await api.clientCancelPersonalBooking(token, booking.sessionId)
+          : await api.clientCancelBooking(token, booking.sessionId);
       if (result.success) {
         setMessage('Запись отменена');
         load();
       } else {
-        setMessage(result.message ?? 'Не удалось отменить');
+        setMessage('Не удалось отменить');
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка');
@@ -91,7 +94,7 @@ export default function ClientBookingsPage() {
                 {sessionTypeLabel(booking.type)}
               </span>
               <button
-                onClick={() => handleCancel(booking.sessionId)}
+                onClick={() => handleCancel(booking)}
                 disabled={cancellingId === booking.sessionId}
                 className="btn-secondary mt-3 w-full"
               >

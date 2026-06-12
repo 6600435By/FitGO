@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@fitgo/shared-types';
 import { FitnessService } from '../fitness/fitness.service';
+import { PersonalTrainingService } from '../personal-training/personal-training.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -9,6 +10,7 @@ export class ClientService {
   constructor(
     private readonly fitness: FitnessService,
     private readonly prisma: PrismaService,
+    private readonly personalTraining: PersonalTrainingService,
   ) {}
 
   private async resolveExternalId(user: JwtPayload): Promise<string> {
@@ -23,23 +25,35 @@ export class ClientService {
     return dbUser.externalId;
   }
 
+  private async getBookingContext(user: JwtPayload) {
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+    });
+    return {
+      phone: dbUser?.phone ?? undefined,
+      name: dbUser
+        ? `${dbUser.firstName} ${dbUser.lastName}`.trim()
+        : undefined,
+    };
+  }
+
   async getDashboard(user: JwtPayload) {
-    const externalId = await this.resolveExternalId(user);
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      include: { club: true },
+    });
+    const externalId = user.externalId ?? dbUser?.externalId ?? undefined;
     const provider = this.fitness.getProvider();
 
-    const [membership, visits, accessCard, dbUser] = await Promise.all([
-      provider.getMembership(externalId),
-      provider.getVisits(externalId),
-      provider.getAccessCard(externalId),
-      this.prisma.user.findUnique({
-        where: { id: user.sub },
-        include: { club: true },
-      }),
+    const [membership, visits, accessCard] = await Promise.all([
+      externalId
+        ? provider.getMembership(externalId)
+        : Promise.resolve(null),
+      externalId ? provider.getVisits(externalId) : Promise.resolve([]),
+      externalId
+        ? provider.getAccessCard(externalId)
+        : Promise.resolve(null),
     ]);
-
-    if (!accessCard) {
-      throw new NotFoundException('Карта доступа не найдена');
-    }
 
     return {
       profile: {
@@ -87,18 +101,39 @@ export class ClientService {
   }
 
   async getBookings(user: JwtPayload) {
-    const externalId = await this.resolveExternalId(user);
-    return this.fitness.getProvider().getBookings(externalId);
+    const context = await this.getBookingContext(user);
+    const personalBookings =
+      await this.personalTraining.getClientPersonalBookings(user);
+    const personalItems =
+      this.personalTraining.toBookingItems(personalBookings);
+
+    try {
+      const externalId = await this.resolveExternalId(user);
+      const oneCBookings = await this.fitness
+        .getProvider()
+        .getBookings(externalId, context);
+      return [...oneCBookings, ...personalItems].sort((a, b) =>
+        a.startAt.localeCompare(b.startAt),
+      );
+    } catch {
+      return personalItems;
+    }
   }
 
   async bookSession(user: JwtPayload, sessionId: string) {
-    const externalId = await this.resolveExternalId(user);
-    return this.fitness.getProvider().bookSession(externalId, sessionId);
+    const context = await this.getBookingContext(user);
+    const externalId = user.externalId ?? user.sub;
+    return this.fitness
+      .getProvider()
+      .bookSession(externalId, sessionId, context);
   }
 
   async cancelBooking(user: JwtPayload, sessionId: string) {
-    const externalId = await this.resolveExternalId(user);
-    return this.fitness.getProvider().cancelBooking(externalId, sessionId);
+    const context = await this.getBookingContext(user);
+    const externalId = user.externalId ?? user.sub;
+    return this.fitness
+      .getProvider()
+      .cancelBooking(externalId, sessionId, context);
   }
 
   async createPayment(user: JwtPayload, productId: string) {

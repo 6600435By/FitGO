@@ -10,7 +10,7 @@ import type {
   UserProfile,
   Visit,
 } from '@fitgo/shared-types';
-import type { IFitnessClubProvider, OneCConfig, ScheduleFilters, VisitPeriod } from './types';
+import type { IFitnessClubProvider, OneCConfig, ScheduleFilters, VisitPeriod, BookingContext } from './types';
 
 /**
  * Real 1C:Fitness API provider.
@@ -83,7 +83,7 @@ export class OneCFitnessProvider implements IFitnessClubProvider {
     return this.request<ScheduleSlot[]>(`/clubs/${clubExternalId}/schedule${query}`);
   }
 
-  async bookSession(externalId: string, sessionId: string) {
+  async bookSession(externalId: string, sessionId: string, _context?: BookingContext) {
     return this.request<{ success: boolean; message?: string }>(
       `/clients/${externalId}/bookings`,
       {
@@ -93,14 +93,14 @@ export class OneCFitnessProvider implements IFitnessClubProvider {
     );
   }
 
-  async cancelBooking(externalId: string, sessionId: string) {
+  async cancelBooking(externalId: string, sessionId: string, _context?: BookingContext) {
     return this.request<{ success: boolean; message?: string }>(
       `/clients/${externalId}/bookings/${sessionId}`,
       { method: 'DELETE' },
     );
   }
 
-  async getBookings(externalId: string): Promise<Booking[]> {
+  async getBookings(externalId: string, _context?: BookingContext): Promise<Booking[]> {
     return this.request<Booking[]>(`/clients/${externalId}/bookings`);
   }
 

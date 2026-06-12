@@ -10,7 +10,7 @@ const DEMO_USERS = [
     password: 'client123',
     firstName: 'Алексей',
     lastName: 'Иванов',
-    phone: '+375291234567',
+    phone: '+375296600435',
     externalId: '1c-client-001',
     roles: [Role.CLIENT],
   },
@@ -148,6 +148,17 @@ async function main() {
         where: { userId: user.id },
         update: {},
         create: { userId: user.id },
+      });
+    }
+
+    if (demoUser.roles.some((r) => r === Role.TRAINER)) {
+      await prisma.trainerWorkSlot.deleteMany({ where: { trainerId: user.id } });
+      await prisma.trainerWorkSlot.createMany({
+        data: [
+          { trainerId: user.id, dayOfWeek: 1, startTime: '09:00', endTime: '18:00' },
+          { trainerId: user.id, dayOfWeek: 3, startTime: '10:00', endTime: '20:00' },
+          { trainerId: user.id, dayOfWeek: 5, startTime: '09:00', endTime: '15:00' },
+        ],
       });
     }
   }

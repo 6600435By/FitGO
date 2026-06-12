@@ -231,13 +231,22 @@ export class NotificationsService implements OnModuleInit {
     this.logger.log('Churn triggers completed');
   }
 
+  async sendDirectMessage(userId: string, title: string, body: string) {
+    const notification = await this.prisma.notification.create({
+      data: {
+        userId,
+        type: NotificationType.GENERAL,
+        title,
+        body,
+      },
+    });
+
+    await this.sendWebPush(userId, title, body);
+    return notification;
+  }
+
   async sendReminderToClient(userId: string, message: string) {
-    return this.sendNotification(
-      userId,
-      NotificationType.GENERAL,
-      'Сообщение от клуба',
-      message,
-    );
+    return this.sendDirectMessage(userId, 'Сообщение от клуба', message);
   }
 
   getMockClientData() {

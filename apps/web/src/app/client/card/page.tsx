@@ -10,7 +10,7 @@ interface CardData {
     barcode: string;
     clientName: string;
     clubName: string;
-  };
+  } | null;
 }
 
 export default function ClientCardPage() {
@@ -34,6 +34,17 @@ export default function ClientCardPage() {
     return (
       <div className="flex justify-center py-12">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (!data.accessCard) {
+    return (
+      <div className="card text-center text-slate-400">
+        <p>Карта доступа недоступна</p>
+        <p className="mt-2 text-sm">
+          Обратитесь к администратору клуба для получения карты
+        </p>
       </div>
     );
   }

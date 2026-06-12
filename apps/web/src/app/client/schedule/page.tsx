@@ -60,10 +60,13 @@ export default function ClientSchedulePage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Расписание</h2>
+      <h2 className="text-xl font-semibold">Групповые занятия</h2>
+      <p className="text-sm text-slate-400">
+        Расписание из 1С. Персональные тренировки — в отдельном разделе.
+      </p>
 
       <div className="flex gap-2">
-        {(['ALL', SessionType.GROUP, SessionType.PERSONAL] as const).map((f) => (
+        {(['ALL', SessionType.GROUP] as const).map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}

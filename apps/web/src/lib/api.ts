@@ -13,6 +13,10 @@ import {
   type ScheduleSlot,
   type TrainerClientDetail,
   type Visit,
+  type PersonalTrainingBookingItem,
+  type TrainerSummary,
+  type TrainerWorkSlotInput,
+  type PersonalTrainingSlot,
   type WearableSyncResult,
 } from '@fitgo/shared-types';
 
@@ -44,7 +48,7 @@ export interface ClientDashboard {
   profile: AuthUser;
   membership: Membership | null;
   visits: Visit[];
-  accessCard: AccessCard;
+  accessCard: AccessCard | null;
   club: {
     id: string;
     name: string;
@@ -184,6 +188,69 @@ export const api = {
       { method: 'DELETE' },
       token,
     ),
+
+  clientTrainers: (token: string) =>
+    request<TrainerSummary[]>('/client/trainers', {}, token),
+
+  clientTrainerSlots: (
+    token: string,
+    trainerId: string,
+    from?: string,
+    to?: string,
+  ) => {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const query = params.toString() ? `?${params}` : '';
+    return request<PersonalTrainingSlot[]>(
+      `/client/trainers/${trainerId}/slots${query}`,
+      {},
+      token,
+    );
+  },
+
+  clientBookPersonal: (token: string, trainerId: string, startAt: string) =>
+    request<PersonalTrainingBookingItem>(
+      '/client/personal-bookings',
+      { method: 'POST', body: JSON.stringify({ trainerId, startAt }) },
+      token,
+    ),
+
+  clientPersonalBookings: (token: string) =>
+    request<PersonalTrainingBookingItem[]>(
+      '/client/personal-bookings',
+      {},
+      token,
+    ),
+
+  clientCancelPersonalBooking: (token: string, bookingId: string) =>
+    request<{ success: boolean }>(
+      `/client/personal-bookings/${bookingId}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  trainerWorkSchedule: (token: string) =>
+    request<TrainerWorkSlotInput[]>('/trainer/work-schedule', {}, token),
+
+  trainerSetWorkSchedule: (token: string, slots: TrainerWorkSlotInput[]) =>
+    request<TrainerWorkSlotInput[]>(
+      '/trainer/work-schedule',
+      { method: 'PUT', body: JSON.stringify({ slots }) },
+      token,
+    ),
+
+  trainerPersonalBookings: (token: string) =>
+    request<
+      Array<{
+        id: string;
+        clientId: string;
+        clientName: string;
+        startAt: string;
+        endAt: string;
+        status: string;
+      }>
+    >('/trainer/personal-bookings', {}, token),
 
   clientProducts: (token: string) =>
     request<MembershipProduct[]>('/client/products', {}, token),

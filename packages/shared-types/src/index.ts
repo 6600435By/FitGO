@@ -134,6 +134,36 @@ export interface Booking {
   trainerName?: string;
   startAt: string;
   endAt: string;
+  source?: '1c' | 'fitgo';
+}
+
+export interface TrainerSummary {
+  id: string;
+  firstName: string;
+  lastName: string;
+  hasSchedule: boolean;
+}
+
+export interface PersonalTrainingSlot {
+  startAt: string;
+  endAt: string;
+}
+
+export interface PersonalTrainingBookingItem {
+  id: string;
+  trainerId: string;
+  trainerName: string;
+  clientId?: string;
+  clientName?: string;
+  startAt: string;
+  endAt: string;
+  status: 'CONFIRMED' | 'CANCELLED';
+}
+
+export interface TrainerWorkSlotInput {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
 }
 
 export interface NotificationItem {

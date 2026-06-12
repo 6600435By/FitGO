@@ -23,6 +23,11 @@ export interface VisitPeriod {
   to?: string;
 }
 
+export interface BookingContext {
+  phone?: string;
+  name?: string;
+}
+
 export interface IFitnessClubProvider {
   authenticate(credentials: AuthCredentials): Promise<AuthResult | null>;
   getClientProfile(externalId: string): Promise<UserProfile | null>;
@@ -30,9 +35,17 @@ export interface IFitnessClubProvider {
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]>;
   getAccessCard(externalId: string): Promise<AccessCard | null>;
   getSchedule(clubExternalId: string, filters?: ScheduleFilters): Promise<ScheduleSlot[]>;
-  bookSession(externalId: string, sessionId: string): Promise<{ success: boolean; message?: string }>;
-  cancelBooking(externalId: string, sessionId: string): Promise<{ success: boolean; message?: string }>;
-  getBookings(externalId: string): Promise<Booking[]>;
+  bookSession(
+    externalId: string,
+    sessionId: string,
+    context?: BookingContext,
+  ): Promise<{ success: boolean; message?: string }>;
+  cancelBooking(
+    externalId: string,
+    sessionId: string,
+    context?: BookingContext,
+  ): Promise<{ success: boolean; message?: string }>;
+  getBookings(externalId: string, context?: BookingContext): Promise<Booking[]>;
   getMembershipProducts(clubExternalId: string): Promise<MembershipProduct[]>;
   createPayment(externalId: string, productId: string): Promise<PaymentResult>;
   getAllClientsMemberships?(clubExternalId: string): Promise<Array<{
@@ -50,4 +63,15 @@ export interface IFitnessClubProvider {
 export interface OneCConfig {
   baseUrl: string;
   apiKey: string;
+}
+
+export interface FormaConfig {
+  baseUrl: string;
+  apiKey: string;
+  basicAuth: string;
+  defaultPassword?: string;
+}
+
+export interface FormaWordPressConfig {
+  ajaxUrl: string;
 }
