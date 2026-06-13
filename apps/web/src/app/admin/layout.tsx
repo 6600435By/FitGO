@@ -7,6 +7,7 @@ import { AppShell } from '@/components/app-shell';
 
 const NAV = [
   { href: '/admin', label: 'Дашборд' },
+  { href: '/admin/notifications', label: 'Сообщения' },
   { href: '/admin/at-risk', label: 'Риск' },
   { href: '/admin/funnel', label: 'Воронка' },
   { href: '/admin/reports', label: 'Отчёты' },

@@ -61,3 +61,30 @@ export function membershipStatusColor(status: MembershipStatus) {
   };
   return colors[status] ?? 'text-slate-400 bg-slate-400/10';
 }
+
+export function getMonday(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  d.setHours(0, 0, 0, 0);
+  return new Date(d.setDate(diff));
+}
+
+export function addDays(date: Date, days: number): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+export function getWeekRange(weekOffset: number): { from: string; to: string; label: string } {
+  const monday = getMonday(new Date());
+  monday.setDate(monday.getDate() + weekOffset * 7);
+  const sunday = addDays(monday, 6);
+  sunday.setHours(23, 59, 59, 999);
+
+  const from = `${monday.toLocaleDateString('fr-CA')} 00:00`;
+  const to = `${addDays(monday, 7).toLocaleDateString('fr-CA')} 00:00`;
+  const label = `${monday.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} — ${sunday.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}`;
+
+  return { from, to, label };
+}

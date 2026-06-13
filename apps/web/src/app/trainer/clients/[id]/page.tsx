@@ -1,6 +1,7 @@
 'use client';
 
 import type { TrainerClientDetail } from '@fitgo/shared-types';
+import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
@@ -14,7 +15,6 @@ export default function TrainerClientDetailPage() {
   const [goalTitle, setGoalTitle] = useState('');
   const [goalTarget, setGoalTarget] = useState('');
   const [weight, setWeight] = useState('');
-  const [clientMessage, setClientMessage] = useState('');
   const [feedback, setFeedback] = useState('');
   const [error, setError] = useState('');
 
@@ -62,14 +62,6 @@ export default function TrainerClientDetailPage() {
     setWeight('');
     setFeedback('Замер сохранён');
     load();
-  };
-
-  const sendMessage = async () => {
-    const token = getToken();
-    if (!token || !clientMessage.trim()) return;
-    await api.trainerSendMessage(token, id, clientMessage);
-    setClientMessage('');
-    setFeedback('Сообщение отправлено');
   };
 
   if (error) return <p className="text-red-400">{error}</p>;
@@ -175,19 +167,15 @@ export default function TrainerClientDetailPage() {
         </button>
       </div>
 
-      <div className="card">
-        <h3 className="mb-3 font-semibold">Сообщение клиенту</h3>
-        <textarea
-          className="input mb-2 w-full"
-          placeholder="Как прошла тренировка?"
-          rows={2}
-          value={clientMessage}
-          onChange={(e) => setClientMessage(e.target.value)}
-        />
-        <button onClick={sendMessage} className="btn-primary w-full">
-          Отправить
-        </button>
-      </div>
+      <Link
+        href={`/trainer/messages?clientId=${id}`}
+        className="card block border-fitgo-500/30 bg-fitgo-500/5"
+      >
+        <p className="font-medium text-fitgo-300">Открыть чат с клиентом</p>
+        <p className="mt-1 text-sm text-slate-400">
+          Переписка в формате диалога
+        </p>
+      </Link>
 
       {feedback && (
         <p className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-400">

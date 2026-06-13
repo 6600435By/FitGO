@@ -18,6 +18,8 @@ import {
   type TrainerWorkSlotInput,
   type PersonalTrainingSlot,
   type WearableSyncResult,
+  type ConversationSummary,
+  type ChatMessageItem,
 } from '@fitgo/shared-types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -127,6 +129,8 @@ export interface NotificationItem {
   title: string;
   body: string;
   read: boolean;
+  status: 'PENDING' | 'COMPLETED';
+  senderName?: string;
   createdAt: string;
 }
 
@@ -169,8 +173,23 @@ export const api = {
   clientDashboard: (token: string) =>
     request<ClientDashboard>('/client/dashboard', {}, token),
 
-  clientSchedule: (token: string) =>
-    request<ScheduleSlot[]>('/client/schedule', {}, token),
+  clientSchedule: (
+    token: string,
+    params?: {
+      from?: string;
+      to?: string;
+      serviceId?: string;
+      trainerId?: string;
+    },
+  ) => {
+    const search = new URLSearchParams();
+    if (params?.from) search.set('from', params.from);
+    if (params?.to) search.set('to', params.to);
+    if (params?.serviceId) search.set('serviceId', params.serviceId);
+    if (params?.trainerId) search.set('trainerId', params.trainerId);
+    const query = search.toString() ? `?${search}` : '';
+    return request<ScheduleSlot[]>(`/client/schedule${query}`, {}, token);
+  },
 
   clientBookings: (token: string) =>
     request<Booking[]>('/client/bookings', {}, token),
@@ -265,6 +284,13 @@ export const api = {
   trainerDashboard: (token: string) =>
     request<TrainerDashboard>('/trainer/dashboard', {}, token),
 
+  trainerMessageRecipients: (token: string) =>
+    request<Array<{ id: string; firstName: string; lastName: string }>>(
+      '/trainer/message-recipients',
+      {},
+      token,
+    ),
+
   trainerClient: (token: string, clientId: string) =>
     request<TrainerClientDetail>(`/trainer/clients/${clientId}`, {}, token),
 
@@ -331,11 +357,93 @@ export const api = {
       body: JSON.stringify(data),
     }, token),
 
-  notifications: (token: string) =>
-    request<NotificationItem[]>('/notifications', {}, token),
+  notifications: (
+    token: string,
+    filter?: 'all' | 'pending' | 'completed' | 'unread',
+  ) => {
+    const query =
+      filter && filter !== 'all' ? `?filter=${filter}` : '';
+    return request<NotificationItem[]>(`/notifications${query}`, {}, token);
+  },
 
   markNotificationRead: (token: string, id: string) =>
     request(`/notifications/${id}/read`, { method: 'PATCH' }, token),
+
+  markNotificationComplete: (token: string, id: string) =>
+    request(`/notifications/${id}/complete`, { method: 'PATCH' }, token),
+
+  sendAdminMessage: (token: string, message: string) =>
+    request<{ success: boolean; recipients: number }>(
+      '/notifications/admin-message',
+      { method: 'POST', body: JSON.stringify({ message }) },
+      token,
+    ),
+
+  sendStaffMessage: (
+    token: string,
+    data: {
+      message: string;
+      recipientType: 'admin' | 'trainer';
+      trainerId?: string;
+    },
+  ) =>
+    request<{ success: boolean; recipients: number }>(
+      '/notifications/staff-message',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  clientBookingHistory: (
+    token: string,
+    filter?: 'all' | 'upcoming' | 'completed' | 'cancelled',
+  ) => {
+    const query = filter && filter !== 'all' ? `?filter=${filter}` : '';
+    return request<import('@fitgo/shared-types').Booking[]>(
+      `/client/booking-history${query}`,
+      {},
+      token,
+    );
+  },
+
+  clientClubTrainers: (token: string) =>
+    request<Array<{ id: string; firstName: string; lastName: string }>>(
+      '/client/club-trainers',
+      {},
+      token,
+    ),
+
+  chatConversations: (token: string) =>
+    request<ConversationSummary[]>('/chat/conversations', {}, token),
+
+  chatCreateConversation: (
+    token: string,
+    data: { kind: 'admin' | 'trainer'; trainerId?: string },
+  ) =>
+    request<ConversationSummary>(
+      '/chat/conversations',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  chatOpenTrainerClient: (token: string, clientId: string) =>
+    request<ConversationSummary>(
+      `/chat/conversations/trainer/${clientId}`,
+      { method: 'POST' },
+      token,
+    ),
+
+  chatMessages: (token: string, conversationId: string) =>
+    request<{
+      conversation: ConversationSummary;
+      messages: ChatMessageItem[];
+    }>(`/chat/conversations/${conversationId}/messages`, {}, token),
+
+  chatSendMessage: (token: string, conversationId: string, body: string) =>
+    request<ChatMessageItem>(
+      `/chat/conversations/${conversationId}/messages`,
+      { method: 'POST', body: JSON.stringify({ body }) },
+      token,
+    ),
 
   subscribePush: (
     token: string,

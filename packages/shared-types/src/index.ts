@@ -50,6 +50,9 @@ export interface Visit {
   checkIn?: string;
   checkOut?: string;
   clubName: string;
+  title?: string;
+  sessionType?: SessionType;
+  source?: '1c' | 'fitgo';
 }
 
 export interface AccessCard {
@@ -63,6 +66,7 @@ export interface ScheduleSlot {
   id: string;
   title: string;
   type: SessionType;
+  serviceId?: string;
   trainerId?: string;
   trainerName?: string;
   startAt: string;
@@ -135,6 +139,7 @@ export interface Booking {
   startAt: string;
   endAt: string;
   source?: '1c' | 'fitgo';
+  lifecycle?: 'UPCOMING' | 'COMPLETED' | 'CANCELLED';
 }
 
 export interface TrainerSummary {
@@ -172,6 +177,30 @@ export interface NotificationItem {
   title: string;
   body: string;
   read: boolean;
+  status: 'PENDING' | 'COMPLETED';
+  senderName?: string;
+  createdAt: string;
+}
+
+export interface ConversationSummary {
+  id: string;
+  kind: 'ADMIN' | 'TRAINER';
+  title: string;
+  subtitle?: string;
+  clientId: string;
+  trainerId?: string;
+  lastMessage?: string;
+  lastMessageAt: string;
+  unreadCount: number;
+}
+
+export interface ChatMessageItem {
+  id: string;
+  body: string;
+  senderId: string;
+  senderName: string;
+  isMine: boolean;
+  readAt?: string;
   createdAt: string;
 }
 

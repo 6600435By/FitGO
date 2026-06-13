@@ -37,7 +37,7 @@ export default function ClientBookingsPage() {
           ? await api.clientCancelPersonalBooking(token, booking.sessionId)
           : await api.clientCancelBooking(token, booking.sessionId);
       if (result.success) {
-        setMessage('Запись отменена');
+        setMessage('Запись отменена. Смотрите в разделе «История».');
         load();
       } else {
         setMessage('Не удалось отменить');
@@ -64,7 +64,12 @@ export default function ClientBookingsPage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Мои записи</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold">Мои записи</h2>
+        <Link href="/client/booking-history" className="text-sm text-fitgo-400">
+          История →
+        </Link>
+      </div>
 
       {message && (
         <p className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-400">

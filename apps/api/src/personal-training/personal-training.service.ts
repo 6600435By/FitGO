@@ -7,6 +7,7 @@ import {
 import { PersonalBookingStatus, Role } from '@prisma/client';
 import { SessionType } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const SESSION_DURATION_MIN = 60;
@@ -19,7 +20,10 @@ export interface WorkSlotInput {
 
 @Injectable()
 export class PersonalTrainingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async getTrainerWorkSchedule(user: JwtPayload) {
     const slots = await this.prisma.trainerWorkSlot.findMany({
@@ -239,14 +243,25 @@ export class PersonalTrainingService {
     };
   }
 
-  async getClientPersonalBookings(user: JwtPayload) {
+  async getClientPersonalBookings(
+    user: JwtPayload,
+    options?: { upcomingOnly?: boolean; includeAll?: boolean },
+  ) {
+    const where: {
+      clientId: string;
+      status?: PersonalBookingStatus | { in: PersonalBookingStatus[] };
+      endAt?: { gte: Date };
+    } = { clientId: user.sub };
+
+    if (options?.upcomingOnly) {
+      where.status = PersonalBookingStatus.CONFIRMED;
+      where.endAt = { gte: new Date() };
+    }
+
     const bookings = await this.prisma.personalTrainingBooking.findMany({
-      where: {
-        clientId: user.sub,
-        status: PersonalBookingStatus.CONFIRMED,
-      },
+      where,
       include: { trainer: true },
-      orderBy: { startAt: 'asc' },
+      orderBy: { startAt: options?.includeAll ? 'desc' : 'asc' },
     });
 
     return bookings.map((booking) => ({
@@ -266,6 +281,10 @@ export class PersonalTrainingService {
         OR: [{ clientId: user.sub }, { trainerId: user.sub }],
         status: PersonalBookingStatus.CONFIRMED,
       },
+      include: {
+        client: true,
+        trainer: true,
+      },
     });
 
     if (!booking) {
@@ -277,22 +296,47 @@ export class PersonalTrainingService {
       data: { status: PersonalBookingStatus.CANCELLED },
     });
 
+    if (booking.clientId === user.sub) {
+      const clientName =
+        `${booking.client.firstName} ${booking.client.lastName}`.trim();
+      await this.notifications.notifyBookingCancelled({
+        clubId: user.clubId,
+        clientId: user.sub,
+        clientName,
+        clientPhone: booking.client.phone ?? undefined,
+        sessionTitle: `Персональная · ${booking.trainer.firstName} ${booking.trainer.lastName}`.trim(),
+        startAt: booking.startAt,
+        sessionType: 'personal',
+        trainerId: booking.trainerId,
+      });
+    }
+
     return { success: true };
   }
 
   toBookingItems(
     bookings: Awaited<ReturnType<PersonalTrainingService['getClientPersonalBookings']>>,
   ) {
-    return bookings.map((booking) => ({
-      id: booking.id,
-      sessionId: booking.id,
-      title: 'Персональная тренировка',
-      type: SessionType.PERSONAL,
-      trainerName: booking.trainerName,
-      startAt: booking.startAt,
-      endAt: booking.endAt,
-      source: 'fitgo' as const,
-    }));
+    return bookings.map((booking) => {
+      const lifecycle =
+        booking.status === PersonalBookingStatus.CANCELLED
+          ? ('CANCELLED' as const)
+          : new Date(booking.endAt).getTime() > Date.now()
+            ? ('UPCOMING' as const)
+            : ('COMPLETED' as const);
+
+      return {
+        id: booking.id,
+        sessionId: booking.id,
+        title: 'Персональная тренировка',
+        type: SessionType.PERSONAL,
+        trainerName: booking.trainerName,
+        startAt: booking.startAt,
+        endAt: booking.endAt,
+        source: 'fitgo' as const,
+        lifecycle,
+      };
+    });
   }
 
   private validateWorkSlots(slots: WorkSlotInput[]) {

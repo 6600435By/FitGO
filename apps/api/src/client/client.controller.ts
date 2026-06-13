@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { UserRole } from '@fitgo/shared-types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -21,8 +30,19 @@ export class ClientController {
   }
 
   @Get('schedule')
-  getSchedule(@CurrentUser() user: JwtPayload) {
-    return this.clientService.getSchedule(user);
+  getSchedule(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('serviceId') serviceId?: string,
+    @Query('trainerId') trainerId?: string,
+  ) {
+    return this.clientService.getSchedule(user, {
+      from,
+      to,
+      serviceId,
+      trainerId,
+    });
   }
 
   @Get('products')
@@ -33,6 +53,19 @@ export class ClientController {
   @Get('bookings')
   getBookings(@CurrentUser() user: JwtPayload) {
     return this.clientService.getBookings(user);
+  }
+
+  @Get('booking-history')
+  getBookingHistory(
+    @CurrentUser() user: JwtPayload,
+    @Query('filter') filter?: 'all' | 'upcoming' | 'completed' | 'cancelled',
+  ) {
+    return this.clientService.getBookingHistory(user, filter ?? 'all');
+  }
+
+  @Get('club-trainers')
+  getClubTrainers(@CurrentUser() user: JwtPayload) {
+    return this.clientService.getClubTrainers(user.clubId);
   }
 
   @Post('book')

@@ -10,7 +10,9 @@ const NAV = [
   { href: '/client', label: 'Главная' },
   { href: '/client/schedule', label: 'Групповые' },
   { href: '/client/personal-training', label: 'Персональные' },
-  { href: '/client/notifications', label: 'Сообщения' },
+  { href: '/client/bookings', label: 'Записи' },
+  { href: '/client/booking-history', label: 'История' },
+  { href: '/client/notifications', label: 'Чат' },
   { href: '/client/card', label: 'Карта' },
 ];
 

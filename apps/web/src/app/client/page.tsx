@@ -1,6 +1,6 @@
 'use client';
 
-import { MembershipStatus } from '@fitgo/shared-types';
+import { MembershipStatus, type Visit } from '@fitgo/shared-types';
 import { Calendar, CreditCard, Dumbbell, ShoppingBag, Trophy } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
@@ -23,7 +23,7 @@ interface DashboardData {
     validFrom: string;
     validUntil: string;
   } | null;
-  visits: Array<{ id: string; date: string; checkIn?: string }>;
+  visits: Visit[];
   club: { name: string; address?: string } | null;
 }
 
@@ -100,7 +100,7 @@ export default function ClientHomePage() {
       ) : (
         <Link href="/client/schedule" className="card block text-center">
           <p className="text-slate-400">Нет предстоящих записей</p>
-          <span className="btn-primary mt-3 inline-block">Записаться</span>
+          <span className="btn-primary mt-3 inline-block">Записаться на групповое</span>
         </Link>
       )}
 
@@ -198,7 +198,7 @@ export default function ClientHomePage() {
                 key={visit.id}
                 className="flex justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-sm"
               >
-                <span>{formatDate(visit.date)}</span>
+                <span>{visit.title ?? formatDate(visit.date)}</span>
                 <span className="text-slate-400">{visit.checkIn ?? '—'}</span>
               </li>
             ))}

@@ -7,8 +7,10 @@ export interface FormaClassItem {
   end_date: string;
   duration?: number;
   capacity?: number;
+  web_capacity?: number;
   available_slots?: number;
   canceled?: boolean;
+  already_booked?: boolean | null;
   service: { id: string; title: string; color?: string };
   employee: { id: string; name: string };
   room?: { title: string };
@@ -28,7 +30,7 @@ export function normalizePhone(phone: string): string {
 }
 
 export function mapFormaClass(item: FormaClassItem): ScheduleSlot {
-  const capacity = item.capacity ?? 0;
+  const capacity = item.capacity ?? item.web_capacity ?? 0;
   const availableSlots = item.available_slots ?? 0;
   const booked = Math.max(0, capacity - availableSlots);
 
@@ -36,6 +38,7 @@ export function mapFormaClass(item: FormaClassItem): ScheduleSlot {
     id: item.appointment_id,
     title: item.service.title,
     type: SessionType.GROUP,
+    serviceId: item.service.id,
     trainerId: item.employee.id,
     trainerName: item.employee.name,
     startAt: toIsoDate(item.start_date),

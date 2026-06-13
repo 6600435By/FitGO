@@ -121,6 +121,10 @@ export class FormaWordPressProxyProvider implements IFitnessClubProvider {
       params.employee_id = filters.trainerId;
     }
 
+    if (filters?.serviceId) {
+      params.service_id = filters.serviceId;
+    }
+
     const items = await this.wpRequest<FormaClassItem[]>(params);
     let slots = (Array.isArray(items) ? items : []).map(mapFormaClass);
 

@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { MembershipStatus } from '@fitgo/shared-types';
 import { Role } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
@@ -26,7 +30,7 @@ export class TrainerService {
           .getSchedule(club.externalId, { trainerId: externalId })
       : [];
 
-    const clients = await this.getClients(user.clubId);
+    const clients = await this.getClients(user.sub, user.clubId);
 
     return {
       trainer: {
@@ -51,7 +55,29 @@ export class TrainerService {
     };
   }
 
+  async getMessageRecipients(user: JwtPayload) {
+    const eligibleIds = await this.getEligibleClientIds(user.sub, user.clubId);
+    if (eligibleIds.length === 0) return [];
+
+    const clients = await this.prisma.user.findMany({
+      where: {
+        id: { in: eligibleIds },
+        clubId: user.clubId,
+        roles: { some: { role: Role.CLIENT } },
+      },
+      orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+    });
+
+    return clients.map((client) => ({
+      id: client.id,
+      firstName: client.firstName,
+      lastName: client.lastName,
+    }));
+  }
+
   async getClientDetail(user: JwtPayload, clientId: string) {
+    await this.ensureClientAccess(user, clientId);
+
     const client = await this.prisma.user.findFirst({
       where: {
         id: clientId,
@@ -85,7 +111,7 @@ export class TrainerService {
         take: 20,
       }),
       this.prisma.clientMeasurement.findMany({
-        where: { clientId },
+        where: { clientId, trainerId: user.sub },
         orderBy: { recordedAt: 'desc' },
         take: 10,
       }),
@@ -121,6 +147,7 @@ export class TrainerService {
   }
 
   async addNote(user: JwtPayload, clientId: string, content: string) {
+    await this.ensureClubClient(user, clientId);
     return this.prisma.trainerNote.create({
       data: { trainerId: user.sub, clientId, content },
     });
@@ -131,6 +158,7 @@ export class TrainerService {
     clientId: string,
     data: { title: string; target?: string; progress?: string },
   ) {
+    await this.ensureClubClient(user, clientId);
     return this.prisma.clientGoal.create({
       data: {
         trainerId: user.sub,
@@ -147,6 +175,7 @@ export class TrainerService {
     clientId: string,
     data: { weight?: number; notes?: string },
   ) {
+    await this.ensureClubClient(user, clientId);
     return this.prisma.clientMeasurement.create({
       data: {
         trainerId: user.sub,
@@ -158,6 +187,8 @@ export class TrainerService {
   }
 
   async sendClientMessage(user: JwtPayload, clientId: string, message: string) {
+    await this.ensureClientAccess(user, clientId);
+
     const client = await this.prisma.user.findFirst({
       where: {
         id: clientId,
@@ -178,16 +209,108 @@ export class TrainerService {
       clientId,
       `Сообщение от ${trainerName}`,
       message,
+      user.sub,
     );
   }
 
-  private async getClients(clubId: string) {
+  private async ensureClubClient(user: JwtPayload, clientId: string) {
+    const client = await this.prisma.user.findFirst({
+      where: {
+        id: clientId,
+        clubId: user.clubId,
+        roles: { some: { role: Role.CLIENT } },
+      },
+    });
+    if (!client) throw new NotFoundException('Клиент не найден');
+  }
+
+  private async ensureClientAccess(user: JwtPayload, clientId: string) {
+    const eligibleIds = await this.getEligibleClientIds(user.sub, user.clubId);
+    if (!eligibleIds.includes(clientId)) {
+      throw new ForbiddenException(
+        'Можно писать только клиентам из вашей базы или записанным к вам на тренировку',
+      );
+    }
+  }
+
+  private async getEligibleClientIds(
+    trainerId: string,
+    clubId: string,
+  ): Promise<string[]> {
+    const trainer = await this.prisma.user.findUnique({
+      where: { id: trainerId },
+    });
+    if (!trainer) return [];
+
+    const fullName = `${trainer.firstName} ${trainer.lastName}`.trim();
+    const nameParts = [trainer.firstName, trainer.lastName].filter(Boolean);
+
+    const [
+      personalBookings,
+      notes,
+      goals,
+      measurements,
+      groupBookings,
+    ] = await Promise.all([
+      this.prisma.personalTrainingBooking.findMany({
+        where: { trainerId },
+        select: { clientId: true },
+        distinct: ['clientId'],
+      }),
+      this.prisma.trainerNote.findMany({
+        where: { trainerId },
+        select: { clientId: true },
+        distinct: ['clientId'],
+      }),
+      this.prisma.clientGoal.findMany({
+        where: { trainerId },
+        select: { clientId: true },
+        distinct: ['clientId'],
+      }),
+      this.prisma.clientMeasurement.findMany({
+        where: { trainerId },
+        select: { clientId: true },
+        distinct: ['clientId'],
+      }),
+      fullName
+        ? this.prisma.groupClassBooking.findMany({
+            where: {
+              client: { clubId },
+              OR: nameParts.map((part) => ({
+                trainerName: { contains: part, mode: 'insensitive' as const },
+              })),
+            },
+            select: { clientId: true },
+            distinct: ['clientId'],
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const ids = new Set<string>();
+    for (const row of [
+      ...personalBookings,
+      ...notes,
+      ...goals,
+      ...measurements,
+      ...groupBookings,
+    ]) {
+      ids.add(row.clientId);
+    }
+
+    return [...ids];
+  }
+
+  private async getClients(trainerId: string, clubId: string) {
+    const eligibleIds = await this.getEligibleClientIds(trainerId, clubId);
+    if (eligibleIds.length === 0) return [];
+
     const users = await this.prisma.user.findMany({
       where: {
+        id: { in: eligibleIds },
         clubId,
         roles: { some: { role: Role.CLIENT } },
       },
-      include: { roles: true },
+      orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
     });
 
     const provider = this.fitness.getProvider();

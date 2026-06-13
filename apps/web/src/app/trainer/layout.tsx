@@ -10,6 +10,7 @@ const NAV = [
   { href: '/trainer/schedule', label: '1С расписание' },
   { href: '/trainer/work-schedule', label: 'График работы' },
   { href: '/trainer/clients', label: 'Клиенты' },
+  { href: '/trainer/messages', label: 'Сообщения' },
 ];
 
 export default function TrainerLayout({ children }: { children: ReactNode }) {

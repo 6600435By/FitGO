@@ -1,17 +1,10 @@
 'use client';
 
+import type { Visit } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import { formatDate } from '@/lib/utils';
-
-interface Visit {
-  id: string;
-  date: string;
-  checkIn?: string;
-  checkOut?: string;
-  clubName: string;
-}
+import { formatDate, sessionTypeLabel } from '@/lib/utils';
 
 export default function ClientVisitsPage() {
   const [visits, setVisits] = useState<Visit[]>([]);
@@ -41,13 +34,31 @@ export default function ClientVisitsPage() {
         <ul className="space-y-3">
           {visits.map((visit) => (
             <li key={visit.id} className="card">
-              <div className="flex items-center justify-between">
-                <p className="font-medium">{formatDate(visit.date)}</p>
-                <p className="text-sm text-slate-400">{visit.clubName}</p>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  {visit.title ? (
+                    <p className="font-medium">{visit.title}</p>
+                  ) : (
+                    <p className="font-medium">{formatDate(visit.date)}</p>
+                  )}
+                  {visit.title && (
+                    <p className="text-sm text-slate-400">
+                      {formatDate(visit.date)}
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <p className="text-sm text-slate-400">{visit.clubName}</p>
+                  {visit.sessionType && (
+                    <span className="rounded-full bg-slate-800 px-2 py-1 text-xs">
+                      {sessionTypeLabel(visit.sessionType)}
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="mt-2 flex gap-4 text-sm text-slate-400">
-                <span>Вход: {visit.checkIn ?? '—'}</span>
-                <span>Выход: {visit.checkOut ?? '—'}</span>
+                <span>Начало: {visit.checkIn ?? '—'}</span>
+                <span>Конец: {visit.checkOut ?? '—'}</span>
               </div>
             </li>
           ))}

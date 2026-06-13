@@ -42,7 +42,12 @@ export default function TrainerClientsPage() {
       <h2 className="text-xl font-semibold">Мои клиенты</h2>
 
       {clients.length === 0 ? (
-        <div className="card text-center text-slate-400">Нет клиентов</div>
+        <div className="card text-center text-slate-400">
+          <p>Пока нет клиентов в вашей базе</p>
+          <p className="mt-2 text-sm">
+            Клиенты появятся после записи к вам на тренировку или добавления заметок
+          </p>
+        </div>
       ) : (
         <ul className="space-y-3">
           {clients.map((client) => (

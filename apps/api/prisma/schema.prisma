@@ -22,9 +22,25 @@ enum NotificationType {
   GENERAL
 }
 
+enum NotificationStatus {
+  PENDING
+  COMPLETED
+}
+
 enum PersonalBookingStatus {
   CONFIRMED
   CANCELLED
+}
+
+enum GroupClassBookingStatus {
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+enum ConversationKind {
+  ADMIN
+  TRAINER
 }
 
 model Club {
@@ -100,6 +116,11 @@ model User {
   trainerWorkSlots     TrainerWorkSlot[]
   trainerPersonalBookings PersonalTrainingBooking[] @relation("TrainerPersonalBookings")
   clientPersonalBookings  PersonalTrainingBooking[] @relation("ClientPersonalBookings")
+  groupClassBookings      GroupClassBooking[]
+  sentNotifications       Notification[]          @relation("NotificationSender")
+  clientConversations     Conversation[]          @relation("ClientConversations")
+  trainerConversations    Conversation[]          @relation("TrainerConversations")
+  chatMessages            ChatMessage[]           @relation("ChatMessageSender")
 
   @@unique([clubId, email])
   @@index([externalId])
@@ -131,17 +152,21 @@ model DailyReport {
 }
 
 model Notification {
-  id        String           @id @default(cuid())
+  id        String             @id @default(cuid())
   userId    String
   type      NotificationType
   title     String
   body      String
-  read      Boolean          @default(false)
-  createdAt DateTime         @default(now())
+  read      Boolean            @default(false)
+  status    NotificationStatus @default(PENDING)
+  senderId  String?
+  createdAt DateTime           @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sender User? @relation("NotificationSender", fields: [senderId], references: [id], onDelete: SetNull)
 
   @@index([userId, read])
+  @@index([userId, status])
 }
 
 model PushSubscription {
@@ -312,4 +337,59 @@ model PersonalTrainingBooking {
 
   @@index([trainerId, startAt])
   @@index([clientId])
+}
+
+model GroupClassBooking {
+  id            String                  @id @default(cuid())
+  clientId      String
+  appointmentId String
+  title         String
+  trainerName   String?
+  startAt       DateTime
+  endAt         DateTime
+  status        GroupClassBookingStatus @default(CONFIRMED)
+  cancelledAt   DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  client User @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, appointmentId])
+  @@index([clientId, startAt])
+  @@index([clientId, status])
+}
+
+model Conversation {
+  id            String           @id @default(cuid())
+  clubId        String
+  clientId      String
+  kind          ConversationKind
+  trainerId     String?
+  conversationKey String         @unique
+  lastMessageAt DateTime         @default(now())
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  client   User          @relation("ClientConversations", fields: [clientId], references: [id], onDelete: Cascade)
+  trainer  User?         @relation("TrainerConversations", fields: [trainerId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@index([clubId, lastMessageAt])
+  @@index([clientId])
+  @@index([trainerId])
+}
+
+model ChatMessage {
+  id             String    @id @default(cuid())
+  conversationId String
+  senderId       String
+  body           String
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation("ChatMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([conversationId, readAt])
 }

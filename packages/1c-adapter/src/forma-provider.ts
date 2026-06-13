@@ -144,6 +144,10 @@ export class FormaFitnessProvider implements IFitnessClubProvider {
       params.set('employee_id', filters.trainerId);
     }
 
+    if (filters?.serviceId) {
+      params.set('service_id', filters.serviceId);
+    }
+
     const items = await this.request<FormaClassItem[]>(
       `/classes/?${params.toString()}`,
       { method: 'GET' },

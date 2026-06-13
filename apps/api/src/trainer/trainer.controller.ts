@@ -22,6 +22,11 @@ export class TrainerController {
     return this.trainerService.getDashboard(user);
   }
 
+  @Get('message-recipients')
+  getMessageRecipients(@CurrentUser() user: JwtPayload) {
+    return this.trainerService.getMessageRecipients(user);
+  }
+
   @Get('clients/:clientId')
   getClient(
     @CurrentUser() user: JwtPayload,

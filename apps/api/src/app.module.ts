@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AdminModule } from './admin/admin.module';
 import { AuthModule } from './auth/auth.module';
+import { ChatModule } from './chat/chat.module';
 import { ClientModule } from './client/client.module';
 import { EngagementModule } from './engagement/engagement.module';
 import { FitnessModule } from './fitness/fitness.module';
@@ -20,6 +21,7 @@ import { TrainerModule } from './trainer/trainer.module';
     TrainerModule,
     AdminModule,
     NotificationsModule,
+    ChatModule,
     EngagementModule,
     PersonalTrainingModule,
   ],

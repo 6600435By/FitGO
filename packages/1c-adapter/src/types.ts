@@ -15,6 +15,7 @@ export interface ScheduleFilters {
   from?: string;
   to?: string;
   trainerId?: string;
+  serviceId?: string;
   type?: 'GROUP' | 'PERSONAL';
 }
 
