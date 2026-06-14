@@ -36,6 +36,24 @@ export function sessionTypeLabel(type: SessionType) {
   return type === SessionType.GROUP ? 'Групповое' : 'Персональное';
 }
 
+export function sessionStatusLabel(status: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED') {
+  const labels = {
+    SCHEDULED: 'Запланирована',
+    COMPLETED: 'Проведена',
+    CANCELLED: 'Отменена',
+  };
+  return labels[status];
+}
+
+export function sessionStatusColor(status: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED') {
+  const colors = {
+    SCHEDULED: 'text-blue-400 bg-blue-400/10',
+    COMPLETED: 'text-emerald-400 bg-emerald-400/10',
+    CANCELLED: 'text-red-400 bg-red-400/10',
+  };
+  return colors[status];
+}
+
 export function formatCurrency(amount: number, currency = 'BYN') {
   const symbols: Record<string, string> = { BYN: 'Br', RUB: '₽', USD: '$' };
   return `${amount} ${symbols[currency] ?? currency}`;

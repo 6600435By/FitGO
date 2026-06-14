@@ -1,6 +1,7 @@
 'use client';
 
 import type { Booking } from '@fitgo/shared-types';
+import { SessionType } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
@@ -98,6 +99,14 @@ export default function ClientBookingsPage() {
               <span className="mt-2 inline-block rounded-full bg-slate-800 px-2 py-1 text-xs">
                 {sessionTypeLabel(booking.type)}
               </span>
+              {booking.source === 'fitgo' && booking.type === SessionType.PERSONAL && (
+                <Link
+                  href={`/client/personal-bookings/${booking.sessionId}`}
+                  className="btn-primary mt-3 block w-full text-center"
+                >
+                  План тренировки
+                </Link>
+              )}
               <button
                 onClick={() => handleCancel(booking)}
                 disabled={cancellingId === booking.sessionId}
@@ -119,7 +128,20 @@ export default function ClientBookingsPage() {
                 key={booking.id}
                 className="rounded-xl bg-slate-800/50 px-3 py-2 text-sm text-slate-400"
               >
-                {booking.title} — {formatDateTime(booking.startAt)}
+                <div className="flex items-center justify-between gap-2">
+                  <span>
+                    {booking.title} — {formatDateTime(booking.startAt)}
+                  </span>
+                  {booking.lifecycle === 'AWAITING_CONFIRMATION' &&
+                    booking.source === 'fitgo' && (
+                      <Link
+                        href={`/client/personal-bookings/${booking.sessionId}`}
+                        className="text-fitgo-400"
+                      >
+                        Завершить →
+                      </Link>
+                    )}
+                </div>
               </li>
             ))}
           </ul>

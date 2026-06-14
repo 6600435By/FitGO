@@ -14,10 +14,16 @@ import {
   type TrainerClientDetail,
   type Visit,
   type PersonalTrainingBookingItem,
+  type PersonalTrainingGoalTemplate,
+  type PersonalTrainingSessionDetail,
   type TrainerSummary,
   type TrainerWorkSlotInput,
   type PersonalTrainingSlot,
   type WearableSyncResult,
+  type ClientProfile,
+  type BodyProfileResponse,
+  type ChallengeView,
+  type LeagueGroupView,
   type ConversationSummary,
   type ChatMessageItem,
 } from '@fitgo/shared-types';
@@ -249,6 +255,64 @@ export const api = {
       token,
     ),
 
+  personalGoalTemplates: (token: string) =>
+    request<PersonalTrainingGoalTemplate[]>(
+      '/personal-bookings/goal-templates',
+      {},
+      token,
+    ),
+
+  personalSessionDetail: (token: string, bookingId: string) =>
+    request<PersonalTrainingSessionDetail>(
+      `/personal-bookings/${bookingId}`,
+      {},
+      token,
+    ),
+
+  personalSessionUpdatePlan: (
+    token: string,
+    bookingId: string,
+    goals: Array<{
+      title: string;
+      notes?: string;
+      tasks?: Array<{ title: string }>;
+    }>,
+  ) =>
+    request<PersonalTrainingSessionDetail>(
+      `/personal-bookings/${bookingId}/plan`,
+      { method: 'PUT', body: JSON.stringify({ goals }) },
+      token,
+    ),
+
+  personalSessionConfirmGoal: (
+    token: string,
+    bookingId: string,
+    goalId: string,
+  ) =>
+    request<PersonalTrainingSessionDetail>(
+      `/personal-bookings/${bookingId}/goals/${goalId}/confirm`,
+      { method: 'POST' },
+      token,
+    ),
+
+  personalSessionConfirmTask: (
+    token: string,
+    bookingId: string,
+    taskId: string,
+  ) =>
+    request<PersonalTrainingSessionDetail>(
+      `/personal-bookings/${bookingId}/tasks/${taskId}/confirm`,
+      { method: 'POST' },
+      token,
+    ),
+
+  personalSessionComplete: (token: string, bookingId: string) =>
+    request<PersonalTrainingSessionDetail>(
+      `/personal-bookings/${bookingId}/complete`,
+      { method: 'POST' },
+      token,
+    ),
+
   trainerWorkSchedule: (token: string) =>
     request<TrainerWorkSlotInput[]>('/trainer/work-schedule', {}, token),
 
@@ -472,6 +536,124 @@ export const api = {
 
   gamification: (token: string) =>
     request<GamificationProfile>('/engagement/gamification', {}, token),
+
+  activateGamification: (
+    token: string,
+    data: { useRealNameInPublic: boolean; gamificationNickname?: string },
+  ) =>
+    request('/engagement/activate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, token),
+
+  suggestNickname: (token: string) =>
+    request<{ nickname: string }>('/engagement/nickname/suggest', {}, token),
+
+  checkNickname: (token: string, name: string) =>
+    request<{ available: boolean; reason?: string }>(
+      `/engagement/nickname/check?name=${encodeURIComponent(name)}`,
+      {},
+      token,
+    ),
+
+  checkIn: (token: string, qrToken?: string) =>
+    request('/engagement/check-in', {
+      method: 'POST',
+      body: JSON.stringify({ qrToken }),
+    }, token),
+
+  dailyGoal: (token: string) =>
+    request('/engagement/daily-goal', { method: 'POST' }, token),
+
+  leagueGroup: (token: string) =>
+    request<LeagueGroupView>('/engagement/league/group', {}, token),
+
+  challenges: (token: string) =>
+    request<ChallengeView[]>('/engagement/challenges', {}, token),
+
+  clientProfile: (token: string) =>
+    request<ClientProfile>('/client/profile', {}, token),
+
+  updateClientProfile: (
+    token: string,
+    data: {
+      firstName: string;
+      lastName: string;
+      phone: string;
+      gender: string;
+      dateOfBirth: string;
+    },
+  ) =>
+    request<ClientProfile>('/client/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }, token),
+
+  updateGamificationSettings: (
+    token: string,
+    data: { useRealNameInPublic?: boolean; gamificationNickname?: string },
+  ) =>
+    request('/client/profile/gamification', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }, token),
+
+  bodyProfile: (token: string) =>
+    request<BodyProfileResponse>('/client/body', {}, token),
+
+  updateBodyProfile: (
+    token: string,
+    data: { heightCm?: number; targetWeightKg?: number },
+  ) =>
+    request('/client/body/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }, token),
+
+  addBodyLog: (
+    token: string,
+    data: {
+      weightKg?: number;
+      chestCm?: number;
+      waistCm?: number;
+      hipsCm?: number;
+      bicepsCm?: number;
+      thighCm?: number;
+      bodyFatPct?: number;
+      notes?: string;
+    },
+  ) =>
+    request('/client/body/log', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, token),
+
+  createWorkout: (
+    token: string,
+    data: {
+      type: string;
+      startedAt: string;
+      durationMin: number;
+      distanceKm?: number;
+      calories?: number;
+      notes?: string;
+    },
+  ) =>
+    request('/engagement/workouts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, token),
+
+  getWorkouts: (token: string) =>
+    request<Array<{
+      id: string;
+      type: string;
+      startedAt: string;
+      durationMin: number;
+      distanceKm?: number;
+      calories?: number;
+      notes?: string;
+    }>>('/engagement/workouts', {}, token),
 
   referral: (token: string) =>
     request<ReferralInfo>('/engagement/referral', {}, token),

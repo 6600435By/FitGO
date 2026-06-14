@@ -1,6 +1,6 @@
 'use client';
 
-import { MembershipStatus, type Visit } from '@fitgo/shared-types';
+import { MembershipStatus, type GamificationProfile, type Visit } from '@fitgo/shared-types';
 import { Calendar, CreditCard, Dumbbell, ShoppingBag, Trophy } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
@@ -34,6 +34,7 @@ export default function ClientHomePage() {
     title: string;
     startAt: string;
   } | null>(null);
+  const [gamification, setGamification] = useState<GamificationProfile | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -59,6 +60,8 @@ export default function ClientHomePage() {
         }
       })
       .catch(() => {});
+
+    api.gamification(token).then(setGamification).catch(() => {});
   }, []);
 
   if (error) {
@@ -163,6 +166,32 @@ export default function ClientHomePage() {
           <Link href="/client/products" className="btn-primary mt-4 inline-block">
             Купить абонемент
           </Link>
+        </div>
+      )}
+
+      {gamification?.activated && (
+        <div className="card space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Trophy className="h-5 w-5 text-fitgo-400" />
+              <span className="font-semibold">
+                {gamification.league?.tierLabel ?? 'Бронза'}
+              </span>
+            </div>
+            {gamification.league?.myRank && (
+              <span className="text-sm text-slate-400">
+                #{gamification.league.myRank} в группе
+              </span>
+            )}
+          </div>
+          {gamification.decayWarning && (
+            <p className="text-xs text-yellow-400">{gamification.decayWarning.message}</p>
+          )}
+          <div className="flex gap-2">
+            <Link href="/client/engagement" className="btn-primary flex-1 text-center text-sm">
+              Достижения
+            </Link>
+          </div>
         </div>
       )}
 

@@ -61,6 +61,21 @@ export class FormaWordPressProxyProvider implements IFitnessClubProvider {
       );
     }
 
+    if (
+      body &&
+      typeof body === 'object' &&
+      'result' in body &&
+      (body as { result?: boolean }).result === false
+    ) {
+      const errBody = body as { error?: number; error_message?: string; message?: string };
+      throw new Error(
+        errBody.error_message ??
+          body.message ??
+          body.error ??
+          `Ошибка WordPress proxy (${errBody.error ?? 'planvueplugin'})`,
+      );
+    }
+
     return unwrapFormaData<T>(body);
   }
 

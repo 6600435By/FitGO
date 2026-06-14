@@ -19,7 +19,69 @@ enum NotificationType {
   INACTIVITY
   MILESTONE
   CHALLENGE
+  RATING_DECAY
   GENERAL
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum VisitSource {
+  ONEC_SYNC
+  APP_GEOFENCE
+  APP_QR
+  BOOKING_GROUP
+  BOOKING_PT
+  TRAINER_CONFIRM
+}
+
+enum LeagueTier {
+  BRONZE
+  SILVER
+  GOLD
+  SAPPHIRE
+  RUBY
+  EMERALD
+  DIAMOND
+  OBSIDIAN
+}
+
+enum LoyaltyStatus {
+  ACTIVE
+  FROZEN
+  REACTIVATED
+}
+
+enum BadgeDataScope {
+  SINCE_INSTALL
+  HISTORICAL
+}
+
+enum BodyLogSource {
+  CLIENT_SELF
+  TRAINER
+}
+
+enum WorkoutType {
+  RUNNING
+  CYCLING
+  STRENGTH
+  YOGA
+  HIIT
+  WALKING
+  SWIMMING
+  OTHER
+}
+
+enum WorkoutSource {
+  MANUAL
+  APPLE_HEALTH
+  GOOGLE_FIT
+  GARMIN
 }
 
 enum NotificationStatus {
@@ -30,6 +92,7 @@ enum NotificationStatus {
 enum PersonalBookingStatus {
   CONFIRMED
   CANCELLED
+  COMPLETED
 }
 
 enum GroupClassBookingStatus {
@@ -93,6 +156,12 @@ model User {
   lastName   String
   externalId String?
   referralCode String? @unique
+  gender        Gender?
+  dateOfBirth   DateTime? @db.Date
+  profileCompletedAt DateTime?
+  gamificationNickname String?
+  useRealNameInPublic  Boolean @default(true)
+  gamificationStartedAt DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -122,8 +191,17 @@ model User {
   clientConversations     Conversation[]          @relation("ClientConversations")
   trainerConversations    Conversation[]          @relation("TrainerConversations")
   chatMessages            ChatMessage[]           @relation("ChatMessageSender")
+  clubVisits              ClubVisit[]
+  loyaltyProfile          LoyaltyProfile?
+  clientRating            ClientRating?
+  leagueGroupMembers      LeagueGroupMember[]
+  bodyProfile             ClientBodyProfile?
+  bodyLogs                ClientBodyLog[]         @relation("ClientBodyLogs")
+  recordedBodyLogs        ClientBodyLog[]         @relation("RecordedBodyLogs")
+  workoutLogs             WorkoutLog[]
 
   @@unique([clubId, email])
+  @@unique([clubId, gamificationNickname])
   @@index([externalId])
 }
 
@@ -190,17 +268,22 @@ model NotificationPreference {
   membershipAlerts    Boolean @default(true)
   inactivityAlerts    Boolean @default(true)
   milestoneAlerts     Boolean @default(true)
+  ratingDecayAlerts   Boolean @default(true)
   marketingAlerts     Boolean @default(false)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Badge {
-  id          String   @id @default(cuid())
-  slug        String   @unique
+  id          String         @id @default(cuid())
+  slug        String         @unique
   name        String
   description String
   threshold   Int?
+  category    String?
+  tier        String?
+  icon        String?
+  dataScope   BadgeDataScope @default(SINCE_INSTALL)
 
   users UserBadge[]
 }
@@ -324,20 +407,56 @@ model TrainerWorkSlot {
 }
 
 model PersonalTrainingBooking {
-  id        String                @id @default(cuid())
-  trainerId String
-  clientId  String
-  startAt   DateTime
-  endAt     DateTime
-  status    PersonalBookingStatus @default(CONFIRMED)
-  createdAt DateTime              @default(now())
-  updatedAt DateTime              @updatedAt
+  id                 String                @id @default(cuid())
+  trainerId          String
+  clientId           String
+  startAt            DateTime
+  endAt              DateTime
+  status             PersonalBookingStatus @default(CONFIRMED)
+  clientCompletedAt  DateTime?
+  trainerCompletedAt DateTime?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
 
-  trainer User @relation("TrainerPersonalBookings", fields: [trainerId], references: [id], onDelete: Cascade)
-  client  User @relation("ClientPersonalBookings", fields: [clientId], references: [id], onDelete: Cascade)
+  trainer      User                          @relation("TrainerPersonalBookings", fields: [trainerId], references: [id], onDelete: Cascade)
+  client       User                          @relation("ClientPersonalBookings", fields: [clientId], references: [id], onDelete: Cascade)
+  sessionGoals PersonalTrainingSessionGoal[]
 
   @@index([trainerId, startAt])
   @@index([clientId])
+}
+
+model PersonalTrainingSessionGoal {
+  id               String   @id @default(cuid())
+  bookingId        String
+  title            String
+  notes            String?
+  sortOrder        Int      @default(0)
+  clientConfirmed  Boolean  @default(false)
+  trainerConfirmed Boolean  @default(false)
+  createdById      String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  booking PersonalTrainingBooking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  tasks   PersonalTrainingSessionTask[]
+
+  @@index([bookingId])
+}
+
+model PersonalTrainingSessionTask {
+  id               String   @id @default(cuid())
+  goalId           String
+  title            String
+  sortOrder        Int      @default(0)
+  clientConfirmed  Boolean  @default(false)
+  trainerConfirmed Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  goal PersonalTrainingSessionGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@index([goalId])
 }
 
 model GroupClassBooking {
@@ -393,4 +512,123 @@ model ChatMessage {
 
   @@index([conversationId, createdAt])
   @@index([conversationId, readAt])
+}
+
+model ClubVisit {
+  id         String      @id @default(cuid())
+  userId     String
+  clubId     String
+  visitedAt  DateTime
+  visitDate  String
+  source     VisitSource
+  externalId String?
+  verified   Boolean     @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clubId, visitDate])
+  @@index([userId, visitedAt])
+}
+
+model LoyaltyProfile {
+  userId            String        @id
+  peakTier          LeagueTier    @default(BRONZE)
+  currentTier       LeagueTier    @default(BRONZE)
+  status            LoyaltyStatus @default(ACTIVE)
+  continuityMonths  Int           @default(0)
+  lastVisitAt       DateTime?
+  frozenAt          DateTime?
+  reactivatedAt     DateTime?
+  downgradeCount    Int           @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ClientRating {
+  userId                    String     @id
+  clubId                    String
+  leagueTier                LeagueTier @default(BRONZE)
+  weeklyXp                  Int        @default(0)
+  monthlyXp                 Int        @default(0)
+  lifetimeXp                Int        @default(0)
+  lastAppActivityAt         DateTime?
+  consecutiveInactiveMonths Int        @default(0)
+  leagueGroupId             String?
+  ratingProtectedUntil      DateTime?
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leagueGroup LeagueGroup? @relation(fields: [leagueGroupId], references: [id], onDelete: SetNull)
+
+  @@index([clubId, leagueTier])
+}
+
+model LeagueGroup {
+  id         String     @id @default(cuid())
+  clubId     String
+  leagueTier LeagueTier
+  weekStart  DateTime   @db.Date
+  weekEnd    DateTime   @db.Date
+
+  members       LeagueGroupMember[]
+  clientRatings ClientRating[]
+}
+
+model LeagueGroupMember {
+  id            String @id @default(cuid())
+  leagueGroupId String
+  userId        String
+  weeklyXp      Int    @default(0)
+
+  leagueGroup LeagueGroup @relation(fields: [leagueGroupId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([leagueGroupId, userId])
+  @@index([userId])
+}
+
+model ClientBodyProfile {
+  userId           String   @id
+  heightCm         Float?
+  targetWeightKg   Float?
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ClientBodyLog {
+  id           String        @id @default(cuid())
+  clientId     String
+  recordedById String?
+  source       BodyLogSource
+  recordedAt   DateTime      @default(now())
+  weightKg     Float?
+  chestCm      Float?
+  waistCm      Float?
+  hipsCm       Float?
+  bicepsCm     Float?
+  thighCm      Float?
+  bodyFatPct   Float?
+  notes        String?
+
+  client     User  @relation("ClientBodyLogs", fields: [clientId], references: [id], onDelete: Cascade)
+  recordedBy User? @relation("RecordedBodyLogs", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([clientId, recordedAt])
+}
+
+model WorkoutLog {
+  id          String        @id @default(cuid())
+  userId      String
+  type        WorkoutType
+  startedAt   DateTime
+  durationMin Int
+  distanceKm  Float?
+  calories    Int?
+  source      WorkoutSource @default(MANUAL)
+  verified    Boolean       @default(false)
+  notes       String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startedAt])
 }

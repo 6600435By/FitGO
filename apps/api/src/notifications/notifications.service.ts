@@ -245,6 +245,7 @@ export class NotificationsService implements OnModuleInit {
       (type === NotificationType.MEMBERSHIP_EXPIRING && prefs.membershipAlerts) ||
       (type === NotificationType.INACTIVITY && prefs.inactivityAlerts) ||
       (type === NotificationType.MILESTONE && prefs.milestoneAlerts) ||
+      (type === NotificationType.RATING_DECAY && prefs.ratingDecayAlerts) ||
       type === NotificationType.GENERAL ||
       type === NotificationType.CHALLENGE;
 
@@ -542,6 +543,22 @@ export class NotificationsService implements OnModuleInit {
 
   async sendReminderToClient(userId: string, message: string) {
     return this.sendDirectMessage(userId, 'Сообщение от клуба', message);
+  }
+
+  async sendRatingDecayReminder(userId: string, dayOfMonth: number) {
+    const messages: Record<number, string> = {
+      7: 'В этом месяце ещё не было активности в приложении. Выполните цель, чтобы сохранить лигу!',
+      14: 'Половина месяца прошла без активности — ваш рейтинг может понизиться.',
+      21: 'До конца месяца осталось мало времени. Сохраните свой рейтинг!',
+      25: 'Последние дни! Откройте приложение и выполните цель, иначе лига понизится.',
+    };
+    const body = messages[dayOfMonth] ?? messages[25];
+    return this.sendNotification(
+      userId,
+      NotificationType.RATING_DECAY,
+      'Сохраните рейтинг',
+      body,
+    );
   }
 
   getMockClientData() {

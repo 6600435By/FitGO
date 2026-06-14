@@ -18,6 +18,98 @@ export const MOCK_CLUB = {
   address: 'ул. Спортивная, 10, Минск',
 };
 
+/** Шаблоны занятий: dayOffset от сегодня, hour — локальное время */
+const SCHEDULE_TEMPLATES: Array<{
+  dayOffset: number;
+  hour: number;
+  durationMin: number;
+  title: string;
+  type: SessionType;
+  trainerId: string;
+  trainerName: string;
+  capacity: number;
+  booked: number;
+}> = [
+  { dayOffset: 0, hour: 10, durationMin: 60, title: 'Функциональный тренинг', type: SessionType.GROUP, trainerId: '1c-trainer-001', trainerName: 'Мария Петрова', capacity: 12, booked: 6 },
+  { dayOffset: 0, hour: 18, durationMin: 60, title: 'Кроссфит', type: SessionType.GROUP, trainerId: '1c-trainer-003', trainerName: 'Игорь Волков', capacity: 12, booked: 10 },
+  { dayOffset: 0, hour: 11, durationMin: 60, title: 'Персональная тренировка', type: SessionType.PERSONAL, trainerId: '1c-trainer-001', trainerName: 'Мария Петрова', capacity: 1, booked: 0 },
+  { dayOffset: 1, hour: 9, durationMin: 60, title: 'Йога для начинающих', type: SessionType.GROUP, trainerId: '1c-trainer-002', trainerName: 'Елена Козлова', capacity: 15, booked: 8 },
+  { dayOffset: 1, hour: 14, durationMin: 60, title: 'Пилатес', type: SessionType.GROUP, trainerId: '1c-trainer-002', trainerName: 'Елена Козлова', capacity: 10, booked: 5 },
+  { dayOffset: 1, hour: 16, durationMin: 60, title: 'Персональная тренировка', type: SessionType.PERSONAL, trainerId: '1c-trainer-001', trainerName: 'Мария Петрова', capacity: 1, booked: 0 },
+  { dayOffset: 2, hour: 10, durationMin: 60, title: 'Стretching', type: SessionType.GROUP, trainerId: '1c-trainer-001', trainerName: 'Мария Петрова', capacity: 14, booked: 4 },
+  { dayOffset: 3, hour: 18, durationMin: 60, title: 'Кроссфит', type: SessionType.GROUP, trainerId: '1c-trainer-003', trainerName: 'Игорь Волков', capacity: 12, booked: 12 },
+  { dayOffset: 4, hour: 9, durationMin: 60, title: 'Йога для начинающих', type: SessionType.GROUP, trainerId: '1c-trainer-002', trainerName: 'Елена Козлова', capacity: 15, booked: 3 },
+  { dayOffset: 5, hour: 11, durationMin: 60, title: 'Персональная тренировка', type: SessionType.PERSONAL, trainerId: '1c-trainer-001', trainerName: 'Мария Петрова', capacity: 1, booked: 1 },
+  { dayOffset: 6, hour: 10, durationMin: 60, title: 'Пилатес', type: SessionType.GROUP, trainerId: '1c-trainer-002', trainerName: 'Елена Козлова', capacity: 10, booked: 2 },
+];
+
+function pad2(n: number) {
+  return String(n).padStart(2, '0');
+}
+
+function formatLocalIso(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
+function addDays(base: Date, days: number): Date {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function formatDateKey(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** Генерирует расписание на ближайшие дни от «сегодня» */
+export function buildMockSchedule(): ScheduleSlot[] {
+  const now = new Date();
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+
+  const slots: ScheduleSlot[] = [];
+  let idx = 1;
+
+  for (const tmpl of SCHEDULE_TEMPLATES) {
+    const start = addDays(todayStart, tmpl.dayOffset);
+    start.setHours(tmpl.hour, 0, 0, 0);
+    const end = new Date(start.getTime() + tmpl.durationMin * 60_000);
+
+    if (end.getTime() <= now.getTime()) continue;
+
+    const available = tmpl.booked < tmpl.capacity;
+    slots.push({
+      id: `slot-${String(idx++).padStart(3, '0')}`,
+      title: tmpl.title,
+      type: tmpl.type,
+      trainerId: tmpl.trainerId,
+      trainerName: tmpl.trainerName,
+      startAt: formatLocalIso(start),
+      endAt: formatLocalIso(end),
+      capacity: tmpl.capacity,
+      booked: tmpl.booked,
+      available,
+    });
+  }
+
+  return slots.sort((a, b) => a.startAt.localeCompare(b.startAt));
+}
+
+/** Визиты клиента — последние N дней от сегодня */
+export function buildMockVisits(clubName: string): Visit[] {
+  const offsets = [2, 4, 6, 8, 12];
+  return offsets.map((daysAgo, i) => {
+    const d = addDays(new Date(), -daysAgo);
+    return {
+      id: `visit-${String(i + 1).padStart(3, '0')}`,
+      date: formatDateKey(d),
+      checkIn: i % 2 === 0 ? '08:15' : '18:30',
+      checkOut: i % 2 === 0 ? '09:45' : '20:00',
+      clubName,
+    };
+  });
+}
+
 export const MOCK_USERS: Record<
   string,
   {
@@ -47,45 +139,9 @@ export const MOCK_USERS: Record<
       visitsRemaining: undefined,
       visitsTotal: undefined,
       validFrom: '2025-06-01',
-      validUntil: '2026-06-01',
+      validUntil: '2026-12-01',
     },
-    visits: [
-      {
-        id: 'visit-001',
-        date: '2026-06-08',
-        checkIn: '08:15',
-        checkOut: '09:45',
-        clubName: MOCK_CLUB.name,
-      },
-      {
-        id: 'visit-002',
-        date: '2026-06-06',
-        checkIn: '18:30',
-        checkOut: '20:00',
-        clubName: MOCK_CLUB.name,
-      },
-      {
-        id: 'visit-003',
-        date: '2026-06-04',
-        checkIn: '07:00',
-        checkOut: '08:30',
-        clubName: MOCK_CLUB.name,
-      },
-      {
-        id: 'visit-004',
-        date: '2026-06-02',
-        checkIn: '12:00',
-        checkOut: '13:15',
-        clubName: MOCK_CLUB.name,
-      },
-      {
-        id: 'visit-005',
-        date: '2026-05-30',
-        checkIn: '19:00',
-        checkOut: '20:30',
-        clubName: MOCK_CLUB.name,
-      },
-    ],
+    visits: buildMockVisits(MOCK_CLUB.name),
     accessCard: {
       id: 'card-001',
       barcode: 'FG2026001234567',
@@ -153,68 +209,8 @@ export const MOCK_CLIENTS = Object.values(MOCK_USERS)
   .filter((u) => u.profile.roles.includes(UserRole.CLIENT))
   .map((u) => u.profile);
 
-export const MOCK_SCHEDULE: ScheduleSlot[] = [
-  {
-    id: 'slot-001',
-    title: 'Йога для начинающих',
-    type: SessionType.GROUP,
-    trainerId: '1c-trainer-002',
-    trainerName: 'Елена Козлова',
-    startAt: '2026-06-10T09:00:00',
-    endAt: '2026-06-10T10:00:00',
-    capacity: 15,
-    booked: 8,
-    available: true,
-  },
-  {
-    id: 'slot-002',
-    title: 'Кроссфит',
-    type: SessionType.GROUP,
-    trainerId: '1c-trainer-003',
-    trainerName: 'Игорь Волков',
-    startAt: '2026-06-10T18:00:00',
-    endAt: '2026-06-10T19:00:00',
-    capacity: 12,
-    booked: 12,
-    available: false,
-  },
-  {
-    id: 'slot-003',
-    title: 'Персональная тренировка',
-    type: SessionType.PERSONAL,
-    trainerId: '1c-trainer-001',
-    trainerName: 'Мария Петрова',
-    startAt: '2026-06-10T11:00:00',
-    endAt: '2026-06-10T12:00:00',
-    capacity: 1,
-    booked: 0,
-    available: true,
-  },
-  {
-    id: 'slot-004',
-    title: 'Пилатес',
-    type: SessionType.GROUP,
-    trainerId: '1c-trainer-002',
-    trainerName: 'Елена Козлова',
-    startAt: '2026-06-11T10:00:00',
-    endAt: '2026-06-11T11:00:00',
-    capacity: 10,
-    booked: 5,
-    available: true,
-  },
-  {
-    id: 'slot-005',
-    title: 'Персональная тренировка',
-    type: SessionType.PERSONAL,
-    trainerId: '1c-trainer-001',
-    trainerName: 'Мария Петрова',
-    startAt: '2026-06-11T14:00:00',
-    endAt: '2026-06-11T15:00:00',
-    capacity: 1,
-    booked: 1,
-    available: false,
-  },
-];
+/** @deprecated используйте buildMockSchedule() — оставлено для совместимости импортов */
+export const MOCK_SCHEDULE: ScheduleSlot[] = buildMockSchedule();
 
 export const MOCK_PRODUCTS: MembershipProduct[] = [
   {

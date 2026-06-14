@@ -6,7 +6,13 @@ import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import { formatDate, membershipStatusLabel } from '@/lib/utils';
+import {
+  formatDate,
+  formatDateTime,
+  membershipStatusLabel,
+  sessionStatusColor,
+  sessionStatusLabel,
+} from '@/lib/utils';
 
 export default function TrainerClientDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -80,7 +86,6 @@ export default function TrainerClientDetailPage() {
         <h2 className="text-xl font-semibold">
           {client.firstName} {client.lastName}
         </h2>
-        {client.phone && <p className="text-sm text-slate-400">{client.phone}</p>}
         {client.membershipName && (
           <p className="mt-2 text-sm">
             {client.membershipName}
@@ -90,7 +95,7 @@ export default function TrainerClientDetailPage() {
         )}
         {client.lastVisit && (
           <p className="text-sm text-slate-400">
-            Последний визит: {formatDate(client.lastVisit)}
+            Последняя тренировка: {formatDate(client.lastVisit)}
           </p>
         )}
       </div>
@@ -144,6 +149,46 @@ export default function TrainerClientDetailPage() {
         <button onClick={addNote} className="btn-secondary w-full">
           Сохранить заметку
         </button>
+      </div>
+
+      <div className="card">
+        <h3 className="mb-3 font-semibold">История тренировок</h3>
+        {client.sessions.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            Нет персональных тренировок с этим клиентом
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {client.sessions.map((s) => (
+              <li key={s.id}>
+                <Link
+                  href={`/trainer/sessions/${s.id}?clientId=${id}`}
+                  className="flex items-start justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-sm transition hover:bg-slate-800"
+                >
+                  <div>
+                    <p className="font-medium">Персональная тренировка</p>
+                    <p className="text-slate-400">{formatDateTime(s.startAt)}</p>
+                    {s.goalsCount > 0 && (
+                      <p className="text-xs text-slate-500">
+                        {s.goalsCount} {s.goalsCount === 1 ? 'цель' : 'целей'}
+                      </p>
+                    )}
+                    {s.awaitingConfirmation && (
+                      <p className="text-xs text-amber-400">
+                        Ожидает подтверждения
+                      </p>
+                    )}
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-full px-2 py-1 text-xs ${sessionStatusColor(s.status)}`}
+                  >
+                    {sessionStatusLabel(s.status)}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <div className="card">

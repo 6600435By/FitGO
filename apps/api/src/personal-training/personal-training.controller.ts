@@ -17,6 +17,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { BookPersonalTrainingDto } from './dto/book-personal-training.dto';
 import { SetWorkScheduleDto } from './dto/set-work-schedule.dto';
+import { UpdateSessionPlanDto } from './dto/update-session-plan.dto';
 import { PersonalTrainingService } from './personal-training.service';
 
 @Controller()
@@ -93,5 +94,59 @@ export class PersonalTrainingController {
     @Param('bookingId') bookingId: string,
   ) {
     return this.personalTraining.cancelPersonalBooking(user, bookingId);
+  }
+
+  @Get('personal-bookings/goal-templates')
+  @Roles(UserRole.CLIENT, UserRole.TRAINER)
+  getGoalTemplates() {
+    return this.personalTraining.getGoalTemplates();
+  }
+
+  @Get('personal-bookings/:bookingId')
+  @Roles(UserRole.CLIENT, UserRole.TRAINER)
+  getSessionDetail(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.personalTraining.getSessionDetail(user, bookingId);
+  }
+
+  @Put('personal-bookings/:bookingId/plan')
+  @Roles(UserRole.CLIENT, UserRole.TRAINER)
+  updateSessionPlan(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+    @Body() dto: UpdateSessionPlanDto,
+  ) {
+    return this.personalTraining.updateSessionPlan(user, bookingId, dto.goals);
+  }
+
+  @Post('personal-bookings/:bookingId/goals/:goalId/confirm')
+  @Roles(UserRole.CLIENT, UserRole.TRAINER)
+  confirmSessionGoal(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+    @Param('goalId') goalId: string,
+  ) {
+    return this.personalTraining.confirmSessionGoal(user, bookingId, goalId);
+  }
+
+  @Post('personal-bookings/:bookingId/tasks/:taskId/confirm')
+  @Roles(UserRole.CLIENT, UserRole.TRAINER)
+  confirmSessionTask(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+    @Param('taskId') taskId: string,
+  ) {
+    return this.personalTraining.confirmSessionTask(user, bookingId, taskId);
+  }
+
+  @Post('personal-bookings/:bookingId/complete')
+  @Roles(UserRole.CLIENT, UserRole.TRAINER)
+  completeSession(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.personalTraining.completeSession(user, bookingId);
   }
 }

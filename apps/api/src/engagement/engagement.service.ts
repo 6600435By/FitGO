@@ -1,112 +1,327 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { VisitSource, WorkoutSource, WorkoutType, NotificationType } from '@prisma/client';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
-
-const BADGE_DEFS = [
-  { slug: 'first-visit', name: 'Первый шаг', description: 'Первое посещение клуба', threshold: 1 },
-  { slug: 'visits-10', name: 'Постоянный гость', description: '10 посещений', threshold: 10 },
-  { slug: 'visits-25', name: 'Фанат фитнеса', description: '25 посещений', threshold: 25 },
-  { slug: 'visits-50', name: 'Легенда клуба', description: '50 посещений', threshold: 50 },
-  { slug: 'streak-7', name: 'Неделя силы', description: '7 дней подряд в зале', threshold: 7 },
-];
+import { BadgeEvaluatorService } from './badge-evaluator.service';
+import { XP_BY_ACTION } from './badge-definitions';
+import { LeagueService } from './league.service';
+import { LEAGUE_TIER_LABELS } from './league-tier.util';
+import { LoyaltyService } from './loyalty.service';
+import { suggestNickname } from './nickname-pools';
+import { getPublicDisplayName } from './public-display.util';
+import { VisitSyncService } from './visit-sync.service';
+import type { ActivateGamificationDto, CheckInDto, CreateWorkoutDto } from './dto/engagement.dto';
 
 @Injectable()
 export class EngagementService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
+    private readonly visitSync: VisitSyncService,
+    private readonly loyalty: LoyaltyService,
+    private readonly league: LeagueService,
+    private readonly badgeEvaluator: BadgeEvaluatorService,
   ) {}
 
-  async ensureBadges() {
-    for (const badge of BADGE_DEFS) {
-      await this.prisma.badge.upsert({
-        where: { slug: badge.slug },
-        update: { name: badge.name, description: badge.description, threshold: badge.threshold },
-        create: badge,
+  private requireProfile(user: { profileCompletedAt: Date | null }) {
+    if (!user.profileCompletedAt) {
+      throw new ForbiddenException({ requiresProfile: true, message: 'Заполните профиль' });
+    }
+  }
+
+  async suggestNicknameForUser(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException();
+    return { nickname: suggestNickname(user.gender) };
+  }
+
+  async checkNickname(clubId: string, name: string) {
+    const normalized = name.trim();
+    if (normalized.length < 2) {
+      return { available: false, reason: 'Слишком короткий ник' };
+    }
+    const existing = await this.prisma.user.findFirst({
+      where: { clubId, gamificationNickname: normalized },
+    });
+    return { available: !existing };
+  }
+
+  async activate(user: JwtPayload, dto: ActivateGamificationDto) {
+    const dbUser = await this.prisma.user.findUnique({ where: { id: user.sub } });
+    if (!dbUser) throw new NotFoundException();
+    this.requireProfile(dbUser);
+
+    if (dbUser.gamificationStartedAt) {
+      throw new BadRequestException('Геймификация уже активирована');
+    }
+
+    let nickname = dto.gamificationNickname?.trim();
+    if (!dto.useRealNameInPublic) {
+      if (!nickname) nickname = suggestNickname(dbUser.gender);
+      const check = await this.checkNickname(user.clubId, nickname);
+      if (!check.available) {
+        throw new ConflictException('Этот ник уже занят');
+      }
+    }
+
+    const now = new Date();
+    await this.prisma.user.update({
+      where: { id: user.sub },
+      data: {
+        gamificationStartedAt: now,
+        useRealNameInPublic: dto.useRealNameInPublic,
+        gamificationNickname: dto.useRealNameInPublic ? null : nickname,
+      },
+    });
+
+    await this.loyalty.initializeFromHistory(user.sub, user.clubId, dbUser.externalId);
+    await this.league.ensureClientRating(user.sub, user.clubId);
+    await this.league.awardXp(user.sub, XP_BY_ACTION.DAILY_GOAL);
+    const newBadges = await this.badgeEvaluator.evaluate(user.sub);
+
+    const rating = await this.prisma.clientRating.findUnique({ where: { userId: user.sub } });
+    const loyaltyProfile = await this.prisma.loyaltyProfile.findUnique({ where: { userId: user.sub } });
+
+    return {
+      gamificationStartedAt: now.toISOString(),
+      newBadges,
+      loyalty: loyaltyProfile
+        ? {
+            status: loyaltyProfile.status,
+            currentTier: loyaltyProfile.currentTier,
+            tierLabel: LEAGUE_TIER_LABELS[loyaltyProfile.currentTier],
+            continuityMonths: loyaltyProfile.continuityMonths,
+          }
+        : null,
+      leagueTier: rating?.leagueTier ?? 'BRONZE',
+    };
+  }
+
+  async checkIn(user: JwtPayload, dto: CheckInDto = {}) {
+    const dbUser = await this.prisma.user.findUnique({ where: { id: user.sub } });
+    if (!dbUser) throw new NotFoundException();
+    this.requireProfile(dbUser);
+    if (!dbUser.gamificationStartedAt) {
+      throw new BadRequestException('Сначала активируйте геймификацию');
+    }
+
+    const source = dto.qrToken ? VisitSource.APP_QR : VisitSource.APP_GEOFENCE;
+    const { visit, isNew } = await this.visitSync.upsertVisit(
+      user.sub,
+      user.clubId,
+      new Date(),
+      source,
+    );
+
+    if (isNew) {
+      await this.league.awardXp(user.sub, XP_BY_ACTION.CLUB_VISIT);
+      await this.updateChallengeProgress(user.sub, user.clubId);
+    }
+
+    await this.loyalty.refreshLoyalty(user.sub);
+    const newBadges = await this.badgeEvaluator.evaluate(user.sub);
+
+    return { visitId: visit.id, newBadges, xpAwarded: isNew ? XP_BY_ACTION.CLUB_VISIT : 0 };
+  }
+
+  async recordDailyGoal(user: JwtPayload) {
+    const dbUser = await this.prisma.user.findUnique({ where: { id: user.sub } });
+    if (!dbUser?.gamificationStartedAt) {
+      throw new BadRequestException('Сначала активируйте геймификацию');
+    }
+
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const existing = await this.prisma.notification.findFirst({
+      where: {
+        userId: user.sub,
+        title: 'Ежедневная цель',
+        createdAt: { gte: todayStart },
+      },
+    });
+    if (existing) {
+      return { awarded: false, message: 'Цель уже выполнена сегодня' };
+    }
+
+    await this.league.awardXp(user.sub, XP_BY_ACTION.DAILY_GOAL);
+    await this.prisma.notification.create({
+      data: {
+        userId: user.sub,
+        type: NotificationType.GENERAL,
+        title: 'Ежедневная цель',
+        body: `+${XP_BY_ACTION.DAILY_GOAL} XP за ежедневную активность`,
+      },
+    });
+
+    return { awarded: true, xp: XP_BY_ACTION.DAILY_GOAL };
+  }
+
+  private async updateChallengeProgress(userId: string, clubId: string) {
+    const now = new Date();
+    const challenges = await this.prisma.challenge.findMany({
+      where: {
+        clubId,
+        active: true,
+        startDate: { lte: now },
+        endDate: { gte: now },
+      },
+    });
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const since = user?.gamificationStartedAt ?? new Date(0);
+
+    for (const challenge of challenges) {
+      const visits = await this.prisma.clubVisit.count({
+        where: {
+          userId,
+          visitedAt: {
+            gte: since > challenge.startDate ? since : challenge.startDate,
+            lte: challenge.endDate,
+          },
+        },
+      });
+
+      await this.prisma.challengeEntry.upsert({
+        where: { challengeId_userId: { challengeId: challenge.id, userId } },
+        update: { visits },
+        create: { challengeId: challenge.id, userId, visits },
       });
     }
   }
 
-  private calcStreak(visitDates: string[]): number {
-    if (visitDates.length === 0) return 0;
-    const uniqueDays = [...new Set(visitDates.map((d) => d.slice(0, 10)))].sort().reverse();
-    let streak = 1;
-    for (let i = 0; i < uniqueDays.length - 1; i++) {
-      const current = new Date(uniqueDays[i]);
-      const next = new Date(uniqueDays[i + 1]);
-      const diff = (current.getTime() - next.getTime()) / 86400000;
-      if (diff === 1) streak++;
-      else break;
-    }
-    return streak;
-  }
-
   async getGamification(user: JwtPayload) {
-    await this.ensureBadges();
     const dbUser = await this.prisma.user.findUnique({ where: { id: user.sub } });
-    if (!dbUser?.externalId) throw new NotFoundException('Клиент не привязан к 1С');
+    if (!dbUser) throw new NotFoundException();
+    this.requireProfile(dbUser);
 
-    const visits = await this.fitness.getProvider().getVisits(dbUser.externalId);
-    const visitStreak = this.calcStreak(visits.map((v) => v.date));
+    const since = dbUser.gamificationStartedAt;
+    const visits = since
+      ? await this.visitSync.getVisitsForUser(user.sub, since)
+      : [];
+    const visitStreak = this.visitSync.calcStreak(visits.map((v) => v.visitDate));
     const totalVisits = visits.length;
 
-    const badges = await this.prisma.badge.findMany();
     const earned = await this.prisma.userBadge.findMany({
-      where: { userId: user.sub },
-      include: { badge: true },
-    });
-
-    for (const badge of badges) {
-      if (!badge.threshold) continue;
-      const earnedSlugs = new Set(earned.map((e) => e.badge.slug));
-      if (earnedSlugs.has(badge.slug)) continue;
-
-      const qualifies =
-        badge.slug === 'streak-7'
-          ? visitStreak >= badge.threshold
-          : totalVisits >= badge.threshold;
-
-      if (qualifies) {
-        await this.prisma.userBadge.create({
-          data: { userId: user.sub, badgeId: badge.id },
-        });
-        await this.prisma.user.update({
-          where: { id: user.sub },
-          data: { gamificationPoints: { increment: badge.threshold * 10 } },
-        });
-      }
-    }
-
-    const updatedEarned = await this.prisma.userBadge.findMany({
       where: { userId: user.sub },
       include: { badge: true },
       orderBy: { earnedAt: 'desc' },
     });
 
-    const dbUserUpdated = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-    });
+    const allBadges = await this.prisma.badge.findMany();
+    const earnedSlugs = new Set(earned.map((e) => e.badge.slug));
+    const lockedBadges = allBadges
+      .filter((b) => !earnedSlugs.has(b.slug))
+      .map((b) => ({
+        id: b.id,
+        slug: b.slug,
+        name: b.name,
+        description: b.description,
+        category: b.category,
+        tier: b.tier,
+      }));
 
-    const clubUsers = await this.prisma.user.findMany({
+    const rating = await this.prisma.clientRating.findUnique({ where: { userId: user.sub } });
+    const loyaltyProfile = await this.prisma.loyaltyProfile.findUnique({ where: { userId: user.sub } });
+    const leagueGroup = await this.league.getLeagueGroup(user.sub);
+    const nextBadge = since ? await this.badgeEvaluator.getNextBadge(user.sub) : null;
+    const decayWarning = this.league.getDecayWarning(rating?.lastAppActivityAt);
+
+    const rankUsers = await this.prisma.clientRating.findMany({
       where: { clubId: user.clubId },
-      orderBy: { gamificationPoints: 'desc' },
-      take: 20,
+      orderBy: { lifetimeXp: 'desc' },
+      take: 50,
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            gamificationNickname: true,
+            useRealNameInPublic: true,
+          },
+        },
+      },
     });
-    const rank = clubUsers.findIndex((u) => u.id === user.sub) + 1;
+    const rank = rankUsers.findIndex((r) => r.userId === user.sub) + 1;
 
     return {
+      activated: !!since,
+      gamificationStartedAt: since?.toISOString(),
       visitStreak,
       totalVisits,
-      points: dbUserUpdated?.gamificationPoints ?? 0,
+      points: rating?.lifetimeXp ?? dbUser.gamificationPoints,
       rank: rank > 0 ? rank : undefined,
-      badges: updatedEarned.map((e) => ({
+      badges: earned.map((e) => ({
         id: e.badge.id,
+        slug: e.badge.slug,
         name: e.badge.name,
         description: e.badge.description,
+        category: e.badge.category,
+        tier: e.badge.tier,
         earnedAt: e.earnedAt.toISOString(),
       })),
+      lockedBadges,
+      nextBadge,
+      league: leagueGroup,
+      loyalty: loyaltyProfile
+        ? {
+            status: loyaltyProfile.status,
+            currentTier: loyaltyProfile.currentTier,
+            peakTier: loyaltyProfile.peakTier,
+            tierLabel: LEAGUE_TIER_LABELS[loyaltyProfile.currentTier],
+            continuityMonths: loyaltyProfile.continuityMonths,
+            lastVisitAt: loyaltyProfile.lastVisitAt?.toISOString(),
+          }
+        : null,
+      decayWarning,
+      useRealNameInPublic: dbUser.useRealNameInPublic,
+      gamificationNickname: dbUser.gamificationNickname,
     };
+  }
+
+  async getLeagueGroup(user: JwtPayload) {
+    return this.league.getLeagueGroup(user.sub);
+  }
+
+  async createWorkout(user: JwtPayload, dto: CreateWorkoutDto) {
+    const dbUser = await this.prisma.user.findUnique({ where: { id: user.sub } });
+    if (!dbUser?.gamificationStartedAt) {
+      throw new BadRequestException('Сначала активируйте геймификацию');
+    }
+
+    const workout = await this.prisma.workoutLog.create({
+      data: {
+        userId: user.sub,
+        type: dto.type as WorkoutType,
+        startedAt: new Date(dto.startedAt),
+        durationMin: dto.durationMin,
+        distanceKm: dto.distanceKm,
+        calories: dto.calories,
+        notes: dto.notes,
+        source: WorkoutSource.MANUAL,
+        verified: false,
+      },
+    });
+
+    await this.league.awardXp(user.sub, XP_BY_ACTION.WORKOUT_MANUAL);
+    const newBadges = await this.badgeEvaluator.evaluate(user.sub);
+
+    return { workout, xpAwarded: XP_BY_ACTION.WORKOUT_MANUAL, newBadges };
+  }
+
+  async getWorkouts(user: JwtPayload) {
+    return this.prisma.workoutLog.findMany({
+      where: { userId: user.sub },
+      orderBy: { startedAt: 'desc' },
+      take: 50,
+    });
   }
 
   async getReferral(user: JwtPayload) {
@@ -160,38 +375,64 @@ export class EngagementService {
     });
   }
 
-  async getChallenges(clubId: string) {
-    return this.prisma.challenge.findMany({
-      where: { clubId, active: true },
+  async getChallenges(user: JwtPayload) {
+    const dbUser = await this.prisma.user.findUnique({ where: { id: user.sub } });
+    const challenges = await this.prisma.challenge.findMany({
+      where: { clubId: user.clubId, active: true },
       orderBy: { startDate: 'desc' },
+      include: {
+        entries: dbUser?.gamificationStartedAt
+          ? { where: { userId: user.sub } }
+          : false,
+      },
+    });
+
+    return challenges.map((c) => {
+      const entry = Array.isArray(c.entries) ? c.entries[0] : null;
+      return {
+        id: c.id,
+        title: c.title,
+        description: c.description,
+        targetVisits: c.targetVisits,
+        startDate: c.startDate.toISOString(),
+        endDate: c.endDate.toISOString(),
+        progress: entry?.visits ?? 0,
+        completed: (entry?.visits ?? 0) >= c.targetVisits,
+      };
     });
   }
 
   async getLeaderboard(clubId: string) {
-    const users = await this.prisma.user.findMany({
-      where: { clubId, gamificationPoints: { gt: 0 } },
-      orderBy: { gamificationPoints: 'desc' },
+    const ratings = await this.prisma.clientRating.findMany({
+      where: { clubId, lifetimeXp: { gt: 0 } },
+      orderBy: { lifetimeXp: 'desc' },
       take: 10,
-      select: {
-        id: true,
-        firstName: true,
-        lastName: true,
-        gamificationPoints: true,
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            gamificationNickname: true,
+            useRealNameInPublic: true,
+          },
+        },
       },
     });
-    return users.map((u, i) => ({
+
+    return ratings.map((r, i) => ({
       rank: i + 1,
-      name: `${u.firstName} ${u.lastName.charAt(0)}.`,
-      points: u.gamificationPoints,
+      name: getPublicDisplayName(r.user),
+      points: r.lifetimeXp,
     }));
   }
 
   async syncWearable(user: JwtPayload, provider: string) {
     const dbUser = await this.prisma.user.findUnique({ where: { id: user.sub } });
-    if (!dbUser?.externalId) throw new NotFoundException();
+    if (!dbUser) throw new NotFoundException();
 
-    const visits = await this.fitness.getProvider().getVisits(dbUser.externalId);
-    const visitsImported = visits.length;
+    const visitsImported = dbUser.externalId
+      ? (await this.fitness.getProvider().getVisits(dbUser.externalId)).length
+      : 0;
 
     const sync = await this.prisma.wearableSync.upsert({
       where: { userId_provider: { userId: user.sub, provider } },

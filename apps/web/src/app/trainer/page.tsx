@@ -84,20 +84,24 @@ export default function TrainerHomePage() {
           </Link>
         </div>
         <ul className="space-y-2">
-          {data.schedule.slice(0, 4).map((slot) => (
-            <li
-              key={slot.id}
-              className="flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-sm"
-            >
-              <div>
-                <p className="font-medium">{slot.title}</p>
-                <p className="text-slate-400">{formatDateTime(slot.startAt)}</p>
-              </div>
-              <span className="text-slate-400">
-                {slot.booked}/{slot.capacity}
-              </span>
-            </li>
-          ))}
+          {data.schedule.length === 0 ? (
+            <li className="text-sm text-slate-400">Нет предстоящих занятий</li>
+          ) : (
+            data.schedule.slice(0, 4).map((slot) => (
+              <li
+                key={slot.id}
+                className="flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-sm"
+              >
+                <div>
+                  <p className="font-medium">{slot.title}</p>
+                  <p className="text-slate-400">{formatDateTime(slot.startAt)}</p>
+                </div>
+                <span className="text-slate-400">
+                  {slot.booked}/{slot.capacity}
+                </span>
+              </li>
+            ))
+          )}
         </ul>
       </div>
 

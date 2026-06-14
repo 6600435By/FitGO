@@ -20,6 +20,7 @@ const LIFECYCLE_LABELS = {
   UPCOMING: 'Предстоящая',
   COMPLETED: 'Завершена',
   CANCELLED: 'Отменена',
+  AWAITING_CONFIRMATION: 'Ожидает подтверждения',
 };
 
 export default function ClientBookingHistoryPage() {

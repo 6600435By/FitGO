@@ -60,16 +60,18 @@ FORMA_DEFAULT_PASSWORD=club-client-password
 
 `Club.externalId` в БД должен содержать UUID клуба из 1С (`club_id`).
 
-### WordPress proxy (рекомендуется, если 1С доступна только с сервера сайта)
+### WordPress proxy (рекомендуется для ffs.by / planvueplugin)
 
-Тот же путь, что у виджета `planvueplugin` — через `admin-ajax.php`:
+Тот же путь, что у виджета `planvueplugin` на сайте клуба — через `admin-ajax.php`:
 
 ```env
 FITNESS_PROVIDER=forma-wp
-FORMA_WP_AJAX_URL=https://your-club-site.com/wp-admin/admin-ajax.php
+FORMA_WP_AJAX_URL=https://ffs.by/wp-admin/admin-ajax.php
 ```
 
 FitGO API вызывает те же action (`getGroups`, `authClient`, `clientToClass`, `clientFromClass`), что и виджет на WordPress. Credentials 1С остаются в PHP-плагине на сервере клуба.
+
+> **Важно:** `FITNESS_PROVIDER=mock` — только демо-расписание без связи с ffs.by. Для продакшена/club-сайта используйте `forma-wp`.
 
 ### Generic REST API
 

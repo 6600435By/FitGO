@@ -5,7 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PersonalBookingStatus, Role } from '@prisma/client';
-import { SessionType } from '@fitgo/shared-types';
+import {
+  PERSONAL_TRAINING_GOAL_TEMPLATES,
+  SessionType,
+  type PersonalSessionStatus,
+  type PersonalTrainingSessionDetail,
+} from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -271,7 +276,252 @@ export class PersonalTrainingService {
       startAt: booking.startAt.toISOString(),
       endAt: booking.endAt.toISOString(),
       status: booking.status,
+      clientCompletedAt: booking.clientCompletedAt?.toISOString(),
+      trainerCompletedAt: booking.trainerCompletedAt?.toISOString(),
     }));
+  }
+
+  getGoalTemplates() {
+    return PERSONAL_TRAINING_GOAL_TEMPLATES;
+  }
+
+  async getSessionDetail(
+    user: JwtPayload,
+    bookingId: string,
+  ): Promise<PersonalTrainingSessionDetail> {
+    const booking = await this.getAccessibleBooking(user, bookingId);
+    return this.mapSessionDetail(booking, user.sub);
+  }
+
+  async updateSessionPlan(
+    user: JwtPayload,
+    bookingId: string,
+    goals: Array<{
+      id?: string;
+      title: string;
+      notes?: string;
+      sortOrder?: number;
+      tasks?: Array<{ id?: string; title: string; sortOrder?: number }>;
+    }>,
+  ) {
+    const booking = await this.getAccessibleBooking(user, bookingId);
+    this.ensureSessionEditable(booking);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.personalTrainingSessionGoal.deleteMany({
+        where: { bookingId },
+      });
+
+      for (const [goalIndex, goal] of goals.entries()) {
+        const createdGoal = await tx.personalTrainingSessionGoal.create({
+          data: {
+            bookingId,
+            title: goal.title.trim(),
+            notes: goal.notes?.trim() || null,
+            sortOrder: goal.sortOrder ?? goalIndex,
+            createdById: user.sub,
+          },
+        });
+
+        for (const [taskIndex, task] of (goal.tasks ?? []).entries()) {
+          if (!task.title.trim()) continue;
+          await tx.personalTrainingSessionTask.create({
+            data: {
+              goalId: createdGoal.id,
+              title: task.title.trim(),
+              sortOrder: task.sortOrder ?? taskIndex,
+            },
+          });
+        }
+      }
+    });
+
+    return this.getSessionDetail(user, bookingId);
+  }
+
+  async confirmSessionGoal(
+    user: JwtPayload,
+    bookingId: string,
+    goalId: string,
+  ) {
+    const booking = await this.getAccessibleBooking(user, bookingId);
+    this.ensureCanConfirm(booking);
+
+    const goal = await this.prisma.personalTrainingSessionGoal.findFirst({
+      where: { id: goalId, bookingId },
+    });
+    if (!goal) throw new NotFoundException('Цель не найдена');
+
+    const isClient = booking.clientId === user.sub;
+    await this.prisma.personalTrainingSessionGoal.update({
+      where: { id: goalId },
+      data: isClient
+        ? { clientConfirmed: true }
+        : { trainerConfirmed: true },
+    });
+
+    return this.getSessionDetail(user, bookingId);
+  }
+
+  async confirmSessionTask(
+    user: JwtPayload,
+    bookingId: string,
+    taskId: string,
+  ) {
+    const booking = await this.getAccessibleBooking(user, bookingId);
+    this.ensureCanConfirm(booking);
+
+    const task = await this.prisma.personalTrainingSessionTask.findFirst({
+      where: {
+        id: taskId,
+        goal: { bookingId },
+      },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+
+    const isClient = booking.clientId === user.sub;
+    await this.prisma.personalTrainingSessionTask.update({
+      where: { id: taskId },
+      data: isClient
+        ? { clientConfirmed: true }
+        : { trainerConfirmed: true },
+    });
+
+    return this.getSessionDetail(user, bookingId);
+  }
+
+  async completeSession(user: JwtPayload, bookingId: string) {
+    const booking = await this.getAccessibleBooking(user, bookingId);
+    if (booking.status === PersonalBookingStatus.CANCELLED) {
+      throw new BadRequestException('Тренировка отменена');
+    }
+    if (booking.status === PersonalBookingStatus.COMPLETED) {
+      return this.getSessionDetail(user, bookingId);
+    }
+
+    const now = new Date();
+    if (booking.startAt > now) {
+      throw new BadRequestException('Тренировка ещё не началась');
+    }
+
+    const isClient = booking.clientId === user.sub;
+    const isTrainer = booking.trainerId === user.sub;
+
+    await this.prisma.personalTrainingBooking.update({
+      where: { id: bookingId },
+      data: {
+        ...(isClient ? { clientCompletedAt: now } : {}),
+        ...(isTrainer ? { trainerCompletedAt: now } : {}),
+        status: PersonalBookingStatus.COMPLETED,
+      },
+    });
+
+    return this.getSessionDetail(user, bookingId);
+  }
+
+  mapSessionStatus(
+    status: PersonalBookingStatus,
+  ): PersonalSessionStatus {
+    if (status === PersonalBookingStatus.CANCELLED) return 'CANCELLED';
+    if (status === PersonalBookingStatus.COMPLETED) return 'COMPLETED';
+    return 'SCHEDULED';
+  }
+
+  private mapSessionDetail(
+    booking: Awaited<
+      ReturnType<PersonalTrainingService['getAccessibleBooking']>
+    >,
+    viewerId: string,
+  ): PersonalTrainingSessionDetail {
+    const now = Date.now();
+    const status = this.mapSessionStatus(booking.status);
+    const isParticipant =
+      booking.clientId === viewerId || booking.trainerId === viewerId;
+
+    return {
+      id: booking.id,
+      trainerId: booking.trainerId,
+      trainerName:
+        `${booking.trainer.firstName} ${booking.trainer.lastName}`.trim(),
+      clientId: booking.clientId,
+      clientName:
+        `${booking.client.firstName} ${booking.client.lastName}`.trim(),
+      startAt: booking.startAt.toISOString(),
+      endAt: booking.endAt.toISOString(),
+      status,
+      clientCompletedAt: booking.clientCompletedAt?.toISOString(),
+      trainerCompletedAt: booking.trainerCompletedAt?.toISOString(),
+      canEdit:
+        isParticipant &&
+        booking.status === PersonalBookingStatus.CONFIRMED,
+      canComplete:
+        isParticipant &&
+        booking.status === PersonalBookingStatus.CONFIRMED &&
+        booking.startAt.getTime() <= now,
+      goals: (booking.sessionGoals ?? []).map((goal) => ({
+        id: goal.id,
+        title: goal.title,
+        notes: goal.notes ?? undefined,
+        sortOrder: goal.sortOrder,
+        clientConfirmed: goal.clientConfirmed,
+        trainerConfirmed: goal.trainerConfirmed,
+        tasks: goal.tasks.map((task) => ({
+          id: task.id,
+          title: task.title,
+          sortOrder: task.sortOrder,
+          clientConfirmed: task.clientConfirmed,
+          trainerConfirmed: task.trainerConfirmed,
+        })),
+      })),
+    };
+  }
+
+  private ensureSessionEditable(booking: {
+    status: PersonalBookingStatus;
+  }) {
+    if (booking.status !== PersonalBookingStatus.CONFIRMED) {
+      throw new BadRequestException('План нельзя изменить для этой тренировки');
+    }
+  }
+
+  private ensureCanConfirm(booking: {
+    status: PersonalBookingStatus;
+    startAt: Date;
+  }) {
+    if (booking.status === PersonalBookingStatus.CANCELLED) {
+      throw new BadRequestException('Тренировка отменена');
+    }
+    if (booking.startAt.getTime() > Date.now()) {
+      throw new BadRequestException('Подтверждение доступно после начала тренировки');
+    }
+  }
+
+  private async getAccessibleBooking(
+    user: JwtPayload,
+    bookingId: string,
+  ) {
+    const booking = await this.prisma.personalTrainingBooking.findFirst({
+      where: {
+        id: bookingId,
+        OR: [{ clientId: user.sub }, { trainerId: user.sub }],
+      },
+      include: {
+        trainer: true,
+        client: true,
+        sessionGoals: {
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            tasks: { orderBy: { sortOrder: 'asc' } },
+          },
+        },
+      },
+    });
+
+    if (!booking) {
+      throw new NotFoundException('Тренировка не найдена');
+    }
+
+    return booking;
   }
 
   async cancelPersonalBooking(user: JwtPayload, bookingId: string) {
@@ -317,13 +567,18 @@ export class PersonalTrainingService {
   toBookingItems(
     bookings: Awaited<ReturnType<PersonalTrainingService['getClientPersonalBookings']>>,
   ) {
+    const now = Date.now();
     return bookings.map((booking) => {
-      const lifecycle =
-        booking.status === PersonalBookingStatus.CANCELLED
-          ? ('CANCELLED' as const)
-          : new Date(booking.endAt).getTime() > Date.now()
-            ? ('UPCOMING' as const)
-            : ('COMPLETED' as const);
+      let lifecycle: 'UPCOMING' | 'COMPLETED' | 'CANCELLED' | 'AWAITING_CONFIRMATION';
+      if (booking.status === PersonalBookingStatus.CANCELLED) {
+        lifecycle = 'CANCELLED';
+      } else if (booking.status === PersonalBookingStatus.COMPLETED) {
+        lifecycle = 'COMPLETED';
+      } else if (new Date(booking.endAt).getTime() > now) {
+        lifecycle = 'UPCOMING';
+      } else {
+        lifecycle = 'AWAITING_CONFIRMATION';
+      }
 
       return {
         id: booking.id,

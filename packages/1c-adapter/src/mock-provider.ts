@@ -1,14 +1,25 @@
-import { UserRole, type AuthCredentials, type AuthResult, type Booking, type PaymentResult } from '@fitgo/shared-types';
+import { UserRole, type AuthCredentials, type AuthResult, type Booking, type PaymentResult, type ScheduleSlot } from '@fitgo/shared-types';
 import {
   MOCK_CLUB,
   MOCK_PRODUCTS,
-  MOCK_SCHEDULE,
   MOCK_USERS,
+  buildMockSchedule,
+  buildMockVisits,
 } from './fixtures';
 import type { IFitnessClubProvider, ScheduleFilters, VisitPeriod, BookingContext } from './types';
 
 export class Mock1CProvider implements IFitnessClubProvider {
+  private slots: ScheduleSlot[] = buildMockSchedule();
   private bookings = new Set<string>();
+
+  private ensureFreshSchedule() {
+    const now = Date.now();
+    const hasUpcoming = this.slots.some((s) => new Date(s.endAt).getTime() > now);
+    if (!hasUpcoming) {
+      this.slots = buildMockSchedule();
+      this.bookings.clear();
+    }
+  }
 
   async authenticate(credentials: AuthCredentials): Promise<AuthResult | null> {
     const user = MOCK_USERS[credentials.email];
@@ -42,7 +53,11 @@ export class Mock1CProvider implements IFitnessClubProvider {
     );
     if (!entry) return [];
 
-    let visits = [...entry.visits];
+    let visits =
+      entry.profile.roles.includes(UserRole.CLIENT)
+        ? buildMockVisits(MOCK_CLUB.name)
+        : [...entry.visits];
+
     if (period?.from) {
       visits = visits.filter((v) => v.date >= period.from!);
     }
@@ -62,7 +77,9 @@ export class Mock1CProvider implements IFitnessClubProvider {
   async getSchedule(clubExternalId: string, filters?: ScheduleFilters) {
     if (clubExternalId !== MOCK_CLUB.externalId) return [];
 
-    let slots = [...MOCK_SCHEDULE];
+    this.ensureFreshSchedule();
+
+    let slots = [...this.slots];
     if (filters?.trainerId) {
       slots = slots.filter((s) => s.trainerId === filters.trainerId);
     }
@@ -79,7 +96,8 @@ export class Mock1CProvider implements IFitnessClubProvider {
   }
 
   async bookSession(externalId: string, sessionId: string, _context?: BookingContext) {
-    const slot = MOCK_SCHEDULE.find((s) => s.id === sessionId);
+    this.ensureFreshSchedule();
+    const slot = this.slots.find((s) => s.id === sessionId);
     if (!slot) {
       return { success: false, message: 'Занятие не найдено' };
     }
@@ -101,11 +119,12 @@ export class Mock1CProvider implements IFitnessClubProvider {
   }
 
   async getBookings(externalId: string, _context?: BookingContext): Promise<Booking[]> {
+    this.ensureFreshSchedule();
     const bookings: Booking[] = [];
     for (const key of this.bookings) {
       const [bookedExternalId, sessionId] = key.split(':');
       if (bookedExternalId !== externalId) continue;
-      const slot = MOCK_SCHEDULE.find((s) => s.id === sessionId);
+      const slot = this.slots.find((s) => s.id === sessionId);
       if (!slot) continue;
       bookings.push({
         id: key,
@@ -126,7 +145,7 @@ export class Mock1CProvider implements IFitnessClubProvider {
       return { success: false, message: 'Запись не найдена' };
     }
 
-    const slot = MOCK_SCHEDULE.find((s) => s.id === sessionId);
+    const slot = this.slots.find((s) => s.id === sessionId);
     this.bookings.delete(key);
     if (slot) {
       slot.booked = Math.max(0, slot.booked - 1);
@@ -150,7 +169,7 @@ export class Mock1CProvider implements IFitnessClubProvider {
         membershipName: u.membership.name,
         membershipStatus: u.membership.status,
         validUntil: u.membership.validUntil,
-        lastVisit: u.visits[0]?.date,
+        lastVisit: buildMockVisits(MOCK_CLUB.name)[0]?.date,
       }));
   }
 

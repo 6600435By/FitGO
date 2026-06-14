@@ -3,10 +3,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MembershipStatus } from '@fitgo/shared-types';
-import { Role } from '@prisma/client';
+import { MembershipStatus, SessionType, type ScheduleSlot, type Visit } from '@fitgo/shared-types';
+import { GroupClassBookingStatus, PersonalBookingStatus, Role, BodyLogSource } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { FitnessService } from '../fitness/fitness.service';
+import { VisitSyncService } from '../engagement/visit-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -16,7 +17,225 @@ export class TrainerService {
     private readonly fitness: FitnessService,
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly visitSync: VisitSyncService,
   ) {}
+
+  private isFormaEmployeeId(id: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      id,
+    );
+  }
+
+  private async fetchTrainerGroupSchedule(
+    clubExternalId: string,
+    trainerExternalId: string,
+    trainerUserId: string,
+  ): Promise<ScheduleSlot[]> {
+    const provider = this.fitness.getProvider();
+
+    try {
+      if (this.isFormaEmployeeId(trainerExternalId)) {
+        return await provider.getSchedule(clubExternalId, {
+          trainerId: trainerExternalId,
+        });
+      }
+
+      const dbTrainer = await this.prisma.user.findUnique({
+        where: { id: trainerUserId },
+      });
+      const allSlots = await provider.getSchedule(clubExternalId);
+      if (!dbTrainer) return allSlots;
+
+      const first = dbTrainer.firstName.trim();
+      const last = dbTrainer.lastName.trim();
+      return allSlots.filter((slot) => {
+        if (slot.trainerId === trainerExternalId) return true;
+        const name = slot.trainerName?.toLowerCase() ?? '';
+        return (
+          (first && name.includes(first.toLowerCase())) ||
+          (last && name.includes(last.toLowerCase()))
+        );
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  private async fetchTrainerPersonalSchedule(
+    trainerUserId: string,
+  ): Promise<ScheduleSlot[]> {
+    const now = new Date();
+    const bookings = await this.prisma.personalTrainingBooking.findMany({
+      where: {
+        trainerId: trainerUserId,
+        status: PersonalBookingStatus.CONFIRMED,
+        endAt: { gt: now },
+      },
+      include: { client: true },
+      orderBy: { startAt: 'asc' },
+    });
+
+    return bookings.map((booking) => ({
+      id: booking.id,
+      title: `Персональная · ${booking.client.firstName} ${booking.client.lastName}`.trim(),
+      type: SessionType.PERSONAL,
+      trainerId: booking.trainerId,
+      trainerName: '',
+      startAt: booking.startAt.toISOString(),
+      endAt: booking.endAt.toISOString(),
+      capacity: 1,
+      booked: 1,
+      available: false,
+    }));
+  }
+
+  private localDateKey(d = new Date()): string {
+    return d.toLocaleDateString('fr-CA');
+  }
+
+  private filterUpcomingSchedule<T extends { endAt: string; startAt: string }>(
+    slots: T[],
+  ): T[] {
+    const now = Date.now();
+    return slots
+      .filter((s) => new Date(s.endAt).getTime() > now)
+      .sort((a, b) => a.startAt.localeCompare(b.startAt));
+  }
+
+  private formatVisitTime(date: Date): string {
+    return date.toISOString().slice(11, 16);
+  }
+
+  private async getAppSessionVisits(
+    clientId: string,
+    clubName: string,
+  ): Promise<Visit[]> {
+    const now = new Date();
+
+    const [groupBookings, personalBookings] = await Promise.all([
+      this.prisma.groupClassBooking.findMany({
+        where: {
+          clientId,
+          status: { not: GroupClassBookingStatus.CANCELLED },
+          endAt: { lt: now },
+        },
+        orderBy: { startAt: 'desc' },
+      }),
+      this.prisma.personalTrainingBooking.findMany({
+        where: {
+          clientId,
+          status: { not: PersonalBookingStatus.CANCELLED },
+          endAt: { lt: now },
+        },
+        include: { trainer: true },
+        orderBy: { startAt: 'desc' },
+      }),
+    ]);
+
+    const groupVisits: Visit[] = groupBookings.map((booking) => ({
+      id: `group-${booking.id}`,
+      date: booking.startAt.toISOString().slice(0, 10),
+      checkIn: this.formatVisitTime(booking.startAt),
+      checkOut: this.formatVisitTime(booking.endAt),
+      clubName,
+      title: booking.title,
+      sessionType: SessionType.GROUP,
+      source: 'fitgo',
+    }));
+
+    const personalVisits: Visit[] = personalBookings.map((booking) => ({
+      id: `personal-${booking.id}`,
+      date: booking.startAt.toISOString().slice(0, 10),
+      checkIn: this.formatVisitTime(booking.startAt),
+      checkOut: this.formatVisitTime(booking.endAt),
+      clubName,
+      title: `Персональная · ${booking.trainer.firstName} ${booking.trainer.lastName}`.trim(),
+      sessionType: SessionType.PERSONAL,
+      source: 'fitgo',
+    }));
+
+    return [...groupVisits, ...personalVisits];
+  }
+
+  private mergeVisits(externalVisits: Visit[], appVisits: Visit[]): Visit[] {
+    return [...externalVisits, ...appVisits].sort((a, b) => {
+      const dateCompare = b.date.localeCompare(a.date);
+      if (dateCompare !== 0) return dateCompare;
+      return (b.checkIn ?? '').localeCompare(a.checkIn ?? '');
+    });
+  }
+
+  private async getClientVisitHistory(
+    clientId: string,
+    externalId: string | null | undefined,
+    clubId: string,
+    clubName: string,
+  ): Promise<Visit[]> {
+    if (externalId) {
+      await this.visitSync.syncUserVisits(clientId, clubId, externalId);
+    }
+
+    const provider = this.fitness.getProvider();
+    const externalVisits = externalId
+      ? await provider.getVisits(externalId)
+      : [];
+
+    const clubVisits = await this.visitSync.getVisitsForUser(clientId);
+    const syncedVisits: Visit[] = clubVisits.map((v) => ({
+      id: v.id,
+      date: v.visitDate.slice(0, 10),
+      checkIn: this.formatVisitTime(v.visitedAt),
+      clubName,
+      title: v.source === 'ONEC_SYNC' ? 'Визит в клуб' : 'Check-in / запись',
+      source: v.source === 'ONEC_SYNC' ? '1c' : 'fitgo',
+    }));
+
+    const appVisits = await this.getAppSessionVisits(clientId, clubName);
+    const combined = [...externalVisits, ...syncedVisits, ...appVisits];
+
+    const byDateTitle = new Set<string>();
+    const merged: Visit[] = [];
+
+    for (const v of this.mergeVisits(combined, [])) {
+      const key = `${v.date}|${v.title ?? ''}|${v.checkIn ?? ''}`;
+      if (byDateTitle.has(key)) continue;
+      byDateTitle.add(key);
+      merged.push(v);
+    }
+
+    return merged;
+  }
+
+  private async getTrainerClientSessions(trainerId: string, clientId: string) {
+    const bookings = await this.prisma.personalTrainingBooking.findMany({
+      where: { trainerId, clientId },
+      include: {
+        sessionGoals: true,
+      },
+      orderBy: { startAt: 'desc' },
+    });
+
+    const now = Date.now();
+    return bookings.map((booking) => {
+      const status =
+        booking.status === PersonalBookingStatus.CANCELLED
+          ? ('CANCELLED' as const)
+          : booking.status === PersonalBookingStatus.COMPLETED
+            ? ('COMPLETED' as const)
+            : ('SCHEDULED' as const);
+
+      return {
+        id: booking.id,
+        startAt: booking.startAt.toISOString(),
+        endAt: booking.endAt.toISOString(),
+        status,
+        awaitingConfirmation:
+          booking.status === PersonalBookingStatus.CONFIRMED &&
+          booking.endAt.getTime() <= now,
+        goalsCount: booking.sessionGoals.length,
+      };
+    });
+  }
 
   async getDashboard(user: JwtPayload) {
     const externalId = user.externalId ?? '1c-trainer-001';
@@ -24,11 +243,22 @@ export class TrainerService {
       where: { id: user.clubId },
     });
 
-    const schedule = club?.externalId
-      ? await this.fitness
-          .getProvider()
-          .getSchedule(club.externalId, { trainerId: externalId })
-      : [];
+    const [groupSchedule, personalSchedule] = club?.externalId
+      ? await Promise.all([
+          this.fetchTrainerGroupSchedule(
+            club.externalId,
+            externalId,
+            user.sub,
+          ),
+          this.fetchTrainerPersonalSchedule(user.sub),
+        ])
+      : [[], await this.fetchTrainerPersonalSchedule(user.sub)];
+
+    const schedule = this.filterUpcomingSchedule([
+      ...groupSchedule,
+      ...personalSchedule,
+    ]);
+    const todayKey = this.localDateKey();
 
     const clients = await this.getClients(user.sub, user.clubId);
 
@@ -48,7 +278,7 @@ export class TrainerService {
       stats: {
         clientsCount: clients.length,
         sessionsToday: schedule.filter((s) =>
-          s.startAt.startsWith(new Date().toISOString().slice(0, 10)),
+          s.startAt.slice(0, 10) === todayKey,
         ).length,
         upcomingSessions: schedule.filter((s) => s.available).length,
       },
@@ -90,14 +320,15 @@ export class TrainerService {
     const provider = this.fitness.getProvider();
     let membershipName: string | undefined;
     let membershipStatus: MembershipStatus | undefined;
-    let lastVisit: string | undefined;
+
+    const sessions = await this.getTrainerClientSessions(user.sub, clientId);
+    const lastCompleted = sessions.find((s) => s.status === 'COMPLETED');
+    const lastVisit = lastCompleted?.startAt.slice(0, 10);
 
     if (client.externalId) {
       const membership = await provider.getMembership(client.externalId);
-      const visits = await provider.getVisits(client.externalId);
       membershipName = membership?.name;
       membershipStatus = membership?.status;
-      lastVisit = visits[0]?.date;
     }
 
     const [goals, notes, measurements] = await Promise.all([
@@ -122,10 +353,10 @@ export class TrainerService {
       externalId: client.externalId ?? undefined,
       firstName: client.firstName,
       lastName: client.lastName,
-      phone: client.phone ?? undefined,
       membershipName,
       membershipStatus,
       lastVisit,
+      sessions,
       goals: goals.map((g) => ({
         id: g.id,
         title: g.title,
@@ -176,7 +407,7 @@ export class TrainerService {
     data: { weight?: number; notes?: string },
   ) {
     await this.ensureClubClient(user, clientId);
-    return this.prisma.clientMeasurement.create({
+    const measurement = await this.prisma.clientMeasurement.create({
       data: {
         trainerId: user.sub,
         clientId,
@@ -184,6 +415,18 @@ export class TrainerService {
         notes: data.notes,
       },
     });
+    if (data.weight) {
+      await this.prisma.clientBodyLog.create({
+        data: {
+          clientId,
+          recordedById: user.sub,
+          source: BodyLogSource.TRAINER,
+          weightKg: data.weight,
+          notes: data.notes,
+        },
+      });
+    }
+    return measurement;
   }
 
   async sendClientMessage(user: JwtPayload, clientId: string, message: string) {
@@ -335,7 +578,6 @@ export class TrainerService {
           externalId: client.externalId ?? undefined,
           firstName: client.firstName,
           lastName: client.lastName,
-          phone: client.phone ?? undefined,
           membershipName,
           membershipStatus,
           lastVisit,

@@ -1,8 +1,26 @@
-import { PrismaClient, Role } from '@prisma/client';
+import { BadgeDataScope, Gender, LeagueTier, PrismaClient, Role, VisitSource } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { MOCK_CLUB } from '@fitgo/1c-adapter';
 
 const prisma = new PrismaClient();
+
+const BADGES = [
+  { slug: 'visit-1', name: 'Первый шаг', description: '1 визит', threshold: 1, category: 'visits', tier: 'bronze', dataScope: BadgeDataScope.SINCE_INSTALL },
+  { slug: 'visit-10', name: 'Постоянный гость', description: '10 визитов', threshold: 10, category: 'visits', tier: 'bronze', dataScope: BadgeDataScope.SINCE_INSTALL },
+  { slug: 'visit-25', name: 'Фанат фитнеса', description: '25 визитов', threshold: 25, category: 'visits', tier: 'silver', dataScope: BadgeDataScope.SINCE_INSTALL },
+  { slug: 'visit-50', name: 'Полтинник', description: '50 визитов', threshold: 50, category: 'visits', tier: 'silver', dataScope: BadgeDataScope.SINCE_INSTALL },
+  { slug: 'visit-100', name: 'Сотня', description: '100 визитов', threshold: 100, category: 'visits', tier: 'gold', dataScope: BadgeDataScope.SINCE_INSTALL },
+  { slug: 'streak-3', name: 'Разгон', description: '3 дня подряд', threshold: 3, category: 'streak', tier: 'bronze', dataScope: BadgeDataScope.SINCE_INSTALL },
+  { slug: 'streak-7', name: 'Неделя силы', description: '7 дней подряд', threshold: 7, category: 'streak', tier: 'silver', dataScope: BadgeDataScope.SINCE_INSTALL },
+  { slug: 'streak-14', name: 'Две недели', description: '14 дней подряд', threshold: 14, category: 'streak', tier: 'gold', dataScope: BadgeDataScope.SINCE_INSTALL },
+  { slug: 'outdoor-first', name: 'Первый выход', description: '1 тренировка вне клуба', threshold: 1, category: 'outdoor', tier: 'bronze', dataScope: BadgeDataScope.SINCE_INSTALL },
+  { slug: 'outdoor-10', name: 'Домашний атлет', description: '10 тренировок вне клуба', threshold: 10, category: 'outdoor', tier: 'silver', dataScope: BadgeDataScope.SINCE_INSTALL },
+  { slug: 'loyalty-1y', name: 'Верный друг', description: '1 год непрерывности', threshold: 12, category: 'loyalty', tier: 'bronze', dataScope: BadgeDataScope.HISTORICAL },
+  { slug: 'loyalty-2y', name: 'Клубный житель', description: '2 года непрерывности', threshold: 24, category: 'loyalty', tier: 'silver', dataScope: BadgeDataScope.HISTORICAL },
+  { slug: 'loyalty-3y', name: 'Старожил', description: '3 года непрерывности', threshold: 36, category: 'loyalty', tier: 'gold', dataScope: BadgeDataScope.HISTORICAL },
+  { slug: 'loyalty-5y', name: 'Столп клуба', description: '5 лет непрерывности', threshold: 60, category: 'loyalty', tier: 'platinum', dataScope: BadgeDataScope.HISTORICAL },
+  { slug: 'loyalty-6y', name: 'Клубная легенда', description: '6+ лет непрерывности', threshold: 72, category: 'loyalty', tier: 'diamond', dataScope: BadgeDataScope.HISTORICAL },
+];
 
 const DEMO_USERS = [
   {
@@ -12,7 +30,10 @@ const DEMO_USERS = [
     lastName: 'Иванов',
     phone: '+375296600435',
     externalId: '1c-client-001',
+    gender: Gender.MALE,
+    dateOfBirth: new Date('1990-05-15'),
     roles: [Role.CLIENT],
+    withGamification: true,
   },
   {
     email: 'trainer@demo.fitgo',
@@ -32,14 +53,6 @@ const DEMO_USERS = [
     externalId: '1c-admin-001',
     roles: [Role.ADMIN],
   },
-];
-
-const BADGES = [
-  { slug: 'first-visit', name: 'Первый шаг', description: 'Первое посещение клуба', threshold: 1 },
-  { slug: 'visits-10', name: 'Постоянный гость', description: '10 посещений', threshold: 10 },
-  { slug: 'visits-25', name: 'Фанат фитнеса', description: '25 посещений', threshold: 25 },
-  { slug: 'visits-50', name: 'Легенда клуба', description: '50 посещений', threshold: 50 },
-  { slug: 'streak-7', name: 'Неделя силы', description: '7 дней подряд в зале', threshold: 7 },
 ];
 
 async function main() {
@@ -102,6 +115,9 @@ async function main() {
 
   for (const demoUser of DEMO_USERS) {
     const passwordHash = await bcrypt.hash(demoUser.password, 10);
+    const gamificationStartedAt =
+      'withGamification' in demoUser && demoUser.withGamification ? new Date() : undefined;
+
     const user = await prisma.user.upsert({
       where: {
         clubId_email: {
@@ -115,6 +131,16 @@ async function main() {
         phone: demoUser.phone,
         externalId: demoUser.externalId,
         password: passwordHash,
+        ...('gender' in demoUser && demoUser.gender
+          ? { gender: demoUser.gender, dateOfBirth: demoUser.dateOfBirth, profileCompletedAt: new Date() }
+          : {}),
+        ...(gamificationStartedAt
+          ? {
+              gamificationStartedAt,
+              useRealNameInPublic: true,
+              gamificationNickname: 'Железный Кабан',
+            }
+          : {}),
       },
       create: {
         clubId: club.id,
@@ -124,22 +150,23 @@ async function main() {
         lastName: demoUser.lastName,
         phone: demoUser.phone,
         externalId: demoUser.externalId,
+        ...('gender' in demoUser && demoUser.gender
+          ? { gender: demoUser.gender, dateOfBirth: demoUser.dateOfBirth, profileCompletedAt: new Date() }
+          : {}),
+        ...(gamificationStartedAt
+          ? {
+              gamificationStartedAt,
+              useRealNameInPublic: true,
+            }
+          : {}),
       },
     });
 
     for (const role of demoUser.roles) {
       await prisma.userRole.upsert({
-        where: {
-          userId_role: {
-            userId: user.id,
-            role,
-          },
-        },
+        where: { userId_role: { userId: user.id, role } },
         update: {},
-        create: {
-          userId: user.id,
-          role,
-        },
+        create: { userId: user.id, role },
       });
     }
 
@@ -149,6 +176,57 @@ async function main() {
         update: {},
         create: { userId: user.id },
       });
+
+      if ('withGamification' in demoUser && demoUser.withGamification) {
+        await prisma.clientRating.upsert({
+          where: { userId: user.id },
+          update: {},
+          create: {
+            userId: user.id,
+            clubId: club.id,
+            leagueTier: LeagueTier.BRONZE,
+            weeklyXp: 120,
+            monthlyXp: 120,
+            lifetimeXp: 120,
+            lastAppActivityAt: new Date(),
+          },
+        });
+
+        await prisma.loyaltyProfile.upsert({
+          where: { userId: user.id },
+          update: {},
+          create: {
+            userId: user.id,
+            peakTier: LeagueTier.BRONZE,
+            currentTier: LeagueTier.BRONZE,
+            continuityMonths: 3,
+            lastVisitAt: new Date(),
+          },
+        });
+
+        for (let i = 0; i < 5; i++) {
+          const d = new Date();
+          d.setDate(d.getDate() - i * 2);
+          const visitDate = d.toISOString().slice(0, 10);
+          await prisma.clubVisit.upsert({
+            where: {
+              userId_clubId_visitDate: {
+                userId: user.id,
+                clubId: club.id,
+                visitDate,
+              },
+            },
+            update: {},
+            create: {
+              userId: user.id,
+              clubId: club.id,
+              visitedAt: d,
+              visitDate,
+              source: VisitSource.ONEC_SYNC,
+            },
+          });
+        }
+      }
     }
 
     if (demoUser.roles.some((r) => r === Role.TRAINER)) {
@@ -163,7 +241,7 @@ async function main() {
     }
   }
 
-  console.log('Seed completed: demo club, users, badges, and challenge created');
+  console.log('Seed completed: demo club, users, badges, gamification data');
 }
 
 main()

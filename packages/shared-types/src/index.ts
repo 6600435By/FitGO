@@ -139,7 +139,7 @@ export interface Booking {
   startAt: string;
   endAt: string;
   source?: '1c' | 'fitgo';
-  lifecycle?: 'UPCOMING' | 'COMPLETED' | 'CANCELLED';
+  lifecycle?: 'UPCOMING' | 'COMPLETED' | 'CANCELLED' | 'AWAITING_CONFIRMATION';
 }
 
 export interface TrainerSummary {
@@ -162,7 +162,54 @@ export interface PersonalTrainingBookingItem {
   clientName?: string;
   startAt: string;
   endAt: string;
-  status: 'CONFIRMED' | 'CANCELLED';
+  status: 'CONFIRMED' | 'CANCELLED' | 'COMPLETED';
+  clientCompletedAt?: string;
+  trainerCompletedAt?: string;
+}
+
+export type PersonalSessionStatus = 'SCHEDULED' | 'COMPLETED' | 'CANCELLED';
+
+export interface PersonalTrainingSessionTask {
+  id: string;
+  title: string;
+  sortOrder: number;
+  clientConfirmed: boolean;
+  trainerConfirmed: boolean;
+}
+
+export interface PersonalTrainingSessionGoal {
+  id: string;
+  title: string;
+  notes?: string;
+  sortOrder: number;
+  clientConfirmed: boolean;
+  trainerConfirmed: boolean;
+  tasks: PersonalTrainingSessionTask[];
+}
+
+export interface PersonalTrainingSessionDetail {
+  id: string;
+  trainerId: string;
+  trainerName: string;
+  clientId: string;
+  clientName: string;
+  startAt: string;
+  endAt: string;
+  status: PersonalSessionStatus;
+  clientCompletedAt?: string;
+  trainerCompletedAt?: string;
+  canEdit: boolean;
+  canComplete: boolean;
+  goals: PersonalTrainingSessionGoal[];
+}
+
+export interface TrainerClientSession {
+  id: string;
+  startAt: string;
+  endAt: string;
+  status: PersonalSessionStatus;
+  awaitingConfirmation: boolean;
+  goalsCount: number;
 }
 
 export interface TrainerWorkSlotInput {
@@ -205,11 +252,119 @@ export interface ChatMessageItem {
 }
 
 export interface GamificationProfile {
+  activated: boolean;
+  gamificationStartedAt?: string;
   visitStreak: number;
   totalVisits: number;
-  badges: Array<{ id: string; name: string; description: string; earnedAt: string }>;
+  badges: Array<{
+    id: string;
+    slug?: string;
+    name: string;
+    description: string;
+    category?: string;
+    tier?: string;
+    earnedAt: string;
+  }>;
+  lockedBadges?: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    description: string;
+    category?: string;
+    tier?: string;
+  }>;
+  nextBadge?: {
+    slug: string;
+    name: string;
+    description: string;
+    current: number;
+    target: number;
+    progress: number;
+    streak: number;
+  } | null;
+  league?: LeagueGroupView;
+  loyalty?: LoyaltyInfo | null;
+  decayWarning?: DecayWarning | null;
   rank?: number;
   points: number;
+  useRealNameInPublic?: boolean;
+  gamificationNickname?: string | null;
+}
+
+export interface LeagueGroupView {
+  tier: string;
+  tierLabel: string;
+  weekEnd: string | null;
+  members: Array<{
+    rank: number;
+    userId: string;
+    name: string;
+    weeklyXp: number;
+    isMe: boolean;
+    zone: 'promotion' | 'safe' | 'relegation';
+  }>;
+  myRank: number | null;
+  promotionZone: number;
+  relegationZone: number;
+  weeklyXp: number;
+}
+
+export interface LoyaltyInfo {
+  status: string;
+  currentTier: string;
+  peakTier?: string;
+  tierLabel: string;
+  continuityMonths: number;
+  lastVisitAt?: string;
+}
+
+export interface DecayWarning {
+  dayOfMonth: number;
+  daysLeftInMonth: number;
+  urgency: 'info' | 'warning' | 'critical';
+  message: string;
+}
+
+export interface ClientProfile {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone?: string | null;
+  gender?: string | null;
+  dateOfBirth?: string | null;
+  profileCompletedAt?: string | null;
+  gamificationNickname?: string | null;
+  useRealNameInPublic?: boolean;
+  gamificationStartedAt?: string | null;
+}
+
+export interface BodyProfileResponse {
+  profile: { heightCm?: number | null; targetWeightKg?: number | null };
+  logs: Array<{
+    id: string;
+    recordedAt: string;
+    source: string;
+    weightKg?: number | null;
+    chestCm?: number | null;
+    waistCm?: number | null;
+    hipsCm?: number | null;
+    bicepsCm?: number | null;
+    thighCm?: number | null;
+    bodyFatPct?: number | null;
+    notes?: string | null;
+  }>;
+}
+
+export interface ChallengeView {
+  id: string;
+  title: string;
+  description?: string | null;
+  targetVisits: number;
+  startDate: string;
+  endDate: string;
+  progress: number;
+  completed: boolean;
 }
 
 export interface ReferralInfo {
@@ -241,10 +396,10 @@ export interface TrainerClientDetail {
   externalId?: string;
   firstName: string;
   lastName: string;
-  phone?: string;
   membershipName?: string;
   membershipStatus?: MembershipStatus;
   lastVisit?: string;
+  sessions: TrainerClientSession[];
   goals: Array<{ id: string; title: string; target?: string; progress?: string }>;
   notes: Array<{ id: string; content: string; createdAt: string }>;
   measurements: Array<{ id: string; weight?: number; notes?: string; recordedAt: string }>;
@@ -255,3 +410,8 @@ export interface WearableSyncResult {
   visitsImported: number;
   lastSyncAt: string;
 }
+
+export {
+  PERSONAL_TRAINING_GOAL_TEMPLATES,
+  type PersonalTrainingGoalTemplate,
+} from './personal-training-goals';

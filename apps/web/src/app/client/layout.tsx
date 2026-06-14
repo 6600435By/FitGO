@@ -5,14 +5,15 @@ import type { ReactNode } from 'react';
 import { AuthGuard } from '@/components/auth-guard';
 import { AppShell } from '@/components/app-shell';
 import { ClientOnboarding } from '@/components/client-onboarding';
+import { ProfileGate } from '@/components/profile-gate';
 
 const NAV = [
   { href: '/client', label: 'Главная' },
   { href: '/client/schedule', label: 'Расписание', matchSubpaths: true },
   { href: '/client/bookings', label: 'Записи' },
-  { href: '/client/booking-history', label: 'История' },
+  { href: '/client/engagement', label: 'Достижения' },
   { href: '/client/notifications', label: 'Сообщения' },
-  { href: '/client/card', label: 'Карта' },
+  { href: '/client/profile', label: 'Профиль' },
 ];
 
 export default function ClientLayout({ children }: { children: ReactNode }) {
@@ -20,7 +21,7 @@ export default function ClientLayout({ children }: { children: ReactNode }) {
     <AuthGuard allowedRoles={[UserRole.CLIENT]}>
       <AppShell title="Мой клуб" navItems={NAV}>
         <ClientOnboarding />
-        {children}
+        <ProfileGate>{children}</ProfileGate>
       </AppShell>
     </AuthGuard>
   );
