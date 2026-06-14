@@ -18,7 +18,7 @@ export default function AdminFunnelPage() {
     if (!token) return;
 
     api
-      .adminDashboard(token)
+      .adminFunnel(token)
       .then((data: { funnel: FunnelStage[] }) => setFunnel(data.funnel))
       .catch((err) => setError(err.message));
   }, []);

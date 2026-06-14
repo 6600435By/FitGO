@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module';
 import { FitnessModule } from '../fitness/fitness.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { EngagementController } from './engagement.controller';
@@ -10,7 +11,7 @@ import { BadgeEvaluatorService } from './badge-evaluator.service';
 import { EngagementSchedulerService } from './engagement-scheduler.service';
 
 @Module({
-  imports: [FitnessModule, NotificationsModule],
+  imports: [AuthModule, FitnessModule, NotificationsModule],
   controllers: [EngagementController],
   providers: [
     EngagementService,

@@ -42,6 +42,7 @@ pnpm dev
 |------|-------|--------|
 | Клиент | client@demo.fitgo | client123 |
 | Тренер | trainer@demo.fitgo | trainer123 |
+| Супер-админ | superadmin@demo.fitgo | super123 |
 | Админ | admin@demo.fitgo | admin123 |
 
 ## Переключение на реальный 1С

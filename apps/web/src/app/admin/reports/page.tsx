@@ -27,7 +27,7 @@ export default function AdminReportsPage() {
     if (!token) return;
 
     api
-      .adminDashboard(token)
+      .adminReports(token)
       .then((data: { recentReports: DailyReport[] }) =>
         setReports(data.recentReports ?? []),
       );

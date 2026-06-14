@@ -1,8 +1,10 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { UserRole } from '@fitgo/shared-types';
+import { AdminPermission, UserRole } from '@fitgo/shared-types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { EngagementService } from './engagement.service';
@@ -103,8 +105,9 @@ export class EngagementController {
   }
 
   @Post('theme')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, PermissionsGuard)
   @Roles(UserRole.ADMIN)
+  @RequirePermission(AdminPermission.SETTINGS_BRANDING)
   updateTheme(
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateThemeDto,

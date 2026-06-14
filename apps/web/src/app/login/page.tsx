@@ -9,6 +9,7 @@ const DEMO_ACCOUNTS = [
   { email: 'client@demo.fitgo', password: 'client123', role: 'Клиент' },
   { email: 'trainer@demo.fitgo', password: 'trainer123', role: 'Тренер' },
   { email: 'admin@demo.fitgo', password: 'admin123', role: 'Администратор' },
+  { email: 'superadmin@demo.fitgo', password: 'super123', role: 'Супер-админ' },
 ];
 
 export default function LoginPage() {

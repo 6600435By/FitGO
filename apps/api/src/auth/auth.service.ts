@@ -10,6 +10,7 @@ const ROLE_MAP: Record<Role, SharedUserRole> = {
   [Role.CLIENT]: SharedUserRole.CLIENT,
   [Role.TRAINER]: SharedUserRole.TRAINER,
   [Role.ADMIN]: SharedUserRole.ADMIN,
+  [Role.SUPER_ADMIN]: SharedUserRole.SUPER_ADMIN,
 };
 
 @Injectable()
@@ -30,6 +31,10 @@ export class AuthService {
 
     if (!user) {
       throw new UnauthorizedException('Неверный email или пароль');
+    }
+
+    if (!user.isActive) {
+      throw new UnauthorizedException('Аккаунт деактивирован');
     }
 
     const valid = await bcrypt.compare(dto.password, user.password);

@@ -4,15 +4,23 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConversationKind, Role } from '@prisma/client';
-import { UserRole } from '@fitgo/shared-types';
+import { AdminPermission, UserRole } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { AdminPermissionsService } from '../auth/admin-permissions.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class ChatService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly adminPermissions: AdminPermissionsService,
+  ) {}
 
   async getUnreadCount(user: JwtPayload) {
+    if (user.roles.includes(UserRole.ADMIN)) {
+      await this.ensureAdminCanMessage(user);
+    }
+
     let conversations;
     if (user.roles.includes(UserRole.TRAINER)) {
       const [clients, admin] = await Promise.all([
@@ -31,6 +39,10 @@ export class ChatService {
     user: JwtPayload,
     scope?: 'clients' | 'admin' | 'trainers',
   ) {
+    if (user.roles.includes(UserRole.ADMIN)) {
+      await this.ensureAdminCanMessage(user);
+    }
+
     const where = this.buildConversationListWhere(user, scope);
     const conversations = await this.prisma.conversation.findMany({
       where,
@@ -102,6 +114,10 @@ export class ChatService {
   }
 
   async getMessages(user: JwtPayload, conversationId: string) {
+    if (user.roles.includes(UserRole.ADMIN)) {
+      await this.ensureAdminCanMessage(user);
+    }
+
     const conversation = await this.ensureConversationAccess(user, conversationId);
 
     const messages = await this.prisma.chatMessage.findMany({
@@ -139,6 +155,10 @@ export class ChatService {
   }
 
   async sendMessage(user: JwtPayload, conversationId: string, body: string) {
+    if (user.roles.includes(UserRole.ADMIN)) {
+      await this.ensureAdminCanMessage(user);
+    }
+
     const conversation = await this.ensureConversationAccess(user, conversationId);
 
     if (user.roles.includes(UserRole.TRAINER)) {
@@ -442,5 +462,15 @@ export class ChatService {
     }
 
     return [...ids];
+  }
+
+  private async ensureAdminCanMessage(user: JwtPayload) {
+    const allowed = await this.adminPermissions.hasAnyPermission(user, [
+      AdminPermission.NOTIFICATIONS_SEND,
+      AdminPermission.CLIENTS_MESSAGE,
+    ]);
+    if (!allowed) {
+      throw new ForbiddenException('Недостаточно прав для сообщений');
+    }
   }
 }

@@ -9,6 +9,7 @@ import { FitnessModule } from './fitness/fitness.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PersonalTrainingModule } from './personal-training/personal-training.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { SuperAdminModule } from './super-admin/super-admin.module';
 import { TrainerModule } from './trainer/trainer.module';
 
 @Module({
@@ -20,6 +21,7 @@ import { TrainerModule } from './trainer/trainer.module';
     ClientModule,
     TrainerModule,
     AdminModule,
+    SuperAdminModule,
     NotificationsModule,
     ChatModule,
     EngagementModule,

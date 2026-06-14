@@ -26,6 +26,13 @@ import {
   type LeagueGroupView,
   type ConversationSummary,
   type ChatMessageItem,
+  type StaffMember,
+  type StaffCreateResult,
+  type AdminTaskItem,
+  type SuperAdminAnalytics,
+  type StaffAuditLogItem,
+  AdminPermission,
+  AdminTaskStatus,
 } from '@fitgo/shared-types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -394,6 +401,18 @@ export const api = {
   adminDashboard: (token: string) =>
     request<AdminDashboard>('/admin/dashboard', {}, token),
 
+  adminFunnel: (token: string) =>
+    request<{ funnel: Array<{ stage: string; count: number }> }>('/admin/funnel', {}, token),
+
+  adminReports: (token: string) =>
+    request<{ recentReports: Array<{
+      id: string;
+      date: string;
+      revenue: number;
+      problems?: string | null;
+      ideas?: string | null;
+    }> }>('/admin/reports', {}, token),
+
   adminAtRisk: (token: string) =>
     request<AtRiskClient[]>('/admin/at-risk', {}, token),
 
@@ -684,4 +703,116 @@ export const api = {
       { method: 'POST' },
       token,
     ),
+
+  adminPermissions: (token: string) =>
+    request<{ permissions: AdminPermission[] }>('/admin/permissions', {}, token),
+
+  adminMyTasks: (token: string) =>
+    request<AdminTaskItem[]>('/admin/tasks', {}, token),
+
+  adminUpdateTask: (token: string, taskId: string, status: AdminTaskStatus) =>
+    request(`/admin/tasks/${taskId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }, token),
+
+  superAdminStaff: (token: string) =>
+    request<StaffMember[]>('/super-admin/staff', {}, token),
+
+  superAdminCreateStaff: (
+    token: string,
+    data: {
+      firstName: string;
+      lastName: string;
+      dateOfBirth?: string;
+      phone?: string;
+      email: string;
+      password: string;
+      role: 'ADMIN' | 'TRAINER';
+    },
+  ) =>
+    request<StaffCreateResult>('/super-admin/staff', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, token),
+
+  superAdminUpdateStaff: (
+    token: string,
+    id: string,
+    data: Partial<{
+      firstName: string;
+      lastName: string;
+      dateOfBirth: string;
+      phone: string;
+      isActive: boolean;
+      password: string;
+    }>,
+  ) =>
+    request<StaffMember & { credentials?: { email: string; password: string } }>(
+      `/super-admin/staff/${id}`,
+      { method: 'PATCH', body: JSON.stringify(data) },
+      token,
+    ),
+
+  superAdminStaffExportUrl: () => `${API_URL}/api/super-admin/staff/export.csv`,
+
+  superAdminPermissions: (token: string, adminId: string) =>
+    request<{ permissions: AdminPermission[] }>(
+      `/super-admin/admins/${adminId}/permissions`,
+      {},
+      token,
+    ),
+
+  superAdminSetPermissions: (
+    token: string,
+    adminId: string,
+    permissions: AdminPermission[],
+  ) =>
+    request(`/super-admin/admins/${adminId}/permissions`, {
+      method: 'PUT',
+      body: JSON.stringify({ permissions }),
+    }, token),
+
+  superAdminApplyPreset: (
+    token: string,
+    adminId: string,
+    preset: 'reception' | 'marketing' | 'floor',
+  ) =>
+    request<{ permissions: AdminPermission[] }>(
+      `/super-admin/admins/${adminId}/permissions/preset`,
+      { method: 'POST', body: JSON.stringify({ preset }) },
+      token,
+    ),
+
+  superAdminTasks: (token: string, status?: AdminTaskStatus) => {
+    const q = status ? `?status=${status}` : '';
+    return request<AdminTaskItem[]>(`/super-admin/tasks${q}`, {}, token);
+  },
+
+  superAdminCreateTask: (
+    token: string,
+    data: { assigneeId: string; title: string; description?: string; dueAt?: string },
+  ) =>
+    request<AdminTaskItem>('/super-admin/tasks', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, token),
+
+  superAdminUpdateTask: (
+    token: string,
+    id: string,
+    data: Partial<{ status: AdminTaskStatus; title: string; description: string; dueAt: string }>,
+  ) =>
+    request<AdminTaskItem>(`/super-admin/tasks/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }, token),
+
+  superAdminAnalytics: (token: string, period?: '7d' | '30d' | '90d') => {
+    const q = period ? `?period=${period}` : '';
+    return request<SuperAdminAnalytics>(`/super-admin/analytics${q}`, {}, token);
+  },
+
+  superAdminAuditLog: (token: string) =>
+    request<StaffAuditLogItem[]>('/super-admin/audit-log', {}, token),
 };

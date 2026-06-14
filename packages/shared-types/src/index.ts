@@ -2,6 +2,26 @@ export enum UserRole {
   CLIENT = 'CLIENT',
   TRAINER = 'TRAINER',
   ADMIN = 'ADMIN',
+  SUPER_ADMIN = 'SUPER_ADMIN',
+}
+
+export enum AdminPermission {
+  DASHBOARD_VIEW = 'DASHBOARD_VIEW',
+  CLIENTS_VIEW = 'CLIENTS_VIEW',
+  CLIENTS_MESSAGE = 'CLIENTS_MESSAGE',
+  AT_RISK_VIEW = 'AT_RISK_VIEW',
+  FUNNEL_VIEW = 'FUNNEL_VIEW',
+  REPORTS_VIEW = 'REPORTS_VIEW',
+  REPORTS_EDIT = 'REPORTS_EDIT',
+  SETTINGS_BRANDING = 'SETTINGS_BRANDING',
+  NOTIFICATIONS_SEND = 'NOTIFICATIONS_SEND',
+}
+
+export enum AdminTaskStatus {
+  OPEN = 'OPEN',
+  IN_PROGRESS = 'IN_PROGRESS',
+  DONE = 'DONE',
+  CANCELLED = 'CANCELLED',
 }
 
 export enum MembershipStatus {
@@ -419,3 +439,125 @@ export {
   PERSONAL_TRAINING_GOAL_TEMPLATES,
   type PersonalTrainingGoalTemplate,
 } from './personal-training-goals';
+
+export interface StaffMember {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  dateOfBirth?: string;
+  roles: UserRole[];
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface StaffCreateResult {
+  user: StaffMember;
+  credentials: { email: string; password: string };
+}
+
+export interface AdminTaskItem {
+  id: string;
+  title: string;
+  description?: string;
+  status: AdminTaskStatus;
+  dueAt?: string;
+  completedAt?: string;
+  assignee: { id: string; firstName: string; lastName: string };
+  createdAt: string;
+}
+
+export interface GrowthInsight {
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  body: string;
+  action?: string;
+}
+
+export interface SuperAdminAnalytics {
+  periodDays: number;
+  kpis: {
+    visits: number;
+    visitsPrev: number;
+    activeMemberships: number;
+    expiringSoon: number;
+    revenue: number;
+    revenuePrev: number;
+    personalSessionsCompleted: number;
+    adminTasksDoneRate: number;
+  };
+  trainerRankings: Array<{
+    trainerId: string;
+    name: string;
+    score: number;
+    completedPt: number;
+    activeClients: number;
+  }>;
+  groupDirectionLoad: Array<{
+    title: string;
+    bookings: number;
+    loadPercent: number;
+  }>;
+  insights: GrowthInsight[];
+  integrationHealth?: {
+    provider: string;
+    clubExternalId: string | null;
+    ok: boolean;
+  };
+}
+
+export interface StaffAuditLogItem {
+  id: string;
+  action: string;
+  targetId?: string;
+  actorName: string;
+  meta?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export const ADMIN_PERMISSION_LABELS: Record<AdminPermission, string> = {
+  [AdminPermission.DASHBOARD_VIEW]: 'Дашборд',
+  [AdminPermission.CLIENTS_VIEW]: 'Клиенты',
+  [AdminPermission.CLIENTS_MESSAGE]: 'Сообщения клиентам',
+  [AdminPermission.AT_RISK_VIEW]: 'Клиенты в зоне риска',
+  [AdminPermission.FUNNEL_VIEW]: 'Воронка',
+  [AdminPermission.REPORTS_VIEW]: 'Просмотр отчётов',
+  [AdminPermission.REPORTS_EDIT]: 'Ввод отчётов',
+  [AdminPermission.SETTINGS_BRANDING]: 'Брендинг клуба',
+  [AdminPermission.NOTIFICATIONS_SEND]: 'Рассылки',
+};
+
+export const ADMIN_PERMISSION_PRESETS: Record<
+  string,
+  { label: string; permissions: AdminPermission[] }
+> = {
+  reception: {
+    label: 'Рецепция',
+    permissions: [
+      AdminPermission.DASHBOARD_VIEW,
+      AdminPermission.CLIENTS_VIEW,
+      AdminPermission.CLIENTS_MESSAGE,
+      AdminPermission.NOTIFICATIONS_SEND,
+    ],
+  },
+  marketing: {
+    label: 'Маркетинг',
+    permissions: [
+      AdminPermission.DASHBOARD_VIEW,
+      AdminPermission.FUNNEL_VIEW,
+      AdminPermission.AT_RISK_VIEW,
+      AdminPermission.NOTIFICATIONS_SEND,
+    ],
+  },
+  floor: {
+    label: 'Директор зала',
+    permissions: [
+      AdminPermission.DASHBOARD_VIEW,
+      AdminPermission.CLIENTS_VIEW,
+      AdminPermission.AT_RISK_VIEW,
+      AdminPermission.REPORTS_VIEW,
+      AdminPermission.REPORTS_EDIT,
+    ],
+  },
+};

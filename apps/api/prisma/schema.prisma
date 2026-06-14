@@ -11,6 +11,26 @@ enum Role {
   CLIENT
   TRAINER
   ADMIN
+  SUPER_ADMIN
+}
+
+enum AdminPermission {
+  DASHBOARD_VIEW
+  CLIENTS_VIEW
+  CLIENTS_MESSAGE
+  AT_RISK_VIEW
+  FUNNEL_VIEW
+  REPORTS_VIEW
+  REPORTS_EDIT
+  SETTINGS_BRANDING
+  NOTIFICATIONS_SEND
+}
+
+enum AdminTaskStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELLED
 }
 
 enum NotificationType {
@@ -123,6 +143,8 @@ model Club {
   theme                ClubTheme?
   challenges           Challenge[]
   referralRewardDesc   String   @default("Скидка 10% на следующий абонемент")
+  adminTasks           AdminTask[]
+  staffAuditLogs       StaffAuditLog[]
 }
 
 model ClubTheme {
@@ -162,10 +184,13 @@ model User {
   gamificationNickname String?
   useRealNameInPublic  Boolean @default(true)
   gamificationStartedAt DateTime?
+  isActive              Boolean  @default(true)
+  createdById           String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   club                 Club                   @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  createdBy            User?                  @relation("StaffCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   roles                UserRole[]
   notifications        Notification[]
   pushSubscriptions    PushSubscription[]
@@ -199,6 +224,11 @@ model User {
   bodyLogs                ClientBodyLog[]         @relation("ClientBodyLogs")
   recordedBodyLogs        ClientBodyLog[]         @relation("RecordedBodyLogs")
   workoutLogs             WorkoutLog[]
+  adminTasksAssigned      AdminTask[]            @relation("AdminTaskAssignee")
+  adminTasksCreated       AdminTask[]            @relation("AdminTaskCreator")
+  adminPermissions        AdminPermissionGrant[]
+  staffCreated            User[]                 @relation("StaffCreatedBy")
+  staffAuditLogs          StaffAuditLog[]        @relation("StaffAuditActor")
 
   @@unique([clubId, email])
   @@unique([clubId, gamificationNickname])
@@ -631,4 +661,52 @@ model WorkoutLog {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, startedAt])
+}
+
+model AdminPermissionGrant {
+  id         String          @id @default(cuid())
+  userId     String
+  permission AdminPermission
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permission])
+  @@index([userId])
+}
+
+model AdminTask {
+  id          String          @id @default(cuid())
+  clubId      String
+  assigneeId  String
+  createdById String
+  title       String
+  description String?
+  dueAt       DateTime?
+  status      AdminTaskStatus @default(OPEN)
+  completedAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  club      Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  assignee  User @relation("AdminTaskAssignee", fields: [assigneeId], references: [id], onDelete: Cascade)
+  createdBy User @relation("AdminTaskCreator", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([clubId, assigneeId, status])
+  @@index([clubId, status])
+}
+
+model StaffAuditLog {
+  id        String   @id @default(cuid())
+  clubId    String
+  actorId   String
+  action    String
+  targetId  String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  club  Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  actor User @relation("StaffAuditActor", fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, createdAt])
+  @@index([actorId])
 }

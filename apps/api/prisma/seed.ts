@@ -1,4 +1,4 @@
-import { BadgeDataScope, Gender, LeagueTier, PrismaClient, Role, VisitSource } from '@prisma/client';
+import { BadgeDataScope, Gender, LeagueTier, PrismaClient, Role, AdminPermission, VisitSource } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { MOCK_CLUB } from '@fitgo/1c-adapter';
 
@@ -52,6 +52,15 @@ const DEMO_USERS = [
     phone: '+375331112233',
     externalId: '1c-admin-001',
     roles: [Role.ADMIN],
+    withAllAdminPermissions: true,
+  },
+  {
+    email: 'superadmin@demo.fitgo',
+    password: 'super123',
+    firstName: 'Ольга',
+    lastName: 'Козлова',
+    phone: '+375441234567',
+    roles: [Role.SUPER_ADMIN],
   },
 ];
 
@@ -238,6 +247,21 @@ async function main() {
           { trainerId: user.id, dayOfWeek: 5, startTime: '09:00', endTime: '15:00' },
         ],
       });
+    }
+
+    if (
+      'withAllAdminPermissions' in demoUser &&
+      demoUser.withAllAdminPermissions
+    ) {
+      for (const permission of Object.values(AdminPermission)) {
+        await prisma.adminPermissionGrant.upsert({
+          where: {
+            userId_permission: { userId: user.id, permission },
+          },
+          update: {},
+          create: { userId: user.id, permission },
+        });
+      }
     }
   }
 

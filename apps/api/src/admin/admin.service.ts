@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
-import { MembershipStatus } from '@fitgo/shared-types';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { AdminTaskStatus, MembershipStatus } from '@fitgo/shared-types';
+import { AdminTaskStatus as PrismaAdminTaskStatus } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -92,7 +93,7 @@ export class AdminService {
           }
         : null,
       stats: {
-        activeMemberships: activeMemberships || clients.length,
+        activeMemberships,
         visitsToday,
         revenueToday: recentReports[0]?.revenue ?? 0,
         expiringSoon,
@@ -102,6 +103,19 @@ export class AdminService {
       funnel: await this.buildFunnel(user.clubId),
       recentReports,
     };
+  }
+
+  async getFunnel(user: JwtPayload) {
+    return { funnel: await this.buildFunnel(user.clubId) };
+  }
+
+  async getReports(user: JwtPayload) {
+    const recentReports = await this.prisma.dailyReport.findMany({
+      where: { clubId: user.clubId },
+      orderBy: { date: 'desc' },
+      take: 30,
+    });
+    return { recentReports };
   }
 
   private async buildFunnel(clubId: string) {
@@ -248,6 +262,39 @@ export class AdminService {
         problems: dto.problems,
         ideas: dto.ideas,
         createdBy: user.sub,
+      },
+    });
+  }
+
+  async getMyTasks(user: JwtPayload) {
+    const tasks = await this.prisma.adminTask.findMany({
+      where: { clubId: user.clubId, assigneeId: user.sub },
+      include: { assignee: true },
+      orderBy: [{ status: 'asc' }, { dueAt: 'asc' }],
+    });
+
+    return tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      description: task.description ?? undefined,
+      status: task.status as AdminTaskStatus,
+      dueAt: task.dueAt?.toISOString(),
+      completedAt: task.completedAt?.toISOString(),
+      createdAt: task.createdAt.toISOString(),
+    }));
+  }
+
+  async updateMyTask(user: JwtPayload, taskId: string, status: AdminTaskStatus) {
+    const task = await this.prisma.adminTask.findFirst({
+      where: { id: taskId, assigneeId: user.sub, clubId: user.clubId },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+
+    return this.prisma.adminTask.update({
+      where: { id: taskId },
+      data: {
+        status: status as PrismaAdminTaskStatus,
+        completedAt: status === AdminTaskStatus.DONE ? new Date() : null,
       },
     });
   }
