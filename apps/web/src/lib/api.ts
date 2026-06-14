@@ -412,7 +412,7 @@ export const api = {
       token,
     ),
 
-  chatConversations: (token: string, scope?: 'clients' | 'admin') => {
+  chatConversations: (token: string, scope?: 'clients' | 'admin' | 'trainers') => {
     const query = scope ? `?scope=${scope}` : '';
     return request<ConversationSummary[]>(
       `/chat/conversations${query}`,
@@ -420,6 +420,9 @@ export const api = {
       token,
     );
   },
+
+  chatUnreadCount: (token: string) =>
+    request<{ chat: number }>('/chat/unread-count', {}, token),
 
   chatOpenTrainerAdmin: (token: string) =>
     request<ConversationSummary>(

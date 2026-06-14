@@ -3,6 +3,7 @@
 import { Users, Calendar, Target } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { MessagesHomeLink } from '@/components/messages-home-link';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -106,6 +107,8 @@ export default function TrainerHomePage() {
           Цели, заметки, замеры и сообщения клиентам
         </p>
       </Link>
+
+      <MessagesHomeLink href="/trainer/messages" />
     </div>
   );
 }

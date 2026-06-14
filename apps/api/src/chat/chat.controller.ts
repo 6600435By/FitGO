@@ -23,10 +23,15 @@ import { SendChatMessageDto } from './dto/send-chat-message.dto';
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
+  @Get('unread-count')
+  getUnreadCount(@CurrentUser() user: JwtPayload) {
+    return this.chatService.getUnreadCount(user);
+  }
+
   @Get('conversations')
   listConversations(
     @CurrentUser() user: JwtPayload,
-    @Query('scope') scope?: 'clients' | 'admin',
+    @Query('scope') scope?: 'clients' | 'admin' | 'trainers',
   ) {
     return this.chatService.listConversations(user, scope);
   }

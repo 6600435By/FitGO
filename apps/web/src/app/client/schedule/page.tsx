@@ -113,9 +113,8 @@ export default function ClientSchedulePage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Групповые занятия</h2>
       <p className="text-sm text-slate-400">
-        Расписание из 1С. Персональные тренировки — в отдельном разделе.
+        Расписание групповых занятий из 1С.
       </p>
 
       <div className="card flex items-center justify-between gap-2">

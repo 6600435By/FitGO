@@ -3,6 +3,7 @@
 import { AlertTriangle, Bell, TrendingUp, Users } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { MessagesHomeLink } from '@/components/messages-home-link';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDate } from '@/lib/utils';
@@ -117,6 +118,8 @@ export default function AdminHomePage() {
           Дневной отчёт
         </Link>
       </div>
+
+      <MessagesHomeLink href="/admin/notifications" />
     </div>
   );
 }

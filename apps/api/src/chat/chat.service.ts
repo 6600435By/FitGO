@@ -12,9 +12,24 @@ import { PrismaService } from '../prisma/prisma.service';
 export class ChatService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async getUnreadCount(user: JwtPayload) {
+    let conversations;
+    if (user.roles.includes(UserRole.TRAINER)) {
+      const [clients, admin] = await Promise.all([
+        this.listConversations(user, 'clients'),
+        this.listConversations(user, 'admin'),
+      ]);
+      conversations = [...clients, ...admin];
+    } else {
+      conversations = await this.listConversations(user);
+    }
+    const chat = conversations.reduce((sum, c) => sum + c.unreadCount, 0);
+    return { chat };
+  }
+
   async listConversations(
     user: JwtPayload,
-    scope?: 'clients' | 'admin',
+    scope?: 'clients' | 'admin' | 'trainers',
   ) {
     const where = this.buildConversationListWhere(user, scope);
     const conversations = await this.prisma.conversation.findMany({
@@ -216,7 +231,7 @@ export class ChatService {
 
   private buildConversationListWhere(
     user: JwtPayload,
-    scope?: 'clients' | 'admin',
+    scope?: 'clients' | 'admin' | 'trainers',
   ) {
     if (user.roles.includes(UserRole.CLIENT)) {
       return { clientId: user.sub };
@@ -233,6 +248,12 @@ export class ChatService {
     }
 
     if (user.roles.includes(UserRole.ADMIN)) {
+      if (scope === 'clients') {
+        return { clubId: user.clubId, kind: ConversationKind.ADMIN };
+      }
+      if (scope === 'trainers') {
+        return { clubId: user.clubId, kind: ConversationKind.TRAINER_ADMIN };
+      }
       return {
         clubId: user.clubId,
         kind: { in: [ConversationKind.ADMIN, ConversationKind.TRAINER_ADMIN] },

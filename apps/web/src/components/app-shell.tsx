@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 interface NavItem {
   href: string;
   label: string;
+  matchSubpaths?: boolean;
 }
 
 interface AppShellProps {
@@ -55,20 +56,25 @@ export function AppShell({ children, title, navItems }: AppShellProps) {
 
       <nav className="fixed bottom-0 left-0 right-0 border-t border-slate-800 bg-slate-950/95 backdrop-blur">
         <div className="mx-auto flex max-w-lg justify-around px-2 py-2">
-          {navItems.map((item) => (
+          {navItems.map((item) => {
+            const active =
+              pathname === item.href ||
+              (item.matchSubpaths && pathname.startsWith(`${item.href}/`));
+            return (
             <Link
               key={item.href}
               href={item.href}
               className={cn(
                 'rounded-xl px-3 py-2 text-center text-sm transition',
-                pathname === item.href
+                active
                   ? 'bg-fitgo-500/20 text-fitgo-300'
                   : 'text-slate-400 hover:text-white',
               )}
             >
               {item.label}
             </Link>
-          ))}
+            );
+          })}
         </div>
       </nav>
     </div>

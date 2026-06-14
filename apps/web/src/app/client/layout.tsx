@@ -8,11 +8,10 @@ import { ClientOnboarding } from '@/components/client-onboarding';
 
 const NAV = [
   { href: '/client', label: 'Главная' },
-  { href: '/client/schedule', label: 'Групповые' },
-  { href: '/client/personal-training', label: 'Персональные' },
+  { href: '/client/schedule', label: 'Расписание', matchSubpaths: true },
   { href: '/client/bookings', label: 'Записи' },
   { href: '/client/booking-history', label: 'История' },
-  { href: '/client/notifications', label: 'Чат' },
+  { href: '/client/notifications', label: 'Сообщения' },
   { href: '/client/card', label: 'Карта' },
 ];
 

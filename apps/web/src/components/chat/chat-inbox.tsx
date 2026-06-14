@@ -18,7 +18,7 @@ interface TrainerOption {
 interface ChatInboxProps {
   role: ChatRole;
   initialClientId?: string;
-  scope?: 'clients' | 'admin';
+  scope?: 'clients' | 'admin' | 'trainers';
   directThread?: boolean;
 }
 

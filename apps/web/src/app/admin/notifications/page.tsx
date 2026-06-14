@@ -7,7 +7,7 @@ import { formatDateTime } from '@/lib/utils';
 import { PushSubscribeButton } from '@/components/push-subscribe-button';
 import { ChatInbox } from '@/components/chat/chat-inbox';
 
-type PageTab = 'chat' | 'alerts';
+type PageTab = 'clients' | 'trainers' | 'alerts';
 type MessageFilter = 'all' | 'pending' | 'completed' | 'unread';
 
 const FILTERS: { id: MessageFilter; label: string }[] = [
@@ -18,7 +18,7 @@ const FILTERS: { id: MessageFilter; label: string }[] = [
 ];
 
 export default function AdminNotificationsPage() {
-  const [tab, setTab] = useState<PageTab>('chat');
+  const [tab, setTab] = useState<PageTab>('clients');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [filter, setFilter] = useState<MessageFilter>('all');
   const [error, setError] = useState('');
@@ -64,19 +64,30 @@ export default function AdminNotificationsPage() {
       <div className="flex gap-2">
         <button
           type="button"
-          onClick={() => setTab('chat')}
-          className={`flex-1 rounded-full px-3 py-2 text-sm ${
-            tab === 'chat'
+          onClick={() => setTab('clients')}
+          className={`flex-1 rounded-full px-2 py-2 text-sm ${
+            tab === 'clients'
               ? 'bg-fitgo-500 text-white'
               : 'bg-slate-800 text-slate-400'
           }`}
         >
-          Чаты с клиентами
+          Клиенты
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('trainers')}
+          className={`flex-1 rounded-full px-2 py-2 text-sm ${
+            tab === 'trainers'
+              ? 'bg-fitgo-500 text-white'
+              : 'bg-slate-800 text-slate-400'
+          }`}
+        >
+          Тренеры
         </button>
         <button
           type="button"
           onClick={() => setTab('alerts')}
-          className={`flex-1 rounded-full px-3 py-2 text-sm ${
+          className={`flex-1 rounded-full px-2 py-2 text-sm ${
             tab === 'alerts'
               ? 'bg-fitgo-500 text-white'
               : 'bg-slate-800 text-slate-400'
@@ -86,8 +97,10 @@ export default function AdminNotificationsPage() {
         </button>
       </div>
 
-      {tab === 'chat' ? (
-        <ChatInbox role="admin" />
+      {tab === 'clients' ? (
+        <ChatInbox key="clients" role="admin" scope="clients" />
+      ) : tab === 'trainers' ? (
+        <ChatInbox key="trainers" role="admin" scope="trainers" />
       ) : error ? (
         <p className="text-red-400">{error}</p>
       ) : (

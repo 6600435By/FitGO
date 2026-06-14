@@ -4,6 +4,7 @@ import { MembershipStatus, type Visit } from '@fitgo/shared-types';
 import { Calendar, CreditCard, Dumbbell, ShoppingBag, Trophy } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { MessagesHomeLink } from '@/components/messages-home-link';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import {
@@ -170,6 +171,7 @@ export default function ClientHomePage() {
           <Calendar className="h-8 w-8 text-fitgo-400" />
           <span className="font-medium">Расписание</span>
         </Link>
+        <MessagesHomeLink href="/client/notifications" />
         <Link href="/client/card" className="card flex flex-col items-center gap-2 py-6">
           <CreditCard className="h-8 w-8 text-fitgo-400" />
           <span className="font-medium">Карта клуба</span>

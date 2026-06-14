@@ -100,12 +100,13 @@ export default function TrainerMessagesPage() {
 
       {tab === 'clients' ? (
         <ChatInbox
+          key="clients"
           role="trainer"
           scope="clients"
           initialClientId={initialClientId}
         />
       ) : tab === 'admin' ? (
-        <ChatInbox role="trainer" scope="admin" directThread />
+        <ChatInbox key="admin" role="trainer" scope="admin" directThread />
       ) : error ? (
         <p className="text-red-400">{error}</p>
       ) : alertItems.length === 0 ? (
