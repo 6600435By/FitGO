@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -11,8 +11,9 @@ export function ProfileGate({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [ready, setReady] = useState(false);
+  const [error, setError] = useState('');
 
-  useEffect(() => {
+  const checkProfile = useCallback(() => {
     const token = getToken();
     if (!token) {
       setReady(true);
@@ -24,6 +25,7 @@ export function ProfileGate({ children }: { children: ReactNode }) {
       return;
     }
 
+    setError('');
     api
       .clientProfile(token)
       .then((profile) => {
@@ -33,8 +35,30 @@ export function ProfileGate({ children }: { children: ReactNode }) {
           setReady(true);
         }
       })
-      .catch(() => setReady(true));
+      .catch((err) => {
+        setReady(false);
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Не удалось проверить профиль',
+        );
+      });
   }, [pathname, router]);
+
+  useEffect(() => {
+    checkProfile();
+  }, [checkProfile]);
+
+  if (error) {
+    return (
+      <div className="card space-y-3 text-center">
+        <p className="text-red-400">{error}</p>
+        <button type="button" onClick={checkProfile} className="btn-secondary">
+          Повторить
+        </button>
+      </div>
+    );
+  }
 
   if (!ready) {
     return (

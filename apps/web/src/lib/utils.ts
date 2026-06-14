@@ -36,18 +36,24 @@ export function sessionTypeLabel(type: SessionType) {
   return type === SessionType.GROUP ? 'Групповое' : 'Персональное';
 }
 
-export function sessionStatusLabel(status: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED') {
+export function sessionStatusLabel(
+  status: 'SCHEDULED' | 'AWAITING_CONFIRMATION' | 'COMPLETED' | 'CANCELLED',
+) {
   const labels = {
     SCHEDULED: 'Запланирована',
+    AWAITING_CONFIRMATION: 'Ожидает подтверждения',
     COMPLETED: 'Проведена',
     CANCELLED: 'Отменена',
   };
   return labels[status];
 }
 
-export function sessionStatusColor(status: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED') {
+export function sessionStatusColor(
+  status: 'SCHEDULED' | 'AWAITING_CONFIRMATION' | 'COMPLETED' | 'CANCELLED',
+) {
   const colors = {
     SCHEDULED: 'text-blue-400 bg-blue-400/10',
+    AWAITING_CONFIRMATION: 'text-amber-400 bg-amber-400/10',
     COMPLETED: 'text-emerald-400 bg-emerald-400/10',
     CANCELLED: 'text-red-400 bg-red-400/10',
   };

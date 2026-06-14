@@ -16,9 +16,10 @@ import {
 } from '@/lib/utils';
 
 type DraftGoal = {
+  id?: string;
   title: string;
   notes?: string;
-  tasks: Array<{ title: string }>;
+  tasks: Array<{ id?: string; title: string }>;
 };
 
 interface SessionPlanEditorProps {
@@ -53,9 +54,10 @@ export function SessionPlanEditor({
     setSession(data);
     setDraftGoals(
       data.goals.map((g) => ({
+        id: g.id,
         title: g.title,
         notes: g.notes,
-        tasks: g.tasks.map((t) => ({ title: t.title })),
+        tasks: g.tasks.map((t) => ({ id: t.id, title: t.title })),
       })),
     );
   };
@@ -72,9 +74,10 @@ export function SessionPlanEditor({
         setTemplates(tpls);
         setDraftGoals(
           data.goals.map((g) => ({
+            id: g.id,
             title: g.title,
             notes: g.notes,
-            tasks: g.tasks.map((t) => ({ title: t.title })),
+            tasks: g.tasks.map((t) => ({ id: t.id, title: t.title })),
           })),
         );
       })
@@ -212,8 +215,16 @@ export function SessionPlanEditor({
 
         {session.status === 'COMPLETED' && (
           <p className="mt-3 text-sm text-slate-400">
-            {session.clientCompletedAt && 'Клиент подтвердил · '}
-            {session.trainerCompletedAt && 'Тренер подтвердил'}
+            {session.clientCompletedAt && 'Клиент подтвердил завершение · '}
+            {session.trainerCompletedAt && 'Тренер подтвердил завершение'}
+            {!session.clientCompletedAt && !session.trainerCompletedAt &&
+              'Тренировка завершена'}
+          </p>
+        )}
+        {session.status === 'AWAITING_CONFIRMATION' && (
+          <p className="mt-3 text-sm text-amber-400/90">
+            Время тренировки прошло — подтвердите завершение (достаточно одной
+            стороны).
           </p>
         )}
       </div>
@@ -438,13 +449,13 @@ export function SessionPlanEditor({
         )}
       </div>
 
-      {session.canComplete && session.status === 'SCHEDULED' && (
+      {session.canComplete && (
         <button
           disabled={busy}
           onClick={completeSession}
           className="btn-primary w-full disabled:opacity-50"
         >
-          Завершить тренировку
+          Подтвердить завершение тренировки
         </button>
       )}
     </div>

@@ -217,21 +217,26 @@ export class TrainerService {
 
     const now = Date.now();
     return bookings.map((booking) => {
-      const status =
-        booking.status === PersonalBookingStatus.CANCELLED
-          ? ('CANCELLED' as const)
-          : booking.status === PersonalBookingStatus.COMPLETED
-            ? ('COMPLETED' as const)
-            : ('SCHEDULED' as const);
+      let status: 'SCHEDULED' | 'AWAITING_CONFIRMATION' | 'COMPLETED' | 'CANCELLED';
+      if (booking.status === PersonalBookingStatus.CANCELLED) {
+        status = 'CANCELLED';
+      } else if (booking.status === PersonalBookingStatus.COMPLETED) {
+        status = 'COMPLETED';
+      } else if (
+        booking.status === PersonalBookingStatus.CONFIRMED &&
+        booking.endAt.getTime() <= now
+      ) {
+        status = 'AWAITING_CONFIRMATION';
+      } else {
+        status = 'SCHEDULED';
+      }
 
       return {
         id: booking.id,
         startAt: booking.startAt.toISOString(),
         endAt: booking.endAt.toISOString(),
         status,
-        awaitingConfirmation:
-          booking.status === PersonalBookingStatus.CONFIRMED &&
-          booking.endAt.getTime() <= now,
+        awaitingConfirmation: status === 'AWAITING_CONFIRMATION',
         goalsCount: booking.sessionGoals.length,
       };
     });
@@ -280,7 +285,7 @@ export class TrainerService {
         sessionsToday: schedule.filter((s) =>
           s.startAt.slice(0, 10) === todayKey,
         ).length,
-        upcomingSessions: schedule.filter((s) => s.available).length,
+        upcomingSessions: schedule.length,
       },
     };
   }

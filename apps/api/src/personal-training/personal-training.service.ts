@@ -307,32 +307,82 @@ export class PersonalTrainingService {
     const booking = await this.getAccessibleBooking(user, bookingId);
     this.ensureSessionEditable(booking);
 
+    const existingGoals = booking.sessionGoals ?? [];
+    const keptGoalIds = new Set<string>();
+
     await this.prisma.$transaction(async (tx) => {
-      await tx.personalTrainingSessionGoal.deleteMany({
-        where: { bookingId },
-      });
-
       for (const [goalIndex, goal] of goals.entries()) {
-        const createdGoal = await tx.personalTrainingSessionGoal.create({
-          data: {
-            bookingId,
-            title: goal.title.trim(),
-            notes: goal.notes?.trim() || null,
-            sortOrder: goal.sortOrder ?? goalIndex,
-            createdById: user.sub,
-          },
-        });
+        if (!goal.title.trim()) continue;
 
-        for (const [taskIndex, task] of (goal.tasks ?? []).entries()) {
-          if (!task.title.trim()) continue;
-          await tx.personalTrainingSessionTask.create({
+        const sortOrder = goal.sortOrder ?? goalIndex;
+        const taskInputs = (goal.tasks ?? []).filter((t) => t.title.trim());
+
+        let goalId: string;
+        if (goal.id && existingGoals.some((g) => g.id === goal.id)) {
+          goalId = goal.id;
+          keptGoalIds.add(goalId);
+          await tx.personalTrainingSessionGoal.update({
+            where: { id: goalId },
             data: {
-              goalId: createdGoal.id,
-              title: task.title.trim(),
-              sortOrder: task.sortOrder ?? taskIndex,
+              title: goal.title.trim(),
+              notes: goal.notes?.trim() || null,
+              sortOrder,
             },
           });
+        } else {
+          const created = await tx.personalTrainingSessionGoal.create({
+            data: {
+              bookingId,
+              title: goal.title.trim(),
+              notes: goal.notes?.trim() || null,
+              sortOrder,
+              createdById: user.sub,
+            },
+          });
+          goalId = created.id;
+          keptGoalIds.add(goalId);
         }
+
+        const existingTasks =
+          existingGoals.find((g) => g.id === goalId)?.tasks ?? [];
+        const keptTaskIds = new Set<string>();
+
+        for (const [taskIndex, task] of taskInputs.entries()) {
+          const taskSortOrder = task.sortOrder ?? taskIndex;
+          if (task.id && existingTasks.some((t) => t.id === task.id)) {
+            keptTaskIds.add(task.id);
+            await tx.personalTrainingSessionTask.update({
+              where: { id: task.id },
+              data: {
+                title: task.title.trim(),
+                sortOrder: taskSortOrder,
+              },
+            });
+          } else {
+            const createdTask = await tx.personalTrainingSessionTask.create({
+              data: {
+                goalId,
+                title: task.title.trim(),
+                sortOrder: taskSortOrder,
+              },
+            });
+            keptTaskIds.add(createdTask.id);
+          }
+        }
+
+        const tasksToRemove = existingTasks.filter((t) => !keptTaskIds.has(t.id));
+        if (tasksToRemove.length > 0) {
+          await tx.personalTrainingSessionTask.deleteMany({
+            where: { id: { in: tasksToRemove.map((t) => t.id) } },
+          });
+        }
+      }
+
+      const goalsToRemove = existingGoals.filter((g) => !keptGoalIds.has(g.id));
+      if (goalsToRemove.length > 0) {
+        await tx.personalTrainingSessionGoal.deleteMany({
+          where: { id: { in: goalsToRemove.map((g) => g.id) } },
+        });
       }
     });
 
@@ -395,9 +445,6 @@ export class PersonalTrainingService {
     if (booking.status === PersonalBookingStatus.CANCELLED) {
       throw new BadRequestException('Тренировка отменена');
     }
-    if (booking.status === PersonalBookingStatus.COMPLETED) {
-      return this.getSessionDetail(user, bookingId);
-    }
 
     const now = new Date();
     if (booking.startAt > now) {
@@ -406,24 +453,46 @@ export class PersonalTrainingService {
 
     const isClient = booking.clientId === user.sub;
     const isTrainer = booking.trainerId === user.sub;
+    const clientCompletedAt =
+      booking.clientCompletedAt ?? (isClient ? now : null);
+    const trainerCompletedAt =
+      booking.trainerCompletedAt ?? (isTrainer ? now : null);
+
+    if (
+      booking.status === PersonalBookingStatus.COMPLETED &&
+      ((isClient && booking.clientCompletedAt) ||
+        (isTrainer && booking.trainerCompletedAt))
+    ) {
+      return this.getSessionDetail(user, bookingId);
+    }
 
     await this.prisma.personalTrainingBooking.update({
       where: { id: bookingId },
       data: {
-        ...(isClient ? { clientCompletedAt: now } : {}),
-        ...(isTrainer ? { trainerCompletedAt: now } : {}),
-        status: PersonalBookingStatus.COMPLETED,
+        ...(clientCompletedAt ? { clientCompletedAt } : {}),
+        ...(trainerCompletedAt ? { trainerCompletedAt } : {}),
+        status:
+          clientCompletedAt || trainerCompletedAt
+            ? PersonalBookingStatus.COMPLETED
+            : PersonalBookingStatus.CONFIRMED,
       },
     });
 
     return this.getSessionDetail(user, bookingId);
   }
 
-  mapSessionStatus(
-    status: PersonalBookingStatus,
-  ): PersonalSessionStatus {
-    if (status === PersonalBookingStatus.CANCELLED) return 'CANCELLED';
-    if (status === PersonalBookingStatus.COMPLETED) return 'COMPLETED';
+  mapSessionStatus(booking: {
+    status: PersonalBookingStatus;
+    endAt: Date;
+  }): PersonalSessionStatus {
+    if (booking.status === PersonalBookingStatus.CANCELLED) return 'CANCELLED';
+    if (booking.status === PersonalBookingStatus.COMPLETED) return 'COMPLETED';
+    if (
+      booking.status === PersonalBookingStatus.CONFIRMED &&
+      booking.endAt.getTime() <= Date.now()
+    ) {
+      return 'AWAITING_CONFIRMATION';
+    }
     return 'SCHEDULED';
   }
 
@@ -434,9 +503,13 @@ export class PersonalTrainingService {
     viewerId: string,
   ): PersonalTrainingSessionDetail {
     const now = Date.now();
-    const status = this.mapSessionStatus(booking.status);
+    const status = this.mapSessionStatus(booking);
     const isParticipant =
       booking.clientId === viewerId || booking.trainerId === viewerId;
+    const isClient = booking.clientId === viewerId;
+    const userAlreadyCompleted = isClient
+      ? !!booking.clientCompletedAt
+      : !!booking.trainerCompletedAt;
 
     return {
       id: booking.id,
@@ -456,8 +529,9 @@ export class PersonalTrainingService {
         booking.status === PersonalBookingStatus.CONFIRMED,
       canComplete:
         isParticipant &&
-        booking.status === PersonalBookingStatus.CONFIRMED &&
-        booking.startAt.getTime() <= now,
+        booking.status !== PersonalBookingStatus.CANCELLED &&
+        booking.startAt.getTime() <= now &&
+        !userAlreadyCompleted,
       goals: (booking.sessionGoals ?? []).map((goal) => ({
         id: goal.id,
         title: goal.title,

@@ -273,9 +273,10 @@ export const api = {
     token: string,
     bookingId: string,
     goals: Array<{
+      id?: string;
       title: string;
       notes?: string;
-      tasks?: Array<{ title: string }>;
+      tasks?: Array<{ id?: string; title: string }>;
     }>,
   ) =>
     request<PersonalTrainingSessionDetail>(

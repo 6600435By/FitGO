@@ -167,7 +167,11 @@ export interface PersonalTrainingBookingItem {
   trainerCompletedAt?: string;
 }
 
-export type PersonalSessionStatus = 'SCHEDULED' | 'COMPLETED' | 'CANCELLED';
+export type PersonalSessionStatus =
+  | 'SCHEDULED'
+  | 'AWAITING_CONFIRMATION'
+  | 'COMPLETED'
+  | 'CANCELLED';
 
 export interface PersonalTrainingSessionTask {
   id: string;
