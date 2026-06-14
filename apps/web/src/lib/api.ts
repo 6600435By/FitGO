@@ -412,8 +412,21 @@ export const api = {
       token,
     ),
 
-  chatConversations: (token: string) =>
-    request<ConversationSummary[]>('/chat/conversations', {}, token),
+  chatConversations: (token: string, scope?: 'clients' | 'admin') => {
+    const query = scope ? `?scope=${scope}` : '';
+    return request<ConversationSummary[]>(
+      `/chat/conversations${query}`,
+      {},
+      token,
+    );
+  },
+
+  chatOpenTrainerAdmin: (token: string) =>
+    request<ConversationSummary>(
+      '/chat/conversations/trainer-admin',
+      { method: 'POST' },
+      token,
+    ),
 
   chatCreateConversation: (
     token: string,

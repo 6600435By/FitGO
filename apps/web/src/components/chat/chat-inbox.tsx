@@ -1,6 +1,7 @@
 'use client';
 
 import type { ChatMessageItem, ConversationSummary } from '@fitgo/shared-types';
+import { ArrowLeft, Plus, Send } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -16,16 +17,48 @@ interface TrainerOption {
 
 interface ChatInboxProps {
   role: ChatRole;
-  /** For trainer: open chat with specific client */
   initialClientId?: string;
+  scope?: 'clients' | 'admin';
+  directThread?: boolean;
 }
 
-export function ChatInbox({ role, initialClientId }: ChatInboxProps) {
+function initials(title: string) {
+  const parts = title.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+  return title.slice(0, 2).toUpperCase();
+}
+
+function formatListTime(iso: string) {
+  const date = new Date(iso);
+  const now = new Date();
+  const isToday =
+    date.toDateString() === now.toDateString();
+  if (isToday) {
+    return date.toLocaleTimeString('ru-RU', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+  return date.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
+export function ChatInbox({
+  role,
+  initialClientId,
+  scope,
+  directThread = false,
+}: ChatInboxProps) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessageItem[]>([]);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadingThread, setLoadingThread] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [showNewChat, setShowNewChat] = useState(false);
@@ -38,10 +71,10 @@ export function ChatInbox({ role, initialClientId }: ChatInboxProps) {
   const loadConversations = useCallback(async () => {
     const token = getToken();
     if (!token) return;
-    const list = await api.chatConversations(token);
+    const list = await api.chatConversations(token, scope);
     setConversations(list);
     return list;
-  }, []);
+  }, [scope]);
 
   const loadMessages = useCallback(async (conversationId: string) => {
     const token = getToken();
@@ -57,20 +90,42 @@ export function ChatInbox({ role, initialClientId }: ChatInboxProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const list = await loadConversations();
+      await loadConversations();
       if (activeId) {
         await loadMessages(activeId);
       }
-      return list;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки');
     }
   }, [activeId, loadConversations, loadMessages]);
 
   useEffect(() => {
+    if (!directThread) return;
+    const token = getToken();
+    if (!token) return;
+
+    setLoading(true);
+    api
+      .chatOpenTrainerAdmin(token)
+      .then(async (conversation) => {
+        setActiveId(conversation.id);
+        setLoadingThread(true);
+        await loadMessages(conversation.id);
+      })
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'Не удалось открыть чат'),
+      )
+      .finally(() => {
+        setLoading(false);
+        setLoadingThread(false);
+      });
+  }, [directThread, loadMessages]);
+
+  useEffect(() => {
+    if (directThread) return;
     setLoading(true);
     refresh().finally(() => setLoading(false));
-  }, [refresh]);
+  }, [refresh, directThread]);
 
   useEffect(() => {
     if (role !== 'client') return;
@@ -96,13 +151,15 @@ export function ChatInbox({ role, initialClientId }: ChatInboxProps) {
 
     api
       .chatOpenTrainerClient(token, initialClientId)
-      .then((conversation) => {
+      .then(async (conversation) => {
         setActiveId(conversation.id);
-        return loadMessages(conversation.id);
+        setLoadingThread(true);
+        await loadMessages(conversation.id);
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : 'Не удалось открыть чат'),
-      );
+      )
+      .finally(() => setLoadingThread(false));
   }, [role, initialClientId, loadMessages]);
 
   useEffect(() => {
@@ -119,11 +176,21 @@ export function ChatInbox({ role, initialClientId }: ChatInboxProps) {
   const openConversation = async (id: string) => {
     setActiveId(id);
     setError('');
+    setLoadingThread(true);
     try {
       await loadMessages(id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки');
+    } finally {
+      setLoadingThread(false);
     }
+  };
+
+  const closeConversation = () => {
+    setActiveId(null);
+    setMessages([]);
+    setDraft('');
+    setError('');
   };
 
   const handleSend = async () => {
@@ -175,229 +242,248 @@ export function ChatInbox({ role, initialClientId }: ChatInboxProps) {
 
   const activeConversation = conversations.find((c) => c.id === activeId);
 
-  if (loading && conversations.length === 0) {
+  if (loading && !activeId && !directThread) {
     return (
-      <div className="flex justify-center py-12">
+      <div className="flex h-[calc(100vh-10rem)] min-h-[480px] items-center justify-center rounded-2xl bg-slate-900/50 ring-1 ring-slate-800">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (loading && directThread && !activeId) {
+    return (
+      <div className="flex h-[calc(100vh-10rem)] min-h-[480px] items-center justify-center rounded-2xl bg-slate-900/50 ring-1 ring-slate-800">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div className="flex h-[calc(100vh-12rem)] min-h-[420px] flex-col gap-3 md:flex-row">
-      <div
-        className={`card flex w-full flex-col overflow-hidden md:w-80 md:shrink-0 ${
-          activeId ? 'hidden md:flex' : 'flex'
-        }`}
-      >
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-medium">Диалоги</h3>
-          {role === 'client' && (
-            <button
-              type="button"
-              onClick={() => setShowNewChat((v) => !v)}
-              className="text-sm text-fitgo-400"
-            >
-              + Новый
-            </button>
-          )}
-        </div>
-
-        {showNewChat && role === 'client' && (
-          <div className="mb-3 space-y-2 rounded-xl bg-slate-800/60 p-3">
-            <div className="flex gap-2">
+    <div className="flex h-[calc(100vh-10rem)] min-h-[480px] flex-col overflow-hidden rounded-2xl bg-slate-900/50 ring-1 ring-slate-800">
+      {!activeId ? (
+        <>
+          <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+            <h3 className="font-semibold">Чаты</h3>
+            {role === 'client' && (
               <button
                 type="button"
-                onClick={() => setNewChatKind('admin')}
-                className={`flex-1 rounded-full px-2 py-1 text-xs ${
-                  newChatKind === 'admin'
-                    ? 'bg-fitgo-500 text-white'
-                    : 'bg-slate-700 text-slate-300'
-                }`}
+                onClick={() => setShowNewChat((v) => !v)}
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-fitgo-500/15 text-fitgo-400 transition hover:bg-fitgo-500/25"
+                aria-label="Новый чат"
               >
-                Админ
+                <Plus className="h-5 w-5" />
               </button>
+            )}
+          </div>
+
+          {showNewChat && role === 'client' && (
+            <div className="space-y-3 border-b border-slate-800 bg-slate-900/80 px-4 py-3">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setNewChatKind('admin')}
+                  className={`flex-1 rounded-full px-3 py-2 text-sm ${
+                    newChatKind === 'admin'
+                      ? 'bg-fitgo-500 text-white'
+                      : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  Администратор
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewChatKind('trainer')}
+                  className={`flex-1 rounded-full px-3 py-2 text-sm ${
+                    newChatKind === 'trainer'
+                      ? 'bg-fitgo-500 text-white'
+                      : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  Тренер
+                </button>
+              </div>
+              {newChatKind === 'trainer' && (
+                <select
+                  value={selectedTrainerId}
+                  onChange={(e) => setSelectedTrainerId(e.target.value)}
+                  className="w-full rounded-xl bg-slate-800 px-3 py-2 text-sm"
+                >
+                  <option value="">Выберите тренера</option>
+                  {trainers.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.firstName} {t.lastName}
+                    </option>
+                  ))}
+                </select>
+              )}
               <button
                 type="button"
-                onClick={() => setNewChatKind('trainer')}
-                className={`flex-1 rounded-full px-2 py-1 text-xs ${
-                  newChatKind === 'trainer'
-                    ? 'bg-fitgo-500 text-white'
-                    : 'bg-slate-700 text-slate-300'
-                }`}
+                onClick={handleStartChat}
+                disabled={sending}
+                className="btn-primary w-full text-sm disabled:opacity-50"
               >
-                Тренер
+                Начать чат
               </button>
             </div>
-            {newChatKind === 'trainer' && (
-              <select
-                value={selectedTrainerId}
-                onChange={(e) => setSelectedTrainerId(e.target.value)}
-                className="w-full rounded-lg bg-slate-800 px-2 py-2 text-sm"
-              >
-                <option value="">Выберите тренера</option>
-                {trainers.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.firstName} {t.lastName}
-                  </option>
-                ))}
-              </select>
-            )}
-            <button
-              type="button"
-              onClick={handleStartChat}
-              disabled={sending}
-              className="btn-primary w-full text-sm disabled:opacity-50"
-            >
-              Начать чат
-            </button>
-          </div>
-        )}
-
-        <div className="flex-1 space-y-1 overflow-y-auto">
-          {conversations.length === 0 ? (
-            <p className="py-6 text-center text-sm text-slate-400">
-              {role === 'client'
-                ? 'Начните диалог с администрацией или тренером'
-                : 'Пока нет диалогов'}
-            </p>
-          ) : (
-            conversations.map((conversation) => (
-              <button
-                key={conversation.id}
-                type="button"
-                onClick={() => openConversation(conversation.id)}
-                className={`w-full rounded-xl px-3 py-2 text-left transition ${
-                  activeId === conversation.id
-                    ? 'bg-fitgo-500/15 ring-1 ring-fitgo-500/30'
-                    : 'bg-slate-800/40 hover:bg-slate-800/70'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{conversation.title}</p>
-                    {conversation.subtitle && (
-                      <p className="truncate text-xs text-slate-500">
-                        {conversation.subtitle}
-                      </p>
-                    )}
-                    {conversation.lastMessage && (
-                      <p className="mt-1 truncate text-xs text-slate-400">
-                        {conversation.lastMessage}
-                      </p>
-                    )}
-                  </div>
-                  {conversation.unreadCount > 0 && (
-                    <span className="shrink-0 rounded-full bg-fitgo-500 px-2 py-0.5 text-xs text-white">
-                      {conversation.unreadCount}
-                    </span>
-                  )}
-                </div>
-              </button>
-            ))
           )}
-        </div>
-      </div>
 
-      <div
-        className={`card flex min-w-0 flex-1 flex-col overflow-hidden ${
-          activeId ? 'flex' : 'hidden md:flex'
-        }`}
-      >
-        {!activeConversation ? (
-          <div className="flex flex-1 items-center justify-center text-slate-400">
-            Выберите диалог
+          {error && !activeId && (
+            <p className="px-4 py-2 text-sm text-red-400">{error}</p>
+          )}
+
+          <div className="flex-1 overflow-y-auto">
+            {conversations.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center px-6 text-center text-slate-400">
+                <p className="text-sm">
+                  {role === 'client'
+                    ? 'Нажмите + чтобы начать диалог с администрацией или тренером'
+                    : 'Пока нет диалогов'}
+                </p>
+              </div>
+            ) : (
+              conversations.map((conversation) => (
+                <button
+                  key={conversation.id}
+                  type="button"
+                  onClick={() => openConversation(conversation.id)}
+                  className="flex w-full items-center gap-3 border-b border-slate-800/60 px-4 py-3 text-left transition hover:bg-slate-800/40 active:bg-slate-800/60"
+                >
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-fitgo-500/20 text-sm font-semibold text-fitgo-300">
+                    {initials(conversation.title)}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <p className="truncate font-medium">
+                        {conversation.title}
+                      </p>
+                      <span className="shrink-0 text-xs text-slate-500">
+                        {formatListTime(conversation.lastMessageAt)}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 flex items-center justify-between gap-2">
+                      <p className="truncate text-sm text-slate-400">
+                        {conversation.lastMessage ??
+                          conversation.subtitle ??
+                          'Нет сообщений'}
+                      </p>
+                      {conversation.unreadCount > 0 && (
+                        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-fitgo-500 px-1.5 text-xs font-medium text-white">
+                          {conversation.unreadCount}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              ))
+            )}
           </div>
-        ) : (
-          <>
-            <div className="mb-3 flex items-center gap-2 border-b border-slate-800 pb-3">
+        </>
+      ) : (
+        <>
+          <div className="flex items-center gap-3 border-b border-slate-800 px-3 py-2">
+            {!directThread && (
               <button
                 type="button"
-                onClick={() => setActiveId(null)}
-                className="text-sm text-fitgo-400 md:hidden"
+                onClick={closeConversation}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-fitgo-400 transition hover:bg-slate-800"
+                aria-label="Назад к списку"
               >
-                ← Назад
+                <ArrowLeft className="h-5 w-5" />
               </button>
-              <div>
-                <p className="font-medium">{activeConversation.title}</p>
-                {activeConversation.subtitle && (
-                  <p className="text-xs text-slate-500">
+            )}
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fitgo-500/20 text-sm font-semibold text-fitgo-300">
+                {initials(activeConversation?.title ?? '?')}
+              </div>
+              <div className="min-w-0">
+                <p className="truncate font-semibold">
+                  {activeConversation?.title}
+                </p>
+                {activeConversation?.subtitle && (
+                  <p className="truncate text-xs text-slate-500">
                     {activeConversation.subtitle}
                   </p>
                 )}
               </div>
             </div>
+          </div>
 
-            <div className="flex-1 space-y-3 overflow-y-auto pr-1">
-              {messages.length === 0 ? (
-                <p className="py-8 text-center text-sm text-slate-400">
-                  Напишите первое сообщение
-                </p>
-              ) : (
-                messages.map((message) => (
+          <div className="flex-1 overflow-y-auto px-3 py-4">
+            {loadingThread ? (
+              <div className="flex h-full items-center justify-center">
+                <div className="h-7 w-7 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+              </div>
+            ) : messages.length === 0 ? (
+              <p className="py-12 text-center text-sm text-slate-400">
+                Напишите первое сообщение
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {messages.map((message) => (
                   <div
                     key={message.id}
                     className={`flex ${message.isMine ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
+                      className={`max-w-[80%] rounded-2xl px-3 py-2 shadow-sm ${
                         message.isMine
-                          ? 'rounded-br-md bg-fitgo-500 text-white'
-                          : 'rounded-bl-md bg-slate-800 text-slate-100'
+                          ? 'rounded-br-sm bg-fitgo-500 text-white'
+                          : 'rounded-bl-sm bg-slate-800 text-slate-100'
                       }`}
                     >
                       {!message.isMine && (
-                        <p className="mb-1 text-xs opacity-70">
+                        <p className="mb-0.5 text-xs font-medium opacity-70">
                           {message.senderName}
                         </p>
                       )}
-                      <p className="whitespace-pre-wrap break-words">
+                      <p className="whitespace-pre-wrap break-words text-[15px] leading-snug">
                         {message.body}
                       </p>
                       <p
-                        className={`mt-1 text-[10px] ${
-                          message.isMine ? 'text-white/70' : 'text-slate-500'
+                        className={`mt-1 text-right text-[10px] ${
+                          message.isMine ? 'text-white/65' : 'text-slate-500'
                         }`}
                       >
                         {formatDateTime(message.createdAt)}
                       </p>
                     </div>
                   </div>
-                ))
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-
-            {error && (
-              <p className="mt-2 text-sm text-red-400">{error}</p>
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
             )}
+          </div>
 
-            <div className="mt-3 flex gap-2 border-t border-slate-800 pt-3">
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    void handleSend();
-                  }
-                }}
-                placeholder="Сообщение..."
-                rows={2}
-                className="flex-1 resize-none rounded-xl bg-slate-800 px-3 py-2 text-sm"
-              />
-              <button
-                type="button"
-                onClick={handleSend}
-                disabled={sending || !draft.trim()}
-                className="btn-primary self-end px-4 disabled:opacity-50"
-              >
-                →
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+          {error && activeId && (
+            <p className="px-4 pb-1 text-sm text-red-400">{error}</p>
+          )}
+
+          <div className="flex items-end gap-2 border-t border-slate-800 bg-slate-900/80 px-3 py-3">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void handleSend();
+                }
+              }}
+              placeholder="Сообщение..."
+              rows={1}
+              className="max-h-32 min-h-[44px] flex-1 resize-none rounded-2xl bg-slate-800 px-4 py-3 text-sm leading-snug"
+            />
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={sending || !draft.trim()}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-fitgo-500 text-white transition hover:bg-fitgo-400 disabled:opacity-40"
+              aria-label="Отправить"
+            >
+              <Send className="h-5 w-5" />
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

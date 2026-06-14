@@ -184,7 +184,7 @@ export interface NotificationItem {
 
 export interface ConversationSummary {
   id: string;
-  kind: 'ADMIN' | 'TRAINER';
+  kind: 'ADMIN' | 'TRAINER' | 'TRAINER_ADMIN';
   title: string;
   subtitle?: string;
   clientId: string;

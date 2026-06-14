@@ -5,10 +5,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, type NotificationItem } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
-import { SendStaffMessageForm } from '@/components/send-staff-message-form';
 import { ChatInbox } from '@/components/chat/chat-inbox';
 
-type MessagesTab = 'chat' | 'alerts' | 'admin';
+type MessagesTab = 'clients' | 'alerts' | 'admin';
 
 const CANCELLATION_TITLES = new Set([
   'Отмена группового занятия',
@@ -27,7 +26,7 @@ export default function TrainerMessagesPage() {
   const searchParams = useSearchParams();
   const initialClientId = searchParams.get('clientId') ?? undefined;
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [tab, setTab] = useState<MessagesTab>('chat');
+  const [tab, setTab] = useState<MessagesTab>('clients');
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
@@ -66,19 +65,19 @@ export default function TrainerMessagesPage() {
       <div className="flex gap-2">
         <button
           type="button"
-          onClick={() => setTab('chat')}
-          className={`flex-1 rounded-full px-3 py-2 text-sm ${
-            tab === 'chat'
+          onClick={() => setTab('clients')}
+          className={`flex-1 rounded-full px-2 py-2 text-sm ${
+            tab === 'clients'
               ? 'bg-fitgo-500 text-white'
               : 'bg-slate-800 text-slate-400'
           }`}
         >
-          Чаты
+          Чат с клиентами
         </button>
         <button
           type="button"
           onClick={() => setTab('alerts')}
-          className={`flex-1 rounded-full px-3 py-2 text-sm ${
+          className={`flex-1 rounded-full px-2 py-2 text-sm ${
             tab === 'alerts'
               ? 'bg-fitgo-500 text-white'
               : 'bg-slate-800 text-slate-400'
@@ -89,20 +88,24 @@ export default function TrainerMessagesPage() {
         <button
           type="button"
           onClick={() => setTab('admin')}
-          className={`flex-1 rounded-full px-3 py-2 text-sm ${
+          className={`flex-1 rounded-full px-2 py-2 text-sm ${
             tab === 'admin'
               ? 'bg-fitgo-500 text-white'
               : 'bg-slate-800 text-slate-400'
           }`}
         >
-          Админу
+          Чат с админом
         </button>
       </div>
 
-      {tab === 'chat' ? (
-        <ChatInbox role="trainer" initialClientId={initialClientId} />
+      {tab === 'clients' ? (
+        <ChatInbox
+          role="trainer"
+          scope="clients"
+          initialClientId={initialClientId}
+        />
       ) : tab === 'admin' ? (
-        <SendStaffMessageForm trainerMode />
+        <ChatInbox role="trainer" scope="admin" directThread />
       ) : error ? (
         <p className="text-red-400">{error}</p>
       ) : alertItems.length === 0 ? (

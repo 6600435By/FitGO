@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { UserRole } from '@fitgo/shared-types';
@@ -23,8 +24,11 @@ export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
   @Get('conversations')
-  listConversations(@CurrentUser() user: JwtPayload) {
-    return this.chatService.listConversations(user);
+  listConversations(
+    @CurrentUser() user: JwtPayload,
+    @Query('scope') scope?: 'clients' | 'admin',
+  ) {
+    return this.chatService.listConversations(user, scope);
   }
 
   @Post('conversations')
@@ -34,6 +38,12 @@ export class ChatController {
     @Body() dto: CreateConversationDto,
   ) {
     return this.chatService.createConversation(user, dto.kind, dto.trainerId);
+  }
+
+  @Post('conversations/trainer-admin')
+  @Roles(UserRole.TRAINER)
+  openTrainerAdminChat(@CurrentUser() user: JwtPayload) {
+    return this.chatService.getOrCreateTrainerAdminConversation(user);
   }
 
   @Post('conversations/trainer/:clientId')
