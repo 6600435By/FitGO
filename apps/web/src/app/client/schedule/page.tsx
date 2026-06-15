@@ -3,6 +3,7 @@
 import type { Booking, ScheduleSlot } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import { cancelGroupBooking } from '@/lib/cancel-booking';
 import { getToken } from '@/lib/auth';
 import { formatDateTime, getWeekRange, sessionTypeLabel } from '@/lib/utils';
 
@@ -19,6 +20,8 @@ export default function ClientSchedulePage() {
   const [trainerFilter, setTrainerFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [bookingId, setBookingId] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [waitlistId, setWaitlistId] = useState<string | null>(null);
   const [message, setMessage] = useState('');
 
   const weekRange = useMemo(() => getWeekRange(weekOffset), [weekOffset]);
@@ -97,6 +100,79 @@ export default function ClientSchedulePage() {
     }
   };
 
+  const handleJoinWaitlist = async (sessionId: string) => {
+    const token = getToken();
+    if (!token) return;
+    setWaitlistId(sessionId);
+    setMessage('');
+    try {
+      const entry = await api.clientJoinWaitlist(token, sessionId);
+      setMessage(
+        entry.isFirstInQueue
+          ? `Вы первые в листе ожидания (позиция ${entry.position}). Мы уведомим, когда освободится место.`
+          : `Вы в листе ожидания (позиция ${entry.position}). Мы уведомим, когда освободится место.`,
+      );
+      load();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setWaitlistId(null);
+    }
+  };
+
+  const handleLeaveWaitlist = async (sessionId: string) => {
+    const token = getToken();
+    if (!token) return;
+    setWaitlistId(sessionId);
+    try {
+      await api.clientLeaveWaitlist(token, sessionId);
+      setMessage('Вы вышли из листа ожидания');
+      load();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setWaitlistId(null);
+    }
+  };
+
+  const handleConfirmWaitlist = async (sessionId: string) => {
+    const token = getToken();
+    if (!token) return;
+    setBookingId(sessionId);
+    setMessage('');
+    try {
+      const result = await api.clientConfirmWaitlist(token, sessionId);
+      if (result.success) {
+        setMessage('Запись подтверждена на сервере клуба!');
+        load();
+      } else {
+        setMessage(result.message ?? 'Не удалось подтвердить запись');
+      }
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBookingId(null);
+    }
+  };
+
+  const handleCancel = async (sessionId: string, title: string) => {
+    setCancellingId(sessionId);
+    setMessage('');
+    try {
+      const result = await cancelGroupBooking(sessionId, title);
+      if (result.success) {
+        setMessage('Запись отменена на сервере клуба. Администратор уведомлён.');
+        load();
+      } else if (result.message && result.message !== 'Отменено') {
+        setMessage(result.message ?? 'Не удалось отменить');
+      }
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
   const filtered = slots.filter((slot) => {
     if (serviceFilter && slot.serviceId !== serviceFilter) return false;
     if (trainerFilter && slot.trainerId !== trainerFilter) return false;
@@ -114,7 +190,7 @@ export default function ClientSchedulePage() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-400">
-        Расписание групповых занятий из 1С.
+        Расписание групповых занятий из 1С. При заполнении группы открывается лист ожидания.
       </p>
 
       <div className="card flex items-center justify-between gap-2">
@@ -181,6 +257,10 @@ export default function ClientSchedulePage() {
         <ul className="space-y-3">
           {filtered.map((slot) => {
             const isBooked = bookedSessionIds.has(slot.id);
+            const wl = slot.waitlist;
+            const onWaitlist = !!wl?.userPosition;
+            const canConfirm = wl?.canConfirm;
+
             return (
               <li key={slot.id} className="card">
                 <div className="mb-2 flex items-start justify-between">
@@ -200,6 +280,11 @@ export default function ClientSchedulePage() {
                 <div className="mb-3 flex items-center justify-between text-sm">
                   <span className="text-slate-400">
                     {slot.booked}/{slot.capacity} мест
+                    {wl?.open && wl.count > 0 && (
+                      <span className="ml-2 text-amber-400">
+                        · лист ожидания: {wl.count}
+                      </span>
+                    )}
                   </span>
                   <div className="h-2 w-24 overflow-hidden rounded-full bg-slate-800">
                     <div
@@ -211,16 +296,76 @@ export default function ClientSchedulePage() {
                   </div>
                 </div>
                 {isBooked ? (
-                  <div className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-center text-sm text-fitgo-400">
-                    Вы записаны
+                  <div className="space-y-2">
+                    <div className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-center text-sm text-fitgo-400">
+                      Вы записаны
+                    </div>
+                    <button
+                      type="button"
+                      disabled={cancellingId === slot.id}
+                      onClick={() => handleCancel(slot.id, slot.title)}
+                      className="btn-secondary w-full disabled:opacity-50"
+                    >
+                      {cancellingId === slot.id ? 'Отмена…' : 'Отменить запись'}
+                    </button>
                   </div>
-                ) : (
+                ) : canConfirm ? (
+                  <div className="space-y-2">
+                    <div className="rounded-xl bg-amber-400/10 px-3 py-2 text-center text-sm text-amber-300">
+                      Освободилось место — подтвердите запись
+                    </div>
+                    <button
+                      type="button"
+                      disabled={bookingId === slot.id}
+                      onClick={() => handleConfirmWaitlist(slot.id)}
+                      className="btn-primary w-full disabled:opacity-50"
+                    >
+                      {bookingId === slot.id ? 'Запись…' : 'Подтвердить запись'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={waitlistId === slot.id}
+                      onClick={() => handleLeaveWaitlist(slot.id)}
+                      className="btn-secondary w-full text-sm disabled:opacity-50"
+                    >
+                      Отказаться
+                    </button>
+                  </div>
+                ) : onWaitlist ? (
+                  <div className="space-y-2">
+                    <div className="rounded-xl bg-amber-400/10 px-3 py-2 text-center text-sm text-amber-300">
+                      {wl?.isFirstInQueue
+                        ? `Вы первые в листе ожидания (#${wl.userPosition})`
+                        : `В листе ожидания · позиция ${wl?.userPosition}`}
+                    </div>
+                    <button
+                      type="button"
+                      disabled={waitlistId === slot.id}
+                      onClick={() => handleLeaveWaitlist(slot.id)}
+                      className="btn-secondary w-full disabled:opacity-50"
+                    >
+                      Выйти из очереди
+                    </button>
+                  </div>
+                ) : slot.available ? (
                   <button
-                    disabled={!slot.available || bookingId === slot.id}
+                    disabled={bookingId === slot.id}
                     onClick={() => handleBook(slot.id)}
                     className="btn-primary w-full disabled:opacity-50"
                   >
-                    {slot.available ? 'Записаться' : 'Мест нет'}
+                    {bookingId === slot.id ? 'Запись…' : 'Записаться'}
+                  </button>
+                ) : wl?.open ? (
+                  <button
+                    disabled={waitlistId === slot.id}
+                    onClick={() => handleJoinWaitlist(slot.id)}
+                    className="btn-primary w-full disabled:opacity-50"
+                  >
+                    {waitlistId === slot.id ? 'Добавление…' : 'В лист ожидания'}
+                  </button>
+                ) : (
+                  <button disabled className="btn-primary w-full opacity-50">
+                    Мест нет
                   </button>
                 )}
               </li>

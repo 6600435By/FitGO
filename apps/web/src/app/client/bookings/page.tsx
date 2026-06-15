@@ -5,6 +5,7 @@ import { SessionType } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { cancelClientBooking } from '@/lib/cancel-booking';
 import { getToken } from '@/lib/auth';
 import { formatDateTime, sessionTypeLabel } from '@/lib/utils';
 
@@ -29,19 +30,14 @@ export default function ClientBookingsPage() {
   }, []);
 
   const handleCancel = async (booking: Booking) => {
-    const token = getToken();
-    if (!token) return;
     setCancellingId(booking.sessionId);
     try {
-      const result =
-        booking.source === 'fitgo'
-          ? await api.clientCancelPersonalBooking(token, booking.sessionId)
-          : await api.clientCancelBooking(token, booking.sessionId);
+      const result = await cancelClientBooking(booking);
       if (result.success) {
-        setMessage('Запись отменена. Смотрите в разделе «История».');
+        setMessage('Запись отменена на сервере клуба. Администратор уведомлён.');
         load();
-      } else {
-        setMessage('Не удалось отменить');
+      } else if (result.message && result.message !== 'Отменено') {
+        setMessage(result.message ?? 'Не удалось отменить');
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка');

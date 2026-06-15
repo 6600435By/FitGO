@@ -41,6 +41,7 @@ enum NotificationType {
   CHALLENGE
   RATING_DECAY
   GENERAL
+  WAITLIST_SPOT
 }
 
 enum Gender {
@@ -121,6 +122,13 @@ enum GroupClassBookingStatus {
   COMPLETED
 }
 
+enum GroupClassWaitlistStatus {
+  WAITING
+  NOTIFIED
+  CONFIRMED
+  CANCELLED
+}
+
 enum ConversationKind {
   ADMIN
   TRAINER
@@ -186,6 +194,9 @@ model User {
   gamificationStartedAt DateTime?
   isActive              Boolean  @default(true)
   createdById           String?
+  osmiCardId            String?
+  osmiBarcode           String?
+  osmiSyncedAt          DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -212,6 +223,7 @@ model User {
   trainerPersonalBookings PersonalTrainingBooking[] @relation("TrainerPersonalBookings")
   clientPersonalBookings  PersonalTrainingBooking[] @relation("ClientPersonalBookings")
   groupClassBookings      GroupClassBooking[]
+  groupClassWaitlist      GroupClassWaitlistEntry[]
   sentNotifications       Notification[]          @relation("NotificationSender")
   clientConversations     Conversation[]          @relation("ClientConversations")
   trainerConversations    Conversation[]          @relation("TrainerConversations")
@@ -507,6 +519,41 @@ model GroupClassBooking {
   @@unique([clientId, appointmentId])
   @@index([clientId, startAt])
   @@index([clientId, status])
+}
+
+model GroupClassWaitlistEntry {
+  id            String                   @id @default(cuid())
+  clubId        String
+  clientId      String
+  appointmentId String
+  title         String
+  trainerName   String?
+  startAt       DateTime
+  endAt         DateTime
+  position      Int
+  status        GroupClassWaitlistStatus @default(WAITING)
+  notifiedAt    DateTime?
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+
+  client User @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, appointmentId])
+  @@index([appointmentId, status, position])
+  @@index([clubId, appointmentId])
+}
+
+model GroupClassWaitlistOpenEvent {
+  id              String    @id @default(cuid())
+  clubId          String
+  appointmentId   String
+  openedAt        DateTime  @default(now())
+  firstNotifiedAt DateTime?
+  restNotifiedAt  DateTime?
+  resolvedAt      DateTime?
+
+  @@index([appointmentId, resolvedAt])
+  @@index([clubId, appointmentId])
 }
 
 model Conversation {

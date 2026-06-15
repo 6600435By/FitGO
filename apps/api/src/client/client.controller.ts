@@ -127,11 +127,50 @@ export class ClientController {
     return this.clientService.cancelBooking(user, sessionId);
   }
 
+  @Get('waitlist')
+  getWaitlist(@CurrentUser() user: JwtPayload) {
+    return this.clientService.getWaitlist(user);
+  }
+
+  @Post('waitlist/:sessionId')
+  joinWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Param('sessionId') sessionId: string,
+  ) {
+    return this.clientService.joinWaitlist(user, sessionId);
+  }
+
+  @Delete('waitlist/:sessionId')
+  leaveWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Param('sessionId') sessionId: string,
+  ) {
+    return this.clientService.leaveWaitlist(user, sessionId);
+  }
+
+  @Post('waitlist/:sessionId/confirm')
+  confirmWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Param('sessionId') sessionId: string,
+  ) {
+    return this.clientService.confirmWaitlistSpot(user, sessionId);
+  }
+
   @Post('payment')
   createPayment(
     @CurrentUser() user: JwtPayload,
     @Body() dto: CreatePaymentDto,
   ) {
     return this.clientService.createPayment(user, dto.productId);
+  }
+
+  @Get('card')
+  getClubCard(@CurrentUser() user: JwtPayload) {
+    return this.clientService.getClubCard(user);
+  }
+
+  @Post('card/sync')
+  syncClubCard(@CurrentUser() user: JwtPayload) {
+    return this.clientService.syncClubCard(user);
   }
 }

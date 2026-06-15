@@ -11,6 +11,8 @@ import { PersonalTrainingModule } from './personal-training/personal-training.mo
 import { PrismaModule } from './prisma/prisma.module';
 import { SuperAdminModule } from './super-admin/super-admin.module';
 import { TrainerModule } from './trainer/trainer.module';
+import { WaitlistModule } from './waitlist/waitlist.module';
+import { OsmiModule } from './osmi/osmi.module';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { TrainerModule } from './trainer/trainer.module';
     ChatModule,
     EngagementModule,
     PersonalTrainingModule,
+    WaitlistModule,
+    OsmiModule,
   ],
 })
 export class AppModule {}

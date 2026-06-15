@@ -24,6 +24,7 @@ import {
   type BodyProfileResponse,
   type ChallengeView,
   type LeagueGroupView,
+  type ClubCardView,
   type ConversationSummary,
   type ChatMessageItem,
   type StaffMember,
@@ -186,6 +187,24 @@ export const api = {
   clientDashboard: (token: string) =>
     request<ClientDashboard>('/client/dashboard', {}, token),
 
+  clientClubCard: (token: string) =>
+    request<{
+      enabled: boolean;
+      card: ClubCardView | null;
+      needsPhone: boolean;
+      anketaUrl?: string;
+      syncError?: string;
+    }>('/client/card', {}, token),
+
+  clientSyncClubCard: (token: string) =>
+    request<{
+      enabled: boolean;
+      card: ClubCardView | null;
+      needsPhone: boolean;
+      anketaUrl?: string;
+      syncError?: string;
+    }>('/client/card/sync', { method: 'POST' }, token),
+
   clientSchedule: (
     token: string,
     params?: {
@@ -218,6 +237,32 @@ export const api = {
     request<{ success: boolean; message?: string }>(
       `/client/bookings/${sessionId}`,
       { method: 'DELETE' },
+      token,
+    ),
+
+  clientJoinWaitlist: (token: string, sessionId: string) =>
+    request<import('@fitgo/shared-types').GroupClassWaitlistEntry>(
+      `/client/waitlist/${sessionId}`,
+      { method: 'POST' },
+      token,
+    ),
+
+  clientLeaveWaitlist: (token: string, sessionId: string) =>
+    request<{ success: boolean }>(`/client/waitlist/${sessionId}`, {
+      method: 'DELETE',
+    }, token),
+
+  clientConfirmWaitlist: (token: string, sessionId: string) =>
+    request<{ success: boolean; message?: string }>(
+      `/client/waitlist/${sessionId}/confirm`,
+      { method: 'POST' },
+      token,
+    ),
+
+  clientWaitlist: (token: string) =>
+    request<import('@fitgo/shared-types').GroupClassWaitlistEntry[]>(
+      '/client/waitlist',
+      {},
       token,
     ),
 

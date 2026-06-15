@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@fitgo/1c-adapter": "workspace:*",
+    "@fitgo/osmi-adapter": "workspace:*",
     "@fitgo/shared-types": "workspace:*",
     "@nestjs/common": "^11.0.12",
     "@nestjs/config": "^4.0.2",

@@ -5,6 +5,8 @@ import type { ScheduleFilters } from '@fitgo/1c-adapter';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PersonalTrainingService } from '../personal-training/personal-training.service';
+import { WaitlistService } from '../waitlist/waitlist.service';
+import { OsmiCardService } from '../osmi/osmi-card.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -15,6 +17,8 @@ export class ClientService {
     private readonly prisma: PrismaService,
     private readonly personalTraining: PersonalTrainingService,
     private readonly notifications: NotificationsService,
+    private readonly waitlist: WaitlistService,
+    private readonly osmiCards: OsmiCardService,
   ) {}
 
   private async resolveExternalId(user: JwtPayload): Promise<string> {
@@ -264,6 +268,24 @@ export class ClientService {
     return false;
   }
 
+  private async findScheduleSlot(clubId: string, sessionId: string) {
+    const club = await this.prisma.club.findUnique({
+      where: { id: clubId },
+    });
+    if (!club?.externalId) return null;
+
+    const from = new Date();
+    from.setDate(from.getDate() - 30);
+    const to = new Date();
+    to.setDate(to.getDate() + 60);
+
+    const slots = await this.fitness.getProvider().getSchedule(club.externalId, {
+      from: from.toISOString(),
+      to: to.toISOString(),
+    });
+    return slots.find((s) => s.id === sessionId) ?? null;
+  }
+
   async getDashboard(user: JwtPayload) {
     const dbUser = await this.prisma.user.findUnique({
       where: { id: user.sub },
@@ -272,16 +294,54 @@ export class ClientService {
     const externalId = user.externalId ?? dbUser?.externalId ?? undefined;
     const provider = this.fitness.getProvider();
 
-    const [membership, externalVisits, accessCard, appVisits] = await Promise.all([
-      externalId
-        ? provider.getMembership(externalId)
-        : Promise.resolve(null),
-      externalId ? provider.getVisits(externalId) : Promise.resolve([]),
-      externalId
-        ? provider.getAccessCard(externalId)
-        : Promise.resolve(null),
-      this.getAppSessionVisits(user.sub, dbUser?.club?.name ?? 'Клуб'),
-    ]);
+    const osmiEnabled = this.osmiCards.isEnabled();
+    const osmiAccess =
+      osmiEnabled && dbUser
+        ? this.osmiCards.getAccessCardFromCache({
+            id: dbUser.id,
+            firstName: dbUser.firstName,
+            lastName: dbUser.lastName,
+            osmiCardId: dbUser.osmiCardId,
+            osmiBarcode: dbUser.osmiBarcode,
+            club: dbUser.club,
+          })
+        : null;
+
+    const [membershipFromFitness, externalVisits, accessCardFromFitness, appVisits] =
+      await Promise.all([
+        externalId && !osmiEnabled
+          ? provider.getMembership(externalId)
+          : Promise.resolve(null),
+        externalId ? provider.getVisits(externalId) : Promise.resolve([]),
+        externalId && !osmiEnabled
+          ? provider.getAccessCard(externalId)
+          : Promise.resolve(null),
+        this.getAppSessionVisits(user.sub, dbUser?.club?.name ?? 'Клуб'),
+      ]);
+
+    let membership = membershipFromFitness;
+    let accessCard = accessCardFromFitness;
+
+    if (osmiEnabled && dbUser?.phone) {
+      try {
+        const osmiResult = await this.osmiCards.getClubCard(user);
+        if (osmiResult.card) {
+          accessCard = {
+            id: osmiResult.card.id,
+            barcode: osmiResult.card.barcode,
+            clientName: osmiResult.card.clientName,
+            clubName: osmiResult.card.clubName,
+          };
+          if (osmiResult.card.membership) {
+            membership = osmiResult.card.membership;
+          }
+        } else if (osmiAccess) {
+          accessCard = osmiAccess;
+        }
+      } catch {
+        if (osmiAccess) accessCard = osmiAccess;
+      }
+    }
 
     const visits = this.mergeVisits(
       externalVisits.map((visit) => ({ ...visit, source: '1c' as const })),
@@ -326,9 +386,11 @@ export class ClientService {
       .getSchedule(club.externalId, filters);
 
     const now = Date.now();
-    return slots
+    const filtered = slots
       .filter((slot) => new Date(slot.endAt).getTime() > now)
       .sort((a, b) => a.startAt.localeCompare(b.startAt));
+
+    return this.waitlist.enrichScheduleSlots(user, filtered);
   }
 
   async getProducts(user: JwtPayload) {
@@ -419,7 +481,7 @@ export class ClientService {
 
   async cancelBooking(user: JwtPayload, sessionId: string) {
     const context = await this.getBookingContext(user);
-    const externalId = user.externalId ?? user.sub;
+    const externalId = await this.resolveExternalId(user);
 
     const [booking, dbUser] = await Promise.all([
       this.prisma.groupClassBooking.findFirst({
@@ -432,48 +494,103 @@ export class ClientService {
       .getProvider()
       .cancelBooking(externalId, sessionId, context);
 
-    const savedLocally = await this.persistGroupBookingCancellation(
-      user,
-      sessionId,
-      booking,
-    );
-
-    if (savedLocally) {
-      const cancelledBooking = await this.prisma.groupClassBooking.findFirst({
-        where: { clientId: user.sub, appointmentId: sessionId },
-      });
-
-      const clientName = dbUser
-        ? `${dbUser.firstName} ${dbUser.lastName}`.trim()
-        : 'Клиент';
-
-      await this.notifications.notifyBookingCancelled({
-        clubId: user.clubId,
-        clientId: user.sub,
-        clientName,
-        clientPhone: dbUser?.phone ?? undefined,
-        sessionTitle: cancelledBooking?.title ?? booking?.title ?? 'Групповое занятие',
-        startAt: cancelledBooking?.startAt ?? booking?.startAt ?? null,
-        sessionType: 'group',
-        trainerName: cancelledBooking?.trainerName ?? booking?.trainerName,
-      });
+    if (!externalResult.success) {
+      return externalResult;
     }
 
-    if (savedLocally) {
-      return {
-        success: true,
-        message: externalResult.success
-          ? externalResult.message
-          : 'Запись отменена в приложении',
-      };
-    }
+    await this.persistGroupBookingCancellation(user, sessionId, booking);
 
-    return externalResult;
+    const cancelledBooking = await this.prisma.groupClassBooking.findFirst({
+      where: { clientId: user.sub, appointmentId: sessionId },
+    });
+    const slot =
+      !cancelledBooking?.title && !booking?.title
+        ? await this.findScheduleSlot(user.clubId, sessionId)
+        : null;
+
+    const clientName = dbUser
+      ? `${dbUser.firstName} ${dbUser.lastName}`.trim()
+      : 'Клиент';
+
+    await this.notifications.notifyBookingCancelled({
+      clubId: user.clubId,
+      clientId: user.sub,
+      clientName,
+      clientPhone: dbUser?.phone ?? undefined,
+      sessionTitle:
+        cancelledBooking?.title ??
+        booking?.title ??
+        slot?.title ??
+        'Групповое занятие',
+      startAt:
+        cancelledBooking?.startAt ??
+        booking?.startAt ??
+        (slot ? new Date(slot.startAt) : null),
+      sessionType: 'group',
+      trainerName:
+        cancelledBooking?.trainerName ??
+        booking?.trainerName ??
+        slot?.trainerName,
+    });
+
+    await this.waitlist.onSpotOpened(user.clubId, sessionId, {
+      title:
+        cancelledBooking?.title ??
+        booking?.title ??
+        slot?.title ??
+        'Групповое занятие',
+      trainerName:
+        cancelledBooking?.trainerName ??
+        booking?.trainerName ??
+        slot?.trainerName,
+      startAt:
+        cancelledBooking?.startAt ??
+        booking?.startAt ??
+        (slot ? new Date(slot.startAt) : new Date()),
+      endAt:
+        cancelledBooking?.endAt ??
+        booking?.endAt ??
+        (slot ? new Date(slot.endAt) : new Date()),
+    });
+
+    return {
+      success: true,
+      message: externalResult.message ?? 'Запись отменена на сервере клуба',
+    };
   }
 
   async createPayment(user: JwtPayload, productId: string) {
     const externalId = await this.resolveExternalId(user);
     return this.fitness.getProvider().createPayment(externalId, productId);
+  }
+
+  async joinWaitlist(user: JwtPayload, sessionId: string) {
+    return this.waitlist.joinWaitlist(user, sessionId);
+  }
+
+  async leaveWaitlist(user: JwtPayload, sessionId: string) {
+    return this.waitlist.leaveWaitlist(user, sessionId);
+  }
+
+  async getWaitlist(user: JwtPayload) {
+    return this.waitlist.getMyWaitlist(user);
+  }
+
+  async confirmWaitlistSpot(user: JwtPayload, sessionId: string) {
+    await this.waitlist.assertCanConfirm(user, sessionId);
+    const result = await this.bookSession(user, sessionId);
+    if (result.success) {
+      await this.waitlist.onConfirmed(user, sessionId);
+    }
+    return result;
+  }
+
+  getClubCard(user: JwtPayload) {
+    return this.osmiCards.getClubCard(user);
+  }
+
+  syncClubCard(user: JwtPayload) {
+    return this.osmiCards.getClubCard(user, { forceRefresh: true });
   }
 
   ensureClientRole(user: JwtPayload) {

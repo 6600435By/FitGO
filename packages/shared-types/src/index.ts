@@ -82,6 +82,21 @@ export interface AccessCard {
   clubName: string;
 }
 
+export interface ClubCardView {
+  id: string;
+  barcode: string;
+  /** OSMI barcode symbology (e.g. PDF417 for club turnstiles) */
+  barcodeFormat?: 'CODE128' | 'PDF417' | 'QR';
+  clientName: string;
+  clubName: string;
+  membership: Membership | null;
+  walletUrl?: string;
+  stripImageId?: string;
+  syncedAt: string;
+  source: 'osmi';
+  anketaUrl?: string;
+}
+
 export interface ScheduleSlot {
   id: string;
   title: string;
@@ -94,6 +109,27 @@ export interface ScheduleSlot {
   capacity: number;
   booked: number;
   available: boolean;
+  waitlist?: {
+    open: boolean;
+    count: number;
+    userPosition?: number;
+    userStatus?: 'WAITING' | 'NOTIFIED';
+    isFirstInQueue?: boolean;
+    canConfirm?: boolean;
+  };
+}
+
+export interface GroupClassWaitlistEntry {
+  id: string;
+  sessionId: string;
+  title: string;
+  trainerName?: string;
+  startAt: string;
+  endAt: string;
+  position: number;
+  status: 'WAITING' | 'NOTIFIED' | 'CONFIRMED' | 'CANCELLED';
+  isFirstInQueue: boolean;
+  notifiedAt?: string;
 }
 
 export interface MembershipProduct {

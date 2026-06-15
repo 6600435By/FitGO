@@ -247,7 +247,8 @@ export class NotificationsService implements OnModuleInit {
       (type === NotificationType.MILESTONE && prefs.milestoneAlerts) ||
       (type === NotificationType.RATING_DECAY && prefs.ratingDecayAlerts) ||
       type === NotificationType.GENERAL ||
-      type === NotificationType.CHALLENGE;
+      type === NotificationType.CHALLENGE ||
+      type === NotificationType.WAITLIST_SPOT;
 
     if (!allowed) return null;
 
@@ -476,7 +477,8 @@ export class NotificationsService implements OnModuleInit {
     const admins = await this.prisma.user.findMany({
       where: {
         clubId: params.clubId,
-        roles: { some: { role: Role.ADMIN } },
+        isActive: true,
+        roles: { some: { role: { in: [Role.ADMIN, Role.SUPER_ADMIN] } } },
       },
     });
 

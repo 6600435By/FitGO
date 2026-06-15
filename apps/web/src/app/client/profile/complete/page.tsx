@@ -38,7 +38,8 @@ export default function ProfileCompletePage() {
     <div className="mx-auto max-w-lg space-y-4">
       <h2 className="text-xl font-semibold">Заполните профиль</h2>
       <p className="text-sm text-slate-400">
-        Эти данные нужны для записи на занятия и участия в геймификации клуба.
+        Эти данные нужны для записи на занятия, участия в геймификации и выпуска
+        клубной карты OSMI по вашему телефону.
       </p>
 
       <form onSubmit={submit} className="card space-y-4">

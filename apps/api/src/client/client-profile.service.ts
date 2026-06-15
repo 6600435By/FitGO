@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { BodyLogSource } from '@prisma/client';
+import { OsmiCardService } from '../osmi/osmi-card.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import type {
@@ -16,7 +17,10 @@ import type {
 
 @Injectable()
 export class ClientProfileService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly osmiCards: OsmiCardService,
+  ) {}
 
   async getProfile(userId: string) {
     const user = await this.prisma.user.findUnique({
@@ -66,11 +70,22 @@ export class ClientProfileService {
       },
     });
 
+    await this.syncOsmiCardIfEnabled(userId);
+
     return {
       ...user,
       dateOfBirth: user.dateOfBirth?.toISOString().slice(0, 10),
       profileCompletedAt: user.profileCompletedAt?.toISOString(),
     };
+  }
+
+  private async syncOsmiCardIfEnabled(userId: string) {
+    if (!this.osmiCards.isEnabled()) return;
+    try {
+      await this.osmiCards.syncCardForUser(userId);
+    } catch {
+      // Profile save should succeed even if OSMI is temporarily unavailable
+    }
   }
 
   async updateGamificationSettings(
