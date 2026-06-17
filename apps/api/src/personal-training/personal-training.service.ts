@@ -4,12 +4,17 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PersonalBookingStatus, Role } from '@prisma/client';
+import { PersonalBookingStatus, Prisma, Role } from '@prisma/client';
 import {
   PERSONAL_TRAINING_GOAL_TEMPLATES,
   SessionType,
+  normalizeWorkoutSheet,
+  summarizeCircuitSession,
+  workoutSheetForClient,
   type PersonalSessionStatus,
   type PersonalTrainingSessionDetail,
+  type WorkoutSheet,
+  type CircuitHistoryPoint,
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -293,6 +298,61 @@ export class PersonalTrainingService {
     return this.mapSessionDetail(booking, user.sub);
   }
 
+  async getPreviousWorkoutSheet(
+    user: JwtPayload,
+    bookingId: string,
+  ): Promise<{ sheet: WorkoutSheet | null; date?: string }> {
+    const booking = await this.getAccessibleBooking(user, bookingId);
+    const previous = await this.prisma.personalTrainingBooking.findMany({
+      where: {
+        trainerId: booking.trainerId,
+        clientId: booking.clientId,
+        startAt: { lt: booking.startAt },
+      },
+      orderBy: { startAt: 'desc' },
+      take: 15,
+    });
+    const withSheet = previous.find((row) => row.workoutSheet != null);
+    if (!withSheet?.workoutSheet) {
+      return { sheet: null };
+    }
+    return {
+      sheet: normalizeWorkoutSheet(withSheet.workoutSheet),
+      date: withSheet.startAt.toISOString(),
+    };
+  }
+
+  async getCircuitHistory(
+    user: JwtPayload,
+    bookingId: string,
+    limit = 10,
+  ): Promise<CircuitHistoryPoint[]> {
+    const booking = await this.getAccessibleBooking(user, bookingId);
+    const sessions = await this.prisma.personalTrainingBooking.findMany({
+      where: {
+        trainerId: booking.trainerId,
+        clientId: booking.clientId,
+        id: { not: bookingId },
+      },
+      orderBy: { startAt: 'desc' },
+      take: limit * 3,
+    });
+
+    const points: CircuitHistoryPoint[] = [];
+    for (const session of sessions) {
+      if (session.workoutSheet == null) continue;
+      const sheet = normalizeWorkoutSheet(session.workoutSheet);
+      const point = summarizeCircuitSession(
+        session.id,
+        session.startAt.toISOString(),
+        sheet,
+      );
+      if (point) points.push(point);
+      if (points.length >= limit) break;
+    }
+    return points.reverse();
+  }
+
   async updateSessionPlan(
     user: JwtPayload,
     bookingId: string,
@@ -303,6 +363,7 @@ export class PersonalTrainingService {
       sortOrder?: number;
       tasks?: Array<{ id?: string; title: string; sortOrder?: number }>;
     }>,
+    workoutSheet?: WorkoutSheet,
   ) {
     const booking = await this.getAccessibleBooking(user, bookingId);
     this.ensureSessionEditable(booking);
@@ -382,6 +443,17 @@ export class PersonalTrainingService {
       if (goalsToRemove.length > 0) {
         await tx.personalTrainingSessionGoal.deleteMany({
           where: { id: { in: goalsToRemove.map((g) => g.id) } },
+        });
+      }
+
+      if (workoutSheet !== undefined) {
+        await tx.personalTrainingBooking.update({
+          where: { id: bookingId },
+          data: {
+            workoutSheet: normalizeWorkoutSheet(
+              workoutSheet,
+            ) as unknown as Prisma.InputJsonValue,
+          },
         });
       }
     });
@@ -511,6 +583,8 @@ export class PersonalTrainingService {
       ? !!booking.clientCompletedAt
       : !!booking.trainerCompletedAt;
 
+    const normalizedSheet = normalizeWorkoutSheet(booking.workoutSheet);
+
     return {
       id: booking.id,
       trainerId: booking.trainerId,
@@ -519,6 +593,9 @@ export class PersonalTrainingService {
       clientId: booking.clientId,
       clientName:
         `${booking.client.firstName} ${booking.client.lastName}`.trim(),
+      clientDateOfBirth: booking.client.dateOfBirth
+        ? booking.client.dateOfBirth.toISOString().slice(0, 10)
+        : undefined,
       startAt: booking.startAt.toISOString(),
       endAt: booking.endAt.toISOString(),
       status,
@@ -547,6 +624,9 @@ export class PersonalTrainingService {
           trainerConfirmed: task.trainerConfirmed,
         })),
       })),
+      workoutSheet: isClient
+        ? workoutSheetForClient(normalizedSheet)
+        : normalizedSheet,
     };
   }
 

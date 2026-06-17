@@ -321,19 +321,36 @@ export const api = {
       token,
     ),
 
+  personalSessionPreviousSheet: (token: string, bookingId: string) =>
+    request<{ sheet: import('@fitgo/shared-types').WorkoutSheet | null; date?: string }>(
+      `/personal-bookings/${bookingId}/previous-sheet`,
+      {},
+      token,
+    ),
+
+  personalSessionCircuitHistory: (token: string, bookingId: string) =>
+    request<import('@fitgo/shared-types').CircuitHistoryPoint[]>(
+      `/personal-bookings/${bookingId}/circuit-history`,
+      {},
+      token,
+    ),
+
   personalSessionUpdatePlan: (
     token: string,
     bookingId: string,
-    goals: Array<{
-      id?: string;
-      title: string;
-      notes?: string;
-      tasks?: Array<{ id?: string; title: string }>;
-    }>,
+    payload: {
+      goals: Array<{
+        id?: string;
+        title: string;
+        notes?: string;
+        tasks?: Array<{ id?: string; title: string }>;
+      }>;
+      workoutSheet?: import('@fitgo/shared-types').WorkoutSheet;
+    },
   ) =>
     request<PersonalTrainingSessionDetail>(
       `/personal-bookings/${bookingId}/plan`,
-      { method: 'PUT', body: JSON.stringify({ goals }) },
+      { method: 'PUT', body: JSON.stringify(payload) },
       token,
     ),
 

@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MembershipStatus, SessionType, type ScheduleSlot, type Visit } from '@fitgo/shared-types';
+import { MembershipStatus, SessionType, normalizeWorkoutSheet, workoutSheetHasData, type ScheduleSlot, type Visit } from '@fitgo/shared-types';
 import { GroupClassBookingStatus, PersonalBookingStatus, Role, BodyLogSource } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { FitnessService } from '../fitness/fitness.service';
@@ -238,6 +238,9 @@ export class TrainerService {
         status,
         awaitingConfirmation: status === 'AWAITING_CONFIRMATION',
         goalsCount: booking.sessionGoals.length,
+        hasWorkoutSheet: workoutSheetHasData(
+          normalizeWorkoutSheet(booking.workoutSheet),
+        ),
       };
     });
   }

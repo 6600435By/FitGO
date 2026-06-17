@@ -173,6 +173,9 @@ export default function TrainerClientDetailPage() {
                         {s.goalsCount} {s.goalsCount === 1 ? 'цель' : 'целей'}
                       </p>
                     )}
+                    {s.hasWorkoutSheet && (
+                      <p className="text-xs text-fitgo-400">Тренировочный лист заполнен</p>
+                    )}
                     {s.awaitingConfirmation && (
                       <p className="text-xs text-amber-400">
                         Ожидает подтверждения

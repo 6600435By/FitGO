@@ -261,6 +261,8 @@ export interface PersonalTrainingSessionDetail {
   canEdit: boolean;
   canComplete: boolean;
   goals: PersonalTrainingSessionGoal[];
+  workoutSheet: import('./workout-sheet').WorkoutSheet;
+  clientDateOfBirth?: string;
 }
 
 export interface TrainerClientSession {
@@ -270,6 +272,7 @@ export interface TrainerClientSession {
   status: PersonalSessionStatus;
   awaitingConfirmation: boolean;
   goalsCount: number;
+  hasWorkoutSheet: boolean;
 }
 
 export interface TrainerWorkSlotInput {
@@ -475,6 +478,7 @@ export {
   PERSONAL_TRAINING_GOAL_TEMPLATES,
   type PersonalTrainingGoalTemplate,
 } from './personal-training-goals';
+export * from './workout-sheet';
 
 export interface StaffMember {
   id: string;

@@ -457,6 +457,7 @@ model PersonalTrainingBooking {
   status             PersonalBookingStatus @default(CONFIRMED)
   clientCompletedAt  DateTime?
   trainerCompletedAt DateTime?
+  workoutSheet       Json?
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
 

@@ -51,4 +51,7 @@ export class UpdateSessionPlanDto {
   @ValidateNested({ each: true })
   @Type(() => SessionGoalInputDto)
   goals!: SessionGoalInputDto[];
+
+  @IsOptional()
+  workoutSheet?: Record<string, unknown>;
 }

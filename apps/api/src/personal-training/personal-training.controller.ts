@@ -14,6 +14,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { type WorkoutSheet } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { BookPersonalTrainingDto } from './dto/book-personal-training.dto';
 import { SetWorkScheduleDto } from './dto/set-work-schedule.dto';
@@ -111,6 +112,24 @@ export class PersonalTrainingController {
     return this.personalTraining.getSessionDetail(user, bookingId);
   }
 
+  @Get('personal-bookings/:bookingId/previous-sheet')
+  @Roles(UserRole.CLIENT, UserRole.TRAINER)
+  getPreviousSheet(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.personalTraining.getPreviousWorkoutSheet(user, bookingId);
+  }
+
+  @Get('personal-bookings/:bookingId/circuit-history')
+  @Roles(UserRole.CLIENT, UserRole.TRAINER)
+  getCircuitHistory(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.personalTraining.getCircuitHistory(user, bookingId);
+  }
+
   @Put('personal-bookings/:bookingId/plan')
   @Roles(UserRole.CLIENT, UserRole.TRAINER)
   updateSessionPlan(
@@ -118,7 +137,12 @@ export class PersonalTrainingController {
     @Param('bookingId') bookingId: string,
     @Body() dto: UpdateSessionPlanDto,
   ) {
-    return this.personalTraining.updateSessionPlan(user, bookingId, dto.goals);
+    return this.personalTraining.updateSessionPlan(
+      user,
+      bookingId,
+      dto.goals,
+      dto.workoutSheet as WorkoutSheet | undefined,
+    );
   }
 
   @Post('personal-bookings/:bookingId/goals/:goalId/confirm')

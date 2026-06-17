@@ -4,6 +4,15 @@ import type {
   PersonalTrainingGoalTemplate,
   PersonalTrainingSessionDetail,
   PersonalTrainingSessionGoal,
+  WorkoutSheet,
+} from '@fitgo/shared-types';
+import {
+  createEmptyWorkoutSheet,
+  createDefaultCircuit,
+  ensureCircuitRoundLogs,
+  getWorkoutBlocks,
+  normalizeWorkoutSheet,
+  workoutSheetHasData,
 } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
@@ -14,6 +23,7 @@ import {
   sessionStatusColor,
   sessionStatusLabel,
 } from '@/lib/utils';
+import { WorkoutSheetEditor } from './workout-sheet-editor';
 
 type DraftGoal = {
   id?: string;
@@ -42,6 +52,10 @@ export function SessionPlanEditor({
     [],
   );
   const [draftGoals, setDraftGoals] = useState<DraftGoal[]>([]);
+  const [draftWorkoutSheet, setDraftWorkoutSheet] = useState<WorkoutSheet>(
+    createEmptyWorkoutSheet(),
+  );
+  const [activeTab, setActiveTab] = useState<'sheet' | 'goals'>('sheet');
   const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -60,6 +74,7 @@ export function SessionPlanEditor({
         tasks: g.tasks.map((t) => ({ id: t.id, title: t.title })),
       })),
     );
+    setDraftWorkoutSheet(normalizeWorkoutSheet(data.workoutSheet));
   };
 
   useEffect(() => {
@@ -80,6 +95,7 @@ export function SessionPlanEditor({
             tasks: g.tasks.map((t) => ({ id: t.id, title: t.title })),
           })),
         );
+        setDraftWorkoutSheet(normalizeWorkoutSheet(data.workoutSheet));
       })
       .catch((err) => setError(err.message));
   }, [bookingId]);
@@ -90,12 +106,12 @@ export function SessionPlanEditor({
     setBusy(true);
     setMessage('');
     try {
-      const data = await api.personalSessionUpdatePlan(
-        token,
-        bookingId,
-        draftGoals.filter((g) => g.title.trim()),
-      );
+      const data = await api.personalSessionUpdatePlan(token, bookingId, {
+        goals: draftGoals.filter((g) => g.title.trim()),
+        workoutSheet: ensureCircuitRoundLogs(draftWorkoutSheet),
+      });
       setSession(data);
+      setDraftWorkoutSheet(normalizeWorkoutSheet(data.workoutSheet));
       setEditing(false);
       setMessage('План тренировки сохранён');
     } catch (err) {
@@ -169,6 +185,7 @@ export function SessionPlanEditor({
   };
 
   const isClient = viewerRole === 'client';
+  const isTrainer = !isClient;
   const counterpartName = isClient
     ? session?.trainerName
     : session?.clientName;
@@ -240,6 +257,87 @@ export function SessionPlanEditor({
         </p>
       )}
 
+      <div className="flex gap-2 rounded-xl bg-slate-800/50 p-1">
+        <button
+          type="button"
+          onClick={() => setActiveTab('sheet')}
+          className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium ${
+            activeTab === 'sheet'
+              ? 'bg-fitgo-500 text-white'
+              : 'text-slate-400'
+          }`}
+        >
+          Тренировочный лист
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('goals')}
+          className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium ${
+            activeTab === 'goals'
+              ? 'bg-fitgo-500 text-white'
+              : 'text-slate-400'
+          }`}
+        >
+          Цели и задачи
+        </button>
+      </div>
+
+      {activeTab === 'sheet' ? (
+        <div className="space-y-3">
+          {!workoutSheetHasData(draftWorkoutSheet) && isTrainer && session.canEdit && (
+            <button
+              type="button"
+              onClick={() => {
+                const sheet = createEmptyWorkoutSheet();
+                setDraftWorkoutSheet(
+                  getWorkoutBlocks(sheet).includes('circuit')
+                    ? ensureCircuitRoundLogs({
+                        ...sheet,
+                        circuit: createDefaultCircuit(),
+                      })
+                    : sheet,
+                );
+                setEditing(true);
+              }}
+              className="btn-primary w-full"
+            >
+              Открыть бланк тренировки
+            </button>
+          )}
+
+          <WorkoutSheetEditor
+            bookingId={bookingId}
+            sheet={draftWorkoutSheet}
+            sessionDate={session.startAt}
+            clientName={session.clientName}
+            clientDateOfBirth={session.clientDateOfBirth}
+            canEdit={session.canEdit}
+            isTrainer={isTrainer}
+            onChange={(sheet) => {
+              setDraftWorkoutSheet(sheet);
+              if (isTrainer) setEditing(true);
+            }}
+            onResetTemplate={
+              isTrainer && session.canEdit
+                ? () => {
+                    setDraftWorkoutSheet(createEmptyWorkoutSheet());
+                    setEditing(true);
+                  }
+                : undefined
+            }
+          />
+
+          {isTrainer && session.canEdit && (
+            <button
+              disabled={busy}
+              onClick={savePlan}
+              className="btn-primary w-full disabled:opacity-50"
+            >
+              {busy ? 'Сохранение…' : 'Сохранить лист'}
+            </button>
+          )}
+        </div>
+      ) : (
       <div className="card">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="font-semibold">Цели и задачи</h3>
@@ -448,6 +546,7 @@ export function SessionPlanEditor({
           </ul>
         )}
       </div>
+      )}
 
       {session.canComplete && (
         <button
