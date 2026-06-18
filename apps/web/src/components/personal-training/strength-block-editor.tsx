@@ -15,7 +15,6 @@ import {
   syncStrengthSetLoad,
 } from '@fitgo/shared-types';
 import { Minus, Plus, Trash2 } from 'lucide-react';
-import { TrainerTip } from './trainer-tip';
 
 interface StrengthBlockEditorProps {
   exercises: StrengthExerciseRow[];
@@ -116,10 +115,7 @@ export function StrengthBlockEditor({
     <div className="space-y-3">
       {!readOnly && (
         <div>
-          <p className="mb-2 flex items-center gap-1 text-xs text-slate-500">
-            Поля подхода
-            <TrainerTip tipId="strength-rpe" />
-          </p>
+          <p className="mb-2 text-xs text-slate-500">Поля подхода</p>
           <div className="flex flex-wrap gap-1.5">
             {STRENGTH_SET_FIELD_IDS.map((field) => {
               const enabled = activeFields.includes(field);
@@ -334,7 +330,7 @@ export function StrengthBlockEditor({
                             </label>
                             <input
                               className="input w-full px-1.5 py-1.5 text-sm text-center"
-                              placeholder="3-1-2"
+                              placeholder="3-1-2-0"
                               value={set.tempo ?? ''}
                               onChange={(e) =>
                                 updateSet(rowIndex, setIndex, { tempo: e.target.value })

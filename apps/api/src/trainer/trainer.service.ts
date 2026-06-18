@@ -77,6 +77,7 @@ export class TrainerService {
 
     return bookings.map((booking) => ({
       id: booking.id,
+      clientId: booking.clientId,
       title: `Персональная · ${booking.client.firstName} ${booking.client.lastName}`.trim(),
       type: SessionType.PERSONAL,
       trainerId: booking.trainerId,

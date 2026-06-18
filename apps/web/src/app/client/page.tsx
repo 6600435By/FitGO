@@ -1,7 +1,7 @@
 'use client';
 
-import { MembershipStatus, type GamificationProfile, type Visit } from '@fitgo/shared-types';
-import { Calendar, CreditCard, Dumbbell, ShoppingBag, Trophy } from 'lucide-react';
+import { MembershipStatus, SessionType, type Booking, type GamificationProfile, type Visit } from '@fitgo/shared-types';
+import { Calendar, CreditCard, ChevronRight, Dumbbell, ShoppingBag, Trophy } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { MessagesHomeLink } from '@/components/messages-home-link';
@@ -14,6 +14,13 @@ import {
   membershipStatusColor,
   membershipStatusLabel,
 } from '@/lib/utils';
+
+function clientWorkoutHref(booking: Booking): string | null {
+  if (booking.source === 'fitgo' && booking.type === SessionType.PERSONAL) {
+    return `/client/personal-bookings/${booking.sessionId}`;
+  }
+  return null;
+}
 
 interface DashboardData {
   membership: {
@@ -30,10 +37,7 @@ interface DashboardData {
 
 export default function ClientHomePage() {
   const [data, setData] = useState<DashboardData | null>(null);
-  const [nextBooking, setNextBooking] = useState<{
-    title: string;
-    startAt: string;
-  } | null>(null);
+  const [upcomingBookings, setUpcomingBookings] = useState<Booking[]>([]);
   const [gamification, setGamification] = useState<GamificationProfile | null>(null);
   const [error, setError] = useState('');
 
@@ -52,12 +56,7 @@ export default function ClientHomePage() {
         const upcoming = bookings
           .filter((b) => new Date(b.startAt) >= new Date())
           .sort((a, b) => a.startAt.localeCompare(b.startAt));
-        if (upcoming[0]) {
-          setNextBooking({
-            title: upcoming[0].title,
-            startAt: upcoming[0].startAt,
-          });
-        }
+        setUpcomingBookings(upcoming.slice(0, 4));
       })
       .catch(() => {});
 
@@ -93,14 +92,60 @@ export default function ClientHomePage() {
         </div>
       )}
 
-      {nextBooking ? (
-        <Link href="/client/bookings" className="card block border-fitgo-500/30 bg-fitgo-500/5">
-          <p className="text-sm text-fitgo-400">Ближайшая запись</p>
-          <p className="font-semibold">{nextBooking.title}</p>
-          <p className="text-sm text-slate-400">
-            {formatDateTime(nextBooking.startAt)}
-          </p>
-        </Link>
+      {upcomingBookings.length > 0 ? (
+        <div className="card">
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-sm font-medium text-fitgo-400">Ближайшие записи</p>
+            <Link href="/client/bookings" className="text-sm text-fitgo-400">
+              Все →
+            </Link>
+          </div>
+          <ul className="space-y-2">
+            {upcomingBookings.map((booking) => {
+              const workoutHref = clientWorkoutHref(booking);
+              const inner = (
+                <>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold">{booking.title}</p>
+                    <p className="text-sm text-slate-400">
+                      {formatDateTime(booking.startAt)}
+                    </p>
+                    {booking.trainerName && (
+                      <p className="text-sm text-slate-400">{booking.trainerName}</p>
+                    )}
+                    {workoutHref && (
+                      <p className="mt-0.5 text-xs text-fitgo-400">План тренировки</p>
+                    )}
+                  </div>
+                  {workoutHref && (
+                    <ChevronRight className="h-4 w-4 shrink-0 text-fitgo-400" />
+                  )}
+                </>
+              );
+
+              return (
+                <li key={booking.id}>
+                  {workoutHref ? (
+                    <Link
+                      href={workoutHref}
+                      className={`block rounded-xl px-3 py-2 transition hover:bg-slate-800/80 ${
+                        upcomingBookings[0]?.id === booking.id
+                          ? 'border border-fitgo-500/30 bg-fitgo-500/5'
+                          : 'bg-slate-800/50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">{inner}</div>
+                    </Link>
+                  ) : (
+                    <div className="rounded-xl bg-slate-800/50 px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">{inner}</div>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       ) : (
         <Link href="/client/schedule" className="card block text-center">
           <p className="text-slate-400">Нет предстоящих записей</p>

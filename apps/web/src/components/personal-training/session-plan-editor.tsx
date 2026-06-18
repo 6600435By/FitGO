@@ -311,6 +311,7 @@ export function SessionPlanEditor({
             sessionDate={session.startAt}
             clientName={session.clientName}
             clientDateOfBirth={session.clientDateOfBirth}
+            clientRestingHr={session.clientRestingHr}
             canEdit={session.canEdit}
             isTrainer={isTrainer}
             onChange={(sheet) => {

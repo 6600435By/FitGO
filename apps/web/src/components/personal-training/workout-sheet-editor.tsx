@@ -29,6 +29,7 @@ import {
   reopenWorkoutSection,
   saveBlockSummary,
   summarizeCircuitSession,
+  summarizeWorkoutSession,
   togglePrepSection,
   toggleSectionCollapsed,
   toggleWorkoutBlock,
@@ -46,7 +47,12 @@ import { PrepBlockEditor } from './prep-block-editor';
 import { StrengthBlockEditor } from './strength-block-editor';
 import { SectionTitle, TrainerTip } from './trainer-tip';
 import { WorkoutSectionCard } from './workout-section-card';
-import { WorkoutTimerLauncher } from './workout-timer';
+import { WorkoutSessionSummaryPanel } from './workout-session-summary';
+import {
+  WorkoutTimerDock,
+  emitWorkoutSectionVisible,
+  type TimerDockBlockOption,
+} from './workout-timer-dock';
 import { Lock } from 'lucide-react';
 
 const MAIN_BLOCK_LABELS: Record<WorkoutMainBlock, string> = {
@@ -80,6 +86,8 @@ interface WorkoutSheetEditorProps {
   sessionDate: string;
   clientName: string;
   clientDateOfBirth?: string;
+  /** ЧСС в покое из анкеты клиента (подставляется автоматически, если в листе пусто) */
+  clientRestingHr?: number;
   canEdit: boolean;
   isTrainer: boolean;
   onChange: (sheet: WorkoutSheet) => void;
@@ -133,6 +141,7 @@ export function WorkoutSheetEditor({
   sessionDate,
   clientName,
   clientDateOfBirth,
+  clientRestingHr,
   canEdit,
   isTrainer,
   onChange,
@@ -148,6 +157,22 @@ export function WorkoutSheetEditor({
   const hasCircuit = activeBlocks.includes('circuit');
   const hasStrength = activeBlocks.includes('strength');
   const hasMobility = activeBlocks.includes('mobility');
+
+  const timerBlocks = useMemo((): TimerDockBlockOption[] => {
+    const options: TimerDockBlockOption[] = [];
+    if (hasWarmup) options.push({ id: 'warmup', label: 'Разминка' });
+    if (hasStrength) {
+      options.push({ id: 'strength', label: 'Силовая' });
+      options.push({ id: 'rest', label: 'Отдых' });
+    }
+    if (activeBlocks.includes('cardio')) {
+      options.push({ id: 'cardio', label: 'Кардио' });
+    }
+    if (hasCircuit) options.push({ id: 'circuit', label: 'Круговая' });
+    if (hasMobility) options.push({ id: 'mobility', label: 'Биомеханика' });
+    if (hasCooldown) options.push({ id: 'cooldown', label: 'Заминка' });
+    return options;
+  }, [hasWarmup, hasStrength, hasCircuit, hasMobility, hasCooldown, activeBlocks]);
   const [circuitHistory, setCircuitHistory] = useState<CircuitHistoryPoint[]>([]);
   const [copyBusy, setCopyBusy] = useState(false);
 
@@ -163,6 +188,13 @@ export function WorkoutSheetEditor({
     () => estimatedMaxHr(sheet.clientAge ?? suggestedAge),
     [sheet.clientAge, suggestedAge],
   );
+
+  useEffect(() => {
+    if (readOnly || clientRestingHr == null || sheet.restingHr != null) return;
+    onChange({ ...sheet, restingHr: clientRestingHr });
+    // Только при появлении значения из анкеты, если в листе ещё пусто
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientRestingHr, readOnly]);
 
   useEffect(() => {
     if (!hasCircuit) return;
@@ -199,6 +231,7 @@ export function WorkoutSheetEditor({
   });
 
   const compiledSummary = useMemo(() => compileSessionSummary(sheet), [sheet]);
+  const sessionSummary = useMemo(() => summarizeWorkoutSession(sheet), [sheet]);
 
   const handleCompleteSession = () => {
     onChange(completeWorkoutSession(sheet));
@@ -229,6 +262,10 @@ export function WorkoutSheetEditor({
     if (suggestedAge) update({ clientAge: suggestedAge });
   };
 
+  const applySuggestedRestingHr = () => {
+    if (clientRestingHr != null) update({ restingHr: clientRestingHr });
+  };
+
   const handleCopyPrevious = async () => {
     if (onCopyPrevious) {
       onCopyPrevious();
@@ -250,6 +287,36 @@ export function WorkoutSheetEditor({
       setCopyBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (readOnly) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const top = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        const id = top?.target.id;
+        if (id?.startsWith('workout-section-')) {
+          emitWorkoutSectionVisible(
+            id.replace('workout-section-', '') as WorkoutSectionId,
+          );
+        }
+      },
+      { rootMargin: '-35% 0px -50% 0px', threshold: [0.15, 0.4, 0.6] },
+    );
+    document
+      .querySelectorAll('[id^="workout-section-"]')
+      .forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [
+    readOnly,
+    hasWarmup,
+    hasCooldown,
+    hasStrength,
+    hasCircuit,
+    hasMobility,
+    activeBlocks,
+  ]);
 
   const updateCircuit = (patch: Partial<NonNullable<WorkoutSheet['circuit']>>) => {
     const circuit = { ...(sheet.circuit ?? createDefaultCircuit()), ...patch };
@@ -323,6 +390,34 @@ export function WorkoutSheetEditor({
             </div>
           </div>
           <div>
+            <p className="mb-1 text-xs uppercase text-slate-500">ЧСС в покое</p>
+            <div className="flex items-center gap-2">
+              <NumberInput
+                value={sheet.restingHr}
+                onChange={(v) => update({ restingHr: v })}
+                readOnly={readOnly}
+                placeholder="уд/мин"
+                className="max-w-[100px]"
+                min={30}
+                max={120}
+              />
+              {!readOnly &&
+                clientRestingHr != null &&
+                sheet.restingHr !== clientRestingHr && (
+                  <button
+                    type="button"
+                    onClick={applySuggestedRestingHr}
+                    className="text-xs text-fitgo-400"
+                  >
+                    Из анкеты ({clientRestingHr})
+                  </button>
+                )}
+            </div>
+            <p className="mt-1 text-[10px] leading-snug text-slate-600">
+              Пульс в покое. Норма 50–80 уд/мин
+            </p>
+          </div>
+          <div className="sm:col-span-2">
             <p className="mb-2 text-xs uppercase text-slate-500">День недели</p>
             <div className="flex flex-wrap gap-1">
               {WORKOUT_WEEKDAY_LABELS.map((label, index) => (
@@ -383,17 +478,15 @@ export function WorkoutSheetEditor({
           </p>
         )}
 
-        {(hasCircuit || hasStrength) && (
-          <div className="mb-4 rounded-xl border border-fitgo-500/30 bg-fitgo-500/5 p-3">
-            <WorkoutTimerLauncher
-              circuit={sheet.circuit}
-              canUseCircuit={hasCircuit && Boolean(sheet.circuit)}
-              canUseRest={hasStrength}
-              defaultRestSec={90}
-            />
-          </div>
-        )}
       </div>
+
+      <WorkoutTimerDock
+        sheet={sheet}
+        readOnly={readOnly}
+        circuit={sheet.circuit}
+        blocks={timerBlocks}
+        onChange={onChange}
+      />
 
       {hasWarmup && (
         <WorkoutSectionCard
@@ -485,7 +578,7 @@ export function WorkoutSheetEditor({
             onChange={(circuit) => updateCircuit(circuit)}
           />
           <div className="mt-4">
-            <SectionTitle tipId="circuit-dynamics">Динамика круговых</SectionTitle>
+            <SectionTitle>Динамика круговых</SectionTitle>
             <div className="mt-3">
               <CircuitDynamics
                 history={circuitHistory}
@@ -559,19 +652,7 @@ export function WorkoutSheetEditor({
             нагрузки между тренировками
           </p>
         </div>
-        <div className="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <div>
-            <p className="mb-1 text-xs uppercase text-slate-500">ЧСС в покое</p>
-            <NumberInput
-              value={sheet.restingHr}
-              onChange={(v) => update({ restingHr: v })}
-              readOnly={readOnly}
-              placeholder="уд/мин"
-            />
-            <p className="mt-1 text-[10px] leading-snug text-slate-600">
-              Пульс в покое. Норма 50–80. Рост к прошлой сессии — сигнал усталости
-            </p>
-          </div>
+        <div className="mb-3 grid gap-3 sm:grid-cols-2">
           <div>
             <p className="mb-1 text-xs uppercase text-slate-500">Максимальная ЧСС</p>
             <div className="flex items-center gap-2">
@@ -614,6 +695,16 @@ export function WorkoutSheetEditor({
               Насколько тяжело было всё занятие целиком (как Feel в TrainingPeaks)
             </p>
           </div>
+        </div>
+
+        <div className="mb-4 border-t border-slate-700 pt-4">
+          <div className="mb-3">
+            <h4 className="font-semibold">СВОДКА ТРЕНИРОВКИ</h4>
+            <p className="mt-1 text-xs text-slate-500">
+              Автоматически по заполненным блокам — объём, RPE, пульс, структура времени
+            </p>
+          </div>
+          <WorkoutSessionSummaryPanel summary={sessionSummary} />
         </div>
 
         <div className="mb-4 border-t border-slate-700 pt-4">

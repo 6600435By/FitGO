@@ -9,7 +9,6 @@ import {
   createEmptyCardioRow,
 } from '@fitgo/shared-types';
 import { Plus, Trash2 } from 'lucide-react';
-import { TrainerTip } from './trainer-tip';
 
 interface CardioBlockEditorProps {
   exercises: CardioExerciseRow[];
@@ -67,10 +66,7 @@ export function CardioBlockEditor({
     <div className="space-y-3">
       {!readOnly && (
         <div>
-          <p className="mb-2 flex items-center gap-1 text-xs text-slate-500">
-            Поля для записи
-            <TrainerTip tipId="cardio" />
-          </p>
+          <p className="mb-2 text-xs text-slate-500">Поля для записи</p>
           <div className="flex flex-wrap gap-1.5">
             {CARDIO_FIELD_IDS.map((field) => {
               const enabled = activeFields.includes(field);

@@ -51,6 +51,7 @@ export function WorkoutSectionCard({
 
   return (
     <div
+      id={`workout-section-${sectionId}`}
       className={`rounded-2xl border bg-slate-900/40 transition-colors ${
         summarySaved
           ? 'border-emerald-500/30 bg-emerald-500/5'

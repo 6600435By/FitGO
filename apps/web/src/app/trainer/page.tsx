@@ -1,6 +1,7 @@
 'use client';
 
-import { Users, Calendar, Target } from 'lucide-react';
+import { SessionType, type Booking } from '@fitgo/shared-types';
+import { Users, Calendar, Target, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { MessagesHomeLink } from '@/components/messages-home-link';
@@ -13,6 +14,8 @@ interface TrainerDashboard {
   schedule: Array<{
     id: string;
     title: string;
+    type: SessionType;
+    clientId?: string;
     startAt: string;
     booked: number;
     capacity: number;
@@ -23,6 +26,11 @@ interface TrainerDashboard {
     sessionsToday: number;
     upcomingSessions: number;
   };
+}
+
+function trainerSessionHref(slot: TrainerDashboard['schedule'][number]): string | null {
+  if (slot.type !== SessionType.PERSONAL || !slot.clientId) return null;
+  return `/trainer/sessions/${slot.id}?clientId=${slot.clientId}`;
 }
 
 export default function TrainerHomePage() {
@@ -87,20 +95,45 @@ export default function TrainerHomePage() {
           {data.schedule.length === 0 ? (
             <li className="text-sm text-slate-400">Нет предстоящих занятий</li>
           ) : (
-            data.schedule.slice(0, 4).map((slot) => (
-              <li
-                key={slot.id}
-                className="flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-sm"
-              >
-                <div>
-                  <p className="font-medium">{slot.title}</p>
-                  <p className="text-slate-400">{formatDateTime(slot.startAt)}</p>
-                </div>
-                <span className="text-slate-400">
-                  {slot.booked}/{slot.capacity}
-                </span>
-              </li>
-            ))
+            data.schedule.slice(0, 4).map((slot) => {
+              const href = trainerSessionHref(slot);
+              const inner = (
+                <>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium">{slot.title}</p>
+                    <p className="text-slate-400">{formatDateTime(slot.startAt)}</p>
+                    {href && (
+                      <p className="mt-0.5 text-xs text-fitgo-400">План тренировки</p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 text-slate-400">
+                    {slot.type !== SessionType.PERSONAL && (
+                      <span>
+                        {slot.booked}/{slot.capacity}
+                      </span>
+                    )}
+                    {href && <ChevronRight className="h-4 w-4 text-fitgo-400" />}
+                  </div>
+                </>
+              );
+
+              return (
+                <li key={slot.id}>
+                  {href ? (
+                    <Link
+                      href={href}
+                      className="flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-sm transition hover:bg-slate-800"
+                    >
+                      {inner}
+                    </Link>
+                  ) : (
+                    <div className="flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-sm">
+                      {inner}
+                    </div>
+                  )}
+                </li>
+              );
+            })
           )}
         </ul>
       </div>

@@ -11,8 +11,6 @@ import {
   createEmptyPrepRow,
 } from '@fitgo/shared-types';
 import { Plus, Trash2 } from 'lucide-react';
-import { TrainerTip } from './trainer-tip';
-import type { WorkoutTipId } from './workout-trainer-tips';
 
 interface PrepBlockEditorProps {
   variant: 'warmup' | 'cooldown';
@@ -22,11 +20,6 @@ interface PrepBlockEditorProps {
   onChange: (activities: PrepActivityRow[]) => void;
   onFieldsChange: (fields: PrepFieldId[]) => void;
 }
-
-const TIP_BY_VARIANT: Record<PrepBlockEditorProps['variant'], WorkoutTipId> = {
-  warmup: 'warmup',
-  cooldown: 'cooldown',
-};
 
 export function PrepBlockEditor({
   variant,
@@ -80,10 +73,7 @@ export function PrepBlockEditor({
     <div className="space-y-3">
       {!readOnly && (
         <div>
-          <p className="mb-2 flex items-center gap-1 text-xs text-slate-500">
-            Поля для записи
-            <TrainerTip tipId={TIP_BY_VARIANT[variant]} />
-          </p>
+          <p className="mb-2 text-xs text-slate-500">Поля для записи</p>
           <div className="flex flex-wrap gap-1.5">
             {PREP_FIELD_IDS.map((field) => {
               const enabled = activeFields.includes(field);

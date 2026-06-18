@@ -596,6 +596,7 @@ export class PersonalTrainingService {
       clientDateOfBirth: booking.client.dateOfBirth
         ? booking.client.dateOfBirth.toISOString().slice(0, 10)
         : undefined,
+      clientRestingHr: undefined,
       startAt: booking.startAt.toISOString(),
       endAt: booking.endAt.toISOString(),
       status,

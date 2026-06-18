@@ -109,6 +109,8 @@ export interface ScheduleSlot {
   capacity: number;
   booked: number;
   available: boolean;
+  /** FitGO: клиент персональной тренировки (для ссылки тренера) */
+  clientId?: string;
   waitlist?: {
     open: boolean;
     count: number;
@@ -263,6 +265,8 @@ export interface PersonalTrainingSessionDetail {
   goals: PersonalTrainingSessionGoal[];
   workoutSheet: import('./workout-sheet').WorkoutSheet;
   clientDateOfBirth?: string;
+  /** Из анкеты клиента (будет заполняться позже) */
+  clientRestingHr?: number;
 }
 
 export interface TrainerClientSession {

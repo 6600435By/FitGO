@@ -13,7 +13,6 @@ import {
   createEmptyMobilityExercise,
 } from '@fitgo/shared-types';
 import { Plus, Trash2 } from 'lucide-react';
-import { TrainerTip } from './trainer-tip';
 
 interface MobilityBlockEditorProps {
   exercises: MobilityExerciseRow[];
@@ -73,10 +72,7 @@ export function MobilityBlockEditor({
     <div className="space-y-3">
       {!readOnly && (
         <div>
-          <p className="mb-2 flex items-center gap-1 text-xs text-slate-500">
-            Поля для записи
-            <TrainerTip tipId="mobility" />
-          </p>
+          <p className="mb-2 text-xs text-slate-500">Поля для записи</p>
           <div className="flex flex-wrap gap-1.5">
             {MOBILITY_FIELD_IDS.map((field) => {
               const enabled = activeFields.includes(field);

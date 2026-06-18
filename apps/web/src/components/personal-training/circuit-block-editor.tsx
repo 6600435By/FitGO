@@ -1,6 +1,10 @@
 'use client';
 
 import type {
+  CircuitCrossFitFieldId,
+  CircuitCrossFitFormat,
+  CircuitCrossFitResult,
+  CircuitMovementDomain,
   CircuitRoundLog,
   CircuitStation,
   CircuitStationFieldId,
@@ -8,7 +12,16 @@ import type {
   CircuitWorkout,
 } from '@fitgo/shared-types';
 import {
+  applyCrossFitFormat,
+  CIRCUIT_CROSSFIT_DEFAULT_FIELDS,
+  CIRCUIT_CROSSFIT_FIELD_IDS,
+  CIRCUIT_CROSSFIT_FIELD_LABELS,
+  CIRCUIT_CROSSFIT_FIELD_PLACEHOLDERS,
+  CIRCUIT_CROSSFIT_FORMAT_HINTS,
+  CIRCUIT_CROSSFIT_FORMAT_IDS,
+  CIRCUIT_CROSSFIT_FORMAT_LABELS,
   CIRCUIT_DEFAULT_STATION_FIELDS,
+  CIRCUIT_MOVEMENT_DOMAIN_LABELS,
   CIRCUIT_STATION_FIELD_IDS,
   CIRCUIT_STATION_FIELD_LABELS,
   CIRCUIT_STATION_FIELD_PLACEHOLDERS,
@@ -16,14 +29,42 @@ import {
   CIRCUIT_STATION_MIN,
   CIRCUIT_STATION_TYPE_LABELS,
   createEmptyCircuitStation,
+  defaultCrossFitConfig,
+  reorderCircuitStations,
+  resizeCircuitStations,
 } from '@fitgo/shared-types';
-import { Plus, Trash2 } from 'lucide-react';
-import { TrainerTip } from './trainer-tip';
+import { ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 
 interface CircuitBlockEditorProps {
   circuit: CircuitWorkout;
   readOnly: boolean;
   onChange: (circuit: CircuitWorkout) => void;
+}
+
+function crossfitResultHasData(result?: CircuitCrossFitResult): boolean {
+  return Boolean(
+    result?.roundsCompleted != null ||
+      result?.extraReps != null ||
+      result?.timeSec ||
+      result?.notes?.trim(),
+  );
+}
+
+function circuitJournalHasData(circuit: CircuitWorkout): boolean {
+  if (crossfitResultHasData(circuit.crossfitResult)) return true;
+  return circuit.roundLogs.some(
+    (log) =>
+      Boolean(
+        log.roundWorkSec ||
+          log.avgHr ||
+          log.maxHr ||
+          log.roundRestSec ||
+          log.stations.some(
+            (s) => s.rpe || s.actualHr || Boolean(s.notes?.trim()),
+          ),
+      ),
+  );
 }
 
 function NumberInput({
@@ -67,6 +108,15 @@ export function CircuitBlockEditor({
   onChange,
 }: CircuitBlockEditorProps) {
   const activeFields = circuit.stationFields ?? CIRCUIT_DEFAULT_STATION_FIELDS;
+  const crossfitEnabled = Boolean(circuit.crossfitEnabled);
+  const crossfit = circuit.crossfit ?? defaultCrossFitConfig();
+  const crossfitFields =
+    crossfit.stationFields ?? CIRCUIT_CROSSFIT_DEFAULT_FIELDS;
+  const crossfitFormat = crossfit.format;
+  const journalHasData = circuitJournalHasData(circuit);
+  const [journalOpen, setJournalOpen] = useState(
+    () => readOnly && journalHasData,
+  );
 
   const patch = (next: Partial<CircuitWorkout>) => {
     onChange({ ...circuit, ...next });
@@ -88,6 +138,15 @@ export function CircuitBlockEditor({
     patch({ stations: circuit.stations.filter((_, i) => i !== index) });
   };
 
+  const moveStation = (fromIndex: number, toIndex: number) => {
+    patch(reorderCircuitStations(circuit, fromIndex, toIndex));
+  };
+
+  const setStationCount = (count: number | undefined) => {
+    if (count == null) return;
+    patch(resizeCircuitStations(circuit, count));
+  };
+
   const toggleField = (field: CircuitStationFieldId) => {
     if (readOnly) return;
     const enabled = activeFields.includes(field);
@@ -96,6 +155,45 @@ export function CircuitBlockEditor({
       ? activeFields.filter((f) => f !== field)
       : [...activeFields, field];
     patch({ stationFields });
+  };
+
+  const toggleCrossFit = () => {
+    if (readOnly) return;
+    if (crossfitEnabled) {
+      patch({ crossfitEnabled: false });
+      return;
+    }
+    patch({
+      crossfitEnabled: true,
+      crossfit: circuit.crossfit ?? defaultCrossFitConfig(),
+    });
+  };
+
+  const setCrossFitFormat = (format: CircuitCrossFitFormat) => {
+    if (readOnly) return;
+    onChange(applyCrossFitFormat(circuit, format));
+  };
+
+  const updateCrossFit = (next: Partial<typeof crossfit>) => {
+    patch({
+      crossfit: { ...crossfit, ...next },
+    });
+  };
+
+  const toggleCrossFitField = (field: CircuitCrossFitFieldId) => {
+    if (readOnly) return;
+    const enabled = crossfitFields.includes(field);
+    if (enabled && crossfitFields.length <= 1) return;
+    const stationFields = enabled
+      ? crossfitFields.filter((f) => f !== field)
+      : [...crossfitFields, field];
+    updateCrossFit({ stationFields });
+  };
+
+  const updateCrossFitResult = (next: Partial<CircuitCrossFitResult>) => {
+    patch({
+      crossfitResult: { ...(circuit.crossfitResult ?? {}), ...next },
+    });
   };
 
   const updateRoundLog = (roundIndex: number, logPatch: Partial<CircuitRoundLog>) => {
@@ -126,15 +224,19 @@ export function CircuitBlockEditor({
           s.restSec ||
           s.tempo ||
           s.targetHr ||
-          s.load,
+          s.load ||
+          s.reps ||
+          s.rxLoad ||
+          s.scaledLoad ||
+          s.movementDomain,
       )
     : circuit.stations;
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <p className="mb-1 flex items-center gap-1 text-xs text-slate-500">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="flex min-w-0 flex-col">
+          <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
             Кругов
           </p>
           <NumberInput
@@ -143,36 +245,250 @@ export function CircuitBlockEditor({
             readOnly={readOnly}
             min={1}
             max={20}
+            className="w-full"
           />
         </div>
-        <div>
-          <p className="mb-1 text-xs text-slate-500">Станций</p>
-          <span className="text-sm text-slate-200">
-            {circuit.stations.length}
-          </span>
-        </div>
-        <div>
-          <p className="mb-1 text-xs text-slate-500">Отдых между кругами, сек</p>
+        <div className="flex min-w-0 flex-col">
+          <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+            Станций
+          </p>
           <NumberInput
-            value={circuit.restBetweenRoundsSec}
-            onChange={(v) => patch({ restBetweenRoundsSec: v })}
+            value={circuit.stations.length}
+            onChange={setStationCount}
             readOnly={readOnly}
+            min={CIRCUIT_STATION_MIN}
+            max={CIRCUIT_STATION_MAX}
+            className="w-full"
           />
         </div>
-        <div>
-          <p className="mb-1 text-xs text-slate-500">Переход, сек</p>
+        <div className="flex min-w-0 flex-col">
+          <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+            Переход, сек
+          </p>
           <NumberInput
             value={circuit.transitionSec}
             onChange={(v) => patch({ transitionSec: v })}
             readOnly={readOnly}
+            min={0}
+            className="w-full"
+          />
+        </div>
+        <div className="flex min-w-0 flex-col">
+          <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+            Отдых между кругами, сек
+          </p>
+          <NumberInput
+            value={circuit.restBetweenRoundsSec}
+            onChange={(v) => patch({ restBetweenRoundsSec: v })}
+            readOnly={readOnly}
+            min={0}
+            className="w-full"
           />
         </div>
       </div>
 
+      {!readOnly && (
+        <div>
+          <p className="mb-2 text-xs text-slate-500">Режим</p>
+          <button
+            type="button"
+            onClick={toggleCrossFit}
+            className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+              crossfitEnabled
+                ? 'bg-amber-500 text-white'
+                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+            }`}
+          >
+            {crossfitEnabled ? '✓ ' : ''}
+            CrossFit
+          </button>
+        </div>
+      )}
+
+      {readOnly && crossfitEnabled && (
+        <p className="text-xs font-medium text-amber-400/90">
+          CrossFit · {CIRCUIT_CROSSFIT_FORMAT_LABELS[crossfitFormat]}
+        </p>
+      )}
+
+      {crossfitEnabled && (
+        <div className="space-y-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
+          {!readOnly && (
+            <>
+              <div>
+                <p className="mb-2 text-xs text-slate-500">Формат WOD</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {CIRCUIT_CROSSFIT_FORMAT_IDS.map((format) => (
+                    <button
+                      key={format}
+                      type="button"
+                      onClick={() => setCrossFitFormat(format)}
+                      title={CIRCUIT_CROSSFIT_FORMAT_HINTS[format]}
+                      className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                        crossfitFormat === format
+                          ? 'bg-amber-500 text-white'
+                          : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                      }`}
+                    >
+                      {CIRCUIT_CROSSFIT_FORMAT_LABELS[format]}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-[10px] leading-snug text-slate-500">
+                  {CIRCUIT_CROSSFIT_FORMAT_HINTS[crossfitFormat]}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {(crossfitFormat === 'amrap' || crossfitFormat === 'chipper') && (
+                  <div className="flex min-w-0 flex-col">
+                    <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+                      Лимит, мин
+                    </p>
+                    <NumberInput
+                      value={crossfit.timeCapMin}
+                      onChange={(v) => updateCrossFit({ timeCapMin: v })}
+                      readOnly={readOnly}
+                      min={1}
+                      max={60}
+                      className="w-full"
+                    />
+                  </div>
+                )}
+                {crossfitFormat === 'emom' && (
+                  <>
+                    <div className="flex min-w-0 flex-col">
+                      <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+                        Длительность, мин
+                      </p>
+                      <NumberInput
+                        value={crossfit.emomDurationMin}
+                        onChange={(v) => updateCrossFit({ emomDurationMin: v })}
+                        readOnly={readOnly}
+                        min={1}
+                        max={60}
+                        className="w-full"
+                      />
+                    </div>
+                    <div className="flex min-w-0 flex-col">
+                      <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+                        Интервал, сек
+                      </p>
+                      <NumberInput
+                        value={crossfit.emomIntervalSec}
+                        onChange={(v) => updateCrossFit({ emomIntervalSec: v })}
+                        readOnly={readOnly}
+                        min={30}
+                        max={180}
+                        className="w-full"
+                      />
+                    </div>
+                  </>
+                )}
+                {crossfitFormat === 'tabata' && (
+                  <>
+                    <div className="flex min-w-0 flex-col">
+                      <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+                        Работа, сек
+                      </p>
+                      <NumberInput
+                        value={crossfit.tabataWorkSec}
+                        onChange={(v) => updateCrossFit({ tabataWorkSec: v })}
+                        readOnly={readOnly}
+                        min={10}
+                        max={60}
+                        className="w-full"
+                      />
+                    </div>
+                    <div className="flex min-w-0 flex-col">
+                      <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+                        Отдых, сек
+                      </p>
+                      <NumberInput
+                        value={crossfit.tabataRestSec}
+                        onChange={(v) => updateCrossFit({ tabataRestSec: v })}
+                        readOnly={readOnly}
+                        min={5}
+                        max={60}
+                        className="w-full"
+                      />
+                    </div>
+                    <div className="flex min-w-0 flex-col">
+                      <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+                        Раундов
+                      </p>
+                      <NumberInput
+                        value={crossfit.tabataRounds}
+                        onChange={(v) => {
+                          updateCrossFit({ tabataRounds: v });
+                          if (v) patch({ rounds: v });
+                        }}
+                        readOnly={readOnly}
+                        min={1}
+                        max={20}
+                        className="w-full"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div>
+                <p className="mb-2 text-xs text-slate-500">Поля движения</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {CIRCUIT_CROSSFIT_FIELD_IDS.map((field) => {
+                    const enabled = crossfitFields.includes(field);
+                    return (
+                      <button
+                        key={field}
+                        type="button"
+                        onClick={() => toggleCrossFitField(field)}
+                        className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                          enabled
+                            ? 'bg-amber-500 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                        }`}
+                      >
+                        {enabled ? '✓ ' : ''}
+                        {CIRCUIT_CROSSFIT_FIELD_LABELS[field]}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+
+          {readOnly && (
+            <div className="grid grid-cols-2 gap-2 text-xs text-slate-400 sm:grid-cols-4">
+              {(crossfitFormat === 'amrap' || crossfitFormat === 'chipper') &&
+                crossfit.timeCapMin != null && (
+                  <span>Лимит: {crossfit.timeCapMin} мин</span>
+                )}
+              {crossfitFormat === 'emom' && (
+                <>
+                  {crossfit.emomDurationMin != null && (
+                    <span>EMOM: {crossfit.emomDurationMin} мин</span>
+                  )}
+                  {crossfit.emomIntervalSec != null && (
+                    <span>Интервал: {crossfit.emomIntervalSec} с</span>
+                  )}
+                </>
+              )}
+              {crossfitFormat === 'tabata' && (
+                <span>
+                  Tabata {crossfit.tabataWorkSec ?? 20}/{crossfit.tabataRestSec ?? 10} ×{' '}
+                  {crossfit.tabataRounds ?? 8}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       <div>
-        <p className="mb-2 flex items-center gap-1 text-xs uppercase text-slate-500">
-          План станций
-          <TrainerTip tipId="circuit-stations" />
+        <p className="mb-2 text-xs uppercase text-slate-500">
+          {crossfitEnabled ? 'План движений' : 'План станций'}
         </p>
 
         {!readOnly && (
@@ -208,9 +524,33 @@ export function CircuitBlockEditor({
               className="rounded-xl border border-slate-700/80 bg-slate-800/30 p-3"
             >
               <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-slate-500">
-                  Станция {index + 1}
-                </span>
+                <div className="flex items-center gap-1">
+                  {!readOnly && (
+                    <div className="flex flex-col">
+                      <button
+                        type="button"
+                        onClick={() => moveStation(index, index - 1)}
+                        disabled={index === 0}
+                        className="rounded p-0.5 text-slate-500 hover:bg-slate-700 hover:text-slate-200 disabled:opacity-25"
+                        aria-label="Переместить станцию выше"
+                      >
+                        <ChevronUp className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveStation(index, index + 1)}
+                        disabled={index >= circuit.stations.length - 1}
+                        className="rounded p-0.5 text-slate-500 hover:bg-slate-700 hover:text-slate-200 disabled:opacity-25"
+                        aria-label="Переместить станцию ниже"
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                  <span className="text-xs font-medium text-slate-500">
+                    {crossfitEnabled ? `Движение ${index + 1}` : `Станция ${index + 1}`}
+                  </span>
+                </div>
                 {!readOnly && circuit.stations.length > CIRCUIT_STATION_MIN && (
                   <button
                     type="button"
@@ -225,14 +565,18 @@ export function CircuitBlockEditor({
 
               <div className="mb-2">
                 <label className="mb-0.5 block text-[10px] uppercase text-slate-600">
-                  Название
+                  {crossfitEnabled ? 'Движение' : 'Название'}
                 </label>
                 {readOnly ? (
                   <p className="text-sm text-slate-200">{station.name || '—'}</p>
                 ) : (
                   <input
                     className="input w-full text-sm"
-                    placeholder="Упражнение / тренажёр"
+                    placeholder={
+                      crossfitEnabled
+                        ? 'Thrusters, Pull-ups, Row 500 м…'
+                        : 'Упражнение / тренажёр'
+                    }
                     value={station.name}
                     onChange={(e) =>
                       updateStation(index, { ...station, name: e.target.value })
@@ -324,7 +668,77 @@ export function CircuitBlockEditor({
                       )}
                     </div>
                   ))}
+                {crossfitEnabled &&
+                  crossfitFields
+                    .filter((f) => f !== 'movementDomain')
+                    .map((field) => (
+                      <div key={field}>
+                        <label className="mb-0.5 block text-[10px] uppercase text-slate-600">
+                          {CIRCUIT_CROSSFIT_FIELD_LABELS[field]}
+                        </label>
+                        {readOnly ? (
+                          <p className="text-sm text-slate-200">
+                            {station[field]?.trim() || '—'}
+                          </p>
+                        ) : (
+                          <input
+                            className="input w-full px-2 py-1.5 text-sm"
+                            placeholder={
+                              CIRCUIT_CROSSFIT_FIELD_PLACEHOLDERS[field]
+                            }
+                            value={station[field] ?? ''}
+                            onChange={(e) =>
+                              updateStation(index, {
+                                ...station,
+                                [field]: e.target.value,
+                              })
+                            }
+                          />
+                        )}
+                      </div>
+                    ))}
               </div>
+
+              {crossfitEnabled && crossfitFields.includes('movementDomain') && (
+                <div className="mt-2">
+                  <label className="mb-1 block text-[10px] uppercase text-slate-600">
+                    {CIRCUIT_CROSSFIT_FIELD_LABELS.movementDomain}
+                  </label>
+                  {readOnly ? (
+                    <p className="text-sm text-slate-200">
+                      {station.movementDomain
+                        ? CIRCUIT_MOVEMENT_DOMAIN_LABELS[station.movementDomain]
+                        : '—'}
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {(
+                        Object.keys(
+                          CIRCUIT_MOVEMENT_DOMAIN_LABELS,
+                        ) as CircuitMovementDomain[]
+                      ).map((domain) => (
+                        <button
+                          key={domain}
+                          type="button"
+                          onClick={() =>
+                            updateStation(index, {
+                              ...station,
+                              movementDomain: domain,
+                            })
+                          }
+                          className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                            station.movementDomain === domain
+                              ? 'bg-amber-500/30 text-amber-200 ring-1 ring-amber-500/50'
+                              : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                          }`}
+                        >
+                          {CIRCUIT_MOVEMENT_DOMAIN_LABELS[domain]}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -336,43 +750,140 @@ export function CircuitBlockEditor({
             className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-slate-600 py-3 text-sm text-slate-400 hover:border-fitgo-500/50 hover:text-fitgo-400"
           >
             <Plus className="h-4 w-4" />
-            Новая станция
+            {crossfitEnabled ? 'Новое движение' : 'Новая станция'}
           </button>
         )}
       </div>
 
-      <div className="space-y-3">
-        <h5 className="flex items-center gap-1 text-sm font-medium text-slate-300">
-          Журнал кругов
-          <TrainerTip tipId="circuit-journal" />
-          <TrainerTip tipId="circuit-rpe" />
-        </h5>
-        {circuit.roundLogs.map((log, roundIndex) => (
-          <div key={log.round} className="rounded-xl bg-slate-800/40 p-3">
-            <p className="mb-2 text-sm font-medium">Круг {log.round}</p>
-            <div className="mb-3 grid gap-2 sm:grid-cols-3">
+      {(journalOpen || !readOnly) && (
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={() => setJournalOpen((open) => !open)}
+            className="flex w-full items-center justify-between gap-2 rounded-xl border border-slate-700/80 bg-slate-800/30 px-3 py-2.5 text-left text-sm font-medium text-slate-300 hover:bg-slate-800/50"
+            aria-expanded={journalOpen}
+          >
+            <span>{crossfitEnabled ? 'Журнал / результат' : 'Журнал кругов'}</span>
+            <span className="flex items-center gap-2 text-xs font-normal text-slate-500">
+              {!journalOpen && journalHasData && 'Есть записи'}
+              {!journalOpen && !readOnly && 'Развернуть'}
+              {journalOpen ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </span>
+          </button>
+          {journalOpen && crossfitEnabled && (
+            <div className="rounded-xl border border-amber-500/20 bg-slate-800/40 p-3">
+              <p className="mb-2 text-sm font-medium text-amber-200/90">Результат WOD</p>
+              {crossfitFormat === 'amrap' && (
+                <div className="mb-2 grid gap-2 sm:grid-cols-2">
+                  <div className="flex min-w-0 flex-col">
+                    <p className="mb-1 text-xs text-slate-500">Круги</p>
+                    <NumberInput
+                      value={circuit.crossfitResult?.roundsCompleted}
+                      onChange={(v) => updateCrossFitResult({ roundsCompleted: v })}
+                      readOnly={readOnly}
+                      min={0}
+                      className="w-full"
+                    />
+                  </div>
+                  <div className="flex min-w-0 flex-col">
+                    <p className="mb-1 text-xs text-slate-500">+ повторы</p>
+                    <NumberInput
+                      value={circuit.crossfitResult?.extraReps}
+                      onChange={(v) => updateCrossFitResult({ extraReps: v })}
+                      readOnly={readOnly}
+                      min={0}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+              )}
+              {(crossfitFormat === 'for_time' || crossfitFormat === 'chipper') && (
+                <div className="mb-2 flex min-w-0 flex-col">
+                  <p className="mb-1 text-xs text-slate-500">Итог, сек</p>
+                  <NumberInput
+                    value={circuit.crossfitResult?.timeSec}
+                    onChange={(v) => updateCrossFitResult({ timeSec: v })}
+                    readOnly={readOnly}
+                    min={1}
+                    className="w-full"
+                  />
+                </div>
+              )}
+              {(crossfitFormat === 'emom' || crossfitFormat === 'tabata') && (
+                <p className="mb-2 text-xs text-slate-500">
+                  Детали по раундам — в журнале ниже
+                </p>
+              )}
               <div>
-                <p className="text-xs text-slate-500">Ср. ЧСС круга</p>
+                <p className="mb-1 text-xs text-slate-500">Заметка</p>
+                {readOnly ? (
+                  <p className="text-sm text-slate-300">
+                    {circuit.crossfitResult?.notes?.trim() || '—'}
+                  </p>
+                ) : (
+                  <input
+                    className="input w-full text-sm"
+                    placeholder="RX / Scaled, техника, срыв…"
+                    value={circuit.crossfitResult?.notes ?? ''}
+                    onChange={(e) =>
+                      updateCrossFitResult({ notes: e.target.value })
+                    }
+                  />
+                )}
+              </div>
+            </div>
+          )}
+          {journalOpen &&
+            circuit.roundLogs.map((log, roundIndex) => (
+              <div key={log.round} className="rounded-xl bg-slate-800/40 p-3">
+            <p className="mb-2 text-sm font-medium">Круг {log.round}</p>
+            <div className="mb-3 grid gap-2 sm:grid-cols-4">
+              <div className="flex min-w-0 flex-col">
+                <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+                  Время круга, сек
+                </p>
+                <NumberInput
+                  value={log.roundWorkSec}
+                  onChange={(v) => updateRoundLog(roundIndex, { roundWorkSec: v })}
+                  readOnly={readOnly}
+                  className="w-full"
+                />
+              </div>
+              <div className="flex min-w-0 flex-col">
+                <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+                  Ср. ЧСС круга
+                </p>
                 <NumberInput
                   value={log.avgHr}
                   onChange={(v) => updateRoundLog(roundIndex, { avgHr: v })}
                   readOnly={readOnly}
+                  className="w-full"
                 />
               </div>
-              <div>
-                <p className="text-xs text-slate-500">Макс. ЧСС</p>
+              <div className="flex min-w-0 flex-col">
+                <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+                  Макс. ЧСС
+                </p>
                 <NumberInput
                   value={log.maxHr}
                   onChange={(v) => updateRoundLog(roundIndex, { maxHr: v })}
                   readOnly={readOnly}
+                  className="w-full"
                 />
               </div>
-              <div>
-                <p className="text-xs text-slate-500">Отдых после, сек</p>
+              <div className="flex min-w-0 flex-col">
+                <p className="mb-1 flex min-h-8 items-end text-xs leading-tight text-slate-500">
+                  Отдых после, сек
+                </p>
                 <NumberInput
                   value={log.roundRestSec}
                   onChange={(v) => updateRoundLog(roundIndex, { roundRestSec: v })}
                   readOnly={readOnly}
+                  className="w-full"
                 />
               </div>
             </div>
@@ -456,9 +967,10 @@ export function CircuitBlockEditor({
                 );
               })}
             </div>
-          </div>
-        ))}
-      </div>
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   );
 }

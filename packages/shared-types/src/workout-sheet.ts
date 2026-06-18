@@ -142,6 +142,163 @@ export const CIRCUIT_DEFAULT_STATION_FIELDS: CircuitStationFieldId[] = [
   'targetHr',
 ];
 
+/** Форматы WOD (CrossFit / SugarWOD / BTWB) */
+export type CircuitCrossFitFormat =
+  | 'amrap'
+  | 'for_time'
+  | 'emom'
+  | 'chipper'
+  | 'tabata';
+
+export const CIRCUIT_CROSSFIT_FORMAT_IDS: CircuitCrossFitFormat[] = [
+  'amrap',
+  'for_time',
+  'emom',
+  'chipper',
+  'tabata',
+];
+
+export const CIRCUIT_CROSSFIT_FORMAT_LABELS: Record<CircuitCrossFitFormat, string> = {
+  amrap: 'AMRAP',
+  for_time: 'For Time',
+  emom: 'EMOM',
+  chipper: 'Chipper',
+  tabata: 'Tabata',
+};
+
+export const CIRCUIT_CROSSFIT_FORMAT_HINTS: Record<CircuitCrossFitFormat, string> = {
+  amrap: 'Максимум кругов за время',
+  for_time: 'N кругов на время',
+  emom: 'Старт каждую минуту',
+  chipper: 'Все движения по порядку',
+  tabata: '20 сек / 10 сек',
+};
+
+/** Домены движений CrossFit (G / W / M) */
+export type CircuitMovementDomain =
+  | 'weightlifting'
+  | 'gymnastics'
+  | 'monostructural';
+
+export const CIRCUIT_MOVEMENT_DOMAIN_LABELS: Record<CircuitMovementDomain, string> = {
+  weightlifting: 'Тяж. атл.',
+  gymnastics: 'Гимнастика',
+  monostructural: 'Моно',
+};
+
+export type CircuitCrossFitFieldId =
+  | 'reps'
+  | 'rxLoad'
+  | 'scaledLoad'
+  | 'movementDomain';
+
+export const CIRCUIT_CROSSFIT_FIELD_IDS: CircuitCrossFitFieldId[] = [
+  'reps',
+  'rxLoad',
+  'scaledLoad',
+  'movementDomain',
+];
+
+export const CIRCUIT_CROSSFIT_FIELD_LABELS: Record<CircuitCrossFitFieldId, string> = {
+  reps: 'Повторы',
+  rxLoad: 'RX',
+  scaledLoad: 'Scaled',
+  movementDomain: 'Домен',
+};
+
+export const CIRCUIT_CROSSFIT_FIELD_PLACEHOLDERS: Record<
+  CircuitCrossFitFieldId,
+  string
+> = {
+  reps: '21-15-9',
+  rxLoad: '43/30 кг',
+  scaledLoad: '30/20 кг',
+  movementDomain: '',
+};
+
+export const CIRCUIT_CROSSFIT_DEFAULT_FIELDS: CircuitCrossFitFieldId[] = [
+  'reps',
+  'rxLoad',
+  'scaledLoad',
+];
+
+export interface CircuitCrossFitConfig {
+  format: CircuitCrossFitFormat;
+  /** Лимит времени, мин — AMRAP, Chipper */
+  timeCapMin?: number;
+  /** Длительность EMOM, мин */
+  emomDurationMin?: number;
+  /** Интервал EMOM, сек (стандарт 60) */
+  emomIntervalSec?: number;
+  tabataWorkSec?: number;
+  tabataRestSec?: number;
+  tabataRounds?: number;
+  stationFields?: CircuitCrossFitFieldId[];
+}
+
+export interface CircuitCrossFitResult {
+  /** AMRAP: полные круги */
+  roundsCompleted?: number;
+  /** AMRAP: доп. повторения */
+  extraReps?: number;
+  /** For Time / Chipper: итог, сек */
+  timeSec?: number;
+  notes?: string;
+}
+
+export function defaultCrossFitConfig(
+  format: CircuitCrossFitFormat = 'amrap',
+): CircuitCrossFitConfig {
+  const base: CircuitCrossFitConfig = {
+    format,
+    stationFields: [...CIRCUIT_CROSSFIT_DEFAULT_FIELDS],
+  };
+  switch (format) {
+    case 'amrap':
+      return { ...base, timeCapMin: 12 };
+    case 'for_time':
+      return { ...base };
+    case 'emom':
+      return { ...base, emomDurationMin: 12, emomIntervalSec: 60 };
+    case 'chipper':
+      return { ...base, timeCapMin: 20 };
+    case 'tabata':
+      return {
+        ...base,
+        tabataWorkSec: 20,
+        tabataRestSec: 10,
+        tabataRounds: 8,
+        stationFields: ['reps', 'rxLoad', 'scaledLoad'],
+      };
+  }
+}
+
+export function applyCrossFitFormat(
+  circuit: CircuitWorkout,
+  format: CircuitCrossFitFormat,
+): CircuitWorkout {
+  const config = defaultCrossFitConfig(format);
+  const stationFields =
+    circuit.crossfit?.stationFields ?? config.stationFields;
+  const next: CircuitWorkout = {
+    ...circuit,
+    crossfitEnabled: true,
+    crossfit: { ...config, stationFields },
+  };
+  if (format === 'chipper') {
+    next.rounds = 1;
+  }
+  if (format === 'tabata') {
+    next.rounds = config.tabataRounds ?? 8;
+    next.stations = circuit.stations.map((station) => ({
+      ...station,
+      workSec: config.tabataWorkSec ?? 20,
+      restSec: config.tabataRestSec ?? 10,
+    }));
+  }
+  return next;
+}
+
 export type PrepFieldId = 'type' | 'duration' | 'zone' | 'rpe' | 'notes';
 
 export const PREP_FIELD_IDS: PrepFieldId[] = [
@@ -409,6 +566,14 @@ export interface CircuitStation {
   targetHr?: number;
   /** Сопротивление / вес / уровень */
   load?: string;
+  /** CrossFit: схема повторений (21-15-9, 10, max) */
+  reps?: string;
+  /** CrossFit: нагрузка RX */
+  rxLoad?: string;
+  /** CrossFit: нагрузка Scaled */
+  scaledLoad?: string;
+  /** CrossFit: домен движения G / W / M */
+  movementDomain?: CircuitMovementDomain;
 }
 
 export interface CircuitStationResult {
@@ -420,6 +585,8 @@ export interface CircuitStationResult {
 export interface CircuitRoundLog {
   round: number;
   stations: CircuitStationResult[];
+  /** Фактическое время прохождения круга, сек */
+  roundWorkSec?: number;
   /** Отдых между кругами фактически, сек */
   roundRestSec?: number;
   avgHr?: number;
@@ -437,6 +604,11 @@ export interface CircuitWorkout {
   transitionSec?: number;
   /** Журнал выполненных кругов (для динамики) */
   roundLogs: CircuitRoundLog[];
+  /** Режим CrossFit WOD */
+  crossfitEnabled?: boolean;
+  crossfit?: CircuitCrossFitConfig;
+  /** Итог WOD (AMRAP / For Time / Chipper) */
+  crossfitResult?: CircuitCrossFitResult;
 }
 
 /** Структурированный лист тренировки */
@@ -492,6 +664,379 @@ export interface CircuitHistoryPoint {
   avgHr?: number;
   maxHr?: number;
   totalWorkSec?: number;
+}
+
+export interface WorkoutBlockMetric {
+  id: WorkoutSectionId;
+  label: string;
+  durationMin?: number;
+  durationSharePct?: number;
+  avgRpe?: number;
+  maxRpe?: number;
+  highlights: string[];
+}
+
+export interface StrengthExerciseMetric {
+  name: string;
+  workingSets: number;
+  topLoad?: string;
+  avgRpe?: number;
+  maxRpe?: number;
+}
+
+export interface CircuitRoundMetric {
+  round: number;
+  workSec?: number;
+  restSec?: number;
+  avgHr?: number;
+  maxHr?: number;
+}
+
+export interface WorkoutSessionSummary {
+  hasData: boolean;
+  totalDurationMin?: number;
+  sessionRpe?: number;
+  restingHr?: number;
+  maxHr?: number;
+  maxHrPct?: number;
+  blocks: WorkoutBlockMetric[];
+  durationSegments: Array<{ id: string; label: string; min: number }>;
+  rpeBars: Array<{ label: string; value: number }>;
+  strength?: {
+    exercises: StrengthExerciseMetric[];
+    totalSets: number;
+    tonnageKg?: number;
+    avgRpe?: number;
+    maxRpe?: number;
+  };
+  cardio?: {
+    rows: number;
+    avgRpe?: number;
+    avgHr?: number;
+    topZone?: string;
+  };
+  circuit?: {
+    formatLabel?: string;
+    roundsLogged: number;
+    roundsPlanned: number;
+    avgRpe?: number;
+    avgHr?: number;
+    maxHr?: number;
+    rounds: CircuitRoundMetric[];
+    scoreLabel?: string;
+  };
+  mobility?: {
+    exercises: number;
+    avgRpe?: number;
+    avgComfort?: number;
+  };
+}
+
+function parseNumericField(raw?: string): number | undefined {
+  if (!raw?.trim()) return undefined;
+  const match = raw.trim().match(/(\d+(?:[.,]\d+)?)/);
+  if (!match) return undefined;
+  const value = parseFloat(match[1].replace(',', '.'));
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function averageRounded(values: number[]): number | undefined {
+  if (values.length === 0) return undefined;
+  return Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10;
+}
+
+function formatDurationFromSec(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** Сводная статистика тренировки по заполненному листу (TrainingPeaks / Garmin style) */
+export function summarizeWorkoutSession(sheet: WorkoutSheet): WorkoutSessionSummary {
+  const blocks = getWorkoutBlocks(sheet);
+  const blockMetrics: WorkoutBlockMetric[] = [];
+  const durationSegments: WorkoutSessionSummary['durationSegments'] = [];
+  const rpeBars: WorkoutSessionSummary['rpeBars'] = [];
+  let totalDurationMin = 0;
+
+  const pushDuration = (id: WorkoutSectionId, label: string, min?: number) => {
+    if (!min || min <= 0) return;
+    totalDurationMin += min;
+    durationSegments.push({ id, label, min });
+  };
+
+  if (isPrepSectionEnabled(sheet, 'warmup') && sheet.warmupDurationMin) {
+    pushDuration('warmup', WORKOUT_SECTION_LABELS.warmup, sheet.warmupDurationMin);
+    const rpes = (sheet.warmupActivities ?? [])
+      .map((r) => parseNumericField(r.rpe))
+      .filter((v): v is number => v != null);
+    const avgRpe = averageRounded(rpes);
+    if (avgRpe) rpeBars.push({ label: 'Разминка', value: avgRpe });
+    blockMetrics.push({
+      id: 'warmup',
+      label: WORKOUT_SECTION_LABELS.warmup,
+      durationMin: sheet.warmupDurationMin,
+      avgRpe,
+      highlights: [`${sheet.warmupDurationMin} мин`],
+    });
+  }
+
+  let strengthSummary: WorkoutSessionSummary['strength'];
+  if (blocks.includes('strength')) {
+    const exercises: StrengthExerciseMetric[] = [];
+    let totalSets = 0;
+    let tonnage = 0;
+    const allRpes: number[] = [];
+
+    for (const row of sheet.strengthExercises) {
+      if (!row.name?.trim() && !row.sets.some(strengthSetHasData)) continue;
+      const workingSets = row.sets.filter(strengthSetHasData);
+      if (workingSets.length === 0) continue;
+      totalSets += workingSets.length;
+      const setRpes: number[] = [];
+      let topWeight = 0;
+      let topLoad: string | undefined;
+
+      for (const set of workingSets) {
+        if (typeof set.rpe === 'number') {
+          setRpes.push(set.rpe);
+          allRpes.push(set.rpe);
+        }
+        const w = parseNumericField(set.weight) ?? parseNumericField(set.load);
+        const reps = parseNumericField(set.reps);
+        if (w != null && reps != null) tonnage += w * reps;
+        if (w != null && w >= topWeight) {
+          topWeight = w;
+          topLoad = set.load?.trim() || `${w}×${reps ?? '?'}`;
+        }
+      }
+
+      exercises.push({
+        name: row.name.trim() || 'Упражнение',
+        workingSets: workingSets.length,
+        topLoad,
+        avgRpe: averageRounded(setRpes),
+        maxRpe: setRpes.length ? Math.max(...setRpes) : undefined,
+      });
+    }
+
+    const avgRpe = averageRounded(allRpes);
+    const maxRpe = allRpes.length ? Math.max(...allRpes) : undefined;
+    if (exercises.length > 0 || sheet.strengthDurationMin) {
+      pushDuration('strength', WORKOUT_SECTION_LABELS.strength, sheet.strengthDurationMin);
+      if (avgRpe) rpeBars.push({ label: 'Силовая', value: avgRpe });
+      const highlights: string[] = [];
+      if (totalSets) highlights.push(`${totalSets} подх.`);
+      if (tonnage > 0) highlights.push(`${Math.round(tonnage)} кг×повт`);
+      if (avgRpe) highlights.push(`RPE ${avgRpe}`);
+      blockMetrics.push({
+        id: 'strength',
+        label: WORKOUT_SECTION_LABELS.strength,
+        durationMin: sheet.strengthDurationMin,
+        avgRpe,
+        maxRpe,
+        highlights,
+      });
+      strengthSummary = {
+        exercises,
+        totalSets,
+        tonnageKg: tonnage > 0 ? Math.round(tonnage) : undefined,
+        avgRpe,
+        maxRpe,
+      };
+    }
+  }
+
+  let cardioSummary: WorkoutSessionSummary['cardio'];
+  if (blocks.includes('cardio')) {
+    const rows = sheet.cardioExercises.filter((r) =>
+      cardioRowHasData(r, sheet.cardioFields ?? CARDIO_DEFAULT_FIELDS),
+    );
+    const rpes: number[] = [];
+    const hrs: number[] = [];
+    const zones: Record<string, number> = {};
+    for (const row of rows) {
+      const rpe = parseNumericField(row.rpe);
+      const hr = parseNumericField(row.hr);
+      if (rpe != null) rpes.push(rpe);
+      if (hr != null) hrs.push(hr);
+      const zone = row.zone?.trim();
+      if (zone) zones[zone] = (zones[zone] ?? 0) + 1;
+    }
+    const avgRpe = averageRounded(rpes);
+    const avgHr = averageRounded(hrs);
+    const topZone = Object.entries(zones).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (rows.length > 0 || sheet.cardioTotalMin) {
+      pushDuration('cardio', WORKOUT_SECTION_LABELS.cardio, sheet.cardioTotalMin);
+      if (avgRpe) rpeBars.push({ label: 'Кардио', value: avgRpe });
+      const highlights: string[] = [];
+      if (sheet.cardioTotalMin) highlights.push(`${sheet.cardioTotalMin} мин`);
+      if (avgHr) highlights.push(`ЧСС ${avgHr}`);
+      if (topZone) highlights.push(topZone);
+      blockMetrics.push({
+        id: 'cardio',
+        label: WORKOUT_SECTION_LABELS.cardio,
+        durationMin: sheet.cardioTotalMin,
+        avgRpe,
+        highlights,
+      });
+      cardioSummary = { rows: rows.length, avgRpe, avgHr, topZone };
+    }
+  }
+
+  let circuitSummary: WorkoutSessionSummary['circuit'];
+  if (blocks.includes('circuit') && sheet.circuit) {
+    const circuit = sheet.circuit;
+    const point = summarizeCircuitSession('current', '', sheet);
+    const rounds: CircuitRoundMetric[] = circuit.roundLogs.map((log) => ({
+      round: log.round,
+      workSec: log.roundWorkSec,
+      restSec: log.roundRestSec,
+      avgHr: log.avgHr,
+      maxHr: log.maxHr,
+    }));
+    const hasCircuit =
+      point ||
+      rounds.some((r) => r.workSec || r.avgHr) ||
+      circuit.crossfitResult ||
+      circuit.stations.some((s) => s.name?.trim());
+
+    if (hasCircuit) {
+      const estMin = point?.totalWorkSec
+        ? Math.round(point.totalWorkSec / 60)
+        : undefined;
+      pushDuration('circuit', WORKOUT_SECTION_LABELS.circuit, estMin);
+      if (point?.avgRpe) rpeBars.push({ label: 'Круговая', value: point.avgRpe });
+
+      let scoreLabel: string | undefined;
+      const cf = circuit.crossfit;
+      const result = circuit.crossfitResult;
+      if (circuit.crossfitEnabled && result) {
+        if (cf?.format === 'amrap' && result.roundsCompleted != null) {
+          scoreLabel = `${result.roundsCompleted}${result.extraReps ? `+${result.extraReps}` : ''}`;
+        } else if (
+          (cf?.format === 'for_time' || cf?.format === 'chipper') &&
+          result.timeSec
+        ) {
+          scoreLabel = formatDurationFromSec(result.timeSec);
+        }
+      }
+
+      const highlights: string[] = [];
+      if (point) {
+        highlights.push(`${point.roundsLogged}/${point.roundsPlanned} кругов`);
+        if (point.avgHr) highlights.push(`ЧСС ${point.avgHr}`);
+      }
+      if (scoreLabel) highlights.push(`WOD ${scoreLabel}`);
+      if (cf?.format) {
+        highlights.unshift(CIRCUIT_CROSSFIT_FORMAT_LABELS[cf.format]);
+      }
+
+      blockMetrics.push({
+        id: 'circuit',
+        label: WORKOUT_SECTION_LABELS.circuit,
+        durationMin: estMin,
+        avgRpe: point?.avgRpe,
+        highlights,
+      });
+
+      circuitSummary = {
+        formatLabel: cf?.format ? CIRCUIT_CROSSFIT_FORMAT_LABELS[cf.format] : undefined,
+        roundsLogged: point?.roundsLogged ?? circuit.roundLogs.length,
+        roundsPlanned: point?.roundsPlanned ?? circuit.rounds,
+        avgRpe: point?.avgRpe,
+        avgHr: point?.avgHr,
+        maxHr: point?.maxHr,
+        rounds,
+        scoreLabel,
+      };
+    }
+  }
+
+  let mobilitySummary: WorkoutSessionSummary['mobility'];
+  if (blocks.includes('mobility')) {
+    const rows = sheet.mobilityExercises.filter((r) =>
+      mobilityRowHasData(r, sheet.mobilityFields ?? MOBILITY_DEFAULT_FIELDS),
+    );
+    const rpes: number[] = [];
+    const comforts: number[] = [];
+    for (const row of rows) {
+      const rpe = parseNumericField(row.rpe);
+      const comfort = parseNumericField(row.comfort);
+      if (rpe != null) rpes.push(rpe);
+      if (comfort != null) comforts.push(comfort);
+    }
+    const avgRpe = averageRounded(rpes);
+    const avgComfort = averageRounded(comforts);
+    if (rows.length > 0 || sheet.mobilityDurationMin) {
+      pushDuration('mobility', WORKOUT_SECTION_LABELS.mobility, sheet.mobilityDurationMin);
+      if (avgRpe) rpeBars.push({ label: 'Биомех.', value: avgRpe });
+      blockMetrics.push({
+        id: 'mobility',
+        label: WORKOUT_SECTION_LABELS.mobility,
+        durationMin: sheet.mobilityDurationMin,
+        avgRpe,
+        highlights: [
+          ...(sheet.mobilityDurationMin ? [`${sheet.mobilityDurationMin} мин`] : []),
+          `${rows.length} упр.`,
+        ],
+      });
+      mobilitySummary = {
+        exercises: rows.length,
+        avgRpe,
+        avgComfort,
+      };
+    }
+  }
+
+  if (isPrepSectionEnabled(sheet, 'cooldown') && sheet.cooldownDurationMin) {
+    pushDuration('cooldown', WORKOUT_SECTION_LABELS.cooldown, sheet.cooldownDurationMin);
+    blockMetrics.push({
+      id: 'cooldown',
+      label: WORKOUT_SECTION_LABELS.cooldown,
+      durationMin: sheet.cooldownDurationMin,
+      highlights: [`${sheet.cooldownDurationMin} мин`],
+    });
+  }
+
+  if (totalDurationMin > 0) {
+    for (const block of blockMetrics) {
+      if (block.durationMin) {
+        block.durationSharePct = Math.round((block.durationMin / totalDurationMin) * 100);
+      }
+    }
+  }
+
+  const maxHrPct =
+    sheet.maxHr && sheet.clientAge
+      ? Math.round((sheet.maxHr / (estimatedMaxHr(sheet.clientAge) ?? sheet.maxHr)) * 100)
+      : undefined;
+
+  const hasData = Boolean(
+    blockMetrics.length > 0 ||
+      sheet.sessionRpe ||
+      sheet.restingHr ||
+      sheet.maxHr ||
+      strengthSummary ||
+      cardioSummary ||
+      circuitSummary,
+  );
+
+  return {
+    hasData,
+    totalDurationMin: totalDurationMin || undefined,
+    sessionRpe: sheet.sessionRpe,
+    restingHr: sheet.restingHr,
+    maxHr: sheet.maxHr,
+    maxHrPct,
+    blocks: blockMetrics,
+    durationSegments,
+    rpeBars,
+    strength: strengthSummary,
+    cardio: cardioSummary,
+    circuit: circuitSummary,
+    mobility: mobilitySummary,
+  };
 }
 
 function parseLoadToWeightReps(load: string): { weight?: string; reps?: string } {
@@ -619,6 +1164,16 @@ function normalizeCircuitStation(raw: unknown): CircuitStation {
         ? row.targetHr
         : undefined,
     load: row.load?.trim() || undefined,
+    reps: row.reps?.trim() || undefined,
+    rxLoad: row.rxLoad?.trim() || undefined,
+    scaledLoad: row.scaledLoad?.trim() || undefined,
+    movementDomain:
+      row.movementDomain &&
+      ['weightlifting', 'gymnastics', 'monostructural'].includes(
+        row.movementDomain,
+      )
+        ? row.movementDomain
+        : undefined,
   };
 }
 
@@ -696,6 +1251,86 @@ export function normalizeCircuitStationFields(
   return unique.length > 0 ? unique : [...CIRCUIT_DEFAULT_STATION_FIELDS];
 }
 
+export function normalizeCrossFitFields(
+  raw: CircuitCrossFitFieldId[] | undefined,
+): CircuitCrossFitFieldId[] {
+  if (!Array.isArray(raw)) return [...CIRCUIT_CROSSFIT_DEFAULT_FIELDS];
+  const unique: CircuitCrossFitFieldId[] = [];
+  for (const field of raw) {
+    if (
+      CIRCUIT_CROSSFIT_FIELD_IDS.includes(field as CircuitCrossFitFieldId) &&
+      !unique.includes(field as CircuitCrossFitFieldId)
+    ) {
+      unique.push(field as CircuitCrossFitFieldId);
+    }
+  }
+  return unique.length > 0 ? unique : [...CIRCUIT_CROSSFIT_DEFAULT_FIELDS];
+}
+
+function normalizeCrossFitConfig(raw: unknown): CircuitCrossFitConfig | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const data = raw as Partial<CircuitCrossFitConfig>;
+  const format =
+    data.format && CIRCUIT_CROSSFIT_FORMAT_IDS.includes(data.format)
+      ? data.format
+      : 'amrap';
+  const defaults = defaultCrossFitConfig(format);
+  return {
+    format,
+    timeCapMin:
+      typeof data.timeCapMin === 'number' && data.timeCapMin > 0
+        ? data.timeCapMin
+        : defaults.timeCapMin,
+    emomDurationMin:
+      typeof data.emomDurationMin === 'number' && data.emomDurationMin > 0
+        ? data.emomDurationMin
+        : defaults.emomDurationMin,
+    emomIntervalSec:
+      typeof data.emomIntervalSec === 'number' && data.emomIntervalSec > 0
+        ? data.emomIntervalSec
+        : defaults.emomIntervalSec,
+    tabataWorkSec:
+      typeof data.tabataWorkSec === 'number' && data.tabataWorkSec > 0
+        ? data.tabataWorkSec
+        : defaults.tabataWorkSec,
+    tabataRestSec:
+      typeof data.tabataRestSec === 'number' && data.tabataRestSec >= 0
+        ? data.tabataRestSec
+        : defaults.tabataRestSec,
+    tabataRounds:
+      typeof data.tabataRounds === 'number' && data.tabataRounds > 0
+        ? data.tabataRounds
+        : defaults.tabataRounds,
+    stationFields: normalizeCrossFitFields(data.stationFields),
+  };
+}
+
+function normalizeCrossFitResult(raw: unknown): CircuitCrossFitResult | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const data = raw as Partial<CircuitCrossFitResult>;
+  const result: CircuitCrossFitResult = {
+    notes: data.notes?.trim() || undefined,
+  };
+  if (typeof data.roundsCompleted === 'number' && data.roundsCompleted >= 0) {
+    result.roundsCompleted = data.roundsCompleted;
+  }
+  if (typeof data.extraReps === 'number' && data.extraReps >= 0) {
+    result.extraReps = data.extraReps;
+  }
+  if (typeof data.timeSec === 'number' && data.timeSec > 0) {
+    result.timeSec = data.timeSec;
+  }
+  if (
+    result.roundsCompleted == null &&
+    result.extraReps == null &&
+    result.timeSec == null &&
+    !result.notes
+  ) {
+    return undefined;
+  }
+  return result;
+}
+
 export function normalizeCircuitStations(
   raw: CircuitStation[] | undefined,
 ): CircuitStation[] {
@@ -708,7 +1343,11 @@ export function normalizeCircuitStations(
       s.restSec ||
       s.tempo ||
       s.targetHr ||
-      s.load,
+      s.load ||
+      s.reps ||
+      s.rxLoad ||
+      s.scaledLoad ||
+      s.movementDomain,
   );
   if (withContent.length === 0) {
     return Array.from({ length: CIRCUIT_STATION_DEFAULT }, () => ({
@@ -770,6 +1409,10 @@ function normalizeRoundLog(
   return {
     round: log.round,
     stations,
+    roundWorkSec:
+      typeof log.roundWorkSec === 'number' && log.roundWorkSec > 0
+        ? log.roundWorkSec
+        : undefined,
     roundRestSec:
       typeof log.roundRestSec === 'number' && log.roundRestSec >= 0
         ? log.roundRestSec
@@ -1052,7 +1695,13 @@ export function normalizeWorkoutSheet(raw: unknown): WorkoutSheet {
       stationFields,
       stations,
       roundLogs,
+      crossfitEnabled: Boolean(rawCircuit.crossfitEnabled),
+      crossfit: normalizeCrossFitConfig(rawCircuit.crossfit),
+      crossfitResult: normalizeCrossFitResult(rawCircuit.crossfitResult),
     };
+    if (circuit.crossfitEnabled && !circuit.crossfit) {
+      circuit.crossfit = defaultCrossFitConfig();
+    }
   }
 
   const blocks = normalizeWorkoutBlocks(data);
@@ -1597,4 +2246,63 @@ export function ensureCircuitRoundLogs(sheet: WorkoutSheet): WorkoutSheet {
     ...sheet,
     circuit: { ...sheet.circuit, roundLogs },
   };
+}
+
+/** Меняет порядок станций и синхронизирует журнал кругов */
+export function reorderCircuitStations(
+  circuit: CircuitWorkout,
+  fromIndex: number,
+  toIndex: number,
+): CircuitWorkout {
+  if (
+    fromIndex === toIndex ||
+    fromIndex < 0 ||
+    toIndex < 0 ||
+    fromIndex >= circuit.stations.length ||
+    toIndex >= circuit.stations.length
+  ) {
+    return circuit;
+  }
+
+  const stations = [...circuit.stations];
+  const [moved] = stations.splice(fromIndex, 1);
+  stations.splice(toIndex, 0, moved);
+
+  const roundLogs = circuit.roundLogs.map((log) => {
+    const logStations = [...log.stations];
+    const [movedResult] = logStations.splice(fromIndex, 1);
+    logStations.splice(toIndex, 0, movedResult ?? {});
+    return { ...log, stations: logStations };
+  });
+
+  return { ...circuit, stations, roundLogs };
+}
+
+/** Задаёт число станций заранее (добавляет пустые или обрезает с конца) */
+export function resizeCircuitStations(
+  circuit: CircuitWorkout,
+  count: number,
+): CircuitWorkout {
+  const next = Math.max(
+    CIRCUIT_STATION_MIN,
+    Math.min(CIRCUIT_STATION_MAX, Math.round(count) || CIRCUIT_STATION_MIN),
+  );
+  const current = circuit.stations.length;
+  if (next === current) return circuit;
+
+  let stations = [...circuit.stations];
+  if (next > current) {
+    while (stations.length < next) {
+      stations.push(createEmptyCircuitStation());
+    }
+  } else {
+    stations = stations.slice(0, next);
+  }
+
+  const roundLogs = circuit.roundLogs.map((log) => ({
+    ...log,
+    stations: Array.from({ length: next }, (_, i) => log.stations[i] ?? {}),
+  }));
+
+  return { ...circuit, stations, roundLogs };
 }

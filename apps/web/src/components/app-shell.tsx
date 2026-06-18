@@ -3,9 +3,13 @@
 import { LogOut } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { clearAuth, getUser } from '@/lib/auth';
 import { cn } from '@/lib/utils';
+import {
+  subscribeWorkoutTimerDockChrome,
+  type WorkoutTimerDockChrome,
+} from '@/components/personal-training/workout-timer-chrome';
 
 interface NavItem {
   href: string;
@@ -23,6 +27,19 @@ export function AppShell({ children, title, navItems }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const user = getUser();
+  const [timerChrome, setTimerChrome] = useState<WorkoutTimerDockChrome | null>(
+    null,
+  );
+
+  useEffect(
+    () =>
+      subscribeWorkoutTimerDockChrome((detail) => {
+        setTimerChrome(detail.active ? detail : null);
+      }),
+    [],
+  );
+
+  const hideHeader = timerChrome?.active && timerChrome.atTop;
 
   const logout = () => {
     clearAuth();
@@ -31,7 +48,12 @@ export function AppShell({ children, title, navItems }: AppShellProps) {
 
   return (
     <div className="mx-auto min-h-screen max-w-lg pb-24">
-      <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/90 px-4 py-4 backdrop-blur">
+      <header
+        className={cn(
+          'sticky top-0 z-10 border-b border-slate-800 bg-slate-950/90 px-4 py-4 backdrop-blur',
+          hideHeader && 'hidden',
+        )}
+      >
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-wider text-fitgo-400">FITGO</p>

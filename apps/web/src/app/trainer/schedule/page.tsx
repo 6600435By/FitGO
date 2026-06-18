@@ -1,19 +1,16 @@
 'use client';
 
+import { SessionType, type ScheduleSlot } from '@fitgo/shared-types';
+import { ChevronRight } from 'lucide-react';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
 
-interface ScheduleSlot {
-  id: string;
-  title: string;
-  type: string;
-  startAt: string;
-  endAt: string;
-  booked: number;
-  capacity: number;
-  available: boolean;
+function trainerSessionHref(slot: ScheduleSlot): string | null {
+  if (slot.type !== SessionType.PERSONAL || !slot.clientId) return null;
+  return `/trainer/sessions/${slot.id}?clientId=${slot.clientId}`;
 }
 
 export default function TrainerSchedulePage() {
@@ -42,33 +39,60 @@ export default function TrainerSchedulePage() {
         </div>
       ) : (
         <ul className="space-y-3">
-          {schedule.map((slot) => (
-            <li key={slot.id} className="card">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="font-medium">{slot.title}</p>
-                  <p className="text-sm text-slate-400">
-                    {slot.type === 'PERSONAL' ? 'Персональная' : 'Групповая'}
-                  </p>
+          {schedule.map((slot) => {
+            const href = trainerSessionHref(slot);
+            const card = (
+              <>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-medium">{slot.title}</p>
+                    <p className="text-sm text-slate-400">
+                      {slot.type === SessionType.PERSONAL ? 'Персональная' : 'Групповая'}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {slot.type !== SessionType.PERSONAL && (
+                      <span
+                        className={`rounded-full px-2 py-1 text-xs ${
+                          slot.available
+                            ? 'bg-emerald-400/10 text-emerald-400'
+                            : 'bg-red-400/10 text-red-400'
+                        }`}
+                      >
+                        {slot.available ? 'Есть места' : 'Заполнено'}
+                      </span>
+                    )}
+                    {href && <ChevronRight className="h-5 w-5 text-fitgo-400" />}
+                  </div>
                 </div>
-                <span
-                  className={`rounded-full px-2 py-1 text-xs ${
-                    slot.available
-                      ? 'bg-emerald-400/10 text-emerald-400'
-                      : 'bg-red-400/10 text-red-400'
-                  }`}
-                >
-                  {slot.available ? 'Есть места' : 'Заполнено'}
-                </span>
-              </div>
-              <p className="mt-2 text-sm text-slate-400">
-                {formatDateTime(slot.startAt)} — {formatDateTime(slot.endAt)}
-              </p>
-              <p className="mt-1 text-sm">
-                Записано: {slot.booked} / {slot.capacity}
-              </p>
-            </li>
-          ))}
+                <p className="mt-2 text-sm text-slate-400">
+                  {formatDateTime(slot.startAt)} — {formatDateTime(slot.endAt)}
+                </p>
+                {slot.type !== SessionType.PERSONAL && (
+                  <p className="mt-1 text-sm">
+                    Записано: {slot.booked} / {slot.capacity}
+                  </p>
+                )}
+                {href && (
+                  <p className="mt-2 text-sm font-medium text-fitgo-400">
+                    Открыть план тренировки
+                  </p>
+                )}
+              </>
+            );
+
+            return (
+              <li key={slot.id}>
+                {href ? (
+                  <Link href={href} className="card block transition hover:border-fitgo-500/30">
+                    {card}
+                  </Link>
+                ) : (
+                  <div className="card">{card}</div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
