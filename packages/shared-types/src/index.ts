@@ -483,6 +483,7 @@ export {
   type PersonalTrainingGoalTemplate,
 } from './personal-training-goals';
 export * from './workout-sheet';
+export * from './block-session';
 
 export interface StaffMember {
   id: string;

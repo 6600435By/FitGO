@@ -21,6 +21,7 @@ import {
   createEmptyWorkoutSheet,
   ensureCircuitRoundLogs,
   estimatedMaxHr,
+  buildWorkoutSessionPlan,
   getPrepSections,
   getWorkoutBlocks,
   isPrepSectionEnabled,
@@ -47,12 +48,8 @@ import { PrepBlockEditor } from './prep-block-editor';
 import { StrengthBlockEditor } from './strength-block-editor';
 import { SectionTitle, TrainerTip } from './trainer-tip';
 import { WorkoutSectionCard } from './workout-section-card';
+import { WorkoutSessionController } from './workout-session-controller';
 import { WorkoutSessionSummaryPanel } from './workout-session-summary';
-import {
-  WorkoutTimerDock,
-  emitWorkoutSectionVisible,
-  type TimerDockBlockOption,
-} from './workout-timer-dock';
 import { Lock } from 'lucide-react';
 
 const MAIN_BLOCK_LABELS: Record<WorkoutMainBlock, string> = {
@@ -158,21 +155,9 @@ export function WorkoutSheetEditor({
   const hasStrength = activeBlocks.includes('strength');
   const hasMobility = activeBlocks.includes('mobility');
 
-  const timerBlocks = useMemo((): TimerDockBlockOption[] => {
-    const options: TimerDockBlockOption[] = [];
-    if (hasWarmup) options.push({ id: 'warmup', label: 'Разминка' });
-    if (hasStrength) {
-      options.push({ id: 'strength', label: 'Силовая' });
-      options.push({ id: 'rest', label: 'Отдых' });
-    }
-    if (activeBlocks.includes('cardio')) {
-      options.push({ id: 'cardio', label: 'Кардио' });
-    }
-    if (hasCircuit) options.push({ id: 'circuit', label: 'Круговая' });
-    if (hasMobility) options.push({ id: 'mobility', label: 'Биомеханика' });
-    if (hasCooldown) options.push({ id: 'cooldown', label: 'Заминка' });
-    return options;
-  }, [hasWarmup, hasStrength, hasCircuit, hasMobility, hasCooldown, activeBlocks]);
+  const sessionSteps = useMemo(() => buildWorkoutSessionPlan(sheet), [sheet]);
+  const canStartSession = !readOnly && sessionSteps.length > 0;
+
   const [circuitHistory, setCircuitHistory] = useState<CircuitHistoryPoint[]>([]);
   const [copyBusy, setCopyBusy] = useState(false);
 
@@ -287,36 +272,6 @@ export function WorkoutSheetEditor({
       setCopyBusy(false);
     }
   };
-
-  useEffect(() => {
-    if (readOnly) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const top = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
-        const id = top?.target.id;
-        if (id?.startsWith('workout-section-')) {
-          emitWorkoutSectionVisible(
-            id.replace('workout-section-', '') as WorkoutSectionId,
-          );
-        }
-      },
-      { rootMargin: '-35% 0px -50% 0px', threshold: [0.15, 0.4, 0.6] },
-    );
-    document
-      .querySelectorAll('[id^="workout-section-"]')
-      .forEach((el) => observer.observe(el));
-    return () => observer.disconnect();
-  }, [
-    readOnly,
-    hasWarmup,
-    hasCooldown,
-    hasStrength,
-    hasCircuit,
-    hasMobility,
-    activeBlocks,
-  ]);
 
   const updateCircuit = (patch: Partial<NonNullable<WorkoutSheet['circuit']>>) => {
     const circuit = { ...(sheet.circuit ?? createDefaultCircuit()), ...patch };
@@ -478,15 +433,13 @@ export function WorkoutSheetEditor({
           </p>
         )}
 
-      </div>
+        <WorkoutSessionController
+          sheet={sheet}
+          canStart={canStartSession}
+          onChange={onChange}
+        />
 
-      <WorkoutTimerDock
-        sheet={sheet}
-        readOnly={readOnly}
-        circuit={sheet.circuit}
-        blocks={timerBlocks}
-        onChange={onChange}
-      />
+      </div>
 
       {hasWarmup && (
         <WorkoutSectionCard

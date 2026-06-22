@@ -1,6 +1,8 @@
 export interface WorkoutTimerDockChrome {
   atTop: boolean;
   active: boolean;
+  /** Полноэкранный таймер сессии — скрыть шапку */
+  overlayOpen?: boolean;
 }
 
 const CHROME_EVENT = 'workout-timer-dock-chrome';

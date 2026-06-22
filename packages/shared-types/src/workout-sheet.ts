@@ -512,6 +512,18 @@ export interface StrengthSetEntry {
   restSec?: number;
   /** Темп, напр. 3-1-2-0 */
   tempo?: string;
+  /** Факт: время работы подхода, сек */
+  actualWorkSec?: number;
+  /** Факт: отдых после подхода, сек */
+  actualRestSec?: number;
+  /** Факт: вес, кг */
+  actualWeight?: string;
+  /** Факт: повторения */
+  actualReps?: string;
+  /** Факт: нагрузка (если не вес×повт) */
+  actualLoad?: string;
+  /** Факт: RPE 1–10 */
+  actualRpe?: number;
 }
 
 export interface StrengthExerciseRow {
@@ -531,6 +543,21 @@ export interface CardioExerciseRow {
   resistance?: string;
   intervals?: string;
   notes?: string;
+  actualWorkSec?: number;
+  actualRestAfterSec?: number;
+  skipped?: boolean;
+  /** Факт: ЧСС */
+  actualHr?: string;
+  /** Факт: RPE */
+  actualRpe?: string;
+  /** Факт: зона */
+  actualZone?: string;
+  /** Факт: темп */
+  actualPace?: string;
+  /** Факт: дистанция */
+  actualDistance?: string;
+  /** Факт: заметка */
+  actualNotes?: string;
 }
 
 export interface MobilityExerciseRow {
@@ -544,6 +571,12 @@ export interface MobilityExerciseRow {
   side?: string;
   comfort?: string;
   notes?: string;
+  actualWorkSec?: number;
+  actualRestAfterSec?: number;
+  skipped?: boolean;
+  actualRpe?: string;
+  actualComfort?: string;
+  actualNotes?: string;
 }
 
 export interface PrepActivityRow {
@@ -552,6 +585,18 @@ export interface PrepActivityRow {
   zone?: string;
   rpe?: string;
   notes?: string;
+  /** Фактическое время работы этапа, сек */
+  actualWorkSec?: number;
+  /** Отдых после этапа до следующего, сек */
+  actualRestAfterSec?: number;
+  /** Этап пропущен */
+  skipped?: boolean;
+  /** Факт: зона */
+  actualZone?: string;
+  /** Факт: RPE */
+  actualRpe?: string;
+  /** Факт: заметка */
+  actualNotes?: string;
 }
 
 export interface CircuitStation {
@@ -604,6 +649,8 @@ export interface CircuitWorkout {
   transitionSec?: number;
   /** Журнал выполненных кругов (для динамики) */
   roundLogs: CircuitRoundLog[];
+  /** Поля ввода в таймере (ЧСС, RPE, нагрузка) */
+  timerCaptureFields?: Array<'hr' | 'rpe' | 'load'>;
   /** Режим CrossFit WOD */
   crossfitEnabled?: boolean;
   crossfit?: CircuitCrossFitConfig;
@@ -649,6 +696,12 @@ export interface WorkoutSheet {
   sessionSummaryNote?: string;
   sessionCompleted?: boolean;
   sessionCompletedAt?: string;
+  /** Первый старт таймера любого блока */
+  sessionStartedAt?: string;
+  /** Завершение последнего блока через сессию */
+  sessionEndedAt?: string;
+  /** Фактический отдых после блока до следующего, сек */
+  blockRestAfterSec?: Partial<Record<WorkoutSectionId, number>>;
   /** Только для тренера — клиент не видит */
   trainerPrivateNotes?: string;
   notes?: string;
@@ -1111,6 +1164,23 @@ function normalizeSetEntry(raw: unknown): StrengthSetEntry {
           ? entry.restSec
           : undefined,
       tempo: entry.tempo?.trim() || undefined,
+      actualWorkSec:
+        typeof entry.actualWorkSec === 'number' && entry.actualWorkSec >= 0
+          ? entry.actualWorkSec
+          : undefined,
+      actualRestSec:
+        typeof entry.actualRestSec === 'number' && entry.actualRestSec >= 0
+          ? entry.actualRestSec
+          : undefined,
+      actualWeight: entry.actualWeight?.trim() || undefined,
+      actualReps: entry.actualReps?.trim() || undefined,
+      actualLoad: entry.actualLoad?.trim() || undefined,
+      actualRpe:
+        typeof entry.actualRpe === 'number' &&
+        entry.actualRpe >= 1 &&
+        entry.actualRpe <= 10
+          ? entry.actualRpe
+          : undefined,
     });
   }
   return createEmptyStrengthSet();
@@ -1197,6 +1267,16 @@ function normalizePrepRow(raw: unknown): PrepActivityRow {
   for (const field of PREP_FIELD_IDS) {
     result[field] = row[field]?.trim() ?? '';
   }
+  if (typeof row.actualWorkSec === 'number' && row.actualWorkSec >= 0) {
+    result.actualWorkSec = row.actualWorkSec;
+  }
+  if (typeof row.actualRestAfterSec === 'number' && row.actualRestAfterSec >= 0) {
+    result.actualRestAfterSec = row.actualRestAfterSec;
+  }
+  if (row.skipped === true) result.skipped = true;
+  if (row.actualZone?.trim()) result.actualZone = row.actualZone.trim();
+  if (row.actualRpe?.trim()) result.actualRpe = row.actualRpe.trim();
+  if (row.actualNotes?.trim()) result.actualNotes = row.actualNotes.trim();
   return result;
 }
 
@@ -1495,6 +1575,23 @@ function normalizeCardioRow(
   for (const field of CARDIO_FIELD_IDS) {
     row[field] = migrated[field]?.trim() ?? '';
   }
+  if (typeof migrated.actualWorkSec === 'number' && migrated.actualWorkSec >= 0) {
+    row.actualWorkSec = migrated.actualWorkSec;
+  }
+  if (
+    typeof migrated.actualRestAfterSec === 'number' &&
+    migrated.actualRestAfterSec >= 0
+  ) {
+    row.actualRestAfterSec = migrated.actualRestAfterSec;
+  }
+  if (migrated.skipped === true) row.skipped = true;
+  const actual = migrated as Partial<CardioExerciseRow>;
+  if (actual.actualHr?.trim()) row.actualHr = actual.actualHr.trim();
+  if (actual.actualRpe?.trim()) row.actualRpe = actual.actualRpe.trim();
+  if (actual.actualZone?.trim()) row.actualZone = actual.actualZone.trim();
+  if (actual.actualPace?.trim()) row.actualPace = actual.actualPace.trim();
+  if (actual.actualDistance?.trim()) row.actualDistance = actual.actualDistance.trim();
+  if (actual.actualNotes?.trim()) row.actualNotes = actual.actualNotes.trim();
   return row;
 }
 
@@ -1573,6 +1670,16 @@ function normalizeMobilityRow(raw: unknown): MobilityExerciseRow {
   for (const field of MOBILITY_FIELD_IDS) {
     result[field] = row[field]?.trim() ?? '';
   }
+  if (typeof row.actualWorkSec === 'number' && row.actualWorkSec >= 0) {
+    result.actualWorkSec = row.actualWorkSec;
+  }
+  if (typeof row.actualRestAfterSec === 'number' && row.actualRestAfterSec >= 0) {
+    result.actualRestAfterSec = row.actualRestAfterSec;
+  }
+  if (row.skipped === true) result.skipped = true;
+  if (row.actualRpe?.trim()) result.actualRpe = row.actualRpe.trim();
+  if (row.actualComfort?.trim()) result.actualComfort = row.actualComfort.trim();
+  if (row.actualNotes?.trim()) result.actualNotes = row.actualNotes.trim();
   return result;
 }
 
@@ -1770,9 +1877,34 @@ export function normalizeWorkoutSheet(raw: unknown): WorkoutSheet {
       typeof data.sessionCompletedAt === 'string'
         ? data.sessionCompletedAt
         : undefined,
+    sessionStartedAt:
+      typeof data.sessionStartedAt === 'string' ? data.sessionStartedAt : undefined,
+    sessionEndedAt:
+      typeof data.sessionEndedAt === 'string' ? data.sessionEndedAt : undefined,
+    blockRestAfterSec: normalizeBlockRestAfterSec(data.blockRestAfterSec),
     trainerPrivateNotes: data.trainerPrivateNotes?.trim() || undefined,
     notes: data.notes?.trim() || undefined,
   };
+}
+
+function normalizeBlockRestAfterSec(
+  raw: WorkoutSheet['blockRestAfterSec'],
+): WorkoutSheet['blockRestAfterSec'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const ids: WorkoutSectionId[] = [
+    'warmup',
+    'strength',
+    'cardio',
+    'circuit',
+    'mobility',
+    'cooldown',
+  ];
+  const result: NonNullable<WorkoutSheet['blockRestAfterSec']> = {};
+  for (const id of ids) {
+    const v = raw[id];
+    if (typeof v === 'number' && v >= 0) result[id] = v;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function normalizeBlockProgress(

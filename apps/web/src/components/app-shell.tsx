@@ -39,7 +39,8 @@ export function AppShell({ children, title, navItems }: AppShellProps) {
     [],
   );
 
-  const hideHeader = timerChrome?.active && timerChrome.atTop;
+  const hideHeader =
+    timerChrome?.overlayOpen || (timerChrome?.active && timerChrome.atTop);
 
   const logout = () => {
     clearAuth();
@@ -47,11 +48,11 @@ export function AppShell({ children, title, navItems }: AppShellProps) {
   };
 
   return (
-    <div className="mx-auto min-h-screen max-w-lg pb-24">
+    <div className="mx-auto min-h-screen max-w-lg pb-24 [--app-header-h:5.5rem]">
       <header
         className={cn(
-          'sticky top-0 z-10 border-b border-slate-800 bg-slate-950/90 px-4 py-4 backdrop-blur',
-          hideHeader && 'hidden',
+          'sticky top-0 z-10 min-h-[var(--app-header-h)] border-b border-slate-800 bg-slate-950/90 px-4 py-4 backdrop-blur',
+          hideHeader && 'pointer-events-none invisible',
         )}
       >
         <div className="flex items-center justify-between">

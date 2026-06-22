@@ -2,7 +2,7 @@
 
 import type { WorkoutBlockProgress, WorkoutSectionId } from '@fitgo/shared-types';
 import { WORKOUT_SECTION_LABELS } from '@fitgo/shared-types';
-import { Check, ChevronDown, ChevronUp, Pencil } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Pencil, Play } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { WorkoutTipId } from './workout-trainer-tips';
 import { SectionTitle } from './trainer-tip';
@@ -22,6 +22,8 @@ interface WorkoutSectionCardProps {
   onSaveSummary: () => void;
   onReopen: () => void;
   onSummaryNoteChange: (note: string) => void;
+  /** Запуск блочной сессии с таймером */
+  onStartSession?: () => void;
   children: ReactNode;
 }
 
@@ -40,6 +42,7 @@ export function WorkoutSectionCard({
   onSaveSummary,
   onReopen,
   onSummaryNoteChange,
+  onStartSession,
   children,
 }: WorkoutSectionCardProps) {
   const label = title ?? WORKOUT_SECTION_LABELS[sectionId];
@@ -142,13 +145,25 @@ export function WorkoutSectionCard({
           )}
 
           {!completed && isTrainer && !readOnly && (
-            <button
-              type="button"
-              onClick={onComplete}
-              className="btn-primary mt-4 w-full text-sm"
-            >
-              Завершить блок
-            </button>
+            <div className="mt-4 space-y-2">
+              {onStartSession && (
+                <button
+                  type="button"
+                  onClick={onStartSession}
+                  className="btn-primary flex w-full items-center justify-center gap-2 text-sm"
+                >
+                  <Play className="h-4 w-4" />
+                  Начать тренировку
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onComplete}
+                className="btn-secondary w-full text-sm"
+              >
+                Завершить без таймера
+              </button>
+            </div>
           )}
         </div>
       )}

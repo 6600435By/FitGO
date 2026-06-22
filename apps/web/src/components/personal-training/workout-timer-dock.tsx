@@ -87,22 +87,22 @@ function defaultMeasureForBlock(
 
 function TimerBar({
   flash,
-  docked,
+  stuck,
   onTimer,
   onRest,
 }: {
   flash: string | null;
-  docked: boolean;
+  stuck: boolean;
   onTimer: () => void;
   onRest: () => void;
 }) {
   return (
     <div
       className={cn(
-        'border-slate-700 bg-slate-950/95 p-2.5 backdrop-blur-md',
-        docked
-          ? 'fixed top-0 left-1/2 z-20 w-full max-w-lg -translate-x-1/2 border-b pt-[env(safe-area-inset-top)]'
-          : 'rounded-2xl border shadow-lg shadow-black/25',
+        'sticky z-20 -mx-4 border-slate-700 bg-slate-950/95 px-4 p-2.5 backdrop-blur-md',
+        stuck
+          ? 'top-0 border-x-0 border-b pt-[env(safe-area-inset-top)]'
+          : 'top-[var(--app-header-h)] mb-3 rounded-2xl border shadow-lg shadow-black/25',
       )}
     >
       <div className="flex gap-2">
@@ -153,8 +153,9 @@ export function WorkoutTimerDock({
   const [autoStart, setAutoStart] = useState(false);
   const [launch, setLaunch] = useState<TimerLaunch>('timer');
   const [flash, setFlash] = useState<string | null>(null);
-  const [docked, setDocked] = useState(false);
+  const [stuck, setStuck] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const stuckRef = useRef(false);
   const flashTimer = useRef<number | null>(null);
 
   const applyTarget = useMemo(() => buildApplyTarget(session), [session]);
@@ -205,8 +206,24 @@ export function WorkoutTimerDock({
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
+
+    const readStuck = (top: number, intersecting: boolean) =>
+      intersecting ? false : top < 0;
+
+    const sync = (top: number, intersecting: boolean) => {
+      const next = readStuck(top, intersecting);
+      if (next === stuckRef.current) return;
+      stuckRef.current = next;
+      setStuck(next);
+    };
+
+    const rect = el.getBoundingClientRect();
+    const intersecting =
+      rect.top < window.innerHeight && rect.bottom > 0;
+    sync(rect.top, intersecting);
+
     const observer = new IntersectionObserver(
-      ([entry]) => setDocked(!entry.isIntersecting),
+      ([entry]) => sync(entry.boundingClientRect.top, entry.isIntersecting),
       { threshold: 0 },
     );
     observer.observe(el);
@@ -214,9 +231,9 @@ export function WorkoutTimerDock({
   }, []);
 
   useEffect(() => {
-    emitWorkoutTimerDockChrome({ atTop: docked, active: true });
+    emitWorkoutTimerDockChrome({ atTop: stuck, active: true });
     return () => emitWorkoutTimerDockChrome({ atTop: false, active: false });
-  }, [docked]);
+  }, [stuck]);
 
   useEffect(() => {
     const handler = (e: CustomEvent<{ sectionId: WorkoutSectionId }>) => {
@@ -282,22 +299,12 @@ export function WorkoutTimerDock({
   return (
     <>
       <div ref={sentinelRef} className="h-px w-full" aria-hidden />
-      <div className={docked ? 'invisible' : undefined}>
-        <TimerBar
-          flash={flash}
-          docked={false}
-          onTimer={openTimer}
-          onRest={openRest}
-        />
-      </div>
-      {docked && (
-        <TimerBar
-          flash={flash}
-          docked
-          onTimer={openTimer}
-          onRest={openRest}
-        />
-      )}
+      <TimerBar
+        flash={flash}
+        stuck={stuck}
+        onTimer={openTimer}
+        onRest={openRest}
+      />
 
       <WorkoutTimer
         open={fullscreen}
