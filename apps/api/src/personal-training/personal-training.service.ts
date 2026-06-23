@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PersonalBookingStatus, Prisma, Role } from '@prisma/client';
+import { PersonalBookingStatus, Prisma, Role, AvailabilityBlockStatus, PersonalBookingOrigin } from '@prisma/client';
 import {
   PERSONAL_TRAINING_GOAL_TEMPLATES,
   SessionType,
@@ -15,8 +15,12 @@ import {
   type PersonalTrainingSessionDetail,
   type WorkoutSheet,
   type CircuitHistoryPoint,
+  type TrainerCalendarResponse,
+  type TrainerCalendarEvent,
+  type ScheduleSlot,
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -33,6 +37,7 @@ export class PersonalTrainingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly fitness: FitnessService,
   ) {}
 
   async getTrainerWorkSchedule(user: JwtPayload) {
@@ -87,7 +92,393 @@ export class PersonalTrainingService {
       startAt: booking.startAt.toISOString(),
       endAt: booking.endAt.toISOString(),
       status: booking.status,
+      origin: booking.origin,
     }));
+  }
+
+  async getTrainerCalendar(
+    user: JwtPayload,
+    from: string,
+    to: string,
+  ): Promise<TrainerCalendarResponse> {
+    const rangeStart = new Date(from);
+    const rangeEnd = new Date(to);
+    if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
+      throw new BadRequestException('Некорректный период');
+    }
+
+    const [groupSlots, bookings, blocks, lastPublication] = await Promise.all([
+      this.fetchTrainerGroupSchedule(user, rangeStart, rangeEnd),
+      this.prisma.personalTrainingBooking.findMany({
+        where: {
+          trainerId: user.sub,
+          status: PersonalBookingStatus.CONFIRMED,
+          startAt: { lt: rangeEnd },
+          endAt: { gt: rangeStart },
+        },
+        include: { client: true },
+        orderBy: { startAt: 'asc' },
+      }),
+      this.prisma.trainerAvailabilityBlock.findMany({
+        where: {
+          trainerId: user.sub,
+          startAt: { lt: rangeEnd },
+          endAt: { gt: rangeStart },
+        },
+        orderBy: { startAt: 'asc' },
+      }),
+      this.prisma.trainerSchedulePublication.findFirst({
+        where: { trainerId: user.sub },
+        orderBy: { publishedAt: 'desc' },
+      }),
+    ]);
+
+    const events: TrainerCalendarEvent[] = [];
+
+    for (const slot of groupSlots) {
+      events.push({
+        id: `group-${slot.id}`,
+        kind: 'GROUP',
+        title: slot.title,
+        startAt: slot.startAt,
+        endAt: slot.endAt,
+        available: slot.available,
+        capacity: slot.capacity,
+        booked: slot.booked,
+      });
+    }
+
+    for (const booking of bookings) {
+      events.push({
+        id: `personal-${booking.id}`,
+        kind: 'PERSONAL',
+        title: `Персональная · ${booking.client.firstName} ${booking.client.lastName}`.trim(),
+        startAt: booking.startAt.toISOString(),
+        endAt: booking.endAt.toISOString(),
+        clientId: booking.clientId,
+        clientName: `${booking.client.firstName} ${booking.client.lastName}`.trim(),
+        bookingId: booking.id,
+        origin: booking.origin,
+      });
+    }
+
+    for (const block of blocks) {
+      const overlapsBooking = bookings.some(
+        (b) => b.startAt < block.endAt && b.endAt > block.startAt,
+      );
+      if (overlapsBooking) continue;
+
+      events.push({
+        id: `avail-${block.id}`,
+        kind:
+          block.status === AvailabilityBlockStatus.PUBLISHED
+            ? 'OPEN_SLOT'
+            : 'DRAFT_SLOT',
+        title:
+          block.status === AvailabilityBlockStatus.PUBLISHED
+            ? 'Открыто для записи'
+            : 'Черновик · открыто для записи',
+        startAt: block.startAt.toISOString(),
+        endAt: block.endAt.toISOString(),
+      });
+    }
+
+    const draftBlockCount = blocks.filter(
+      (b) => b.status === AvailabilityBlockStatus.DRAFT,
+    ).length;
+
+    return {
+      events: events.sort((a, b) => a.startAt.localeCompare(b.startAt)),
+      availabilityBlocks: blocks.map((b) => ({
+        id: b.id,
+        startAt: b.startAt.toISOString(),
+        endAt: b.endAt.toISOString(),
+        status: b.status,
+      })),
+      draftBlockCount,
+      lastPublication: lastPublication
+        ? {
+            periodStart: lastPublication.periodStart.toISOString(),
+            periodEnd: lastPublication.periodEnd.toISOString(),
+            publishedAt: lastPublication.publishedAt.toISOString(),
+          }
+        : undefined,
+    };
+  }
+
+  async getAvailabilityBlocks(user: JwtPayload, from: string, to: string) {
+    const rangeStart = new Date(from);
+    const rangeEnd = new Date(to);
+
+    const blocks = await this.prisma.trainerAvailabilityBlock.findMany({
+      where: {
+        trainerId: user.sub,
+        startAt: { lt: rangeEnd },
+        endAt: { gt: rangeStart },
+      },
+      orderBy: { startAt: 'asc' },
+    });
+
+    return blocks.map((b) => ({
+      id: b.id,
+      startAt: b.startAt.toISOString(),
+      endAt: b.endAt.toISOString(),
+      status: b.status,
+    }));
+  }
+
+  async setAvailabilityBlocks(
+    user: JwtPayload,
+    periodStart: string,
+    periodEnd: string,
+    blocks: Array<{ id?: string; startAt: string; endAt: string }>,
+  ) {
+    const start = this.startOfDay(new Date(periodStart));
+    const end = this.endOfDay(new Date(periodEnd));
+
+    for (const block of blocks) {
+      const blockStart = new Date(block.startAt);
+      const blockEnd = new Date(block.endAt);
+      if (Number.isNaN(blockStart.getTime()) || Number.isNaN(blockEnd.getTime())) {
+        throw new BadRequestException('Некорректное время блока');
+      }
+      if (blockStart >= blockEnd) {
+        throw new BadRequestException('Время начала должно быть раньше окончания');
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.trainerAvailabilityBlock.deleteMany({
+        where: {
+          trainerId: user.sub,
+          status: AvailabilityBlockStatus.DRAFT,
+          startAt: { lt: end },
+          endAt: { gt: start },
+        },
+      });
+
+      if (blocks.length > 0) {
+        await tx.trainerAvailabilityBlock.createMany({
+          data: blocks.map((block) => ({
+            trainerId: user.sub,
+            startAt: new Date(block.startAt),
+            endAt: new Date(block.endAt),
+            status: AvailabilityBlockStatus.DRAFT,
+          })),
+        });
+      }
+    });
+
+    return this.getAvailabilityBlocks(
+      user,
+      start.toISOString(),
+      end.toISOString(),
+    );
+  }
+
+  async fillFromTemplate(
+    user: JwtPayload,
+    periodStart: string,
+    periodEnd: string,
+  ) {
+    const template = await this.prisma.trainerWorkSlot.findMany({
+      where: { trainerId: user.sub },
+      orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
+    });
+
+    if (template.length === 0) {
+      throw new BadRequestException(
+        'Сначала настройте шаблон недели в мастере расписания',
+      );
+    }
+
+    const start = this.startOfDay(new Date(periodStart));
+    const end = this.endOfDay(new Date(periodEnd));
+    const blocks: Array<{ startAt: string; endAt: string }> = [];
+
+    const cursor = new Date(start);
+    while (cursor <= end) {
+      const daySlots = template.filter(
+        (slot) => slot.dayOfWeek === cursor.getDay(),
+      );
+      for (const workSlot of daySlots) {
+        blocks.push({
+          startAt: this.combineDateAndTime(cursor, workSlot.startTime).toISOString(),
+          endAt: this.combineDateAndTime(cursor, workSlot.endTime).toISOString(),
+        });
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    return this.setAvailabilityBlocks(
+      user,
+      start.toISOString(),
+      end.toISOString(),
+      blocks,
+    );
+  }
+
+  async publishSchedule(
+    user: JwtPayload,
+    periodStart: string,
+    periodEnd: string,
+  ) {
+    const start = this.startOfDay(new Date(periodStart));
+    const end = this.endOfDay(new Date(periodEnd));
+
+    const draftCount = await this.prisma.trainerAvailabilityBlock.count({
+      where: {
+        trainerId: user.sub,
+        status: AvailabilityBlockStatus.DRAFT,
+        startAt: { lt: end },
+        endAt: { gt: start },
+      },
+    });
+
+    if (draftCount === 0) {
+      throw new BadRequestException('Нет черновых слотов для публикации');
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.trainerAvailabilityBlock.updateMany({
+        where: {
+          trainerId: user.sub,
+          status: AvailabilityBlockStatus.DRAFT,
+          startAt: { lt: end },
+          endAt: { gt: start },
+        },
+        data: { status: AvailabilityBlockStatus.PUBLISHED },
+      }),
+      this.prisma.trainerSchedulePublication.create({
+        data: {
+          trainerId: user.sub,
+          periodStart: start,
+          periodEnd: end,
+        },
+      }),
+    ]);
+
+    return {
+      publishedBlocks: draftCount,
+      periodStart: start.toISOString(),
+      periodEnd: end.toISOString(),
+    };
+  }
+
+  async assignPersonalBooking(
+    user: JwtPayload,
+    clientId: string,
+    startAt: string,
+  ) {
+    const start = new Date(startAt);
+    if (Number.isNaN(start.getTime())) {
+      throw new BadRequestException('Некорректная дата');
+    }
+
+    const end = new Date(start.getTime() + SESSION_DURATION_MIN * 60_000);
+
+    await this.ensureClientAccess(user.sub, user.clubId, clientId);
+    await this.ensureNoBookingConflict(user.sub, start, end);
+
+    const client = await this.prisma.user.findFirst({
+      where: { id: clientId, clubId: user.clubId },
+    });
+    if (!client) {
+      throw new NotFoundException('Клиент не найден');
+    }
+
+    const booking = await this.prisma.personalTrainingBooking.create({
+      data: {
+        trainerId: user.sub,
+        clientId,
+        startAt: start,
+        endAt: end,
+        origin: PersonalBookingOrigin.TRAINER_ASSIGNED,
+      },
+      include: { client: true, trainer: true },
+    });
+
+    const trainerName =
+      `${booking.trainer.firstName} ${booking.trainer.lastName}`.trim();
+    await this.notifications.notifySessionAssigned({
+      clientId,
+      trainerId: user.sub,
+      trainerName,
+      startAt: start,
+    });
+
+    return {
+      id: booking.id,
+      trainerId: booking.trainerId,
+      clientId: booking.clientId,
+      clientName: `${booking.client.firstName} ${booking.client.lastName}`.trim(),
+      startAt: booking.startAt.toISOString(),
+      endAt: booking.endAt.toISOString(),
+      status: booking.status,
+      origin: booking.origin,
+    };
+  }
+
+  async updateTrainerPersonalBooking(
+    user: JwtPayload,
+    bookingId: string,
+    data: { startAt?: string; action?: 'cancel' },
+  ) {
+    const booking = await this.prisma.personalTrainingBooking.findFirst({
+      where: {
+        id: bookingId,
+        trainerId: user.sub,
+        status: PersonalBookingStatus.CONFIRMED,
+      },
+      include: { client: true },
+    });
+
+    if (!booking) {
+      throw new NotFoundException('Запись не найдена');
+    }
+
+    if (data.action === 'cancel') {
+      await this.prisma.personalTrainingBooking.update({
+        where: { id: bookingId },
+        data: { status: PersonalBookingStatus.CANCELLED },
+      });
+      return { id: bookingId, status: 'CANCELLED' as const };
+    }
+
+    if (data.startAt) {
+      const start = new Date(data.startAt);
+      const end = new Date(start.getTime() + SESSION_DURATION_MIN * 60_000);
+      await this.ensureNoBookingConflict(user.sub, start, end, bookingId);
+
+      const updated = await this.prisma.personalTrainingBooking.update({
+        where: { id: bookingId },
+        data: { startAt: start, endAt: end },
+        include: { client: true },
+      });
+
+      return {
+        id: updated.id,
+        clientId: updated.clientId,
+        clientName: `${updated.client.firstName} ${updated.client.lastName}`.trim(),
+        startAt: updated.startAt.toISOString(),
+        endAt: updated.endAt.toISOString(),
+        status: updated.status,
+        origin: updated.origin,
+      };
+    }
+
+    throw new BadRequestException('Укажите действие или новое время');
+  }
+
+  checkGroupConflicts(
+    groupSlots: ScheduleSlot[],
+    startAt: Date,
+    endAt: Date,
+  ): ScheduleSlot[] {
+    return groupSlots.filter(
+      (slot) =>
+        new Date(slot.startAt) < endAt && new Date(slot.endAt) > startAt,
+    );
   }
 
   async listAvailableTrainers(clubId: string) {
@@ -97,18 +488,32 @@ export class PersonalTrainingService {
         roles: { some: { role: Role.TRAINER } },
       },
       include: {
-        trainerWorkSlots: true,
+        trainerSchedulePublications: {
+          where: { periodEnd: { gte: new Date() } },
+          orderBy: { publishedAt: 'desc' },
+          take: 1,
+        },
       },
     });
 
-    return trainers
-      .filter((trainer) => trainer.trainerWorkSlots.length > 0)
-      .map((trainer) => ({
-        id: trainer.id,
-        firstName: trainer.firstName,
-        lastName: trainer.lastName,
-        hasSchedule: true,
-      }));
+    const results = await Promise.all(
+      trainers.map(async (trainer) => {
+        const slots = await this.getTrainerAvailableSlots(
+          clubId,
+          trainer.id,
+          new Date().toISOString(),
+          new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+        );
+        return {
+          id: trainer.id,
+          firstName: trainer.firstName,
+          lastName: trainer.lastName,
+          hasSchedule: slots.length > 0,
+        };
+      }),
+    );
+
+    return results.filter((t) => t.hasSchedule);
   }
 
   async getTrainerAvailableSlots(
@@ -123,21 +528,30 @@ export class PersonalTrainingService {
         clubId,
         roles: { some: { role: Role.TRAINER } },
       },
-      include: { trainerWorkSlots: true },
     });
 
     if (!trainer) {
       throw new NotFoundException('Тренер не найден');
     }
 
-    if (trainer.trainerWorkSlots.length === 0) {
-      return [];
-    }
-
     const rangeStart = from ? new Date(from) : new Date();
     const rangeEnd = to
       ? new Date(to)
       : new Date(rangeStart.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+    const publishedBlocks = await this.prisma.trainerAvailabilityBlock.findMany({
+      where: {
+        trainerId,
+        status: AvailabilityBlockStatus.PUBLISHED,
+        startAt: { lt: rangeEnd },
+        endAt: { gt: rangeStart },
+      },
+      orderBy: { startAt: 'asc' },
+    });
+
+    if (publishedBlocks.length === 0) {
+      return [];
+    }
 
     const bookings = await this.prisma.personalTrainingBooking.findMany({
       where: {
@@ -149,48 +563,42 @@ export class PersonalTrainingService {
     });
 
     const slots: Array<{ startAt: string; endAt: string }> = [];
-    const cursor = new Date(rangeStart);
-    cursor.setHours(0, 0, 0, 0);
 
-    while (cursor <= rangeEnd) {
-      const daySlots = trainer.trainerWorkSlots.filter(
-        (slot) => slot.dayOfWeek === cursor.getDay(),
-      );
+    for (const block of publishedBlocks) {
+      let slotStart = new Date(block.startAt);
+      const blockEnd = new Date(block.endAt);
 
-      for (const workSlot of daySlots) {
-        const dayStart = this.combineDateAndTime(cursor, workSlot.startTime);
-        const dayEnd = this.combineDateAndTime(cursor, workSlot.endTime);
+      while (
+        slotStart.getTime() + SESSION_DURATION_MIN * 60_000 <=
+        blockEnd.getTime()
+      ) {
+        const slotEnd = new Date(
+          slotStart.getTime() + SESSION_DURATION_MIN * 60_000,
+        );
 
-        let slotStart = new Date(dayStart);
-        while (
-          slotStart.getTime() + SESSION_DURATION_MIN * 60_000 <=
-          dayEnd.getTime()
+        const isPast = slotStart <= new Date();
+        const overlapsBooking = bookings.some(
+          (booking) =>
+            booking.startAt < slotEnd && booking.endAt > slotStart,
+        );
+
+        if (
+          !isPast &&
+          !overlapsBooking &&
+          slotStart >= rangeStart &&
+          slotStart < rangeEnd
         ) {
-          const slotEnd = new Date(
-            slotStart.getTime() + SESSION_DURATION_MIN * 60_000,
-          );
-
-          const isPast = slotStart <= new Date();
-          const overlapsBooking = bookings.some(
-            (booking) =>
-              booking.startAt < slotEnd && booking.endAt > slotStart,
-          );
-
-          if (!isPast && !overlapsBooking) {
-            slots.push({
-              startAt: slotStart.toISOString(),
-              endAt: slotEnd.toISOString(),
-            });
-          }
-
-          slotStart = new Date(slotEnd);
+          slots.push({
+            startAt: slotStart.toISOString(),
+            endAt: slotEnd.toISOString(),
+          });
         }
-      }
 
-      cursor.setDate(cursor.getDate() + 1);
+        slotStart = new Date(slotEnd);
+      }
     }
 
-    return slots;
+    return slots.sort((a, b) => a.startAt.localeCompare(b.startAt));
   }
 
   async bookPersonalSession(
@@ -239,6 +647,7 @@ export class PersonalTrainingService {
         clientId: user.sub,
         startAt: start,
         endAt: end,
+        origin: PersonalBookingOrigin.CLIENT_BOOKED,
       },
       include: { trainer: true },
     });
@@ -281,6 +690,7 @@ export class PersonalTrainingService {
       startAt: booking.startAt.toISOString(),
       endAt: booking.endAt.toISOString(),
       status: booking.status,
+      origin: booking.origin,
       clientCompletedAt: booking.clientCompletedAt?.toISOString(),
       trainerCompletedAt: booking.trainerCompletedAt?.toISOString(),
     }));
@@ -744,6 +1154,7 @@ export class PersonalTrainingService {
         startAt: booking.startAt,
         endAt: booking.endAt,
         source: 'fitgo' as const,
+        origin: booking.origin,
         lifecycle,
       };
     });
@@ -772,5 +1183,111 @@ export class PersonalTrainingService {
     const result = new Date(date);
     result.setHours(hours, minutes, 0, 0);
     return result;
+  }
+
+  private startOfDay(date: Date): Date {
+    const result = new Date(date);
+    result.setHours(0, 0, 0, 0);
+    return result;
+  }
+
+  private endOfDay(date: Date): Date {
+    const result = new Date(date);
+    result.setHours(23, 59, 59, 999);
+    return result;
+  }
+
+  private isFormaEmployeeId(id: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      id,
+    );
+  }
+
+  private async fetchTrainerGroupSchedule(
+    user: JwtPayload,
+    rangeStart: Date,
+    rangeEnd: Date,
+  ): Promise<ScheduleSlot[]> {
+    const club = await this.prisma.club.findUnique({
+      where: { id: user.clubId },
+    });
+    if (!club?.externalId) return [];
+
+    const externalId = user.externalId ?? '1c-trainer-001';
+    const provider = this.fitness.getProvider();
+
+    try {
+      let slots: ScheduleSlot[];
+      if (this.isFormaEmployeeId(externalId)) {
+        slots = await provider.getSchedule(club.externalId, {
+          trainerId: externalId,
+        });
+      } else {
+        const dbTrainer = await this.prisma.user.findUnique({
+          where: { id: user.sub },
+        });
+        const allSlots = await provider.getSchedule(club.externalId);
+        if (!dbTrainer) {
+          slots = allSlots;
+        } else {
+          const first = dbTrainer.firstName.trim();
+          const last = dbTrainer.lastName.trim();
+          slots = allSlots.filter((slot) => {
+            if (slot.trainerId === externalId) return true;
+            const name = slot.trainerName?.toLowerCase() ?? '';
+            return (
+              (first && name.includes(first.toLowerCase())) ||
+              (last && name.includes(last.toLowerCase()))
+            );
+          });
+        }
+      }
+
+      return slots.filter(
+        (slot) =>
+          new Date(slot.startAt) < rangeEnd &&
+          new Date(slot.endAt) > rangeStart,
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  private async ensureClientAccess(
+    _trainerId: string,
+    clubId: string,
+    clientId: string,
+  ) {
+    const client = await this.prisma.user.findFirst({
+      where: {
+        id: clientId,
+        clubId,
+        roles: { some: { role: Role.CLIENT } },
+      },
+    });
+    if (!client) {
+      throw new NotFoundException('Клиент не найден');
+    }
+  }
+
+  private async ensureNoBookingConflict(
+    trainerId: string,
+    start: Date,
+    end: Date,
+    excludeBookingId?: string,
+  ) {
+    const conflict = await this.prisma.personalTrainingBooking.findFirst({
+      where: {
+        trainerId,
+        status: PersonalBookingStatus.CONFIRMED,
+        id: excludeBookingId ? { not: excludeBookingId } : undefined,
+        startAt: { lt: end },
+        endAt: { gt: start },
+      },
+    });
+
+    if (conflict) {
+      throw new ConflictException('Время пересекается с другой записью');
+    }
   }
 }

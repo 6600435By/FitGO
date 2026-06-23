@@ -95,6 +95,11 @@ export default function ClientBookingsPage() {
               <span className="mt-2 inline-block rounded-full bg-slate-800 px-2 py-1 text-xs">
                 {sessionTypeLabel(booking.type)}
               </span>
+              {booking.origin === 'TRAINER_ASSIGNED' && (
+                <span className="ml-2 mt-2 inline-block rounded-full bg-fitgo-500/15 px-2 py-1 text-xs text-fitgo-400">
+                  Назначено тренером
+                </span>
+              )}
               {booking.source === 'fitgo' && booking.type === SessionType.PERSONAL && (
                 <Link
                   href={`/client/personal-bookings/${booking.sessionId}`}

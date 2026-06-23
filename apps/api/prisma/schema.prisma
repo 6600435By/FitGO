@@ -116,6 +116,16 @@ enum PersonalBookingStatus {
   COMPLETED
 }
 
+enum AvailabilityBlockStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum PersonalBookingOrigin {
+  CLIENT_BOOKED
+  TRAINER_ASSIGNED
+}
+
 enum GroupClassBookingStatus {
   CONFIRMED
   CANCELLED
@@ -220,6 +230,8 @@ model User {
   challengeEntries     ChallengeEntry[]
   wearableSyncs        WearableSync[]
   trainerWorkSlots     TrainerWorkSlot[]
+  trainerAvailabilityBlocks TrainerAvailabilityBlock[]
+  trainerSchedulePublications TrainerSchedulePublication[]
   trainerPersonalBookings PersonalTrainingBooking[] @relation("TrainerPersonalBookings")
   clientPersonalBookings  PersonalTrainingBooking[] @relation("ClientPersonalBookings")
   groupClassBookings      GroupClassBooking[]
@@ -448,6 +460,33 @@ model TrainerWorkSlot {
   @@index([trainerId])
 }
 
+model TrainerAvailabilityBlock {
+  id        String                  @id @default(cuid())
+  trainerId String
+  startAt   DateTime
+  endAt     DateTime
+  status    AvailabilityBlockStatus @default(DRAFT)
+  createdAt DateTime                @default(now())
+  updatedAt DateTime                @updatedAt
+
+  trainer User @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@index([trainerId, startAt])
+  @@index([trainerId, status, startAt])
+}
+
+model TrainerSchedulePublication {
+  id          String   @id @default(cuid())
+  trainerId   String
+  periodStart DateTime
+  periodEnd   DateTime
+  publishedAt DateTime @default(now())
+
+  trainer User @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@index([trainerId, periodStart])
+}
+
 model PersonalTrainingBooking {
   id                 String                @id @default(cuid())
   trainerId          String
@@ -455,6 +494,7 @@ model PersonalTrainingBooking {
   startAt            DateTime
   endAt              DateTime
   status             PersonalBookingStatus @default(CONFIRMED)
+  origin             PersonalBookingOrigin @default(CLIENT_BOOKED)
   clientCompletedAt  DateTime?
   trainerCompletedAt DateTime?
   workoutSheet       Json?
@@ -465,6 +505,7 @@ model PersonalTrainingBooking {
   client       User                          @relation("ClientPersonalBookings", fields: [clientId], references: [id], onDelete: Cascade)
   sessionGoals PersonalTrainingSessionGoal[]
 
+  @@unique([trainerId, startAt])
   @@index([trainerId, startAt])
   @@index([clientId])
 }

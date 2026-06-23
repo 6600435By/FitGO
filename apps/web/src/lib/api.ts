@@ -19,6 +19,9 @@ import {
   type TrainerSummary,
   type TrainerWorkSlotInput,
   type PersonalTrainingSlot,
+  type TrainerCalendarResponse,
+  type TrainerAvailabilityBlock,
+  type TrainerCalendarEvent,
   type WearableSyncResult,
   type ClientProfile,
   type BodyProfileResponse,
@@ -402,8 +405,95 @@ export const api = {
         startAt: string;
         endAt: string;
         status: string;
+        origin?: string;
       }>
     >('/trainer/personal-bookings', {}, token),
+
+  trainerCalendar: (token: string, from: string, to: string) =>
+    request<TrainerCalendarResponse>(
+      `/trainer/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      {},
+      token,
+    ),
+
+  trainerAvailabilityBlocks: (token: string, from: string, to: string) =>
+    request<TrainerAvailabilityBlock[]>(
+      `/trainer/availability-blocks?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      {},
+      token,
+    ),
+
+  trainerSetAvailabilityBlocks: (
+    token: string,
+    data: {
+      periodStart: string;
+      periodEnd: string;
+      blocks: Array<{ startAt: string; endAt: string }>;
+    },
+  ) =>
+    request<TrainerAvailabilityBlock[]>(
+      '/trainer/availability-blocks',
+      { method: 'PUT', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerFillFromTemplate: (
+    token: string,
+    periodStart: string,
+    periodEnd: string,
+  ) =>
+    request<TrainerAvailabilityBlock[]>(
+      '/trainer/schedule/fill-from-template',
+      {
+        method: 'POST',
+        body: JSON.stringify({ periodStart, periodEnd }),
+      },
+      token,
+    ),
+
+  trainerPublishSchedule: (
+    token: string,
+    periodStart: string,
+    periodEnd: string,
+  ) =>
+    request<{ publishedBlocks: number; periodStart: string; periodEnd: string }>(
+      '/trainer/schedule/publish',
+      {
+        method: 'POST',
+        body: JSON.stringify({ periodStart, periodEnd }),
+      },
+      token,
+    ),
+
+  trainerAssignPersonalBooking: (
+    token: string,
+    clientId: string,
+    startAt: string,
+  ) =>
+    request<{
+      id: string;
+      clientId: string;
+      clientName: string;
+      startAt: string;
+      endAt: string;
+    }>(
+      '/trainer/personal-bookings',
+      {
+        method: 'POST',
+        body: JSON.stringify({ clientId, startAt }),
+      },
+      token,
+    ),
+
+  trainerUpdatePersonalBooking: (
+    token: string,
+    bookingId: string,
+    data: { startAt?: string; action?: 'cancel' },
+  ) =>
+    request(`/trainer/personal-bookings/${bookingId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }, token),
 
   clientProducts: (token: string) =>
     request<MembershipProduct[]>('/client/products', {}, token),

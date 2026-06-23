@@ -3,7 +3,8 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3000",
+    "dev": "next dev --turbopack --port 3000",
+    "dev:app": "next dev --turbopack --port 3000",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
@@ -11,11 +12,13 @@
   "dependencies": {
     "@fitgo/shared-types": "workspace:*",
     "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
     "jsbarcode": "^3.11.6",
     "lucide-react": "^0.511.0",
-    "qrcode": "^1.5.4",
     "next": "^15.3.3",
+    "qrcode": "^1.5.4",
     "react": "^19.1.0",
+    "react-big-calendar": "^1.20.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
@@ -23,6 +26,7 @@
     "@types/node": "^22.15.21",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^19.1.6",
+    "@types/react-big-calendar": "^1.16.3",
     "@types/react-dom": "^19.1.5",
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.4",

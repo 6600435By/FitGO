@@ -457,6 +457,24 @@ export class NotificationsService implements OnModuleInit {
     );
   }
 
+  async notifySessionAssigned(params: {
+    clientId: string;
+    trainerId: string;
+    trainerName: string;
+    startAt: Date;
+  }) {
+    const when = this.formatCancellationWhen(params.startAt);
+    const body = `${params.trainerName} назначил(а) вам персональную тренировку${when ? ` — ${when}` : ''}.`;
+
+    await this.createNotification({
+      userId: params.clientId,
+      title: 'Новая тренировка',
+      body,
+      senderId: params.trainerId,
+      status: NotificationStatus.PENDING,
+    });
+  }
+
   async notifyBookingCancelled(params: {
     clubId: string;
     clientId: string;

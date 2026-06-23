@@ -34,4 +34,47 @@ body {
   .stat-label {
     @apply text-sm text-slate-400;
   }
+
+  .rbc-calendar {
+    @apply text-slate-100;
+  }
+
+  .rbc-off-range-bg {
+    @apply bg-slate-950;
+  }
+
+  .rbc-today {
+    @apply bg-fitgo-500/5;
+  }
+
+  .rbc-header {
+    @apply border-slate-800 py-2 text-sm text-slate-300;
+  }
+
+  .rbc-month-view,
+  .rbc-time-view,
+  .rbc-time-header,
+  .rbc-time-content,
+  .rbc-day-bg,
+  .rbc-timeslot-group,
+  .rbc-time-header-content,
+  .rbc-time-gutter {
+    @apply border-slate-800;
+  }
+
+  .rbc-event {
+    @apply rounded-lg border-0 text-xs;
+  }
+
+  .rbc-toolbar button {
+    @apply rounded-lg border border-slate-700 bg-slate-800 px-3 py-1 text-sm text-slate-200;
+  }
+
+  .rbc-toolbar button.rbc-active {
+    @apply bg-fitgo-500 text-white;
+  }
+
+  .rbc-toolbar-label {
+    @apply text-base font-semibold text-white;
+  }
 }

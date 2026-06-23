@@ -247,6 +247,51 @@ async function main() {
           { trainerId: user.id, dayOfWeek: 5, startTime: '09:00', endTime: '15:00' },
         ],
       });
+
+      const periodStart = new Date();
+      periodStart.setHours(0, 0, 0, 0);
+      const periodEnd = new Date(periodStart);
+      periodEnd.setDate(periodEnd.getDate() + 28);
+      periodEnd.setHours(23, 59, 59, 999);
+
+      await prisma.trainerAvailabilityBlock.deleteMany({
+        where: { trainerId: user.id },
+      });
+
+      const template = await prisma.trainerWorkSlot.findMany({
+        where: { trainerId: user.id },
+      });
+      const blocks: Array<{ trainerId: string; startAt: Date; endAt: Date; status: 'PUBLISHED' }> = [];
+      const cursor = new Date(periodStart);
+      while (cursor <= periodEnd) {
+        for (const slot of template) {
+          if (slot.dayOfWeek !== cursor.getDay()) continue;
+          const [sh, sm] = slot.startTime.split(':').map(Number);
+          const [eh, em] = slot.endTime.split(':').map(Number);
+          const startAt = new Date(cursor);
+          startAt.setHours(sh, sm, 0, 0);
+          const endAt = new Date(cursor);
+          endAt.setHours(eh, em, 0, 0);
+          blocks.push({
+            trainerId: user.id,
+            startAt,
+            endAt,
+            status: 'PUBLISHED',
+          });
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+
+      if (blocks.length > 0) {
+        await prisma.trainerAvailabilityBlock.createMany({ data: blocks });
+        await prisma.trainerSchedulePublication.create({
+          data: {
+            trainerId: user.id,
+            periodStart,
+            periodEnd,
+          },
+        });
+      }
     }
 
     if (

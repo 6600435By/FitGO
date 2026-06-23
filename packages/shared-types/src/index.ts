@@ -188,6 +188,10 @@ export interface AdminDashboardStats {
   bookingsToday: number;
 }
 
+export type PersonalBookingOrigin =
+  | 'CLIENT_BOOKED'
+  | 'TRAINER_ASSIGNED';
+
 export interface Booking {
   id: string;
   sessionId: string;
@@ -197,6 +201,7 @@ export interface Booking {
   startAt: string;
   endAt: string;
   source?: '1c' | 'fitgo';
+  origin?: PersonalBookingOrigin;
   lifecycle?: 'UPCOMING' | 'COMPLETED' | 'CANCELLED' | 'AWAITING_CONFIRMATION';
 }
 
@@ -221,6 +226,7 @@ export interface PersonalTrainingBookingItem {
   startAt: string;
   endAt: string;
   status: 'CONFIRMED' | 'CANCELLED' | 'COMPLETED';
+  origin?: PersonalBookingOrigin;
   clientCompletedAt?: string;
   trainerCompletedAt?: string;
 }
@@ -283,6 +289,47 @@ export interface TrainerWorkSlotInput {
   dayOfWeek: number;
   startTime: string;
   endTime: string;
+}
+
+export type TrainerCalendarEventKind =
+  | 'GROUP'
+  | 'PERSONAL'
+  | 'OPEN_SLOT'
+  | 'DRAFT_SLOT';
+
+export interface TrainerCalendarEvent {
+  id: string;
+  kind: TrainerCalendarEventKind;
+  title: string;
+  startAt: string;
+  endAt: string;
+  clientId?: string;
+  clientName?: string;
+  bookingId?: string;
+  origin?: PersonalBookingOrigin;
+  available?: boolean;
+  capacity?: number;
+  booked?: number;
+}
+
+export interface TrainerAvailabilityBlock {
+  id: string;
+  startAt: string;
+  endAt: string;
+  status: 'DRAFT' | 'PUBLISHED';
+}
+
+export interface TrainerSchedulePublicationInfo {
+  periodStart: string;
+  periodEnd: string;
+  publishedAt: string;
+}
+
+export interface TrainerCalendarResponse {
+  events: TrainerCalendarEvent[];
+  availabilityBlocks: TrainerAvailabilityBlock[];
+  draftBlockCount: number;
+  lastPublication?: TrainerSchedulePublicationInfo;
 }
 
 export interface NotificationItem {

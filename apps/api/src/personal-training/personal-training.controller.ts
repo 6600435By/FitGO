@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -19,6 +20,10 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { BookPersonalTrainingDto } from './dto/book-personal-training.dto';
 import { SetWorkScheduleDto } from './dto/set-work-schedule.dto';
 import { UpdateSessionPlanDto } from './dto/update-session-plan.dto';
+import { SetAvailabilityBlocksDto } from './dto/set-availability-blocks.dto';
+import { PublishScheduleDto } from './dto/publish-schedule.dto';
+import { AssignPersonalBookingDto } from './dto/assign-personal-booking.dto';
+import { UpdateTrainerBookingDto } from './dto/update-trainer-booking.dto';
 import { PersonalTrainingService } from './personal-training.service';
 
 @Controller()
@@ -45,6 +50,93 @@ export class PersonalTrainingController {
   @Roles(UserRole.TRAINER)
   getTrainerBookings(@CurrentUser() user: JwtPayload) {
     return this.personalTraining.getTrainerPersonalBookings(user);
+  }
+
+  @Get('trainer/calendar')
+  @Roles(UserRole.TRAINER)
+  getTrainerCalendar(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.personalTraining.getTrainerCalendar(user, from, to);
+  }
+
+  @Get('trainer/availability-blocks')
+  @Roles(UserRole.TRAINER)
+  getAvailabilityBlocks(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.personalTraining.getAvailabilityBlocks(user, from, to);
+  }
+
+  @Put('trainer/availability-blocks')
+  @Roles(UserRole.TRAINER)
+  setAvailabilityBlocks(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: SetAvailabilityBlocksDto,
+  ) {
+    return this.personalTraining.setAvailabilityBlocks(
+      user,
+      dto.periodStart,
+      dto.periodEnd,
+      dto.blocks,
+    );
+  }
+
+  @Post('trainer/schedule/fill-from-template')
+  @Roles(UserRole.TRAINER)
+  fillFromTemplate(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: PublishScheduleDto,
+  ) {
+    return this.personalTraining.fillFromTemplate(
+      user,
+      dto.periodStart,
+      dto.periodEnd,
+    );
+  }
+
+  @Post('trainer/schedule/publish')
+  @Roles(UserRole.TRAINER)
+  publishSchedule(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: PublishScheduleDto,
+  ) {
+    return this.personalTraining.publishSchedule(
+      user,
+      dto.periodStart,
+      dto.periodEnd,
+    );
+  }
+
+  @Post('trainer/personal-bookings')
+  @Roles(UserRole.TRAINER)
+  assignPersonalBooking(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: AssignPersonalBookingDto,
+  ) {
+    return this.personalTraining.assignPersonalBooking(
+      user,
+      dto.clientId,
+      dto.startAt,
+    );
+  }
+
+  @Patch('trainer/personal-bookings/:bookingId')
+  @Roles(UserRole.TRAINER)
+  updateTrainerPersonalBooking(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+    @Body() dto: UpdateTrainerBookingDto,
+  ) {
+    return this.personalTraining.updateTrainerPersonalBooking(
+      user,
+      bookingId,
+      dto,
+    );
   }
 
   @Get('client/trainers')
