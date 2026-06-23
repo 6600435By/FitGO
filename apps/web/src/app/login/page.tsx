@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 import { getHomePath, saveAuth } from '@/lib/auth';
 
@@ -83,6 +84,13 @@ export default function LoginPage() {
             {loading ? 'Вход...' : 'Войти'}
           </button>
         </form>
+
+        <p className="mt-4 text-center text-sm text-slate-400">
+          Нет аккаунта?{' '}
+          <Link href="/register" className="text-fitgo-400 hover:underline">
+            Зарегистрироваться
+          </Link>
+        </p>
 
         <div className="mt-6 card">
           <p className="mb-3 text-sm font-medium text-slate-300">Демо-аккаунты</p>

@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export interface JwtPayload {
   sub: string;
   email: string;
-  clubId: string;
+  clubId?: string;
   roles: UserRole[];
   externalId?: string;
 }

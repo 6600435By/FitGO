@@ -5,6 +5,7 @@ import { Calendar, CreditCard, ChevronRight, Dumbbell, ShoppingBag, Trophy } fro
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { MessagesHomeLink } from '@/components/messages-home-link';
+import { ClientTrainerInvites } from '@/components/client/client-trainer-invites';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import {
@@ -82,6 +83,8 @@ export default function ClientHomePage() {
 
   return (
     <div className="space-y-4">
+      <ClientTrainerInvites />
+
       {club && (
         <div className="card">
           <p className="text-sm text-slate-400">Ваш клуб</p>
@@ -207,10 +210,16 @@ export default function ClientHomePage() {
         </div>
       ) : (
         <div className="card text-center">
-          <p className="text-slate-400">Абонемент не найден</p>
-          <Link href="/client/products" className="btn-primary mt-4 inline-block">
-            Купить абонемент
-          </Link>
+          <p className="text-slate-400">
+            {club
+              ? 'Абонемент не найден'
+              : 'Клуб не подключён — персональные тренировки доступны без абонемента'}
+          </p>
+          {club && (
+            <Link href="/client/products" className="btn-primary mt-4 inline-block">
+              Купить абонемент
+            </Link>
+          )}
         </div>
       )}
 

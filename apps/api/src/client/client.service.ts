@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { GroupClassBookingStatus, PersonalBookingStatus, Role } from '@prisma/client';
 import { SessionType, UserRole, type Visit } from '@fitgo/shared-types';
 import type { ScheduleFilters } from '@fitgo/1c-adapter';
+import { ClubMembershipService } from '../common/club-membership.service';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PersonalTrainingService } from '../personal-training/personal-training.service';
@@ -19,18 +20,30 @@ export class ClientService {
     private readonly notifications: NotificationsService,
     private readonly waitlist: WaitlistService,
     private readonly osmiCards: OsmiCardService,
+    private readonly clubMembership: ClubMembershipService,
   ) {}
 
   private async resolveExternalId(user: JwtPayload): Promise<string> {
-    if (user.externalId) return user.externalId;
-
+    const membership = await this.clubMembership.getActiveMembership(user.sub);
     const dbUser = await this.prisma.user.findUnique({
       where: { id: user.sub },
     });
-    if (!dbUser?.externalId) {
-      throw new NotFoundException('Клиент не привязан к 1С');
+    const externalId = this.clubMembership.resolveExternalId(
+      membership,
+      user.externalId ?? dbUser?.externalId,
+    );
+    if (!externalId) {
+      throw new NotFoundException('Клиент не привязан к клубу');
     }
-    return dbUser.externalId;
+    return externalId;
+  }
+
+  private async requireActiveMembership(userId: string) {
+    const membership = await this.clubMembership.getActiveMembership(userId);
+    if (!membership?.club.externalId) {
+      throw new NotFoundException('Нет активного клубного абонемента');
+    }
+    return membership;
   }
 
   private async getBookingContext(user: JwtPayload) {
@@ -291,19 +304,27 @@ export class ClientService {
       where: { id: user.sub },
       include: { club: true },
     });
-    const externalId = user.externalId ?? dbUser?.externalId ?? undefined;
+    const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
+    const clubRecord = activeMembership?.club ?? null;
+    const externalId = activeMembership
+      ? this.clubMembership.resolveExternalId(
+          activeMembership,
+          user.externalId ?? dbUser?.externalId,
+        )
+      : undefined;
     const provider = this.fitness.getProvider();
+    const clubName = clubRecord?.name ?? 'Клуб';
 
     const osmiEnabled = this.osmiCards.isEnabled();
     const osmiAccess =
-      osmiEnabled && dbUser
+      osmiEnabled && dbUser && clubRecord
         ? this.osmiCards.getAccessCardFromCache({
             id: dbUser.id,
             firstName: dbUser.firstName,
             lastName: dbUser.lastName,
             osmiCardId: dbUser.osmiCardId,
             osmiBarcode: dbUser.osmiBarcode,
-            club: dbUser.club,
+            club: clubRecord,
           })
         : null;
 
@@ -316,13 +337,13 @@ export class ClientService {
         externalId && !osmiEnabled
           ? provider.getAccessCard(externalId)
           : Promise.resolve(null),
-        this.getAppSessionVisits(user.sub, dbUser?.club?.name ?? 'Клуб'),
+        this.getAppSessionVisits(user.sub, clubName),
       ]);
 
     let membership = membershipFromFitness;
     let accessCard = accessCardFromFitness;
 
-    if (osmiEnabled && dbUser?.phone) {
+    if (osmiEnabled && dbUser?.phone && activeMembership) {
       try {
         const osmiResult = await this.osmiCards.getClubCard(user);
         if (osmiResult.card) {
@@ -362,21 +383,87 @@ export class ClientService {
       membership,
       visits,
       accessCard,
-      club: dbUser?.club
+      club: clubRecord
         ? {
-            id: dbUser.club.id,
-            name: dbUser.club.name,
-            slug: dbUser.club.slug,
-            address: dbUser.club.address ?? undefined,
+            id: clubRecord.id,
+            name: clubRecord.name,
+            slug: clubRecord.slug,
+            address: clubRecord.address ?? undefined,
           }
         : null,
     };
   }
 
+  async joinClub(user: JwtPayload, clubSlug: string, externalId?: string) {
+    const membership = await this.clubMembership.joinClub(
+      user.sub,
+      clubSlug,
+      externalId,
+    );
+    return {
+      club: {
+        id: membership.club.id,
+        name: membership.club.name,
+        slug: membership.club.slug,
+        address: membership.club.address ?? undefined,
+      },
+      externalId: membership.externalId ?? undefined,
+      joinedAt: membership.joinedAt.toISOString(),
+    };
+  }
+
+  async getMembership(user: JwtPayload) {
+    const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
+    if (!activeMembership) {
+      return { membership: null, club: null };
+    }
+
+    const externalId = this.clubMembership.resolveExternalId(
+      activeMembership,
+      user.externalId,
+    );
+    const membership =
+      externalId && !this.osmiCards.isEnabled()
+        ? await this.fitness.getProvider().getMembership(externalId)
+        : null;
+
+    return {
+      membership,
+      club: {
+        id: activeMembership.club.id,
+        name: activeMembership.club.name,
+        slug: activeMembership.club.slug,
+        address: activeMembership.club.address ?? undefined,
+      },
+    };
+  }
+
+  async getClubVisits(user: JwtPayload) {
+    const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
+    if (!activeMembership) {
+      return [];
+    }
+
+    const externalId = this.clubMembership.resolveExternalId(
+      activeMembership,
+      user.externalId,
+    );
+    const externalVisits = externalId
+      ? await this.fitness.getProvider().getVisits(externalId)
+      : [];
+    const groupAppVisits = (
+      await this.getAppSessionVisits(user.sub, activeMembership.club.name)
+    ).filter((visit) => visit.sessionType === SessionType.GROUP);
+
+    return this.mergeVisits(
+      externalVisits.map((visit) => ({ ...visit, source: '1c' as const })),
+      groupAppVisits,
+    );
+  }
+
   async getSchedule(user: JwtPayload, filters?: ScheduleFilters) {
-    const club = await this.prisma.club.findUnique({
-      where: { id: user.clubId },
-    });
+    const membership = await this.requireActiveMembership(user.sub);
+    const club = membership.club;
     if (!club?.externalId) {
       throw new NotFoundException('Клуб не привязан к 1С');
     }
@@ -394,9 +481,8 @@ export class ClientService {
   }
 
   async getProducts(user: JwtPayload) {
-    const club = await this.prisma.club.findUnique({
-      where: { id: user.clubId },
-    });
+    const membership = await this.requireActiveMembership(user.sub);
+    const club = membership.club;
     if (!club?.externalId) {
       throw new NotFoundException('Клуб не привязан к 1С');
     }

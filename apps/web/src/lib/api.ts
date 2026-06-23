@@ -12,6 +12,8 @@ import {
   type ReferralInfo,
   type ScheduleSlot,
   type TrainerClientDetail,
+  type TrainerClientSummary,
+  type TrainerInviteRequest,
   type Visit,
   type PersonalTrainingBookingItem,
   type PersonalTrainingGoalTemplate,
@@ -44,7 +46,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 export interface AuthUser {
   id: string;
   externalId?: string;
-  clubId: string;
+  clubId?: string;
   email: string;
   phone?: string;
   firstName: string;
@@ -56,6 +58,12 @@ export interface AuthUser {
     slug: string;
     address?: string;
   };
+}
+
+export interface RegisterResponse {
+  accessToken: string;
+  user: AuthUser;
+  pendingTrainers: TrainerInviteRequest[];
 }
 
 export interface LoginResponse {
@@ -74,17 +82,6 @@ export interface ClientDashboard {
     slug: string;
     address?: string;
   } | null;
-}
-
-export interface TrainerClientSummary {
-  id: string;
-  externalId?: string;
-  firstName: string;
-  lastName: string;
-  phone?: string;
-  membershipName?: string;
-  membershipStatus?: MembershipStatus;
-  lastVisit?: string;
 }
 
 export interface TrainerDashboard {
@@ -183,6 +180,18 @@ export const api = {
     request<LoginResponse>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
+    }),
+
+  register: (data: {
+    email: string;
+    password: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+  }) =>
+    request<RegisterResponse>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
 
   me: (token: string) => request<AuthUser>('/auth/me', {}, token),
@@ -507,6 +516,43 @@ export const api = {
 
   trainerDashboard: (token: string) =>
     request<TrainerDashboard>('/trainer/dashboard', {}, token),
+
+  trainerClients: (token: string) =>
+    request<TrainerClientSummary[]>('/trainer/clients', {}, token),
+
+  trainerAddOfflineClient: (
+    token: string,
+    data: { firstName: string; lastName: string; phone: string; notes?: string },
+  ) =>
+    request<TrainerClientSummary | { message: string }>(
+      '/trainer/clients',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerInviteClient: (token: string, phone: string) =>
+    request<{ message: string }>(
+      '/trainer/clients/invite',
+      { method: 'POST', body: JSON.stringify({ phone }) },
+      token,
+    ),
+
+  clientTrainerInvites: (token: string) =>
+    request<TrainerInviteRequest[]>('/client/trainer-invites', {}, token),
+
+  clientAcceptTrainerInvite: (token: string, trainerId: string) =>
+    request<{ success: boolean }>(
+      `/client/trainer-invites/${trainerId}/accept`,
+      { method: 'POST' },
+      token,
+    ),
+
+  clientRejectTrainerInvite: (token: string, trainerId: string) =>
+    request<{ success: boolean }>(
+      `/client/trainer-invites/${trainerId}/reject`,
+      { method: 'POST' },
+      token,
+    ),
 
   trainerMessageRecipients: (token: string) =>
     request<Array<{ id: string; firstName: string; lastName: string }>>(

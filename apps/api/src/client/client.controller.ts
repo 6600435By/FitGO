@@ -5,10 +5,12 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { TrainerRosterService } from '../trainer/trainer-roster.service';
 import { ClientService } from './client.service';
 import { ClientProfileService } from './client-profile.service';
 import { BookSessionDto } from './dto/book-session.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
+import { JoinClubDto } from './dto/join-club.dto';
 import {
   CreateBodyLogDto,
   UpdateBodyProfileDto,
@@ -23,6 +25,7 @@ export class ClientController {
   constructor(
     private readonly clientService: ClientService,
     private readonly profileService: ClientProfileService,
+    private readonly roster: TrainerRosterService,
   ) {}
 
   @Get('profile')
@@ -70,6 +73,21 @@ export class ClientController {
   @Get('dashboard')
   getDashboard(@CurrentUser() user: JwtPayload) {
     return this.clientService.getDashboard(user);
+  }
+
+  @Post('club/join')
+  joinClub(@CurrentUser() user: JwtPayload, @Body() dto: JoinClubDto) {
+    return this.clientService.joinClub(user, dto.clubSlug, dto.externalId);
+  }
+
+  @Get('membership')
+  getMembership(@CurrentUser() user: JwtPayload) {
+    return this.clientService.getMembership(user);
+  }
+
+  @Get('visits')
+  getVisits(@CurrentUser() user: JwtPayload) {
+    return this.clientService.getClubVisits(user);
   }
 
   @Get('schedule')
@@ -172,5 +190,26 @@ export class ClientController {
   @Post('card/sync')
   syncClubCard(@CurrentUser() user: JwtPayload) {
     return this.clientService.syncClubCard(user);
+  }
+
+  @Get('trainer-invites')
+  getTrainerInvites(@CurrentUser() user: JwtPayload) {
+    return this.roster.getPendingTrainerRequests(user.sub);
+  }
+
+  @Post('trainer-invites/:trainerId/accept')
+  acceptTrainerInvite(
+    @CurrentUser() user: JwtPayload,
+    @Param('trainerId') trainerId: string,
+  ) {
+    return this.roster.acceptTrainerRequest(user.sub, trainerId);
+  }
+
+  @Post('trainer-invites/:trainerId/reject')
+  rejectTrainerInvite(
+    @CurrentUser() user: JwtPayload,
+    @Param('trainerId') trainerId: string,
+  ) {
+    return this.roster.rejectTrainerRequest(user.sub, trainerId);
   }
 }

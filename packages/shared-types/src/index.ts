@@ -178,6 +178,28 @@ export interface TrainerClientSummary {
   membershipName?: string;
   membershipStatus?: MembershipStatus;
   lastVisit?: string;
+  rosterStatus?: 'CONFIRMED' | 'PENDING' | 'REJECTED';
+  hasApp?: boolean;
+  clientAccepted?: boolean;
+  inRosterSince?: string;
+  source?: 'MANUAL' | 'INVITE';
+}
+
+export interface TrainerInviteRequest {
+  id: string;
+  trainerId: string;
+  trainerName: string;
+  source: 'link' | 'invite';
+  highlight: boolean;
+}
+
+export interface UserClubMembershipSummary {
+  clubId: string;
+  clubName: string;
+  clubSlug: string;
+  externalId?: string;
+  joinedAt: string;
+  leftAt?: string;
 }
 
 export interface AdminDashboardStats {

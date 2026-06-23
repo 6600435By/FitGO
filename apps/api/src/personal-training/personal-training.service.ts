@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PersonalBookingStatus, Prisma, Role, AvailabilityBlockStatus, PersonalBookingOrigin } from '@prisma/client';
+import { PersonalBookingStatus, Prisma, Role, AvailabilityBlockStatus, PersonalBookingOrigin, AccountStatus } from '@prisma/client';
 import {
   PERSONAL_TRAINING_GOAL_TEMPLATES,
   SessionType,
@@ -23,6 +23,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { TrainerRosterService } from '../trainer/trainer-roster.service';
 
 const SESSION_DURATION_MIN = 60;
 
@@ -38,6 +39,7 @@ export class PersonalTrainingService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly fitness: FitnessService,
+    private readonly roster: TrainerRosterService,
   ) {}
 
   async getTrainerWorkSchedule(user: JwtPayload) {
@@ -377,15 +379,22 @@ export class PersonalTrainingService {
 
     const end = new Date(start.getTime() + SESSION_DURATION_MIN * 60_000);
 
-    await this.ensureClientAccess(user.sub, user.clubId, clientId);
+    await this.roster.ensureConfirmedLink(user.sub, clientId);
     await this.ensureNoBookingConflict(user.sub, start, end);
 
     const client = await this.prisma.user.findFirst({
-      where: { id: clientId, clubId: user.clubId },
+      where: {
+        id: clientId,
+        roles: { some: { role: Role.CLIENT } },
+      },
     });
     if (!client) {
       throw new NotFoundException('Клиент не найден');
     }
+
+    const link = await this.prisma.trainerClientLink.findUnique({
+      where: { trainerId_clientId: { trainerId: user.sub, clientId } },
+    });
 
     const booking = await this.prisma.personalTrainingBooking.create({
       data: {
@@ -400,12 +409,18 @@ export class PersonalTrainingService {
 
     const trainerName =
       `${booking.trainer.firstName} ${booking.trainer.lastName}`.trim();
-    await this.notifications.notifySessionAssigned({
-      clientId,
-      trainerId: user.sub,
-      trainerName,
-      startAt: start,
-    });
+
+    if (
+      client.accountStatus === AccountStatus.ACTIVE &&
+      link?.clientAcceptedAt
+    ) {
+      await this.notifications.notifySessionAssigned({
+        clientId,
+        trainerId: user.sub,
+        trainerName,
+        startAt: start,
+      });
+    }
 
     return {
       id: booking.id,
@@ -666,11 +681,22 @@ export class PersonalTrainingService {
     user: JwtPayload,
     options?: { upcomingOnly?: boolean; includeAll?: boolean },
   ) {
+    const acceptedTrainerIds =
+      await this.roster.getClientAcceptedTrainerIds(user.sub);
+
+    if (acceptedTrainerIds.length === 0) {
+      return [];
+    }
+
     const where: {
       clientId: string;
+      trainerId: { in: string[] };
       status?: PersonalBookingStatus | { in: PersonalBookingStatus[] };
       endAt?: { gte: Date };
-    } = { clientId: user.sub };
+    } = {
+      clientId: user.sub,
+      trainerId: { in: acceptedTrainerIds },
+    };
 
     if (options?.upcomingOnly) {
       where.status = PersonalBookingStatus.CONFIRMED;
@@ -1250,23 +1276,6 @@ export class PersonalTrainingService {
       );
     } catch {
       return [];
-    }
-  }
-
-  private async ensureClientAccess(
-    _trainerId: string,
-    clubId: string,
-    clientId: string,
-  ) {
-    const client = await this.prisma.user.findFirst({
-      where: {
-        id: clientId,
-        clubId,
-        roles: { some: { role: Role.CLIENT } },
-      },
-    });
-    if (!client) {
-      throw new NotFoundException('Клиент не найден');
     }
   }
 

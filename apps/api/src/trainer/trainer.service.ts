@@ -1,15 +1,16 @@
 import {
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { MembershipStatus, SessionType, normalizeWorkoutSheet, workoutSheetHasData, type ScheduleSlot, type Visit } from '@fitgo/shared-types';
 import { GroupClassBookingStatus, PersonalBookingStatus, Role, BodyLogSource } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { ClubMembershipService } from '../common/club-membership.service';
 import { FitnessService } from '../fitness/fitness.service';
 import { VisitSyncService } from '../engagement/visit-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { TrainerRosterService } from './trainer-roster.service';
 
 @Injectable()
 export class TrainerService {
@@ -18,6 +19,8 @@ export class TrainerService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly visitSync: VisitSyncService,
+    private readonly roster: TrainerRosterService,
+    private readonly clubMembership: ClubMembershipService,
   ) {}
 
   private isFormaEmployeeId(id: string): boolean {
@@ -248,9 +251,10 @@ export class TrainerService {
 
   async getDashboard(user: JwtPayload) {
     const externalId = user.externalId ?? '1c-trainer-001';
-    const club = await this.prisma.club.findUnique({
-      where: { id: user.clubId },
-    });
+    const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
+    const club = activeMembership?.club ?? (user.clubId
+      ? await this.prisma.club.findUnique({ where: { id: user.clubId } })
+      : null);
 
     const [groupSchedule, personalSchedule] = club?.externalId
       ? await Promise.all([
@@ -269,7 +273,7 @@ export class TrainerService {
     ]);
     const todayKey = this.localDateKey();
 
-    const clients = await this.getClients(user.sub, user.clubId);
+    const clients = await this.roster.listClients(user.sub, club?.id ?? user.clubId);
 
     return {
       trainer: {
@@ -295,13 +299,12 @@ export class TrainerService {
   }
 
   async getMessageRecipients(user: JwtPayload) {
-    const eligibleIds = await this.getEligibleClientIds(user.sub, user.clubId);
+    const eligibleIds = await this.roster.getMessagableClientIds(user.sub);
     if (eligibleIds.length === 0) return [];
 
     const clients = await this.prisma.user.findMany({
       where: {
         id: { in: eligibleIds },
-        clubId: user.clubId,
         roles: { some: { role: Role.CLIENT } },
       },
       orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
@@ -315,12 +318,11 @@ export class TrainerService {
   }
 
   async getClientDetail(user: JwtPayload, clientId: string) {
-    await this.ensureClientAccess(user, clientId);
+    await this.roster.ensureRosterAccess(user.sub, clientId);
 
     const client = await this.prisma.user.findFirst({
       where: {
         id: clientId,
-        clubId: user.clubId,
         roles: { some: { role: Role.CLIENT } },
       },
     });
@@ -387,7 +389,7 @@ export class TrainerService {
   }
 
   async addNote(user: JwtPayload, clientId: string, content: string) {
-    await this.ensureClubClient(user, clientId);
+    await this.roster.ensureRosterAccess(user.sub, clientId);
     return this.prisma.trainerNote.create({
       data: { trainerId: user.sub, clientId, content },
     });
@@ -398,7 +400,7 @@ export class TrainerService {
     clientId: string,
     data: { title: string; target?: string; progress?: string },
   ) {
-    await this.ensureClubClient(user, clientId);
+    await this.roster.ensureRosterAccess(user.sub, clientId);
     return this.prisma.clientGoal.create({
       data: {
         trainerId: user.sub,
@@ -415,7 +417,7 @@ export class TrainerService {
     clientId: string,
     data: { weight?: number; notes?: string },
   ) {
-    await this.ensureClubClient(user, clientId);
+    await this.roster.ensureRosterAccess(user.sub, clientId);
     const measurement = await this.prisma.clientMeasurement.create({
       data: {
         trainerId: user.sub,
@@ -439,12 +441,11 @@ export class TrainerService {
   }
 
   async sendClientMessage(user: JwtPayload, clientId: string, message: string) {
-    await this.ensureClientAccess(user, clientId);
+    await this.roster.ensureClientMessagingAllowed(user.sub, clientId);
 
     const client = await this.prisma.user.findFirst({
       where: {
         id: clientId,
-        clubId: user.clubId,
         roles: { some: { role: Role.CLIENT } },
       },
     });
@@ -462,136 +463,6 @@ export class TrainerService {
       `Сообщение от ${trainerName}`,
       message,
       user.sub,
-    );
-  }
-
-  private async ensureClubClient(user: JwtPayload, clientId: string) {
-    const client = await this.prisma.user.findFirst({
-      where: {
-        id: clientId,
-        clubId: user.clubId,
-        roles: { some: { role: Role.CLIENT } },
-      },
-    });
-    if (!client) throw new NotFoundException('Клиент не найден');
-  }
-
-  private async ensureClientAccess(user: JwtPayload, clientId: string) {
-    const eligibleIds = await this.getEligibleClientIds(user.sub, user.clubId);
-    if (!eligibleIds.includes(clientId)) {
-      throw new ForbiddenException(
-        'Можно писать только клиентам из вашей базы или записанным к вам на тренировку',
-      );
-    }
-  }
-
-  private async getEligibleClientIds(
-    trainerId: string,
-    clubId: string,
-  ): Promise<string[]> {
-    const trainer = await this.prisma.user.findUnique({
-      where: { id: trainerId },
-    });
-    if (!trainer) return [];
-
-    const fullName = `${trainer.firstName} ${trainer.lastName}`.trim();
-    const nameParts = [trainer.firstName, trainer.lastName].filter(Boolean);
-
-    const [
-      personalBookings,
-      notes,
-      goals,
-      measurements,
-      groupBookings,
-    ] = await Promise.all([
-      this.prisma.personalTrainingBooking.findMany({
-        where: { trainerId },
-        select: { clientId: true },
-        distinct: ['clientId'],
-      }),
-      this.prisma.trainerNote.findMany({
-        where: { trainerId },
-        select: { clientId: true },
-        distinct: ['clientId'],
-      }),
-      this.prisma.clientGoal.findMany({
-        where: { trainerId },
-        select: { clientId: true },
-        distinct: ['clientId'],
-      }),
-      this.prisma.clientMeasurement.findMany({
-        where: { trainerId },
-        select: { clientId: true },
-        distinct: ['clientId'],
-      }),
-      fullName
-        ? this.prisma.groupClassBooking.findMany({
-            where: {
-              client: { clubId },
-              OR: nameParts.map((part) => ({
-                trainerName: { contains: part, mode: 'insensitive' as const },
-              })),
-            },
-            select: { clientId: true },
-            distinct: ['clientId'],
-          })
-        : Promise.resolve([]),
-    ]);
-
-    const ids = new Set<string>();
-    for (const row of [
-      ...personalBookings,
-      ...notes,
-      ...goals,
-      ...measurements,
-      ...groupBookings,
-    ]) {
-      ids.add(row.clientId);
-    }
-
-    return [...ids];
-  }
-
-  private async getClients(trainerId: string, clubId: string) {
-    const eligibleIds = await this.getEligibleClientIds(trainerId, clubId);
-    if (eligibleIds.length === 0) return [];
-
-    const users = await this.prisma.user.findMany({
-      where: {
-        id: { in: eligibleIds },
-        clubId,
-        roles: { some: { role: Role.CLIENT } },
-      },
-      orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
-    });
-
-    const provider = this.fitness.getProvider();
-
-    return Promise.all(
-      users.map(async (client) => {
-        const externalId = client.externalId;
-        let membershipName: string | undefined;
-        let membershipStatus: MembershipStatus | undefined;
-        let lastVisit: string | undefined;
-
-        if (externalId) {
-          const membership = await provider.getMembership(externalId);
-          const visits = await provider.getVisits(externalId);
-          membershipName = membership?.name;
-          membershipStatus = membership?.status;
-          lastVisit = visits[0]?.date;
-        }
-
-        return {
-          id: client.id,
-          externalId: client.externalId ?? undefined,
-          firstName: client.firstName,
-          lastName: client.lastName,
-          membershipName,
-          membershipStatus,
-          lastVisit,
-        };
-      }),
     );
   }
 }

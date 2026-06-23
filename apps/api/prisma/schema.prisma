@@ -126,6 +126,29 @@ enum PersonalBookingOrigin {
   TRAINER_ASSIGNED
 }
 
+enum AccountStatus {
+  ACTIVE
+  SHADOW
+}
+
+enum TrainerClientLinkStatus {
+  CONFIRMED
+  PENDING
+  REJECTED
+}
+
+enum TrainerClientSource {
+  MANUAL
+  INVITE
+}
+
+enum TrainerClientInviteStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
 enum GroupClassBookingStatus {
   CONFIRMED
   CANCELLED
@@ -163,6 +186,7 @@ model Club {
   referralRewardDesc   String   @default("Скидка 10% на следующий абонемент")
   adminTasks           AdminTask[]
   staffAuditLogs       StaffAuditLog[]
+  clubMemberships      UserClubMembership[]
 }
 
 model ClubTheme {
@@ -188,10 +212,14 @@ model Club1CConfig {
 
 model User {
   id         String   @id @default(cuid())
-  clubId     String
-  email      String
+  clubId     String?
+  email      String   @unique
   password   String
   phone      String?
+  phoneNormalized String? @unique
+  accountStatus   AccountStatus @default(ACTIVE)
+  createdByTrainerId String?
+  activatedAt     DateTime?
   firstName  String
   lastName   String
   externalId String?
@@ -210,8 +238,10 @@ model User {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  club                 Club                   @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  club                 Club?                  @relation(fields: [clubId], references: [id], onDelete: SetNull)
   createdBy            User?                  @relation("StaffCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  shadowCreatedBy      User?                  @relation("ShadowCreatedBy", fields: [createdByTrainerId], references: [id], onDelete: SetNull)
+  shadowsCreated       User[]                 @relation("ShadowCreatedBy")
   roles                UserRole[]
   notifications        Notification[]
   pushSubscriptions    PushSubscription[]
@@ -253,8 +283,11 @@ model User {
   adminPermissions        AdminPermissionGrant[]
   staffCreated            User[]                 @relation("StaffCreatedBy")
   staffAuditLogs          StaffAuditLog[]        @relation("StaffAuditActor")
+  trainerRosterClients    TrainerClientLink[]    @relation("TrainerRoster")
+  clientRosterTrainers    TrainerClientLink[]    @relation("ClientRoster")
+  trainerClientInvites    TrainerClientInvite[]  @relation("TrainerClientInvites")
+  clubMemberships         UserClubMembership[]
 
-  @@unique([clubId, email])
   @@unique([clubId, gamificationNickname])
   @@index([externalId])
 }
@@ -267,6 +300,58 @@ model UserRole {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, role])
+}
+
+model UserClubMembership {
+  id         String    @id @default(cuid())
+  userId     String
+  clubId     String
+  externalId String?
+  joinedAt   DateTime  @default(now())
+  leftAt     DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clubId])
+  @@index([clubId])
+  @@index([externalId])
+}
+
+model TrainerClientLink {
+  id               String                  @id @default(cuid())
+  trainerId        String
+  clientId         String
+  status           TrainerClientLinkStatus @default(PENDING)
+  source           TrainerClientSource     @default(MANUAL)
+  notes            String?
+  clientAcceptedAt DateTime?
+  createdAt        DateTime                @default(now())
+  confirmedAt      DateTime?
+
+  trainer User @relation("TrainerRoster", fields: [trainerId], references: [id], onDelete: Cascade)
+  client  User @relation("ClientRoster", fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([trainerId, clientId])
+  @@index([trainerId, status])
+  @@index([clientId])
+}
+
+model TrainerClientInvite {
+  id              String                    @id @default(cuid())
+  trainerId       String
+  phoneNormalized String
+  clientId        String?
+  status          TrainerClientInviteStatus @default(PENDING)
+  createdAt       DateTime                  @default(now())
+  expiresAt       DateTime?
+  respondedAt     DateTime?
+
+  trainer User @relation("TrainerClientInvites", fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@index([trainerId, status])
+  @@index([phoneNormalized, status])
+  @@index([clientId])
 }
 
 model DailyReport {

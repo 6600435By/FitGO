@@ -49,7 +49,7 @@ export class SuperAdminService {
     }
 
     const existing = await this.prisma.user.findFirst({
-      where: { clubId: user.clubId, email: dto.email },
+      where: { email: dto.email },
     });
     if (existing) {
       throw new ConflictException('Пользователь с таким логином уже существует');

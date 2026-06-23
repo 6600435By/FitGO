@@ -1,8 +1,17 @@
-import { BadgeDataScope, Gender, LeagueTier, PrismaClient, Role, AdminPermission, VisitSource } from '@prisma/client';
+import { BadgeDataScope, Gender, LeagueTier, PrismaClient, Role, AdminPermission, VisitSource, TrainerClientLinkStatus, TrainerClientSource, AccountStatus, TrainerClientInviteStatus } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import { MOCK_CLUB } from '@fitgo/1c-adapter';
 
 const prisma = new PrismaClient();
+
+function normalizePhone(phone: string): string {
+  let digits = phone.replace(/\D/g, '');
+  if (digits.length === 9) digits = `375${digits}`;
+  else if (digits.length === 11 && digits.startsWith('80')) digits = `375${digits.slice(2)}`;
+  else if (digits.length === 10 && digits.startsWith('8')) digits = `375${digits.slice(1)}`;
+  return digits;
+}
 
 const BADGES = [
   { slug: 'visit-1', name: 'Первый шаг', description: '1 визит', threshold: 1, category: 'visits', tier: 'bronze', dataScope: BadgeDataScope.SINCE_INSTALL },
@@ -128,18 +137,15 @@ async function main() {
       'withGamification' in demoUser && demoUser.withGamification ? new Date() : undefined;
 
     const user = await prisma.user.upsert({
-      where: {
-        clubId_email: {
-          clubId: club.id,
-          email: demoUser.email,
-        },
-      },
+      where: { email: demoUser.email },
       update: {
         firstName: demoUser.firstName,
         lastName: demoUser.lastName,
         phone: demoUser.phone,
+        phoneNormalized: normalizePhone(demoUser.phone),
         externalId: demoUser.externalId,
         password: passwordHash,
+        clubId: club.id,
         ...('gender' in demoUser && demoUser.gender
           ? { gender: demoUser.gender, dateOfBirth: demoUser.dateOfBirth, profileCompletedAt: new Date() }
           : {}),
@@ -158,6 +164,7 @@ async function main() {
         firstName: demoUser.firstName,
         lastName: demoUser.lastName,
         phone: demoUser.phone,
+        phoneNormalized: normalizePhone(demoUser.phone),
         externalId: demoUser.externalId,
         ...('gender' in demoUser && demoUser.gender
           ? { gender: demoUser.gender, dateOfBirth: demoUser.dateOfBirth, profileCompletedAt: new Date() }
@@ -178,6 +185,21 @@ async function main() {
         create: { userId: user.id, role },
       });
     }
+
+    await prisma.userClubMembership.upsert({
+      where: {
+        userId_clubId: { userId: user.id, clubId: club.id },
+      },
+      update: {
+        externalId: demoUser.externalId ?? undefined,
+        leftAt: null,
+      },
+      create: {
+        userId: user.id,
+        clubId: club.id,
+        externalId: demoUser.externalId ?? undefined,
+      },
+    });
 
     if (demoUser.roles.some((r) => r === Role.CLIENT)) {
       await prisma.notificationPreference.upsert({
@@ -308,6 +330,100 @@ async function main() {
         });
       }
     }
+  }
+
+  const demoTrainer = await prisma.user.findUnique({
+    where: { email: 'trainer@demo.fitgo' },
+  });
+  const demoClient = await prisma.user.findUnique({
+    where: { email: 'client@demo.fitgo' },
+  });
+  if (demoTrainer && demoClient) {
+    const now = new Date();
+    await prisma.trainerClientLink.upsert({
+      where: {
+        trainerId_clientId: {
+          trainerId: demoTrainer.id,
+          clientId: demoClient.id,
+        },
+      },
+      update: {
+        status: TrainerClientLinkStatus.CONFIRMED,
+        clientAcceptedAt: now,
+      },
+      create: {
+        trainerId: demoTrainer.id,
+        clientId: demoClient.id,
+        status: TrainerClientLinkStatus.CONFIRMED,
+        source: TrainerClientSource.MANUAL,
+        confirmedAt: now,
+        clientAcceptedAt: now,
+      },
+    });
+  }
+
+  const shadowPhone = '+375291234567';
+  const shadowNormalized = normalizePhone(shadowPhone);
+  if (demoTrainer) {
+    const shadowPassword = await bcrypt.hash(randomBytes(32).toString('hex'), 10);
+    const shadowClient = await prisma.user.upsert({
+      where: { phoneNormalized: shadowNormalized },
+      update: {
+        firstName: 'Офлайн',
+        lastName: 'Демо',
+        createdByTrainerId: demoTrainer.id,
+      },
+      create: {
+        email: `shadow+${shadowNormalized}@fitgo.internal`,
+        password: shadowPassword,
+        firstName: 'Офлайн',
+        lastName: 'Демо',
+        phone: shadowPhone,
+        phoneNormalized: shadowNormalized,
+        accountStatus: AccountStatus.SHADOW,
+        createdByTrainerId: demoTrainer.id,
+        roles: { create: { role: Role.CLIENT } },
+      },
+    });
+
+    await prisma.trainerClientLink.upsert({
+      where: {
+        trainerId_clientId: {
+          trainerId: demoTrainer.id,
+          clientId: shadowClient.id,
+        },
+      },
+      update: {
+        status: TrainerClientLinkStatus.CONFIRMED,
+        source: TrainerClientSource.MANUAL,
+      },
+      create: {
+        trainerId: demoTrainer.id,
+        clientId: shadowClient.id,
+        status: TrainerClientLinkStatus.CONFIRMED,
+        source: TrainerClientSource.MANUAL,
+        confirmedAt: new Date(),
+      },
+    });
+
+    const invitePhone = '+375295555555';
+    const inviteNormalized = normalizePhone(invitePhone);
+    await prisma.trainerClientInvite.upsert({
+      where: { id: 'demo-pending-invite' },
+      update: {
+        trainerId: demoTrainer.id,
+        phoneNormalized: inviteNormalized,
+        status: TrainerClientInviteStatus.PENDING,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+      },
+      create: {
+        id: 'demo-pending-invite',
+        trainerId: demoTrainer.id,
+        phoneNormalized: inviteNormalized,
+        status: TrainerClientInviteStatus.PENDING,
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000),
+      },
+    });
   }
 
   console.log('Seed completed: demo club, users, badges, gamification data');
