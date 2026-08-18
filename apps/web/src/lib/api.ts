@@ -199,6 +199,24 @@ export const api = {
   clientDashboard: (token: string) =>
     request<ClientDashboard>('/client/dashboard', {}, token),
 
+  clientClubs: (token: string) =>
+    request<Array<{
+      id: string;
+      name: string;
+      slug: string;
+      address?: string;
+    }>>('/client/clubs', {}, token),
+
+  clientJoinClub: (token: string, clubSlug: string) =>
+    request<{
+      club: { id: string; name: string; slug: string; address?: string };
+      externalId?: string;
+      joinedAt: string;
+    }>('/client/club/join', {
+      method: 'POST',
+      body: JSON.stringify({ clubSlug }),
+    }, token),
+
   clientClubCard: (token: string) =>
     request<{
       enabled: boolean;

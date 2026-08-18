@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { MessagesHomeLink } from '@/components/messages-home-link';
 import { ClientTrainerInvites } from '@/components/client/client-trainer-invites';
+import { ClientClubPicker } from '@/components/client/client-club-picker';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import {
@@ -33,7 +34,7 @@ interface DashboardData {
     validUntil: string;
   } | null;
   visits: Visit[];
-  club: { name: string; address?: string } | null;
+  club: { name: string; address?: string; slug?: string } | null;
 }
 
 export default function ClientHomePage() {
@@ -41,6 +42,7 @@ export default function ClientHomePage() {
   const [upcomingBookings, setUpcomingBookings] = useState<Booking[]>([]);
   const [gamification, setGamification] = useState<GamificationProfile | null>(null);
   const [error, setError] = useState('');
+  const [changingClub, setChangingClub] = useState(false);
 
   useEffect(() => {
     const token = getToken();
@@ -85,14 +87,29 @@ export default function ClientHomePage() {
     <div className="space-y-4">
       <ClientTrainerInvites />
 
-      {club && (
+      {club && !changingClub ? (
         <div className="card">
           <p className="text-sm text-slate-400">Ваш клуб</p>
           <p className="text-xl font-semibold">{club.name}</p>
           {club.address && (
             <p className="mt-1 text-sm text-slate-400">{club.address}</p>
           )}
+          <button
+            type="button"
+            className="mt-3 text-sm text-fitgo-400"
+            onClick={() => setChangingClub(true)}
+          >
+            Сменить клуб
+          </button>
         </div>
+      ) : (
+        <ClientClubPicker
+          onJoined={(joined) => {
+            setData((prev) => (prev ? { ...prev, club: joined } : prev));
+            setChangingClub(false);
+          }}
+          onCancel={club ? () => setChangingClub(false) : undefined}
+        />
       )}
 
       {upcomingBookings.length > 0 ? (

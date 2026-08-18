@@ -76,6 +76,11 @@ export class ClientController {
     return this.clientService.getDashboard(user);
   }
 
+  @Get('clubs')
+  listClubs() {
+    return this.clientService.listClubs();
+  }
+
   @Post('club/join')
   joinClub(@CurrentUser() user: JwtPayload, @Body() dto: JoinClubDto) {
     return this.clientService.joinClub(user, dto.clubSlug, dto.externalId);

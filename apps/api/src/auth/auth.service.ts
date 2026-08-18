@@ -8,6 +8,7 @@ import { UserRole as SharedUserRole } from '@fitgo/shared-types';
 import * as bcrypt from 'bcryptjs';
 import { AccountStatus, Role } from '@prisma/client';
 import { normalizePhone } from '../common/phone.util';
+import { ClubMembershipService } from '../common/club-membership.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
 import { LoginDto } from './dto/login.dto';
@@ -26,6 +27,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly roster: TrainerRosterService,
+    private readonly clubMembership: ClubMembershipService,
   ) {}
 
   private formatUserResponse(user: {
@@ -105,6 +107,18 @@ export class AuthService {
 
     if (!user.isActive) {
       throw new UnauthorizedException('Аккаунт деактивирован');
+    }
+
+    const clubId = await this.clubMembership.resolveActiveClubId(
+      user.id,
+      user.clubId,
+    );
+    if (clubId !== (user.clubId ?? undefined)) {
+      const refreshed = await this.prisma.user.findUniqueOrThrow({
+        where: { id: user.id },
+        include: { roles: true, club: true },
+      });
+      Object.assign(user, refreshed);
     }
 
     const valid = await bcrypt.compare(dto.password, user.password);

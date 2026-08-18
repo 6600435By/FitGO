@@ -395,6 +395,18 @@ export class ClientService {
     };
   }
 
+  async listClubs() {
+    const clubs = await this.prisma.club.findMany({
+      orderBy: { name: 'asc' },
+    });
+    return clubs.map((club) => ({
+      id: club.id,
+      name: club.name,
+      slug: club.slug,
+      address: club.address ?? undefined,
+    }));
+  }
+
   async joinClub(user: JwtPayload, clubSlug: string, externalId?: string) {
     const membership = await this.clubMembership.joinClub(
       user.sub,

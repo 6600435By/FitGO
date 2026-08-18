@@ -13,6 +13,20 @@ export class ClubMembershipService {
     });
   }
 
+  async resolveActiveClubId(userId: string, storedClubId?: string | null) {
+    const membership = await this.getActiveMembership(userId);
+    const clubId = membership?.clubId ?? storedClubId ?? null;
+
+    if (clubId && storedClubId !== clubId) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { clubId },
+      });
+    }
+
+    return clubId ?? undefined;
+  }
+
   resolveExternalId(
     membership: { externalId: string | null } | null,
     userExternalId?: string | null,
