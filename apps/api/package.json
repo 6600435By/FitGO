@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "nest build",
-    "dev": "nest start --watch",
+    "dev": "nest start --watch --builder swc --type-check false",
+    "dev:app": "nest start --watch --builder swc --type-check false",
     "start": "node dist/main",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
@@ -36,6 +37,8 @@
   "devDependencies": {
     "@nestjs/cli": "^11.0.7",
     "@nestjs/schematics": "^11.0.5",
+    "@swc/cli": "^0.8.1",
+    "@swc/core": "^1.15.43",
     "@types/bcryptjs": "^3.0.0",
     "@types/node": "^22.15.21",
     "@types/passport-jwt": "^4.0.1",
