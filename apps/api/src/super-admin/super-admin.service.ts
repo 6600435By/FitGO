@@ -16,6 +16,7 @@ import {
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { AdminPermissionsService } from '../auth/admin-permissions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateAdminTaskDto } from './dto/task.dto';
@@ -33,7 +34,7 @@ export class SuperAdminService {
   async listStaff(user: JwtPayload) {
     const staff = await this.prisma.user.findMany({
       where: {
-        clubId: user.clubId,
+        clubId: requireClubId(user),
         roles: { some: { role: { in: STAFF_ROLES } } },
       },
       include: { roles: true },
@@ -57,10 +58,11 @@ export class SuperAdminService {
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const prismaRole = dto.role === 'ADMIN' ? Role.ADMIN : Role.TRAINER;
+    const clubId = requireClubId(user);
 
     const created = await this.prisma.user.create({
       data: {
-        clubId: user.clubId,
+        clubId,
         email: dto.email,
         password: passwordHash,
         firstName: dto.firstName.trim(),
@@ -92,7 +94,7 @@ export class SuperAdminService {
   }
 
   async updateStaff(user: JwtPayload, staffId: string, dto: UpdateStaffDto) {
-    const member = await this.getStaffMember(user.clubId, staffId);
+    const member = await this.getStaffMember(requireClubId(user), staffId);
 
     const data: {
       firstName?: string;
@@ -140,7 +142,7 @@ export class SuperAdminService {
   }
 
   async getAdminPermissions(user: JwtPayload, adminId: string) {
-    await this.ensureClubAdmin(user.clubId, adminId);
+    await this.ensureClubAdmin(requireClubId(user), adminId);
     const permissions = await this.adminPermissions.getPermissions({
       ...user,
       sub: adminId,
@@ -154,7 +156,7 @@ export class SuperAdminService {
     adminId: string,
     permissions: AdminPermission[],
   ) {
-    await this.ensureClubAdmin(user.clubId, adminId);
+    await this.ensureClubAdmin(requireClubId(user), adminId);
     await this.adminPermissions.setPermissions(adminId, permissions);
     await this.logAudit(user, 'PERMISSIONS_UPDATED', adminId, { permissions });
     return { permissions };
@@ -163,7 +165,7 @@ export class SuperAdminService {
   async listTasks(user: JwtPayload, status?: AdminTaskStatus) {
     const tasks = await this.prisma.adminTask.findMany({
       where: {
-        clubId: user.clubId,
+        clubId: requireClubId(user),
         ...(status ? { status: status as PrismaAdminTaskStatus } : {}),
       },
       include: { assignee: true },
@@ -174,11 +176,12 @@ export class SuperAdminService {
   }
 
   async createTask(user: JwtPayload, dto: CreateAdminTaskDto) {
-    await this.ensureClubAdmin(user.clubId, dto.assigneeId);
+    const clubId = requireClubId(user);
+    await this.ensureClubAdmin(clubId, dto.assigneeId);
 
     const task = await this.prisma.adminTask.create({
       data: {
-        clubId: user.clubId,
+        clubId,
         assigneeId: dto.assigneeId,
         createdById: user.sub,
         title: dto.title.trim(),
@@ -214,7 +217,7 @@ export class SuperAdminService {
     },
   ) {
     const task = await this.prisma.adminTask.findFirst({
-      where: { id: taskId, clubId: user.clubId },
+      where: { id: taskId, clubId: requireClubId(user) },
     });
     if (!task) throw new NotFoundException('Задача не найдена');
 
@@ -244,7 +247,7 @@ export class SuperAdminService {
 
   async listAuditLog(user: JwtPayload, limit = 50) {
     const logs = await this.prisma.staffAuditLog.findMany({
-      where: { clubId: user.clubId },
+      where: { clubId: requireClubId(user) },
       include: { actor: true },
       orderBy: { createdAt: 'desc' },
       take: limit,
@@ -357,7 +360,7 @@ export class SuperAdminService {
   ) {
     await this.prisma.staffAuditLog.create({
       data: {
-        clubId: user.clubId,
+        clubId: requireClubId(user),
         actorId: user.sub,
         action,
         targetId: targetId ?? null,

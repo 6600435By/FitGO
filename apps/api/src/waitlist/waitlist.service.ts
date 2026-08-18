@@ -11,6 +11,7 @@ import {
 } from '@prisma/client';
 import type { ScheduleSlot } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -110,7 +111,8 @@ export class WaitlistService {
   }
 
   async joinWaitlist(user: JwtPayload, sessionId: string) {
-    const slot = await this.requireScheduleSlot(user.clubId, sessionId);
+    const clubId = requireClubId(user);
+    const slot = await this.requireScheduleSlot(clubId, sessionId);
     if (slot.available) {
       throw new BadRequestException(
         'На занятии ещё есть свободные места — запишитесь напрямую',
@@ -162,7 +164,7 @@ export class WaitlistService {
         },
       },
       create: {
-        clubId: user.clubId,
+        clubId,
         clientId: user.sub,
         appointmentId: sessionId,
         title: slot.title,

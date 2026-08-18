@@ -20,6 +20,7 @@ import {
   type ScheduleSlot,
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -627,8 +628,9 @@ export class PersonalTrainingService {
     }
 
     const end = new Date(start.getTime() + SESSION_DURATION_MIN * 60_000);
+    const clubId = requireClubId(user);
     const available = await this.getTrainerAvailableSlots(
-      user.clubId,
+      clubId,
       trainerId,
       start.toISOString(),
       end.toISOString(),
@@ -647,7 +649,7 @@ export class PersonalTrainingService {
     const trainer = await this.prisma.user.findFirst({
       where: {
         id: trainerId,
-        clubId: user.clubId,
+        clubId,
         roles: { some: { role: Role.TRAINER } },
       },
     });
@@ -1141,7 +1143,7 @@ export class PersonalTrainingService {
       const clientName =
         `${booking.client.firstName} ${booking.client.lastName}`.trim();
       await this.notifications.notifyBookingCancelled({
-        clubId: user.clubId,
+        clubId: requireClubId(user),
         clientId: user.sub,
         clientName,
         clientPhone: booking.client.phone ?? undefined,
@@ -1235,7 +1237,7 @@ export class PersonalTrainingService {
     rangeEnd: Date,
   ): Promise<ScheduleSlot[]> {
     const club = await this.prisma.club.findUnique({
-      where: { id: user.clubId },
+      where: { id: requireClubId(user) },
     });
     if (!club?.externalId) return [];
 

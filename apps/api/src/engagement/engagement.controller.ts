@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { EngagementService } from './engagement.service';
 import { UpdateThemeDto } from './dto/update-theme.dto';
 import {
@@ -51,7 +52,7 @@ export class EngagementController {
     @CurrentUser() user: JwtPayload,
     @Query('name') name: string,
   ) {
-    return this.engagement.checkNickname(user.clubId, name ?? '');
+    return this.engagement.checkNickname(requireClubId(user), name ?? '');
   }
 
   @Post('check-in')
@@ -101,7 +102,7 @@ export class EngagementController {
 
   @Get('theme')
   getTheme(@CurrentUser() user: JwtPayload) {
-    return this.engagement.getClubTheme(user.clubId);
+    return this.engagement.getClubTheme(requireClubId(user));
   }
 
   @Post('theme')
@@ -112,7 +113,7 @@ export class EngagementController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateThemeDto,
   ) {
-    return this.engagement.updateClubTheme(user.clubId, dto);
+    return this.engagement.updateClubTheme(requireClubId(user), dto);
   }
 
   @Get('challenges')
@@ -122,7 +123,7 @@ export class EngagementController {
 
   @Get('leaderboard')
   getLeaderboard(@CurrentUser() user: JwtPayload) {
-    return this.engagement.getLeaderboard(user.clubId);
+    return this.engagement.getLeaderboard(requireClubId(user));
   }
 
   @Post('wearables/:provider/sync')

@@ -9,6 +9,7 @@ import { PersonalTrainingService } from '../personal-training/personal-training.
 import { WaitlistService } from '../waitlist/waitlist.service';
 import { OsmiCardService } from '../osmi/osmi-card.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -188,7 +189,7 @@ export class ClientService {
     cancelledAt?: Date | null,
   ): Promise<boolean> {
     const club = await this.prisma.club.findUnique({
-      where: { id: user.clubId },
+      where: { id: requireClubId(user) },
     });
     if (!club?.externalId) return false;
 
@@ -373,7 +374,7 @@ export class ClientService {
       profile: {
         id: user.sub,
         externalId,
-        clubId: user.clubId,
+        clubId: user.clubId ?? clubRecord?.id ?? '',
         email: user.email,
         firstName: dbUser?.firstName ?? '',
         lastName: dbUser?.lastName ?? '',
@@ -589,9 +590,10 @@ export class ClientService {
     const cancelledBooking = await this.prisma.groupClassBooking.findFirst({
       where: { clientId: user.sub, appointmentId: sessionId },
     });
+    const clubId = requireClubId(user);
     const slot =
       !cancelledBooking?.title && !booking?.title
-        ? await this.findScheduleSlot(user.clubId, sessionId)
+        ? await this.findScheduleSlot(clubId, sessionId)
         : null;
 
     const clientName = dbUser
@@ -599,7 +601,7 @@ export class ClientService {
       : 'Клиент';
 
     await this.notifications.notifyBookingCancelled({
-      clubId: user.clubId,
+      clubId,
       clientId: user.sub,
       clientName,
       clientPhone: dbUser?.phone ?? undefined,
@@ -619,7 +621,7 @@ export class ClientService {
         slot?.trainerName,
     });
 
-    await this.waitlist.onSpotOpened(user.clubId, sessionId, {
+    await this.waitlist.onSpotOpened(clubId, sessionId, {
       title:
         cancelledBooking?.title ??
         booking?.title ??

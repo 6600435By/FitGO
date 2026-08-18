@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { AdminTaskStatus, MembershipStatus } from '@fitgo/shared-types';
 import { AdminTaskStatus as PrismaAdminTaskStatus } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -16,21 +17,22 @@ export class AdminService {
   ) {}
 
   async getDashboard(user: JwtPayload) {
+    const clubId = requireClubId(user);
     const club = await this.prisma.club.findUnique({
-      where: { id: user.clubId },
+      where: { id: clubId },
     });
 
     const today = new Date().toISOString().slice(0, 10);
 
     const recentReports = await this.prisma.dailyReport.findMany({
-      where: { clubId: user.clubId },
+      where: { clubId },
       orderBy: { date: 'desc' },
       take: 7,
     });
 
     const clients = await this.prisma.user.findMany({
       where: {
-        clubId: user.clubId,
+        clubId,
         roles: { some: { role: 'CLIENT' } },
       },
     });
@@ -100,18 +102,18 @@ export class AdminService {
         bookingsToday,
       },
       expiringClients: expiringClients.slice(0, 10),
-      funnel: await this.buildFunnel(user.clubId),
+      funnel: await this.buildFunnel(clubId),
       recentReports,
     };
   }
 
   async getFunnel(user: JwtPayload) {
-    return { funnel: await this.buildFunnel(user.clubId) };
+    return { funnel: await this.buildFunnel(requireClubId(user)) };
   }
 
   async getReports(user: JwtPayload) {
     const recentReports = await this.prisma.dailyReport.findMany({
-      where: { clubId: user.clubId },
+      where: { clubId: requireClubId(user) },
       orderBy: { date: 'desc' },
       take: 30,
     });
@@ -151,7 +153,7 @@ export class AdminService {
   async getAtRiskClients(user: JwtPayload) {
     const clients = await this.prisma.user.findMany({
       where: {
-        clubId: user.clubId,
+        clubId: requireClubId(user),
         roles: { some: { role: 'CLIENT' } },
       },
     });
@@ -240,12 +242,13 @@ export class AdminService {
   }
 
   async createDailyReport(user: JwtPayload, dto: CreateDailyReportDto) {
+    const clubId = requireClubId(user);
     const date = new Date(dto.date);
 
     return this.prisma.dailyReport.upsert({
       where: {
         clubId_date: {
-          clubId: user.clubId,
+          clubId,
           date,
         },
       },
@@ -256,7 +259,7 @@ export class AdminService {
         createdBy: user.sub,
       },
       create: {
-        clubId: user.clubId,
+        clubId,
         date,
         revenue: dto.revenue,
         problems: dto.problems,
@@ -268,7 +271,7 @@ export class AdminService {
 
   async getMyTasks(user: JwtPayload) {
     const tasks = await this.prisma.adminTask.findMany({
-      where: { clubId: user.clubId, assigneeId: user.sub },
+      where: { clubId: requireClubId(user), assigneeId: user.sub },
       include: { assignee: true },
       orderBy: [{ status: 'asc' }, { dueAt: 'asc' }],
     });
@@ -286,7 +289,7 @@ export class AdminService {
 
   async updateMyTask(user: JwtPayload, taskId: string, status: AdminTaskStatus) {
     const task = await this.prisma.adminTask.findFirst({
-      where: { id: taskId, assigneeId: user.sub, clubId: user.clubId },
+      where: { id: taskId, assigneeId: user.sub, clubId: requireClubId(user) },
     });
     if (!task) throw new NotFoundException('Задача не найдена');
 

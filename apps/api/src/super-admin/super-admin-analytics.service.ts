@@ -6,6 +6,7 @@ import {
   Role,
 } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -17,6 +18,7 @@ export class SuperAdminAnalyticsService {
   ) {}
 
   async getAnalytics(user: JwtPayload, periodDays = 30) {
+    const clubId = requireClubId(user);
     const now = new Date();
     const periodStart = new Date(now);
     periodStart.setDate(periodStart.getDate() - periodDays);
@@ -24,40 +26,40 @@ export class SuperAdminAnalyticsService {
     prevStart.setDate(prevStart.getDate() - periodDays);
 
     const club = await this.prisma.club.findUnique({
-      where: { id: user.clubId },
+      where: { id: clubId },
     });
 
     const [visits, visitsPrev, reports, reportsPrev, ptCompleted, tasks, groupBookings] =
       await Promise.all([
         this.prisma.clubVisit.count({
-          where: { user: { clubId: user.clubId }, visitedAt: { gte: periodStart } },
+          where: { user: { clubId: clubId }, visitedAt: { gte: periodStart } },
         }),
         this.prisma.clubVisit.count({
           where: {
-            user: { clubId: user.clubId },
+            user: { clubId: clubId },
             visitedAt: { gte: prevStart, lt: periodStart },
           },
         }),
         this.prisma.dailyReport.findMany({
-          where: { clubId: user.clubId, date: { gte: periodStart } },
+          where: { clubId: clubId, date: { gte: periodStart } },
         }),
         this.prisma.dailyReport.findMany({
           where: {
-            clubId: user.clubId,
+            clubId: clubId,
             date: { gte: prevStart, lt: periodStart },
           },
         }),
         this.prisma.personalTrainingBooking.count({
           where: {
-            trainer: { clubId: user.clubId },
+            trainer: { clubId: clubId },
             status: PersonalBookingStatus.COMPLETED,
             endAt: { gte: periodStart },
           },
         }),
-        this.prisma.adminTask.findMany({ where: { clubId: user.clubId } }),
+        this.prisma.adminTask.findMany({ where: { clubId: clubId } }),
         this.prisma.groupClassBooking.findMany({
           where: {
-            client: { clubId: user.clubId },
+            client: { clubId: clubId },
             startAt: { gte: periodStart },
           },
         }),
@@ -70,7 +72,7 @@ export class SuperAdminAnalyticsService {
     let expiringSoon = 0;
     const provider = this.fitness.getProvider();
     const clients = await this.prisma.user.findMany({
-      where: { clubId: user.clubId, roles: { some: { role: Role.CLIENT } } },
+      where: { clubId: clubId, roles: { some: { role: Role.CLIENT } } },
     });
 
     for (const client of clients) {
@@ -85,7 +87,7 @@ export class SuperAdminAnalyticsService {
       }
     }
 
-    const trainerRankings = await this.buildTrainerRankings(user.clubId, periodStart);
+    const trainerRankings = await this.buildTrainerRankings(clubId, periodStart);
     const groupDirectionLoad = this.buildGroupLoad(groupBookings);
 
     const doneTasks = tasks.filter((t) => t.status === AdminTaskStatus.DONE);

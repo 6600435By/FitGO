@@ -6,6 +6,7 @@ import {
 import { ConversationKind, Role } from '@prisma/client';
 import { AdminPermission, UserRole } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { AdminPermissionsService } from '../auth/admin-permissions.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -85,22 +86,24 @@ export class ChatService {
       throw new ForbiddenException('Только клиент может начать новый чат');
     }
 
+    const clubId = requireClubId(user);
+
     if (kind === 'trainer') {
       if (!trainerId) {
         throw new ForbiddenException('Выберите тренера');
       }
-      await this.ensureTrainerEligible(user.clubId, trainerId);
+      await this.ensureTrainerEligible(clubId, trainerId);
     }
 
     const conversationKey =
       kind === 'admin'
-        ? `admin:${user.clubId}:${user.sub}`
+        ? `admin:${clubId}:${user.sub}`
         : `trainer:${user.sub}:${trainerId}`;
 
     const conversation = await this.prisma.conversation.upsert({
       where: { conversationKey },
       create: {
-        clubId: user.clubId,
+        clubId,
         clientId: user.sub,
         kind: kind === 'admin' ? ConversationKind.ADMIN : ConversationKind.TRAINER,
         trainerId: kind === 'trainer' ? trainerId : null,
@@ -210,11 +213,12 @@ export class ChatService {
   ) {
     await this.ensureTrainerCanMessageClient(user, clientId);
 
+    const clubId = requireClubId(user);
     const conversationKey = `trainer:${clientId}:${user.sub}`;
     const conversation = await this.prisma.conversation.upsert({
       where: { conversationKey },
       create: {
-        clubId: user.clubId,
+        clubId,
         clientId,
         kind: ConversationKind.TRAINER,
         trainerId: user.sub,
@@ -232,11 +236,12 @@ export class ChatService {
       throw new ForbiddenException('Только тренер может открыть этот чат');
     }
 
-    const conversationKey = `trainer-admin:${user.clubId}:${user.sub}`;
+    const clubId = requireClubId(user);
+    const conversationKey = `trainer-admin:${clubId}:${user.sub}`;
     const conversation = await this.prisma.conversation.upsert({
       where: { conversationKey },
       create: {
-        clubId: user.clubId,
+        clubId,
         clientId: user.sub,
         kind: ConversationKind.TRAINER_ADMIN,
         trainerId: user.sub,
@@ -268,14 +273,15 @@ export class ChatService {
     }
 
     if (user.roles.includes(UserRole.ADMIN)) {
+      const clubId = requireClubId(user);
       if (scope === 'clients') {
-        return { clubId: user.clubId, kind: ConversationKind.ADMIN };
+        return { clubId, kind: ConversationKind.ADMIN };
       }
       if (scope === 'trainers') {
-        return { clubId: user.clubId, kind: ConversationKind.TRAINER_ADMIN };
+        return { clubId, kind: ConversationKind.TRAINER_ADMIN };
       }
       return {
-        clubId: user.clubId,
+        clubId,
         kind: { in: [ConversationKind.ADMIN, ConversationKind.TRAINER_ADMIN] },
       };
     }
@@ -397,7 +403,10 @@ export class ChatService {
     user: JwtPayload,
     clientId: string,
   ) {
-    const eligibleIds = await this.getEligibleClientIds(user.sub, user.clubId);
+    const eligibleIds = await this.getEligibleClientIds(
+      user.sub,
+      requireClubId(user),
+    );
     if (!eligibleIds.includes(clientId)) {
       throw new ForbiddenException(
         'Можно писать только клиентам из вашей базы или записанным к вам',

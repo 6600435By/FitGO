@@ -231,7 +231,7 @@ export class OsmiCardService {
       firstName: string;
       lastName: string;
       osmiSyncedAt?: Date | null;
-      club: { name: string };
+      club: { name: string } | null;
     },
     card: OsmiCardData,
   ): ClubCardView {
@@ -240,7 +240,7 @@ export class OsmiCardService {
       barcode: card.barcode,
       barcodeFormat: card.barcodeFormat,
       clientName: card.ownerName ?? `${user.firstName} ${user.lastName}`.trim(),
-      clubName: user.club.name,
+      clubName: user.club?.name ?? 'Клуб',
       membership: card.membership,
       walletUrl: card.walletUrl,
       stripImageId: card.stripImageId,

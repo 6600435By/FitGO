@@ -9,6 +9,7 @@ import { VisitSource, WorkoutSource, WorkoutType, NotificationType } from '@pris
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { BadgeEvaluatorService } from './badge-evaluator.service';
 import { XP_BY_ACTION } from './badge-definitions';
 import { LeagueService } from './league.service';
@@ -58,6 +59,7 @@ export class EngagementService {
     if (!dbUser) throw new NotFoundException();
     this.requireProfile(dbUser);
 
+    const clubId = requireClubId(user);
     if (dbUser.gamificationStartedAt) {
       throw new BadRequestException('Геймификация уже активирована');
     }
@@ -65,7 +67,7 @@ export class EngagementService {
     let nickname = dto.gamificationNickname?.trim();
     if (!dto.useRealNameInPublic) {
       if (!nickname) nickname = suggestNickname(dbUser.gender);
-      const check = await this.checkNickname(user.clubId, nickname);
+      const check = await this.checkNickname(clubId, nickname);
       if (!check.available) {
         throw new ConflictException('Этот ник уже занят');
       }
@@ -81,8 +83,8 @@ export class EngagementService {
       },
     });
 
-    await this.loyalty.initializeFromHistory(user.sub, user.clubId, dbUser.externalId);
-    await this.league.ensureClientRating(user.sub, user.clubId);
+    await this.loyalty.initializeFromHistory(user.sub, clubId, dbUser.externalId);
+    await this.league.ensureClientRating(user.sub, clubId);
     await this.league.awardXp(user.sub, XP_BY_ACTION.DAILY_GOAL);
     const newBadges = await this.badgeEvaluator.evaluate(user.sub);
 
@@ -113,16 +115,17 @@ export class EngagementService {
     }
 
     const source = dto.qrToken ? VisitSource.APP_QR : VisitSource.APP_GEOFENCE;
+    const clubId = requireClubId(user);
     const { visit, isNew } = await this.visitSync.upsertVisit(
       user.sub,
-      user.clubId,
+      clubId,
       new Date(),
       source,
     );
 
     if (isNew) {
       await this.league.awardXp(user.sub, XP_BY_ACTION.CLUB_VISIT);
-      await this.updateChallengeProgress(user.sub, user.clubId);
+      await this.updateChallengeProgress(user.sub, clubId);
     }
 
     await this.loyalty.refreshLoyalty(user.sub);
@@ -234,7 +237,7 @@ export class EngagementService {
     const decayWarning = this.league.getDecayWarning(rating?.lastAppActivityAt);
 
     const rankUsers = await this.prisma.clientRating.findMany({
-      where: { clubId: user.clubId },
+      where: { clubId: requireClubId(user) },
       orderBy: { lifetimeXp: 'desc' },
       take: 50,
       include: {
@@ -336,7 +339,9 @@ export class EngagementService {
       });
     }
 
-    const club = await this.prisma.club.findUnique({ where: { id: user.clubId } });
+    const club = await this.prisma.club.findUnique({
+      where: { id: requireClubId(user) },
+    });
     const referralsCount = await this.prisma.referral.count({
       where: { referrerId: user.sub },
     });
@@ -378,7 +383,7 @@ export class EngagementService {
   async getChallenges(user: JwtPayload) {
     const dbUser = await this.prisma.user.findUnique({ where: { id: user.sub } });
     const challenges = await this.prisma.challenge.findMany({
-      where: { clubId: user.clubId, active: true },
+      where: { clubId: requireClubId(user), active: true },
       orderBy: { startDate: 'desc' },
       include: {
         entries: dbUser?.gamificationStartedAt

@@ -103,6 +103,7 @@ export class EngagementSchedulerService implements OnModuleInit {
       select: { id: true, clubId: true, externalId: true },
     });
     for (const u of users) {
+      if (!u.clubId) continue;
       await this.visitSync.syncUserVisits(u.id, u.clubId, u.externalId);
     }
   }

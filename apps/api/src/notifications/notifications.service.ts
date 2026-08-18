@@ -5,6 +5,7 @@ import { UserRole } from '@fitgo/shared-types';
 import { MOCK_USERS } from '@fitgo/1c-adapter';
 import { MembershipStatus } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -123,6 +124,7 @@ export class NotificationsService implements OnModuleInit {
     const senderName = `${sender.firstName} ${sender.lastName}`.trim();
     const phone = sender.phone ? ` (${sender.phone})` : '';
     const body = `${senderName}${phone}: ${params.message}`;
+    const clubId = requireClubId(user);
 
     if (params.recipientType === 'admin') {
       const title = isTrainer
@@ -131,7 +133,7 @@ export class NotificationsService implements OnModuleInit {
 
       const admins = await this.prisma.user.findMany({
         where: {
-          clubId: user.clubId,
+          clubId,
           roles: { some: { role: Role.ADMIN } },
         },
       });
@@ -162,7 +164,7 @@ export class NotificationsService implements OnModuleInit {
     const trainer = await this.prisma.user.findFirst({
       where: {
         id: params.trainerId,
-        clubId: user.clubId,
+        clubId,
         roles: { some: { role: Role.TRAINER } },
       },
     });

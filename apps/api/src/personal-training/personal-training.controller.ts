@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { type WorkoutSheet } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { BookPersonalTrainingDto } from './dto/book-personal-training.dto';
 import { SetWorkScheduleDto } from './dto/set-work-schedule.dto';
 import { UpdateSessionPlanDto } from './dto/update-session-plan.dto';
@@ -142,7 +143,7 @@ export class PersonalTrainingController {
   @Get('client/trainers')
   @Roles(UserRole.CLIENT)
   listTrainers(@CurrentUser() user: JwtPayload) {
-    return this.personalTraining.listAvailableTrainers(user.clubId);
+    return this.personalTraining.listAvailableTrainers(requireClubId(user));
   }
 
   @Get('client/trainers/:trainerId/slots')
@@ -154,7 +155,7 @@ export class PersonalTrainingController {
     @Query('to') to?: string,
   ) {
     return this.personalTraining.getTrainerAvailableSlots(
-      user.clubId,
+      requireClubId(user),
       trainerId,
       from,
       to,

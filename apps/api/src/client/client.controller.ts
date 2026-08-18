@@ -5,6 +5,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
 import { ClientService } from './client.service';
 import { ClientProfileService } from './client-profile.service';
@@ -38,7 +39,7 @@ export class ClientController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateClientProfileDto,
   ) {
-    return this.profileService.updateProfile(user.sub, user.clubId, dto);
+    return this.profileService.updateProfile(user.sub, requireClubId(user), dto);
   }
 
   @Patch('profile/gamification')
@@ -46,7 +47,7 @@ export class ClientController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateGamificationSettingsDto,
   ) {
-    return this.profileService.updateGamificationSettings(user.sub, user.clubId, dto);
+    return this.profileService.updateGamificationSettings(user.sub, requireClubId(user), dto);
   }
 
   @Get('body')
@@ -126,7 +127,7 @@ export class ClientController {
 
   @Get('club-trainers')
   getClubTrainers(@CurrentUser() user: JwtPayload) {
-    return this.clientService.getClubTrainers(user.clubId);
+    return this.clientService.getClubTrainers(requireClubId(user));
   }
 
   @Post('book')
