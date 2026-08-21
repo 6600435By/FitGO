@@ -24,7 +24,6 @@ import {
   createDefaultCircuit,
   getPrepSections,
   getWorkoutBlocks,
-  isPrepSectionEnabled,
 } from '@fitgo/shared-types';
 
 export interface TimerFieldOption {
@@ -41,7 +40,7 @@ const CARDIO_TIMER_CAPTURE_IDS: CardioFieldId[] = [
   'notes',
 ];
 
-const PREP_TIMER_CAPTURE_IDS: PrepFieldId[] = ['zone', 'rpe', 'notes'];
+const PREP_TIMER_CAPTURE_IDS: PrepFieldId[] = ['zone', 'hr', 'rpe', 'notes'];
 
 const STRENGTH_TIMER_CAPTURE_IDS: StrengthSetFieldId[] = [
   'weight',
@@ -184,85 +183,24 @@ function mergeMobilityFields(
   return merged;
 }
 
-export function getTimerFieldDefaults(blockId: WorkoutSectionId): string[] {
-  switch (blockId) {
-    case 'cardio':
-      return ['hr'];
-    case 'circuit':
-      return ['hr'];
-    case 'strength':
-      return ['rpe'];
-    case 'warmup':
-    case 'cooldown':
-      return ['zone'];
-    default:
-      return [];
-  }
-}
-
+/** Поля записи в таймере берутся из конфигурации блока; здесь только инициализация круга. */
 export function applyTimerFieldDefaults(sheet: WorkoutSheet): WorkoutSheet {
   if (sheet.sessionStartedAt) return sheet;
 
-  let next: WorkoutSheet = { ...sheet };
+  const blocks = getWorkoutBlocks(sheet);
+  if (!blocks.includes('circuit')) return sheet;
 
-  if (isPrepSectionEnabled(next, 'warmup')) {
-    next = {
-      ...next,
-      warmupFields: mergePrepFields(
-        next.warmupFields,
-        WARMUP_DEFAULT_FIELDS,
-        getTimerFieldDefaults('warmup') as PrepFieldId[],
-      ),
-    };
-  }
+  const circuit = sheet.circuit ?? createDefaultCircuit();
+  if (circuit.timerCaptureFields?.length) return sheet;
 
-  if (isPrepSectionEnabled(next, 'cooldown')) {
-    next = {
-      ...next,
-      cooldownFields: mergePrepFields(
-        next.cooldownFields,
-        COOLDOWN_DEFAULT_FIELDS,
-        getTimerFieldDefaults('cooldown') as PrepFieldId[],
-      ),
-    };
-  }
-
-  const blocks = getWorkoutBlocks(next);
-  if (blocks.includes('cardio')) {
-    next = {
-      ...next,
-      cardioFields: mergeCardioFields(
-        next.cardioFields,
-        getTimerFieldDefaults('cardio') as CardioFieldId[],
-      ),
-    };
-  }
-
-  if (blocks.includes('strength')) {
-    next = {
-      ...next,
-      strengthSetFields: mergeStrengthFields(
-        next.strengthSetFields,
-        getTimerFieldDefaults('strength') as StrengthSetFieldId[],
-      ),
-    };
-  }
-
-  if (blocks.includes('circuit')) {
-    const circuit = next.circuit ?? createDefaultCircuit();
-    next = {
-      ...next,
-      circuit: {
-        ...circuit,
-        timerCaptureFields: (circuit.timerCaptureFields ??
-          ['hr']) as CircuitTimerCaptureId[],
-        stationFields:
-          circuit.stationFields ?? [...CIRCUIT_DEFAULT_STATION_FIELDS],
-      },
-    };
-  }
-
-  return next;
+  return {
+    ...sheet,
+    circuit: {
+      ...circuit,
+      timerCaptureFields: ['hr'] as CircuitTimerCaptureId[],
+      stationFields: circuit.stationFields ?? [...CIRCUIT_DEFAULT_STATION_FIELDS],
+    },
+  };
 }
 
 export function toggleTimerField(

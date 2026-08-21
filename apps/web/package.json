@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --turbopack --port 3000",
     "dev:app": "next dev --turbopack --port 3000",
+    "dev:3010": "NEXT_PUBLIC_API_URL=http://localhost:3011 next dev --turbopack --port 3010",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
@@ -18,7 +19,6 @@
     "next": "^15.3.3",
     "qrcode": "^1.5.4",
     "react": "^19.1.0",
-    "react-big-calendar": "^1.20.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
@@ -26,7 +26,6 @@
     "@types/node": "^22.15.21",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^19.1.6",
-    "@types/react-big-calendar": "^1.16.3",
     "@types/react-dom": "^19.1.5",
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.4",

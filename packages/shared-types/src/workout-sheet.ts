@@ -299,12 +299,13 @@ export function applyCrossFitFormat(
   return next;
 }
 
-export type PrepFieldId = 'type' | 'duration' | 'zone' | 'rpe' | 'notes';
+export type PrepFieldId = 'type' | 'duration' | 'zone' | 'hr' | 'rpe' | 'notes';
 
 export const PREP_FIELD_IDS: PrepFieldId[] = [
   'type',
   'duration',
   'zone',
+  'hr',
   'rpe',
   'notes',
 ];
@@ -313,6 +314,7 @@ export const PREP_FIELD_LABELS: Record<PrepFieldId, string> = {
   type: 'Тип',
   duration: 'Время',
   zone: 'Зона',
+  hr: 'ЧСС',
   rpe: 'RPE',
   notes: 'Заметка',
 };
@@ -321,6 +323,7 @@ export const PREP_FIELD_PLACEHOLDERS: Record<PrepFieldId, string> = {
   type: '',
   duration: '5 мин',
   zone: 'Z1',
+  hr: '130',
   rpe: '5–6',
   notes: 'Детали…',
 };
@@ -583,6 +586,7 @@ export interface PrepActivityRow {
   type?: string;
   duration?: string;
   zone?: string;
+  hr?: string;
   rpe?: string;
   notes?: string;
   /** Фактическое время работы этапа, сек */
@@ -591,6 +595,8 @@ export interface PrepActivityRow {
   actualRestAfterSec?: number;
   /** Этап пропущен */
   skipped?: boolean;
+  /** Факт: ЧСС */
+  actualHr?: string;
   /** Факт: зона */
   actualZone?: string;
   /** Факт: RPE */
@@ -804,7 +810,122 @@ function formatDurationFromSec(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-/** Сводная статистика тренировки по заполненному листу (TrainingPeaks / Garmin style) */
+function effectiveRpe(
+  actual?: number | string,
+  planned?: number | string,
+): number | undefined {
+  if (typeof actual === 'number' && actual >= 1 && actual <= 10) return actual;
+  const fromActual = parseNumericField(
+    typeof actual === 'string' ? actual : undefined,
+  );
+  if (fromActual != null && fromActual >= 1 && fromActual <= 10) return fromActual;
+  if (typeof planned === 'number' && planned >= 1 && planned <= 10) return planned;
+  return parseNumericField(typeof planned === 'string' ? planned : undefined);
+}
+
+function effectiveHr(actual?: string, planned?: string): number | undefined {
+  return parseNumericField(actual) ?? parseNumericField(planned);
+}
+
+function sumActualWorkSec(
+  rows: Array<{ actualWorkSec?: number; skipped?: boolean }>,
+): number {
+  return rows.reduce((sum, r) => sum + (r.skipped ? 0 : (r.actualWorkSec ?? 0)), 0);
+}
+
+function workSecToDurationMin(sec: number): number | undefined {
+  return sec > 0 ? Math.max(1, Math.round(sec / 60)) : undefined;
+}
+
+function blockDurationMinFromSheet(
+  sheet: WorkoutSheet,
+  blockId: WorkoutSectionId,
+): number | undefined {
+  switch (blockId) {
+    case 'warmup':
+      if (sheet.warmupDurationMin) return sheet.warmupDurationMin;
+      return workSecToDurationMin(sumActualWorkSec(sheet.warmupActivities ?? []));
+    case 'cooldown':
+      if (sheet.cooldownDurationMin) return sheet.cooldownDurationMin;
+      return workSecToDurationMin(sumActualWorkSec(sheet.cooldownActivities ?? []));
+    case 'cardio':
+      if (sheet.cardioTotalMin) return sheet.cardioTotalMin;
+      return workSecToDurationMin(sumActualWorkSec(sheet.cardioExercises));
+    case 'mobility':
+      if (sheet.mobilityDurationMin) return sheet.mobilityDurationMin;
+      return workSecToDurationMin(sumActualWorkSec(sheet.mobilityExercises));
+    case 'strength': {
+      if (sheet.strengthDurationMin) return sheet.strengthDurationMin;
+      let sec = 0;
+      for (const ex of sheet.strengthExercises) {
+        for (const set of ex.sets) {
+          if (typeof set.actualWorkSec === 'number') sec += set.actualWorkSec;
+        }
+      }
+      return workSecToDurationMin(sec);
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** Подставляет макс. ЧСС и RPE сессии из факта таймера, если тренер ещё не ввёл вручную */
+export function deriveSessionFactPatch(sheet: WorkoutSheet): Partial<WorkoutSheet> {
+  const hrs: number[] = [];
+  const rpes: number[] = [];
+
+  const pushHr = (actual?: string, planned?: string) => {
+    const hr = effectiveHr(actual, planned);
+    if (hr != null) hrs.push(hr);
+  };
+  const pushRpe = (actual?: number | string, planned?: number | string) => {
+    const rpe = effectiveRpe(actual, planned);
+    if (rpe != null) rpes.push(rpe);
+  };
+
+  for (const row of sheet.warmupActivities ?? []) {
+    pushHr(row.actualHr, row.hr);
+    pushRpe(row.actualRpe, row.rpe);
+  }
+  for (const row of sheet.cooldownActivities ?? []) {
+    pushHr(row.actualHr, row.hr);
+    pushRpe(row.actualRpe, row.rpe);
+  }
+  for (const row of sheet.cardioExercises) {
+    pushHr(row.actualHr, row.hr);
+    pushRpe(row.actualRpe, row.rpe);
+  }
+  for (const row of sheet.mobilityExercises) {
+    pushRpe(row.actualRpe, row.rpe);
+  }
+  for (const ex of sheet.strengthExercises) {
+    for (const set of ex.sets) {
+      pushRpe(set.actualRpe, set.rpe);
+    }
+  }
+  if (sheet.circuit) {
+    for (const log of sheet.circuit.roundLogs) {
+      if (typeof log.maxHr === 'number') hrs.push(log.maxHr);
+      if (typeof log.avgHr === 'number') hrs.push(log.avgHr);
+      for (const station of log.stations) {
+        if (typeof station.actualHr === 'number') hrs.push(station.actualHr);
+        if (typeof station.rpe === 'number') rpes.push(station.rpe);
+      }
+    }
+  }
+
+  const patch: Partial<WorkoutSheet> = {};
+  if (sheet.maxHr == null && hrs.length > 0) {
+    patch.maxHr = Math.max(...hrs);
+  }
+  if (sheet.sessionRpe == null && rpes.length > 0) {
+    const avg = rpes.reduce((a, b) => a + b, 0) / rpes.length;
+    patch.sessionRpe = Math.min(10, Math.max(1, Math.round(avg * 10) / 10));
+  }
+  return patch;
+}
+
+/** Сводная статистика тренировки: приоритет у факта таймера, иначе план блоков */
 export function summarizeWorkoutSession(sheet: WorkoutSheet): WorkoutSessionSummary {
   const blocks = getWorkoutBlocks(sheet);
   const blockMetrics: WorkoutBlockMetric[] = [];
@@ -818,20 +939,23 @@ export function summarizeWorkoutSession(sheet: WorkoutSheet): WorkoutSessionSumm
     durationSegments.push({ id, label, min });
   };
 
-  if (isPrepSectionEnabled(sheet, 'warmup') && sheet.warmupDurationMin) {
-    pushDuration('warmup', WORKOUT_SECTION_LABELS.warmup, sheet.warmupDurationMin);
-    const rpes = (sheet.warmupActivities ?? [])
-      .map((r) => parseNumericField(r.rpe))
-      .filter((v): v is number => v != null);
-    const avgRpe = averageRounded(rpes);
-    if (avgRpe) rpeBars.push({ label: 'Разминка', value: avgRpe });
-    blockMetrics.push({
-      id: 'warmup',
-      label: WORKOUT_SECTION_LABELS.warmup,
-      durationMin: sheet.warmupDurationMin,
-      avgRpe,
-      highlights: [`${sheet.warmupDurationMin} мин`],
-    });
+  if (isPrepSectionEnabled(sheet, 'warmup')) {
+    const warmupMin = blockDurationMinFromSheet(sheet, 'warmup');
+    if (warmupMin) {
+      pushDuration('warmup', WORKOUT_SECTION_LABELS.warmup, warmupMin);
+      const rpes = (sheet.warmupActivities ?? [])
+        .map((r) => effectiveRpe(r.actualRpe, r.rpe))
+        .filter((v): v is number => v != null);
+      const avgRpe = averageRounded(rpes);
+      if (avgRpe) rpeBars.push({ label: 'Разминка', value: avgRpe });
+      blockMetrics.push({
+        id: 'warmup',
+        label: WORKOUT_SECTION_LABELS.warmup,
+        durationMin: warmupMin,
+        avgRpe,
+        highlights: [`${warmupMin} мин`],
+      });
+    }
   }
 
   let strengthSummary: WorkoutSessionSummary['strength'];
@@ -851,16 +975,29 @@ export function summarizeWorkoutSession(sheet: WorkoutSheet): WorkoutSessionSumm
       let topLoad: string | undefined;
 
       for (const set of workingSets) {
-        if (typeof set.rpe === 'number') {
-          setRpes.push(set.rpe);
-          allRpes.push(set.rpe);
+        const rpe = effectiveRpe(set.actualRpe, set.rpe);
+        if (rpe != null) {
+          setRpes.push(rpe);
+          allRpes.push(rpe);
         }
-        const w = parseNumericField(set.weight) ?? parseNumericField(set.load);
-        const reps = parseNumericField(set.reps);
+        const w =
+          parseNumericField(set.actualWeight) ??
+          parseNumericField(set.weight) ??
+          parseNumericField(set.actualLoad) ??
+          parseNumericField(set.load);
+        const reps =
+          parseNumericField(set.actualReps) ?? parseNumericField(set.reps);
         if (w != null && reps != null) tonnage += w * reps;
         if (w != null && w >= topWeight) {
           topWeight = w;
-          topLoad = set.load?.trim() || `${w}×${reps ?? '?'}`;
+          const factLoad = [set.actualWeight, set.actualReps]
+            .filter(Boolean)
+            .join('×');
+          topLoad =
+            factLoad ||
+            set.actualLoad?.trim() ||
+            set.load?.trim() ||
+            `${w}×${reps ?? '?'}`;
         }
       }
 
@@ -875,8 +1012,9 @@ export function summarizeWorkoutSession(sheet: WorkoutSheet): WorkoutSessionSumm
 
     const avgRpe = averageRounded(allRpes);
     const maxRpe = allRpes.length ? Math.max(...allRpes) : undefined;
-    if (exercises.length > 0 || sheet.strengthDurationMin) {
-      pushDuration('strength', WORKOUT_SECTION_LABELS.strength, sheet.strengthDurationMin);
+    const strengthMin = blockDurationMinFromSheet(sheet, 'strength');
+    if (exercises.length > 0 || strengthMin) {
+      pushDuration('strength', WORKOUT_SECTION_LABELS.strength, strengthMin);
       if (avgRpe) rpeBars.push({ label: 'Силовая', value: avgRpe });
       const highlights: string[] = [];
       if (totalSets) highlights.push(`${totalSets} подх.`);
@@ -885,7 +1023,7 @@ export function summarizeWorkoutSession(sheet: WorkoutSheet): WorkoutSessionSumm
       blockMetrics.push({
         id: 'strength',
         label: WORKOUT_SECTION_LABELS.strength,
-        durationMin: sheet.strengthDurationMin,
+        durationMin: strengthMin,
         avgRpe,
         maxRpe,
         highlights,
@@ -902,34 +1040,38 @@ export function summarizeWorkoutSession(sheet: WorkoutSheet): WorkoutSessionSumm
 
   let cardioSummary: WorkoutSessionSummary['cardio'];
   if (blocks.includes('cardio')) {
-    const rows = sheet.cardioExercises.filter((r) =>
-      cardioRowHasData(r, sheet.cardioFields ?? CARDIO_DEFAULT_FIELDS),
+    const rows = sheet.cardioExercises.filter(
+      (r) =>
+        cardioRowHasData(r, sheet.cardioFields ?? CARDIO_DEFAULT_FIELDS) ||
+        (typeof r.actualWorkSec === 'number' && r.actualWorkSec > 0) ||
+        Boolean(r.actualHr?.trim() || r.actualRpe?.trim() || r.actualZone?.trim()),
     );
     const rpes: number[] = [];
     const hrs: number[] = [];
     const zones: Record<string, number> = {};
     for (const row of rows) {
-      const rpe = parseNumericField(row.rpe);
-      const hr = parseNumericField(row.hr);
+      const rpe = effectiveRpe(row.actualRpe, row.rpe);
+      const hr = effectiveHr(row.actualHr, row.hr);
       if (rpe != null) rpes.push(rpe);
       if (hr != null) hrs.push(hr);
-      const zone = row.zone?.trim();
+      const zone = (row.actualZone ?? row.zone)?.trim();
       if (zone) zones[zone] = (zones[zone] ?? 0) + 1;
     }
     const avgRpe = averageRounded(rpes);
     const avgHr = averageRounded(hrs);
     const topZone = Object.entries(zones).sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (rows.length > 0 || sheet.cardioTotalMin) {
-      pushDuration('cardio', WORKOUT_SECTION_LABELS.cardio, sheet.cardioTotalMin);
+    const cardioMin = blockDurationMinFromSheet(sheet, 'cardio');
+    if (rows.length > 0 || cardioMin) {
+      pushDuration('cardio', WORKOUT_SECTION_LABELS.cardio, cardioMin);
       if (avgRpe) rpeBars.push({ label: 'Кардио', value: avgRpe });
       const highlights: string[] = [];
-      if (sheet.cardioTotalMin) highlights.push(`${sheet.cardioTotalMin} мин`);
+      if (cardioMin) highlights.push(`${cardioMin} мин`);
       if (avgHr) highlights.push(`ЧСС ${avgHr}`);
       if (topZone) highlights.push(topZone);
       blockMetrics.push({
         id: 'cardio',
         label: WORKOUT_SECTION_LABELS.cardio,
-        durationMin: sheet.cardioTotalMin,
+        durationMin: cardioMin,
         avgRpe,
         highlights,
       });
@@ -1008,29 +1150,33 @@ export function summarizeWorkoutSession(sheet: WorkoutSheet): WorkoutSessionSumm
 
   let mobilitySummary: WorkoutSessionSummary['mobility'];
   if (blocks.includes('mobility')) {
-    const rows = sheet.mobilityExercises.filter((r) =>
-      mobilityRowHasData(r, sheet.mobilityFields ?? MOBILITY_DEFAULT_FIELDS),
+    const rows = sheet.mobilityExercises.filter(
+      (r) =>
+        mobilityRowHasData(r, sheet.mobilityFields ?? MOBILITY_DEFAULT_FIELDS) ||
+        (typeof r.actualWorkSec === 'number' && r.actualWorkSec > 0) ||
+        Boolean(r.actualRpe?.trim() || r.actualComfort?.trim()),
     );
     const rpes: number[] = [];
     const comforts: number[] = [];
     for (const row of rows) {
-      const rpe = parseNumericField(row.rpe);
-      const comfort = parseNumericField(row.comfort);
+      const rpe = effectiveRpe(row.actualRpe, row.rpe);
+      const comfort = parseNumericField(row.actualComfort ?? row.comfort);
       if (rpe != null) rpes.push(rpe);
       if (comfort != null) comforts.push(comfort);
     }
     const avgRpe = averageRounded(rpes);
     const avgComfort = averageRounded(comforts);
-    if (rows.length > 0 || sheet.mobilityDurationMin) {
-      pushDuration('mobility', WORKOUT_SECTION_LABELS.mobility, sheet.mobilityDurationMin);
+    const mobilityMin = blockDurationMinFromSheet(sheet, 'mobility');
+    if (rows.length > 0 || mobilityMin) {
+      pushDuration('mobility', WORKOUT_SECTION_LABELS.mobility, mobilityMin);
       if (avgRpe) rpeBars.push({ label: 'Биомех.', value: avgRpe });
       blockMetrics.push({
         id: 'mobility',
         label: WORKOUT_SECTION_LABELS.mobility,
-        durationMin: sheet.mobilityDurationMin,
+        durationMin: mobilityMin,
         avgRpe,
         highlights: [
-          ...(sheet.mobilityDurationMin ? [`${sheet.mobilityDurationMin} мин`] : []),
+          ...(mobilityMin ? [`${mobilityMin} мин`] : []),
           `${rows.length} упр.`,
         ],
       });
@@ -1042,14 +1188,17 @@ export function summarizeWorkoutSession(sheet: WorkoutSheet): WorkoutSessionSumm
     }
   }
 
-  if (isPrepSectionEnabled(sheet, 'cooldown') && sheet.cooldownDurationMin) {
-    pushDuration('cooldown', WORKOUT_SECTION_LABELS.cooldown, sheet.cooldownDurationMin);
-    blockMetrics.push({
-      id: 'cooldown',
-      label: WORKOUT_SECTION_LABELS.cooldown,
-      durationMin: sheet.cooldownDurationMin,
-      highlights: [`${sheet.cooldownDurationMin} мин`],
-    });
+  if (isPrepSectionEnabled(sheet, 'cooldown')) {
+    const cooldownMin = blockDurationMinFromSheet(sheet, 'cooldown');
+    if (cooldownMin) {
+      pushDuration('cooldown', WORKOUT_SECTION_LABELS.cooldown, cooldownMin);
+      blockMetrics.push({
+        id: 'cooldown',
+        label: WORKOUT_SECTION_LABELS.cooldown,
+        durationMin: cooldownMin,
+        highlights: [`${cooldownMin} мин`],
+      });
+    }
   }
 
   if (totalDurationMin > 0) {
@@ -1108,7 +1257,12 @@ export function strengthSetHasData(set: StrengthSetEntry): boolean {
       set.reps?.trim() ||
       set.rpe ||
       set.restSec ||
-      set.tempo?.trim(),
+      set.tempo?.trim() ||
+      set.actualLoad?.trim() ||
+      set.actualWeight?.trim() ||
+      set.actualReps?.trim() ||
+      set.actualRpe ||
+      (typeof set.actualWorkSec === 'number' && set.actualWorkSec > 0),
   );
 }
 
@@ -1274,6 +1428,7 @@ function normalizePrepRow(raw: unknown): PrepActivityRow {
     result.actualRestAfterSec = row.actualRestAfterSec;
   }
   if (row.skipped === true) result.skipped = true;
+  if (row.actualHr?.trim()) result.actualHr = row.actualHr.trim();
   if (row.actualZone?.trim()) result.actualZone = row.actualZone.trim();
   if (row.actualRpe?.trim()) result.actualRpe = row.actualRpe.trim();
   if (row.actualNotes?.trim()) result.actualNotes = row.actualNotes.trim();

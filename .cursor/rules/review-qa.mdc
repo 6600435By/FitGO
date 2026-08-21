@@ -1,0 +1,19 @@
+---
+description: Запуск Review+QA субагента по команде «сделай ревью» / /review-qa
+alwaysApply: true
+---
+
+# Review + QA trigger
+
+Если сообщение пользователя содержит одну из команд:
+
+- `/review-qa`
+- `сделай ревью` / `сделай ревью агентом`
+- `запусти ревью`
+- `make review` / `run review`
+
+→ **немедленно** прочитай и выполни `.cursor/skills/review-qa/SKILL.md`.
+
+Не спрашивай «запустить?» — запускай субагент и верни краткий отчёт по шаблону из skill.
+
+После ревью пользователь может вызвать fixer: `/fix-review` или `исправь по ревью` → skill `.cursor/skills/fix-from-review/SKILL.md`.

@@ -45,11 +45,16 @@ import { CircuitBlockEditor } from './circuit-block-editor';
 import { CardioBlockEditor } from './cardio-block-editor';
 import { MobilityBlockEditor } from './mobility-block-editor';
 import { PrepBlockEditor } from './prep-block-editor';
+import { PrepBlockSession } from './prep-block-session';
 import { StrengthBlockEditor } from './strength-block-editor';
 import { SectionTitle, TrainerTip } from './trainer-tip';
 import { WorkoutSectionCard } from './workout-section-card';
 import { WorkoutSessionController } from './workout-session-controller';
 import { WorkoutSessionSummaryPanel } from './workout-session-summary';
+import {
+  WorkoutTimerDock,
+} from './workout-timer-dock';
+import type { TimerDockBlockOption } from './workout-timer-apply';
 import { Lock } from 'lucide-react';
 
 const MAIN_BLOCK_LABELS: Record<WorkoutMainBlock, string> = {
@@ -158,8 +163,34 @@ export function WorkoutSheetEditor({
   const sessionSteps = useMemo(() => buildWorkoutSessionPlan(sheet), [sheet]);
   const canStartSession = !readOnly && sessionSteps.length > 0;
 
+  const timerDockBlocks = useMemo((): TimerDockBlockOption[] => {
+    const blocks: TimerDockBlockOption[] = [];
+    if (hasWarmup) blocks.push({ id: 'warmup', label: WORKOUT_SECTION_LABELS.warmup });
+    if (hasStrength) blocks.push({ id: 'strength', label: WORKOUT_SECTION_LABELS.strength });
+    if (activeBlocks.includes('cardio')) {
+      blocks.push({ id: 'cardio', label: WORKOUT_SECTION_LABELS.cardio });
+    }
+    if (hasCircuit) blocks.push({ id: 'circuit', label: WORKOUT_SECTION_LABELS.circuit });
+    if (hasMobility) {
+      blocks.push({ id: 'mobility', label: WORKOUT_SECTION_LABELS.mobility });
+    }
+    if (hasCooldown) {
+      blocks.push({ id: 'cooldown', label: WORKOUT_SECTION_LABELS.cooldown });
+    }
+    return blocks;
+  }, [
+    activeBlocks,
+    hasCircuit,
+    hasCooldown,
+    hasMobility,
+    hasStrength,
+    hasWarmup,
+  ]);
+
   const [circuitHistory, setCircuitHistory] = useState<CircuitHistoryPoint[]>([]);
   const [copyBusy, setCopyBusy] = useState(false);
+  const [prepSessionVariant, setPrepSessionVariant] =
+    useState<PrepSectionId | null>(null);
 
   const suggestedAge = useMemo(
     () =>
@@ -439,6 +470,16 @@ export function WorkoutSheetEditor({
           onChange={onChange}
         />
 
+        {!readOnly && timerDockBlocks.length > 0 && (
+          <WorkoutTimerDock
+            sheet={sheet}
+            readOnly={readOnly}
+            circuit={sheet.circuit}
+            blocks={timerDockBlocks}
+            onChange={onChange}
+          />
+        )}
+
       </div>
 
       {hasWarmup && (
@@ -455,6 +496,15 @@ export function WorkoutSheetEditor({
                 placeholder="мин"
                 className="w-20"
               />
+              {!readOnly && (
+                <button
+                  type="button"
+                  className="btn-secondary text-xs"
+                  onClick={() => setPrepSessionVariant('warmup')}
+                >
+                  Запустить блок
+                </button>
+              )}
             </>
           }
         >
@@ -583,6 +633,15 @@ export function WorkoutSheetEditor({
                 placeholder="мин"
                 className="w-20"
               />
+              {!readOnly && (
+                <button
+                  type="button"
+                  className="btn-secondary text-xs"
+                  onClick={() => setPrepSessionVariant('cooldown')}
+                >
+                  Запустить блок
+                </button>
+              )}
             </>
           }
         >
@@ -600,10 +659,9 @@ export function WorkoutSheetEditor({
       <div className="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
         <div className="mb-3">
           <SectionTitle tipId="session-vitals">ПОКАЗАТЕЛИ СЕССИИ</SectionTitle>
-          <p className="mt-1 text-xs text-slate-500">
-            Общее состояние клиента в конце занятия — для отслеживания восстановления и
-            нагрузки между тренировками
-          </p>
+            <p className="mt-1 text-xs text-slate-500">
+              Общее состояние клиента — подставляется из факта таймера, можно скорректировать
+            </p>
         </div>
         <div className="mb-3 grid gap-3 sm:grid-cols-2">
           <div>
@@ -654,7 +712,7 @@ export function WorkoutSheetEditor({
           <div className="mb-3">
             <h4 className="font-semibold">СВОДКА ТРЕНИРОВКИ</h4>
             <p className="mt-1 text-xs text-slate-500">
-              Автоматически по заполненным блокам — объём, RPE, пульс, структура времени
+              Время, объём и RPE — из факта таймера; время блоков редактируется в шапке блока
             </p>
           </div>
           <WorkoutSessionSummaryPanel summary={sessionSummary} />
@@ -734,6 +792,25 @@ export function WorkoutSheetEditor({
             />
           )}
         </div>
+      )}
+
+      {prepSessionVariant && (
+        <PrepBlockSession
+          variant={prepSessionVariant}
+          activities={
+            prepSessionVariant === 'warmup'
+              ? (sheet.warmupActivities ?? [])
+              : (sheet.cooldownActivities ?? [])
+          }
+          activeFields={
+            prepSessionVariant === 'warmup'
+              ? (sheet.warmupFields ?? WARMUP_DEFAULT_FIELDS)
+              : (sheet.cooldownFields ?? COOLDOWN_DEFAULT_FIELDS)
+          }
+          sheet={sheet}
+          onClose={() => setPrepSessionVariant(null)}
+          onChange={onChange}
+        />
       )}
     </div>
   );

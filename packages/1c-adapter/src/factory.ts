@@ -1,5 +1,7 @@
 import { FormaFitnessProvider } from './forma-provider';
 import { FormaWordPressProxyProvider } from './forma-wordpress-provider';
+import { FitgoHttpProvider } from './fitgo-http-provider';
+import { FormaFitgoCompositeProvider } from './forma-fitgo-composite-provider';
 import { Mock1CProvider } from './mock-provider';
 import { OneCFitnessProvider } from './onec-provider';
 import type {
@@ -36,7 +38,16 @@ export function createFitnessProvider(
         'FORMA_BASE_URL, FORMA_API_KEY and FORMA_BASIC_AUTH are required when FITNESS_PROVIDER=forma',
       );
     }
-    return new FormaFitnessProvider(options.forma);
+    const forma = new FormaFitnessProvider(options.forma);
+    if (options.forma.fitgoUrl) {
+      const fitgo = new FitgoHttpProvider({
+        baseUrl: options.forma.fitgoUrl,
+        apiKey: options.forma.apiKey,
+        basicAuth: options.forma.basicAuth,
+      });
+      return new FormaFitgoCompositeProvider(forma, fitgo);
+    }
+    return forma;
   }
 
   if (type === 'forma-wp') {

@@ -71,6 +71,16 @@ export interface FormaConfig {
   apiKey: string;
   basicAuth: string;
   defaultPassword?: string;
+  /** Custom FitGO HTTP service (1C extension), e.g. .../fitgo/hs/fitgo/v1 */
+  fitgoUrl?: string;
+  /** FitGOAnalytics HTTP service, e.g. .../fitgo/hs/analytics/v1 */
+  analyticsUrl?: string;
+}
+
+export interface FitgoHttpConfig {
+  baseUrl: string;
+  apiKey: string;
+  basicAuth: string;
 }
 
 export interface FormaWordPressConfig {

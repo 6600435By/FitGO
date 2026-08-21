@@ -6,6 +6,7 @@
     "build": "nest build",
     "dev": "nest start --watch --builder swc --type-check false",
     "dev:app": "nest start --watch --builder swc --type-check false",
+    "dev:3010": "API_PORT=3011 CORS_ORIGIN=http://localhost:3010 nest start --watch --builder swc --type-check false",
     "start": "node dist/main",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",

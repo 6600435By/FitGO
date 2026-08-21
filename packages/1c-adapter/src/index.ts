@@ -4,5 +4,8 @@ export * from './mock-provider';
 export * from './onec-provider';
 export * from './forma-provider';
 export * from './forma-wordpress-provider';
+export * from './fitgo-http-provider';
+export * from './analytics-http-provider';
+export * from './forma-fitgo-composite-provider';
 export * from './forma-shared';
 export * from './factory';

@@ -52,7 +52,7 @@ export function WorkoutSessionFieldPicker({
         })}
       </div>
       <p className="text-[10px] text-slate-600">
-        Сохраняется в шаблоне · какие показатели фиксировать в таймере
+        Соответствует полям, выбранным в блоке программы
       </p>
     </div>
   );

@@ -78,6 +78,16 @@ export function getStepPlanFactRows(
         hasFact: Boolean(row?.actualZone?.trim()),
       });
     }
+    if (activeFields.includes('hr')) {
+      rows.push({
+        id: 'hr',
+        label: PREP_FIELD_LABELS.hr,
+        plan: dash(row?.hr),
+        fact: dash(row?.actualHr),
+        hasPlan: Boolean(row?.hr?.trim()),
+        hasFact: Boolean(row?.actualHr?.trim()),
+      });
+    }
     if (activeFields.includes('rpe')) {
       rows.push({
         id: 'rpe',

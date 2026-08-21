@@ -2,12 +2,12 @@
 
 import type { TrainerAvailabilityBlock, TrainerCalendarEvent } from '@fitgo/shared-types';
 import { useCallback, useEffect, useState } from 'react';
-import type { View } from 'react-big-calendar';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { getCalendarPeriod } from './calendar-period';
+import type { ScheduleView } from './schedule-grid';
 
-export function useTrainerCalendar(date: Date, view: View) {
+export function useTrainerCalendar(date: Date, view: ScheduleView) {
   const [events, setEvents] = useState<TrainerCalendarEvent[]>([]);
   const [availabilityBlocks, setAvailabilityBlocks] = useState<
     TrainerAvailabilityBlock[]

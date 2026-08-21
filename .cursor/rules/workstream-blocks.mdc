@@ -1,0 +1,46 @@
+---
+description: FitGO workstream blocks B0–B10 — scope, cross-block rules, agent behavior
+alwaysApply: true
+---
+
+# FitGO workstream blocks
+
+Work in **one domain block at a time**. Do not split the monorepo; blocks are focus boundaries.
+
+## Block map (short)
+
+| ID | Domain | Primary paths |
+|----|--------|----------------|
+| B0 | Infra | `scripts/ensure-postgres.sh`, root `package.json` `dev`/`db:up`, Nest SWC |
+| B1 | Club ops / 1C | `packages/1c-adapter`, `apps/api/src/fitness`, `apps/api/src/client`, `scripts/windows` |
+| B2 | Trainer CRM | `apps/api/src/trainer`, `trainer-roster`, `/trainer/clients` |
+| B3 | Trainer calendar | `apps/web/src/components/trainer-schedule/**` |
+| B4 | PT sheet | `components/personal-training/**` (editors, plan-fact), `packages/shared-types` workout-sheet — **not** `workout-timer*` |
+| B5 | Session timer | `workout-timer*.tsx/ts`, timer dock/chrome/apply; session bar/overlay only when changing timer runtime |
+| B6 | Osmi card | `apps/api/src/osmi`, `@fitgo/osmi-adapter` |
+| B7 | Engagement | `apps/api/src/engagement`, `components/engagement` |
+| B8 | Chat / notify | `chat`, `notifications` |
+| B9 | Admin | `admin`, `super-admin` |
+| B10 | Platform | `schema.platform-draft.prisma`, `docs/PLATFORM_ARCHITECTURE.md` |
+
+## Cross-block prompts
+
+1. Classify which block(s) the request touches.
+2. If more than one: state owners, proposed order, what you do **now** vs next step.
+3. Edit **one block per turn** (or a minimal owner-contract bump: one DTO field + one consumer).
+4. Edit multiple blocks only if the user said «оба / всё / за один проход / не дроби», or the change is tiny and required to compile.
+5. After a cross-block change, remind to smoke both blocks.
+
+Hard pairs: do not mix B3 calendar API with B4 plan/complete in one turn; do not mix B4 editors with B5 `workout-timer*` without explicit ask.
+
+## Feature visibility
+
+All blocks are **visible by default**. Add hide flags only when the user explicitly asks to hide a block.
+
+## Prompt tips
+
+Block tags optional (`B3:`, `B5 timer:`). Infer from intent when clear; if ambiguous, state chosen block first.
+
+## Handoff Mac ↔ Windows
+
+Push WIP to a branch before switching machines. Do not rely on Cursor chat history. `.env` is local; on Windows use Docker for Postgres (`docker compose up -d`), not macOS `ensure-postgres.sh` alone.

@@ -1,13 +1,6 @@
-import type {
-  CardioFieldId,
-  MobilityFieldId,
-  PrepFieldId,
-  StrengthSetFieldId,
-  WorkoutSheet,
-} from '@fitgo/shared-types';
+import type { WorkoutSheet } from '@fitgo/shared-types';
 import {
   CARDIO_FIELD_LABELS,
-  MOBILITY_DEFAULT_FIELDS,
   MOBILITY_FIELD_LABELS,
   PREP_FIELD_LABELS,
   STRENGTH_SET_FIELD_LABELS,
@@ -15,6 +8,7 @@ import {
   type WorkoutSessionStep,
 } from '@fitgo/shared-types';
 import type { TimerApplyTarget } from './workout-timer-apply';
+import { getActiveTimerFields } from './workout-session-field-config';
 
 export type SessionCaptureKind =
   | 'hr'
@@ -36,10 +30,6 @@ export interface SessionCaptureField {
 
 export interface SessionStepContext {
   captureFields: SessionCaptureField[];
-  editPrepFields?: PrepFieldId[];
-  editCardioFields?: CardioFieldId[];
-  editMobilityFields?: MobilityFieldId[];
-  editStrengthFields?: StrengthSetFieldId[];
   hrApplyTarget: TimerApplyTarget | null;
   targetHr?: number;
   targetZone?: string;
@@ -89,21 +79,27 @@ export function getSessionStepContext(
   let targetZone: string | undefined;
 
   if (ref.block === 'warmup' || ref.block === 'cooldown') {
-    const fields =
-      ref.block === 'warmup'
-        ? (sheet.warmupFields ?? ['type', 'duration', 'zone'])
-        : (sheet.cooldownFields ?? ['type', 'duration', 'notes']);
+    const activeFields = getActiveTimerFields(sheet, ref.block);
     const row = (ref.block === 'warmup'
       ? sheet.warmupActivities
       : sheet.cooldownActivities)?.[ref.activityIndex];
-    if (fields.includes('zone')) {
+    if (activeFields.includes('zone')) {
       captureFields.push({
         kind: 'zone',
         label: PREP_FIELD_LABELS.zone,
         planned: row?.zone?.trim(),
       });
     }
-    if (fields.includes('rpe')) {
+    if (activeFields.includes('hr')) {
+      captureFields.push({
+        kind: 'hr',
+        label: PREP_FIELD_LABELS.hr,
+        planned: row?.hr?.trim(),
+        hint: 'уд/мин',
+      });
+      hrApplyTarget = stepToApplyTarget(step);
+    }
+    if (activeFields.includes('rpe')) {
       captureFields.push({
         kind: 'rpe',
         label: PREP_FIELD_LABELS.rpe,
@@ -111,7 +107,7 @@ export function getSessionStepContext(
         hint: '1–10',
       });
     }
-    if (fields.includes('notes')) {
+    if (activeFields.includes('notes')) {
       captureFields.push({
         kind: 'notes',
         label: PREP_FIELD_LABELS.notes,
@@ -120,17 +116,16 @@ export function getSessionStepContext(
     }
     return {
       captureFields,
-      editPrepFields: fields,
-      hrApplyTarget: null,
+      hrApplyTarget,
       targetZone,
     };
   }
 
   if (ref.block === 'cardio') {
-    const fields = sheet.cardioFields ?? ['modality', 'duration', 'hr', 'zone'];
+    const activeFields = getActiveTimerFields(sheet, 'cardio');
     const row = sheet.cardioExercises[ref.exerciseIndex];
     hrApplyTarget = stepToApplyTarget(step);
-    if (fields.includes('hr')) {
+    if (activeFields.includes('hr')) {
       captureFields.push({
         kind: 'hr',
         label: CARDIO_FIELD_LABELS.hr,
@@ -138,7 +133,7 @@ export function getSessionStepContext(
         hint: 'уд/мин',
       });
     }
-    if (fields.includes('rpe')) {
+    if (activeFields.includes('rpe')) {
       captureFields.push({
         kind: 'rpe',
         label: CARDIO_FIELD_LABELS.rpe,
@@ -146,7 +141,7 @@ export function getSessionStepContext(
         hint: '1–10',
       });
     }
-    if (fields.includes('zone')) {
+    if (activeFields.includes('zone')) {
       const zone = row?.zone?.trim();
       if (zone) targetZone = zone;
       captureFields.push({
@@ -155,14 +150,14 @@ export function getSessionStepContext(
         planned: zone,
       });
     }
-    if (fields.includes('pace')) {
+    if (activeFields.includes('pace')) {
       captureFields.push({
         kind: 'pace',
         label: CARDIO_FIELD_LABELS.pace,
         planned: row?.pace?.trim(),
       });
     }
-    if (fields.includes('notes')) {
+    if (activeFields.includes('notes')) {
       captureFields.push({
         kind: 'notes',
         label: CARDIO_FIELD_LABELS.notes,
@@ -171,47 +166,52 @@ export function getSessionStepContext(
     }
     return {
       captureFields,
-      editCardioFields: fields,
       hrApplyTarget,
       targetZone,
     };
   }
 
   if (ref.block === 'mobility') {
-    const fields = sheet.mobilityFields ?? MOBILITY_DEFAULT_FIELDS;
+    const activeFields = getActiveTimerFields(sheet, 'mobility');
     const row = sheet.mobilityExercises[ref.exerciseIndex];
-    if (fields.includes('rpe')) {
+    if (activeFields.includes('rpe')) {
       captureFields.push({
         kind: 'rpe',
         label: MOBILITY_FIELD_LABELS.rpe,
         planned: row?.rpe?.trim(),
       });
     }
-    if (fields.includes('comfort')) {
+    if (activeFields.includes('comfort')) {
       captureFields.push({
         kind: 'comfort',
         label: MOBILITY_FIELD_LABELS.comfort,
         planned: row?.comfort?.trim(),
       });
     }
-    return { captureFields, editMobilityFields: fields, hrApplyTarget: null };
+    if (activeFields.includes('notes')) {
+      captureFields.push({
+        kind: 'notes',
+        label: MOBILITY_FIELD_LABELS.notes,
+        planned: row?.notes?.trim(),
+      });
+    }
+    return { captureFields, hrApplyTarget: null };
   }
 
   if (ref.block === 'strength') {
-    const fields = sheet.strengthSetFields ?? ['weight', 'reps', 'rpe', 'restSec'];
+    const activeFields = getActiveTimerFields(sheet, 'strength');
     const set =
       sheet.strengthExercises[ref.exerciseIndex]?.sets[ref.setIndex];
-    if (fields.includes('weight') || fields.includes('reps') || set?.load?.trim()) {
-      const load = set?.load?.trim() || [set?.weight, set?.reps].filter(Boolean).join('×');
-      if (load) {
-        captureFields.push({
-          kind: 'load',
-          label: 'Нагрузка',
-          planned: load,
-        });
-      }
+    if (activeFields.includes('weight') || activeFields.includes('reps')) {
+      const load =
+        set?.load?.trim() || [set?.weight, set?.reps].filter(Boolean).join('×');
+      captureFields.push({
+        kind: 'load',
+        label: 'Нагрузка',
+        planned: load || undefined,
+      });
     }
-    if (fields.includes('rpe')) {
+    if (activeFields.includes('rpe')) {
       captureFields.push({
         kind: 'rpe',
         label: STRENGTH_SET_FIELD_LABELS.rpe,
@@ -221,14 +221,13 @@ export function getSessionStepContext(
     }
     return {
       captureFields,
-      editStrengthFields: fields,
       hrApplyTarget: null,
     };
   }
 
   if (ref.block === 'circuit' && sheet.circuit) {
     const station = sheet.circuit.stations[ref.stationIndex];
-    const capture = sheet.circuit.timerCaptureFields ?? ['hr'];
+    const capture = getActiveTimerFields(sheet, 'circuit');
     hrApplyTarget = stepToApplyTarget(step);
     targetHr = station?.targetHr;
     if (capture.includes('hr')) {

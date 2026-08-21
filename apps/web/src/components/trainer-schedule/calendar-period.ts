@@ -10,11 +10,11 @@ import {
   startOfMonth,
   startOfWeek,
 } from 'date-fns';
-import type { View } from 'react-big-calendar';
+import type { ScheduleView } from './schedule-grid';
 
 export function getCalendarPeriod(
   date: Date,
-  view: View,
+  view: ScheduleView,
 ): { from: string; to: string; periodStart: string; periodEnd: string } {
   let rangeStart: Date;
   let rangeEnd: Date;
@@ -52,7 +52,7 @@ export function defaultCalendarDate(): Date {
   return new Date();
 }
 
-export function useMobileDefaultView(): View {
+export function useMobileDefaultView(): ScheduleView {
   if (typeof window === 'undefined') return 'week';
   return window.innerWidth < 640 ? 'day' : 'week';
 }

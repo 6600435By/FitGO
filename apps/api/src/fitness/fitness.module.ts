@@ -28,6 +28,7 @@ import { FitnessService } from './fitness.service';
             apiKey: config.get('FORMA_API_KEY', ''),
             basicAuth: config.get('FORMA_BASIC_AUTH', ''),
             defaultPassword: config.get('FORMA_DEFAULT_PASSWORD', ''),
+            fitgoUrl: config.get('FORMA_FITGO_URL', '') || undefined,
           },
           formaWordPress: {
             ajaxUrl: config.get('FORMA_WP_AJAX_URL', ''),

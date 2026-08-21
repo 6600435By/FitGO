@@ -1,0 +1,251 @@
+// =============================================================================
+// FitGO Platform — DRAFT schema (NOT applied by Prisma migrate)
+// =============================================================================
+//
+// Статус: черновик для обсуждения и поэтапного переноса в schema.prisma
+// Документ: docs/PLATFORM_ARCHITECTURE.md
+//
+// Как использовать:
+//   1. Согласовать поля с бизнес-логикой
+//   2. Переносить модели в schema.prisma частями (migrate dev)
+//   3. Удалять/менять поля здесь без страха сломать prod
+//
+// Не удалять комментарии @evolution — они фиксируют намерение изменений
+// =============================================================================
+
+// --- Enums (draft) -----------------------------------------------------------
+
+enum IntegrationProviderType {
+  FORMA_1C      // Forma: API v3 + FitGOIntegration + FitGOAnalytics
+  FORMA_WP      // Forma: WordPress proxy (schedule only, legacy)
+  GENERIC_1C    // Любой клуб с FitGO HTTP contract v1
+  MOCK          // Demo / dev
+  // @evolution: MIND_BODY, CLUB_READY, CUSTOM_WEBHOOK
+}
+
+enum IntegrationStatus {
+  DRAFT         // Настройка, не используется
+  ACTIVE        // Рабочая интеграция
+  DISABLED      // Временно выключена
+  ERROR         // Последний health-check failed
+}
+
+enum ClubMembershipStatus {
+  PENDING       // Приглашение / не подтверждён externalId
+  ACTIVE
+  SUSPENDED
+  LEFT          // Клиент ушёл из клуба, история сохраняется
+}
+
+enum SyncResourceKey {
+  SALES
+  EMPLOYEE_STATS
+  DAILY_STATS
+  REVENUE
+  CLUB_LOAD
+  GROUP_CLASSES
+  VISITS
+  MEMBERSHIP_SNAPSHOT
+  HEALTH_CHECK
+}
+
+enum SyncRunStatus {
+  IDLE
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+// --- ClubIntegration ---------------------------------------------------------
+// Заменяет Club1CConfig; один активный integration на клуб (или несколько — @evolution)
+
+model ClubIntegration {
+  id        String   @id @default(cuid())
+  clubId    String
+
+  providerType   IntegrationProviderType
+  status         IntegrationStatus @default(DRAFT)
+  configVersion  Int               @default(1) // Схема JSON в config
+
+  /// Публичные настройки: baseUrl, fitgoUrl, analyticsUrl, capabilities[], syncIntervalMinutes
+  /// @evolution: добавлять поля сюда, bump configVersion
+  config         Json
+
+  /// Зашифрованный blob (apiKey, basicAuth, passwords) — AES-GCM на сервере FitGO
+  /// Пусто в dev/mock
+  secretsEncrypted String?
+
+  /// Последний успешный health-check адаптера
+  lastHealthAt     DateTime?
+  lastHealthOk     Boolean?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  club       Club                    @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  syncStates IntegrationSyncState[]
+  requestLogs IntegrationRequestLog[]
+
+  @@unique([clubId, providerType]) // @evolution: убрать unique если несколько инстансов одного типа
+  @@index([clubId, status])
+}
+
+// --- ClubMembership ----------------------------------------------------------
+// Клиент (и в перспективе staff) в клубе; externalId = ID в CRM клуба
+
+model ClubMembership {
+  id        String   @id @default(cuid())
+  userId    String
+  clubId    String
+
+  /// UUID контрагента / клиента в 1С (или ID в другой CRM)
+  externalId String?
+
+  status     ClubMembershipStatus @default(PENDING)
+
+  /// Отображаемое имя в контексте клуба (если отличается от User)
+  displayFirstName String?
+  displayLastName  String?
+
+  joinedAt   DateTime  @default(now())
+  leftAt     DateTime?
+
+  /// Когда последний раз подтягивали CRM-профиль
+  crmSyncedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clubId])
+  @@index([clubId, status])
+  @@index([externalId])
+}
+
+// --- User extension (draft fields) -------------------------------------------
+// Перенос в schema.prisma:
+//   activeClubId String?  — текущий клуб в UI
+//   memberships ClubMembership[]
+// @evolution: отдельная модель Person, если один email across clubs с разными User
+
+// --- IntegrationSyncState ----------------------------------------------------
+
+model IntegrationSyncState {
+  id              String   @id @default(cuid())
+  clubIntegrationId String
+  resourceKey     SyncResourceKey
+
+  /// Курсор для инкрементального sync (opaque JSON: lastDate, lastId, page)
+  cursor          Json?
+
+  lastRunAt       DateTime?
+  lastSuccessAt   DateTime?
+  lastRunStatus   SyncRunStatus @default(IDLE)
+  lastError       String?
+  consecutiveFailures Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  integration ClubIntegration @relation(fields: [clubIntegrationId], references: [id], onDelete: Cascade)
+
+  @@unique([clubIntegrationId, resourceKey])
+}
+
+// --- IntegrationRequestLog ---------------------------------------------------
+// Операционный лог; без телефонов и тел запросов в plain text
+
+model IntegrationRequestLog {
+  id                String   @id @default(cuid())
+  clubIntegrationId String
+  clubId            String   // Денормализация для быстрых запросов по клубу
+
+  method            String   @default("GET")
+  path              String   // /client, /sales, ...
+  httpStatus        Int?
+  durationMs        Int?
+  errorCode         String?
+  /// @evolution: sampleRate для снижения объёма
+  createdAt         DateTime @default(now())
+
+  integration ClubIntegration @relation(fields: [clubIntegrationId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, createdAt])
+  @@index([clubIntegrationId, createdAt])
+}
+
+// --- Analytics cache (from fitgo-probe ANALYTICS_ROLES_AND_API) --------------
+
+model SaleTransaction {
+  id              String   @id @default(cuid())
+  clubId          String
+
+  /// ID документа / строки в CRM
+  externalSaleId  String
+  soldAt          DateTime
+  paidAt          DateTime?
+
+  amount          Float
+  amountAttributed Float?
+  attributionMode String?  // shiftShare | individual
+  saleType        String   // membership | service | product
+  paymentMethod   String?
+
+  productName     String?
+  clientExternalId String?
+  clientName      String?
+  employeeExternalId String?
+  employeeName    String?
+
+  syncedAt        DateTime @default(now())
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, externalSaleId])
+  @@index([clubId, soldAt])
+  @@index([clubId, employeeExternalId])
+}
+
+model ClubDailyStats {
+  id        String   @id @default(cuid())
+  clubId    String
+  date      DateTime @db.Date
+
+  grossAmount   Float @default(0)
+  refundAmount  Float @default(0)
+  netAmount     Float @default(0)
+  salesCount    Int   @default(0)
+
+  /// JSON: { membership, service, product }
+  bySaleType    Json?
+  /// JSON: { cash, card, cashless }
+  byPaymentMethod Json?
+
+  syncedAt  DateTime @default(now())
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, date])
+}
+
+// @evolution: EmployeePeriodStats, ClubHourlyLoad, GroupClassFillStats
+
+// --- Club relations to add (when merging) ------------------------------------
+//
+// model Club {
+//   ...
+//   integrations   ClubIntegration[]
+//   memberships    ClubMembership[]
+//   saleTransactions SaleTransaction[]
+//   dailyStats     ClubDailyStats[]
+// }
+//
+// model User {
+//   ...
+//   activeClubId  String?
+//   memberships   ClubMembership[]
+// }
+//
+// Club1CConfig — deprecate after ClubIntegration migration

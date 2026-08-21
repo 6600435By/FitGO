@@ -45,6 +45,7 @@ export function WorkoutSessionPlanPreview({
         <PlanLine label={PREP_FIELD_LABELS.type} value={row?.type} />
         <PlanLine label={PREP_FIELD_LABELS.duration} value={row?.duration} />
         <PlanLine label={PREP_FIELD_LABELS.zone} value={row?.zone} />
+        <PlanLine label={PREP_FIELD_LABELS.hr} value={row?.hr} />
         <PlanLine label={PREP_FIELD_LABELS.rpe} value={row?.rpe} />
       </div>
     );

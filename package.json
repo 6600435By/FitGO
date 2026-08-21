@@ -3,8 +3,9 @@
   "private": true,
   "scripts": {
     "build": "turbo run build",
-    "dev": "turbo run dev:app --filter=@fitgo/web --filter=@fitgo/api",
-    "dev:3010": "API_PORT=3011 CORS_ORIGIN=http://localhost:3010 NEXT_PUBLIC_API_URL=http://localhost:3011 turbo run dev:3010 --filter=@fitgo/web --filter=@fitgo/api",
+    "dev": "bash scripts/ensure-postgres.sh && turbo run dev:app --filter=@fitgo/web --filter=@fitgo/api",
+    "dev:3010": "bash scripts/ensure-postgres.sh && API_PORT=3011 CORS_ORIGIN=http://localhost:3010 NEXT_PUBLIC_API_URL=http://localhost:3011 turbo run dev:3010 --filter=@fitgo/web --filter=@fitgo/api",
+    "db:up": "bash scripts/ensure-postgres.sh",
     "dev:clean": "rm -rf apps/web/.next && pnpm dev:3010",
     "dev:all": "turbo run dev",
     "dev:deps": "turbo run build --filter=@fitgo/shared-types --filter=@fitgo/1c-adapter --filter=@fitgo/osmi-adapter",

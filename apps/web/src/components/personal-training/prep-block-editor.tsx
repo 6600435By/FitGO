@@ -176,7 +176,7 @@ export function PrepBlockEditor({
                     <input
                       className="input w-full px-2 py-1.5 text-sm"
                       placeholder={PREP_FIELD_PLACEHOLDERS[field]}
-                      inputMode={field === 'rpe' ? 'numeric' : 'text'}
+                      inputMode={field === 'rpe' || field === 'hr' ? 'numeric' : 'text'}
                       value={row[field] ?? ''}
                       onChange={(e) =>
                         updateRow(rowIndex, { [field]: e.target.value })

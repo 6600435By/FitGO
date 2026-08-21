@@ -14,13 +14,24 @@ export function patchSessionCapture(
   const trimmed = value.trim();
   const ref = step.ref;
 
-  if (kind === 'hr' && ref.block === 'cardio') {
-    const exercises = [...sheet.cardioExercises];
-    exercises[ref.exerciseIndex] = {
-      ...exercises[ref.exerciseIndex],
-      actualHr: trimmed || undefined,
-    };
-    return { ...sheet, cardioExercises: exercises };
+  if (kind === 'hr') {
+    if (ref.block === 'warmup' || ref.block === 'cooldown') {
+      const key = ref.block === 'warmup' ? 'warmupActivities' : 'cooldownActivities';
+      const rows = [...(sheet[key] ?? [])];
+      rows[ref.activityIndex] = {
+        ...rows[ref.activityIndex],
+        actualHr: trimmed || undefined,
+      };
+      return { ...sheet, [key]: rows };
+    }
+    if (ref.block === 'cardio') {
+      const exercises = [...sheet.cardioExercises];
+      exercises[ref.exerciseIndex] = {
+        ...exercises[ref.exerciseIndex],
+        actualHr: trimmed || undefined,
+      };
+      return { ...sheet, cardioExercises: exercises };
+    }
   }
 
   if (kind === 'rpe') {
@@ -216,8 +227,16 @@ export function getSessionCaptureValue(
   kind: SessionCaptureKind,
 ): string {
   const ref = step.ref;
-  if (kind === 'hr' && ref.block === 'cardio') {
-    return sheet.cardioExercises[ref.exerciseIndex]?.actualHr?.trim() ?? '';
+  if (kind === 'hr') {
+    if (ref.block === 'warmup' || ref.block === 'cooldown') {
+      const row = (ref.block === 'warmup'
+        ? sheet.warmupActivities
+        : sheet.cooldownActivities)?.[ref.activityIndex];
+      return row?.actualHr?.trim() ?? '';
+    }
+    if (ref.block === 'cardio') {
+      return sheet.cardioExercises[ref.exerciseIndex]?.actualHr?.trim() ?? '';
+    }
   }
   if (kind === 'rpe') {
     if (ref.block === 'warmup' || ref.block === 'cooldown') {

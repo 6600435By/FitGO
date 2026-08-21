@@ -6,6 +6,7 @@ import type {
 } from './workout-sheet';
 import {
   WORKOUT_SECTION_LABELS,
+  deriveSessionFactPatch,
   getWorkoutBlocks,
   isPrepSectionEnabled,
 } from './workout-sheet';
@@ -443,7 +444,7 @@ export function applyWorkoutSessionToSheet(
     if (blockId === 'strength' && min) next = { ...next, strengthDurationMin: min };
   }
 
-  return next;
+  return { ...next, ...deriveSessionFactPatch(next) };
 }
 
 export function getUniqueSessionBlocks(

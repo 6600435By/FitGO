@@ -1,0 +1,19 @@
+---
+description: Запуск Fix-from-Review агента по «исправь по ревью» / /fix-review
+alwaysApply: true
+---
+
+# Fix from Review trigger
+
+Если сообщение пользователя содержит:
+
+- `/fix-review`
+- `исправь по ревью` / `примени рекомендации`
+- `исправь баги из ревью`
+- `fix review` / `fix findings`
+
+→ **немедленно** прочитай и выполни `.cursor/skills/fix-from-review/SKILL.md`.
+
+Используй findings и recommendations из **последнего отчёта Review+QA** в этом чате. Если отчёта нет — попроси сначала `сделай ревью`.
+
+Не коммить, если пользователь явно не просил.

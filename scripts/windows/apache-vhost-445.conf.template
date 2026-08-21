@@ -1,0 +1,18 @@
+# Шаблон VirtualHost для FitGO (порт 445)
+# Скопируйте в httpd-ssl.conf и адаптируйте пути SSL под ваш :444
+
+Listen 445
+
+<VirtualHost *:445>
+    ServerName localhost
+    DocumentRoot "C:/Apache24/htdocs"
+
+    SSLEngine on
+    # Скопируйте пути сертификатов из VirtualHost *:444
+    SSLCertificateFile "C:/Apache24/conf/server.crt"
+    SSLCertificateKeyFile "C:/Apache24/conf/server.key"
+
+    # Скопируйте сюда ВСЕ директивы 1С (wsisapi / mod_1c) из vhost :444
+    # Пример (имена могут отличаться):
+    # Alias /fitgo "C:/Apache24/htdocs/fitgo"
+</VirtualHost>
