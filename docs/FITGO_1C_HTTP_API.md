@@ -72,6 +72,8 @@ Query: `phone` или `externalId` (GUID клиента в 1С).
 
 Query: `phone` или `externalId`.
 
+Активный абонемент + данные лицевого счёта для карточки клиента (те же поля, что 1С отдаёт в OSMI).
+
 ```json
 {
   "data": {
@@ -81,10 +83,26 @@ Query: `phone` или `externalId`.
     "visitsRemaining": 10,
     "visitsTotal": 12,
     "validFrom": "2026-01-01",
-    "validUntil": "2026-12-31"
+    "validUntil": "2026-12-31",
+    "services": [
+      { "name": "Групповые программы", "unlimited": true },
+      { "name": "Массаж классический", "remaining": 1, "total": 4 }
+    ],
+    "accountBalance": 45.5,
+    "debtAmount": 0,
+    "currency": "BYN"
   }
 }
 ```
+
+| Поле | Описание |
+|------|----------|
+| `services[]` | Включённые услуги / квоты (`name`, опционально `remaining`/`total`/`unlimited`) |
+| `accountBalance` | Остаток лицевого счёта клиента |
+| `debtAmount` | Задолженность |
+| `currency` | Валюта (например `BYN`) |
+
+Допускается алиас `serviceQuotas` с полем `serviceName` (как в `/packages`) — адаптер FitGO нормализует в `services`.
 
 `data: null` — нет активного абонемента.
 
@@ -152,6 +170,7 @@ Query: `phone` или `externalId`.
 
 Реализовано в `packages/1c-adapter/src/fitgo-http-provider.ts`:
 
+- `getClientByPhone(phone)` / provider `findClientByPhone` → `/client?phone=` (привязка CRM)
 - `getMembership(externalId)` → `/membership?externalId=`
 - `getVisits(externalId)` → `/visits?externalId=`
 - `getAccessCard(externalId)` → `/card?externalId=`

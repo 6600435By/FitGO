@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app-shell';
 const NAV = [
   { href: '/super-admin', label: 'Обзор' },
   { href: '/super-admin/analytics', label: 'Аналитика' },
+  { href: '/super-admin/modules', label: 'Модули' },
   { href: '/super-admin/staff', label: 'Staff' },
   { href: '/super-admin/tasks', label: 'Задачи' },
   { href: '/super-admin/audit', label: 'Журнал' },

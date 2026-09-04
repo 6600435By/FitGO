@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ClubCrmLinkStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -55,11 +56,19 @@ export class ClubMembershipService {
       update: {
         leftAt: null,
         externalId: resolvedExternalId,
+        crmStatus: resolvedExternalId
+          ? ClubCrmLinkStatus.LINKED
+          : ClubCrmLinkStatus.PENDING_CRM,
+        lastCrmSyncAt: resolvedExternalId ? new Date() : null,
       },
       create: {
         userId,
         clubId: club.id,
         externalId: resolvedExternalId,
+        crmStatus: resolvedExternalId
+          ? ClubCrmLinkStatus.LINKED
+          : ClubCrmLinkStatus.PENDING_CRM,
+        lastCrmSyncAt: resolvedExternalId ? new Date() : null,
       },
       include: { club: true },
     });

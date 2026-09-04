@@ -54,6 +54,13 @@ export interface UserProfile {
   roles: UserRole[];
 }
 
+export interface MembershipServiceQuota {
+  name: string;
+  remaining?: number;
+  total?: number;
+  unlimited?: boolean;
+}
+
 export interface Membership {
   id: string;
   name: string;
@@ -62,7 +69,145 @@ export interface Membership {
   visitsTotal?: number;
   validFrom: string;
   validUntil: string;
+  /** Included services / package quotas from 1C */
+  services?: MembershipServiceQuota[];
+  /** Personal account balance (client-level in 1C; carried on membership DTO for card UI) */
+  accountBalance?: number;
+  debtAmount?: number;
+  currency?: string;
 }
+
+export type ClubCrmLinkStatus = 'LINKED' | 'PENDING_CRM';
+
+/** Runtime product modules (nav/API gates). Not agent workstream B0–B10. */
+export type ProductModuleKey =
+  | 'club_ops'
+  | 'group_classes'
+  | 'membership_read'
+  | 'club_card'
+  | 'membership_shop'
+  | 'trainer_crm'
+  | 'trainer_calendar'
+  | 'pt_sheet'
+  | 'session_timer'
+  | 'club_admin'
+  | 'messaging'
+  | 'engagement'
+  | 'wearables';
+
+export interface ProductModuleDefinition {
+  key: ProductModuleKey;
+  label: string;
+  description: string;
+  defaultEnabled: boolean;
+  /** Client/trainer/admin path prefixes gated by this module */
+  surfaces: string[];
+}
+
+export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
+  {
+    key: 'club_ops',
+    label: 'Клуб и профиль',
+    description: 'Выбор клуба, профиль, базовый ЛК',
+    defaultEnabled: true,
+    surfaces: ['/client', '/client/profile'],
+  },
+  {
+    key: 'group_classes',
+    label: 'Групповые занятия',
+    description: 'Расписание, запись, мои записи, лист ожидания',
+    defaultEnabled: true,
+    surfaces: ['/client/schedule', '/client/bookings', '/client/booking-history'],
+  },
+  {
+    key: 'membership_read',
+    label: 'Абонемент (чтение)',
+    description: 'Статус абонемента, услуги, лицевой счёт из 1С',
+    defaultEnabled: true,
+    surfaces: [],
+  },
+  {
+    key: 'club_card',
+    label: 'Карта доступа',
+    description: 'Штрихкод 1С/OSMI и визиты',
+    defaultEnabled: true,
+    surfaces: ['/client/card', '/client/visits'],
+  },
+  {
+    key: 'membership_shop',
+    label: 'Покупка абонемента',
+    description: 'Каталог продуктов и онлайн-оплата',
+    defaultEnabled: false,
+    surfaces: ['/client/products'],
+  },
+  {
+    key: 'trainer_crm',
+    label: 'CRM тренера',
+    description: 'Roster клиентов тренера',
+    defaultEnabled: true,
+    surfaces: ['/trainer/clients'],
+  },
+  {
+    key: 'trainer_calendar',
+    label: 'Календарь тренера',
+    description: 'Слоты и расписание персональных',
+    defaultEnabled: true,
+    surfaces: ['/trainer/schedule', '/client/schedule/personal'],
+  },
+  {
+    key: 'pt_sheet',
+    label: 'Лист ПТ',
+    description: 'План/факт персональной тренировки',
+    defaultEnabled: true,
+    surfaces: ['/trainer/sessions', '/client/personal-bookings'],
+  },
+  {
+    key: 'session_timer',
+    label: 'Таймер сессии',
+    description: 'Workout timer на тренировке',
+    defaultEnabled: true,
+    surfaces: [],
+  },
+  {
+    key: 'club_admin',
+    label: 'Админка клуба',
+    description: 'Дашборд, отчёты, воронка, at-risk',
+    defaultEnabled: true,
+    surfaces: ['/admin'],
+  },
+  {
+    key: 'messaging',
+    label: 'Сообщения',
+    description: 'Чат и уведомления',
+    defaultEnabled: true,
+    surfaces: [
+      '/client/notifications',
+      '/trainer/messages',
+      '/admin/notifications',
+    ],
+  },
+  {
+    key: 'engagement',
+    label: 'Достижения',
+    description: 'Геймификация, лиги, челленджи, рефералы',
+    defaultEnabled: true,
+    surfaces: ['/client/engagement', '/client/workouts', '/client/referral'],
+  },
+  {
+    key: 'wearables',
+    label: 'Носимые устройства',
+    description: 'Apple Health / Google Fit (пока stub)',
+    defaultEnabled: false,
+    surfaces: ['/client/wearables'],
+  },
+];
+
+export const DEFAULT_PRODUCT_MODULES: Record<ProductModuleKey, boolean> =
+  Object.fromEntries(
+    PRODUCT_MODULE_CATALOG.map((m) => [m.key, m.defaultEnabled]),
+  ) as Record<ProductModuleKey, boolean>;
+
+export type ProductModulesState = Record<ProductModuleKey, boolean>;
 
 export interface Visit {
   id: string;
@@ -85,7 +230,7 @@ export interface AccessCard {
 export interface ClubCardView {
   id: string;
   barcode: string;
-  /** OSMI barcode symbology (e.g. PDF417 for club turnstiles) */
+  /** Barcode symbology (e.g. CODE128 for 13-digit club cards, PDF417 for OSMI) */
   barcodeFormat?: 'CODE128' | 'PDF417' | 'QR';
   clientName: string;
   clubName: string;
@@ -93,7 +238,7 @@ export interface ClubCardView {
   walletUrl?: string;
   stripImageId?: string;
   syncedAt: string;
-  source: 'osmi';
+  source: '1c' | 'osmi' | 'fitgo';
   anketaUrl?: string;
 }
 
@@ -514,6 +659,9 @@ export interface ClubTheme {
   logoUrl?: string;
   primaryColor: string;
   clubName: string;
+  address?: string;
+  phone?: string;
+  website?: string;
 }
 
 export interface AtRiskClient {
@@ -532,6 +680,8 @@ export interface TrainerClientDetail {
   externalId?: string;
   firstName: string;
   lastName: string;
+  phone?: string;
+  crmStatus?: ClubCrmLinkStatus | null;
   membershipName?: string;
   membershipStatus?: MembershipStatus;
   lastVisit?: string;

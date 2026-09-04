@@ -366,6 +366,9 @@ export class EngagementService {
       clubName: club.name,
       logoUrl: club.theme?.logoUrl ?? undefined,
       primaryColor: club.theme?.primaryColor ?? '#14b88a',
+      address: club.address ?? undefined,
+      phone: club.phone ?? undefined,
+      website: club.website ?? undefined,
     };
   }
 

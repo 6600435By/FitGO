@@ -39,6 +39,8 @@ import {
   type StaffAuditLogItem,
   AdminPermission,
   AdminTaskStatus,
+  type ProductModulesState,
+  type ProductModuleDefinition,
 } from '@fitgo/shared-types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -76,6 +78,8 @@ export interface ClientDashboard {
   membership: Membership | null;
   visits: Visit[];
   accessCard: AccessCard | null;
+  cardSource?: '1c' | 'osmi' | 'fitgo';
+  crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
   club: {
     id: string;
     name: string;
@@ -199,6 +203,9 @@ export const api = {
   clientDashboard: (token: string) =>
     request<ClientDashboard>('/client/dashboard', {}, token),
 
+  features: (token: string) =>
+    request<{ modules: ProductModulesState }>('/features', {}, token),
+
   clientClubs: (token: string) =>
     request<Array<{
       id: string;
@@ -222,8 +229,10 @@ export const api = {
       enabled: boolean;
       card: ClubCardView | null;
       needsPhone: boolean;
+      crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
       anketaUrl?: string;
       syncError?: string;
+      membership?: Membership | null;
     }>('/client/card', {}, token),
 
   clientSyncClubCard: (token: string) =>
@@ -231,8 +240,10 @@ export const api = {
       enabled: boolean;
       card: ClubCardView | null;
       needsPhone: boolean;
+      crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
       anketaUrl?: string;
       syncError?: string;
+      membership?: Membership | null;
     }>('/client/card/sync', { method: 'POST' }, token),
 
   clientSchedule: (
@@ -923,6 +934,50 @@ export const api = {
   adminPermissions: (token: string) =>
     request<{ permissions: AdminPermission[] }>('/admin/permissions', {}, token),
 
+  adminPendingCrm: (token: string) =>
+    request<
+      Array<{
+        membershipId: string;
+        userId: string;
+        firstName: string;
+        lastName: string;
+        phone?: string;
+        email: string;
+        joinedAt: string;
+        lastCrmSyncAt?: string;
+        crmStatus: string | null;
+      }>
+    >('/admin/pending-crm', {}, token),
+
+  adminClubProfile: (token: string) =>
+    request<{
+      id: string;
+      name: string;
+      slug: string;
+      address?: string;
+      phone?: string;
+      website?: string;
+      currency: string;
+      externalId?: string;
+      theme: ClubTheme;
+    }>('/admin/club-profile', {}, token),
+
+  adminUpdateClubProfile: (
+    token: string,
+    data: {
+      name?: string;
+      address?: string;
+      phone?: string;
+      website?: string;
+      logoUrl?: string;
+      primaryColor?: string;
+    },
+  ) =>
+    request('/admin/club-profile', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }, token),
+
   adminMyTasks: (token: string) =>
     request<AdminTaskItem[]>('/admin/tasks', {}, token),
 
@@ -1031,4 +1086,20 @@ export const api = {
 
   superAdminAuditLog: (token: string) =>
     request<StaffAuditLogItem[]>('/super-admin/audit-log', {}, token),
+
+  superAdminModules: (token: string) =>
+    request<{
+      modules: ProductModulesState;
+      catalog: Array<ProductModuleDefinition & { enabled: boolean }>;
+      updatedAt?: string;
+    }>('/super-admin/modules', {}, token),
+
+  superAdminSetModules: (
+    token: string,
+    modules: Partial<ProductModulesState>,
+  ) =>
+    request<{ modules: ProductModulesState }>('/super-admin/modules', {
+      method: 'PUT',
+      body: JSON.stringify({ modules }),
+    }, token),
 };

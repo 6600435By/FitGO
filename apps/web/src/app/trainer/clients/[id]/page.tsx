@@ -86,6 +86,15 @@ export default function TrainerClientDetailPage() {
         <h2 className="text-xl font-semibold">
           {client.firstName} {client.lastName}
         </h2>
+        {client.crmStatus === 'PENDING_CRM' && (
+          <p className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            Нет карточки 1С — заведите клиента и штрихкод в CRM по телефону
+            {client.phone ? ` ${client.phone}` : ''}.
+          </p>
+        )}
+        {client.crmStatus === 'LINKED' && (
+          <p className="mt-1 text-xs text-slate-500">CRM: привязан</p>
+        )}
         {client.membershipName && (
           <p className="mt-2 text-sm">
             {client.membershipName}

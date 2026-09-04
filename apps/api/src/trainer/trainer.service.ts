@@ -336,8 +336,15 @@ export class TrainerService {
     const lastCompleted = sessions.find((s) => s.status === 'COMPLETED');
     const lastVisit = lastCompleted?.startAt.slice(0, 10);
 
-    if (client.externalId) {
-      const membership = await provider.getMembership(client.externalId);
+    const membershipRow = await this.prisma.userClubMembership.findFirst({
+      where: { userId: clientId, leftAt: null },
+      orderBy: { joinedAt: 'desc' },
+    });
+
+    if (client.externalId || membershipRow?.externalId) {
+      const membership = await provider.getMembership(
+        membershipRow?.externalId ?? client.externalId!,
+      );
       membershipName = membership?.name;
       membershipStatus = membership?.status;
     }
@@ -361,9 +368,18 @@ export class TrainerService {
 
     return {
       id: client.id,
-      externalId: client.externalId ?? undefined,
+      externalId:
+        membershipRow?.externalId ?? client.externalId ?? undefined,
       firstName: client.firstName,
       lastName: client.lastName,
+      phone: client.phone ?? undefined,
+      crmStatus:
+        membershipRow?.crmStatus ??
+        (membershipRow?.externalId || client.externalId
+          ? 'LINKED'
+          : membershipRow
+            ? 'PENDING_CRM'
+            : null),
       membershipName,
       membershipStatus,
       lastVisit,

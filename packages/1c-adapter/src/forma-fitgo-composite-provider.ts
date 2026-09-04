@@ -47,6 +47,10 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     };
   }
 
+  findClientByPhone(phone: string) {
+    return this.fitgo.getClientByPhone(phone);
+  }
+
   getMembership(externalId: string): Promise<Membership | null> {
     return this.fitgo.getMembership(externalId);
   }

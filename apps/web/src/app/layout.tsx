@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { ClubThemeProvider } from '@/components/club-theme-provider';
+import { FeaturesProvider } from '@/components/features-provider';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -28,7 +29,9 @@ export default function RootLayout({
   return (
     <html lang="ru">
       <body>
-        <ClubThemeProvider>{children}</ClubThemeProvider>
+        <FeaturesProvider>
+          <ClubThemeProvider>{children}</ClubThemeProvider>
+        </FeaturesProvider>
       </body>
     </html>
   );

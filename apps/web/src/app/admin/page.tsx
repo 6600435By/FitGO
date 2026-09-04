@@ -16,6 +16,7 @@ interface AdminDashboard {
     revenueToday: number;
     expiringSoon: number;
     bookingsToday: number;
+    pendingCrmCount?: number;
   };
   expiringClients: Array<{
     name: string;
@@ -79,6 +80,20 @@ export default function AdminHomePage() {
           <p className="stat-label">Истекают скоро</p>
         </div>
       </div>
+
+      {(data.stats.pendingCrmCount ?? 0) > 0 && (
+        <Link
+          href="/admin/pending-crm"
+          className="card block border border-amber-500/30 bg-amber-500/5"
+        >
+          <p className="font-semibold text-amber-200">
+            Без 1С: {data.stats.pendingCrmCount}
+          </p>
+          <p className="mt-1 text-sm text-slate-400">
+            Клиенты FitGO без карточки CRM — открыть очередь →
+          </p>
+        </Link>
+      )}
 
       <div className="card">
         <div className="mb-3 flex items-center gap-2">

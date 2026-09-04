@@ -74,19 +74,27 @@ const DEMO_USERS = [
 ];
 
 async function main() {
+  // Live Forma uses 1C structural unit UUID; mock schedule keys off MOCK_CLUB.externalId.
+  const clubExternalId =
+    process.env.FORMA_CLUB_ID?.trim() || MOCK_CLUB.externalId;
+
   const club = await prisma.club.upsert({
     where: { slug: MOCK_CLUB.slug },
     update: {
       name: MOCK_CLUB.name,
       address: MOCK_CLUB.address,
-      externalId: MOCK_CLUB.externalId,
+      phone: '+375 29 000-00-00',
+      website: 'https://ffs.by',
+      externalId: clubExternalId,
       currency: 'BYN',
     },
     create: {
       name: MOCK_CLUB.name,
       slug: MOCK_CLUB.slug,
       address: MOCK_CLUB.address,
-      externalId: MOCK_CLUB.externalId,
+      phone: '+375 29 000-00-00',
+      website: 'https://ffs.by',
+      externalId: clubExternalId,
       currency: 'BYN',
     },
   });
@@ -95,6 +103,29 @@ async function main() {
     where: { clubId: club.id },
     update: { primaryColor: '#14b88a' },
     create: { clubId: club.id, primaryColor: '#14b88a' },
+  });
+
+  await prisma.appFeatureFlags.upsert({
+    where: { id: 'default' },
+    update: {},
+    create: {
+      id: 'default',
+      modules: {
+        club_ops: true,
+        group_classes: true,
+        membership_read: true,
+        club_card: true,
+        membership_shop: false,
+        trainer_crm: true,
+        trainer_calendar: true,
+        pt_sheet: true,
+        session_timer: true,
+        club_admin: true,
+        messaging: true,
+        engagement: true,
+        wearables: false,
+      },
+    },
   });
 
   for (const badge of BADGES) {
@@ -193,11 +224,15 @@ async function main() {
       update: {
         externalId: demoUser.externalId ?? undefined,
         leftAt: null,
+        crmStatus: demoUser.externalId ? 'LINKED' : 'PENDING_CRM',
+        lastCrmSyncAt: demoUser.externalId ? new Date() : null,
       },
       create: {
         userId: user.id,
         clubId: club.id,
         externalId: demoUser.externalId ?? undefined,
+        crmStatus: demoUser.externalId ? 'LINKED' : 'PENDING_CRM',
+        lastCrmSyncAt: demoUser.externalId ? new Date() : null,
       },
     });
 

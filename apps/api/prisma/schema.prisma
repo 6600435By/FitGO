@@ -33,6 +33,11 @@ enum AdminTaskStatus {
   CANCELLED
 }
 
+enum ClubCrmLinkStatus {
+  LINKED
+  PENDING_CRM
+}
+
 enum NotificationType {
   BOOKING_REMINDER
   MEMBERSHIP_EXPIRING
@@ -173,6 +178,8 @@ model Club {
   name         String
   slug         String   @unique
   address      String?
+  phone        String?
+  website      String?
   externalId   String?  @unique
   currency     String   @default("BYN")
   createdAt    DateTime @default(now())
@@ -197,6 +204,14 @@ model ClubTheme {
   customDomain String?
 
   club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+}
+
+/// Stand-wide product module toggles (super-admin). Default ON except catalog defaults.
+model AppFeatureFlags {
+  id        String   @id @default("default")
+  modules   Json
+  updatedAt DateTime @updatedAt
+  updatedBy String?
 }
 
 model Club1CConfig {
@@ -303,12 +318,14 @@ model UserRole {
 }
 
 model UserClubMembership {
-  id         String    @id @default(cuid())
-  userId     String
-  clubId     String
-  externalId String?
-  joinedAt   DateTime  @default(now())
-  leftAt     DateTime?
+  id            String             @id @default(cuid())
+  userId        String
+  clubId        String
+  externalId    String?
+  crmStatus     ClubCrmLinkStatus?
+  lastCrmSyncAt DateTime?
+  joinedAt      DateTime           @default(now())
+  leftAt        DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
@@ -316,6 +333,7 @@ model UserClubMembership {
   @@unique([userId, clubId])
   @@index([clubId])
   @@index([externalId])
+  @@index([crmStatus])
 }
 
 model TrainerClientLink {

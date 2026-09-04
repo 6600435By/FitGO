@@ -1,7 +1,18 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { GroupClassBookingStatus, PersonalBookingStatus, Role } from '@prisma/client';
-import { SessionType, UserRole, type Visit } from '@fitgo/shared-types';
+import {
+  SessionType,
+  UserRole,
+  type ClubCardView,
+  type Membership,
+  type Visit,
+} from '@fitgo/shared-types';
 import type { ScheduleFilters } from '@fitgo/1c-adapter';
+import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -22,6 +33,7 @@ export class ClientService {
     private readonly waitlist: WaitlistService,
     private readonly osmiCards: OsmiCardService,
     private readonly clubMembership: ClubMembershipService,
+    private readonly crmLink: ClubCrmLinkService,
   ) {}
 
   private async resolveExternalId(user: JwtPayload): Promise<string> {
@@ -301,50 +313,41 @@ export class ClientService {
   }
 
   async getDashboard(user: JwtPayload) {
+    const crm = await this.crmLink.syncMembershipCrmLink(user.sub);
     const dbUser = await this.prisma.user.findUnique({
       where: { id: user.sub },
       include: { club: true },
     });
     const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
     const clubRecord = activeMembership?.club ?? null;
-    const externalId = activeMembership
-      ? this.clubMembership.resolveExternalId(
-          activeMembership,
-          user.externalId ?? dbUser?.externalId,
-        )
-      : undefined;
+    const externalId =
+      crm.externalId ??
+      (activeMembership
+        ? this.clubMembership.resolveExternalId(
+            activeMembership,
+            user.externalId ?? dbUser?.externalId,
+          )
+        : undefined);
     const provider = this.fitness.getProvider();
     const clubName = clubRecord?.name ?? 'Клуб';
-
     const osmiEnabled = this.osmiCards.isEnabled();
-    const osmiAccess =
-      osmiEnabled && dbUser && clubRecord
-        ? this.osmiCards.getAccessCardFromCache({
-            id: dbUser.id,
-            firstName: dbUser.firstName,
-            lastName: dbUser.lastName,
-            osmiCardId: dbUser.osmiCardId,
-            osmiBarcode: dbUser.osmiBarcode,
-            club: clubRecord,
-          })
-        : null;
 
     const [membershipFromFitness, externalVisits, accessCardFromFitness, appVisits] =
       await Promise.all([
-        externalId && !osmiEnabled
-          ? provider.getMembership(externalId)
-          : Promise.resolve(null),
+        externalId ? provider.getMembership(externalId) : Promise.resolve(null),
         externalId ? provider.getVisits(externalId) : Promise.resolve([]),
-        externalId && !osmiEnabled
-          ? provider.getAccessCard(externalId)
-          : Promise.resolve(null),
+        externalId ? provider.getAccessCard(externalId) : Promise.resolve(null),
         this.getAppSessionVisits(user.sub, clubName),
       ]);
 
     let membership = membershipFromFitness;
     let accessCard = accessCardFromFitness;
+    let cardSource: ClubCardView['source'] | undefined = accessCard
+      ? '1c'
+      : undefined;
 
-    if (osmiEnabled && dbUser?.phone && activeMembership) {
+    // OSMI: barcode-only fallback when 1C has no card yet
+    if (!accessCard && osmiEnabled && dbUser?.phone && activeMembership) {
       try {
         const osmiResult = await this.osmiCards.getClubCard(user);
         if (osmiResult.card) {
@@ -354,14 +357,34 @@ export class ClientService {
             clientName: osmiResult.card.clientName,
             clubName: osmiResult.card.clubName,
           };
-          if (osmiResult.card.membership) {
-            membership = osmiResult.card.membership;
+          cardSource = 'osmi';
+        } else {
+          const osmiAccess = this.osmiCards.getAccessCardFromCache({
+            id: dbUser.id,
+            firstName: dbUser.firstName,
+            lastName: dbUser.lastName,
+            osmiCardId: dbUser.osmiCardId,
+            osmiBarcode: dbUser.osmiBarcode,
+            club: clubRecord ?? { name: clubName },
+          });
+          if (osmiAccess) {
+            accessCard = osmiAccess;
+            cardSource = 'osmi';
           }
-        } else if (osmiAccess) {
-          accessCard = osmiAccess;
         }
       } catch {
-        if (osmiAccess) accessCard = osmiAccess;
+        const osmiAccess = this.osmiCards.getAccessCardFromCache({
+          id: dbUser.id,
+          firstName: dbUser.firstName,
+          lastName: dbUser.lastName,
+          osmiCardId: dbUser.osmiCardId,
+          osmiBarcode: dbUser.osmiBarcode,
+          club: clubRecord ?? { name: clubName },
+        });
+        if (osmiAccess) {
+          accessCard = osmiAccess;
+          cardSource = 'osmi';
+        }
       }
     }
 
@@ -369,6 +392,11 @@ export class ClientService {
       externalVisits.map((visit) => ({ ...visit, source: '1c' as const })),
       appVisits,
     );
+
+    const crmStatus =
+      crm.crmStatus ??
+      activeMembership?.crmStatus ??
+      (externalId ? 'LINKED' : activeMembership ? 'PENDING_CRM' : null);
 
     return {
       profile: {
@@ -384,6 +412,8 @@ export class ClientService {
       membership,
       visits,
       accessCard,
+      cardSource,
+      crmStatus,
       club: clubRecord
         ? {
             id: clubRecord.id,
@@ -413,6 +443,9 @@ export class ClientService {
       clubSlug,
       externalId,
     );
+    const crm = await this.crmLink.syncMembershipCrmLink(user.sub, {
+      force: true,
+    });
     return {
       club: {
         id: membership.club.id,
@@ -420,28 +453,35 @@ export class ClientService {
         slug: membership.club.slug,
         address: membership.club.address ?? undefined,
       },
-      externalId: membership.externalId ?? undefined,
+      externalId: crm.externalId ?? membership.externalId ?? undefined,
+      crmStatus: crm.crmStatus,
       joinedAt: membership.joinedAt.toISOString(),
     };
   }
 
   async getMembership(user: JwtPayload) {
+    const crm = await this.crmLink.syncMembershipCrmLink(user.sub);
     const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
     if (!activeMembership) {
-      return { membership: null, club: null };
+      return { membership: null, club: null, crmStatus: null };
     }
 
-    const externalId = this.clubMembership.resolveExternalId(
-      activeMembership,
-      user.externalId,
-    );
-    const membership =
-      externalId && !this.osmiCards.isEnabled()
-        ? await this.fitness.getProvider().getMembership(externalId)
-        : null;
+    const externalId =
+      crm.externalId ??
+      this.clubMembership.resolveExternalId(
+        activeMembership,
+        user.externalId,
+      );
+    const membership: Membership | null = externalId
+      ? await this.fitness.getProvider().getMembership(externalId)
+      : null;
 
     return {
       membership,
+      crmStatus:
+        crm.crmStatus ??
+        activeMembership.crmStatus ??
+        (externalId ? 'LINKED' : 'PENDING_CRM'),
       club: {
         id: activeMembership.club.id,
         name: activeMembership.club.name,
@@ -566,7 +606,14 @@ export class ClientService {
 
   async bookSession(user: JwtPayload, sessionId: string) {
     const context = await this.getBookingContext(user);
-    const externalId = user.externalId ?? user.sub;
+    let externalId: string;
+    try {
+      externalId = await this.resolveExternalId(user);
+    } catch {
+      throw new BadRequestException(
+        'Запись на групповые доступна после оформления в 1С. Посмотрите расписание или обратитесь на ресепшен.',
+      );
+    }
     const result = await this.fitness
       .getProvider()
       .bookSession(externalId, sessionId, context);
@@ -685,12 +732,150 @@ export class ClientService {
     return result;
   }
 
-  getClubCard(user: JwtPayload) {
-    return this.osmiCards.getClubCard(user);
+  async getClubCard(user: JwtPayload, options?: { forceRefresh?: boolean }) {
+    const crm = await this.crmLink.syncMembershipCrmLink(user.sub, {
+      force: options?.forceRefresh,
+    });
+    const dbUser = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      include: { club: true },
+    });
+    if (!dbUser) throw new NotFoundException();
+
+    const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
+    const clubRecord = activeMembership?.club ?? dbUser.club;
+    const externalId =
+      crm.externalId ??
+      this.clubMembership.resolveExternalId(
+        activeMembership,
+        user.externalId ?? dbUser.externalId,
+      );
+    const crmStatus =
+      crm.crmStatus ??
+      activeMembership?.crmStatus ??
+      (externalId ? 'LINKED' : activeMembership ? 'PENDING_CRM' : null);
+
+    if (!activeMembership) {
+      return {
+        enabled: true as const,
+        card: null as ClubCardView | null,
+        needsPhone: !dbUser.phone?.trim(),
+        crmStatus: null,
+      };
+    }
+
+    if (crmStatus === 'PENDING_CRM' || !externalId) {
+      // OSMI barcode allowed for trial entry before 1C CRM link
+      if (this.osmiCards.isEnabled() && dbUser.phone?.trim()) {
+        try {
+          const osmiResult = await this.osmiCards.getClubCard(user, {
+            forceRefresh: options?.forceRefresh,
+          });
+          if (osmiResult.card) {
+            return {
+              enabled: true as const,
+              card: {
+                ...osmiResult.card,
+                membership: null,
+                source: 'osmi' as const,
+              },
+              needsPhone: false,
+              crmStatus: 'PENDING_CRM' as const,
+              syncError: osmiResult.syncError,
+              anketaUrl: osmiResult.anketaUrl,
+            };
+          }
+          return {
+            enabled: true as const,
+            card: null,
+            needsPhone: osmiResult.needsPhone,
+            crmStatus: 'PENDING_CRM' as const,
+            syncError: osmiResult.syncError,
+            anketaUrl: osmiResult.anketaUrl,
+          };
+        } catch {
+          // fall through
+        }
+      }
+      return {
+        enabled: true as const,
+        card: null as ClubCardView | null,
+        needsPhone: !dbUser.phone?.trim(),
+        crmStatus: 'PENDING_CRM' as const,
+      };
+    }
+
+    const provider = this.fitness.getProvider();
+    const [membership, accessCard] = await Promise.all([
+      provider.getMembership(externalId),
+      provider.getAccessCard(externalId),
+    ]);
+
+    if (accessCard?.barcode) {
+      const card: ClubCardView = {
+        id: accessCard.id,
+        barcode: accessCard.barcode,
+        barcodeFormat: 'CODE128',
+        clientName: accessCard.clientName,
+        clubName: accessCard.clubName,
+        membership,
+        syncedAt: new Date().toISOString(),
+        source: '1c',
+      };
+      return {
+        enabled: true as const,
+        card,
+        needsPhone: false,
+        crmStatus: 'LINKED' as const,
+      };
+    }
+
+    // Barcode fallback via OSMI (membership still from 1C)
+    if (this.osmiCards.isEnabled() && dbUser.phone?.trim()) {
+      try {
+        const osmiResult = await this.osmiCards.getClubCard(user, {
+          forceRefresh: options?.forceRefresh,
+        });
+        if (osmiResult.card) {
+          const card: ClubCardView = {
+            ...osmiResult.card,
+            membership,
+            source: 'osmi',
+          };
+          return {
+            enabled: true as const,
+            card,
+            needsPhone: false,
+            crmStatus: 'LINKED' as const,
+            syncError: osmiResult.syncError,
+            anketaUrl: osmiResult.anketaUrl,
+          };
+        }
+        return {
+          enabled: true as const,
+          card: null,
+          needsPhone: osmiResult.needsPhone,
+          crmStatus: 'LINKED' as const,
+          syncError: osmiResult.syncError,
+          anketaUrl: osmiResult.anketaUrl,
+        };
+      } catch {
+        // fall through
+      }
+    }
+
+    return {
+      enabled: true as const,
+      card: null as ClubCardView | null,
+      needsPhone: false,
+      crmStatus: 'LINKED' as const,
+      membership,
+      clubName: clubRecord?.name,
+    };
   }
 
   syncClubCard(user: JwtPayload) {
-    return this.osmiCards.getClubCard(user, { forceRefresh: true });
+    return this.getClubCard(user, { forceRefresh: true });
   }
 
   ensureClientRole(user: JwtPayload) {

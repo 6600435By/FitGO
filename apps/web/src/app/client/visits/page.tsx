@@ -2,11 +2,20 @@
 
 import type { Visit } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
+import { ModuleGate } from '@/components/module-gate';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDate, sessionTypeLabel } from '@/lib/utils';
 
 export default function ClientVisitsPage() {
+  return (
+    <ModuleGate module="club_card">
+      <ClientVisitsPageInner />
+    </ModuleGate>
+  );
+}
+
+function ClientVisitsPageInner() {
   const [visits, setVisits] = useState<Visit[]>([]);
   const [error, setError] = useState('');
 

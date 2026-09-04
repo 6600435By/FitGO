@@ -2,11 +2,20 @@
 
 import type { MembershipProduct, PaymentResult } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
+import { ModuleGate } from '@/components/module-gate';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatCurrency } from '@/lib/utils';
 
 export default function ClientProductsPage() {
+  return (
+    <ModuleGate module="membership_shop">
+      <ClientProductsPageInner />
+    </ModuleGate>
+  );
+}
+
+function ClientProductsPageInner() {
   const [products, setProducts] = useState<MembershipProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [payingId, setPayingId] = useState<string | null>(null);
@@ -54,6 +63,11 @@ export default function ClientProductsPage() {
     <div className="space-y-4">
       <h2 className="text-xl font-semibold">Абонементы</h2>
 
+      <div className="card border border-slate-700 text-sm text-slate-400">
+        Онлайн-оплата на пилоте может быть недоступна. Оформить абонемент можно
+        на ресепшен клуба.
+      </div>
+
       {error && <p className="text-red-400">{error}</p>}
 
       {payment?.status === 'pending' && (
@@ -78,35 +92,34 @@ export default function ClientProductsPage() {
       <ul className="space-y-3">
         {products.map((product) => (
           <li key={product.id} className="card">
-            <div className="mb-2 flex items-start justify-between">
+            <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="font-semibold">{product.name}</p>
                 {product.description && (
-                  <p className="mt-1 text-sm text-slate-400">
-                    {product.description}
-                  </p>
+                  <p className="mt-1 text-sm text-slate-400">{product.description}</p>
                 )}
+                <p className="mt-2 text-fitgo-400">
+                  {formatCurrency(product.price, product.currency)}
+                </p>
               </div>
-              <p className="text-lg font-bold text-fitgo-400">
-                {formatCurrency(product.price, product.currency)}
-              </p>
+              <button
+                type="button"
+                disabled={payingId === product.id}
+                onClick={() => handleBuy(product.id)}
+                className="btn-primary shrink-0 disabled:opacity-50"
+              >
+                {payingId === product.id ? '…' : 'Купить'}
+              </button>
             </div>
-            <p className="mb-3 text-sm text-slate-400">
-              {product.durationDays} дней
-              {product.visitsIncluded
-                ? ` · ${product.visitsIncluded} визитов`
-                : ' · безлимит'}
-            </p>
-            <button
-              onClick={() => handleBuy(product.id)}
-              disabled={payingId === product.id}
-              className="btn-primary w-full"
-            >
-              Купить
-            </button>
           </li>
         ))}
       </ul>
+
+      {products.length === 0 && !error && (
+        <div className="card text-center text-slate-400">
+          Каталог пуст — оформите абонемент на ресепшен.
+        </div>
+      )}
     </div>
   );
 }

@@ -6,6 +6,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { RequireModule } from '../features/require-module.decorator';
+import { ModuleGuard } from '../features/module.guard';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
 import { ClientService } from './client.service';
 import { ClientProfileService } from './client-profile.service';
@@ -20,7 +22,7 @@ import {
 } from './dto/client-profile.dto';
 
 @Controller('client')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, ModuleGuard)
 @Roles(UserRole.CLIENT)
 export class ClientController {
   constructor(
@@ -92,11 +94,13 @@ export class ClientController {
   }
 
   @Get('visits')
+  @RequireModule('club_card')
   getVisits(@CurrentUser() user: JwtPayload) {
     return this.clientService.getClubVisits(user);
   }
 
   @Get('schedule')
+  @RequireModule('group_classes')
   getSchedule(
     @CurrentUser() user: JwtPayload,
     @Query('from') from?: string,
@@ -113,16 +117,19 @@ export class ClientController {
   }
 
   @Get('products')
+  @RequireModule('membership_shop')
   getProducts(@CurrentUser() user: JwtPayload) {
     return this.clientService.getProducts(user);
   }
 
   @Get('bookings')
+  @RequireModule('group_classes')
   getBookings(@CurrentUser() user: JwtPayload) {
     return this.clientService.getBookings(user);
   }
 
   @Get('booking-history')
+  @RequireModule('group_classes')
   getBookingHistory(
     @CurrentUser() user: JwtPayload,
     @Query('filter') filter?: 'all' | 'upcoming' | 'completed' | 'cancelled',
@@ -136,6 +143,7 @@ export class ClientController {
   }
 
   @Post('book')
+  @RequireModule('group_classes')
   bookSession(
     @CurrentUser() user: JwtPayload,
     @Body() dto: BookSessionDto,
@@ -144,6 +152,7 @@ export class ClientController {
   }
 
   @Delete('bookings/:sessionId')
+  @RequireModule('group_classes')
   cancelBooking(
     @CurrentUser() user: JwtPayload,
     @Param('sessionId') sessionId: string,
@@ -152,11 +161,13 @@ export class ClientController {
   }
 
   @Get('waitlist')
+  @RequireModule('group_classes')
   getWaitlist(@CurrentUser() user: JwtPayload) {
     return this.clientService.getWaitlist(user);
   }
 
   @Post('waitlist/:sessionId')
+  @RequireModule('group_classes')
   joinWaitlist(
     @CurrentUser() user: JwtPayload,
     @Param('sessionId') sessionId: string,
@@ -165,6 +176,7 @@ export class ClientController {
   }
 
   @Delete('waitlist/:sessionId')
+  @RequireModule('group_classes')
   leaveWaitlist(
     @CurrentUser() user: JwtPayload,
     @Param('sessionId') sessionId: string,
@@ -173,6 +185,7 @@ export class ClientController {
   }
 
   @Post('waitlist/:sessionId/confirm')
+  @RequireModule('group_classes')
   confirmWaitlist(
     @CurrentUser() user: JwtPayload,
     @Param('sessionId') sessionId: string,
@@ -181,6 +194,7 @@ export class ClientController {
   }
 
   @Post('payment')
+  @RequireModule('membership_shop')
   createPayment(
     @CurrentUser() user: JwtPayload,
     @Body() dto: CreatePaymentDto,
@@ -189,11 +203,13 @@ export class ClientController {
   }
 
   @Get('card')
+  @RequireModule('club_card')
   getClubCard(@CurrentUser() user: JwtPayload) {
     return this.clientService.getClubCard(user);
   }
 
   @Post('card/sync')
+  @RequireModule('club_card')
   syncClubCard(@CurrentUser() user: JwtPayload) {
     return this.clientService.syncClubCard(user);
   }

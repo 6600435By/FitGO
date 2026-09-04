@@ -84,6 +84,14 @@ export class AdminService {
       ? Math.min(clients.length, 24)
       : visitsToday;
 
+    const pendingCrmCount = await this.prisma.userClubMembership.count({
+      where: {
+        clubId,
+        leftAt: null,
+        crmStatus: 'PENDING_CRM',
+      },
+    });
+
     return {
       club: club
         ? {
@@ -100,6 +108,7 @@ export class AdminService {
         revenueToday: recentReports[0]?.revenue ?? 0,
         expiringSoon,
         bookingsToday,
+        pendingCrmCount,
       },
       expiringClients: expiringClients.slice(0, 10),
       funnel: await this.buildFunnel(clubId),
@@ -300,5 +309,113 @@ export class AdminService {
         completedAt: status === AdminTaskStatus.DONE ? new Date() : null,
       },
     });
+  }
+
+  async getPendingCrmClients(user: JwtPayload) {
+    const clubId = requireClubId(user);
+    const rows = await this.prisma.userClubMembership.findMany({
+      where: {
+        clubId,
+        leftAt: null,
+        crmStatus: 'PENDING_CRM',
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            email: true,
+            createdAt: true,
+          },
+        },
+      },
+      orderBy: { joinedAt: 'desc' },
+    });
+
+    return rows.map((row) => ({
+      membershipId: row.id,
+      userId: row.user.id,
+      firstName: row.user.firstName,
+      lastName: row.user.lastName,
+      phone: row.user.phone ?? undefined,
+      email: row.user.email,
+      joinedAt: row.joinedAt.toISOString(),
+      lastCrmSyncAt: row.lastCrmSyncAt?.toISOString(),
+      crmStatus: row.crmStatus,
+    }));
+  }
+
+  async getClubProfile(user: JwtPayload) {
+    const club = await this.prisma.club.findUnique({
+      where: { id: requireClubId(user) },
+      include: { theme: true },
+    });
+    if (!club) throw new NotFoundException('Клуб не найден');
+    return {
+      id: club.id,
+      name: club.name,
+      slug: club.slug,
+      address: club.address ?? undefined,
+      phone: club.phone ?? undefined,
+      website: club.website ?? undefined,
+      currency: club.currency,
+      externalId: club.externalId ?? undefined,
+      theme: {
+        clubName: club.name,
+        logoUrl: club.theme?.logoUrl ?? undefined,
+        primaryColor: club.theme?.primaryColor ?? '#14b88a',
+        address: club.address ?? undefined,
+        phone: club.phone ?? undefined,
+        website: club.website ?? undefined,
+      },
+    };
+  }
+
+  async updateClubProfile(
+    user: JwtPayload,
+    data: {
+      name?: string;
+      address?: string;
+      phone?: string;
+      website?: string;
+      logoUrl?: string;
+      primaryColor?: string;
+    },
+  ) {
+    const clubId = requireClubId(user);
+    await this.prisma.club.update({
+      where: { id: clubId },
+      data: {
+        ...(data.name !== undefined ? { name: data.name.trim() } : {}),
+        ...(data.address !== undefined
+          ? { address: data.address.trim() || null }
+          : {}),
+        ...(data.phone !== undefined ? { phone: data.phone.trim() || null } : {}),
+        ...(data.website !== undefined
+          ? { website: data.website.trim() || null }
+          : {}),
+      },
+    });
+
+    if (data.logoUrl !== undefined || data.primaryColor !== undefined) {
+      await this.prisma.clubTheme.upsert({
+        where: { clubId },
+        update: {
+          ...(data.logoUrl !== undefined ? { logoUrl: data.logoUrl || null } : {}),
+          ...(data.primaryColor !== undefined
+            ? { primaryColor: data.primaryColor }
+            : {}),
+        },
+        create: {
+          clubId,
+          logoUrl: data.logoUrl || null,
+          primaryColor: data.primaryColor ?? '#14b88a',
+        },
+      });
+    }
+
+    return this.getClubProfile(user);
   }
 }

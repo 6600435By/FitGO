@@ -40,6 +40,23 @@ export class Mock1CProvider implements IFitnessClubProvider {
     return entry?.profile ?? null;
   }
 
+  async findClientByPhone(phone: string) {
+    const digits = phone.replace(/\D/g, '');
+    const entry = Object.values(MOCK_USERS).find((u) => {
+      const p = u.profile.phone?.replace(/\D/g, '') ?? '';
+      if (!p || !digits) return false;
+      return p === digits || p.slice(-9) === digits.slice(-9);
+    });
+    if (!entry) return null;
+    return {
+      externalId: entry.profile.externalId!,
+      firstName: entry.profile.firstName,
+      lastName: entry.profile.lastName,
+      phone: entry.profile.phone,
+      email: entry.profile.email,
+    };
+  }
+
   async getMembership(externalId: string) {
     const entry = Object.values(MOCK_USERS).find(
       (u) => u.profile.externalId === externalId,

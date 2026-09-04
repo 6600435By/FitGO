@@ -3,10 +3,12 @@
 import { MembershipStatus, SessionType, type Booking, type GamificationProfile, type Visit } from '@fitgo/shared-types';
 import { Calendar, CreditCard, ChevronRight, Dumbbell, ShoppingBag, Trophy } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { MessagesHomeLink } from '@/components/messages-home-link';
 import { ClientTrainerInvites } from '@/components/client/client-trainer-invites';
 import { ClientClubPicker } from '@/components/client/client-club-picker';
+import { useFeatures } from '@/components/features-provider';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import {
@@ -32,17 +34,45 @@ interface DashboardData {
     visitsTotal?: number;
     validFrom: string;
     validUntil: string;
+    services?: { name: string; remaining?: number; total?: number; unlimited?: boolean }[];
+    accountBalance?: number;
+    debtAmount?: number;
+    currency?: string;
   } | null;
   visits: Visit[];
   club: { name: string; address?: string; slug?: string } | null;
+  crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
 }
 
 export default function ClientHomePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex justify-center py-12">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+        </div>
+      }
+    >
+      <ClientHomePageInner />
+    </Suspense>
+  );
+}
+
+function ClientHomePageInner() {
+  const { isEnabled } = useFeatures();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [data, setData] = useState<DashboardData | null>(null);
   const [upcomingBookings, setUpcomingBookings] = useState<Booking[]>([]);
   const [gamification, setGamification] = useState<GamificationProfile | null>(null);
   const [error, setError] = useState('');
   const [changingClub, setChangingClub] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get('switchClub') === '1') {
+      setChangingClub(true);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     const token = getToken();
@@ -78,40 +108,46 @@ export default function ClientHomePage() {
     );
   }
 
-  const { membership, visits, club } = data;
+  const { membership, visits, club, crmStatus } = data;
   const progress = membership
     ? membershipProgress(membership.validFrom, membership.validUntil)
     : null;
+  const hasDebt = (membership?.debtAmount ?? 0) > 0;
 
   return (
     <div className="space-y-4">
       <ClientTrainerInvites />
 
-      {club && !changingClub ? (
-        <div className="card">
-          <p className="text-sm text-slate-400">Ваш клуб</p>
-          <p className="text-xl font-semibold">{club.name}</p>
-          {club.address && (
-            <p className="mt-1 text-sm text-slate-400">{club.address}</p>
-          )}
-          <button
-            type="button"
-            className="mt-3 text-sm text-fitgo-400"
-            onClick={() => setChangingClub(true)}
-          >
-            Сменить клуб
-          </button>
-        </div>
-      ) : (
+      {(!club || changingClub) && (
         <ClientClubPicker
           onJoined={(joined) => {
             setData((prev) => (prev ? { ...prev, club: joined } : prev));
             setChangingClub(false);
+            router.replace('/client');
           }}
-          onCancel={club ? () => setChangingClub(false) : undefined}
+          onCancel={
+            club
+              ? () => {
+                  setChangingClub(false);
+                  router.replace('/client');
+                }
+              : undefined
+          }
         />
       )}
 
+      {crmStatus === 'PENDING_CRM' && club && !changingClub && (
+        <div className="card space-y-2 border border-amber-500/30 bg-amber-500/5">
+          <p className="font-semibold text-amber-200">Оформление в клубе</p>
+          <p className="text-sm text-slate-400">
+            Клиент ещё не найден в 1С. Можно смотреть расписание; запись на
+            групповые и карта появятся после заведения на ресепшен.
+          </p>
+          <Link href="/client/schedule" className="text-sm text-fitgo-400">
+            Открыть расписание →
+          </Link>
+        </div>
+      )}
       {upcomingBookings.length > 0 ? (
         <div className="card">
           <div className="mb-3 flex items-center justify-between">
@@ -217,6 +253,14 @@ export default function ClientHomePage() {
                   {membership.visitsTotal ? ` / ${membership.visitsTotal}` : ''}
                 </p>
               </div>
+            ) : membership.accountBalance !== undefined ? (
+              <div className="rounded-xl bg-slate-800/50 p-3">
+                <p className="stat-label">Лицевой счёт</p>
+                <p className="stat-value text-lg">
+                  {membership.accountBalance.toFixed(2)}
+                  {membership.currency ? ` ${membership.currency}` : ''}
+                </p>
+              </div>
             ) : (
               <div className="rounded-xl bg-slate-800/50 p-3">
                 <p className="stat-label">Тип</p>
@@ -224,15 +268,28 @@ export default function ClientHomePage() {
               </div>
             )}
           </div>
+
+          {hasDebt && (
+            <p className="mt-3 text-sm text-red-300">
+              Задолженность: {membership.debtAmount?.toFixed(2)}
+              {membership.currency ? ` ${membership.currency}` : ''}
+            </p>
+          )}
+
+          <Link href="/client/card" className="mt-3 inline-block text-sm text-fitgo-400">
+            Карта и услуги →
+          </Link>
         </div>
       ) : (
         <div className="card text-center">
           <p className="text-slate-400">
-            {club
-              ? 'Абонемент не найден'
-              : 'Клуб не подключён — персональные тренировки доступны без абонемента'}
+            {crmStatus === 'PENDING_CRM'
+              ? 'Абонемент появится после оформления в клубе'
+              : club
+                ? 'Абонемент не найден'
+                : 'Клуб не подключён — персональные тренировки доступны без абонемента'}
           </p>
-          {club && (
+          {club && crmStatus !== 'PENDING_CRM' && isEnabled('membership_shop') && (
             <Link href="/client/products" className="btn-primary mt-4 inline-block">
               Купить абонемент
             </Link>
@@ -240,7 +297,7 @@ export default function ClientHomePage() {
         </div>
       )}
 
-      {gamification?.activated && (
+      {gamification?.activated && isEnabled('engagement') && (
         <div className="card space-y-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -267,29 +324,46 @@ export default function ClientHomePage() {
       )}
 
       <div className="grid grid-cols-2 gap-3">
-        <Link href="/client/schedule" className="card flex flex-col items-center gap-2 py-6">
-          <Calendar className="h-8 w-8 text-fitgo-400" />
-          <span className="font-medium">Расписание</span>
-        </Link>
-        <MessagesHomeLink href="/client/notifications" />
-        <Link href="/client/card" className="card flex flex-col items-center gap-2 py-6">
-          <CreditCard className="h-8 w-8 text-fitgo-400" />
-          <span className="font-medium">Карта клуба</span>
-        </Link>
-        <Link href="/client/products" className="card flex flex-col items-center gap-2 py-6">
-          <ShoppingBag className="h-8 w-8 text-fitgo-400" />
-          <span className="font-medium">Абонементы</span>
-        </Link>
-        <Link href="/client/engagement" className="card flex flex-col items-center gap-2 py-6">
-          <Trophy className="h-8 w-8 text-fitgo-400" />
-          <span className="font-medium">Достижения</span>
-        </Link>
+        {isEnabled('group_classes') && (
+          <Link href="/client/schedule" className="card flex flex-col items-center gap-2 py-6">
+            <Calendar className="h-8 w-8 text-fitgo-400" />
+            <span className="font-medium">Расписание</span>
+          </Link>
+        )}
+        {isEnabled('messaging') && (
+          <MessagesHomeLink href="/client/notifications" />
+        )}
+        {isEnabled('club_card') && (
+          <Link href="/client/card" className="card flex flex-col items-center gap-2 py-6">
+            <CreditCard className="h-8 w-8 text-fitgo-400" />
+            <span className="font-medium">Карта клуба</span>
+          </Link>
+        )}
+        {isEnabled('membership_shop') && (
+          <Link href="/client/products" className="card flex flex-col items-center gap-2 py-6">
+            <ShoppingBag className="h-8 w-8 text-fitgo-400" />
+            <span className="font-medium">Абонементы</span>
+          </Link>
+        )}
+        {isEnabled('engagement') && (
+          <Link href="/client/engagement" className="card flex flex-col items-center gap-2 py-6">
+            <Trophy className="h-8 w-8 text-fitgo-400" />
+            <span className="font-medium">Достижения</span>
+          </Link>
+        )}
       </div>
 
       <div className="card">
-        <div className="mb-3 flex items-center gap-2">
-          <Dumbbell className="h-5 w-5 text-fitgo-400" />
-          <h2 className="font-semibold">Последние визиты</h2>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Dumbbell className="h-5 w-5 text-fitgo-400" />
+            <h2 className="font-semibold">Последние визиты</h2>
+          </div>
+          {isEnabled('club_card') && (
+            <Link href="/client/visits" className="text-sm text-fitgo-400">
+              Все →
+            </Link>
+          )}
         </div>
         {visits.length === 0 ? (
           <p className="text-sm text-slate-400">Пока нет посещений</p>

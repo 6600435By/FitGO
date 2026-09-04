@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { BadgeGrid } from '@/components/engagement/badge-grid';
 import { LeagueBoard } from '@/components/engagement/league-board';
 import { RatingDecayBanner } from '@/components/engagement/rating-decay-banner';
+import { ModuleGate } from '@/components/module-gate';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -16,6 +17,14 @@ const LOYALTY_STATUS_LABELS: Record<string, string> = {
 };
 
 export default function ClientEngagementPage() {
+  return (
+    <ModuleGate module="engagement">
+      <ClientEngagementPageInner />
+    </ModuleGate>
+  );
+}
+
+function ClientEngagementPageInner() {
   const [profile, setProfile] = useState<GamificationProfile | null>(null);
   const [challenges, setChallenges] = useState<ChallengeView[]>([]);
   const [error, setError] = useState('');

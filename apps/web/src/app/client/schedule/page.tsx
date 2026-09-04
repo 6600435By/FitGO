@@ -2,6 +2,7 @@
 
 import type { Booking, ScheduleSlot } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ModuleGate } from '@/components/module-gate';
 import { api } from '@/lib/api';
 import { cancelGroupBooking } from '@/lib/cancel-booking';
 import { getToken } from '@/lib/auth';
@@ -13,8 +14,17 @@ interface FilterOption {
 }
 
 export default function ClientSchedulePage() {
+  return (
+    <ModuleGate module="group_classes">
+      <ClientSchedulePageInner />
+    </ModuleGate>
+  );
+}
+
+function ClientSchedulePageInner() {
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [crmStatus, setCrmStatus] = useState<'LINKED' | 'PENDING_CRM' | null>(null);
   const [weekOffset, setWeekOffset] = useState(0);
   const [serviceFilter, setServiceFilter] = useState('');
   const [trainerFilter, setTrainerFilter] = useState('');
@@ -25,6 +35,7 @@ export default function ClientSchedulePage() {
   const [message, setMessage] = useState('');
 
   const weekRange = useMemo(() => getWeekRange(weekOffset), [weekOffset]);
+  const canBook = crmStatus !== 'PENDING_CRM';
 
   const load = useCallback(() => {
     const token = getToken();
@@ -37,10 +48,12 @@ export default function ClientSchedulePage() {
         to: weekRange.to,
       }),
       api.clientBookings(token),
+      api.clientDashboard(token).catch(() => null),
     ])
-      .then(([schedule, userBookings]) => {
+      .then(([schedule, userBookings, dashboard]) => {
         setSlots(schedule);
         setBookings(userBookings);
+        if (dashboard) setCrmStatus(dashboard.crmStatus ?? null);
       })
       .catch((err) => setMessage(err.message))
       .finally(() => setLoading(false));
@@ -192,6 +205,13 @@ export default function ClientSchedulePage() {
       <p className="text-sm text-slate-400">
         Расписание групповых занятий из 1С. При заполнении группы открывается лист ожидания.
       </p>
+
+      {!canBook && (
+        <div className="card border border-amber-500/30 bg-amber-500/5 text-sm text-slate-300">
+          Запись пока недоступна — клиент не привязан к 1С. Смотрите расписание и
+          оформите карточку на ресепшен.
+        </div>
+      )}
 
       <div className="card flex items-center justify-between gap-2">
         <button
@@ -349,19 +369,29 @@ export default function ClientSchedulePage() {
                   </div>
                 ) : slot.available ? (
                   <button
-                    disabled={bookingId === slot.id}
+                    type="button"
+                    disabled={!canBook || bookingId === slot.id}
                     onClick={() => handleBook(slot.id)}
                     className="btn-primary w-full disabled:opacity-50"
                   >
-                    {bookingId === slot.id ? 'Запись…' : 'Записаться'}
+                    {!canBook
+                      ? 'Нужна карта 1С'
+                      : bookingId === slot.id
+                        ? 'Запись…'
+                        : 'Записаться'}
                   </button>
                 ) : wl?.open ? (
                   <button
-                    disabled={waitlistId === slot.id}
+                    type="button"
+                    disabled={!canBook || waitlistId === slot.id}
                     onClick={() => handleJoinWaitlist(slot.id)}
                     className="btn-primary w-full disabled:opacity-50"
                   >
-                    {waitlistId === slot.id ? 'Добавление…' : 'В лист ожидания'}
+                    {!canBook
+                      ? 'Нужна карта 1С'
+                      : waitlistId === slot.id
+                        ? 'Добавление…'
+                        : 'В лист ожидания'}
                   </button>
                 ) : (
                   <button disabled className="btn-primary w-full opacity-50">

@@ -2,17 +2,19 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { api } from '@/lib/api';
+import { getToken } from '@/lib/auth';
 
 const STEPS = [
   {
-    title: 'Карта клуба',
-    text: 'Покажите QR-код или штрих-код на входе — карта всегда в разделе «Карта».',
-    href: '/client/card',
-    cta: 'Открыть карту',
+    title: 'Ваш клуб',
+    text: 'Выберите клуб на главной — имя и адрес появятся в личном кабинете.',
+    href: '/client',
+    cta: 'К выбору клуба',
   },
   {
     title: 'Расписание',
-    text: 'Записывайтесь на групповые и персональные тренировки онлайн.',
+    text: 'Смотрите групповые программы. Запись — после оформления в клубе.',
     href: '/client/schedule',
     cta: 'Смотреть расписание',
   },
@@ -29,9 +31,20 @@ export function ClientOnboarding() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    if (!localStorage.getItem('fitgo-onboarding-done')) {
+    if (localStorage.getItem('fitgo-onboarding-done')) return;
+    const token = getToken();
+    if (!token) {
       setVisible(true);
+      return;
     }
+    api
+      .clientDashboard(token)
+      .then((dash) => {
+        // Skip club step if already joined
+        setStep(dash.club ? 1 : 0);
+        setVisible(true);
+      })
+      .catch(() => setVisible(true));
   }, []);
 
   if (!visible) return null;
@@ -58,16 +71,17 @@ export function ClientOnboarding() {
               <Link href={current.href} onClick={finish} className="btn-primary flex-1 text-center">
                 {current.cta}
               </Link>
-              <button onClick={finish} className="btn-secondary">
+              <button type="button" onClick={finish} className="btn-secondary">
                 Готово
               </button>
             </>
           ) : (
             <>
-              <button onClick={finish} className="btn-secondary">
+              <button type="button" onClick={finish} className="btn-secondary">
                 Пропустить
               </button>
               <button
+                type="button"
                 onClick={() => setStep((s) => s + 1)}
                 className="btn-primary flex-1"
               >

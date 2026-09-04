@@ -72,6 +72,35 @@ export class AdminController {
     return this.adminService.getAllClubs();
   }
 
+  @Get('pending-crm')
+  @RequirePermission(AdminPermission.CLIENTS_VIEW)
+  getPendingCrm(@CurrentUser() user: JwtPayload) {
+    return this.adminService.getPendingCrmClients(user);
+  }
+
+  @Get('club-profile')
+  @RequirePermission(AdminPermission.SETTINGS_BRANDING)
+  getClubProfile(@CurrentUser() user: JwtPayload) {
+    return this.adminService.getClubProfile(user);
+  }
+
+  @Patch('club-profile')
+  @RequirePermission(AdminPermission.SETTINGS_BRANDING)
+  updateClubProfile(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      name?: string;
+      address?: string;
+      phone?: string;
+      website?: string;
+      logoUrl?: string;
+      primaryColor?: string;
+    },
+  ) {
+    return this.adminService.updateClubProfile(user, body);
+  }
+
   @Post('remind/:clientUserId')
   @RequirePermission(AdminPermission.CLIENTS_MESSAGE)
   sendReminder(

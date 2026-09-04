@@ -1,6 +1,12 @@
-import { MembershipStatus, type AccessCard, type Membership, type Visit } from '@fitgo/shared-types';
+import {
+  MembershipStatus,
+  type AccessCard,
+  type Membership,
+  type MembershipServiceQuota,
+  type Visit,
+} from '@fitgo/shared-types';
 import { unwrapFormaData } from './forma-shared';
-import type { FitgoHttpConfig, VisitPeriod } from './types';
+import type { FitgoClientLookup, FitgoHttpConfig, VisitPeriod } from './types';
 
 interface FitgoApiError {
   error?: { code?: number; message?: string };
@@ -15,6 +21,14 @@ interface FitgoClientData {
   email?: string;
 }
 
+interface FitgoServiceQuotaData {
+  name?: string;
+  serviceName?: string;
+  remaining?: number;
+  total?: number;
+  unlimited?: boolean;
+}
+
 interface FitgoMembershipData {
   id: string;
   name: string;
@@ -23,6 +37,11 @@ interface FitgoMembershipData {
   visitsTotal?: number;
   validFrom: string;
   validUntil: string;
+  services?: FitgoServiceQuotaData[];
+  serviceQuotas?: FitgoServiceQuotaData[];
+  accountBalance?: number;
+  debtAmount?: number;
+  currency?: string;
 }
 
 interface FitgoVisitData {
@@ -81,10 +100,18 @@ export class FitgoHttpProvider {
     return this.request<FitgoClientData>(this.clientQuery(externalId));
   }
 
-  async getClientByPhone(phone: string): Promise<FitgoClientData | null> {
-    return this.request<FitgoClientData>(
+  async getClientByPhone(phone: string): Promise<FitgoClientLookup | null> {
+    const data = await this.request<FitgoClientData>(
       `/client?phone=${encodeURIComponent(phone)}`,
     );
+    if (!data?.externalId) return null;
+    return {
+      externalId: data.externalId,
+      firstName: data.firstName,
+      lastName: data.lastName,
+      phone: data.phone,
+      email: data.email,
+    };
   }
 
   async getMembership(externalId: string): Promise<Membership | null> {
@@ -139,7 +166,23 @@ function mapMembershipStatus(status: string): MembershipStatus {
   return MembershipStatus.ACTIVE;
 }
 
+function mapServiceQuota(raw: FitgoServiceQuotaData): MembershipServiceQuota | null {
+  const name = raw.name ?? raw.serviceName;
+  if (!name) return null;
+  return {
+    name,
+    remaining: raw.remaining,
+    total: raw.total,
+    unlimited: raw.unlimited,
+  };
+}
+
 function mapMembership(data: FitgoMembershipData): Membership {
+  const rawServices = data.services ?? data.serviceQuotas ?? [];
+  const services = rawServices
+    .map(mapServiceQuota)
+    .filter((s): s is MembershipServiceQuota => s !== null);
+
   return {
     id: data.id,
     name: data.name,
@@ -148,6 +191,10 @@ function mapMembership(data: FitgoMembershipData): Membership {
     visitsTotal: data.visitsTotal,
     validFrom: data.validFrom,
     validUntil: data.validUntil,
+    services: services.length > 0 ? services : undefined,
+    accountBalance: data.accountBalance,
+    debtAmount: data.debtAmount,
+    currency: data.currency,
   };
 }
 

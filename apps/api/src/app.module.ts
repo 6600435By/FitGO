@@ -13,12 +13,14 @@ import { SuperAdminModule } from './super-admin/super-admin.module';
 import { TrainerModule } from './trainer/trainer.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { OsmiModule } from './osmi/osmi.module';
+import { FeaturesModule } from './features/features.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     FitnessModule,
+    FeaturesModule,
     AuthModule,
     ClientModule,
     TrainerModule,

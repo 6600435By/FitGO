@@ -29,9 +29,19 @@ export interface BookingContext {
   name?: string;
 }
 
+export interface FitgoClientLookup {
+  externalId: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  email?: string;
+}
+
 export interface IFitnessClubProvider {
   authenticate(credentials: AuthCredentials): Promise<AuthResult | null>;
   getClientProfile(externalId: string): Promise<UserProfile | null>;
+  /** Resolve 1C client by phone (FitGO HTTP / composite). Returns null if unsupported or not found. */
+  findClientByPhone?(phone: string): Promise<FitgoClientLookup | null>;
   getMembership(externalId: string): Promise<Membership | null>;
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]>;
   getAccessCard(externalId: string): Promise<AccessCard | null>;

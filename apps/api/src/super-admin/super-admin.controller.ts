@@ -26,6 +26,8 @@ import { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 import { CreateAdminTaskDto, UpdateAdminTaskDto } from './dto/task.dto';
 import { SuperAdminAnalyticsService } from './super-admin-analytics.service';
 import { SuperAdminService } from './super-admin.service';
+import { FeaturesService } from '../features/features.service';
+import type { ProductModulesState } from '@fitgo/shared-types';
 
 @Controller('super-admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -34,6 +36,7 @@ export class SuperAdminController {
   constructor(
     private readonly superAdmin: SuperAdminService,
     private readonly analytics: SuperAdminAnalyticsService,
+    private readonly features: FeaturesService,
   ) {}
 
   @Get('staff')
@@ -131,5 +134,20 @@ export class SuperAdminController {
   async integrationHealth(@CurrentUser() user: JwtPayload) {
     const data = await this.analytics.getAnalytics(user, 7);
     return data.integrationHealth;
+  }
+
+  @Get('modules')
+  getModules() {
+    return this.features.getCatalog();
+  }
+
+  @Put('modules')
+  setModules(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { modules: Partial<ProductModulesState> },
+  ) {
+    return this.features.setModules(body.modules ?? {}, user.sub).then((modules) => ({
+      modules,
+    }));
   }
 }

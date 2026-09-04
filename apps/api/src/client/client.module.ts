@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { OsmiModule } from '../osmi/osmi.module';
 import { PersonalTrainingModule } from '../personal-training/personal-training.module';
@@ -17,6 +18,7 @@ import { ClientProfileService } from './client-profile.service';
     TrainerRosterModule,
   ],
   controllers: [ClientController],
-  providers: [ClientService, ClientProfileService],
+  providers: [ClientService, ClientProfileService, ClubCrmLinkService],
+  exports: [ClubCrmLinkService],
 })
 export class ClientModule {}

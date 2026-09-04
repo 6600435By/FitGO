@@ -13,7 +13,7 @@ import {
 export const MOCK_CLUB = {
   id: 'club-demo-001',
   externalId: '1c-club-001',
-  name: 'FITGO Demo Club',
+  name: 'Форма',
   slug: 'demo-club',
   address: 'ул. Спортивная, 10, Минск',
 };
@@ -140,6 +140,13 @@ export const MOCK_USERS: Record<
       visitsTotal: undefined,
       validFrom: '2025-06-01',
       validUntil: '2026-12-01',
+      services: [
+        { name: 'Групповые программы', unlimited: true },
+        { name: 'Массаж классический', remaining: 2, total: 4 },
+      ],
+      accountBalance: 45.5,
+      debtAmount: 0,
+      currency: 'BYN',
     },
     visits: buildMockVisits(MOCK_CLUB.name),
     accessCard: {
