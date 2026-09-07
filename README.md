@@ -70,14 +70,21 @@ FORMA_DEFAULT_PASSWORD=club-client-password
 
 ```env
 FITNESS_PROVIDER=forma
-FORMA_BASE_URL=https://your-club-server:445/fitgo/hs/api/v3
-FORMA_FITGO_URL=https://your-club-server:445/fitgo/hs/fitgo/v1
+FORMA_BASE_URL=https://192.168.1.20:444/forma/hs/api/v3
+FORMA_FITGO_URL=https://192.168.1.20:8445/fitgo/hs/fitgo/v1
 FORMA_API_KEY=your-api-key
 FORMA_BASIC_AUTH=base64-credentials-without-Basic-prefix
 FORMA_DEFAULT_PASSWORD=club-client-password
 ```
 
-Настройка сервера и зонд: [docs/SERVER_1C_FITGO_PUBLICATION.md](docs/SERVER_1C_FITGO_PUBLICATION.md), контракт API: [docs/FITGO_1C_HTTP_API.md](docs/FITGO_1C_HTTP_API.md). Скрипты: `scripts/windows/`.
+Пока FitGOIntegration на сервере не опубликован (`:8445` закрыт), локально:
+
+```bash
+pnpm fitgo:stub   # FORMA_FITGO_URL=http://127.0.0.1:3045/fitgo/v1
+pnpm fitgo:health
+```
+
+Настройка сервера и зонд: [docs/SERVER_1C_FITGO_PUBLICATION.md](docs/SERVER_1C_FITGO_PUBLICATION.md), контракт API: [docs/FITGO_1C_HTTP_API.md](docs/FITGO_1C_HTTP_API.md). Скрипты: `scripts/windows/`. Деплой: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ### WordPress proxy (рекомендуется для ffs.by / planvueplugin)
 
@@ -112,6 +119,8 @@ ONEC_API_KEY=your-api-key
 |----------|----------|
 | [PLATFORM_ARCHITECTURE.md](docs/PLATFORM_ARCHITECTURE.md) | Мультиклуб, интеграции, sync, mobile (черновик) |
 | [FITGO_1C_HTTP_API.md](docs/FITGO_1C_HTTP_API.md) | Контракт HTTP-сервиса клуба |
+| [SERVER_1C_FITGO_PUBLICATION.md](docs/SERVER_1C_FITGO_PUBLICATION.md) | Публикация fitgo / stub |
+| [DEPLOY.md](docs/DEPLOY.md) | Первый deploy (Railway / Vercel / hoster VPS) |
 | Draft Prisma | `apps/api/prisma/schema.platform-draft.prisma` |
 
 ## Структура

@@ -2,7 +2,8 @@
 
 Кастомный HTTP-сервис **FitGOIntegration** в расширении 1С.
 
-**Base URL:** `https://<host>:445/fitgo/hs/fitgo/v1`
+**Base URL (WS2016):** `https://<host>:8445/fitgo/hs/fitgo/v1`  
+**Dev stub:** `http://127.0.0.1:3045/fitgo/v1` (см. `scripts/fitgo-integration-dev-stub.mjs`)
 
 ## Авторизация
 

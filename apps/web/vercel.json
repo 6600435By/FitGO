@@ -1,0 +1,6 @@
+{
+  "installCommand": "cd ../.. && pnpm install",
+  "buildCommand": "cd ../.. && pnpm --filter @fitgo/shared-types build && pnpm --filter @fitgo/web build",
+  "framework": "nextjs",
+  "outputDirectory": ".next"
+}

@@ -4,6 +4,7 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "bash scripts/ensure-postgres.sh && turbo run dev:app --filter=@fitgo/web --filter=@fitgo/api",
+    "dev:safe": "test -d node_modules || pnpm install; pnpm dev",
     "dev:3010": "bash scripts/ensure-postgres.sh && API_PORT=3011 CORS_ORIGIN=http://localhost:3010 NEXT_PUBLIC_API_URL=http://localhost:3011 turbo run dev:3010 --filter=@fitgo/web --filter=@fitgo/api",
     "db:up": "bash scripts/ensure-postgres.sh",
     "dev:clean": "rm -rf apps/web/.next && pnpm dev:3010",
@@ -13,7 +14,10 @@
     "db:generate": "pnpm --filter @fitgo/api db:generate",
     "db:push": "pnpm --filter @fitgo/api db:push",
     "db:seed": "pnpm --filter @fitgo/api db:seed",
-    "smoke:offline-clients": "bash scripts/smoke-offline-clients.sh"
+    "smoke:offline-clients": "bash scripts/smoke-offline-clients.sh",
+    "fitgo:stub": "node scripts/fitgo-integration-dev-stub.mjs",
+    "fitgo:health": "bash scripts/verify-fitgo-health.sh",
+    "deploy:vps": "bash scripts/deploy-vps.sh"
   },
   "devDependencies": {
     "turbo": "^2.5.4",

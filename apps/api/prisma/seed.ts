@@ -38,7 +38,8 @@ const DEMO_USERS = [
     firstName: 'Алексей',
     lastName: 'Иванов',
     phone: '+375296600435',
-    externalId: '1c-client-001',
+    // Live Forma: Куделко Денис (1C Контрагенты UUID)
+    externalId: 'ff94bf6a-b4d2-11e8-80e9-7085c20c362e',
     gender: Gender.MALE,
     dateOfBirth: new Date('1990-05-15'),
     roles: [Role.CLIENT],
