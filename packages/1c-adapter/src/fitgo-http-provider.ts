@@ -73,7 +73,10 @@ export class FitgoHttpProvider {
   private async request<T>(path: string): Promise<T | null> {
     const base = this.config.baseUrl.replace(/\/$/, '');
     const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
-    const response = await fetch(url, { headers: this.headers() });
+    const response = await fetch(url, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(12_000),
+    });
     const text = await response.text();
 
     let body: FitgoApiError & { data?: T | null };
@@ -177,6 +180,12 @@ function mapServiceQuota(raw: FitgoServiceQuotaData): MembershipServiceQuota | n
   };
 }
 
+function coerceOptionalNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function mapMembership(data: FitgoMembershipData): Membership {
   const rawServices = data.services ?? data.serviceQuotas ?? [];
   const services = rawServices
@@ -192,8 +201,8 @@ function mapMembership(data: FitgoMembershipData): Membership {
     validFrom: data.validFrom,
     validUntil: data.validUntil,
     services: services.length > 0 ? services : undefined,
-    accountBalance: data.accountBalance,
-    debtAmount: data.debtAmount,
+    accountBalance: coerceOptionalNumber(data.accountBalance),
+    debtAmount: coerceOptionalNumber(data.debtAmount),
     currency: data.currency,
   };
 }

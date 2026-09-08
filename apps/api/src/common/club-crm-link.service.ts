@@ -52,13 +52,6 @@ export class ClubCrmLinkService {
     }
 
     if (membership.externalId) {
-      await this.prisma.userClubMembership.update({
-        where: { id: membership.id },
-        data: {
-          crmStatus: ClubCrmLinkStatus.LINKED,
-          lastCrmSyncAt: new Date(),
-        },
-      });
       return {
         externalId: membership.externalId,
         crmStatus: ClubCrmLinkStatus.LINKED,

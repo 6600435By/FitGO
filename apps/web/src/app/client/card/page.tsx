@@ -30,6 +30,8 @@ function formatMoney(amount: number, currency?: string) {
 function MembershipDetails({ membership }: { membership: Membership }) {
   const progress = membershipProgress(membership.validFrom, membership.validUntil);
   const hasDebt = (membership.debtAmount ?? 0) > 0;
+  const hasAccountBalance = typeof membership.accountBalance === 'number';
+  const hasDebtAmount = typeof membership.debtAmount === 'number';
 
   return (
     <div className="card space-y-4">
@@ -81,18 +83,17 @@ function MembershipDetails({ membership }: { membership: Membership }) {
         )}
       </div>
 
-      {(membership.accountBalance !== undefined ||
-        membership.debtAmount !== undefined) && (
+      {(hasAccountBalance || hasDebtAmount) && (
         <div className="grid grid-cols-2 gap-3">
-          {membership.accountBalance !== undefined && (
+          {hasAccountBalance && (
             <div className="rounded-xl bg-slate-800/50 p-3">
               <p className="stat-label">Лицевой счёт</p>
               <p className="stat-value text-lg">
-                {formatMoney(membership.accountBalance, membership.currency)}
+                {formatMoney(membership.accountBalance!, membership.currency)}
               </p>
             </div>
           )}
-          {membership.debtAmount !== undefined && (
+          {hasDebtAmount && (
             <div
               className={`rounded-xl p-3 ${
                 hasDebt ? 'bg-red-500/10' : 'bg-slate-800/50'
@@ -102,7 +103,7 @@ function MembershipDetails({ membership }: { membership: Membership }) {
               <p
                 className={`stat-value text-lg ${hasDebt ? 'text-red-300' : ''}`}
               >
-                {formatMoney(membership.debtAmount, membership.currency)}
+                {formatMoney(membership.debtAmount!, membership.currency)}
               </p>
             </div>
           )}

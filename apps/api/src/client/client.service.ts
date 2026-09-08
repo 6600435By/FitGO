@@ -316,12 +316,15 @@ export class ClientService {
   }
 
   async getDashboard(user: JwtPayload) {
-    const crm = await this.crmLink.syncMembershipCrmLink(user.sub);
-    const dbUser = await this.prisma.user.findUnique({
-      where: { id: user.sub },
-      include: { club: true },
-    });
-    const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
+    const [crm, dbUser, activeMembership] = await Promise.all([
+      this.crmLink.syncMembershipCrmLink(user.sub),
+      this.prisma.user.findUnique({
+        where: { id: user.sub },
+        include: { club: true },
+      }),
+      this.clubMembership.getActiveMembership(user.sub),
+    ]);
+
     const clubRecord = activeMembership?.club ?? null;
     const externalId =
       crm.externalId ??
@@ -335,21 +338,28 @@ export class ClientService {
     const clubName = clubRecord?.name ?? 'Клуб';
     const osmiEnabled = this.osmiCards.isEnabled();
 
-    const [membershipResult, visitsResult, cardResult, appVisits, crmProfile] =
+    // Home shows only 3 recent visits — don't pull a wide 1C range over VPN.
+    const visitsTo = new Date();
+    const visitsFrom = new Date();
+    visitsFrom.setDate(visitsFrom.getDate() - 45);
+    const visitPeriod = {
+      from: visitsFrom.toISOString().slice(0, 10),
+      to: visitsTo.toISOString().slice(0, 10),
+    };
+
+    // Skip /client profile: names/phone already in FitGO DB (saves 1 round-trip to 1C).
+    const [membershipResult, visitsResult, cardResult, appVisits] =
       await Promise.all([
         externalId
           ? provider.getMembership(externalId).catch(() => null)
           : Promise.resolve(null),
         externalId
-          ? provider.getVisits(externalId).catch(() => [] as Visit[])
+          ? provider.getVisits(externalId, visitPeriod).catch(() => [] as Visit[])
           : Promise.resolve([] as Visit[]),
         externalId
           ? provider.getAccessCard(externalId).catch(() => null)
           : Promise.resolve(null),
         this.getAppSessionVisits(user.sub, clubName),
-        externalId
-          ? provider.getClientProfile(externalId).catch(() => null)
-          : Promise.resolve(null),
       ]);
 
     const externalVisits = visitsResult;
@@ -362,15 +372,15 @@ export class ClientService {
       ? '1c'
       : undefined;
 
-    // OSMI: barcode fallback + membership when 1C /membership is empty
-    if (osmiEnabled && dbUser?.phone && activeMembership) {
+    // OSMI: barcode fallback only when 1C card missing (avoid extra wait when 1C ok)
+    if (osmiEnabled && dbUser?.phone && activeMembership && !accessCard) {
       try {
         const osmiResult = await this.osmiCards.getClubCard(user);
         if (!membership && osmiResult.card?.membership) {
           membership = osmiResult.card.membership;
           membershipSource = 'osmi';
         }
-        if (!accessCard && osmiResult.card) {
+        if (osmiResult.card) {
           accessCard = {
             id: osmiResult.card.id,
             barcode: osmiResult.card.barcode,
@@ -378,7 +388,7 @@ export class ClientService {
             clubName: osmiResult.card.clubName,
           };
           cardSource = 'osmi';
-        } else if (!accessCard) {
+        } else {
           const osmiAccess = this.osmiCards.getAccessCardFromCache({
             id: dbUser.id,
             firstName: dbUser.firstName,
@@ -393,20 +403,33 @@ export class ClientService {
           }
         }
       } catch {
-        if (!accessCard) {
-          const osmiAccess = this.osmiCards.getAccessCardFromCache({
-            id: dbUser.id,
-            firstName: dbUser.firstName,
-            lastName: dbUser.lastName,
-            osmiCardId: dbUser.osmiCardId,
-            osmiBarcode: dbUser.osmiBarcode,
-            club: clubRecord ?? { name: clubName },
-          });
-          if (osmiAccess) {
-            accessCard = osmiAccess;
-            cardSource = 'osmi';
-          }
+        const osmiAccess = this.osmiCards.getAccessCardFromCache({
+          id: dbUser.id,
+          firstName: dbUser.firstName,
+          lastName: dbUser.lastName,
+          osmiCardId: dbUser.osmiCardId,
+          osmiBarcode: dbUser.osmiBarcode,
+          club: clubRecord ?? { name: clubName },
+        });
+        if (osmiAccess) {
+          accessCard = osmiAccess;
+          cardSource = 'osmi';
         }
+      }
+    } else if (
+      osmiEnabled &&
+      dbUser?.phone &&
+      activeMembership &&
+      !membership
+    ) {
+      try {
+        const osmiResult = await this.osmiCards.getClubCard(user);
+        if (osmiResult.card?.membership) {
+          membership = osmiResult.card.membership;
+          membershipSource = 'osmi';
+        }
+      } catch {
+        // ignore
       }
     }
 
@@ -431,9 +454,9 @@ export class ClientService {
         externalId,
         clubId: user.clubId ?? clubRecord?.id ?? '',
         email: user.email,
-        firstName: crmProfile?.firstName || dbUser?.firstName || '',
-        lastName: crmProfile?.lastName || dbUser?.lastName || '',
-        phone: crmProfile?.phone || dbUser?.phone || undefined,
+        firstName: dbUser?.firstName || '',
+        lastName: dbUser?.lastName || '',
+        phone: dbUser?.phone || undefined,
         roles: user.roles,
       },
       membership,

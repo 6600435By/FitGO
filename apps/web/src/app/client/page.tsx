@@ -92,14 +92,36 @@ function ClientHomePageInner() {
     const token = getToken();
     if (!token) return;
 
+    const cacheKey = 'fitgo:client-dashboard:v2';
+    try {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        setData(JSON.parse(cached) as DashboardData);
+      }
+    } catch {
+      // ignore bad cache
+    }
+
+    let cancelled = false;
     api
       .clientDashboard(token)
-      .then(setData)
-      .catch((err) => setError(err.message));
+      .then((next) => {
+        if (cancelled) return;
+        setData(next);
+        try {
+          sessionStorage.setItem(cacheKey, JSON.stringify(next));
+        } catch {
+          // quota / private mode
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
 
     api
       .clientBookings(token)
       .then((bookings) => {
+        if (cancelled) return;
         const upcoming = bookings
           .filter((b) => new Date(b.startAt) >= new Date())
           .sort((a, b) => a.startAt.localeCompare(b.startAt));
@@ -107,7 +129,13 @@ function ClientHomePageInner() {
       })
       .catch(() => {});
 
-    api.gamification(token).then(setGamification).catch(() => {});
+    api.gamification(token).then((g) => {
+      if (!cancelled) setGamification(g);
+    }).catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (error) {
@@ -128,6 +156,8 @@ function ClientHomePageInner() {
     ? membershipProgress(membership.validFrom, membership.validUntil)
     : null;
   const hasDebt = (membership?.debtAmount ?? 0) > 0;
+  const hasAccountBalance = typeof membership?.accountBalance === 'number';
+  const hasDebtAmount = typeof membership?.debtAmount === 'number';
   const displayName = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ');
 
   return (
@@ -221,14 +251,6 @@ function ClientHomePageInner() {
                   {membership.visitsTotal ? ` / ${membership.visitsTotal}` : ''}
                 </p>
               </div>
-            ) : membership.accountBalance !== undefined ? (
-              <div className="rounded-xl bg-slate-800/50 p-3">
-                <p className="stat-label">Лицевой счёт</p>
-                <p className="stat-value text-lg">
-                  {membership.accountBalance.toFixed(2)}
-                  {membership.currency ? ` ${membership.currency}` : ''}
-                </p>
-              </div>
             ) : (
               <div className="rounded-xl bg-slate-800/50 p-3">
                 <p className="stat-label">Тип</p>
@@ -237,16 +259,40 @@ function ClientHomePageInner() {
             )}
           </div>
 
+          {(hasAccountBalance || hasDebtAmount) && (
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              {hasAccountBalance && (
+                <div className="rounded-xl bg-slate-800/50 p-3">
+                  <p className="stat-label">Лицевой счёт</p>
+                  <p className="stat-value text-lg">
+                    {membership.accountBalance!.toFixed(2)}
+                    {membership.currency ? ` ${membership.currency}` : ''}
+                  </p>
+                </div>
+              )}
+              {hasDebtAmount && (
+                <div
+                  className={`rounded-xl p-3 ${
+                    hasDebt ? 'bg-red-500/10' : 'bg-slate-800/50'
+                  }`}
+                >
+                  <p className="stat-label">Задолженность</p>
+                  <p
+                    className={`stat-value text-lg ${
+                      hasDebt ? 'text-red-300' : ''
+                    }`}
+                  >
+                    {membership.debtAmount!.toFixed(2)}
+                    {membership.currency ? ` ${membership.currency}` : ''}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
           {membership.validFrom && (
             <p className="mt-2 text-xs text-slate-500">
               С {formatDate(membership.validFrom)}
-            </p>
-          )}
-
-          {hasDebt && (
-            <p className="mt-3 text-sm text-red-300">
-              Задолженность: {membership.debtAmount?.toFixed(2)}
-              {membership.currency ? ` ${membership.currency}` : ''}
             </p>
           )}
 
