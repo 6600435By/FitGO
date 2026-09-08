@@ -45,8 +45,18 @@ Path-discovery: какие запросы к членству/карте/виз�
 
 В JSON то же подробнее: `membership.fullName`, `membership.attributes[] {name,type,value}`, `register`, `balance[].rows`, `visitDocAttributes` (есть ли `ПризнакОтменен`).
 
-## Файлы
+## Заморозка (v3.4)
 
-- `ObjectModule.bsl` — вся логика (v3, один экспорт `СканироватьВФайл`; вставлять в **Модуль объекта**, не формы)
-- `FormModule.bsl` — кнопка
-- `FORM.md` — реквизиты формы
+Сканер **read-only** добавляет блок `freeze` в JSON:
+
+- `operationDocuments[]` — документы с «Операц» + «членств/пакет» (кандидат на форму «Операция с членством…»)
+- `freezeEnums[]` — перечисления со значением «Заморозка»
+- `membershipFreezeAttrs` — реквизиты членства с «ЗАМОРОЗ»
+- `freezeAllowedGuess` / `freezeDaysRemainingGuess` / `freezeDaysTotalGuess` + `rule`
+  - `false` + total=0 → тариф без заморозки
+  - `true` + remaining=0 → лимит израсходован
+  - `true` + remaining>0 → можно заморозить
+
+**Write-probe (опасно):** только тестовый клиент, вручную из отладки/консоли:
+
+`ПробаЗаморозкиЗапись(Телефон, ВнешнийИд, Дней, ДатаС)` — создаёт и проводит документ операции «Заморозка». Не вызывать на боевом VIP.

@@ -4,6 +4,7 @@ import type { ClubCardView, ClubCrmLinkStatus, Membership } from '@fitgo/shared-
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { BarcodeCard } from '@/components/barcode-card';
+import { MembershipFreezePanel } from '@/components/client/membership-freeze-panel';
 import { ModuleGate } from '@/components/module-gate';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -27,7 +28,13 @@ function formatMoney(amount: number, currency?: string) {
   }
 }
 
-function MembershipDetails({ membership }: { membership: Membership }) {
+function MembershipDetails({
+  membership,
+  onMembershipChange,
+}: {
+  membership: Membership;
+  onMembershipChange?: (m: Membership) => void;
+}) {
   const progress = membershipProgress(membership.validFrom, membership.validUntil);
   const hasDebt = (membership.debtAmount ?? 0) > 0;
   const hasAccountBalance = typeof membership.accountBalance === 'number';
@@ -134,6 +141,11 @@ function MembershipDetails({ membership }: { membership: Membership }) {
           </ul>
         </div>
       )}
+
+      <MembershipFreezePanel
+        membership={membership}
+        onFrozen={onMembershipChange}
+      />
     </div>
   );
 }
@@ -373,7 +385,15 @@ function ClientCardPageInner() {
         </p>
       )}
 
-      {membership && <MembershipDetails membership={membership} />}
+      {membership && (
+        <MembershipDetails
+          membership={membership}
+          onMembershipChange={(next) => {
+            setMembershipOnly(next);
+            setCard((prev) => (prev ? { ...prev, membership: next } : prev));
+          }}
+        />
+      )}
 
       {card && (
         <>

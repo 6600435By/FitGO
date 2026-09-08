@@ -75,6 +75,20 @@ export interface Membership {
   accountBalance?: number;
   debtAmount?: number;
   currency?: string;
+  /** Whether this membership tariff supports freeze (hide UI when false) */
+  freezeAllowed?: boolean;
+  /** Remaining freeze days when freezeAllowed */
+  freezeDaysRemaining?: number;
+  /** Total freeze days in tariff when known */
+  freezeDaysTotal?: number;
+  /** End of current freeze window when status is FROZEN */
+  frozenUntil?: string;
+}
+
+export interface FreezeMembershipRequest {
+  days: number;
+  /** ISO date YYYY-MM-DD; default today */
+  fromDate?: string;
 }
 
 export type ClubCrmLinkStatus = 'LINKED' | 'PENDING_CRM';

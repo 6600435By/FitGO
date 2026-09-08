@@ -13,6 +13,7 @@ import { ClientService } from './client.service';
 import { ClientProfileService } from './client-profile.service';
 import { BookSessionDto } from './dto/book-session.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
+import { FreezeMembershipDto } from './dto/freeze-membership.dto';
 import { JoinClubDto } from './dto/join-club.dto';
 import {
   CreateBodyLogDto,
@@ -89,8 +90,18 @@ export class ClientController {
   }
 
   @Get('membership')
+  @RequireModule('membership_read')
   getMembership(@CurrentUser() user: JwtPayload) {
     return this.clientService.getMembership(user);
+  }
+
+  @Post('membership/freeze')
+  @RequireModule('membership_read')
+  freezeMembership(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: FreezeMembershipDto,
+  ) {
+    return this.clientService.freezeMembership(user, dto.days, dto.fromDate);
   }
 
   @Get('visits')

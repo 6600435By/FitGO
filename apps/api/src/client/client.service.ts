@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { GroupClassBookingStatus, PersonalBookingStatus, Role } from '@prisma/client';
 import {
+  MembershipStatus,
   SessionType,
   UserRole,
   type ClubCardView,
@@ -555,6 +557,87 @@ export class ClientService {
         address: activeMembership.club.address ?? undefined,
       },
     };
+  }
+
+  async freezeMembership(user: JwtPayload, days: number, fromDate?: string) {
+    if (!Number.isInteger(days) || days < 1) {
+      throw new BadRequestException('Укажите число дней заморозки (не меньше 1)');
+    }
+
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const startKey = fromDate ?? todayKey;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startKey)) {
+      throw new BadRequestException('fromDate must be YYYY-MM-DD');
+    }
+    if (startKey < todayKey) {
+      throw new BadRequestException('Дата начала заморозки не может быть в прошлом');
+    }
+
+    const crm = await this.crmLink.syncMembershipCrmLink(user.sub);
+    const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
+    if (!activeMembership) {
+      throw new NotFoundException('Нет активного клуба');
+    }
+    const externalId =
+      crm.externalId ??
+      this.clubMembership.resolveExternalId(activeMembership, user.externalId);
+    if (!externalId) {
+      throw new BadRequestException('Клиент ещё не привязан к 1С');
+    }
+
+    const provider = this.fitness.getProvider();
+    const freezeFn = provider.freezeMembership;
+    if (!freezeFn) {
+      throw new BadRequestException('Заморозка абонемента недоступна для этого клуба');
+    }
+
+    let current: Membership | null = null;
+    try {
+      current = await provider.getMembership(externalId);
+    } catch {
+      current = null;
+    }
+    if (!current) {
+      throw new NotFoundException('Абонемент не найден');
+    }
+    if (current.freezeAllowed !== true) {
+      throw new ConflictException('У этого абонемента нет функции заморозки');
+    }
+    if (current.status === MembershipStatus.FROZEN) {
+      throw new ConflictException('Абонемент уже заморожен');
+    }
+    const remaining = current.freezeDaysRemaining ?? 0;
+    if (days > remaining) {
+      throw new BadRequestException(
+        `Доступно заморозок: ${remaining} дн., запрошено ${days}`,
+      );
+    }
+
+    try {
+      const membership = await freezeFn.call(provider, externalId, days, startKey);
+      return { membership };
+    } catch (err) {
+      const status = (err as { status?: number })?.status;
+      const raw =
+        err instanceof Error ? err.message : 'Не удалось заморозить абонемент';
+      if (status === 409) throw new ConflictException(raw);
+      if (status === 404) {
+        // Empty 404 from Apache/1C usually = URL template not published
+        if (/FitGO 1C API error 404/i.test(raw) || /not found/i.test(raw)) {
+          throw new BadRequestException(
+            'Заморозка в 1С недоступна: не опубликован POST /v1/membership/freeze. Шаблон URL в FitGOIntegration должен быть с префиксом /v1, затем F7 и переопубликовать.',
+          );
+        }
+        throw new NotFoundException(raw);
+      }
+      if (/Предупреждение безопасности/i.test(raw)) {
+        throw new BadRequestException(
+          'Заморозка в 1С заблокирована «Защитой от опасных действий» (проведение документа создаёт COM-объект WinHttp). Снимите флаг у расширения FitGOIntegration в конфигураторе.',
+        );
+      }
+      throw new BadRequestException(raw);
+    }
   }
 
   async getClubVisits(user: JwtPayload) {

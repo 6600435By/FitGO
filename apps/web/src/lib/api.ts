@@ -543,6 +543,16 @@ export const api = {
       token,
     ),
 
+  clientFreezeMembership: (
+    token: string,
+    data: { days: number; fromDate?: string },
+  ) =>
+    request<{ membership: Membership }>(
+      '/client/membership/freeze',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
   trainerDashboard: (token: string) =>
     request<TrainerDashboard>('/trainer/dashboard', {}, token),
 

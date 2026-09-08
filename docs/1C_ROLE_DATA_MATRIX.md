@@ -20,7 +20,9 @@ OSMI cloud **не используем**. Карта только через `С
 | `membership.name` | fitgo_http `/membership` | _из bindings_ | **чинить** |
 | `membership.validUntil` | fitgo_http `/membership` | `….СрокДействия` | **чинить** |
 | `membership.status` | fitgo_http `/membership` | `….Статус` | **чинить** |
-| `membership.services` | fitgo_http | _если найдётся в metadata_ | backlog |
+| `membership.services` | fitgo_http | квоты из остатков | wired |
+| `membership.freezeAllowed` / `freezeDaysRemaining` | fitgo_http `/membership` | `КоличествоДнейЗаморозок` + `КоличествоДнейЗаморозокОстаток` | **wired** |
+| `membership.frozenUntil` | fitgo_http | `Документ.ОперацииСЧленствомПакетомУслуг` дата «до» | wire |
 | `membership.accountBalance` | fitgo_http | _если найдётся_ | backlog |
 | `visits[]` | fitgo_http `/visits` | `Документ.Посещение` | есть |
 | `accessCard.barcode` | fitgo_http `/card` | `Справочник.Карты.КодКарты` | есть |
@@ -61,7 +63,7 @@ OSMI cloud **не используем**. Карта только через `С
 |----------|------|-------|------------|
 | Запись / отмена группового | client | forma_v3 | не FitGOIntegration |
 | Создание контрагента | admin/client | TBD | после scan |
-| Продление / заморозка | admin | TBD | `СрокДействия` / документ |
+| Продление / заморозка | client | fitgo_http `POST /membership/freeze` | `Документ.ОперацииСЧленствомПакетомУслуг`, операция Заморозка |
 | PT | trainer | fitgo_db | не в 1С |
 
 ## После прогона сканера

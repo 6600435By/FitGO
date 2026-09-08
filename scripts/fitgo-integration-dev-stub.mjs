@@ -36,6 +36,9 @@ const MEMBERSHIP = {
   accountBalance: 45.5,
   debtAmount: 0,
   currency: 'BYN',
+  freezeAllowed: true,
+  freezeDaysRemaining: 14,
+  freezeDaysTotal: 14,
 };
 
 const CARD = {
@@ -87,7 +90,30 @@ function resolveClient(url) {
   return null;
 }
 
-const server = http.createServer((req, res) => {
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      if (!raw) return resolve({});
+      try {
+        resolve(JSON.parse(raw));
+      } catch (e) {
+        reject(e);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+function addDaysIso(isoDate, days) {
+  const d = new Date(`${isoDate}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
   const path = url.pathname.replace(/\/$/, '') || '/';
 
@@ -110,6 +136,52 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && (path === '/fitgo/v1/membership' || path === '/membership')) {
     if (!client) return json(res, 404, { error: { code: 404, message: 'Client not found' } });
     return json(res, 200, { data: MEMBERSHIP });
+  }
+
+  if (
+    req.method === 'POST' &&
+    (path === '/fitgo/v1/membership/freeze' || path === '/membership/freeze')
+  ) {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch {
+      return json(res, 400, { error: { code: 400, message: 'Invalid JSON body' } });
+    }
+    const externalId = String(body.externalId ?? '');
+    const phone = String(body.phone ?? '').replace(/\D/g, '');
+    const days = Number(body.days);
+    const fromDate = String(body.fromDate ?? new Date().toISOString().slice(0, 10));
+    const resolved =
+      (externalId && externalId === CLIENT.externalId && CLIENT) ||
+      (phone && (phone === TEST_PHONE || phone.endsWith(TEST_PHONE.slice(-9))) && CLIENT) ||
+      null;
+    if (!resolved) {
+      return json(res, 404, { error: { code: 404, message: 'Client not found' } });
+    }
+    if (!MEMBERSHIP.freezeAllowed) {
+      return json(res, 409, {
+        error: { code: 409, message: 'Freeze is not available for this membership' },
+      });
+    }
+    if (!Number.isFinite(days) || days < 1) {
+      return json(res, 400, { error: { code: 400, message: 'days must be >= 1' } });
+    }
+    if (days > MEMBERSHIP.freezeDaysRemaining) {
+      return json(res, 400, {
+        error: { code: 400, message: 'days exceed freezeDaysRemaining' },
+      });
+    }
+    if (MEMBERSHIP.status === 'FROZEN') {
+      return json(res, 409, {
+        error: { code: 409, message: 'Membership is already frozen' },
+      });
+    }
+    MEMBERSHIP.freezeDaysRemaining -= days;
+    MEMBERSHIP.status = 'FROZEN';
+    MEMBERSHIP.frozenUntil = addDaysIso(fromDate, days);
+    MEMBERSHIP.validUntil = addDaysIso(MEMBERSHIP.validUntil, days);
+    return json(res, 200, { data: { ...MEMBERSHIP } });
   }
 
   if (req.method === 'GET' && (path === '/fitgo/v1/visits' || path === '/visits')) {

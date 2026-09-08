@@ -107,6 +107,43 @@ Query: `phone` или `externalId`.
 
 `data: null` — нет активного абонемента.
 
+Доп. поля заморозки (не у всех тарифов):
+
+| Поле | Описание |
+|------|----------|
+| `freezeAllowed` | `true` — у абонемента есть функция заморозки; `false` — скрыть UI |
+| `freezeDaysRemaining` | остаток дней (если `freezeAllowed`) |
+| `freezeDaysTotal` | лимит по тарифу (если известен) |
+| `frozenUntil` | дата окончания текущей заморозки (если `status=FROZEN`) |
+
+### POST `/membership/freeze`
+
+Создаёт и проводит документ «Операция с членством, пакетом услуг» с операцией **Заморозка**. Срок действия абонемента увеличивается на `days`.
+
+Тело:
+
+```json
+{
+  "externalId": "uuid",
+  "days": 3,
+  "fromDate": "2026-09-08"
+}
+```
+
+`fromDate` опционален (default — сегодня). Либо `phone` вместо `externalId`.
+
+Успех: `{ "data": { ...membership... } }` (как GET, обычно `status: FROZEN`).
+
+Ошибки: `400` (days / fromDate), `404`, `409` (freeze не доступна / уже заморожен).
+
+BSL: `FitGOIntegrationКлиенты.ЗаморозитьАбонемент` → `Документ.ОперацииСЧленствомПакетомУслуг`; полный модуль HTTP — [`scripts/windows/FitGOIntegration_HTTP.bsl`](../scripts/windows/FitGOIntegration_HTTP.bsl).
+
+Bindings (scan Куделко VIP, 2026-09-08):
+
+- `freezeDaysTotal` ← `ЧленствоПакетУслуг.КоличествоДнейЗаморозок` (7)
+- `freezeDaysRemaining` ← `РН.ЧленстваПакетыУслуг.Остатки.КоличествоДнейЗаморозокОстаток` (4) — **не** `ДнейДополнительноОстаток`
+- `freezeAllowed` ← `КоличествоДнейЗаморозок > 0`
+
 ### GET `/packages` (фаза 1b)
 
 Несколько членств/пакетов на клиента (как на столе администратора).
@@ -173,6 +210,7 @@ Query: `phone` или `externalId`.
 
 - `getClientByPhone(phone)` / provider `findClientByPhone` → `/client?phone=` (привязка CRM)
 - `getMembership(externalId)` → `/membership?externalId=`
+- `freezeMembership(externalId, days, fromDate?)` → `POST /membership/freeze`
 - `getVisits(externalId)` → `/visits?externalId=`
 - `getAccessCard(externalId)` → `/card?externalId=`
 
@@ -183,4 +221,14 @@ Query: `phone` или `externalId`.
 ```powershell
 cd C:\fitgo-probe
 .\probe-fitgo-api.ps1
+```
+
+Freeze (осторожно, пишет в 1С — только тест-клиент):
+
+```powershell
+# после проверки GET membership.freezeAllowed=true
+curl.exe -sk -X POST -H "apikey: ..." -H "Authorization: Basic ..." `
+  -H "Content-Type: application/json" `
+  -d "{\"externalId\":\"$extId\",\"days\":1,\"fromDate\":\"2026-09-08\"}" `
+  "$base/membership/freeze"
 ```

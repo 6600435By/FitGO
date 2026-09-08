@@ -1,4 +1,4 @@
-import { UserRole, type AuthCredentials, type AuthResult, type Booking, type PaymentResult, type ScheduleSlot } from '@fitgo/shared-types';
+import { UserRole, MembershipStatus, type AuthCredentials, type AuthResult, type Booking, type PaymentResult, type ScheduleSlot } from '@fitgo/shared-types';
 import {
   MOCK_CLUB,
   MOCK_PRODUCTS,
@@ -7,6 +7,20 @@ import {
   buildMockVisits,
 } from './fixtures';
 import type { IFitnessClubProvider, ScheduleFilters, VisitPeriod, BookingContext } from './types';
+
+function pad2(n: number) {
+  return String(n).padStart(2, '0');
+}
+
+function formatDateKey(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function addDays(base: Date, days: number): Date {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return d;
+}
 
 export class Mock1CProvider implements IFitnessClubProvider {
   private slots: ScheduleSlot[] = buildMockSchedule();
@@ -62,6 +76,36 @@ export class Mock1CProvider implements IFitnessClubProvider {
       (u) => u.profile.externalId === externalId,
     );
     return entry?.membership ?? null;
+  }
+
+  async freezeMembership(externalId: string, days: number, fromDate?: string) {
+    const entry = Object.values(MOCK_USERS).find(
+      (u) => u.profile.externalId === externalId,
+    );
+    if (!entry?.membership) {
+      throw Object.assign(new Error('Membership not found'), { status: 404 });
+    }
+    const m = entry.membership;
+    if (!m.freezeAllowed) {
+      throw Object.assign(new Error('Freeze is not available for this membership'), {
+        status: 409,
+      });
+    }
+    if (m.status === MembershipStatus.FROZEN) {
+      throw Object.assign(new Error('Membership is already frozen'), { status: 409 });
+    }
+    const remaining = m.freezeDaysRemaining ?? 0;
+    if (!Number.isFinite(days) || days < 1 || days > remaining) {
+      throw Object.assign(new Error('days exceed freezeDaysRemaining'), { status: 400 });
+    }
+    const start = fromDate ?? formatDateKey(new Date());
+    m.freezeDaysRemaining = remaining - days;
+    m.status = MembershipStatus.FROZEN;
+    m.frozenUntil = formatDateKey(addDays(new Date(`${start}T12:00:00`), days));
+    m.validUntil = formatDateKey(
+      addDays(new Date(`${m.validUntil}T12:00:00`), days),
+    );
+    return { ...m };
   }
 
   async getVisits(externalId: string, period?: VisitPeriod) {

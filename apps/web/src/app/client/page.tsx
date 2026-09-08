@@ -1,6 +1,6 @@
 'use client';
 
-import { MembershipStatus, SessionType, type Booking, type GamificationProfile, type Visit } from '@fitgo/shared-types';
+import { MembershipStatus, SessionType, type Booking, type GamificationProfile, type Membership, type Visit } from '@fitgo/shared-types';
 import { Calendar, CreditCard, ChevronRight, Dumbbell, ShoppingBag, Trophy } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
@@ -8,6 +8,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { MessagesHomeLink } from '@/components/messages-home-link';
 import { ClientTrainerInvites } from '@/components/client/client-trainer-invites';
 import { ClientClubPicker } from '@/components/client/client-club-picker';
+import { MembershipFreezePanel } from '@/components/client/membership-freeze-panel';
 import { useFeatures } from '@/components/features-provider';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -44,6 +45,10 @@ interface DashboardData {
     accountBalance?: number;
     debtAmount?: number;
     currency?: string;
+    freezeAllowed?: boolean;
+    freezeDaysRemaining?: number;
+    freezeDaysTotal?: number;
+    frozenUntil?: string;
   } | null;
   membershipSource?: '1c' | 'osmi' | 'derived' | null;
   visits: Visit[];
@@ -53,7 +58,7 @@ interface DashboardData {
     clientName: string;
     clubName: string;
   } | null;
-  cardSource?: '1c' | 'osmi';
+  cardSource?: '1c' | 'osmi' | 'fitgo';
   club: { name: string; address?: string; slug?: string } | null;
   crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
 }
@@ -295,6 +300,27 @@ function ClientHomePageInner() {
               С {formatDate(membership.validFrom)}
             </p>
           )}
+
+          <div className="mt-3">
+            <MembershipFreezePanel
+              membership={membership as Membership}
+              onFrozen={(next) => {
+                setData((prev) => {
+                  if (!prev) return prev;
+                  const updated = { ...prev, membership: next };
+                  try {
+                    sessionStorage.setItem(
+                      'fitgo:client-dashboard:v2',
+                      JSON.stringify(updated),
+                    );
+                  } catch {
+                    /* ignore */
+                  }
+                  return updated;
+                });
+              }}
+            />
+          </div>
 
           {membership.services && membership.services.length > 0 && (
             <ul className="mt-3 space-y-1.5 border-t border-slate-800 pt-3">

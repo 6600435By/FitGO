@@ -42,6 +42,10 @@ interface FitgoMembershipData {
   accountBalance?: number;
   debtAmount?: number;
   currency?: string;
+  freezeAllowed?: boolean;
+  freezeDaysRemaining?: number;
+  freezeDaysTotal?: number;
+  frozenUntil?: string;
 }
 
 interface FitgoVisitData {
@@ -70,29 +74,51 @@ export class FitgoHttpProvider {
     };
   }
 
-  private async request<T>(path: string): Promise<T | null> {
+  private async request<T>(
+    path: string,
+    init?: { method?: string; body?: unknown },
+  ): Promise<T | null> {
     const base = this.config.baseUrl.replace(/\/$/, '');
     const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+    const method = init?.method ?? 'GET';
+    const headers: Record<string, string> = {
+      ...this.headers(),
+    };
+    let body: string | undefined;
+    if (init?.body !== undefined) {
+      headers['Content-Type'] = 'application/json; charset=utf-8';
+      body = JSON.stringify(init.body);
+    }
     const response = await fetch(url, {
-      headers: this.headers(),
+      method,
+      headers,
+      body,
       signal: AbortSignal.timeout(12_000),
     });
     const text = await response.text();
 
-    let body: FitgoApiError & { data?: T | null };
+    let parsed: FitgoApiError & { data?: T | null };
     try {
-      body = JSON.parse(text) as FitgoApiError & { data?: T | null };
+      parsed = JSON.parse(text) as FitgoApiError & { data?: T | null };
     } catch {
       throw new Error(`FitGO 1C API error ${response.status}: ${text}`);
     }
 
     if (!response.ok) {
-      throw new Error(
-        body.error?.message ?? body.message ?? `FitGO 1C API error ${response.status}`,
-      );
+      const detail =
+        parsed.error?.message ??
+        parsed.message ??
+        (text.trim() ? text.slice(0, 200) : '');
+      const err = new Error(
+        detail
+          ? `FitGO 1C API error ${response.status}: ${detail}`
+          : `FitGO 1C API error ${response.status}`,
+      ) as Error & { status?: number };
+      err.status = parsed.error?.code ?? response.status;
+      throw err;
     }
 
-    return unwrapFormaData<T | null>(body);
+    return unwrapFormaData<T | null>(parsed);
   }
 
   private clientQuery(externalId: string): string {
@@ -122,6 +148,26 @@ export class FitgoHttpProvider {
       `/membership?externalId=${encodeURIComponent(externalId)}`,
     );
     if (!data) return null;
+    return mapMembership(data);
+  }
+
+  async freezeMembership(
+    externalId: string,
+    days: number,
+    fromDate?: string,
+  ): Promise<Membership> {
+    const body: { externalId: string; days: number; fromDate?: string } = {
+      externalId,
+      days,
+    };
+    if (fromDate) body.fromDate = fromDate;
+    const data = await this.request<FitgoMembershipData>('/membership/freeze', {
+      method: 'POST',
+      body,
+    });
+    if (!data) {
+      throw new Error('FitGO 1C API returned empty membership after freeze');
+    }
     return mapMembership(data);
   }
 
@@ -204,6 +250,11 @@ function mapMembership(data: FitgoMembershipData): Membership {
     accountBalance: coerceOptionalNumber(data.accountBalance),
     debtAmount: coerceOptionalNumber(data.debtAmount),
     currency: data.currency,
+    freezeAllowed:
+      typeof data.freezeAllowed === 'boolean' ? data.freezeAllowed : undefined,
+    freezeDaysRemaining: coerceOptionalNumber(data.freezeDaysRemaining),
+    freezeDaysTotal: coerceOptionalNumber(data.freezeDaysTotal),
+    frozenUntil: data.frozenUntil || undefined,
   };
 }
 

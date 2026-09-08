@@ -43,6 +43,12 @@ export interface IFitnessClubProvider {
   /** Resolve 1C client by phone (FitGO HTTP / composite). Returns null if unsupported or not found. */
   findClientByPhone?(phone: string): Promise<FitgoClientLookup | null>;
   getMembership(externalId: string): Promise<Membership | null>;
+  /** Freeze membership in 1C (FitGO HTTP). Optional — unsupported providers throw. */
+  freezeMembership?(
+    externalId: string,
+    days: number,
+    fromDate?: string,
+  ): Promise<Membership>;
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]>;
   getAccessCard(externalId: string): Promise<AccessCard | null>;
   getSchedule(clubExternalId: string, filters?: ScheduleFilters): Promise<ScheduleSlot[]>;

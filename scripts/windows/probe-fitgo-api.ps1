@@ -34,3 +34,4 @@ foreach ($ep in @(
 Write-Host ""
 Write-Host "Note: client_phone 404 + empty phone in client_guid = телефон не заполнен в КИ контрагента в 1С." -ForegroundColor Yellow
 Write-Host "FitGO after CRM link uses externalId — check membership_guid (expect ACTIVE + validUntil)." -ForegroundColor Yellow
+Write-Host "Freeze: check freezeAllowed/freezeDaysRemaining in membership_guid; POST /membership/freeze only on test client." -ForegroundColor Yellow

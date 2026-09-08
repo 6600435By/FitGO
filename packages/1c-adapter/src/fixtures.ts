@@ -147,6 +147,9 @@ export const MOCK_USERS: Record<
       accountBalance: 45.5,
       debtAmount: 0,
       currency: 'BYN',
+      freezeAllowed: true,
+      freezeDaysRemaining: 14,
+      freezeDaysTotal: 14,
     },
     visits: buildMockVisits(MOCK_CLUB.name),
     accessCard: {
