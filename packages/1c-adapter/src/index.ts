@@ -8,4 +8,5 @@ export * from './fitgo-http-provider';
 export * from './analytics-http-provider';
 export * from './forma-fitgo-composite-provider';
 export * from './forma-shared';
+export * from './membership-from-visits';
 export * from './factory';

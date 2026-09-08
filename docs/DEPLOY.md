@@ -52,24 +52,62 @@ pnpm db:generate && pnpm db:push && pnpm db:seed
 2. References: `DATABASE_URL=${{Postgres.DATABASE_URL}}`, web `NEXT_PUBLIC_API_URL` → API public domain.
 3. Generate Domain для обоих сервисов.
 
-## C. hoster.by VPS (рекомендуется рядом с ffs.by)
+## C. hoster.by VPS (рекомендуется — без VPN с Mac)
 
-ffs.by уже на hoster.by (`87.232.64.100`). VPS с **статическим IP в whitelist MikroTik** — лучший путь для живой 1С без VPN с Mac.
+**Зачем:** MikroTik пускает к 1С IP сайта клуба **`87.232.64.100` (ffs.by / hoster.by)**.  
+API на этом же хостере (тот же или соседний VPS **со статическим IP в whitelist**) ходит в 1С сам; Mac открывает только публичный FitGO API по HTTPS — VPN не нужен.
 
-1. VPS: Node 20, pnpm, PM2, Postgres (или managed Postgres).
-2. `git clone` → `.env` в `apps/api/` и root по необходимости.
-3. `pnpm install` → build packages → `pnpm --filter @fitgo/api build` → web build.
-4. PM2: `pm2 start deploy/ecosystem.config.cjs`
-5. Nginx: шаблоны `deploy/nginx/*.template` → certbot → DNS A-записи.
-6. Обновить скрипт: `bash scripts/deploy-vps.sh`
+**Не подходит «из коробки»:** Railway/Render с плавающим egress — пока IP не добавят в MikroTik.
 
-## После выкладки на whitelist-IP
+### Нужно от тебя один раз
+
+1. VPS hoster.by (Ubuntu 22.04): Node 20, pnpm, PM2, Nginx, Postgres (или managed).
+2. SSH: `user@vps-host` (ключ или пароль) — передать агенту / завести в `~/.ssh/config` как `fitgo-vps`.
+3. DNS: `api.<домен>` и `app.<домен>` → IP VPS (или сначала IP + self-signed для smoke).
+
+### На VPS
+
+```bash
+git clone <repo> FitGO && cd FitGO
+# apps/api/.env — см. блок ниже (публичный IP клуба, НЕ 192.168.1.20)
+pnpm install
+pnpm --filter @fitgo/shared-types build
+pnpm --filter @fitgo/1c-adapter build
+pnpm --filter @fitgo/osmi-adapter build
+pnpm --filter @fitgo/api exec prisma generate
+pnpm db:push && pnpm db:seed   # с DATABASE_URL прода
+pnpm --filter @fitgo/api build && pnpm --filter @fitgo/web build
+pm2 start deploy/ecosystem.config.cjs && pm2 save
+# Nginx: deploy/nginx/*.template → certbot
+```
+
+Обновления: `bash scripts/deploy-vps.sh`
+
+### Env API на whitelist-хосте (прод)
+
+С сервера в интернете 1С доступна по **публичному** IP клуба (NAT), не по LAN:
 
 ```env
 FITNESS_PROVIDER=forma
-FORMA_BASE_URL=https://192.168.1.20:444/forma/hs/api/v3
-FORMA_FITGO_URL=https://192.168.1.20:8445/fitgo/hs/fitgo/v1
+FORMA_BASE_URL=https://86.57.152.242:444/forma/hs/api/v3
+FORMA_FITGO_URL=https://86.57.152.242:8445/fitgo/hs/fitgo/v1
+FORMA_API_KEY=...
+FORMA_BASIC_AUTH=...
+FORMA_CLUB_ID=97f057be-defe-11e6-af15-784561bf6e7c
 NODE_TLS_REJECT_UNAUTHORIZED=0
+CORS_ORIGIN=https://app.<домен>
+JWT_SECRET=<≥32 chars>
+DATABASE_URL=postgresql://...
 ```
 
-Пока FitGOIntegration не опубликован на `:8445`, membership/card на проде будут пустыми; schedule через forma v3 уже работает.
+| Откуда API | FORMA_* host |
+|------------|--------------|
+| Mac + VPN / LAN клуба | `192.168.1.20` |
+| VPS в интернете (hoster) | `86.57.152.242` |
+
+Web build: `NEXT_PUBLIC_API_URL=https://api.<домен>` (без `/api`).
+
+### Smoke после выкладки
+
+С VPS: `curl -sk https://86.57.152.242:8445/fitgo/hs/fitgo/v1/health` + ключи → 200.  
+С Mac **без VPN**: `https://api.<домен>/api/...` login → card/visits.

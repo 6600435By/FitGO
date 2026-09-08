@@ -11,7 +11,10 @@ import {
   type Membership,
   type Visit,
 } from '@fitgo/shared-types';
-import type { ScheduleFilters } from '@fitgo/1c-adapter';
+import {
+  deriveMembershipFromVisits,
+  type ScheduleFilters,
+} from '@fitgo/1c-adapter';
 import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { FitnessService } from '../fitness/fitness.service';
@@ -332,25 +335,42 @@ export class ClientService {
     const clubName = clubRecord?.name ?? 'Клуб';
     const osmiEnabled = this.osmiCards.isEnabled();
 
-    const [membershipFromFitness, externalVisits, accessCardFromFitness, appVisits] =
+    const [membershipResult, visitsResult, cardResult, appVisits, crmProfile] =
       await Promise.all([
-        externalId ? provider.getMembership(externalId) : Promise.resolve(null),
-        externalId ? provider.getVisits(externalId) : Promise.resolve([]),
-        externalId ? provider.getAccessCard(externalId) : Promise.resolve(null),
+        externalId
+          ? provider.getMembership(externalId).catch(() => null)
+          : Promise.resolve(null),
+        externalId
+          ? provider.getVisits(externalId).catch(() => [] as Visit[])
+          : Promise.resolve([] as Visit[]),
+        externalId
+          ? provider.getAccessCard(externalId).catch(() => null)
+          : Promise.resolve(null),
         this.getAppSessionVisits(user.sub, clubName),
+        externalId
+          ? provider.getClientProfile(externalId).catch(() => null)
+          : Promise.resolve(null),
       ]);
 
-    let membership = membershipFromFitness;
-    let accessCard = accessCardFromFitness;
+    const externalVisits = visitsResult;
+    let membership = membershipResult;
+    let membershipSource: '1c' | 'osmi' | 'derived' | null = membership
+      ? '1c'
+      : null;
+    let accessCard = cardResult;
     let cardSource: ClubCardView['source'] | undefined = accessCard
       ? '1c'
       : undefined;
 
-    // OSMI: barcode-only fallback when 1C has no card yet
-    if (!accessCard && osmiEnabled && dbUser?.phone && activeMembership) {
+    // OSMI: barcode fallback + membership when 1C /membership is empty
+    if (osmiEnabled && dbUser?.phone && activeMembership) {
       try {
         const osmiResult = await this.osmiCards.getClubCard(user);
-        if (osmiResult.card) {
+        if (!membership && osmiResult.card?.membership) {
+          membership = osmiResult.card.membership;
+          membershipSource = 'osmi';
+        }
+        if (!accessCard && osmiResult.card) {
           accessCard = {
             id: osmiResult.card.id,
             barcode: osmiResult.card.barcode,
@@ -358,7 +378,7 @@ export class ClientService {
             clubName: osmiResult.card.clubName,
           };
           cardSource = 'osmi';
-        } else {
+        } else if (!accessCard) {
           const osmiAccess = this.osmiCards.getAccessCardFromCache({
             id: dbUser.id,
             firstName: dbUser.firstName,
@@ -373,19 +393,26 @@ export class ClientService {
           }
         }
       } catch {
-        const osmiAccess = this.osmiCards.getAccessCardFromCache({
-          id: dbUser.id,
-          firstName: dbUser.firstName,
-          lastName: dbUser.lastName,
-          osmiCardId: dbUser.osmiCardId,
-          osmiBarcode: dbUser.osmiBarcode,
-          club: clubRecord ?? { name: clubName },
-        });
-        if (osmiAccess) {
-          accessCard = osmiAccess;
-          cardSource = 'osmi';
+        if (!accessCard) {
+          const osmiAccess = this.osmiCards.getAccessCardFromCache({
+            id: dbUser.id,
+            firstName: dbUser.firstName,
+            lastName: dbUser.lastName,
+            osmiCardId: dbUser.osmiCardId,
+            osmiBarcode: dbUser.osmiBarcode,
+            club: clubRecord ?? { name: clubName },
+          });
+          if (osmiAccess) {
+            accessCard = osmiAccess;
+            cardSource = 'osmi';
+          }
         }
       }
+    }
+
+    if (!membership) {
+      membership = deriveMembershipFromVisits(externalVisits);
+      if (membership) membershipSource = 'derived';
     }
 
     const visits = this.mergeVisits(
@@ -404,12 +431,13 @@ export class ClientService {
         externalId,
         clubId: user.clubId ?? clubRecord?.id ?? '',
         email: user.email,
-        firstName: dbUser?.firstName ?? '',
-        lastName: dbUser?.lastName ?? '',
-        phone: dbUser?.phone ?? undefined,
+        firstName: crmProfile?.firstName || dbUser?.firstName || '',
+        lastName: crmProfile?.lastName || dbUser?.lastName || '',
+        phone: crmProfile?.phone || dbUser?.phone || undefined,
         roles: user.roles,
       },
       membership,
+      membershipSource,
       visits,
       accessCard,
       cardSource,
@@ -472,9 +500,24 @@ export class ClientService {
         activeMembership,
         user.externalId,
       );
-    const membership: Membership | null = externalId
-      ? await this.fitness.getProvider().getMembership(externalId)
+    const provider = this.fitness.getProvider();
+    let membership: Membership | null = externalId
+      ? await provider.getMembership(externalId).catch(() => null)
       : null;
+
+    if (!membership && this.osmiCards.isEnabled()) {
+      try {
+        const osmiResult = await this.osmiCards.getClubCard(user);
+        membership = osmiResult.card?.membership ?? null;
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!membership && externalId) {
+      const visits = await provider.getVisits(externalId).catch(() => [] as Visit[]);
+      membership = deriveMembershipFromVisits(visits);
+    }
 
     return {
       membership,
@@ -806,10 +849,13 @@ export class ClientService {
     }
 
     const provider = this.fitness.getProvider();
-    const [membership, accessCard] = await Promise.all([
-      provider.getMembership(externalId),
-      provider.getAccessCard(externalId),
+    const [membershipRaw, accessCard, visits] = await Promise.all([
+      provider.getMembership(externalId).catch(() => null),
+      provider.getAccessCard(externalId).catch(() => null),
+      provider.getVisits(externalId).catch(() => [] as Visit[]),
     ]);
+    const membership =
+      membershipRaw ?? deriveMembershipFromVisits(visits);
 
     if (accessCard?.barcode) {
       const card: ClubCardView = {

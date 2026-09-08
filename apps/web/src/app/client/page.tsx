@@ -27,6 +27,12 @@ function clientWorkoutHref(booking: Booking): string | null {
 }
 
 interface DashboardData {
+  profile?: {
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+    externalId?: string;
+  };
   membership: {
     name: string;
     status: MembershipStatus;
@@ -39,7 +45,15 @@ interface DashboardData {
     debtAmount?: number;
     currency?: string;
   } | null;
+  membershipSource?: '1c' | 'osmi' | 'derived' | null;
   visits: Visit[];
+  accessCard?: {
+    id: string;
+    barcode: string;
+    clientName: string;
+    clubName: string;
+  } | null;
+  cardSource?: '1c' | 'osmi';
   club: { name: string; address?: string; slug?: string } | null;
   crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
 }
@@ -108,15 +122,24 @@ function ClientHomePageInner() {
     );
   }
 
-  const { membership, visits, club, crmStatus } = data;
+  const { membership, visits, club, crmStatus, profile, accessCard, membershipSource } =
+    data;
   const progress = membership
     ? membershipProgress(membership.validFrom, membership.validUntil)
     : null;
   const hasDebt = (membership?.debtAmount ?? 0) > 0;
+  const displayName = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ');
 
   return (
     <div className="space-y-4">
       <ClientTrainerInvites />
+
+      {displayName && club && !changingClub && (
+        <div className="px-0.5">
+          <p className="text-sm text-slate-400">{club.name}</p>
+          <h1 className="text-xl font-semibold tracking-tight">{displayName}</h1>
+        </div>
+      )}
 
       {(!club || changingClub) && (
         <ClientClubPicker
@@ -148,6 +171,144 @@ function ClientHomePageInner() {
           </Link>
         </div>
       )}
+
+      {membership ? (
+        <div className="card">
+          <div className="mb-3 flex items-start justify-between gap-2">
+            <div>
+              <p className="text-sm text-slate-400">Абонемент</p>
+              <p className="text-xl font-semibold">{membership.name}</p>
+              {membershipSource === 'derived' && (
+                <p className="mt-1 text-xs text-slate-500">
+                  Срок уточняется из 1С — показана оценка по последнему визиту
+                </p>
+              )}
+            </div>
+            <span
+              className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${membershipStatusColor(membership.status)}`}
+            >
+              {membershipStatusLabel(membership.status)}
+            </span>
+          </div>
+
+          {progress && membership.status === MembershipStatus.ACTIVE && (
+            <div className="mb-3">
+              <div className="mb-1 flex justify-between text-xs text-slate-400">
+                <span>Осталось {progress.daysLeft} дн.</span>
+                <span>{progress.percent}%</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                <div
+                  className="h-full rounded-full bg-fitgo-500"
+                  style={{ width: `${100 - progress.percent}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-xl bg-slate-800/50 p-3">
+              <p className="stat-label">Действует до</p>
+              <p className="stat-value text-lg">
+                {formatDate(membership.validUntil)}
+              </p>
+            </div>
+            {membership.visitsRemaining !== undefined ? (
+              <div className="rounded-xl bg-slate-800/50 p-3">
+                <p className="stat-label">Осталось визитов</p>
+                <p className="stat-value text-lg">
+                  {membership.visitsRemaining}
+                  {membership.visitsTotal ? ` / ${membership.visitsTotal}` : ''}
+                </p>
+              </div>
+            ) : membership.accountBalance !== undefined ? (
+              <div className="rounded-xl bg-slate-800/50 p-3">
+                <p className="stat-label">Лицевой счёт</p>
+                <p className="stat-value text-lg">
+                  {membership.accountBalance.toFixed(2)}
+                  {membership.currency ? ` ${membership.currency}` : ''}
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-xl bg-slate-800/50 p-3">
+                <p className="stat-label">Тип</p>
+                <p className="stat-value text-lg">Безлимит</p>
+              </div>
+            )}
+          </div>
+
+          {membership.validFrom && (
+            <p className="mt-2 text-xs text-slate-500">
+              С {formatDate(membership.validFrom)}
+            </p>
+          )}
+
+          {hasDebt && (
+            <p className="mt-3 text-sm text-red-300">
+              Задолженность: {membership.debtAmount?.toFixed(2)}
+              {membership.currency ? ` ${membership.currency}` : ''}
+            </p>
+          )}
+
+          {membership.services && membership.services.length > 0 && (
+            <ul className="mt-3 space-y-1.5 border-t border-slate-800 pt-3">
+              {membership.services.slice(0, 4).map((service) => (
+                <li
+                  key={service.name}
+                  className="flex items-center justify-between text-sm"
+                >
+                  <span className="text-slate-300">{service.name}</span>
+                  <span className="text-slate-400">
+                    {service.unlimited
+                      ? '∞'
+                      : service.remaining !== undefined
+                        ? service.total
+                          ? `${service.remaining}/${service.total}`
+                          : String(service.remaining)
+                        : '—'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <Link href="/client/card" className="mt-3 inline-block text-sm text-fitgo-400">
+            Карта и услуги →
+          </Link>
+        </div>
+      ) : (
+        <div className="card text-center">
+          <p className="text-slate-400">
+            {crmStatus === 'PENDING_CRM'
+              ? 'Абонемент появится после оформления в клубе'
+              : club
+                ? 'Абонемент не найден'
+                : 'Клуб не подключён — персональные тренировки доступны без абонемента'}
+          </p>
+          {club && crmStatus !== 'PENDING_CRM' && isEnabled('membership_shop') && (
+            <Link href="/client/products" className="btn-primary mt-4 inline-block">
+              Купить абонемент
+            </Link>
+          )}
+        </div>
+      )}
+
+      {accessCard && isEnabled('club_card') && (
+        <Link
+          href="/client/card"
+          className="card flex items-center justify-between gap-3 transition hover:bg-slate-800/40"
+        >
+          <div className="min-w-0">
+            <p className="text-sm text-slate-400">Карта клуба</p>
+            <p className="truncate font-medium">{accessCard.clientName}</p>
+            <p className="font-mono text-sm text-fitgo-400">
+              ••• {accessCard.barcode.slice(-4)}
+            </p>
+          </div>
+          <CreditCard className="h-8 w-8 shrink-0 text-fitgo-400" />
+        </Link>
+      )}
+
       {upcomingBookings.length > 0 ? (
         <div className="card">
           <div className="mb-3 flex items-center justify-between">
@@ -207,94 +368,6 @@ function ClientHomePageInner() {
           <p className="text-slate-400">Нет предстоящих записей</p>
           <span className="btn-primary mt-3 inline-block">Записаться на групповое</span>
         </Link>
-      )}
-
-      {membership ? (
-        <div className="card">
-          <div className="mb-3 flex items-start justify-between">
-            <div>
-              <p className="text-sm text-slate-400">Абонемент</p>
-              <p className="text-xl font-semibold">{membership.name}</p>
-            </div>
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-medium ${membershipStatusColor(membership.status)}`}
-            >
-              {membershipStatusLabel(membership.status)}
-            </span>
-          </div>
-
-          {progress && (
-            <div className="mb-3">
-              <div className="mb-1 flex justify-between text-xs text-slate-400">
-                <span>Осталось {progress.daysLeft} дн.</span>
-                <span>{progress.percent}%</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                <div
-                  className="h-full rounded-full bg-fitgo-500"
-                  style={{ width: `${100 - progress.percent}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-xl bg-slate-800/50 p-3">
-              <p className="stat-label">Действует до</p>
-              <p className="stat-value text-lg">
-                {formatDate(membership.validUntil)}
-              </p>
-            </div>
-            {membership.visitsRemaining !== undefined ? (
-              <div className="rounded-xl bg-slate-800/50 p-3">
-                <p className="stat-label">Осталось визитов</p>
-                <p className="stat-value text-lg">
-                  {membership.visitsRemaining}
-                  {membership.visitsTotal ? ` / ${membership.visitsTotal}` : ''}
-                </p>
-              </div>
-            ) : membership.accountBalance !== undefined ? (
-              <div className="rounded-xl bg-slate-800/50 p-3">
-                <p className="stat-label">Лицевой счёт</p>
-                <p className="stat-value text-lg">
-                  {membership.accountBalance.toFixed(2)}
-                  {membership.currency ? ` ${membership.currency}` : ''}
-                </p>
-              </div>
-            ) : (
-              <div className="rounded-xl bg-slate-800/50 p-3">
-                <p className="stat-label">Тип</p>
-                <p className="stat-value text-lg">Безлимит</p>
-              </div>
-            )}
-          </div>
-
-          {hasDebt && (
-            <p className="mt-3 text-sm text-red-300">
-              Задолженность: {membership.debtAmount?.toFixed(2)}
-              {membership.currency ? ` ${membership.currency}` : ''}
-            </p>
-          )}
-
-          <Link href="/client/card" className="mt-3 inline-block text-sm text-fitgo-400">
-            Карта и услуги →
-          </Link>
-        </div>
-      ) : (
-        <div className="card text-center">
-          <p className="text-slate-400">
-            {crmStatus === 'PENDING_CRM'
-              ? 'Абонемент появится после оформления в клубе'
-              : club
-                ? 'Абонемент не найден'
-                : 'Клуб не подключён — персональные тренировки доступны без абонемента'}
-          </p>
-          {club && crmStatus !== 'PENDING_CRM' && isEnabled('membership_shop') && (
-            <Link href="/client/products" className="btn-primary mt-4 inline-block">
-              Купить абонемент
-            </Link>
-          )}
-        </div>
       )}
 
       {gamification?.activated && isEnabled('engagement') && (
