@@ -15,9 +15,11 @@ import { getToken } from '@/lib/auth';
 import {
   formatDate,
   formatDateTime,
+  formatShortVisitDate,
   membershipProgress,
   membershipStatusColor,
   membershipStatusLabel,
+  visitHeadline,
 } from '@/lib/utils';
 
 function clientWorkoutHref(booking: Booking): string | null {
@@ -517,10 +519,12 @@ function ClientHomePageInner() {
             {visits.slice(0, 3).map((visit) => (
               <li
                 key={visit.id}
-                className="flex justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-sm"
+                className="flex items-center justify-between gap-3 rounded-xl bg-slate-800/50 px-3 py-2 text-sm"
               >
-                <span>{visit.title ?? formatDate(visit.date)}</span>
-                <span className="text-slate-400">{visit.checkIn ?? '—'}</span>
+                <span className="min-w-0 truncate">{visitHeadline(visit)}</span>
+                <span className="shrink-0 text-slate-400">
+                  {formatShortVisitDate(visit.date)}
+                </span>
               </li>
             ))}
           </ul>

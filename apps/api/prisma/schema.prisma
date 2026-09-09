@@ -63,6 +63,25 @@ enum VisitSource {
   BOOKING_GROUP
   BOOKING_PT
   TRAINER_CONFIRM
+  CLIENT_SELF_CONFIRM
+}
+
+enum VisitKind {
+  GYM
+  GROUP
+  PT
+  SPA_MASSAGE
+  SPA_BODYCOMP
+  SOLARIUM
+  UNKNOWN
+}
+
+enum VisitVerification {
+  PENDING
+  VERIFIED_1C
+  VERIFIED_TRAINER
+  VERIFIED_CLIENT_SELF
+  REJECTED
 }
 
 enum LeagueTier {
@@ -286,6 +305,7 @@ model User {
   trainerConversations    Conversation[]          @relation("TrainerConversations")
   chatMessages            ChatMessage[]           @relation("ChatMessageSender")
   clubVisits              ClubVisit[]
+  clubVisitEvents         ClubVisitEvent[]
   loyaltyProfile          LoyaltyProfile?
   clientRating            ClientRating?
   leagueGroupMembers      LeagueGroupMember[]
@@ -744,12 +764,43 @@ model ClubVisit {
   visitDate  String
   source     VisitSource
   externalId String?
+  /// Only verified day-facts count for streak / loyalty / challenges.
   verified   Boolean     @default(true)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, clubId, visitDate])
   @@index([userId, visitedAt])
+  @@index([userId, verified, visitedAt])
+}
+
+/// Individual visit event (1C document or FitGO booking). History UI reads this.
+model ClubVisitEvent {
+  id           String            @id @default(cuid())
+  userId       String
+  clubId       String
+  /// Dedup key: "1c:{externalId}" | "booking:{id}" | "self:{bookingId}"
+  externalKey  String
+  kind         VisitKind         @default(UNKNOWN)
+  verification VisitVerification @default(PENDING)
+  source       VisitSource
+  externalId   String?
+  bookingId    String?
+  title        String?
+  occurredAt   DateTime
+  visitDate    String
+  checkIn      String?
+  checkOut     String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clubId, externalKey])
+  @@index([userId, visitDate])
+  @@index([userId, kind, visitDate])
+  @@index([bookingId])
+  @@index([externalId])
 }
 
 model LoyaltyProfile {

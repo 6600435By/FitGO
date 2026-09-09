@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { VisitSource, WorkoutSource, WorkoutType, NotificationType } from '@prisma/client';
+import { WorkoutSource, WorkoutType, NotificationType } from '@prisma/client';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
@@ -114,24 +114,17 @@ export class EngagementService {
       throw new BadRequestException('Сначала активируйте геймификацию');
     }
 
-    const source = dto.qrToken ? VisitSource.APP_QR : VisitSource.APP_GEOFENCE;
-    const clubId = requireClubId(user);
-    const { visit, isNew } = await this.visitSync.upsertVisit(
-      user.sub,
-      clubId,
-      new Date(),
-      source,
-    );
-
-    if (isNew) {
-      await this.league.awardXp(user.sub, XP_BY_ACTION.CLUB_VISIT);
-      await this.updateChallengeProgress(user.sub, clubId);
-    }
-
-    await this.loyalty.refreshLoyalty(user.sub);
-    const newBadges = await this.badgeEvaluator.evaluate(user.sub);
-
-    return { visitId: visit.id, newBadges, xpAwarded: isNew ? XP_BY_ACTION.CLUB_VISIT : 0 };
+    // Gym entry must be recorded in 1C by admin/turnstile — honor app check-in
+    // does not create a verified day-fact or award XP.
+    void dto;
+    return {
+      visitId: null,
+      newBadges: [] as string[],
+      xpAwarded: 0,
+      accepted: false,
+      message:
+        'Вход в зал засчитывается только после отметки в 1С (админ / турникет). Для группового занятия без входа в 1С подтвердите посещение в истории.',
+    };
   }
 
   async recordDailyGoal(user: JwtPayload) {
@@ -184,6 +177,7 @@ export class EngagementService {
       const visits = await this.prisma.clubVisit.count({
         where: {
           userId,
+          verified: true,
           visitedAt: {
             gte: since > challenge.startDate ? since : challenge.startDate,
             lte: challenge.endDate,

@@ -15,6 +15,7 @@ import {
   type TrainerClientSummary,
   type TrainerInviteRequest,
   type Visit,
+  type ClientVisitsResponse,
   type PersonalTrainingBookingItem,
   type PersonalTrainingGoalTemplate,
   type PersonalTrainingSessionDetail,
@@ -202,6 +203,29 @@ export const api = {
 
   clientDashboard: (token: string) =>
     request<ClientDashboard>('/client/dashboard', {}, token),
+
+  clientVisits: (
+    token: string,
+    params?: { from?: string; to?: string; kind?: string },
+  ) => {
+    const q = new URLSearchParams();
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    if (params?.kind) q.set('kind', params.kind);
+    const qs = q.toString();
+    return request<ClientVisitsResponse>(
+      `/client/visits${qs ? `?${qs}` : ''}`,
+      {},
+      token,
+    );
+  },
+
+  clientSelfConfirmGroupVisit: (token: string, bookingId: string) =>
+    request<Visit>(
+      `/client/visits/group-bookings/${bookingId}/self-confirm`,
+      { method: 'POST' },
+      token,
+    ),
 
   features: (token: string) =>
     request<{ modules: ProductModulesState }>('/features', {}, token),

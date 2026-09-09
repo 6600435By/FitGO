@@ -1,10 +1,12 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { MembershipStatus, SessionType, normalizeWorkoutSheet, workoutSheetHasData, type ScheduleSlot, type Visit } from '@fitgo/shared-types';
 import { GroupClassBookingStatus, PersonalBookingStatus, Role, BodyLogSource } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { FitnessService } from '../fitness/fitness.service';
 import { VisitSyncService } from '../engagement/visit-sync.service';
@@ -480,5 +482,59 @@ export class TrainerService {
       message,
       user.sub,
     );
+  }
+
+  /** Confirm client attended a group class (verified visit without relying on 1C). */
+  async confirmGroupAttendance(user: JwtPayload, bookingId: string) {
+    const booking = await this.prisma.groupClassBooking.findFirst({
+      where: {
+        id: bookingId,
+        status: { not: GroupClassBookingStatus.CANCELLED },
+      },
+      include: { client: true },
+    });
+    if (!booking) {
+      throw new NotFoundException('Запись на занятие не найдена');
+    }
+
+    if (booking.endAt > new Date()) {
+      throw new BadRequestException('Занятие ещё не закончилось');
+    }
+
+    const clubId =
+      booking.client.clubId ??
+      (await this.clubMembership.getActiveMembership(booking.clientId))?.clubId ??
+      requireClubId(user);
+
+    const trainer = await this.prisma.user.findUnique({ where: { id: user.sub } });
+    if (
+      trainer?.clubId &&
+      booking.client.clubId &&
+      trainer.clubId !== booking.client.clubId
+    ) {
+      throw new BadRequestException('Клиент из другого клуба');
+    }
+
+    await this.prisma.groupClassBooking.update({
+      where: { id: bookingId },
+      data: { status: GroupClassBookingStatus.COMPLETED },
+    });
+
+    const event = await this.visitSync.recordTrainerConfirm({
+      userId: booking.clientId,
+      clubId,
+      bookingId,
+      kind: 'GROUP',
+      occurredAt: booking.startAt,
+      title: booking.title,
+      checkIn: booking.startAt.toISOString().slice(11, 16),
+      checkOut: booking.endAt.toISOString().slice(11, 16),
+    });
+
+    return {
+      bookingId,
+      visitEventId: event.id,
+      verification: 'VERIFIED_TRAINER',
+    };
   }
 }

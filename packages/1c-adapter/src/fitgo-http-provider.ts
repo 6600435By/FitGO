@@ -1,5 +1,6 @@
 import {
   MembershipStatus,
+  classifyVisitKind,
   type AccessCard,
   type Membership,
   type MembershipServiceQuota,
@@ -55,6 +56,11 @@ interface FitgoVisitData {
   checkOut?: string;
   clubName: string;
   title?: string;
+  kind?: string;
+  basisType?: string;
+  serviceCode?: string;
+  classId?: string;
+  membershipId?: string;
 }
 
 interface FitgoCardData {
@@ -259,6 +265,11 @@ function mapMembership(data: FitgoMembershipData): Membership {
 }
 
 function mapVisit(data: FitgoVisitData): Visit {
+  const kind = classifyVisitKind({
+    kind: data.kind,
+    basisType: data.basisType,
+    title: data.title,
+  });
   return {
     id: data.id,
     date: data.date,
@@ -267,5 +278,7 @@ function mapVisit(data: FitgoVisitData): Visit {
     clubName: data.clubName,
     title: data.title,
     source: '1c',
+    kind,
+    verification: 'VERIFIED_1C',
   };
 }

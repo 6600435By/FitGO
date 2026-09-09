@@ -22,6 +22,7 @@ import {
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { FitnessService } from '../fitness/fitness.service';
+import { VisitSyncService } from '../engagement/visit-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
@@ -41,6 +42,7 @@ export class PersonalTrainingService {
     private readonly notifications: NotificationsService,
     private readonly fitness: FitnessService,
     private readonly roster: TrainerRosterService,
+    private readonly visitSync: VisitSyncService,
   ) {}
 
   async getTrainerWorkSchedule(user: JwtPayload) {
@@ -987,6 +989,25 @@ export class PersonalTrainingService {
             : PersonalBookingStatus.CONFIRMED,
       },
     });
+
+    if (trainerCompletedAt) {
+      const clubId =
+        booking.client.clubId ??
+        booking.trainer.clubId ??
+        requireClubId(user);
+      const title =
+        `Персональная · ${booking.trainer.firstName} ${booking.trainer.lastName}`.trim();
+      await this.visitSync.recordTrainerConfirm({
+        userId: booking.clientId,
+        clubId,
+        bookingId: booking.id,
+        kind: 'PT',
+        occurredAt: booking.startAt,
+        title,
+        checkIn: booking.startAt.toISOString().slice(11, 16),
+        checkOut: booking.endAt.toISOString().slice(11, 16),
+      });
+    }
 
     return this.getSessionDetail(user, bookingId);
   }

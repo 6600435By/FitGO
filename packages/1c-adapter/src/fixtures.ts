@@ -98,6 +98,14 @@ export function buildMockSchedule(): ScheduleSlot[] {
 /** Визиты клиента — последние N дней от сегодня */
 export function buildMockVisits(clubName: string): Visit[] {
   const offsets = [2, 4, 6, 8, 12];
+  const kinds = ['GYM', 'GROUP', 'PT', 'GYM', 'SPA_MASSAGE'] as const;
+  const titles = [
+    'Членство VIP',
+    'Йога',
+    'Персональная тренировка',
+    'Тренажёрный зал',
+    'Массаж',
+  ];
   return offsets.map((daysAgo, i) => {
     const d = addDays(new Date(), -daysAgo);
     return {
@@ -106,6 +114,10 @@ export function buildMockVisits(clubName: string): Visit[] {
       checkIn: i % 2 === 0 ? '08:15' : '18:30',
       checkOut: i % 2 === 0 ? '09:45' : '20:00',
       clubName,
+      title: titles[i],
+      kind: kinds[i],
+      verification: 'VERIFIED_1C' as const,
+      source: '1c' as const,
     };
   });
 }

@@ -183,11 +183,22 @@ Query: `phone` или `externalId`; опционально `from`, `to` (ISO dat
       "checkIn": "2026-05-20T10:00:00",
       "checkOut": "2026-05-20T11:00:00",
       "clubName": "Форма",
-      "title": "Йога"
+      "title": "Йога",
+      "kind": "GROUP",
+      "basisType": "class"
     }
   ]
 }
 ```
+
+Поля классификации (FitGOIntegration):
+
+| Поле | Значения | Смысл |
+|------|----------|--------|
+| `kind` | `GYM` \| `GROUP` \| `PT` \| `SPA_MASSAGE` \| `SPA_BODYCOMP` \| `SOLARIUM` \| `UNKNOWN` | Тип визита |
+| `basisType` | `membership` \| `class` \| `service` \| `other` | Тип основания в 1С |
+
+Nest мапит `kind`/`basisType` (с эвристикой по `title`, если поля нет). Опционально позже: `serviceCode`, `classId`, `membershipId`.
 
 ### GET `/card`
 

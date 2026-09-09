@@ -1,3 +1,8 @@
+import type {
+  VisitKind as VisitKindT,
+  VisitVerificationStatus as VisitVerificationStatusT,
+} from './visit-kind';
+
 export enum UserRole {
   CLIENT = 'CLIENT',
   TRAINER = 'TRAINER',
@@ -223,6 +228,18 @@ export const DEFAULT_PRODUCT_MODULES: Record<ProductModuleKey, boolean> =
 
 export type ProductModulesState = Record<ProductModuleKey, boolean>;
 
+export type {
+  VisitBasisType,
+  VisitKind,
+  VisitVerificationStatus,
+} from './visit-kind';
+export {
+  VISIT_KIND_LABELS,
+  classifyVisitKind,
+  isVerifiedVisitStatus,
+  parseVisitKind,
+} from './visit-kind';
+
 export interface Visit {
   id: string;
   date: string;
@@ -232,6 +249,36 @@ export interface Visit {
   title?: string;
   sessionType?: SessionType;
   source?: '1c' | 'fitgo';
+  /** Classified visit type (gym / group / PT / spa / …). */
+  kind?: VisitKindT;
+  /** How the visit was verified for gamification / history trust. */
+  verification?: VisitVerificationStatusT;
+  /** FitGO booking id when the event comes from an app booking. */
+  bookingId?: string;
+  /** Client may self-confirm attendance (group only, no 1C check-in). */
+  canSelfConfirm?: boolean;
+}
+
+export interface VisitDynamicsWeek {
+  weekStart: string;
+  count: number;
+  byKind: Partial<Record<VisitKindT, number>>;
+}
+
+export interface VisitDynamicsHeatmapDay {
+  date: string;
+  count: number;
+}
+
+export interface ClientVisitsResponse {
+  visits: Visit[];
+  from: string;
+  to: string;
+  dynamics: {
+    byWeek: VisitDynamicsWeek[];
+    heatmap: VisitDynamicsHeatmapDay[];
+    totalsByKind: Partial<Record<VisitKindT, number>>;
+  };
 }
 
 export interface AccessCard {

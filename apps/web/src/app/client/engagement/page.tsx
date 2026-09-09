@@ -52,11 +52,17 @@ function ClientEngagementPageInner() {
     setCheckInLoading(true);
     setCheckInMsg('');
     try {
-      const res = await api.checkIn(token) as { xpAwarded: number; newBadges: string[] };
+      const res = await api.checkIn(token) as {
+        xpAwarded: number;
+        newBadges: string[];
+        accepted?: boolean;
+        message?: string;
+      };
       setCheckInMsg(
-        res.xpAwarded > 0
-          ? `Check-in успешен! +${res.xpAwarded} XP`
-          : 'Вы уже отмечались сегодня',
+        res.message ??
+          (res.xpAwarded > 0
+            ? `Check-in успешен! +${res.xpAwarded} XP`
+            : 'Визит в зал засчитывается через 1С'),
       );
       load();
     } catch (e) {
@@ -156,7 +162,7 @@ function ClientEngagementPageInner() {
           disabled={checkInLoading}
           className="btn-primary w-full"
         >
-          {checkInLoading ? 'Отмечаем...' : 'Я в клубе (+50 XP)'}
+          {checkInLoading ? 'Проверяем...' : 'Как засчитывается визит'}
         </button>
         {checkInMsg && <p className="text-center text-sm text-fitgo-400">{checkInMsg}</p>}
       </div>

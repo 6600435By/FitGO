@@ -100,4 +100,12 @@ export class TrainerController {
   ) {
     return this.trainerService.sendClientMessage(user, clientId, dto.message);
   }
+
+  @Post('group-bookings/:bookingId/confirm-attendance')
+  confirmGroupAttendance(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.trainerService.confirmGroupAttendance(user, bookingId);
+  }
 }

@@ -29,7 +29,7 @@ export class LoyaltyService {
 
   async computeContinuityMonths(userId: string): Promise<number> {
     const visits = await this.prisma.clubVisit.findMany({
-      where: { userId },
+      where: { userId, verified: true },
       orderBy: { visitedAt: 'asc' },
     });
     if (visits.length === 0) return 0;
@@ -60,7 +60,7 @@ export class LoyaltyService {
 
   async refreshLoyalty(userId: string) {
     const visits = await this.prisma.clubVisit.findMany({
-      where: { userId },
+      where: { userId, verified: true },
       orderBy: { visitedAt: 'desc' },
       take: 1,
     });

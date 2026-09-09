@@ -4,14 +4,17 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { GroupClassBookingStatus, PersonalBookingStatus, Role } from '@prisma/client';
+import { GroupClassBookingStatus, PersonalBookingStatus, Role, VisitSource } from '@prisma/client';
 import {
   MembershipStatus,
   SessionType,
   UserRole,
+  classifyVisitKind,
+  type ClientVisitsResponse,
   type ClubCardView,
   type Membership,
   type Visit,
+  type VisitKind,
 } from '@fitgo/shared-types';
 import {
   deriveMembershipFromVisits,
@@ -20,6 +23,7 @@ import {
 import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { FitnessService } from '../fitness/fitness.service';
+import { VisitSyncService } from '../engagement/visit-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PersonalTrainingService } from '../personal-training/personal-training.service';
 import { WaitlistService } from '../waitlist/waitlist.service';
@@ -39,6 +43,7 @@ export class ClientService {
     private readonly osmiCards: OsmiCardService,
     private readonly clubMembership: ClubMembershipService,
     private readonly crmLink: ClubCrmLinkService,
+    private readonly visitSync: VisitSyncService,
   ) {}
 
   private async resolveExternalId(user: JwtPayload): Promise<string> {
@@ -128,6 +133,9 @@ export class ClientService {
       title: booking.title,
       sessionType: SessionType.GROUP,
       source: 'fitgo',
+      kind: 'GROUP' as const,
+      verification: 'PENDING' as const,
+      bookingId: booking.id,
     }));
 
     const personalVisits: Visit[] = personalBookings.map((booking) => ({
@@ -139,6 +147,11 @@ export class ClientService {
       title: `Персональная · ${booking.trainer.firstName} ${booking.trainer.lastName}`.trim(),
       sessionType: SessionType.PERSONAL,
       source: 'fitgo',
+      kind: 'PT' as const,
+      verification: booking.trainerCompletedAt
+        ? ('VERIFIED_TRAINER' as const)
+        : ('PENDING' as const),
+      bookingId: booking.id,
     }));
 
     return [...groupVisits, ...personalVisits];
@@ -441,7 +454,16 @@ export class ClientService {
     }
 
     const visits = this.mergeVisits(
-      externalVisits.map((visit) => ({ ...visit, source: '1c' as const })),
+      externalVisits.map((visit) => ({
+        ...visit,
+        source: '1c' as const,
+        kind: classifyVisitKind({
+          kind: visit.kind,
+          title: visit.title,
+          sessionType: visit.sessionType,
+        }),
+        verification: visit.verification ?? ('VERIFIED_1C' as const),
+      })),
       appVisits,
     );
 
@@ -640,27 +662,160 @@ export class ClientService {
     }
   }
 
-  async getClubVisits(user: JwtPayload) {
+  async getClubVisits(
+    user: JwtPayload,
+    options?: { from?: string; to?: string; kind?: string },
+  ): Promise<ClientVisitsResponse> {
     const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
     if (!activeMembership) {
-      return [];
+      const emptyTo = options?.to ?? new Date().toISOString().slice(0, 10);
+      const emptyFrom =
+        options?.from ??
+        new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      return {
+        visits: [],
+        from: emptyFrom,
+        to: emptyTo,
+        dynamics: { byWeek: [], heatmap: [], totalsByKind: {} },
+      };
     }
 
+    const clubId = activeMembership.clubId;
+    const clubName = activeMembership.club.name;
     const externalId = this.clubMembership.resolveExternalId(
       activeMembership,
       user.externalId,
     );
-    const externalVisits = externalId
-      ? await this.fitness.getProvider().getVisits(externalId)
-      : [];
-    const groupAppVisits = (
-      await this.getAppSessionVisits(user.sub, activeMembership.club.name)
-    ).filter((visit) => visit.sessionType === SessionType.GROUP);
 
-    return this.mergeVisits(
-      externalVisits.map((visit) => ({ ...visit, source: '1c' as const })),
-      groupAppVisits,
+    const to = options?.to ?? new Date().toISOString().slice(0, 10);
+    const from =
+      options?.from ??
+      new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+    const kindFilter = options?.kind
+      ? (classifyVisitKind({ kind: options.kind }) as VisitKind)
+      : undefined;
+
+    await this.visitSync.syncUserVisits(user.sub, clubId, externalId, {
+      from,
+      to,
+    });
+
+    const events = await this.visitSync.getEventsForUser(user.sub, clubId, {
+      from,
+      to,
+      kind: kindFilter,
+    });
+
+    const pendingGroupBookingIds = new Set(
+      events
+        .filter(
+          (e) =>
+            e.kind === 'GROUP' &&
+            e.verification === 'PENDING' &&
+            e.bookingId &&
+            e.source === VisitSource.BOOKING_GROUP,
+        )
+        .map((e) => e.bookingId!),
     );
+
+    const onecDates = new Set(
+      events
+        .filter((e) => e.source === VisitSource.ONEC_SYNC)
+        .map((e) => e.visitDate),
+    );
+
+    const visits = events.map((event) => {
+      const canSelfConfirm =
+        !!event.bookingId &&
+        pendingGroupBookingIds.has(event.bookingId) &&
+        event.verification === 'PENDING' &&
+        !onecDates.has(event.visitDate);
+      return this.visitSync.eventToVisit(event, clubName, { canSelfConfirm });
+    });
+
+    return {
+      visits,
+      from,
+      to,
+      dynamics: this.visitSync.buildDynamics(visits),
+    };
+  }
+
+  async selfConfirmGroupVisit(user: JwtPayload, bookingId: string) {
+    const activeMembership = await this.clubMembership.getActiveMembership(user.sub);
+    if (!activeMembership) {
+      throw new NotFoundException('Нет активного клуба');
+    }
+
+    const booking = await this.prisma.groupClassBooking.findFirst({
+      where: {
+        id: bookingId,
+        clientId: user.sub,
+        status: { not: GroupClassBookingStatus.CANCELLED },
+      },
+    });
+    if (!booking) {
+      throw new NotFoundException('Запись на групповое занятие не найдена');
+    }
+
+    const now = new Date();
+    if (booking.endAt > now) {
+      throw new BadRequestException('Занятие ещё не закончилось');
+    }
+
+    // Window: same calendar day as class ± allow until end of next day
+    const dayAfter = new Date(booking.endAt);
+    dayAfter.setDate(dayAfter.getDate() + 1);
+    dayAfter.setHours(23, 59, 59, 999);
+    if (now > dayAfter) {
+      throw new BadRequestException(
+        'Срок самоподтверждения истёк (доступно в день занятия и на следующий день)',
+      );
+    }
+
+    const visitDate = booking.startAt.toISOString().slice(0, 10);
+    const onecSameDay = await this.prisma.clubVisitEvent.findFirst({
+      where: {
+        userId: user.sub,
+        clubId: activeMembership.clubId,
+        visitDate,
+        source: VisitSource.ONEC_SYNC,
+      },
+    });
+    if (onecSameDay) {
+      throw new BadRequestException(
+        'Визит уже зафиксирован в 1С — самоподтверждение не нужно',
+      );
+    }
+
+    const existingSelf = await this.prisma.clubVisitEvent.findFirst({
+      where: {
+        userId: user.sub,
+        clubId: activeMembership.clubId,
+        bookingId,
+        source: VisitSource.CLIENT_SELF_CONFIRM,
+      },
+    });
+    if (existingSelf) {
+      return this.visitSync.eventToVisit(existingSelf, activeMembership.club.name);
+    }
+
+    const event = await this.visitSync.recordClientSelfConfirm({
+      userId: user.sub,
+      clubId: activeMembership.clubId,
+      bookingId,
+      occurredAt: booking.startAt,
+      title: booking.title,
+      checkIn: this.formatVisitTime(booking.startAt),
+      checkOut: this.formatVisitTime(booking.endAt),
+    });
+
+    await this.prisma.groupClassBooking.update({
+      where: { id: bookingId },
+      data: { status: GroupClassBookingStatus.COMPLETED },
+    });
+
+    return this.visitSync.eventToVisit(event, activeMembership.club.name);
   }
 
   async getSchedule(user: JwtPayload, filters?: ScheduleFilters) {

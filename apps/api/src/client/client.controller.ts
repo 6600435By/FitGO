@@ -106,8 +106,22 @@ export class ClientController {
 
   @Get('visits')
   @RequireModule('club_card')
-  getVisits(@CurrentUser() user: JwtPayload) {
-    return this.clientService.getClubVisits(user);
+  getVisits(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('kind') kind?: string,
+  ) {
+    return this.clientService.getClubVisits(user, { from, to, kind });
+  }
+
+  @Post('visits/group-bookings/:bookingId/self-confirm')
+  @RequireModule('club_card')
+  selfConfirmGroupVisit(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.clientService.selfConfirmGroupVisit(user, bookingId);
   }
 
   @Get('schedule')
