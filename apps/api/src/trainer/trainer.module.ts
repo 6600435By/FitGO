@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ClientModule } from '../client/client.module';
 import { EngagementModule } from '../engagement/engagement.module';
 import { FitnessModule } from '../fitness/fitness.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -7,7 +8,13 @@ import { TrainerController } from './trainer.controller';
 import { TrainerService } from './trainer.service';
 
 @Module({
-  imports: [FitnessModule, NotificationsModule, EngagementModule, TrainerRosterModule],
+  imports: [
+    FitnessModule,
+    NotificationsModule,
+    EngagementModule,
+    TrainerRosterModule,
+    ClientModule,
+  ],
   controllers: [TrainerController],
   providers: [TrainerService],
 })

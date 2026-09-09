@@ -1,6 +1,22 @@
 'use client';
 
 import type { TrainerClientDetail } from '@fitgo/shared-types';
+import {
+  BODY_LIMITATION_LABELS,
+  CLIENT_PRIMARY_GOAL_LABELS,
+  EXPERIENCE_LEVEL_LABELS,
+  HOME_EQUIPMENT_LABELS,
+  PREFERRED_INTENSITY_LABELS,
+  PREFERRED_MODALITY_LABELS,
+  PREFERRED_TIME_LABELS,
+  type BodyLimitationZone,
+  type ClientPrimaryGoal,
+  type ExperienceLevel,
+  type HomeEquipmentItem,
+  type PreferredIntensity,
+  type PreferredModality,
+  type PreferredTimeOfDay,
+} from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -13,6 +29,14 @@ import {
   sessionStatusColor,
   sessionStatusLabel,
 } from '@/lib/utils';
+
+function labelList<T extends string>(
+  values: T[],
+  labels: Record<T, string>,
+): string {
+  if (!values.length) return '—';
+  return values.map((v) => labels[v] ?? v).join(', ');
+}
 
 export default function TrainerClientDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -109,8 +133,133 @@ export default function TrainerClientDetailPage() {
         )}
       </div>
 
+      {client.questionnaire && (
+        <div className="card space-y-3">
+          <h3 className="font-semibold">Анкета клиента</h3>
+          <p className="text-xs text-slate-500">
+            Заполняет клиент в профиле — для плана тренировок
+          </p>
+          {(() => {
+            const q = client.questionnaire;
+            const t = q.training;
+            return (
+              <dl className="space-y-2 text-sm">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-400">Цели</dt>
+                  <dd className="text-right">
+                    {labelList(
+                      (t?.primaryGoals ?? []) as ClientPrimaryGoal[],
+                      CLIENT_PRIMARY_GOAL_LABELS,
+                    )}
+                    {t?.goalHorizonWeeks ? ` · ${t.goalHorizonWeeks} нед.` : ''}
+                  </dd>
+                </div>
+                {t?.goalNotes && (
+                  <p className="rounded-lg bg-slate-800/50 px-3 py-2 text-slate-300">
+                    {t.goalNotes}
+                  </p>
+                )}
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-400">Опыт</dt>
+                  <dd className="text-right">
+                    {t?.experienceLevel
+                      ? EXPERIENCE_LEVEL_LABELS[t.experienceLevel as ExperienceLevel]
+                      : '—'}
+                    {t?.sessionsPerWeek != null
+                      ? ` · ${t.sessionsPerWeek}×/нед`
+                      : ''}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-400">Форматы</dt>
+                  <dd className="text-right">
+                    {labelList(
+                      (t?.preferredModalities ?? []) as PreferredModality[],
+                      PREFERRED_MODALITY_LABELS,
+                    )}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-400">Ограничения</dt>
+                  <dd className="text-right">
+                    {labelList(
+                      (t?.limitations ?? []) as BodyLimitationZone[],
+                      BODY_LIMITATION_LABELS,
+                    )}
+                  </dd>
+                </div>
+                {t?.limitationNotes && (
+                  <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-amber-100">
+                    {t.limitationNotes}
+                  </p>
+                )}
+                {(t?.pregnancyFlag || t?.bloodPressureFlag) && (
+                  <p className="text-amber-300">
+                    {[
+                      t.pregnancyFlag ? 'Беременность / послеродовый период' : null,
+                      t.bloodPressureFlag ? 'Особенности давления/сердца' : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                )}
+                <div className="flex justify-between gap-3">
+                  <dt className="text-slate-400">Предпочтения</dt>
+                  <dd className="text-right">
+                    {[
+                      t?.preferredSessionMin
+                        ? `${t.preferredSessionMin} мин`
+                        : null,
+                      t?.preferredTimeOfDay
+                        ? PREFERRED_TIME_LABELS[
+                            t.preferredTimeOfDay as PreferredTimeOfDay
+                          ]
+                        : null,
+                      t?.preferredIntensity
+                        ? PREFERRED_INTENSITY_LABELS[
+                            t.preferredIntensity as PreferredIntensity
+                          ]
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || '—'}
+                  </dd>
+                </div>
+                {(t?.homeEquipment?.length ?? 0) > 0 && (
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-slate-400">Дома</dt>
+                    <dd className="text-right">
+                      {labelList(
+                        t!.homeEquipment as HomeEquipmentItem[],
+                        HOME_EQUIPMENT_LABELS,
+                      )}
+                    </dd>
+                  </div>
+                )}
+                <div className="flex justify-between gap-3 border-t border-slate-800 pt-2">
+                  <dt className="text-slate-400">Тело</dt>
+                  <dd className="text-right">
+                    {[
+                      q.body.heightCm != null ? `${q.body.heightCm} см` : null,
+                      q.body.latestWeightKg != null
+                        ? `${q.body.latestWeightKg} кг`
+                        : null,
+                      q.body.targetWeightKg != null
+                        ? `цель ${q.body.targetWeightKg} кг`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || '—'}
+                  </dd>
+                </div>
+              </dl>
+            );
+          })()}
+        </div>
+      )}
+
       <div className="card">
-        <h3 className="mb-3 font-semibold">Цели</h3>
+        <h3 className="mb-3 font-semibold">Цели тренера</h3>
         {client.goals.length === 0 ? (
           <p className="text-sm text-slate-400">Нет целей</p>
         ) : (

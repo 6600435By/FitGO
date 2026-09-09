@@ -679,6 +679,7 @@ export interface ClientProfile {
   gamificationNickname?: string | null;
   useRealNameInPublic?: boolean;
   gamificationStartedAt?: string | null;
+  training?: import('./client-training-profile').ClientTrainingProfile | null;
 }
 
 export interface BodyProfileResponse {
@@ -697,6 +698,29 @@ export interface BodyProfileResponse {
     notes?: string | null;
   }>;
 }
+
+export type {
+  BodyLimitationZone,
+  ClientPrimaryGoal,
+  ClientTrainingProfile,
+  ExperienceLevel,
+  HomeEquipmentItem,
+  PreferredIntensity,
+  PreferredModality,
+  PreferredTimeOfDay,
+} from './client-training-profile';
+export {
+  BODY_LIMITATION_LABELS,
+  CLIENT_PRIMARY_GOAL_LABELS,
+  EXPERIENCE_LEVEL_LABELS,
+  GOAL_HORIZON_OPTIONS,
+  HOME_EQUIPMENT_LABELS,
+  PREFERRED_INTENSITY_LABELS,
+  PREFERRED_MODALITY_LABELS,
+  PREFERRED_TIME_LABELS,
+  emptyTrainingProfile,
+  trainingProfileCompleteness,
+} from './client-training-profile';
 
 export interface ChallengeView {
   id: string;
@@ -742,10 +766,22 @@ export interface TrainerClientDetail {
   firstName: string;
   lastName: string;
   phone?: string;
+  gender?: string | null;
+  dateOfBirth?: string | null;
   crmStatus?: ClubCrmLinkStatus | null;
   membershipName?: string;
   membershipStatus?: MembershipStatus;
   lastVisit?: string;
+  /** Client self-filled questionnaire (no gamification). */
+  questionnaire?: {
+    training: import('./client-training-profile').ClientTrainingProfile | null;
+    body: {
+      heightCm?: number | null;
+      targetWeightKg?: number | null;
+      latestWeightKg?: number | null;
+      latestLoggedAt?: string | null;
+    };
+  };
   sessions: TrainerClientSession[];
   goals: Array<{ id: string; title: string; target?: string; progress?: string }>;
   notes: Array<{ id: string; content: string; createdAt: string }>;

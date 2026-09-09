@@ -17,9 +17,11 @@ import { FreezeMembershipDto } from './dto/freeze-membership.dto';
 import { JoinClubDto } from './dto/join-club.dto';
 import {
   CreateBodyLogDto,
+  UpdateBodyLogDto,
   UpdateBodyProfileDto,
   UpdateClientProfileDto,
   UpdateGamificationSettingsDto,
+  UpdateTrainingProfileDto,
 } from './dto/client-profile.dto';
 
 @Controller('client')
@@ -43,6 +45,19 @@ export class ClientController {
     @Body() dto: UpdateClientProfileDto,
   ) {
     return this.profileService.updateProfile(user.sub, requireClubId(user), dto);
+  }
+
+  @Get('profile/training')
+  getTrainingProfile(@CurrentUser() user: JwtPayload) {
+    return this.profileService.getTrainingProfile(user.sub);
+  }
+
+  @Patch('profile/training')
+  updateTrainingProfile(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateTrainingProfileDto,
+  ) {
+    return this.profileService.updateTrainingProfile(user.sub, dto);
   }
 
   @Patch('profile/gamification')
@@ -72,6 +87,23 @@ export class ClientController {
     @Body() dto: CreateBodyLogDto,
   ) {
     return this.profileService.addBodyLog(user.sub, dto);
+  }
+
+  @Patch('body/log/:id')
+  updateBodyLog(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdateBodyLogDto,
+  ) {
+    return this.profileService.updateBodyLog(user.sub, id, dto);
+  }
+
+  @Delete('body/log/:id')
+  deleteBodyLog(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.profileService.deleteBodyLog(user.sub, id);
   }
 
   @Get('dashboard')

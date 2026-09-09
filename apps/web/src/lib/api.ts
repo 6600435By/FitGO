@@ -27,6 +27,7 @@ import {
   type TrainerCalendarEvent,
   type WearableSyncResult,
   type ClientProfile,
+  type ClientTrainingProfile,
   type BodyProfileResponse,
   type ChallengeView,
   type LeagueGroupView,
@@ -879,6 +880,17 @@ export const api = {
       body: JSON.stringify(data),
     }, token),
 
+  updateTrainingProfile: (
+    token: string,
+    data: Partial<{
+      [K in keyof ClientTrainingProfile]: ClientTrainingProfile[K];
+    }>,
+  ) =>
+    request<ClientTrainingProfile>('/client/profile/training', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }, token),
+
   bodyProfile: (token: string) =>
     request<BodyProfileResponse>('/client/body', {}, token),
 
@@ -907,6 +919,30 @@ export const api = {
     request('/client/body/log', {
       method: 'POST',
       body: JSON.stringify(data),
+    }, token),
+
+  updateBodyLog: (
+    token: string,
+    id: string,
+    data: {
+      weightKg?: number | null;
+      chestCm?: number | null;
+      waistCm?: number | null;
+      hipsCm?: number | null;
+      bicepsCm?: number | null;
+      thighCm?: number | null;
+      bodyFatPct?: number | null;
+      notes?: string | null;
+    },
+  ) =>
+    request(`/client/body/log/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }, token),
+
+  deleteBodyLog: (token: string, id: string) =>
+    request<{ ok: boolean }>(`/client/body/log/${id}`, {
+      method: 'DELETE',
     }, token),
 
   createWorkout: (

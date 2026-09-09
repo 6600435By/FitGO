@@ -21,6 +21,6 @@ import { ClientProfileService } from './client-profile.service';
   ],
   controllers: [ClientController],
   providers: [ClientService, ClientProfileService, ClubCrmLinkService],
-  exports: [ClubCrmLinkService],
+  exports: [ClubCrmLinkService, ClientProfileService],
 })
 export class ClientModule {}

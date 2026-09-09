@@ -310,6 +310,7 @@ model User {
   clientRating            ClientRating?
   leagueGroupMembers      LeagueGroupMember[]
   bodyProfile             ClientBodyProfile?
+  trainingProfile         ClientTrainingProfile?
   bodyLogs                ClientBodyLog[]         @relation("ClientBodyLogs")
   recordedBodyLogs        ClientBodyLog[]         @relation("RecordedBodyLogs")
   workoutLogs             WorkoutLog[]
@@ -859,11 +860,53 @@ model LeagueGroupMember {
   @@index([userId])
 }
 
+enum PreferredIntensity {
+  EASY
+  MODERATE
+  HARD
+}
+
+enum PreferredTimeOfDay {
+  MORNING
+  DAY
+  EVENING
+  FLEXIBLE
+}
+
+enum ExperienceLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
 model ClientBodyProfile {
   userId           String   @id
   heightCm         Float?
   targetWeightKg   Float?
   updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Client self-filled training questionnaire (goals, experience, limits, prefs).
+model ClientTrainingProfile {
+  userId               String               @id
+  primaryGoals         String[]             @default([])
+  goalNotes            String?
+  goalHorizonWeeks     Int?
+  experienceLevel      ExperienceLevel?
+  yearsTraining        Float?
+  sessionsPerWeek      Int?
+  preferredModalities  String[]             @default([])
+  limitations          String[]             @default([])
+  limitationNotes      String?
+  pregnancyFlag        Boolean              @default(false)
+  bloodPressureFlag    Boolean              @default(false)
+  preferredSessionMin  Int?
+  homeEquipment        String[]             @default([])
+  preferredTimeOfDay   PreferredTimeOfDay?
+  preferredIntensity   PreferredIntensity?
+  updatedAt            DateTime             @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

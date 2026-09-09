@@ -7,6 +7,7 @@ import { MembershipStatus, SessionType, normalizeWorkoutSheet, workoutSheetHasDa
 import { GroupClassBookingStatus, PersonalBookingStatus, Role, BodyLogSource } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { ClientProfileService } from '../client/client-profile.service';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { FitnessService } from '../fitness/fitness.service';
 import { VisitSyncService } from '../engagement/visit-sync.service';
@@ -23,6 +24,7 @@ export class TrainerService {
     private readonly visitSync: VisitSyncService,
     private readonly roster: TrainerRosterService,
     private readonly clubMembership: ClubMembershipService,
+    private readonly clientProfile: ClientProfileService,
   ) {}
 
   private isFormaEmployeeId(id: string): boolean {
@@ -351,7 +353,7 @@ export class TrainerService {
       membershipStatus = membership?.status;
     }
 
-    const [goals, notes, measurements] = await Promise.all([
+    const [goals, notes, measurements, questionnaire] = await Promise.all([
       this.prisma.clientGoal.findMany({
         where: { clientId, trainerId: user.sub },
         orderBy: { updatedAt: 'desc' },
@@ -366,6 +368,7 @@ export class TrainerService {
         orderBy: { recordedAt: 'desc' },
         take: 10,
       }),
+      this.clientProfile.getQuestionnaireForTrainer(clientId),
     ]);
 
     return {
@@ -375,6 +378,8 @@ export class TrainerService {
       firstName: client.firstName,
       lastName: client.lastName,
       phone: client.phone ?? undefined,
+      gender: client.gender ?? null,
+      dateOfBirth: client.dateOfBirth?.toISOString().slice(0, 10) ?? null,
       crmStatus:
         membershipRow?.crmStatus ??
         (membershipRow?.externalId || client.externalId
@@ -385,6 +390,7 @@ export class TrainerService {
       membershipName,
       membershipStatus,
       lastVisit,
+      questionnaire,
       sessions,
       goals: goals.map((g) => ({
         id: g.id,
