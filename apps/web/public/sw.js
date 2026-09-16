@@ -9,14 +9,5 @@ self.addEventListener('push', (event) => {
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
-self.addEventListener('fetch', (event) => {
-  if (event.request.url.includes('/client/card')) {
-    event.respondWith(
-      caches.open('fitgo-offline').then(async (cache) => {
-        const cached = await cache.match('access-card');
-        if (cached) return cached;
-        return fetch(event.request);
-      }),
-    );
-  }
-});
+// Access-card JSON must not intercept document navigations to /client/card
+// (that broke the page). Last barcode is cached in localStorage by the app.

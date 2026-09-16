@@ -1,7 +1,7 @@
 'use client';
 
 import { MembershipStatus, SessionType, type Booking, type GamificationProfile, type Membership, type Visit } from '@fitgo/shared-types';
-import { Calendar, CreditCard, ChevronRight, Dumbbell, ShoppingBag, Trophy } from 'lucide-react';
+import { Calendar, CreditCard, ChevronDown, ChevronRight, Dumbbell, ShoppingBag, Trophy } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -88,6 +88,7 @@ function ClientHomePageInner() {
   const [gamification, setGamification] = useState<GamificationProfile | null>(null);
   const [error, setError] = useState('');
   const [changingClub, setChangingClub] = useState(false);
+  const [membershipOpen, setMembershipOpen] = useState(false);
 
   useEffect(() => {
     if (searchParams.get('switchClub') === '1') {
@@ -157,25 +158,36 @@ function ClientHomePageInner() {
     );
   }
 
-  const { membership, visits, club, crmStatus, profile, accessCard, membershipSource } =
-    data;
+  const { membership, visits, club, crmStatus, membershipSource } = data;
   const progress = membership
     ? membershipProgress(membership.validFrom, membership.validUntil)
     : null;
   const hasDebt = (membership?.debtAmount ?? 0) > 0;
   const hasAccountBalance = typeof membership?.accountBalance === 'number';
   const hasDebtAmount = typeof membership?.debtAmount === 'number';
-  const displayName = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ');
 
   return (
     <div className="space-y-4">
       <ClientTrainerInvites />
 
-      {displayName && club && !changingClub && (
-        <div className="px-0.5">
-          <p className="text-sm text-slate-400">{club.name}</p>
-          <h1 className="text-xl font-semibold tracking-tight">{displayName}</h1>
-        </div>
+      {club && !changingClub && isEnabled('club_card') && (
+        <Link
+          href="/client/card"
+          className="flex items-center justify-between gap-3 rounded-2xl bg-gradient-to-br from-fitgo-500 to-emerald-600 px-4 py-3 shadow-lg transition active:scale-[0.99]"
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15">
+              <CreditCard className="h-5 w-5 text-white" />
+            </span>
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-white/70">
+                Пропуск в клуб
+              </p>
+              <p className="text-lg font-bold leading-tight text-white">Моя карта</p>
+            </div>
+          </div>
+          <ChevronRight className="h-5 w-5 shrink-0 text-white/80" />
+        </Link>
       )}
 
       {(!club || changingClub) && (
@@ -211,30 +223,36 @@ function ClientHomePageInner() {
 
       {membership ? (
         <div className="card">
-          <div className="mb-3 flex items-start justify-between gap-2">
-            <div>
-              <p className="text-sm text-slate-400">Абонемент</p>
-              <p className="text-xl font-semibold">{membership.name}</p>
-              {membershipSource === 'derived' && (
-                <p className="mt-1 text-xs text-slate-500">
-                  Срок уточняется из 1С — показана оценка по последнему визиту
-                </p>
-              )}
+          {/* Always-visible summary: name, status, days-left bar */}
+          <button
+            type="button"
+            onClick={() => setMembershipOpen((v) => !v)}
+            className="flex w-full items-start justify-between gap-2 text-left"
+            aria-expanded={membershipOpen}
+          >
+            <div className="min-w-0">
+              <p className="text-xs text-slate-400">Абонемент</p>
+              <p className="truncate text-lg font-semibold">{membership.name}</p>
             </div>
-            <span
-              className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${membershipStatusColor(membership.status)}`}
-            >
-              {membershipStatusLabel(membership.status)}
-            </span>
-          </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <span
+                className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${membershipStatusColor(membership.status)}`}
+              >
+                {membershipStatusLabel(membership.status)}
+              </span>
+              <ChevronDown
+                className={`h-4 w-4 text-slate-400 transition-transform ${membershipOpen ? 'rotate-180' : ''}`}
+              />
+            </div>
+          </button>
 
           {progress && membership.status === MembershipStatus.ACTIVE && (
-            <div className="mb-3">
+            <div className="mt-3">
               <div className="mb-1 flex justify-between text-xs text-slate-400">
                 <span>Осталось {progress.daysLeft} дн.</span>
                 <span>{progress.percent}%</span>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+              <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
                 <div
                   className="h-full rounded-full bg-fitgo-500"
                   style={{ width: `${100 - progress.percent}%` }}
@@ -243,112 +261,116 @@ function ClientHomePageInner() {
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-xl bg-slate-800/50 p-3">
-              <p className="stat-label">Действует до</p>
-              <p className="stat-value text-lg">
-                {formatDate(membership.validUntil)}
-              </p>
-            </div>
-            {membership.visitsRemaining !== undefined ? (
-              <div className="rounded-xl bg-slate-800/50 p-3">
-                <p className="stat-label">Осталось визитов</p>
-                <p className="stat-value text-lg">
-                  {membership.visitsRemaining}
-                  {membership.visitsTotal ? ` / ${membership.visitsTotal}` : ''}
+          {membershipOpen && (
+            <div className="mt-3 space-y-3 border-t border-slate-800 pt-3">
+              {membershipSource === 'derived' && (
+                <p className="text-xs text-slate-500">
+                  Срок уточняется из 1С — показана оценка по последнему визиту
                 </p>
-              </div>
-            ) : (
-              <div className="rounded-xl bg-slate-800/50 p-3">
-                <p className="stat-label">Тип</p>
-                <p className="stat-value text-lg">Безлимит</p>
-              </div>
-            )}
-          </div>
+              )}
 
-          {(hasAccountBalance || hasDebtAmount) && (
-            <div className="mt-3 grid grid-cols-2 gap-3">
-              {hasAccountBalance && (
+              <div className="grid grid-cols-2 gap-3">
                 <div className="rounded-xl bg-slate-800/50 p-3">
-                  <p className="stat-label">Лицевой счёт</p>
-                  <p className="stat-value text-lg">
-                    {membership.accountBalance!.toFixed(2)}
-                    {membership.currency ? ` ${membership.currency}` : ''}
+                  <p className="stat-label">Действует до</p>
+                  <p className="stat-value text-base">
+                    {formatDate(membership.validUntil)}
                   </p>
+                </div>
+                {membership.visitsRemaining !== undefined ? (
+                  <div className="rounded-xl bg-slate-800/50 p-3">
+                    <p className="stat-label">Осталось визитов</p>
+                    <p className="stat-value text-base">
+                      {membership.visitsRemaining}
+                      {membership.visitsTotal ? ` / ${membership.visitsTotal}` : ''}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-xl bg-slate-800/50 p-3">
+                    <p className="stat-label">Тип</p>
+                    <p className="stat-value text-base">Безлимит</p>
+                  </div>
+                )}
+              </div>
+
+              {(hasAccountBalance || hasDebtAmount) && (
+                <div className="grid grid-cols-2 gap-3">
+                  {hasAccountBalance && (
+                    <div className="rounded-xl bg-slate-800/50 p-3">
+                      <p className="stat-label">Лицевой счёт</p>
+                      <p className="stat-value text-base">
+                        {membership.accountBalance!.toFixed(2)}
+                        {membership.currency ? ` ${membership.currency}` : ''}
+                      </p>
+                    </div>
+                  )}
+                  {hasDebtAmount && (
+                    <div
+                      className={`rounded-xl p-3 ${
+                        hasDebt ? 'bg-red-500/10' : 'bg-slate-800/50'
+                      }`}
+                    >
+                      <p className="stat-label">Задолженность</p>
+                      <p
+                        className={`stat-value text-base ${
+                          hasDebt ? 'text-red-300' : ''
+                        }`}
+                      >
+                        {membership.debtAmount!.toFixed(2)}
+                        {membership.currency ? ` ${membership.currency}` : ''}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
-              {hasDebtAmount && (
-                <div
-                  className={`rounded-xl p-3 ${
-                    hasDebt ? 'bg-red-500/10' : 'bg-slate-800/50'
-                  }`}
-                >
-                  <p className="stat-label">Задолженность</p>
-                  <p
-                    className={`stat-value text-lg ${
-                      hasDebt ? 'text-red-300' : ''
-                    }`}
-                  >
-                    {membership.debtAmount!.toFixed(2)}
-                    {membership.currency ? ` ${membership.currency}` : ''}
-                  </p>
-                </div>
+
+              {membership.validFrom && (
+                <p className="text-xs text-slate-500">
+                  С {formatDate(membership.validFrom)}
+                </p>
+              )}
+
+              <MembershipFreezePanel
+                membership={membership as Membership}
+                onFrozen={(next) => {
+                  setData((prev) => {
+                    if (!prev) return prev;
+                    const updated = { ...prev, membership: next };
+                    try {
+                      sessionStorage.setItem(
+                        'fitgo:client-dashboard:v2',
+                        JSON.stringify(updated),
+                      );
+                    } catch {
+                      /* ignore */
+                    }
+                    return updated;
+                  });
+                }}
+              />
+
+              {membership.services && membership.services.length > 0 && (
+                <ul className="space-y-1.5 border-t border-slate-800 pt-3">
+                  {membership.services.slice(0, 4).map((service) => (
+                    <li
+                      key={service.name}
+                      className="flex items-center justify-between text-sm"
+                    >
+                      <span className="text-slate-300">{service.name}</span>
+                      <span className="text-slate-400">
+                        {service.unlimited
+                          ? '∞'
+                          : service.remaining !== undefined
+                            ? service.total
+                              ? `${service.remaining}/${service.total}`
+                              : String(service.remaining)
+                            : '—'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
           )}
-
-          {membership.validFrom && (
-            <p className="mt-2 text-xs text-slate-500">
-              С {formatDate(membership.validFrom)}
-            </p>
-          )}
-
-          <div className="mt-3">
-            <MembershipFreezePanel
-              membership={membership as Membership}
-              onFrozen={(next) => {
-                setData((prev) => {
-                  if (!prev) return prev;
-                  const updated = { ...prev, membership: next };
-                  try {
-                    sessionStorage.setItem(
-                      'fitgo:client-dashboard:v2',
-                      JSON.stringify(updated),
-                    );
-                  } catch {
-                    /* ignore */
-                  }
-                  return updated;
-                });
-              }}
-            />
-          </div>
-
-          {membership.services && membership.services.length > 0 && (
-            <ul className="mt-3 space-y-1.5 border-t border-slate-800 pt-3">
-              {membership.services.slice(0, 4).map((service) => (
-                <li
-                  key={service.name}
-                  className="flex items-center justify-between text-sm"
-                >
-                  <span className="text-slate-300">{service.name}</span>
-                  <span className="text-slate-400">
-                    {service.unlimited
-                      ? '∞'
-                      : service.remaining !== undefined
-                        ? service.total
-                          ? `${service.remaining}/${service.total}`
-                          : String(service.remaining)
-                        : '—'}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <Link href="/client/card" className="mt-3 inline-block text-sm text-fitgo-400">
-            Карта и услуги →
-          </Link>
         </div>
       ) : (
         <div className="card text-center">
@@ -365,22 +387,6 @@ function ClientHomePageInner() {
             </Link>
           )}
         </div>
-      )}
-
-      {accessCard && isEnabled('club_card') && (
-        <Link
-          href="/client/card"
-          className="card flex items-center justify-between gap-3 transition hover:bg-slate-800/40"
-        >
-          <div className="min-w-0">
-            <p className="text-sm text-slate-400">Карта клуба</p>
-            <p className="truncate font-medium">{accessCard.clientName}</p>
-            <p className="font-mono text-sm text-fitgo-400">
-              ••• {accessCard.barcode.slice(-4)}
-            </p>
-          </div>
-          <CreditCard className="h-8 w-8 shrink-0 text-fitgo-400" />
-        </Link>
       )}
 
       {upcomingBookings.length > 0 ? (
@@ -481,9 +487,9 @@ function ClientHomePageInner() {
           <MessagesHomeLink href="/client/notifications" />
         )}
         {isEnabled('club_card') && (
-          <Link href="/client/card" className="card flex flex-col items-center gap-2 py-6">
-            <CreditCard className="h-8 w-8 text-fitgo-400" />
-            <span className="font-medium">Карта клуба</span>
+          <Link href="/client/visits" className="card flex flex-col items-center gap-2 py-6">
+            <Dumbbell className="h-8 w-8 text-fitgo-400" />
+            <span className="font-medium">Визиты</span>
           </Link>
         )}
         {isEnabled('membership_shop') && (

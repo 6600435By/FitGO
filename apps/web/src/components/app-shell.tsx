@@ -45,6 +45,7 @@ export function AppShell({
     null,
   );
   const [clubOpen, setClubOpen] = useState(false);
+  const immersiveCard = pathname === '/client/card';
 
   useEffect(
     () =>
@@ -55,7 +56,9 @@ export function AppShell({
   );
 
   const hideHeader =
-    timerChrome?.overlayOpen || (timerChrome?.active && timerChrome.atTop);
+    immersiveCard ||
+    timerChrome?.overlayOpen ||
+    (timerChrome?.active && timerChrome.atTop);
 
   const logout = () => {
     clearAuth();
@@ -72,11 +75,16 @@ export function AppShell({
     .replace(/\/$/, '');
 
   return (
-    <div className="mx-auto min-h-screen max-w-lg pb-24 [--app-header-h:5.5rem]">
+    <div
+      className={cn(
+        'mx-auto min-h-screen max-w-lg [--app-header-h:5.5rem]',
+        immersiveCard ? 'pb-20' : 'pb-24',
+      )}
+    >
       <header
         className={cn(
           'sticky top-0 z-10 min-h-[var(--app-header-h)] border-b border-slate-800 bg-slate-950/90 px-4 py-4 backdrop-blur',
-          hideHeader && 'pointer-events-none invisible',
+          hideHeader && 'pointer-events-none invisible absolute',
         )}
       >
         <div className="flex items-center justify-between">
@@ -115,7 +123,9 @@ export function AppShell({
         </div>
       </header>
 
-      <main className="px-4 py-6">{children}</main>
+      <main className={cn(immersiveCard ? 'px-3 py-3' : 'px-4 py-6')}>
+        {children}
+      </main>
 
       <nav className="fixed bottom-0 left-0 right-0 border-t border-slate-800 bg-slate-950/95 backdrop-blur">
         <div className="mx-auto flex max-w-lg justify-around px-2 py-2">

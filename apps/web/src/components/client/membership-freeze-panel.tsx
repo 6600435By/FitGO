@@ -1,7 +1,8 @@
 'use client';
 
 import { MembershipStatus, type Membership } from '@fitgo/shared-types';
-import { useMemo, useState } from 'react';
+import { ChevronDown } from 'lucide-react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDate } from '@/lib/utils';
@@ -60,6 +61,60 @@ function FreezeBudgetLine({ membership }: { membership: Membership }) {
   );
 }
 
+function FreezeShell({
+  title,
+  subtitle,
+  open,
+  onToggle,
+  children,
+  tone = 'default',
+}: {
+  title: string;
+  subtitle?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+  tone?: 'default' | 'sky';
+}) {
+  const shell =
+    tone === 'sky'
+      ? 'border-sky-500/20 bg-sky-500/5'
+      : 'border-slate-700/80 bg-slate-800/30';
+  return (
+    <div className={`rounded-xl border ${shell}`}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left"
+      >
+        <div className="min-w-0">
+          <p
+            className={`text-sm font-medium ${
+              tone === 'sky' ? 'text-sky-200' : 'text-slate-100'
+            }`}
+          >
+            {title}
+          </p>
+          {subtitle && (
+            <p className="mt-0.5 truncate text-xs text-slate-400">{subtitle}</p>
+          )}
+        </div>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+            open ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      {open && (
+        <div className="space-y-3 border-t border-slate-700/60 px-3 pb-3 pt-3">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 type Props = {
   membership: Membership;
   onFrozen?: (membership: Membership) => void;
@@ -72,6 +127,7 @@ export function MembershipFreezePanel({ membership, onFrozen }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [confirming, setConfirming] = useState(false);
+  const [open, setOpen] = useState(false);
 
   const untilPreview = useMemo(() => {
     if (!fromDate || !days || days < 1) return null;
@@ -84,18 +140,25 @@ export function MembershipFreezePanel({ membership, onFrozen }: Props) {
 
   if (membership.status === MembershipStatus.FROZEN) {
     return (
-      <div className="space-y-3 rounded-xl border border-sky-500/20 bg-sky-500/5 p-3 text-sm">
-        <div>
-          <p className="font-medium text-sky-200">Абонемент заморожен</p>
-          {membership.frozenUntil && (
-            <p className="mt-1 text-slate-400">
-              До {formatDate(membership.frozenUntil)}. Срок действия продлён на
-              дни заморозки.
-            </p>
-          )}
-        </div>
+      <FreezeShell
+        tone="sky"
+        title="Абонемент заморожен"
+        subtitle={
+          membership.frozenUntil
+            ? `До ${formatDate(membership.frozenUntil)}`
+            : undefined
+        }
+        open={open}
+        onToggle={() => setOpen((v) => !v)}
+      >
+        {membership.frozenUntil && (
+          <p className="text-sm text-slate-400">
+            До {formatDate(membership.frozenUntil)}. Срок действия продлён на
+            дни заморозки.
+          </p>
+        )}
         <FreezeBudgetLine membership={membership} />
-      </div>
+      </FreezeShell>
     );
   }
 
@@ -105,10 +168,15 @@ export function MembershipFreezePanel({ membership, onFrozen }: Props) {
 
   if (remaining <= 0) {
     return (
-      <div className="space-y-2 rounded-xl bg-slate-800/50 p-3 text-sm">
-        <p className="text-slate-400">Дней заморозки не осталось</p>
+      <FreezeShell
+        title="Заморозка"
+        subtitle="Дней не осталось"
+        open={open}
+        onToggle={() => setOpen((v) => !v)}
+      >
+        <p className="text-sm text-slate-400">Дней заморозки не осталось</p>
         <FreezeBudgetLine membership={membership} />
-      </div>
+      </FreezeShell>
     );
   }
 
@@ -132,13 +200,15 @@ export function MembershipFreezePanel({ membership, onFrozen }: Props) {
   };
 
   return (
-    <div className="space-y-3 rounded-xl border border-slate-700/80 bg-slate-800/30 p-3">
-      <div>
-        <p className="font-medium">Заморозка абонемента</p>
-        <p className="mt-0.5 text-xs text-slate-400">
-          Срок действия абонемента увеличится на выбранные дни.
-        </p>
-      </div>
+    <FreezeShell
+      title="Заморозка абонемента"
+      subtitle={`Осталось ${remaining} дн.`}
+      open={open}
+      onToggle={() => setOpen((v) => !v)}
+    >
+      <p className="text-xs text-slate-400">
+        Срок действия абонемента увеличится на выбранные дни.
+      </p>
 
       <FreezeBudgetLine membership={membership} />
 
@@ -207,6 +277,6 @@ export function MembershipFreezePanel({ membership, onFrozen }: Props) {
           </button>
         </div>
       )}
-    </div>
+    </FreezeShell>
   );
 }
