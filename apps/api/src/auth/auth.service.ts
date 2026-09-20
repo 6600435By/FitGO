@@ -17,6 +17,7 @@ import { RegisterDto } from './dto/register.dto';
 const ROLE_MAP: Record<Role, SharedUserRole> = {
   [Role.CLIENT]: SharedUserRole.CLIENT,
   [Role.TRAINER]: SharedUserRole.TRAINER,
+  [Role.SPECIALIST]: SharedUserRole.SPECIALIST,
   [Role.ADMIN]: SharedUserRole.ADMIN,
   [Role.SUPER_ADMIN]: SharedUserRole.SUPER_ADMIN,
 };

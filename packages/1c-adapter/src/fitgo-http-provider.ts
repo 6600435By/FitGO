@@ -177,6 +177,116 @@ export class FitgoHttpProvider {
     return mapMembership(data);
   }
 
+  async consumeMembershipService(
+    externalId: string,
+    input: {
+      serviceName?: string;
+      serviceId?: string;
+      bookingRef: string;
+      occurredAt: string;
+      durationMin?: number;
+      employeeName?: string;
+      employeeCode?: string;
+    },
+  ): Promise<Membership> {
+    const data = await this.request<FitgoMembershipData>(
+      '/membership/consume-service',
+      {
+        method: 'POST',
+        body: { externalId, ...input },
+      },
+    );
+    if (!data) {
+      throw new Error(
+        'FitGO 1C API returned empty membership after consume-service',
+      );
+    }
+    return mapMembership(data);
+  }
+
+  async restoreSpaVisit(
+    externalId: string,
+    input: { bookingRef: string },
+  ): Promise<Membership> {
+    const data = await this.request<FitgoMembershipData>(
+      '/membership/consume-service',
+      {
+        method: 'POST',
+        body: {
+          externalId,
+          serviceName: '__RESTORE__',
+          bookingRef: input.bookingRef,
+        },
+      },
+    );
+    if (!data) {
+      throw new Error(
+        'FitGO 1C API returned empty membership after restore SPA visit',
+      );
+    }
+    return mapMembership(data);
+  }
+
+  async getSpaVisitStatus(
+    externalId: string,
+    input: { bookingRef: string },
+  ): Promise<{
+    found: boolean;
+    cancelled: boolean;
+    posted?: boolean;
+    deletionMark?: boolean;
+    status?: string;
+    num?: string;
+  }> {
+    const data = await this.request<{
+      found?: boolean;
+      cancelled?: boolean;
+      posted?: boolean;
+      deletionMark?: boolean;
+      status?: string;
+      num?: string;
+    }>('/membership/consume-service', {
+      method: 'POST',
+      body: {
+        externalId,
+        serviceName: '__VISIT_STATUS__',
+        bookingRef: input.bookingRef,
+      },
+    });
+    return {
+      found: Boolean(data?.found),
+      cancelled: Boolean(data?.cancelled),
+      posted: data?.posted,
+      deletionMark: data?.deletionMark,
+      status: data?.status,
+      num: data?.num,
+    };
+  }
+
+  async sellSpaService(
+    externalId: string,
+    input: {
+      serviceName: string;
+      serviceId?: string;
+      bookingRef: string;
+      occurredAt: string;
+      priceMinor: number;
+      currency?: string;
+      durationMin?: number;
+      employeeName?: string;
+      employeeCode?: string;
+    },
+  ): Promise<Membership> {
+    const data = await this.request<FitgoMembershipData>('/spa/service-sale', {
+      method: 'POST',
+      body: { externalId, ...input },
+    });
+    if (!data) {
+      throw new Error('FitGO 1C API returned empty membership after spa sale');
+    }
+    return mapMembership(data);
+  }
+
   async getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]> {
     const params = new URLSearchParams({ externalId });
     if (period?.from) params.set('from', period.from);

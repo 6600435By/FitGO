@@ -26,6 +26,7 @@ import { FitnessService } from '../fitness/fitness.service';
 import { VisitSyncService } from '../engagement/visit-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PersonalTrainingService } from '../personal-training/personal-training.service';
+import { SpaBookingService } from '../spa-booking/spa-booking.service';
 import { WaitlistService } from '../waitlist/waitlist.service';
 import { OsmiCardService } from '../osmi/osmi-card.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
@@ -38,6 +39,7 @@ export class ClientService {
     private readonly fitness: FitnessService,
     private readonly prisma: PrismaService,
     private readonly personalTraining: PersonalTrainingService,
+    private readonly spaBooking: SpaBookingService,
     private readonly notifications: NotificationsService,
     private readonly waitlist: WaitlistService,
     private readonly osmiCards: OsmiCardService,
@@ -856,8 +858,12 @@ export class ClientService {
     const groupItems = await this.getGroupClassBookings(user, {
       upcomingOnly: true,
     });
+    const spaBookings = await this.spaBooking.listClientBookings(user, {
+      upcomingOnly: true,
+    });
+    const spaItems = this.spaBooking.toBookingItems(spaBookings);
 
-    return [...groupItems, ...personalItems].sort((a, b) =>
+    return [...groupItems, ...personalItems, ...spaItems].sort((a, b) =>
       a.startAt.localeCompare(b.startAt),
     );
   }
@@ -875,8 +881,12 @@ export class ClientService {
       });
     const personalItems =
       this.personalTraining.toBookingItems(personalBookings);
+    const spaBookings = await this.spaBooking.listClientBookings(user, {
+      includeAll: true,
+    });
+    const spaItems = this.spaBooking.toBookingItems(spaBookings);
 
-    const items = [...groupItems, ...personalItems].sort((a, b) =>
+    const items = [...groupItems, ...personalItems, ...spaItems].sort((a, b) =>
       b.startAt.localeCompare(a.startAt),
     );
 

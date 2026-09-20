@@ -49,6 +49,53 @@ export interface IFitnessClubProvider {
     days: number,
     fromDate?: string,
   ): Promise<Membership>;
+  /** Consume a membership package service (spa massage etc.). Optional. */
+  consumeMembershipService?(
+    externalId: string,
+    input: {
+      serviceName?: string;
+      serviceId?: string;
+      bookingRef: string;
+      occurredAt: string;
+      durationMin?: number;
+      /** ФИО сотрудника 1С (из слота FitGO) */
+      employeeName?: string;
+      /** Код справочника Сотрудники в 1С, если известен */
+      employeeCode?: string;
+    },
+  ): Promise<Membership>;
+  /** Cancel FitGO SPA visit in 1C (unpost / status Отменено) by bookingRef. Optional. */
+  restoreSpaVisit?(
+    externalId: string,
+    input: { bookingRef: string },
+  ): Promise<Membership>;
+  /** Status of FitGO SPA visit in 1C by bookingRef (sync cancellations). Optional. */
+  getSpaVisitStatus?(
+    externalId: string,
+    input: { bookingRef: string },
+  ): Promise<{
+    found: boolean;
+    cancelled: boolean;
+    posted?: boolean;
+    deletionMark?: boolean;
+    status?: string;
+    num?: string;
+  }>;
+  /** Record a paid spa service sale in 1C. Optional. */
+  sellSpaService?(
+    externalId: string,
+    input: {
+      serviceName: string;
+      serviceId?: string;
+      bookingRef: string;
+      occurredAt: string;
+      priceMinor: number;
+      currency?: string;
+      durationMin?: number;
+      employeeName?: string;
+      employeeCode?: string;
+    },
+  ): Promise<Membership>;
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]>;
   getAccessCard(externalId: string): Promise<AccessCard | null>;
   getSchedule(clubExternalId: string, filters?: ScheduleFilters): Promise<ScheduleSlot[]>;

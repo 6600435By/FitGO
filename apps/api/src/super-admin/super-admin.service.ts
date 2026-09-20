@@ -22,7 +22,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { CreateAdminTaskDto } from './dto/task.dto';
 import type { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 
-const STAFF_ROLES: Role[] = [Role.ADMIN, Role.TRAINER];
+const STAFF_ROLES: Role[] = [Role.ADMIN, Role.TRAINER, Role.SPECIALIST];
 
 @Injectable()
 export class SuperAdminService {
@@ -45,8 +45,14 @@ export class SuperAdminService {
   }
 
   async createStaff(user: JwtPayload, dto: CreateStaffDto) {
-    if (dto.role !== 'ADMIN' && dto.role !== 'TRAINER') {
-      throw new BadRequestException('Можно создать только админа или тренера');
+    if (
+      dto.role !== 'ADMIN' &&
+      dto.role !== 'TRAINER' &&
+      dto.role !== 'SPECIALIST'
+    ) {
+      throw new BadRequestException(
+        'Можно создать только админа, тренера или специалиста',
+      );
     }
 
     const existing = await this.prisma.user.findFirst({
@@ -57,7 +63,12 @@ export class SuperAdminService {
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
-    const prismaRole = dto.role === 'ADMIN' ? Role.ADMIN : Role.TRAINER;
+    const prismaRole =
+      dto.role === 'ADMIN'
+        ? Role.ADMIN
+        : dto.role === 'SPECIALIST'
+          ? Role.SPECIALIST
+          : Role.TRAINER;
     const clubId = requireClubId(user);
 
     const created = await this.prisma.user.create({
@@ -309,6 +320,7 @@ export class SuperAdminService {
     const roleMap: Record<Role, UserRole> = {
       [Role.CLIENT]: UserRole.CLIENT,
       [Role.TRAINER]: UserRole.TRAINER,
+      [Role.SPECIALIST]: UserRole.SPECIALIST,
       [Role.ADMIN]: UserRole.ADMIN,
       [Role.SUPER_ADMIN]: UserRole.SUPER_ADMIN,
     };

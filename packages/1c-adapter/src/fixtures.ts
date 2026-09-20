@@ -136,10 +136,10 @@ export const MOCK_USERS: Record<
     password: 'client123',
     profile: {
       id: 'user-client-001',
-      externalId: '1c-client-001',
+      externalId: 'ff94bf6a-b4d2-11e8-80e9-7085c20c362e',
       clubId: MOCK_CLUB.id,
       email: 'client@demo.fitgo',
-      phone: '+375291234567',
+      phone: '+375296600435',
       firstName: 'Алексей',
       lastName: 'Иванов',
       roles: [UserRole.CLIENT],
@@ -155,6 +155,7 @@ export const MOCK_USERS: Record<
       services: [
         { name: 'Групповые программы', unlimited: true },
         { name: 'Массаж классический', remaining: 2, total: 4 },
+        { name: 'Анализ состава тела', remaining: 1, total: 1 },
       ],
       accountBalance: 45.5,
       debtAmount: 0,

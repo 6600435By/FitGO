@@ -22,7 +22,7 @@ export default function SuperAdminStaffPage() {
     phone: '',
     email: '',
     password: randomPassword(),
-    role: 'TRAINER' as 'ADMIN' | 'TRAINER',
+    role: 'TRAINER' as 'ADMIN' | 'TRAINER' | 'SPECIALIST',
   });
   const [error, setError] = useState('');
 
@@ -103,8 +103,9 @@ export default function SuperAdminStaffPage() {
               Сгенерировать
             </button>
           </div>
-          <select className="input w-full" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as 'ADMIN' | 'TRAINER' })}>
+          <select className="input w-full" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as 'ADMIN' | 'TRAINER' | 'SPECIALIST' })}>
             <option value="TRAINER">Тренер</option>
+            <option value="SPECIALIST">Спа-специалист</option>
             <option value="ADMIN">Администратор</option>
           </select>
           <button onClick={create} className="btn-primary w-full">Создать</button>

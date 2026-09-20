@@ -1,4 +1,5 @@
 import type { Booking } from '@fitgo/shared-types';
+import { SessionType } from '@fitgo/shared-types';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -28,6 +29,21 @@ export async function cancelClientBooking(
 
   if (!window.confirm(`Отменить запись на «${booking.title}»?`)) {
     return { success: false, message: 'Отменено' };
+  }
+
+  if (booking.source === 'fitgo' && booking.type === SessionType.SPA) {
+    try {
+      await api.clientCancelSpaBooking(token, booking.sessionId);
+      return { success: true };
+    } catch (e) {
+      return {
+        success: false,
+        message:
+          e instanceof Error
+            ? e.message
+            : 'Не удалось отменить. Свяжитесь с администратором.',
+      };
+    }
   }
 
   if (booking.source === 'fitgo') {

@@ -26,6 +26,14 @@ import {
   type TrainerAvailabilityBlock,
   type TrainerCalendarEvent,
   type WearableSyncResult,
+  type SpaService,
+  type SpaServiceEligibility,
+  type SpaSpecialistSummary,
+  type SpaBookingSlot,
+  type SpaBooking,
+  type SpaQuotaRule,
+  type SpecialistCalendarResponse,
+  type SpecialistWorkSlotInput,
   type ClientProfile,
   type ClientTrainingProfile,
   type BodyProfileResponse,
@@ -578,6 +586,237 @@ export const api = {
       token,
     ),
 
+  // ─── Spa booking ───────────────────────────────────────────────────────────
+
+  clientSpaServices: (
+    token: string,
+    params?: { membershipServiceName?: string; quotaOnly?: boolean },
+  ) => {
+    const q = new URLSearchParams();
+    if (params?.membershipServiceName) {
+      q.set('membershipServiceName', params.membershipServiceName);
+    }
+    if (params?.quotaOnly) q.set('quotaOnly', '1');
+    const qs = q.toString();
+    return request<SpaServiceEligibility[]>(
+      `/client/spa/services${qs ? `?${qs}` : ''}`,
+      {},
+      token,
+    );
+  },
+
+  clientSpaSpecialists: (
+    token: string,
+    serviceId: string,
+    params?: {
+      membershipServiceName?: string;
+      paymentType?: 'QUOTA' | 'PAID';
+    },
+  ) => {
+    const q = new URLSearchParams({ serviceId });
+    if (params?.membershipServiceName) {
+      q.set('membershipServiceName', params.membershipServiceName);
+    }
+    if (params?.paymentType) q.set('paymentType', params.paymentType);
+    return request<SpaSpecialistSummary[]>(
+      `/client/spa/specialists?${q.toString()}`,
+      {},
+      token,
+    );
+  },
+
+  clientSpaSlots: (token: string, specialistId: string, serviceId: string) =>
+    request<SpaBookingSlot[]>(
+      `/client/spa/specialists/${specialistId}/slots?serviceId=${encodeURIComponent(serviceId)}`,
+      {},
+      token,
+    ),
+
+  clientBookSpa: (
+    token: string,
+    data: {
+      serviceId: string;
+      specialistId: string;
+      startAt: string;
+      paymentType: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+  ) =>
+    request<{ booking: SpaBooking; membership: Membership | null }>(
+      '/client/spa-bookings',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  clientSpaBookings: (token: string) =>
+    request<SpaBooking[]>('/client/spa-bookings', {}, token),
+
+  clientCancelSpaBooking: (token: string, bookingId: string) =>
+    request<{ success: boolean }>(
+      `/client/spa-bookings/${bookingId}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  specialistOwnServices: (token: string) =>
+    request<SpaService[]>('/specialist/spa/services', {}, token),
+
+  specialistWorkSchedule: (token: string) =>
+    request<SpecialistWorkSlotInput[]>('/specialist/work-schedule', {}, token),
+
+  specialistSetWorkSchedule: (
+    token: string,
+    slots: SpecialistWorkSlotInput[],
+  ) =>
+    request<SpecialistWorkSlotInput[]>(
+      '/specialist/work-schedule',
+      { method: 'PUT', body: JSON.stringify({ slots }) },
+      token,
+    ),
+
+  specialistCalendar: (token: string, from: string, to: string) =>
+    request<SpecialistCalendarResponse>(
+      `/specialist/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      {},
+      token,
+    ),
+
+  specialistFillFromTemplate: (
+    token: string,
+    periodStart: string,
+    periodEnd: string,
+  ) =>
+    request<{ createdBlocks: number }>(
+      '/specialist/schedule/fill-from-template',
+      {
+        method: 'POST',
+        body: JSON.stringify({ periodStart, periodEnd }),
+      },
+      token,
+    ),
+
+  specialistPublishSchedule: (
+    token: string,
+    periodStart: string,
+    periodEnd: string,
+  ) =>
+    request<{ publishedBlocks: number }>(
+      '/specialist/schedule/publish',
+      {
+        method: 'POST',
+        body: JSON.stringify({ periodStart, periodEnd }),
+      },
+      token,
+    ),
+
+  specialistSpaBookings: (token: string) =>
+    request<SpaBooking[]>('/specialist/spa-bookings', {}, token),
+
+  specialistAssignSpaBooking: (
+    token: string,
+    data: {
+      clientId: string;
+      serviceId: string;
+      startAt: string;
+      paymentType: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+  ) =>
+    request<{ booking: SpaBooking; membership: Membership | null }>(
+      '/specialist/spa-bookings',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  specialistCancelSpaBooking: (token: string, bookingId: string) =>
+    request<{ ok: boolean }>(
+      `/specialist/spa-bookings/${bookingId}`,
+      { method: 'PATCH' },
+      token,
+    ),
+
+  adminSpaServices: (token: string) =>
+    request<SpaService[]>('/admin/spa/services', {}, token),
+
+  adminUpsertSpaService: (
+    token: string,
+    data: {
+      id?: string;
+      name: string;
+      kind: 'MASSAGE' | 'BODY_COMPOSITION' | 'WRAP';
+      durationMin: number;
+      bufferMin?: number;
+      priceMinor: number;
+      currency?: string;
+      active?: boolean;
+    },
+  ) =>
+    request<SpaService>('/admin/spa/services', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, token),
+
+  adminSpaQuotaRules: (token: string) =>
+    request<SpaQuotaRule[]>('/admin/spa/quota-rules', {}, token),
+
+  adminSetSpaQuotaRules: (
+    token: string,
+    rules: Array<{
+      membershipServiceName: string;
+      allowedServiceIds: string[];
+      allowedSpecialistIds: string[];
+    }>,
+  ) =>
+    request<SpaQuotaRule[]>('/admin/spa/quota-rules', {
+      method: 'PUT',
+      body: JSON.stringify({ rules }),
+    }, token),
+
+  adminSpaSpecialists: (token: string) =>
+    request<SpaSpecialistSummary[]>('/admin/spa/specialists', {}, token),
+
+  adminSetSpecialistServices: (
+    token: string,
+    specialistId: string,
+    serviceIds: string[],
+  ) =>
+    request<SpaSpecialistSummary[]>(
+      `/admin/spa/specialists/${specialistId}/services`,
+      { method: 'PUT', body: JSON.stringify({ serviceIds }) },
+      token,
+    ),
+
+  adminSpaCalendar: (token: string, from: string, to: string) =>
+    request<SpaBooking[]>(
+      `/admin/spa/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      {},
+      token,
+    ),
+
+  adminSpaClients: (token: string) =>
+    request<Array<{ id: string; firstName: string; lastName: string; phone?: string }>>(
+      '/admin/spa/clients',
+      {},
+      token,
+    ),
+
+  adminAssignSpaBooking: (
+    token: string,
+    data: {
+      clientId: string;
+      specialistId: string;
+      serviceId: string;
+      startAt: string;
+      paymentType: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+  ) =>
+    request<{ booking: SpaBooking; membership: Membership | null }>(
+      '/admin/spa-bookings',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
   trainerDashboard: (token: string) =>
     request<TrainerDashboard>('/trainer/dashboard', {}, token),
 
@@ -1069,7 +1308,7 @@ export const api = {
       phone?: string;
       email: string;
       password: string;
-      role: 'ADMIN' | 'TRAINER';
+      role: 'ADMIN' | 'TRAINER' | 'SPECIALIST';
     },
   ) =>
     request<StaffCreateResult>('/super-admin/staff', {

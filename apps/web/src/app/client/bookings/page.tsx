@@ -34,7 +34,11 @@ export default function ClientBookingsPage() {
     try {
       const result = await cancelClientBooking(booking);
       if (result.success) {
-        setMessage('Запись отменена на сервере клуба. Администратор уведомлён.');
+        setMessage(
+          booking.type === SessionType.SPA
+            ? 'Запись в спа-кабинет отменена'
+            : 'Запись отменена на сервере клуба. Администратор уведомлён.',
+        );
         load();
       } else if (result.message && result.message !== 'Отменено') {
         setMessage(result.message ?? 'Не удалось отменить');
@@ -47,9 +51,13 @@ export default function ClientBookingsPage() {
   };
 
   const upcoming = bookings.filter(
-    (b) => new Date(b.startAt) >= new Date(),
+    (b) =>
+      b.lifecycle !== 'CANCELLED' && new Date(b.startAt) >= new Date(),
   );
-  const past = bookings.filter((b) => new Date(b.startAt) < new Date());
+  const past = bookings.filter(
+    (b) =>
+      b.lifecycle === 'CANCELLED' || new Date(b.startAt) < new Date(),
+  );
 
   if (loading) {
     return (
@@ -100,6 +108,11 @@ export default function ClientBookingsPage() {
                   Назначено тренером
                 </span>
               )}
+              {booking.type === SessionType.SPA && (
+                <span className="ml-2 mt-2 inline-block rounded-full bg-fitgo-500/15 px-2 py-1 text-xs text-fitgo-400">
+                  Спа
+                </span>
+              )}
               {booking.source === 'fitgo' && booking.type === SessionType.PERSONAL && (
                 <Link
                   href={`/client/personal-bookings/${booking.sessionId}`}
@@ -143,6 +156,11 @@ export default function ClientBookingsPage() {
                       </Link>
                     )}
                 </div>
+                {booking.lifecycle === 'CANCELLED' && booking.cancelledByLabel && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    {booking.cancelledByLabel}
+                  </p>
+                )}
               </li>
             ))}
           </ul>

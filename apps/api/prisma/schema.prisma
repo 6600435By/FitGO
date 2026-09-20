@@ -10,6 +10,7 @@ datasource db {
 enum Role {
   CLIENT
   TRAINER
+  SPECIALIST
   ADMIN
   SUPER_ADMIN
 }
@@ -150,6 +151,38 @@ enum PersonalBookingOrigin {
   TRAINER_ASSIGNED
 }
 
+enum SpaServiceKind {
+  MASSAGE
+  BODY_COMPOSITION
+  WRAP
+}
+
+enum SpaPaymentType {
+  QUOTA
+  PAID
+}
+
+enum SpaBookingOrigin {
+  CLIENT_BOOKED
+  SPECIALIST_ASSIGNED
+  ADMIN_ASSIGNED
+}
+
+enum SpaBookingStatus {
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+/// Кто отменил SPA-запись (для истории клиента).
+enum SpaCancelledBy {
+  CLIENT
+  SPECIALIST
+  ADMIN
+  /// Отменено / удалено администратором в 1С (подтянуто синхронизацией)
+  CRM_ADMIN
+}
+
 enum AccountStatus {
   ACTIVE
   SHADOW
@@ -213,6 +246,9 @@ model Club {
   adminTasks           AdminTask[]
   staffAuditLogs       StaffAuditLog[]
   clubMemberships      UserClubMembership[]
+  spaServices          SpaService[]
+  spaQuotaRules        SpaQuotaRule[]
+  spaBookings          SpaBooking[]
 }
 
 model ClubTheme {
@@ -298,6 +334,13 @@ model User {
   trainerSchedulePublications TrainerSchedulePublication[]
   trainerPersonalBookings PersonalTrainingBooking[] @relation("TrainerPersonalBookings")
   clientPersonalBookings  PersonalTrainingBooking[] @relation("ClientPersonalBookings")
+  specialistWorkSlots             SpecialistWorkSlot[]
+  specialistAvailabilityBlocks    SpecialistAvailabilityBlock[]
+  specialistSchedulePublications  SpecialistSchedulePublication[]
+  specialistSpaBookings           SpaBooking[] @relation("SpecialistSpaBookings")
+  clientSpaBookings               SpaBooking[] @relation("ClientSpaBookings")
+  specialistServices              SpecialistService[]
+  spaQuotaRuleSpecialists         SpaQuotaRuleSpecialist[]
   groupClassBookings      GroupClassBooking[]
   groupClassWaitlist      GroupClassWaitlistEntry[]
   sentNotifications       Notification[]          @relation("NotificationSender")
@@ -995,4 +1038,149 @@ model StaffAuditLog {
 
   @@index([clubId, createdAt])
   @@index([actorId])
+}
+
+// ─── Spa booking ─────────────────────────────────────────────────────────────
+
+model SpaService {
+  id          String         @id @default(cuid())
+  clubId      String
+  name        String
+  kind        SpaServiceKind
+  durationMin Int
+  bufferMin   Int            @default(0)
+  priceMinor  Int
+  currency    String         @default("BYN")
+  active      Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  club               Club                   @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  specialistServices SpecialistService[]
+  bookings           SpaBooking[]
+  quotaRuleServices  SpaQuotaRuleService[]
+
+  @@index([clubId, active])
+  @@index([clubId, kind])
+}
+
+model SpecialistService {
+  id           String @id @default(cuid())
+  specialistId String
+  serviceId    String
+
+  specialist User       @relation(fields: [specialistId], references: [id], onDelete: Cascade)
+  service    SpaService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([specialistId, serviceId])
+  @@index([serviceId])
+}
+
+model SpaQuotaRule {
+  id                     String   @id @default(cuid())
+  clubId                 String
+  membershipServiceName  String
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  club         Club                    @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  services     SpaQuotaRuleService[]
+  specialists  SpaQuotaRuleSpecialist[]
+
+  @@unique([clubId, membershipServiceName])
+  @@index([clubId])
+}
+
+model SpaQuotaRuleService {
+  id      String @id @default(cuid())
+  ruleId  String
+  serviceId String
+
+  rule    SpaQuotaRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  service SpaService   @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([ruleId, serviceId])
+}
+
+model SpaQuotaRuleSpecialist {
+  id           String @id @default(cuid())
+  ruleId       String
+  specialistId String
+
+  rule       SpaQuotaRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  specialist User         @relation(fields: [specialistId], references: [id], onDelete: Cascade)
+
+  @@unique([ruleId, specialistId])
+}
+
+model SpecialistWorkSlot {
+  id           String   @id @default(cuid())
+  specialistId String
+  dayOfWeek    Int
+  startTime    String
+  endTime      String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  specialist User @relation(fields: [specialistId], references: [id], onDelete: Cascade)
+
+  @@index([specialistId])
+}
+
+model SpecialistAvailabilityBlock {
+  id           String                  @id @default(cuid())
+  specialistId String
+  startAt      DateTime
+  endAt        DateTime
+  status       AvailabilityBlockStatus @default(DRAFT)
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+
+  specialist User @relation(fields: [specialistId], references: [id], onDelete: Cascade)
+
+  @@index([specialistId, startAt])
+  @@index([specialistId, status, startAt])
+}
+
+model SpecialistSchedulePublication {
+  id           String   @id @default(cuid())
+  specialistId String
+  periodStart  DateTime
+  periodEnd    DateTime
+  publishedAt  DateTime @default(now())
+
+  specialist User @relation(fields: [specialistId], references: [id], onDelete: Cascade)
+
+  @@index([specialistId, periodStart])
+}
+
+model SpaBooking {
+  id                     String           @id @default(cuid())
+  clubId                 String
+  specialistId           String
+  clientId               String
+  serviceId              String
+  startAt                DateTime
+  endAt                  DateTime
+  status                 SpaBookingStatus @default(CONFIRMED)
+  origin                 SpaBookingOrigin @default(CLIENT_BOOKED)
+  paymentType            SpaPaymentType
+  priceMinor             Int?
+  membershipServiceName  String?
+  consumedInCrmAt        DateTime?
+  crmDocRef              String?
+  cancelledBy            SpaCancelledBy?
+  cancelledAt            DateTime?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  club       Club       @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  specialist User       @relation("SpecialistSpaBookings", fields: [specialistId], references: [id], onDelete: Cascade)
+  client     User       @relation("ClientSpaBookings", fields: [clientId], references: [id], onDelete: Cascade)
+  service    SpaService @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  @@unique([specialistId, startAt])
+  @@index([specialistId, startAt])
+  @@index([clientId])
+  @@index([clubId, startAt])
 }

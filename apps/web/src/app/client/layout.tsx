@@ -16,6 +16,7 @@ const ALL_NAV: Array<{
   matchSubpaths?: boolean;
   module?:
     | 'group_classes'
+    | 'spa_booking'
     | 'engagement'
     | 'messaging'
     | 'club_card';

@@ -108,6 +108,101 @@ export class Mock1CProvider implements IFitnessClubProvider {
     return { ...m };
   }
 
+  async consumeMembershipService(
+    externalId: string,
+    input: {
+      serviceName?: string;
+      serviceId?: string;
+      bookingRef: string;
+      occurredAt: string;
+      durationMin?: number;
+    },
+  ) {
+    const entry = Object.values(MOCK_USERS).find(
+      (u) => u.profile.externalId === externalId,
+    );
+    if (!entry?.membership) {
+      throw Object.assign(new Error('Membership not found'), { status: 404 });
+    }
+    const m = entry.membership;
+    const services = m.services ?? [];
+    const needle = (input.serviceName ?? '').toLowerCase().trim();
+    const idx = services.findIndex((s) => {
+      const n = s.name.toLowerCase();
+      return needle && (n === needle || n.includes(needle) || needle.includes(n));
+    });
+    if (idx < 0) {
+      throw Object.assign(new Error('Service quota not found'), { status: 404 });
+    }
+    const svc = services[idx];
+    if (svc.unlimited) {
+      return { ...m, services: [...services] };
+    }
+    const remaining = svc.remaining ?? 0;
+    if (remaining <= 0) {
+      throw Object.assign(new Error('No remaining service quota'), { status: 409 });
+    }
+    services[idx] = { ...svc, remaining: remaining - 1 };
+    m.services = [...services];
+    void input.bookingRef;
+    void input.occurredAt;
+    void input.durationMin;
+    void input.serviceId;
+    return { ...m, services: [...services] };
+  }
+
+  async restoreSpaVisit(
+    externalId: string,
+    input: { bookingRef: string },
+  ) {
+    const entry = Object.values(MOCK_USERS).find(
+      (u) => u.profile.externalId === externalId,
+    );
+    if (!entry?.membership) {
+      throw Object.assign(new Error('Membership not found'), { status: 404 });
+    }
+    void input.bookingRef;
+    return { ...entry.membership };
+  }
+
+  async getSpaVisitStatus(
+    _externalId: string,
+    input: { bookingRef: string },
+  ) {
+    void input.bookingRef;
+    return { found: true, cancelled: false, posted: true };
+  }
+
+  async sellSpaService(
+    externalId: string,
+    input: {
+      serviceName: string;
+      serviceId?: string;
+      bookingRef: string;
+      occurredAt: string;
+      priceMinor: number;
+      currency?: string;
+      durationMin?: number;
+    },
+  ) {
+    const entry = Object.values(MOCK_USERS).find(
+      (u) => u.profile.externalId === externalId,
+    );
+    if (!entry?.membership) {
+      throw Object.assign(new Error('Membership not found'), { status: 404 });
+    }
+    const m = entry.membership;
+    const price = (input.priceMinor ?? 0) / 100;
+    m.debtAmount = (m.debtAmount ?? 0) + price;
+    if (input.currency) m.currency = input.currency;
+    void input.serviceName;
+    void input.bookingRef;
+    void input.occurredAt;
+    void input.serviceId;
+    void input.durationMin;
+    return { ...m };
+  }
+
   async getVisits(externalId: string, period?: VisitPeriod) {
     const entry = Object.values(MOCK_USERS).find(
       (u) => u.profile.externalId === externalId,

@@ -30,8 +30,8 @@ export class CreateStaffDto {
   @MinLength(6)
   password!: string;
 
-  @IsIn(['ADMIN', 'TRAINER'])
-  role!: 'ADMIN' | 'TRAINER';
+  @IsIn(['ADMIN', 'TRAINER', 'SPECIALIST'])
+  role!: 'ADMIN' | 'TRAINER' | 'SPECIALIST';
 }
 
 export class UpdateStaffDto {

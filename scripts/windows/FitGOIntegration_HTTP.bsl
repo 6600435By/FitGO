@@ -6,19 +6,25 @@
 //   GET  /v1/health
 //   GET  /v1/client
 //   GET  /v1/membership
-//   POST /v1/membership/freeze  → обработчик FreezePOST
+//   POST /v1/membership/freeze           → обработчик FreezePOST
+//   POST /v1/membership/consume-service  → обработчик ConsumeServicePOST
+//   POST /v1/spa/service-sale            → обработчик SpaSalePOST
+//   POST /v1/spa/cleanup-broken-visits   → обработчик CleanupBrokenSpaVisitsPOST
 //   GET  /v1/visits
 //   GET  /v1/card
 //
-// В конфигураторе:
-//   Имя шаблона: freeze
-//   Шаблон:      /v1/membership/freeze   (без /v1 приложение метод не найдёт: Nest ходит на .../hs/fitgo/v1)
-//   Метод POST → Обработчик: FreezePOST
+// В конфигураторе (пример freeze; consume/sale — аналогично):
+//   Имя шаблона: freeze | consume-service | spa-service-sale | cleanup-broken-visits
+//   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
+//                | /v1/spa/cleanup-broken-visits
+//                (без /v1 приложение метод не найдёт: Nest ходит на .../hs/fitgo/v1)
+//   Метод POST → Обработчик: FreezePOST | ConsumeServicePOST | SpaSalePOST | CleanupBrokenSpaVisitsPOST
 //
-// У расширения снять флаг «Защита от опасных действий»: проведение документа заморозки
+// У расширения снять флаг «Защита от опасных действий»: проведение документов
 // создаёт COM-объект WinHttp (рассылки), иначе в HTTP-сервисе будет 500 «Предупреждение безопасности».
 //
 // Вставить целиком в модуль HTTP-сервиса FitGOIntegration в расширении.
+// Пошаговая настройка: FitGOIntegration_SPA_SETUP.md
 
 Функция HealthGET(Запрос)
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Новый Структура("status", "ok"));
@@ -127,6 +133,303 @@
     КонецЕсли;
 
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Результат.membership);
+КонецФункции
+
+Функция ConsumeServicePOST(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    ТелоСтрока = Запрос.ПолучитьТелоКакСтроку();
+    Чтение = Новый ЧтениеJSON;
+    Чтение.УстановитьСтроку(ТелоСтрока);
+    Данные = Неопределено;
+    Попытка
+        Данные = ПрочитатьJSON(Чтение);
+    Исключение
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "Invalid JSON body");
+    КонецПопытки;
+    Чтение.Закрыть();
+
+    Если ТипЗнч(Данные) <> Тип("Структура") Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "JSON object required");
+    КонецЕсли;
+
+    ExternalId = "";
+    Phone = "";
+    ServiceName = "";
+    BookingRef = "";
+    OccurredAt = Неопределено;
+    DurationMin = 0;
+    EmployeeName = "";
+    EmployeeCode = "";
+    Если Данные.Свойство("externalId") Тогда
+        ExternalId = СокрЛП(Строка(Данные.externalId));
+    КонецЕсли;
+    Если Данные.Свойство("phone") Тогда
+        Phone = СокрЛП(Строка(Данные.phone));
+    КонецЕсли;
+    Если Данные.Свойство("serviceName") Тогда
+        ServiceName = СокрЛП(Строка(Данные.serviceName));
+    КонецЕсли;
+    Если Данные.Свойство("bookingRef") Тогда
+        BookingRef = СокрЛП(Строка(Данные.bookingRef));
+    КонецЕсли;
+    Если Данные.Свойство("occurredAt") И ЗначениеЗаполнено(Данные.occurredAt) Тогда
+        Попытка
+            OccurredAt = ПрочитатьДатуJSON(Строка(Данные.occurredAt), ФорматДатыJSON.ISO);
+        Исключение
+            Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "occurredAt must be ISO datetime");
+        КонецПопытки;
+    КонецЕсли;
+    Если Данные.Свойство("durationMin") Тогда
+        Попытка
+            DurationMin = Число(Данные.durationMin);
+        Исключение
+            DurationMin = 0;
+        КонецПопытки;
+    КонецЕсли;
+    Если Данные.Свойство("employeeName") Тогда
+        EmployeeName = СокрЛП(Строка(Данные.employeeName));
+    КонецЕсли;
+    Если Данные.Свойство("employeeCode") Тогда
+        EmployeeCode = СокрЛП(Строка(Данные.employeeCode));
+    КонецЕсли;
+
+    Если ПустаяСтрока(ServiceName) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "serviceName required");
+    КонецЕсли;
+    Если ПустаяСтрока(BookingRef) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "bookingRef required");
+    КонецЕсли;
+
+    // Статус SPA-визита по bookingRef (синхронизация отмен админом в 1С → FitGO)
+    Если ServiceName = "__VISIT_STATUS__" Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(
+            200, FitGOIntegrationКлиенты.СтатусFitGOSpaЗанятияJSON(BookingRef));
+    КонецЕсли;
+
+    Контрагент = Неопределено;
+    Если НЕ ПустаяСтрока(ExternalId) Тогда
+        Контрагент = FitGOIntegrationКлиенты.НайтиКонтрагентаПоВнешнемуИд(ExternalId);
+    КонецЕсли;
+    Если Контрагент = Неопределено И НЕ ПустаяСтрока(Phone) Тогда
+        Контрагент = FitGOIntegrationКлиенты.НайтиКонтрагентаПоТелефону(Phone);
+    КонецЕсли;
+    Если Контрагент = Неопределено Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(404, "Client not found");
+    КонецЕсли;
+
+    // Отмена SPA-записи: откат «Занятие» по bookingRef (без нового HTTP-шаблона).
+    // Тело: serviceName="__RESTORE__", bookingRef="<id записи FitGO>"
+    Если ServiceName = "__RESTORE__" Тогда
+        Если ПустаяСтрока(BookingRef) Тогда
+            Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "bookingRef required");
+        КонецЕсли;
+        РезультатВосст = FitGOIntegrationКлиенты.ОтменитьFitGOSpaЗанятие(Контрагент, BookingRef);
+        Если НЕ РезультатВосст.ok Тогда
+            КодВ = 400;
+            Если СтрНайти(ВРег(РезультатВосст.error), "NOT FOUND") > 0
+                ИЛИ СтрНайти(ВРег(РезультатВосст.error), "НЕ НАЙД") > 0 Тогда
+                КодВ = 404;
+            КонецЕсли;
+            Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(КодВ, РезультатВосст.error);
+        КонецЕсли;
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, РезультатВосст.membership);
+    КонецЕсли;
+
+    Результат = FitGOIntegrationКлиенты.СписатьУслугуЧленства(
+        Контрагент, ServiceName, BookingRef, OccurredAt, DurationMin, EmployeeName, EmployeeCode);
+    Если НЕ Результат.ok Тогда
+        Код = 400;
+        Сообщение = Результат.error;
+        Если СтрНайти(ВРег(Сообщение), "NOT FOUND") > 0
+            ИЛИ СтрНайти(ВРег(Сообщение), "НЕ НАЙД") > 0 Тогда
+            Код = 404;
+        ИначеЕсли СтрНайти(ВРег(Сообщение), "NO QUOTA") > 0
+            ИЛИ СтрНайти(ВРег(Сообщение), "НЕТ ОСТАТ") > 0
+            ИЛИ СтрНайти(ВРег(Сообщение), "EXCEED") > 0 Тогда
+            Код = 409;
+        КонецЕсли;
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(Код, Сообщение);
+    КонецЕсли;
+
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Результат.membership);
+КонецФункции
+
+Функция SpaSalePOST(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    ТелоСтрока = Запрос.ПолучитьТелоКакСтроку();
+    Чтение = Новый ЧтениеJSON;
+    Чтение.УстановитьСтроку(ТелоСтрока);
+    Данные = Неопределено;
+    Попытка
+        Данные = ПрочитатьJSON(Чтение);
+    Исключение
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "Invalid JSON body");
+    КонецПопытки;
+    Чтение.Закрыть();
+
+    Если ТипЗнч(Данные) <> Тип("Структура") Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "JSON object required");
+    КонецЕсли;
+
+    ExternalId = "";
+    Phone = "";
+    ServiceName = "";
+    BookingRef = "";
+    OccurredAt = Неопределено;
+    PriceMinor = 0;
+    Currency = "BYN";
+    DurationMin = 0;
+    Если Данные.Свойство("externalId") Тогда
+        ExternalId = СокрЛП(Строка(Данные.externalId));
+    КонецЕсли;
+    Если Данные.Свойство("phone") Тогда
+        Phone = СокрЛП(Строка(Данные.phone));
+    КонецЕсли;
+    Если Данные.Свойство("serviceName") Тогда
+        ServiceName = СокрЛП(Строка(Данные.serviceName));
+    КонецЕсли;
+    Если Данные.Свойство("bookingRef") Тогда
+        BookingRef = СокрЛП(Строка(Данные.bookingRef));
+    КонецЕсли;
+    Если Данные.Свойство("occurredAt") И ЗначениеЗаполнено(Данные.occurredAt) Тогда
+        Попытка
+            OccurredAt = ПрочитатьДатуJSON(Строка(Данные.occurredAt), ФорматДатыJSON.ISO);
+        Исключение
+            Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "occurredAt must be ISO datetime");
+        КонецПопытки;
+    КонецЕсли;
+    Если Данные.Свойство("priceMinor") Тогда
+        Попытка
+            PriceMinor = Число(Данные.priceMinor);
+        Исключение
+            Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "priceMinor must be a number");
+        КонецПопытки;
+    КонецЕсли;
+    Если Данные.Свойство("currency") Тогда
+        Currency = СокрЛП(Строка(Данные.currency));
+    КонецЕсли;
+    Если Данные.Свойство("durationMin") Тогда
+        Попытка
+            DurationMin = Число(Данные.durationMin);
+        Исключение
+            DurationMin = 0;
+        КонецПопытки;
+    КонецЕсли;
+    EmployeeName = "";
+    EmployeeCode = "";
+    Если Данные.Свойство("employeeName") Тогда
+        EmployeeName = СокрЛП(Строка(Данные.employeeName));
+    КонецЕсли;
+    Если Данные.Свойство("employeeCode") Тогда
+        EmployeeCode = СокрЛП(Строка(Данные.employeeCode));
+    КонецЕсли;
+
+    // Диагностика/сервис через опубликованный шаблон (без новых шаблонов).
+    // serviceName = "__DUMP_SALON__" → дамп салонных «Занятий» (реальные vs FitGO)
+    // serviceName = "__CLEANUP_BROKEN__" → прямое удаление FitGO SPA с пустым СоставЗанятия
+    Если ServiceName = "__DUMP_SALON__" ИЛИ ServiceName = "__CLEANUP_BROKEN__" Тогда
+        КонтрагентСервис = Неопределено;
+        Если НЕ ПустаяСтрока(ExternalId) Тогда
+            КонтрагентСервис = FitGOIntegrationКлиенты.НайтиКонтрагентаПоВнешнемуИд(ExternalId);
+        КонецЕсли;
+        Если КонтрагентСервис = Неопределено И НЕ ПустаяСтрока(Phone) Тогда
+            КонтрагентСервис = FitGOIntegrationКлиенты.НайтиКонтрагентаПоТелефону(Phone);
+        КонецЕсли;
+        Если ServiceName = "__DUMP_SALON__" Тогда
+            Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(
+                200, FitGOIntegrationКлиенты.ДампСалонныхЗанятийJSON(КонтрагентСервис));
+        Иначе
+            Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(
+                200, FitGOIntegrationКлиенты.ОчиститьБитыеFitGOSpaЗанятия(КонтрагентСервис));
+        КонецЕсли;
+    КонецЕсли;
+
+    Если ПустаяСтрока(ServiceName) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "serviceName required");
+    КонецЕсли;
+    Если ПустаяСтрока(BookingRef) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "bookingRef required");
+    КонецЕсли;
+    Если PriceMinor < 0 Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "priceMinor must be >= 0");
+    КонецЕсли;
+
+    Контрагент = Неопределено;
+    Если НЕ ПустаяСтрока(ExternalId) Тогда
+        Контрагент = FitGOIntegrationКлиенты.НайтиКонтрагентаПоВнешнемуИд(ExternalId);
+    КонецЕсли;
+    Если Контрагент = Неопределено И НЕ ПустаяСтрока(Phone) Тогда
+        Контрагент = FitGOIntegrationКлиенты.НайтиКонтрагентаПоТелефону(Phone);
+    КонецЕсли;
+    Если Контрагент = Неопределено Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(404, "Client not found");
+    КонецЕсли;
+
+    Результат = FitGOIntegrationКлиенты.ПродатьСпаУслугу(
+        Контрагент, ServiceName, BookingRef, OccurredAt, PriceMinor, Currency, DurationMin,
+        EmployeeName, EmployeeCode);
+    Если НЕ Результат.ok Тогда
+        Код = 400;
+        Сообщение = Результат.error;
+        Если СтрНайти(ВРег(Сообщение), "NOT FOUND") > 0
+            ИЛИ СтрНайти(ВРег(Сообщение), "НЕ НАЙД") > 0 Тогда
+            Код = 404;
+        КонецЕсли;
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(Код, Сообщение);
+    КонецЕсли;
+
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Результат.membership);
+КонецФункции
+
+// Пометить на удаление FitGO SPA «Занятие» с пустым СоставЗанятия (форма салона падает на [0]).
+// Шаблон: POST /v1/spa/cleanup-broken-visits  тело: {"externalId":"..."} или {"phone":"..."} или {}
+Функция CleanupBrokenSpaVisitsPOST(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    Контрагент = Неопределено;
+    ТелоСтрока = Запрос.ПолучитьТелоКакСтроку();
+    Если ЗначениеЗаполнено(ТелоСтрока) Тогда
+        Чтение = Новый ЧтениеJSON;
+        Чтение.УстановитьСтроку(ТелоСтрока);
+        Данные = Неопределено;
+        Попытка
+            Данные = ПрочитатьJSON(Чтение);
+        Исключение
+            Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "Invalid JSON body");
+        КонецПопытки;
+        Чтение.Закрыть();
+        Если ТипЗнч(Данные) = Тип("Структура") Тогда
+            ExternalId = "";
+            Phone = "";
+            Если Данные.Свойство("externalId") Тогда
+                ExternalId = СокрЛП(Строка(Данные.externalId));
+            КонецЕсли;
+            Если Данные.Свойство("phone") Тогда
+                Phone = СокрЛП(Строка(Данные.phone));
+            КонецЕсли;
+            Если НЕ ПустаяСтрока(ExternalId) Тогда
+                Контрагент = FitGOIntegrationКлиенты.НайтиКонтрагентаПоВнешнемуИд(ExternalId);
+            КонецЕсли;
+            Если Контрагент = Неопределено И НЕ ПустаяСтрока(Phone) Тогда
+                Контрагент = FitGOIntegrationКлиенты.НайтиКонтрагентаПоТелефону(Phone);
+            КонецЕсли;
+        КонецЕсли;
+    КонецЕсли;
+
+    Результат = FitGOIntegrationКлиенты.ОчиститьБитыеFitGOSpaЗанятия(Контрагент);
+    Если НЕ Результат.ok Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, Результат.error);
+    КонецЕсли;
+
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Результат);
 КонецФункции
 
 Функция VisitsGET(Запрос)

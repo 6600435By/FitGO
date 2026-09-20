@@ -72,10 +72,11 @@ export function classifyVisitKind(input: {
   if (!title) return basis === 'service' ? 'UNKNOWN' : 'GYM';
 
   if (
-    /персонал|personal|pt\b|индивидуал/.test(title) ||
-    title.includes('персональная')
+    /состав[ае]?\s*тела|inbody|биоимпеданс|body\s*comp|анализ\s*состав/.test(
+      title,
+    )
   ) {
-    return 'PT';
+    return 'SPA_BODYCOMP';
   }
   if (
     /массаж|massage|spa\b/.test(title) &&
@@ -83,14 +84,19 @@ export function classifyVisitKind(input: {
   ) {
     return 'SPA_MASSAGE';
   }
-  if (/состав\s*тела|inbody|биоимпеданс|body\s*comp/.test(title)) {
-    return 'SPA_BODYCOMP';
+  if (
+    /персонал|personal|индивидуал|пт\s*с\s*тренер|подарочн.*(?:пт|тренир)|(?:^|[\s(])pt(?:[\s)]|$)/.test(
+      title,
+    ) ||
+    title.includes('персональная')
+  ) {
+    return 'PT';
   }
   if (/соляр|solarium|tanning/.test(title)) {
     return 'SOLARIUM';
   }
   if (
-    /йога|yoga|pilates|пилатес|spin|сайкл|aerobics|аэробик|зумба|zumba|crossfit|кроссфит|функционал|бассейн|swim|танц|dance|stretch|стретч|группа|group|занятие/.test(
+    /йога|yoga|pilates|пилатес|spin|сайкл|aerobics|аэробик|зумба|zumba|crossfit|кроссфит|функционал|бассейн|swim|танц|dance|stretch|стретч|групп|group|занятие/.test(
       title,
     )
   ) {

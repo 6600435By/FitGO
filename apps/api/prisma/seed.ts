@@ -55,6 +55,15 @@ const DEMO_USERS = [
     roles: [Role.TRAINER],
   },
   {
+    email: 'specialist@demo.fitgo',
+    password: 'specialist123',
+    firstName: 'Анна',
+    lastName: 'Спасова',
+    phone: '+375297771122',
+    externalId: '1c-specialist-001',
+    roles: [Role.SPECIALIST],
+  },
+  {
     email: 'admin@demo.fitgo',
     password: 'admin123',
     firstName: 'Дмитрий',
@@ -121,6 +130,7 @@ async function main() {
         trainer_calendar: true,
         pt_sheet: true,
         session_timer: true,
+        spa_booking: true,
         club_admin: true,
         messaging: true,
         engagement: true,
@@ -352,6 +362,72 @@ async function main() {
       }
     }
 
+    if (demoUser.roles.some((r) => r === Role.SPECIALIST)) {
+      await prisma.specialistWorkSlot.deleteMany({
+        where: { specialistId: user.id },
+      });
+      await prisma.specialistWorkSlot.createMany({
+        data: [
+          { specialistId: user.id, dayOfWeek: 1, startTime: '10:00', endTime: '20:00' },
+          { specialistId: user.id, dayOfWeek: 2, startTime: '10:00', endTime: '20:00' },
+          { specialistId: user.id, dayOfWeek: 3, startTime: '10:00', endTime: '20:00' },
+          { specialistId: user.id, dayOfWeek: 4, startTime: '10:00', endTime: '20:00' },
+          { specialistId: user.id, dayOfWeek: 5, startTime: '10:00', endTime: '20:00' },
+          { specialistId: user.id, dayOfWeek: 6, startTime: '10:00', endTime: '18:00' },
+        ],
+      });
+
+      const periodStart = new Date();
+      periodStart.setHours(0, 0, 0, 0);
+      const periodEnd = new Date(periodStart);
+      periodEnd.setDate(periodEnd.getDate() + 28);
+      periodEnd.setHours(23, 59, 59, 999);
+
+      await prisma.specialistAvailabilityBlock.deleteMany({
+        where: { specialistId: user.id },
+      });
+
+      const template = await prisma.specialistWorkSlot.findMany({
+        where: { specialistId: user.id },
+      });
+      const blocks: Array<{
+        specialistId: string;
+        startAt: Date;
+        endAt: Date;
+        status: 'PUBLISHED';
+      }> = [];
+      const cursor = new Date(periodStart);
+      while (cursor <= periodEnd) {
+        for (const slot of template) {
+          if (slot.dayOfWeek !== cursor.getDay()) continue;
+          const [sh, sm] = slot.startTime.split(':').map(Number);
+          const [eh, em] = slot.endTime.split(':').map(Number);
+          const startAt = new Date(cursor);
+          startAt.setHours(sh, sm, 0, 0);
+          const endAt = new Date(cursor);
+          endAt.setHours(eh, em, 0, 0);
+          blocks.push({
+            specialistId: user.id,
+            startAt,
+            endAt,
+            status: 'PUBLISHED',
+          });
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+
+      if (blocks.length > 0) {
+        await prisma.specialistAvailabilityBlock.createMany({ data: blocks });
+        await prisma.specialistSchedulePublication.create({
+          data: {
+            specialistId: user.id,
+            periodStart,
+            periodEnd,
+          },
+        });
+      }
+    }
+
     if (
       'withAllAdminPermissions' in demoUser &&
       demoUser.withAllAdminPermissions
@@ -363,6 +439,122 @@ async function main() {
           },
           update: {},
           create: { userId: user.id, permission },
+        });
+      }
+    }
+  }
+
+  // Spa catalog (FFS prices from https://ffs.by/ceny-uslug/spa-uslugi/)
+  const spaCatalog: Array<{
+    name: string;
+    kind: 'MASSAGE' | 'BODY_COMPOSITION' | 'WRAP';
+    durationMin: number;
+    priceMinor: number;
+  }> = [
+    { name: 'Классический спа-массаж 25 мин', kind: 'MASSAGE', durationMin: 25, priceMinor: 5000 },
+    { name: 'Классический спа-массаж 40 мин', kind: 'MASSAGE', durationMin: 40, priceMinor: 6500 },
+    { name: 'Классический спа-массаж 50 мин', kind: 'MASSAGE', durationMin: 50, priceMinor: 7500 },
+    { name: 'Классический спа-массаж 80 мин', kind: 'MASSAGE', durationMin: 80, priceMinor: 11500 },
+    { name: 'Расслабляющий спа-массаж 50 мин', kind: 'MASSAGE', durationMin: 50, priceMinor: 10000 },
+    { name: 'Расслабляющий спа-массаж 80 мин', kind: 'MASSAGE', durationMin: 80, priceMinor: 12000 },
+    { name: 'Коррекция фигуры 25 мин', kind: 'MASSAGE', durationMin: 25, priceMinor: 6000 },
+    { name: 'Коррекция фигуры 40 мин', kind: 'MASSAGE', durationMin: 40, priceMinor: 7500 },
+    { name: 'Коррекция фигуры 50 мин', kind: 'MASSAGE', durationMin: 50, priceMinor: 9000 },
+    { name: 'Медовая коррекция 40 мин', kind: 'MASSAGE', durationMin: 40, priceMinor: 8500 },
+    { name: 'Медовая коррекция 50 мин', kind: 'MASSAGE', durationMin: 50, priceMinor: 9500 },
+    { name: 'Спортивный спа-массаж 40 мин', kind: 'MASSAGE', durationMin: 40, priceMinor: 8000 },
+    { name: 'Спортивный спа-массаж 50 мин', kind: 'MASSAGE', durationMin: 50, priceMinor: 10000 },
+    { name: 'Бандажирование 50 мин', kind: 'WRAP', durationMin: 50, priceMinor: 11000 },
+    { name: 'Бандажирование + руки и плечи 60 мин', kind: 'WRAP', durationMin: 60, priceMinor: 12000 },
+    { name: 'Бандажирование + спа-массаж', kind: 'WRAP', durationMin: 80, priceMinor: 15000 },
+    { name: 'Бандажирование + руки и плечи + спа-массаж', kind: 'WRAP', durationMin: 100, priceMinor: 17000 },
+    { name: 'Анализ состава тела (InBody)', kind: 'BODY_COMPOSITION', durationMin: 20, priceMinor: 3500 },
+  ];
+
+  const existingSpa = await prisma.spaService.findMany({
+    where: { clubId: club.id },
+    select: { id: true, name: true },
+  });
+  if (existingSpa.length === 0) {
+    await prisma.spaService.createMany({
+      data: spaCatalog.map((s) => ({
+        clubId: club.id,
+        name: s.name,
+        kind: s.kind,
+        durationMin: s.durationMin,
+        bufferMin: 5,
+        priceMinor: s.priceMinor,
+        currency: 'BYN',
+        active: true,
+      })),
+    });
+  }
+
+  const demoSpecialist = await prisma.user.findUnique({
+    where: { email: 'specialist@demo.fitgo' },
+  });
+  const spaServices = await prisma.spaService.findMany({
+    where: { clubId: club.id, active: true },
+  });
+
+  if (demoSpecialist && spaServices.length > 0) {
+    await prisma.specialistService.deleteMany({
+      where: { specialistId: demoSpecialist.id },
+    });
+    await prisma.specialistService.createMany({
+      data: spaServices.map((s) => ({
+        specialistId: demoSpecialist.id,
+        serviceId: s.id,
+      })),
+    });
+
+    const classicServices = spaServices.filter(
+      (s) =>
+        s.name.startsWith('Классический спа-массаж') &&
+        s.durationMin < 80,
+    );
+    // Exact names from live FitGO GET /membership (VIP Куделко, 2026-09-17)
+    const membershipServiceName = 'Массаж классический общий';
+    await prisma.spaQuotaRule.deleteMany({
+      where: {
+        clubId: club.id,
+        membershipServiceName: {
+          in: [membershipServiceName, 'Массаж классический'],
+        },
+      },
+    });
+    if (classicServices.length > 0) {
+      const rule = await prisma.spaQuotaRule.create({
+        data: {
+          clubId: club.id,
+          membershipServiceName,
+          services: {
+            create: classicServices.map((s) => ({ serviceId: s.id })),
+          },
+          specialists: {
+            create: [{ specialistId: demoSpecialist.id }],
+          },
+        },
+      });
+      void rule;
+
+      const bodycomp = spaServices.find((s) => s.kind === 'BODY_COMPOSITION');
+      if (bodycomp) {
+        await prisma.spaQuotaRule.deleteMany({
+          where: {
+            clubId: club.id,
+            membershipServiceName: 'Анализ состава тела',
+          },
+        });
+        await prisma.spaQuotaRule.create({
+          data: {
+            clubId: club.id,
+            membershipServiceName: 'Анализ состава тела',
+            services: { create: [{ serviceId: bodycomp.id }] },
+            specialists: {
+              create: [{ specialistId: demoSpecialist.id }],
+            },
+          },
         });
       }
     }
@@ -462,7 +654,7 @@ async function main() {
     });
   }
 
-  console.log('Seed completed: demo club, users, badges, gamification data');
+  console.log('Seed completed: demo club, users, spa catalog, badges, gamification data');
 }
 
 main()

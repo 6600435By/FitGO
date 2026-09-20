@@ -13,7 +13,7 @@ const ALL_NAV: Array<{
   href: string;
   label: string;
   permission?: AdminPermission;
-  module?: 'messaging' | 'club_admin';
+  module?: 'messaging' | 'club_admin' | 'spa_booking';
 }> = [
   { href: '/admin', label: 'Дашборд', permission: AdminPermission.DASHBOARD_VIEW },
   {
@@ -26,6 +26,12 @@ const ALL_NAV: Array<{
     label: 'Сообщения',
     permission: AdminPermission.NOTIFICATIONS_SEND,
     module: 'messaging',
+  },
+  {
+    href: '/admin/spa',
+    label: 'Спа',
+    permission: AdminPermission.CLIENTS_VIEW,
+    module: 'spa_booking' as const,
   },
   { href: '/admin/at-risk', label: 'Риск', permission: AdminPermission.AT_RISK_VIEW },
   { href: '/admin/funnel', label: 'Воронка', permission: AdminPermission.FUNNEL_VIEW },

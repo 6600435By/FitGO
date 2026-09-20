@@ -4,6 +4,7 @@ import { EngagementModule } from '../engagement/engagement.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { OsmiModule } from '../osmi/osmi.module';
 import { PersonalTrainingModule } from '../personal-training/personal-training.module';
+import { SpaBookingModule } from '../spa-booking/spa-booking.module';
 import { TrainerRosterModule } from '../trainer-roster/trainer-roster.module';
 import { WaitlistModule } from '../waitlist/waitlist.module';
 import { ClientController } from './client.controller';
@@ -13,6 +14,7 @@ import { ClientProfileService } from './client-profile.service';
 @Module({
   imports: [
     PersonalTrainingModule,
+    SpaBookingModule,
     NotificationsModule,
     WaitlistModule,
     OsmiModule,

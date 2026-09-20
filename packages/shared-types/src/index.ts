@@ -6,6 +6,7 @@ import type {
 export enum UserRole {
   CLIENT = 'CLIENT',
   TRAINER = 'TRAINER',
+  SPECIALIST = 'SPECIALIST',
   ADMIN = 'ADMIN',
   SUPER_ADMIN = 'SUPER_ADMIN',
 }
@@ -39,6 +40,7 @@ export enum MembershipStatus {
 export enum SessionType {
   GROUP = 'GROUP',
   PERSONAL = 'PERSONAL',
+  SPA = 'SPA',
 }
 
 export interface Club {
@@ -109,6 +111,7 @@ export type ProductModuleKey =
   | 'trainer_calendar'
   | 'pt_sheet'
   | 'session_timer'
+  | 'spa_booking'
   | 'club_admin'
   | 'messaging'
   | 'engagement'
@@ -186,6 +189,17 @@ export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
     description: 'Workout timer на тренировке',
     defaultEnabled: true,
     surfaces: [],
+  },
+  {
+    key: 'spa_booking',
+    label: 'Спа-запись',
+    description: 'Массаж, анализ состава тела, расписание специалистов',
+    defaultEnabled: true,
+    surfaces: [
+      '/specialist/schedule',
+      '/client/schedule/spa',
+      '/admin/spa',
+    ],
   },
   {
     key: 'club_admin',
@@ -431,6 +445,9 @@ export interface Booking {
   source?: '1c' | 'fitgo';
   origin?: PersonalBookingOrigin;
   lifecycle?: 'UPCOMING' | 'COMPLETED' | 'CANCELLED' | 'AWAITING_CONFIRMATION';
+  /** Кто отменил (для SPA / истории) */
+  cancelledBy?: SpaCancelledBy;
+  cancelledByLabel?: string;
 }
 
 export interface TrainerSummary {
@@ -922,3 +939,149 @@ export const ADMIN_PERMISSION_PRESETS: Record<
     ],
   },
 };
+
+// ─── Spa booking ─────────────────────────────────────────────────────────────
+
+export type SpaServiceKind = 'MASSAGE' | 'BODY_COMPOSITION' | 'WRAP';
+
+export type SpaPaymentType = 'QUOTA' | 'PAID';
+
+export type SpaBookingOrigin =
+  | 'CLIENT_BOOKED'
+  | 'SPECIALIST_ASSIGNED'
+  | 'ADMIN_ASSIGNED';
+
+export type SpaBookingStatus = 'CONFIRMED' | 'CANCELLED' | 'COMPLETED';
+
+export type SpaCancelledBy = 'CLIENT' | 'SPECIALIST' | 'ADMIN' | 'CRM_ADMIN';
+
+export interface SpaService {
+  id: string;
+  clubId: string;
+  name: string;
+  kind: SpaServiceKind;
+  durationMin: number;
+  bufferMin: number;
+  priceMinor: number;
+  currency: string;
+  active: boolean;
+}
+
+export interface SpaServiceEligibility {
+  service: SpaService;
+  /** Can book via membership quota */
+  quotaAvailable: boolean;
+  /** Remaining quota for matched membership service name (if any) */
+  quotaRemaining?: number;
+  membershipServiceName?: string;
+  /** Can book as paid */
+  paidAvailable: boolean;
+}
+
+export interface SpaQuotaRule {
+  id: string;
+  clubId: string;
+  /** Exact name of membership.services[] entry from 1C */
+  membershipServiceName: string;
+  allowedServiceIds: string[];
+  allowedSpecialistIds: string[];
+}
+
+export interface SpaSpecialistSummary {
+  id: string;
+  firstName: string;
+  lastName: string;
+  hasSchedule: boolean;
+  serviceIds: string[];
+}
+
+export interface SpaBookingSlot {
+  startAt: string;
+  endAt: string;
+}
+
+export interface SpaBooking {
+  id: string;
+  clubId: string;
+  specialistId: string;
+  specialistName: string;
+  clientId: string;
+  clientName: string;
+  serviceId: string;
+  serviceName: string;
+  startAt: string;
+  endAt: string;
+  status: SpaBookingStatus;
+  origin: SpaBookingOrigin;
+  paymentType: SpaPaymentType;
+  priceMinor?: number;
+  membershipServiceName?: string;
+  consumedInCrmAt?: string;
+  cancelledBy?: SpaCancelledBy;
+  cancelledAt?: string;
+}
+
+export interface ConsumeMembershipServiceRequest {
+  serviceName?: string;
+  serviceId?: string;
+  bookingRef: string;
+  occurredAt: string;
+  durationMin?: number;
+}
+
+export interface SellSpaServiceRequest {
+  serviceName: string;
+  serviceId?: string;
+  bookingRef: string;
+  occurredAt: string;
+  priceMinor: number;
+  currency?: string;
+  durationMin?: number;
+}
+
+export type SpecialistCalendarEventKind =
+  | 'SPA'
+  | 'OPEN_SLOT'
+  | 'DRAFT_SLOT';
+
+export interface SpecialistCalendarEvent {
+  id: string;
+  kind: SpecialistCalendarEventKind;
+  title: string;
+  startAt: string;
+  endAt: string;
+  clientId?: string;
+  clientName?: string;
+  bookingId?: string;
+  serviceId?: string;
+  serviceName?: string;
+  origin?: SpaBookingOrigin;
+  paymentType?: SpaPaymentType;
+  available?: boolean;
+}
+
+export interface SpecialistWorkSlotInput {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+}
+
+export interface SpecialistAvailabilityBlock {
+  id: string;
+  startAt: string;
+  endAt: string;
+  status: 'DRAFT' | 'PUBLISHED';
+}
+
+export interface SpecialistSchedulePublicationInfo {
+  periodStart: string;
+  periodEnd: string;
+  publishedAt: string;
+}
+
+export interface SpecialistCalendarResponse {
+  events: SpecialistCalendarEvent[];
+  availabilityBlocks: SpecialistAvailabilityBlock[];
+  draftBlockCount: number;
+  lastPublication?: SpecialistSchedulePublicationInfo;
+}

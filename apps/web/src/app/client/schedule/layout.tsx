@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 const TABS = [
   { href: '/client/schedule', label: 'Групповые', exact: true },
   { href: '/client/schedule/personal', label: 'Персональные', exact: false },
+  { href: '/client/schedule/spa', label: 'Спа-кабинет', exact: false },
 ];
 
 export default function ClientScheduleLayout({

@@ -484,14 +484,18 @@ export class NotificationsService implements OnModuleInit {
     clientPhone?: string;
     sessionTitle: string;
     startAt?: Date | null;
-    sessionType: 'group' | 'personal';
+    sessionType: 'group' | 'personal' | 'spa';
     trainerId?: string;
     trainerName?: string | null;
   }) {
     const when = this.formatCancellationWhen(params.startAt ?? null);
     const phoneLine = params.clientPhone ? ` (${params.clientPhone})` : '';
     const sessionLabel =
-      params.sessionType === 'group' ? 'групповое' : 'персональное';
+      params.sessionType === 'group'
+        ? 'групповое'
+        : params.sessionType === 'spa'
+          ? 'спа'
+          : 'персональное';
     const body = `${params.clientName}${phoneLine} отменил(а) запись на ${sessionLabel} «${params.sessionTitle}»${when ? ` — ${when}` : ''}.`;
 
     const admins = await this.prisma.user.findMany({
@@ -525,17 +529,22 @@ export class NotificationsService implements OnModuleInit {
 
     if (!trainerId) return;
 
-    const isPersonal = params.sessionType === 'personal';
+    const title =
+      params.sessionType === 'personal'
+        ? 'Отмена персональной тренировки'
+        : params.sessionType === 'spa'
+          ? 'Отмена записи в спа-кабинет'
+          : 'Отмена группового занятия';
+
     await this.createNotification({
       userId: trainerId,
-      title: isPersonal
-        ? 'Отмена персональной тренировки'
-        : 'Отмена группового занятия',
+      title,
       body,
       senderId: params.clientId,
-      status: isPersonal
-        ? NotificationStatus.PENDING
-        : NotificationStatus.COMPLETED,
+      status:
+        params.sessionType === 'group'
+          ? NotificationStatus.COMPLETED
+          : NotificationStatus.PENDING,
     });
   }
 

@@ -59,6 +59,59 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     return this.fitgo.freezeMembership(externalId, days, fromDate);
   }
 
+  consumeMembershipService(
+    externalId: string,
+    input: {
+      serviceName?: string;
+      serviceId?: string;
+      bookingRef: string;
+      occurredAt: string;
+      durationMin?: number;
+      employeeName?: string;
+      employeeCode?: string;
+    },
+  ): Promise<Membership> {
+    return this.fitgo.consumeMembershipService(externalId, input);
+  }
+
+  restoreSpaVisit(
+    externalId: string,
+    input: { bookingRef: string },
+  ): Promise<Membership> {
+    return this.fitgo.restoreSpaVisit(externalId, input);
+  }
+
+  getSpaVisitStatus(
+    externalId: string,
+    input: { bookingRef: string },
+  ): Promise<{
+    found: boolean;
+    cancelled: boolean;
+    posted?: boolean;
+    deletionMark?: boolean;
+    status?: string;
+    num?: string;
+  }> {
+    return this.fitgo.getSpaVisitStatus(externalId, input);
+  }
+
+  sellSpaService(
+    externalId: string,
+    input: {
+      serviceName: string;
+      serviceId?: string;
+      bookingRef: string;
+      occurredAt: string;
+      priceMinor: number;
+      currency?: string;
+      durationMin?: number;
+      employeeName?: string;
+      employeeCode?: string;
+    },
+  ): Promise<Membership> {
+    return this.fitgo.sellSpaService(externalId, input);
+  }
+
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]> {
     return this.fitgo.getVisits(externalId, period);
   }

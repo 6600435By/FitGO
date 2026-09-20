@@ -1,6 +1,16 @@
 'use client';
 
-import { MembershipStatus, SessionType, type Booking, type GamificationProfile, type Membership, type Visit } from '@fitgo/shared-types';
+import {
+  MembershipStatus,
+  SessionType,
+  classifyVisitKind,
+  type Booking,
+  type GamificationProfile,
+  type Membership,
+  type ProductModuleKey,
+  type Visit,
+  type VisitKind,
+} from '@fitgo/shared-types';
 import { Calendar, CreditCard, ChevronDown, ChevronRight, Dumbbell, ShoppingBag, Trophy } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
@@ -21,6 +31,31 @@ import {
   membershipStatusLabel,
   visitHeadline,
 } from '@/lib/utils';
+
+/** Кнопка «Использовать» у услуги абонемента → куда вести. */
+function membershipServiceAction(
+  serviceName: string,
+  isEnabled: (key: ProductModuleKey) => boolean,
+): { href: string } | null {
+  const kind: VisitKind = classifyVisitKind({
+    title: serviceName,
+    basisType: 'service',
+  });
+  if (kind === 'SPA_MASSAGE' || kind === 'SPA_BODYCOMP') {
+    if (!isEnabled('spa_booking')) return null;
+    return {
+      href: `/client/schedule/spa?service=${encodeURIComponent(serviceName)}`,
+    };
+  }
+  if (kind === 'GROUP') {
+    if (!isEnabled('group_classes')) return null;
+    return { href: '/client/schedule' };
+  }
+  if (kind === 'PT') {
+    return { href: '/client/schedule/personal' };
+  }
+  return null;
+}
 
 function clientWorkoutHref(booking: Booking): string | null {
   if (booking.source === 'fitgo' && booking.type === SessionType.PERSONAL) {
@@ -131,7 +166,11 @@ function ClientHomePageInner() {
       .then((bookings) => {
         if (cancelled) return;
         const upcoming = bookings
-          .filter((b) => new Date(b.startAt) >= new Date())
+          .filter(
+            (b) =>
+              b.lifecycle !== 'CANCELLED' &&
+              new Date(b.startAt) >= new Date(),
+          )
           .sort((a, b) => a.startAt.localeCompare(b.startAt));
         setUpcomingBookings(upcoming.slice(0, 4));
       })
@@ -350,23 +389,41 @@ function ClientHomePageInner() {
 
               {membership.services && membership.services.length > 0 && (
                 <ul className="space-y-1.5 border-t border-slate-800 pt-3">
-                  {membership.services.slice(0, 4).map((service) => (
-                    <li
-                      key={service.name}
-                      className="flex items-center justify-between text-sm"
-                    >
-                      <span className="text-slate-300">{service.name}</span>
-                      <span className="text-slate-400">
-                        {service.unlimited
-                          ? '∞'
-                          : service.remaining !== undefined
-                            ? service.total
-                              ? `${service.remaining}/${service.total}`
-                              : String(service.remaining)
-                            : '—'}
-                      </span>
-                    </li>
-                  ))}
+                  {membership.services.slice(0, 8).map((service) => {
+                    const hasQuota =
+                      service.unlimited || (service.remaining ?? 0) > 0;
+                    const action =
+                      hasQuota
+                        ? membershipServiceAction(service.name, isEnabled)
+                        : null;
+                    return (
+                      <li
+                        key={service.name}
+                        className="flex items-center justify-between gap-2 text-sm"
+                      >
+                        <span className="text-slate-300">{service.name}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-slate-400">
+                            {service.unlimited
+                              ? '∞'
+                              : service.remaining !== undefined
+                                ? service.total
+                                  ? `${service.remaining}/${service.total}`
+                                  : String(service.remaining)
+                                : '—'}
+                          </span>
+                          {action && (
+                            <Link
+                              href={action.href}
+                              className="rounded-lg bg-fitgo-500/20 px-2 py-1 text-xs text-fitgo-300 hover:bg-fitgo-500/30"
+                            >
+                              Использовать
+                            </Link>
+                          )}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>

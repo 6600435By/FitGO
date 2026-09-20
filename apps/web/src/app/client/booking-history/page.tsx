@@ -121,6 +121,9 @@ export default function ClientBookingHistoryPage() {
                   )}
                 </div>
               </div>
+              {booking.lifecycle === 'CANCELLED' && booking.cancelledByLabel && (
+                <p className="text-xs text-slate-500">{booking.cancelledByLabel}</p>
+              )}
             </li>
           ))}
         </ul>

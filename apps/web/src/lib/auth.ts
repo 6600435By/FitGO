@@ -36,5 +36,6 @@ export function getHomePath(roles: UserRole[]): string {
   if (roles.includes(UserRole.SUPER_ADMIN)) return '/super-admin';
   if (roles.includes(UserRole.ADMIN)) return '/admin';
   if (roles.includes(UserRole.TRAINER)) return '/trainer';
+  if (roles.includes(UserRole.SPECIALIST)) return '/specialist/schedule';
   return '/client';
 }
