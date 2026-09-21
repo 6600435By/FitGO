@@ -477,6 +477,25 @@ export class NotificationsService implements OnModuleInit {
     });
   }
 
+  async notifySpaAssigned(params: {
+    clientId: string;
+    specialistId: string;
+    specialistName: string;
+    serviceName: string;
+    startAt: Date;
+  }) {
+    const when = this.formatCancellationWhen(params.startAt);
+    const body = `${params.specialistName} записал(а) вас на «${params.serviceName}»${when ? ` — ${when}` : ''}.`;
+
+    await this.createNotification({
+      userId: params.clientId,
+      title: 'Новая запись в спа',
+      body,
+      senderId: params.specialistId,
+      status: NotificationStatus.PENDING,
+    });
+  }
+
   async notifyBookingCancelled(params: {
     clubId: string;
     clientId: string;

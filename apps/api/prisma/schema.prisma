@@ -212,6 +212,97 @@ enum GroupClassBookingStatus {
   COMPLETED
 }
 
+enum GroupBookingOrigin {
+  CLIENT_BOOKED
+  STAFF_BOOKED
+  ADMIN_BOOKED
+}
+
+/// Dual-gate control for service usage (SPA / PT / group).
+enum ServiceControlLevel {
+  BASE
+  ELEVATED
+}
+
+enum ServicePresenceStatus {
+  PENDING
+  VERIFIED_1C
+  ADMIN_OVERRIDE
+}
+
+enum ServicePerformanceStatus {
+  PENDING
+  CONFIRMED_BY_PERFORMER
+  REJECTED
+}
+
+enum ServiceUsageStatus {
+  BOOKED
+  NO_SHOW
+  ATTENDED
+  CONSUMED
+  CANCELLED
+}
+
+enum ServicePaymentStatus {
+  N_A
+  PENDING_PAYMENT
+  DEBT
+  PAID
+}
+
+/// L0 anti-padding trust for payroll eligibility.
+enum TrustBand {
+  GREEN
+  AMBER
+  RED
+}
+
+enum TrustResolution {
+  NONE
+  RESOLVED
+}
+
+enum GroupClassSessionStatus {
+  OPEN
+  SUBMITTED
+  AUTO_READY
+  NEEDS_ADMIN
+  APPROVED
+  LOCKED
+}
+
+enum GroupSessionBaselineQuality {
+  FULL
+  PARTIAL
+}
+
+enum GroupSessionMemberSource {
+  BASELINE_1C
+  TRAINER_ADDED
+  ADMIN_ADDED
+}
+
+enum GroupSessionMemberAttendance {
+  EXPECTED
+  ATTENDED
+  NO_SHOW
+  REMOVED
+}
+
+enum MotivationRateKind {
+  SPA_SERVICE
+  SPA_KIND
+  PT
+  GROUP
+}
+
+enum MotivationRateType {
+  PERCENT_OF_PRICE
+  FIXED_PER_SESSION
+  FIXED_PER_ATTENDEE
+}
+
 enum GroupClassWaitlistStatus {
   WAITING
   NOTIFIED
@@ -249,6 +340,11 @@ model Club {
   spaServices          SpaService[]
   spaQuotaRules        SpaQuotaRule[]
   spaBookings          SpaBooking[]
+  groupClassSessions   GroupClassSession[]
+  staffCompensations   StaffCompensation[]
+  motivationRates      MotivationRate[]
+  payrollAdjustments   PayrollAdjustment[]
+  payrollPeriodLocks   PayrollPeriodLock[]
 }
 
 model ClubTheme {
@@ -366,6 +462,9 @@ model User {
   clientRosterTrainers    TrainerClientLink[]    @relation("ClientRoster")
   trainerClientInvites    TrainerClientInvite[]  @relation("TrainerClientInvites")
   clubMemberships         UserClubMembership[]
+  groupClassSessionsLed   GroupClassSession[]  @relation("GroupSessionTrainer")
+  staffCompensation       StaffCompensation[]
+  payrollAdjustments      PayrollAdjustment[]
 
   @@unique([clubId, gamificationNickname])
   @@index([externalId])
@@ -665,6 +764,27 @@ model PersonalTrainingBooking {
   clientCompletedAt  DateTime?
   trainerCompletedAt DateTime?
   workoutSheet       Json?
+  /// Gift / complimentary PT — excluded from motivation totals by default.
+  isComplimentary    Boolean               @default(false)
+  controlLevel       ServiceControlLevel   @default(BASE)
+  presenceStatus     ServicePresenceStatus @default(PENDING)
+  performanceStatus  ServicePerformanceStatus @default(PENDING)
+  usageStatus        ServiceUsageStatus    @default(BOOKED)
+  paymentStatus      ServicePaymentStatus  @default(N_A)
+  reviewFlag         Boolean               @default(false)
+  eligibleForMotivation Boolean            @default(false)
+  trustBand          TrustBand             @default(AMBER)
+  trustReasons       Json                  @default("[]")
+  trustResolution    TrustResolution       @default(NONE)
+  trustResolveNote   String?
+  trustResolvedAt    DateTime?
+  trustResolvedById  String?
+  bookedByUserId     String?
+  presenceOverrideNote String?
+  presenceOverrideAt DateTime?
+  presenceOverrideById String?
+  paidAt             DateTime?
+  crmDocRef          String?
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
 
@@ -675,6 +795,9 @@ model PersonalTrainingBooking {
   @@unique([trainerId, startAt])
   @@index([trainerId, startAt])
   @@index([clientId])
+  @@index([reviewFlag, usageStatus])
+  @@index([presenceStatus, startAt])
+  @@index([trustBand, trustResolution])
 }
 
 model PersonalTrainingSessionGoal {
@@ -719,7 +842,25 @@ model GroupClassBooking {
   startAt       DateTime
   endAt         DateTime
   status        GroupClassBookingStatus @default(CONFIRMED)
+  origin        GroupBookingOrigin      @default(CLIENT_BOOKED)
   cancelledAt   DateTime?
+  controlLevel       ServiceControlLevel   @default(BASE)
+  presenceStatus     ServicePresenceStatus @default(PENDING)
+  performanceStatus  ServicePerformanceStatus @default(PENDING)
+  usageStatus        ServiceUsageStatus    @default(BOOKED)
+  paymentStatus      ServicePaymentStatus  @default(N_A)
+  reviewFlag         Boolean               @default(false)
+  eligibleForMotivation Boolean            @default(false)
+  trustBand          TrustBand             @default(AMBER)
+  trustReasons       Json                  @default("[]")
+  trustResolution    TrustResolution       @default(NONE)
+  trustResolveNote   String?
+  trustResolvedAt    DateTime?
+  trustResolvedById  String?
+  bookedByUserId     String?
+  presenceOverrideNote String?
+  presenceOverrideAt DateTime?
+  presenceOverrideById String?
   createdAt     DateTime                @default(now())
   updatedAt     DateTime                @updatedAt
 
@@ -728,6 +869,10 @@ model GroupClassBooking {
   @@unique([clientId, appointmentId])
   @@index([clientId, startAt])
   @@index([clientId, status])
+  @@index([reviewFlag, usageStatus])
+  @@index([presenceStatus, startAt])
+  @@index([appointmentId])
+  @@index([trustBand, trustResolution])
 }
 
 model GroupClassWaitlistEntry {
@@ -1171,6 +1316,25 @@ model SpaBooking {
   crmDocRef              String?
   cancelledBy            SpaCancelledBy?
   cancelledAt            DateTime?
+  controlLevel           ServiceControlLevel   @default(BASE)
+  presenceStatus         ServicePresenceStatus @default(PENDING)
+  performanceStatus      ServicePerformanceStatus @default(PENDING)
+  usageStatus            ServiceUsageStatus    @default(BOOKED)
+  paymentStatus          ServicePaymentStatus  @default(N_A)
+  reviewFlag             Boolean               @default(false)
+  eligibleForMotivation  Boolean               @default(false)
+  trustBand              TrustBand             @default(AMBER)
+  trustReasons           Json                  @default("[]")
+  trustResolution        TrustResolution       @default(NONE)
+  trustResolveNote       String?
+  trustResolvedAt        DateTime?
+  trustResolvedById      String?
+  bookedByUserId         String?
+  presenceOverrideNote   String?
+  presenceOverrideAt     DateTime?
+  presenceOverrideById   String?
+  paidAt                 DateTime?
+  specialistCompletedAt  DateTime?
   createdAt              DateTime         @default(now())
   updatedAt              DateTime         @updatedAt
 
@@ -1183,4 +1347,131 @@ model SpaBooking {
   @@index([specialistId, startAt])
   @@index([clientId])
   @@index([clubId, startAt])
+  @@index([reviewFlag, usageStatus])
+  @@index([presenceStatus, startAt])
+  @@index([trustBand, trustResolution])
+}
+
+/// Group class journal for payroll (roster attestation).
+model GroupClassSession {
+  id                    String                     @id @default(cuid())
+  clubId                String
+  appointmentId         String
+  trainerId             String
+  title                 String
+  startAt               DateTime
+  endAt                 DateTime
+  status                GroupClassSessionStatus    @default(OPEN)
+  baselineQuality       GroupSessionBaselineQuality @default(PARTIAL)
+  baselineCount         Int                        @default(0)
+  submittedCount        Int?
+  approvedAttendedCount Int?
+  trustBand             TrustBand                  @default(AMBER)
+  trustReasons          Json                       @default("[]")
+  baselineFrozenAt      DateTime?
+  trainerSubmittedAt    DateTime?
+  adminApprovedAt       DateTime?
+  adminApprovedById     String?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+
+  club     Club                    @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  trainer  User                    @relation("GroupSessionTrainer", fields: [trainerId], references: [id], onDelete: Cascade)
+  members  GroupClassSessionMember[]
+
+  @@unique([clubId, appointmentId])
+  @@index([trainerId, startAt])
+  @@index([clubId, status, startAt])
+  @@index([trustBand])
+}
+
+model GroupClassSessionMember {
+  id               String                        @id @default(cuid())
+  sessionId        String
+  clientId         String?
+  externalId       String?
+  displayName      String
+  source           GroupSessionMemberSource      @default(BASELINE_1C)
+  attendance       GroupSessionMemberAttendance  @default(EXPECTED)
+  visitMatched     Boolean                       @default(false)
+  trustBand        TrustBand                     @default(AMBER)
+  trustReasons     Json                          @default("[]")
+  trustResolution  TrustResolution               @default(NONE)
+  trustResolveNote String?
+  bookingId        String?
+  createdAt        DateTime                      @default(now())
+  updatedAt        DateTime                      @updatedAt
+
+  session GroupClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, attendance])
+  @@index([clientId])
+  @@index([externalId])
+}
+
+model StaffCompensation {
+  id               String   @id @default(cuid())
+  clubId           String
+  userId           String
+  baseSalaryMinor  Int      @default(0)
+  /// Role-specific motivation rules (JSON StaffPayProfile).
+  payProfile       Json?
+  currency         String   @default("BYN")
+  effectiveFrom    DateTime @db.Date
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, userId, effectiveFrom])
+}
+
+model MotivationRate {
+  id            String             @id @default(cuid())
+  clubId        String
+  kind          MotivationRateKind
+  serviceId     String?
+  rateType      MotivationRateType
+  /// Percent points (e.g. 30 = 30%) or fixed amount in minor units.
+  rateValue     Int
+  currency      String             @default("BYN")
+  effectiveFrom DateTime           @db.Date
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, kind, effectiveFrom])
+}
+
+model PayrollAdjustment {
+  id          String   @id @default(cuid())
+  clubId      String
+  userId      String
+  amountMinor Int
+  reason      String
+  periodFrom  DateTime @db.Date
+  periodTo    DateTime @db.Date
+  createdById String
+  createdAt   DateTime @default(now())
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, userId, periodFrom])
+}
+
+model PayrollPeriodLock {
+  id         String   @id @default(cuid())
+  clubId     String
+  userId     String
+  periodFrom DateTime @db.Date
+  periodTo   DateTime @db.Date
+  lockedAt   DateTime @default(now())
+  lockedById String
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, userId, periodFrom, periodTo])
 }

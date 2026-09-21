@@ -123,6 +123,7 @@ export class PersonalTrainingController {
       user,
       dto.clientId,
       dto.startAt,
+      dto.isComplimentary ?? false,
     );
   }
 

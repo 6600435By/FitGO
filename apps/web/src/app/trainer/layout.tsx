@@ -14,6 +14,7 @@ const ALL_NAV: Array<{
 }> = [
   { href: '/trainer', label: 'Обзор' },
   { href: '/trainer/schedule', label: 'Расписание', module: 'trainer_calendar' },
+  { href: '/trainer/group-journal', label: 'Журнал групп' },
   { href: '/trainer/clients', label: 'Клиенты', module: 'trainer_crm' },
   { href: '/trainer/messages', label: 'Сообщения', module: 'messaging' },
 ];

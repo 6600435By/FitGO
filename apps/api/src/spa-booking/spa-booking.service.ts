@@ -7,6 +7,7 @@ import {
 import {
   AvailabilityBlockStatus,
   Role,
+  ServiceUsageStatus,
   SpaBookingOrigin,
   SpaBookingStatus,
   SpaCancelledBy,
@@ -16,6 +17,7 @@ import {
 import {
   classifyVisitKind,
   SessionType,
+  toUsageControl,
   type Membership,
   type SpaBooking,
   type SpaQuotaRule,
@@ -30,6 +32,7 @@ import { ClubMembershipService } from '../common/club-membership.service';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ServiceUsageService } from '../service-usage/service-usage.service';
 
 export interface WorkSlotInput {
   dayOfWeek: number;
@@ -48,6 +51,7 @@ export class SpaBookingService {
     private readonly crmLink: ClubCrmLinkService,
     private readonly clubMembership: ClubMembershipService,
     private readonly notifications: NotificationsService,
+    private readonly serviceUsage: ServiceUsageService,
   ) {}
 
   // ─── Catalog helpers ───────────────────────────────────────────────────────
@@ -82,10 +86,31 @@ export class SpaBookingService {
     consumedInCrmAt: Date | null;
     cancelledBy: SpaCancelledBy | null;
     cancelledAt: Date | null;
+    controlLevel?: string;
+    presenceStatus?: string;
+    performanceStatus?: string;
+    usageStatus?: string;
+    paymentStatus?: string;
+    reviewFlag?: boolean;
+    eligibleForMotivation?: boolean;
+    specialistCompletedAt?: Date | null;
+    paidAt?: Date | null;
     specialist: { firstName: string; lastName: string };
     client: { firstName: string; lastName: string };
     service: { name: string };
   }): SpaBooking {
+    const usage =
+      booking.controlLevel != null
+        ? toUsageControl({
+            controlLevel: booking.controlLevel,
+            presenceStatus: booking.presenceStatus ?? 'PENDING',
+            performanceStatus: booking.performanceStatus ?? 'PENDING',
+            usageStatus: booking.usageStatus ?? 'BOOKED',
+            paymentStatus: booking.paymentStatus ?? 'N_A',
+            reviewFlag: Boolean(booking.reviewFlag),
+            eligibleForMotivation: Boolean(booking.eligibleForMotivation),
+          })
+        : undefined;
     return {
       id: booking.id,
       clubId: booking.clubId,
@@ -106,6 +131,9 @@ export class SpaBookingService {
       consumedInCrmAt: booking.consumedInCrmAt?.toISOString(),
       cancelledBy: booking.cancelledBy ?? undefined,
       cancelledAt: booking.cancelledAt?.toISOString(),
+      usage,
+      specialistCompletedAt: booking.specialistCompletedAt?.toISOString(),
+      paidAt: booking.paidAt?.toISOString(),
     };
   }
 
@@ -608,6 +636,11 @@ export class SpaBookingService {
       // #endregion
 
       if (existing && existing.status === SpaBookingStatus.CANCELLED) {
+        const control = this.serviceUsage.controlFieldsForCreate({
+          origin: input.origin,
+          paymentType: input.paymentType,
+          bookedByUserId: actor.sub,
+        });
         booking = await this.prisma.spaBooking.update({
           where: { id: existing.id },
           data: {
@@ -627,6 +660,16 @@ export class SpaBookingService {
             crmDocRef: null,
             cancelledBy: null,
             cancelledAt: null,
+            controlLevel: control.controlLevel,
+            reviewFlag: control.reviewFlag,
+            paymentStatus: control.paymentStatus,
+            usageStatus: control.usageStatus,
+            presenceStatus: control.presenceStatus,
+            performanceStatus: control.performanceStatus,
+            eligibleForMotivation: control.eligibleForMotivation,
+            bookedByUserId: control.bookedByUserId,
+            specialistCompletedAt: null,
+            paidAt: null,
           },
           include: {
             specialist: true,
@@ -637,6 +680,11 @@ export class SpaBookingService {
       } else if (existing) {
         throw new ConflictException('Слот уже занят');
       } else {
+        const control = this.serviceUsage.controlFieldsForCreate({
+          origin: input.origin,
+          paymentType: input.paymentType,
+          bookedByUserId: actor.sub,
+        });
         booking = await this.prisma.spaBooking.create({
           data: {
             clubId,
@@ -652,6 +700,14 @@ export class SpaBookingService {
                 : SpaPaymentType.PAID,
             priceMinor,
             membershipServiceName: membershipServiceName ?? null,
+            controlLevel: control.controlLevel,
+            reviewFlag: control.reviewFlag,
+            paymentStatus: control.paymentStatus,
+            usageStatus: control.usageStatus,
+            presenceStatus: control.presenceStatus,
+            performanceStatus: control.performanceStatus,
+            eligibleForMotivation: control.eligibleForMotivation,
+            bookedByUserId: control.bookedByUserId,
           },
           include: {
             specialist: true,
@@ -671,73 +727,33 @@ export class SpaBookingService {
       throw err;
     }
 
-    try {
-      const employeeName = [booking.specialist.lastName, booking.specialist.firstName]
-        .filter(Boolean)
-        .join(' ')
-        .trim();
-      const rawCode = booking.specialist.externalId?.trim();
-      const employeeCode =
-        rawCode && /^\d+$/.test(rawCode) ? rawCode : undefined;
-
-      if (input.paymentType === 'QUOTA') {
-        const consume = provider.consumeMembershipService;
-        if (!consume) {
-          throw new BadRequestException(
-            'Списание услуги в 1С недоступно для этого клуба',
-          );
-        }
-        membership = await consume.call(provider, externalId, {
-          serviceName: membershipServiceName,
-          serviceId: service.id,
-          bookingRef: booking.id,
-          occurredAt: start.toISOString(),
-          durationMin: service.durationMin,
-          employeeName: employeeName || undefined,
-          employeeCode,
-        });
-      } else {
-        const sell = provider.sellSpaService;
-        if (!sell) {
-          throw new BadRequestException(
-            'Продажа спа-услуги в 1С недоступна для этого клуба',
-          );
-        }
-        membership = await sell.call(provider, externalId, {
-          serviceName: service.name,
-          serviceId: service.id,
-          bookingRef: booking.id,
-          occurredAt: start.toISOString(),
-          priceMinor: service.priceMinor,
-          currency: service.currency,
-          durationMin: service.durationMin,
-          employeeName: employeeName || undefined,
-          employeeCode,
-        });
-      }
-
-      booking = await this.prisma.spaBooking.update({
-        where: { id: booking.id },
-        data: {
-          consumedInCrmAt: new Date(),
-          crmDocRef: booking.id,
-        },
-        include: {
-          specialist: true,
-          client: true,
-          service: true,
-        },
-      });
-    } catch (err) {
-      await this.prisma.spaBooking.delete({ where: { id: booking.id } }).catch(
-        () => undefined,
+    // Quota/sale consume deferred until dual-gate ATTENDED → CONSUMED (phase 3).
+    // Still validate membership has quota at book time for QUOTA.
+    if (input.paymentType === 'QUOTA' && membershipServiceName) {
+      const quota = membership?.services?.find(
+        (s) => s.name === membershipServiceName,
       );
-      const status = (err as { status?: number })?.status;
-      const raw =
-        err instanceof Error ? err.message : 'Не удалось списать услугу в 1С';
-      if (status === 409) throw new ConflictException(raw);
-      if (status === 404) throw new NotFoundException(raw);
-      throw new BadRequestException(raw);
+      if (!quota || (quota.remaining != null && quota.remaining <= 0 && !quota.unlimited)) {
+        await this.prisma.spaBooking.delete({ where: { id: booking.id } }).catch(
+          () => undefined,
+        );
+        throw new ConflictException('Нет остатка услуги в абонементе');
+      }
+    }
+
+    if (
+      input.origin === SpaBookingOrigin.SPECIALIST_ASSIGNED ||
+      input.origin === SpaBookingOrigin.ADMIN_ASSIGNED
+    ) {
+      const specialistName =
+        `${booking.specialist.firstName} ${booking.specialist.lastName}`.trim();
+      await this.notifications.notifySpaAssigned({
+        clientId: input.clientId,
+        specialistId: input.specialistId,
+        specialistName: specialistName || 'Специалист',
+        serviceName: booking.service.name,
+        startAt: start,
+      });
     }
 
     return { booking: this.mapBooking(booking), membership };
@@ -792,6 +808,24 @@ export class SpaBookingService {
       ...dto,
       origin: SpaBookingOrigin.ADMIN_ASSIGNED,
     });
+  }
+
+  /** Specialist confirms the service was performed (dual-gate performer). */
+  async specialistComplete(user: JwtPayload, bookingId: string) {
+    const booking = await this.prisma.spaBooking.findFirst({
+      where: { id: bookingId, specialistId: user.sub },
+      include: { specialist: true, client: true, service: true },
+    });
+    if (!booking) throw new NotFoundException('Запись не найдена');
+    if (booking.status === SpaBookingStatus.CANCELLED) {
+      throw new BadRequestException('Запись отменена');
+    }
+    await this.serviceUsage.markPerformerConfirmed(bookingId, 'SPA');
+    const refreshed = await this.prisma.spaBooking.findUniqueOrThrow({
+      where: { id: bookingId },
+      include: { specialist: true, client: true, service: true },
+    });
+    return this.mapBooking(refreshed);
   }
 
   async listClientBookings(
@@ -873,9 +907,11 @@ export class SpaBookingService {
         startAt: booking.startAt,
         endAt: booking.endAt,
         source: 'fitgo' as const,
+        origin: booking.origin,
         lifecycle,
         cancelledBy: booking.cancelledBy,
         cancelledByLabel: this.cancelledByLabel(booking.cancelledBy ?? null),
+        usage: booking.usage,
       };
     });
   }
@@ -939,6 +975,8 @@ export class SpaBookingService {
         status: SpaBookingStatus.CANCELLED,
         cancelledBy: SpaCancelledBy.CLIENT,
         cancelledAt: new Date(),
+        usageStatus: ServiceUsageStatus.CANCELLED,
+        eligibleForMotivation: false,
       },
     });
 

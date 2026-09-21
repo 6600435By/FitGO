@@ -27,6 +27,8 @@ import { CreateAdminTaskDto, UpdateAdminTaskDto } from './dto/task.dto';
 import { SuperAdminAnalyticsService } from './super-admin-analytics.service';
 import { SuperAdminService } from './super-admin.service';
 import { FeaturesService } from '../features/features.service';
+import { ServiceUsageService } from '../service-usage/service-usage.service';
+import { requireClubId } from '../auth/require-club-id';
 import type { ProductModulesState } from '@fitgo/shared-types';
 
 @Controller('super-admin')
@@ -37,6 +39,7 @@ export class SuperAdminController {
     private readonly superAdmin: SuperAdminService,
     private readonly analytics: SuperAdminAnalyticsService,
     private readonly features: FeaturesService,
+    private readonly serviceUsage: ServiceUsageService,
   ) {}
 
   @Get('staff')
@@ -149,5 +152,72 @@ export class SuperAdminController {
     return this.features.setModules(body.modules ?? {}, user.sub).then((modules) => ({
       modules,
     }));
+  }
+
+  @Get('service-usage/review-queue')
+  reviewQueue(@CurrentUser() user: JwtPayload) {
+    return this.serviceUsage.listReviewQueue(requireClubId(user));
+  }
+
+  @Post('service-usage/review-queue/:kind/:bookingId/ack')
+  ackReview(
+    @CurrentUser() user: JwtPayload,
+    @Param('kind') kind: string,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.serviceUsage.acknowledgeReview(user, kind, bookingId);
+  }
+
+  @Post('service-usage/:kind/:bookingId/presence-override')
+  presenceOverride(
+    @CurrentUser() user: JwtPayload,
+    @Param('kind') kind: 'SPA' | 'PT' | 'GROUP',
+    @Param('bookingId') bookingId: string,
+    @Body() body: { note: string },
+  ) {
+    return this.serviceUsage.adminOverridePresence({
+      actor: user,
+      kind,
+      bookingId,
+      note: body.note ?? '',
+    });
+  }
+
+  @Get('specialist-service-debts/performers')
+  specialistDebtPerformers(@CurrentUser() user: JwtPayload) {
+    return this.serviceUsage.listDebtPerformers(requireClubId(user));
+  }
+
+  @Get('specialist-service-debts')
+  specialistDebts(
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('employeeCode') employeeCode: string,
+  ) {
+    return this.serviceUsage.getSpecialistServiceDebts({
+      from,
+      to,
+      employeeCode,
+    });
+  }
+
+  @Get('trust-exceptions')
+  trustExceptions(@CurrentUser() user: JwtPayload) {
+    return this.serviceUsage.listTrustExceptions(requireClubId(user));
+  }
+
+  @Post('trust-exceptions/:kind/:bookingId/resolve')
+  resolveTrust(
+    @CurrentUser() user: JwtPayload,
+    @Param('kind') kind: 'SPA' | 'PT',
+    @Param('bookingId') bookingId: string,
+    @Body() body: { note: string },
+  ) {
+    return this.serviceUsage.resolveTrustException({
+      actor: user,
+      kind,
+      bookingId,
+      note: body.note ?? '',
+    });
   }
 }

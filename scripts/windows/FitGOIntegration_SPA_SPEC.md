@@ -9,8 +9,9 @@
 |--------|----------|---------|
 | POST | `/v1/membership/consume-service` | `ConsumeServicePOST` |
 | POST | `/v1/spa/service-sale` | `SpaSalePOST` |
+| GET | `/v1/specialist-service-debts` | долги по услугам с конкретным `Сотрудник` за период |
 
-Отмена SPA (порог 3 ч в Nest): тот же `POST /v1/membership/consume-service` с `serviceName: "__RESTORE__"` и `bookingRef` — откат документа «Занятие» (отмена проведения + статус Отменено).
+Отмена SPA (порог 3 ч в Nest): тот же `POST /v1/membership/consume-service` с `serviceName: "__RESTORE__"` и `bookingRef` — откат документа «Занятие» (отмена проведения + статус Отменено). **Только если consume уже был** (`consumedInCrmAt`).
 
 Auth: `apikey` + `Authorization: Basic …` (как у `/v1/membership/freeze`).
 
@@ -18,7 +19,9 @@ Auth: `apikey` + `Authorization: Basic …` (как у `/v1/membership/freeze`).
 
 ## POST `/v1/membership/consume-service`
 
-Списание услуги из пакета абонемента (зеркало заморозки: документ операции с членством).
+Списание услуги из пакета абонемента.
+
+**Политика FitGO (с dual-gate):** Nest вызывает consume **не в момент записи**, а при переходе брони в `CONSUMED` (вход `VERIFIED_1C`/`ADMIN_OVERRIDE` + подтверждение исполнителя). До этого бронь только резервирует слот; при отмене до consume restore в 1С не нужен.
 
 Request JSON:
 
@@ -64,4 +67,42 @@ Request JSON:
 
 Response `200`: membership JSON (с обновлённым `debtAmount` / лицевым счётом при наличии).
 
-Реализация на Windows: заглушки `ConsumeServicePOST` / `SpaSalePOST` в `FitGOIntegration_HTTP.bsl` + бизнес-функции в `FitGOIntegration_Клиенты.bsl`. До публикации проверять `curl -sk` с Mac по 1c-debug-protocol.
+## GET `/v1/specialist-service-debts`
+
+Оказанные услуги с **конкретным** сотрудником (строки **Документ.Продажа** с заполненным **Исполнителем** в ТЧ).
+
+Реализация (быстрый путь): один запрос к `Документ.Продажа.<ТЧ>` + пакет остатков по расчётам для статуса оплаты. Без обхода всех занятий и без `ПолучитьОбъект` на каждый документ.
+
+**Ограничения нагрузки (обязательны):**
+
+- `employeeCode` — **обязателен** (отчёт только по одному специалисту; без кода → `400`).
+- Период `from`…`to` — не больше **31 календарного дня** включительно (полный месяц с 31 днём). FitGO UI: режим «день» или «период».
+
+Query: `from`, `to` (YYYY-MM-DD), `employeeCode` (код сотрудника 1С).
+
+Response `200`:
+
+```json
+{
+  "data": [
+    {
+      "externalId": "uuid",
+      "clientName": "Куделко Д.",
+      "serviceName": "Массаж спортивный 40 мин",
+      "occurredAt": "2026-09-20T12:00:00",
+      "amount": 95,
+      "currency": "BYN",
+      "employeeCode": "…",
+      "employeeName": "Хилькович …",
+      "docRef": "000028749#1",
+      "paymentStatus": "DEBT"
+    }
+  ]
+}
+```
+
+FitGO: live pull `/super-admin/debts` (специалист обязателен; день / период ≤31; фильтр оплаты на UI).
+
+**Обработчики в репо:** `SpecialistServiceDebtsGET` в `FitGOIntegration_HTTP.bsl`, `ДолгиУслугСпециалистовJSON` в `FitGOIntegration_Клиенты.bsl` — вставить в расширение, F7, переопубликовать `fitgo`.
+
+Реализация на Windows: заглушки `ConsumeServicePOST` / `SpaSalePOST` / `SpecialistServiceDebtsGET` в `FitGOIntegration_HTTP.bsl` + бизнес-функции в `FitGOIntegration_Клиенты.bsl`. До публикации проверять `curl -sk` с Mac по 1c-debug-protocol.

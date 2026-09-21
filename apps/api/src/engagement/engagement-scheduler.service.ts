@@ -98,12 +98,63 @@ export class EngagementSchedulerService implements OnModuleInit {
   }
 
   private async syncAllVisits() {
-    const users = await this.prisma.user.findMany({
-      where: { gamificationStartedAt: { not: null } },
+    const since = new Date(Date.now() - 14 * 86400000);
+    // Prefer clients with recent bookings needing presence — fewer 1C calls than all gamified users.
+    const pendingClients = await this.prisma.user.findMany({
+      where: {
+        externalId: { not: null },
+        clubId: { not: null },
+        OR: [
+          {
+            clientSpaBookings: {
+              some: {
+                startAt: { gte: since },
+                presenceStatus: 'PENDING',
+                status: { not: 'CANCELLED' },
+              },
+            },
+          },
+          {
+            clientPersonalBookings: {
+              some: {
+                startAt: { gte: since },
+                presenceStatus: 'PENDING',
+                status: { not: 'CANCELLED' },
+              },
+            },
+          },
+          {
+            groupClassBookings: {
+              some: {
+                startAt: { gte: since },
+                presenceStatus: 'PENDING',
+                status: { not: 'CANCELLED' },
+              },
+            },
+          },
+        ],
+      },
       select: { id: true, clubId: true, externalId: true },
+      take: 80,
     });
+
+    // Fallback: small batch of gamified users if no pending bookings (streak).
+    const users =
+      pendingClients.length > 0
+        ? pendingClients
+        : await this.prisma.user.findMany({
+            where: {
+              gamificationStartedAt: { not: null },
+              externalId: { not: null },
+              clubId: { not: null },
+            },
+            select: { id: true, clubId: true, externalId: true },
+            take: 40,
+            orderBy: { updatedAt: 'desc' },
+          });
+
     for (const u of users) {
-      if (!u.clubId) continue;
+      if (!u.clubId || !u.externalId) continue;
       await this.visitSync.syncUserVisits(u.id, u.clubId, u.externalId);
     }
   }

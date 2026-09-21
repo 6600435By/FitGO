@@ -10,11 +10,14 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { PersonalTrainingModule } from './personal-training/personal-training.module';
 import { SpaBookingModule } from './spa-booking/spa-booking.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ServiceUsageModule } from './service-usage/service-usage.module';
 import { SuperAdminModule } from './super-admin/super-admin.module';
 import { TrainerModule } from './trainer/trainer.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { OsmiModule } from './osmi/osmi.module';
 import { FeaturesModule } from './features/features.module';
+import { GroupSessionModule } from './group-session/group-session.module';
+import { PayrollModule } from './payroll/payroll.module';
 
 @Module({
   imports: [
@@ -22,6 +25,7 @@ import { FeaturesModule } from './features/features.module';
     PrismaModule,
     FitnessModule,
     FeaturesModule,
+    ServiceUsageModule,
     AuthModule,
     ClientModule,
     TrainerModule,
@@ -34,6 +38,8 @@ import { FeaturesModule } from './features/features.module';
     SpaBookingModule,
     WaitlistModule,
     OsmiModule,
+    GroupSessionModule,
+    PayrollModule,
   ],
 })
 export class AppModule {}

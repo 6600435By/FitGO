@@ -1,7 +1,7 @@
 'use client';
 
 import type { Booking } from '@fitgo/shared-types';
-import { SessionType } from '@fitgo/shared-types';
+import { SessionType, originBadgeLabel } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
@@ -103,14 +103,24 @@ export default function ClientBookingsPage() {
               <span className="mt-2 inline-block rounded-full bg-slate-800 px-2 py-1 text-xs">
                 {sessionTypeLabel(booking.type)}
               </span>
-              {booking.origin === 'TRAINER_ASSIGNED' && (
+              {originBadgeLabel(booking.origin) && (
                 <span className="ml-2 mt-2 inline-block rounded-full bg-fitgo-500/15 px-2 py-1 text-xs text-fitgo-400">
-                  Назначено тренером
+                  {originBadgeLabel(booking.origin)}
                 </span>
               )}
-              {booking.type === SessionType.SPA && (
-                <span className="ml-2 mt-2 inline-block rounded-full bg-fitgo-500/15 px-2 py-1 text-xs text-fitgo-400">
-                  Спа
+              {booking.usage?.paymentStatus === 'DEBT' && (
+                <span className="ml-2 mt-2 inline-block rounded-full bg-amber-500/15 px-2 py-1 text-xs text-amber-300">
+                  Долг
+                </span>
+              )}
+              {booking.usage?.paymentStatus === 'PAID' && (
+                <span className="ml-2 mt-2 inline-block rounded-full bg-emerald-500/15 px-2 py-1 text-xs text-emerald-300">
+                  Оплачено
+                </span>
+              )}
+              {booking.usage?.isComplimentary && (
+                <span className="ml-2 mt-2 inline-block rounded-full bg-violet-500/15 px-2 py-1 text-xs text-violet-300">
+                  Подарочная
                 </span>
               )}
               {booking.source === 'fitgo' && booking.type === SessionType.PERSONAL && (

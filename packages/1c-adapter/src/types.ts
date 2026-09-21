@@ -96,6 +96,18 @@ export interface IFitnessClubProvider {
       employeeCode?: string;
     },
   ): Promise<Membership>;
+  /**
+   * Unpaid specialist-rendered services for a period (not aggregate client debt).
+   * Optional — returns [] when unsupported.
+   */
+  getSpecialistServiceDebts?(input: {
+    from: string;
+    to: string;
+    /** Required — full-club scan overloads 1C. */
+    employeeCode: string;
+  }): Promise<
+    import('@fitgo/shared-types').SpecialistServiceDebt[]
+  >;
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]>;
   getAccessCard(externalId: string): Promise<AccessCard | null>;
   getSchedule(clubExternalId: string, filters?: ScheduleFilters): Promise<ScheduleSlot[]>;

@@ -13,6 +13,7 @@ import { FitnessService } from '../fitness/fitness.service';
 import { VisitSyncService } from '../engagement/visit-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { TrainerRosterService } from './trainer-roster.service';
 
 @Injectable()
@@ -25,6 +26,7 @@ export class TrainerService {
     private readonly roster: TrainerRosterService,
     private readonly clubMembership: ClubMembershipService,
     private readonly clientProfile: ClientProfileService,
+    private readonly serviceUsage: ServiceUsageService,
   ) {}
 
   private isFormaEmployeeId(id: string): boolean {
@@ -179,14 +181,10 @@ export class TrainerService {
     clubId: string,
     clubName: string,
   ): Promise<Visit[]> {
+    // One sync into FitGO cache (14d + cooldown); do NOT call getVisits again.
     if (externalId) {
       await this.visitSync.syncUserVisits(clientId, clubId, externalId);
     }
-
-    const provider = this.fitness.getProvider();
-    const externalVisits = externalId
-      ? await provider.getVisits(externalId)
-      : [];
 
     const clubVisits = await this.visitSync.getVisitsForUser(clientId);
     const syncedVisits: Visit[] = clubVisits.map((v) => ({
@@ -199,7 +197,7 @@ export class TrainerService {
     }));
 
     const appVisits = await this.getAppSessionVisits(clientId, clubName);
-    const combined = [...externalVisits, ...syncedVisits, ...appVisits];
+    const combined = [...syncedVisits, ...appVisits];
 
     const byDateTitle = new Set<string>();
     const merged: Visit[] = [];
@@ -525,6 +523,8 @@ export class TrainerService {
       where: { id: bookingId },
       data: { status: GroupClassBookingStatus.COMPLETED },
     });
+
+    await this.serviceUsage.markPerformerConfirmed(bookingId, 'GROUP');
 
     const event = await this.visitSync.recordTrainerConfirm({
       userId: booking.clientId,

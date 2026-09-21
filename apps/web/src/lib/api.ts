@@ -189,6 +189,35 @@ async function request<T>(
   return response.json();
 }
 
+export type GroupClassSessionDto = {
+  id: string;
+  appointmentId: string;
+  title: string;
+  startAt: string;
+  endAt: string;
+  status: string;
+  baselineQuality: string;
+  baselineCount: number;
+  submittedCount?: number;
+  approvedAttendedCount?: number;
+  trustBand: string;
+  trustReasons: string[];
+  trustReasonLabels: string[];
+  trainerId: string;
+  trainerName: string;
+  members: Array<{
+    id: string;
+    clientId?: string;
+    displayName: string;
+    source: string;
+    attendance: string;
+    visitMatched: boolean;
+    trustBand: string;
+    trustReasons: string[];
+    trustResolution: string;
+  }>;
+};
+
 export const api = {
   login: (email: string, password: string) =>
     request<LoginResponse>('/auth/login', {
@@ -732,6 +761,13 @@ export const api = {
     request<{ ok: boolean }>(
       `/specialist/spa-bookings/${bookingId}`,
       { method: 'PATCH' },
+      token,
+    ),
+
+  specialistCompleteSpaBooking: (token: string, bookingId: string) =>
+    request<SpaBooking>(
+      `/specialist/spa-bookings/${bookingId}/complete`,
+      { method: 'POST', body: '{}' },
       token,
     ),
 
@@ -1411,4 +1447,237 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ modules }),
     }, token),
+
+  superAdminReviewQueue: (token: string) =>
+    request<import('@fitgo/shared-types').ServiceUsageReviewItem[]>(
+      '/super-admin/service-usage/review-queue',
+      {},
+      token,
+    ),
+
+  superAdminAckReview: (
+    token: string,
+    kind: string,
+    bookingId: string,
+  ) =>
+    request<{ success: boolean }>(
+      `/super-admin/service-usage/review-queue/${kind}/${bookingId}/ack`,
+      { method: 'POST', body: '{}' },
+      token,
+    ),
+
+  superAdminPresenceOverride: (
+    token: string,
+    kind: string,
+    bookingId: string,
+    note: string,
+  ) =>
+    request<{ success: boolean }>(
+      `/super-admin/service-usage/${kind}/${bookingId}/presence-override`,
+      { method: 'POST', body: JSON.stringify({ note }) },
+      token,
+    ),
+
+  superAdminSpecialistDebtPerformers: (token: string) =>
+    request<Array<{ employeeCode: string; name: string; roles: string[] }>>(
+      '/super-admin/specialist-service-debts/performers',
+      {},
+      token,
+    ),
+
+  superAdminSpecialistDebts: (
+    token: string,
+    params: { from: string; to: string; employeeCode: string },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+      employeeCode: params.employeeCode,
+    });
+    return request<import('@fitgo/shared-types').SpecialistServiceDebt[]>(
+      `/super-admin/specialist-service-debts?${q}`,
+      {},
+      token,
+    );
+  },
+
+  superAdminTrustExceptions: (token: string) =>
+    request<import('@fitgo/shared-types').TrustExceptionItem[]>(
+      '/super-admin/trust-exceptions',
+      {},
+      token,
+    ),
+
+  superAdminResolveTrust: (
+    token: string,
+    kind: 'SPA' | 'PT',
+    bookingId: string,
+    note: string,
+  ) =>
+    request<{ success: boolean }>(
+      `/super-admin/trust-exceptions/${kind}/${bookingId}/resolve`,
+      { method: 'POST', body: JSON.stringify({ note }) },
+      token,
+    ),
+
+  adminGroupSessionExceptions: (token: string) =>
+    request<import('@fitgo/shared-types').TrustExceptionItem[]>(
+      '/admin/group-sessions/exceptions',
+      {},
+      token,
+    ),
+
+  adminResolveGroupSession: (token: string, id: string, note: string) =>
+    request<unknown>(`/admin/group-sessions/${id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    }, token),
+
+  adminReturnGroupSession: (token: string, id: string) =>
+    request<unknown>(`/admin/group-sessions/${id}/return`, {
+      method: 'POST',
+      body: '{}',
+    }, token),
+
+  trainerOpenGroupSession: (
+    token: string,
+    body: {
+      appointmentId: string;
+      title: string;
+      startAt: string;
+      endAt: string;
+    },
+  ) =>
+    request<GroupClassSessionDto>('/trainer/group-sessions/open', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, token),
+
+  trainerGroupSessions: (token: string, from: string, to: string) =>
+    request<GroupClassSessionDto[]>(
+      `/trainer/group-sessions?from=${from}&to=${to}`,
+      {},
+      token,
+    ),
+
+  trainerGetGroupSession: (token: string, id: string) =>
+    request<GroupClassSessionDto>(`/trainer/group-sessions/${id}`, {}, token),
+
+  trainerSetGroupMemberAttendance: (
+    token: string,
+    sessionId: string,
+    memberId: string,
+    attendance: string,
+  ) =>
+    request<GroupClassSessionDto>(
+      `/trainer/group-sessions/${sessionId}/members/${memberId}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ attendance }),
+      },
+      token,
+    ),
+
+  trainerAddGroupMember: (
+    token: string,
+    sessionId: string,
+    body: { displayName: string; clientId?: string },
+  ) =>
+    request<GroupClassSessionDto>(
+      `/trainer/group-sessions/${sessionId}/members`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  trainerSubmitGroupSession: (token: string, id: string) =>
+    request<GroupClassSessionDto>(`/trainer/group-sessions/${id}/submit`, {
+      method: 'POST',
+      body: '{}',
+    }, token),
+
+  payrollStaff: (token: string) =>
+    request<import('@fitgo/shared-types').StaffPaySummary[]>(
+      '/super-admin/payroll/staff',
+      {},
+      token,
+    ),
+
+  payrollStaffProfile: (token: string, userId: string) =>
+    request<import('@fitgo/shared-types').StaffCompensationDto | null>(
+      `/super-admin/payroll/staff/${userId}/profile`,
+      {},
+      token,
+    ),
+
+  payrollSaveStaffProfile: (
+    token: string,
+    userId: string,
+    body: {
+      baseSalaryMinor?: number;
+      payProfile: import('@fitgo/shared-types').StaffPayProfile;
+      effectiveFrom?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').StaffCompensationDto>(
+      `/super-admin/payroll/staff/${userId}/profile`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  payrollSummary: (
+    token: string,
+    params: { userId: string; from: string; to: string },
+  ) => {
+    const q = new URLSearchParams(params);
+    return request<import('@fitgo/shared-types').PayrollPeriodSummary>(
+      `/super-admin/payroll/summary?${q}`,
+      {},
+      token,
+    );
+  },
+
+  payrollLock: (
+    token: string,
+    body: { userId: string; from: string; to: string },
+  ) =>
+    request<import('@fitgo/shared-types').PayrollPeriodSummary>(
+      '/super-admin/payroll/lock',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  payrollAdjustment: (
+    token: string,
+    body: {
+      userId: string;
+      amountMinor: number;
+      reason: string;
+      periodFrom: string;
+      periodTo: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').PayrollAdjustmentDto>(
+      '/super-admin/payroll/adjustments',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  adminPayrollStaff: (token: string) =>
+    request<import('@fitgo/shared-types').StaffPaySummary[]>(
+      '/admin/payroll/staff',
+      {},
+      token,
+    ),
+
+  adminPayrollSummary: (
+    token: string,
+    params: { userId: string; from: string; to: string },
+  ) => {
+    const q = new URLSearchParams(params);
+    return request<import('@fitgo/shared-types').PayrollPeriodSummary>(
+      `/admin/payroll/summary?${q}`,
+      {},
+      token,
+    );
+  },
 };

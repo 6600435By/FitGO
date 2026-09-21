@@ -10,15 +10,17 @@
 //   POST /v1/membership/consume-service  → обработчик ConsumeServicePOST
 //   POST /v1/spa/service-sale            → обработчик SpaSalePOST
 //   POST /v1/spa/cleanup-broken-visits   → обработчик CleanupBrokenSpaVisitsPOST
+//   GET  /v1/specialist-service-debts    → обработчик SpecialistServiceDebtsGET
 //   GET  /v1/visits
 //   GET  /v1/card
 //
-// В конфигураторе (пример freeze; consume/sale — аналогично):
-//   Имя шаблона: freeze | consume-service | spa-service-sale | cleanup-broken-visits
+// В конфигураторе (пример freeze; consume/sale/debts — аналогично):
+//   Имя шаблона: freeze | consume-service | spa-service-sale | cleanup-broken-visits | SpecialistServiceDebts
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
-//                | /v1/spa/cleanup-broken-visits
+//                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
 //                (без /v1 приложение метод не найдёт: Nest ходит на .../hs/fitgo/v1)
-//   Метод POST → Обработчик: FreezePOST | ConsumeServicePOST | SpaSalePOST | CleanupBrokenSpaVisitsPOST
+//   Метод POST → FreezePOST | ConsumeServicePOST | SpaSalePOST | CleanupBrokenSpaVisitsPOST
+//   Метод GET  → SpecialistServiceDebtsGET
 //
 // У расширения снять флаг «Защита от опасных действий»: проведение документов
 // создаёт COM-объект WinHttp (рассылки), иначе в HTTP-сервисе будет 500 «Предупреждение безопасности».
@@ -448,6 +450,54 @@
         Запрос.ПараметрыЗапроса.Получить("to"));
 
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Визиты);
+КонецФункции
+
+// Долги по оказанным услугам с конкретным сотрудником (не агрегат debtAmount).
+// Query: from, to (YYYY-MM-DD), employeeCode (обязателен), период ≤31 день.
+// Внимание: идентификатор To в BSL зарезервирован — не использовать.
+Функция SpecialistServiceDebtsGET(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    ДатаСтрС = "";
+    ДатаСтрПо = "";
+    КодСотрудника = "";
+    Попытка
+        ДатаСтрС = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("from")));
+    Исключение
+    КонецПопытки;
+    Попытка
+        ДатаСтрПо = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("to")));
+    Исключение
+    КонецПопытки;
+    Попытка
+        КодСотрудника = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("employeeCode")));
+    Исключение
+    КонецПопытки;
+
+    Если ПустаяСтрока(ДатаСтрС) Или ПустаяСтрока(ДатаСтрПо) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "from and to required (YYYY-MM-DD)");
+    КонецЕсли;
+    Если ПустаяСтрока(КодСотрудника) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "employeeCode required (one specialist only)");
+    КонецЕсли;
+
+    // Период ≤31 день (полный календарный месяц) — проверка до тяжёлого запроса.
+    Попытка
+        ЧастиС = СтрРазделить(ДатаСтрС, "-");
+        ЧастиПо = СтрРазделить(ДатаСтрПо, "-");
+        ДС = Дата(Число(ЧастиС[0]), Число(ЧастиС[1]), Число(ЧастиС[2]));
+        ДП = Дата(Число(ЧастиПо[0]), Число(ЧастиПо[1]), Число(ЧастиПо[2]));
+        Если ДП < ДС Или (НачалоДня(ДП) - НачалоДня(ДС)) > 30 * 86400 Тогда
+            Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "period must be 1..31 days");
+        КонецЕсли;
+    Исключение
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "invalid from/to");
+    КонецПопытки;
+
+    Данные = FitGOIntegrationКлиенты.ДолгиУслугСпециалистовJSON(ДатаСтрС, ДатаСтрПо, КодСотрудника);
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
 КонецФункции
 
 Функция CardGET(Запрос)

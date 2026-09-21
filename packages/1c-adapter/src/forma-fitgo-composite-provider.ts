@@ -112,6 +112,14 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     return this.fitgo.sellSpaService(externalId, input);
   }
 
+  getSpecialistServiceDebts(input: {
+    from: string;
+    to: string;
+    employeeCode: string;
+  }) {
+    return this.fitgo.getSpecialistServiceDebts?.(input) ?? Promise.resolve([]);
+  }
+
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]> {
     return this.fitgo.getVisits(externalId, period);
   }

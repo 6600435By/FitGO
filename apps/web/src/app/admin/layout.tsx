@@ -33,6 +33,16 @@ const ALL_NAV: Array<{
     permission: AdminPermission.CLIENTS_VIEW,
     module: 'spa_booking' as const,
   },
+  {
+    href: '/admin/exceptions',
+    label: 'Нестыковки',
+    permission: AdminPermission.CLIENTS_VIEW,
+  },
+  {
+    href: '/admin/payroll',
+    label: 'ЗП',
+    permission: AdminPermission.REPORTS_VIEW,
+  },
   { href: '/admin/at-risk', label: 'Риск', permission: AdminPermission.AT_RISK_VIEW },
   { href: '/admin/funnel', label: 'Воронка', permission: AdminPermission.FUNNEL_VIEW },
   { href: '/admin/reports', label: 'Отчёты', permission: AdminPermission.REPORTS_VIEW },
@@ -69,7 +79,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
   return (
     <AuthGuard allowedRoles={[UserRole.ADMIN]}>
-      <AppShell title="Панель администратора" navItems={navItems}>
+      <AppShell title="Панель администратора" navItems={navItems} wide>
         {children}
       </AppShell>
     </AuthGuard>

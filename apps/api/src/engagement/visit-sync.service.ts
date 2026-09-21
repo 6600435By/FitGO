@@ -17,6 +17,7 @@ import {
 } from '@fitgo/shared-types';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ServiceUsageService } from '../service-usage/service-usage.service';
 
 const DAY_FACT_PRIORITY: Record<VisitSource, number> = {
   ONEC_SYNC: 6,
@@ -44,9 +45,16 @@ function fromPrismaVerification(
 
 @Injectable()
 export class VisitSyncService {
+  /** Per-user cooldown for 1C getVisits (ms). */
+  private readonly lastSyncAt = new Map<string, number>();
+  private static readonly SYNC_COOLDOWN_MS = 10 * 60 * 1000;
+  /** Default pull window for background / unspecified sync (not full year). */
+  private static readonly DEFAULT_SYNC_DAYS = 14;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
+    private readonly serviceUsage: ServiceUsageService,
   ) {}
 
   visitDateKey(date: Date | string): string {
@@ -256,7 +264,7 @@ export class VisitSyncService {
     userId: string,
     clubId: string,
     externalId?: string | null,
-    period?: { from?: string; to?: string },
+    period?: { from?: string; to?: string; force?: boolean },
   ) {
     const dbUser = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -264,46 +272,71 @@ export class VisitSyncService {
     });
     if (!dbUser) return [];
 
+    const to = period?.to ?? this.visitDateKey(new Date());
     const from =
       period?.from ??
-      this.visitDateKey(new Date(Date.now() - 365 * 86400000));
-    const to = period?.to ?? this.visitDateKey(new Date());
+      this.visitDateKey(
+        new Date(
+          Date.now() - VisitSyncService.DEFAULT_SYNC_DAYS * 86400000,
+        ),
+      );
 
     if (externalId) {
-      const externalVisits = await this.fitness
-        .getProvider()
-        .getVisits(externalId, { from, to })
-        .catch(() => [] as Visit[]);
+      const cooldownKey = `${userId}:${from}:${to}`;
+      const last = this.lastSyncAt.get(cooldownKey) ?? 0;
+      const skipRemote =
+        !period?.force &&
+        Date.now() - last < VisitSyncService.SYNC_COOLDOWN_MS;
 
-      for (const visit of externalVisits) {
-        const kind = classifyVisitKind({
-          kind: visit.kind,
-          title: visit.title,
-          sessionType: visit.sessionType,
-        });
-        const occurredAt = visit.checkIn
-          ? new Date(
-              visit.checkIn.includes('T')
-                ? visit.checkIn
-                : `${visit.date}T${visit.checkIn.length === 5 ? visit.checkIn + ':00' : visit.checkIn}`,
-            )
-          : new Date(`${visit.date}T12:00:00.000Z`);
+      if (!skipRemote) {
+        const externalVisits = await this.fitness
+          .getProvider()
+          .getVisits(externalId, { from, to })
+          .catch(() => [] as Visit[]);
 
-        await this.upsertEvent({
-          userId,
-          clubId,
-          externalKey: `1c:${visit.id}`,
-          kind,
-          verification: VisitVerification.VERIFIED_1C,
-          source: VisitSource.ONEC_SYNC,
-          occurredAt: Number.isNaN(occurredAt.getTime())
+        this.lastSyncAt.set(cooldownKey, Date.now());
+
+        const presenceDays = new Set<string>();
+
+        for (const visit of externalVisits) {
+          const kind = classifyVisitKind({
+            kind: visit.kind,
+            title: visit.title,
+            sessionType: visit.sessionType,
+          });
+          const occurredAt = visit.checkIn
+            ? new Date(
+                visit.checkIn.includes('T')
+                  ? visit.checkIn
+                  : `${visit.date}T${visit.checkIn.length === 5 ? visit.checkIn + ':00' : visit.checkIn}`,
+              )
+            : new Date(`${visit.date}T12:00:00.000Z`);
+
+          await this.upsertEvent({
+            userId,
+            clubId,
+            externalKey: `1c:${visit.id}`,
+            kind,
+            verification: VisitVerification.VERIFIED_1C,
+            source: VisitSource.ONEC_SYNC,
+            occurredAt: Number.isNaN(occurredAt.getTime())
+              ? new Date(`${visit.date}T12:00:00.000Z`)
+              : occurredAt,
+            title: visit.title,
+            externalId: visit.id,
+            checkIn: visit.checkIn,
+            checkOut: visit.checkOut,
+          });
+
+          const visitAt = Number.isNaN(occurredAt.getTime())
             ? new Date(`${visit.date}T12:00:00.000Z`)
-            : occurredAt,
-          title: visit.title,
-          externalId: visit.id,
-          checkIn: visit.checkIn,
-          checkOut: visit.checkOut,
-        });
+            : occurredAt;
+          const dayKey = this.visitDateKey(visitAt);
+          if (!presenceDays.has(dayKey)) {
+            presenceDays.add(dayKey);
+            await this.serviceUsage.markPresenceFromVisit(userId, visitAt);
+          }
+        }
       }
     }
 

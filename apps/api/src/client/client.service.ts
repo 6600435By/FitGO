@@ -210,7 +210,17 @@ export class ClientService {
       startAt: booking.startAt.toISOString(),
       endAt: booking.endAt.toISOString(),
       source: '1c' as const,
+      origin: booking.origin,
       lifecycle: this.resolveLifecycle(booking.status, booking.endAt),
+      usage: {
+        controlLevel: booking.controlLevel,
+        presenceStatus: booking.presenceStatus,
+        performanceStatus: booking.performanceStatus,
+        usageStatus: booking.usageStatus,
+        paymentStatus: booking.paymentStatus,
+        reviewFlag: booking.reviewFlag,
+        eligibleForMotivation: booking.eligibleForMotivation,
+      },
     }));
   }
 
@@ -252,6 +262,16 @@ export class ClientService {
         startAt: new Date(slot.startAt),
         endAt: new Date(slot.endAt),
         status,
+        origin: 'CLIENT_BOOKED',
+        controlLevel: 'BASE',
+        reviewFlag: false,
+        paymentStatus: 'N_A',
+        usageStatus:
+          status === GroupClassBookingStatus.CANCELLED ? 'CANCELLED' : 'BOOKED',
+        presenceStatus: 'PENDING',
+        performanceStatus: 'PENDING',
+        eligibleForMotivation: false,
+        bookedByUserId: user.sub,
         cancelledAt: cancelledAt ?? null,
       },
       update: {
@@ -261,6 +281,9 @@ export class ClientService {
         endAt: new Date(slot.endAt),
         status,
         cancelledAt: cancelledAt ?? null,
+        ...(status === GroupClassBookingStatus.CANCELLED
+          ? { usageStatus: 'CANCELLED' as const }
+          : {}),
       },
     });
 
@@ -692,7 +715,7 @@ export class ClientService {
     const to = options?.to ?? new Date().toISOString().slice(0, 10);
     const from =
       options?.from ??
-      new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+      new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
     const kindFilter = options?.kind
       ? (classifyVisitKind({ kind: options.kind }) as VisitKind)
       : undefined;

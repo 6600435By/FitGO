@@ -117,6 +117,22 @@ export default function SpecialistSchedulePage() {
     }
   };
 
+  const completeBooking = async (bookingId: string) => {
+    const token = getToken();
+    if (!token) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.specialistCompleteSpaBooking(token, bookingId);
+      setMessage('Услуга подтверждена');
+      await reload();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка подтверждения');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const spaEvents =
     calendar?.events.filter((e) => e.kind === 'SPA') ?? [];
 
@@ -196,19 +212,57 @@ export default function SpecialistSchedulePage() {
       </section>
 
       <section className="space-y-3">
+        <h3 className="font-medium">Календарь (14+ дней)</h3>
+        {spaEvents.length === 0 ? (
+          <p className="text-sm text-slate-500">Нет событий в периоде</p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {spaEvents.slice(0, 42).map((e) => (
+              <div
+                key={e.id}
+                className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2 text-sm"
+              >
+                <p className="font-medium truncate">
+                  {e.serviceName ?? e.title}
+                </p>
+                <p className="text-slate-400 truncate">
+                  {e.clientName ?? (e.kind === 'OPEN_SLOT' ? 'Слот' : '—')}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {formatDateTime(e.startAt)}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
         <h3 className="font-medium">Ближайшие записи</h3>
         {bookings.length === 0 && spaEvents.length === 0 ? (
           <div className="card text-slate-400">Записей пока нет</div>
         ) : (
           <ul className="space-y-2">
-            {(bookings.length > 0 ? bookings : spaEvents.map((e) => ({
-              id: e.bookingId ?? e.id,
-              startAt: e.startAt,
-              endAt: e.endAt,
-              clientName: e.clientName ?? 'Клиент',
-              serviceName: e.serviceName ?? e.title,
-              paymentType: e.paymentType ?? 'PAID',
-            }))).map((b) => (
+            {(bookings.length > 0
+              ? bookings
+              : spaEvents.map((e) => ({
+                  id: e.bookingId ?? e.id,
+                  startAt: e.startAt,
+                  endAt: e.endAt,
+                  clientName: e.clientName ?? 'Клиент',
+                  serviceName: e.serviceName ?? e.title,
+                  paymentType: e.paymentType ?? 'PAID',
+                  usage: undefined as SpaBooking['usage'],
+                }))
+            ).map((b) => {
+              const presence = b.usage?.presenceStatus;
+              const trustHint =
+                presence === 'VERIFIED_1C'
+                  ? 'text-emerald-400'
+                  : presence === 'ADMIN_OVERRIDE'
+                    ? 'text-amber-300'
+                    : 'text-slate-500';
+              return (
               <li key={b.id} className="card">
                 <p className="font-medium">{b.serviceName}</p>
                 <p className="text-sm text-slate-300">{b.clientName}</p>
@@ -216,8 +270,37 @@ export default function SpecialistSchedulePage() {
                   {formatDateTime(b.startAt)} ·{' '}
                   {b.paymentType === 'QUOTA' ? 'По абонементу' : 'Платно'}
                 </p>
+                {b.usage && (
+                  <p className={`mt-1 text-xs ${trustHint}`}>
+                    Вход:{' '}
+                    {b.usage.presenceStatus === 'VERIFIED_1C'
+                      ? 'есть'
+                      : b.usage.presenceStatus === 'ADMIN_OVERRIDE'
+                        ? 'override'
+                        : 'ожидается'}
+                    {b.usage.controlLevel === 'ELEVATED'
+                      ? ' · запись сотрудника'
+                      : ''}
+                  </p>
+                )}
+                {b.usage?.performanceStatus === 'CONFIRMED_BY_PERFORMER' ? (
+                  <p className="mt-2 text-xs text-emerald-400">
+                    Выполнение подтверждено
+                    {b.usage.eligibleForMotivation ? ' · в мотивацию' : ''}
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-secondary mt-2 text-sm"
+                    disabled={busy}
+                    onClick={() => completeBooking(b.id)}
+                  >
+                    Подтвердить выполнение
+                  </button>
+                )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </section>

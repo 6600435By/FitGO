@@ -203,6 +203,41 @@ export class Mock1CProvider implements IFitnessClubProvider {
     return { ...m };
   }
 
+  async getSpecialistServiceDebts(_input: {
+    from: string;
+    to: string;
+    employeeCode: string;
+  }): Promise<import('@fitgo/shared-types').SpecialistServiceDebt[]> {
+    const code = _input.employeeCode?.trim() ?? '';
+    if (!code) return [];
+    return [
+      {
+        externalId: 'mock-client-1',
+        clientName: 'Куделко Д.',
+        serviceName: 'Массаж спортивный 40 мин',
+        occurredAt: `${_input.from}T12:00:00`,
+        amount: 95,
+        currency: 'BYN',
+        employeeCode: '000000099',
+        employeeName: 'Хилькович Е.',
+        docRef: '000028749#1',
+        paymentStatus: 'DEBT' as const,
+      },
+      {
+        externalId: 'mock-client-2',
+        clientName: 'Иванов И.',
+        serviceName: 'Массаж классический общий',
+        occurredAt: `${_input.to}T15:00:00`,
+        amount: 90,
+        currency: 'BYN',
+        employeeCode: '000000081',
+        employeeName: 'Петрова',
+        docRef: '000028700#1',
+        paymentStatus: 'PAID' as const,
+      },
+    ].filter((r) => r.employeeCode === code);
+  }
+
   async getVisits(externalId: string, period?: VisitPeriod) {
     const entry = Object.values(MOCK_USERS).find(
       (u) => u.profile.externalId === externalId,

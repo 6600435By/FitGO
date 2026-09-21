@@ -193,6 +193,15 @@ export class SpaBookingController {
     });
   }
 
+  @Post('specialist/spa-bookings/:bookingId/complete')
+  @Roles(UserRole.SPECIALIST)
+  specialistComplete(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.spa.specialistComplete(user, bookingId);
+  }
+
   @Patch('specialist/spa-bookings/:bookingId')
   @Roles(UserRole.SPECIALIST)
   cancelSpecialistBooking(

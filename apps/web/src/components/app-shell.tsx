@@ -30,6 +30,11 @@ interface AppShellProps {
   navItems: NavItem[];
   /** When set, header title is clickable and opens club contacts. */
   headerClub?: HeaderClubInfo | null;
+  /**
+   * Wider layout on md+ (admin / super-admin desks).
+   * Mobile stays phone-width; desktop uses full content width.
+   */
+  wide?: boolean;
 }
 
 export function AppShell({
@@ -37,6 +42,7 @@ export function AppShell({
   title,
   navItems,
   headerClub,
+  wide = false,
 }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -74,16 +80,23 @@ export function AppShell({
     ?.replace(/^https?:\/\//, '')
     .replace(/\/$/, '');
 
+  const shellWidth = wide
+    ? 'mx-auto min-h-screen w-full max-w-lg md:max-w-none [--app-header-h:5.5rem]'
+    : 'mx-auto min-h-screen max-w-lg [--app-header-h:5.5rem]';
+  const navWidth = wide
+    ? 'mx-auto w-full max-w-lg md:max-w-none'
+    : 'mx-auto max-w-lg';
+
   return (
     <div
       className={cn(
-        'mx-auto min-h-screen max-w-lg [--app-header-h:5.5rem]',
+        shellWidth,
         immersiveCard ? 'pb-20' : 'pb-24',
       )}
     >
       <header
         className={cn(
-          'sticky top-0 z-10 min-h-[var(--app-header-h)] border-b border-slate-800 bg-slate-950/90 px-4 py-4 backdrop-blur',
+          'sticky top-0 z-10 min-h-[var(--app-header-h)] border-b border-slate-800 bg-slate-950/90 px-4 py-4 backdrop-blur md:px-6',
           hideHeader && 'pointer-events-none invisible absolute',
         )}
       >
@@ -123,12 +136,12 @@ export function AppShell({
         </div>
       </header>
 
-      <main className={cn(immersiveCard ? 'px-3 py-3' : 'px-4 py-6')}>
+      <main className={cn(immersiveCard ? 'px-3 py-3' : 'px-4 py-6 md:px-6')}>
         {children}
       </main>
 
       <nav className="fixed bottom-0 left-0 right-0 border-t border-slate-800 bg-slate-950/95 backdrop-blur">
-        <div className="mx-auto flex max-w-lg justify-around px-2 py-2">
+        <div className={cn(navWidth, 'flex justify-around overflow-x-auto px-2 py-2')}>
           {navItems.map((item) => {
             const active =
               pathname === item.href ||
@@ -138,7 +151,7 @@ export function AppShell({
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  'rounded-xl px-3 py-2 text-center text-sm transition',
+                  'shrink-0 rounded-xl px-3 py-2 text-center text-sm transition',
                   active
                     ? 'bg-fitgo-500/20 text-fitgo-300'
                     : 'text-slate-400 hover:text-white',

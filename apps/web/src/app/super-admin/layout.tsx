@@ -11,13 +11,17 @@ const NAV = [
   { href: '/super-admin/modules', label: 'Модули' },
   { href: '/super-admin/staff', label: 'Staff' },
   { href: '/super-admin/tasks', label: 'Задачи' },
+  { href: '/super-admin/review-queue', label: 'Контроль записей' },
+  { href: '/super-admin/exceptions', label: 'Нестыковки' },
+  { href: '/super-admin/payroll', label: 'ЗП' },
+  { href: '/super-admin/debts', label: 'Услуги специалистов' },
   { href: '/super-admin/audit', label: 'Журнал' },
 ];
 
 export default function SuperAdminLayout({ children }: { children: ReactNode }) {
   return (
     <AuthGuard allowedRoles={[UserRole.SUPER_ADMIN]}>
-      <AppShell title="Супер-админ" navItems={NAV}>
+      <AppShell title="Супер-админ" navItems={NAV} wide>
         {children}
       </AppShell>
     </AuthGuard>

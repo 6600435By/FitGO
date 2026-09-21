@@ -82,7 +82,7 @@ export class FitgoHttpProvider {
 
   private async request<T>(
     path: string,
-    init?: { method?: string; body?: unknown },
+    init?: { method?: string; body?: unknown; timeoutMs?: number },
   ): Promise<T | null> {
     const base = this.config.baseUrl.replace(/\/$/, '');
     const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
@@ -95,11 +95,12 @@ export class FitgoHttpProvider {
       headers['Content-Type'] = 'application/json; charset=utf-8';
       body = JSON.stringify(init.body);
     }
+    const timeoutMs = init?.timeoutMs ?? 12_000;
     const response = await fetch(url, {
       method,
       headers,
       body,
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await response.text();
 
@@ -285,6 +286,27 @@ export class FitgoHttpProvider {
       throw new Error('FitGO 1C API returned empty membership after spa sale');
     }
     return mapMembership(data);
+  }
+
+  async getSpecialistServiceDebts(input: {
+    from: string;
+    to: string;
+    employeeCode: string;
+  }): Promise<import('@fitgo/shared-types').SpecialistServiceDebt[]> {
+    const employeeCode = input.employeeCode?.trim() ?? '';
+    if (!employeeCode) {
+      throw new Error('employeeCode required (report by specialist only)');
+    }
+    const q = new URLSearchParams({
+      from: input.from,
+      to: input.to,
+      employeeCode,
+    });
+    // Один сотрудник + ≤31 день (полный месяц); без фильтра по коду 1С не тянем.
+    const data = await this.request<
+      import('@fitgo/shared-types').SpecialistServiceDebt[]
+    >(`/specialist-service-debts?${q.toString()}`, { timeoutMs: 120_000 });
+    return Array.isArray(data) ? data : [];
   }
 
   async getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]> {

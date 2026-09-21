@@ -434,6 +434,66 @@ export type PersonalBookingOrigin =
   | 'CLIENT_BOOKED'
   | 'TRAINER_ASSIGNED';
 
+export type GroupBookingOrigin =
+  | 'CLIENT_BOOKED'
+  | 'STAFF_BOOKED'
+  | 'ADMIN_BOOKED';
+
+export type {
+  ServiceControlLevel,
+  ServicePresenceStatus,
+  ServicePerformanceStatus,
+  ServiceUsageStatus,
+  ServicePaymentStatus,
+  ServiceUsageControl,
+} from './service-usage';
+
+export {
+  isElevatedOrigin,
+  controlLevelFromOrigin,
+  initialControlFields,
+  toUsageControl,
+  computeUsageAfterGates,
+  originBadgeLabel,
+} from './service-usage';
+
+export type {
+  TrustBand,
+  TrustReasonCode,
+  TrustResolution,
+} from './trust';
+
+export {
+  PRESENCE_VISIT_WINDOW_HOURS,
+  GROUP_BASELINE_SOFT_CAP,
+  TRUST_REASON_LABELS,
+  visitInBookingWindow,
+  worstTrustBand,
+  isPayrollTrusted,
+  computeBookingTrust,
+  computeGroupMemberTrust,
+  computeGroupSessionTrust,
+} from './trust';
+
+export * from './payroll';
+export * from './staff-pay';
+
+import type {
+  ServiceControlLevel,
+  ServicePresenceStatus,
+  ServicePerformanceStatus,
+  ServiceUsageStatus,
+  ServicePaymentStatus,
+  ServiceUsageControl,
+} from './service-usage';
+
+/** Unified booking origin for client UI badges. */
+export type BookingOrigin =
+  | PersonalBookingOrigin
+  | 'SPECIALIST_ASSIGNED'
+  | 'ADMIN_ASSIGNED'
+  | GroupBookingOrigin;
+
 export interface Booking {
   id: string;
   sessionId: string;
@@ -443,11 +503,12 @@ export interface Booking {
   startAt: string;
   endAt: string;
   source?: '1c' | 'fitgo';
-  origin?: PersonalBookingOrigin;
+  origin?: BookingOrigin;
   lifecycle?: 'UPCOMING' | 'COMPLETED' | 'CANCELLED' | 'AWAITING_CONFIRMATION';
   /** Кто отменил (для SPA / истории) */
   cancelledBy?: SpaCancelledBy;
   cancelledByLabel?: string;
+  usage?: ServiceUsageControl;
 }
 
 export interface TrainerSummary {
@@ -474,6 +535,8 @@ export interface PersonalTrainingBookingItem {
   origin?: PersonalBookingOrigin;
   clientCompletedAt?: string;
   trainerCompletedAt?: string;
+  isComplimentary?: boolean;
+  usage?: ServiceUsageControl;
 }
 
 export type PersonalSessionStatus =
@@ -1019,6 +1082,47 @@ export interface SpaBooking {
   consumedInCrmAt?: string;
   cancelledBy?: SpaCancelledBy;
   cancelledAt?: string;
+  usage?: ServiceUsageControl;
+  specialistCompletedAt?: string;
+  paidAt?: string;
+}
+
+/** Specialist-rendered service from 1C (period report: sales + sessions). */
+export interface SpecialistServiceDebt {
+  externalId: string;
+  clientName: string;
+  serviceName: string;
+  occurredAt: string;
+  amount: number;
+  currency: string;
+  employeeCode: string;
+  employeeName: string;
+  docRef: string;
+  /** DEBT = unpaid at reception; PAID = settled in 1C. */
+  paymentStatus: 'DEBT' | 'PAID';
+  bookingRef?: string;
+}
+
+/** Elevated / review-queue row for super-admin. */
+export interface ServiceUsageReviewItem {
+  id: string;
+  kind: 'SPA' | 'PT' | 'GROUP';
+  title: string;
+  clientId: string;
+  clientName: string;
+  performerName: string;
+  bookedByName?: string;
+  startAt: string;
+  endAt: string;
+  origin: string;
+  controlLevel: ServiceControlLevel;
+  presenceStatus: ServicePresenceStatus;
+  performanceStatus: ServicePerformanceStatus;
+  usageStatus: ServiceUsageStatus;
+  paymentStatus: ServicePaymentStatus;
+  reviewFlag: boolean;
+  eligibleForMotivation: boolean;
+  isComplimentary?: boolean;
 }
 
 export interface ConsumeMembershipServiceRequest {

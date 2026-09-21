@@ -25,7 +25,9 @@ import { FitnessService } from '../fitness/fitness.service';
 import { VisitSyncService } from '../engagement/visit-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
+import { toUsageControl } from '@fitgo/shared-types';
 
 const SESSION_DURATION_MIN = 60;
 
@@ -39,10 +41,11 @@ export interface WorkSlotInput {
 export class PersonalTrainingService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly notifications: NotificationsService,
     private readonly fitness: FitnessService,
+    private readonly notifications: NotificationsService,
     private readonly roster: TrainerRosterService,
     private readonly visitSync: VisitSyncService,
+    private readonly serviceUsage: ServiceUsageService,
   ) {}
 
   async getTrainerWorkSchedule(user: JwtPayload) {
@@ -374,6 +377,7 @@ export class PersonalTrainingService {
     user: JwtPayload,
     clientId: string,
     startAt: string,
+    isComplimentary = false,
   ) {
     const start = new Date(startAt);
     if (Number.isNaN(start.getTime())) {
@@ -399,6 +403,12 @@ export class PersonalTrainingService {
       where: { trainerId_clientId: { trainerId: user.sub, clientId } },
     });
 
+    const control = this.serviceUsage.controlFieldsForCreate({
+      origin: PersonalBookingOrigin.TRAINER_ASSIGNED,
+      bookedByUserId: user.sub,
+      isComplimentary,
+    });
+
     const booking = await this.prisma.personalTrainingBooking.create({
       data: {
         trainerId: user.sub,
@@ -406,6 +416,15 @@ export class PersonalTrainingService {
         startAt: start,
         endAt: end,
         origin: PersonalBookingOrigin.TRAINER_ASSIGNED,
+        isComplimentary,
+        controlLevel: control.controlLevel,
+        reviewFlag: control.reviewFlag,
+        paymentStatus: control.paymentStatus,
+        usageStatus: control.usageStatus,
+        presenceStatus: control.presenceStatus,
+        performanceStatus: control.performanceStatus,
+        eligibleForMotivation: control.eligibleForMotivation,
+        bookedByUserId: control.bookedByUserId,
       },
       include: { client: true, trainer: true },
     });
@@ -660,6 +679,11 @@ export class PersonalTrainingService {
       throw new NotFoundException('Тренер не найден');
     }
 
+    const control = this.serviceUsage.controlFieldsForCreate({
+      origin: PersonalBookingOrigin.CLIENT_BOOKED,
+      bookedByUserId: user.sub,
+    });
+
     const booking = await this.prisma.personalTrainingBooking.create({
       data: {
         trainerId,
@@ -667,6 +691,14 @@ export class PersonalTrainingService {
         startAt: start,
         endAt: end,
         origin: PersonalBookingOrigin.CLIENT_BOOKED,
+        controlLevel: control.controlLevel,
+        reviewFlag: control.reviewFlag,
+        paymentStatus: control.paymentStatus,
+        usageStatus: control.usageStatus,
+        presenceStatus: control.presenceStatus,
+        performanceStatus: control.performanceStatus,
+        eligibleForMotivation: control.eligibleForMotivation,
+        bookedByUserId: control.bookedByUserId,
       },
       include: { trainer: true },
     });
@@ -723,6 +755,17 @@ export class PersonalTrainingService {
       origin: booking.origin,
       clientCompletedAt: booking.clientCompletedAt?.toISOString(),
       trainerCompletedAt: booking.trainerCompletedAt?.toISOString(),
+      isComplimentary: booking.isComplimentary,
+      usage: toUsageControl({
+        controlLevel: booking.controlLevel,
+        presenceStatus: booking.presenceStatus,
+        performanceStatus: booking.performanceStatus,
+        usageStatus: booking.usageStatus,
+        paymentStatus: booking.paymentStatus,
+        reviewFlag: booking.reviewFlag,
+        eligibleForMotivation: booking.eligibleForMotivation,
+        isComplimentary: booking.isComplimentary,
+      }),
     }));
   }
 
@@ -991,6 +1034,7 @@ export class PersonalTrainingService {
     });
 
     if (trainerCompletedAt) {
+      await this.serviceUsage.markPerformerConfirmed(bookingId, 'PT');
       const clubId =
         booking.client.clubId ??
         booking.trainer.clubId ??
@@ -1197,7 +1241,9 @@ export class PersonalTrainingService {
       return {
         id: booking.id,
         sessionId: booking.id,
-        title: 'Персональная тренировка',
+        title: booking.isComplimentary
+          ? 'Подарочная тренировка'
+          : 'Персональная тренировка',
         type: SessionType.PERSONAL,
         trainerName: booking.trainerName,
         startAt: booking.startAt,
@@ -1205,6 +1251,7 @@ export class PersonalTrainingService {
         source: 'fitgo' as const,
         origin: booking.origin,
         lifecycle,
+        usage: booking.usage,
       };
     });
   }

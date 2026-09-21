@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { FitnessModule } from '../fitness/fitness.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import { EngagementController } from './engagement.controller';
 import { EngagementService } from './engagement.service';
 import { VisitSyncService } from './visit-sync.service';
@@ -11,7 +12,7 @@ import { BadgeEvaluatorService } from './badge-evaluator.service';
 import { EngagementSchedulerService } from './engagement-scheduler.service';
 
 @Module({
-  imports: [AuthModule, FitnessModule, NotificationsModule],
+  imports: [AuthModule, FitnessModule, NotificationsModule, ServiceUsageModule],
   controllers: [EngagementController],
   providers: [
     EngagementService,
