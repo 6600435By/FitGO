@@ -108,6 +108,21 @@ export interface IFitnessClubProvider {
   }): Promise<
     import('@fitgo/shared-types').SpecialistServiceDebt[]
   >;
+  /**
+   * Check PT session payment fact in 1C by client phone/externalId + datetime.
+   * Optional — returns null when unsupported.
+   */
+  getPtSessionPayment?(input: {
+    clientExternalId?: string;
+    clientPhone?: string;
+    trainerExternalId?: string;
+    occurredAt: string;
+  }): Promise<{
+    paymentStatus: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
+    payKind?: 'GIFT' | 'BLOCK' | 'PAID' | 'UNKNOWN';
+    priceMinor?: number;
+    docRef?: string;
+  } | null>;
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]>;
   getAccessCard(externalId: string): Promise<AccessCard | null>;
   getSchedule(clubExternalId: string, filters?: ScheduleFilters): Promise<ScheduleSlot[]>;

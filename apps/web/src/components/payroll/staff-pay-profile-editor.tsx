@@ -220,8 +220,19 @@ export function StaffPayProfileEditor({ userId, suggestedTrack }: Props) {
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
             % от оплаченной и проведённой ПТ. Подарочные идут в счёт количества
-            за месяц, но не оплачиваются. Пороги — календарный месяц.
+            за месяц, но не оплачиваются. Пороги — календарный месяц. Часы смены
+            оплачиваются отдельно по ставке.
           </p>
+          <Field
+            label="Ставка за час смены, BYN"
+            value={String((profile.hourlyRateMinor ?? 0) / 100)}
+            onChange={(v) =>
+              setProfile({
+                ...profile,
+                hourlyRateMinor: Math.round(Number(v || 0) * 100),
+              })
+            }
+          />
           <Field
             label="Стоимость ПТ для расчёта, BYN"
             value={String((profile.ptSessionPriceMinor ?? 0) / 100)}

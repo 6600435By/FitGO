@@ -30,7 +30,9 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { GroupSessionService } from '../group-session/group-session.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { PtTimesheetService } from '../pt-timesheet/pt-timesheet.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
+import { StaffRosterService } from '../staff-roster/staff-roster.service';
 
 function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -43,6 +45,8 @@ export class PayrollService {
     private readonly prisma: PrismaService,
     private readonly serviceUsage: ServiceUsageService,
     private readonly groupSessions: GroupSessionService,
+    private readonly ptTimesheet: PtTimesheetService,
+    private readonly staffRoster: StaffRosterService,
   ) {}
 
   async listWorkUnits(
@@ -89,13 +93,50 @@ export class PayrollService {
         trainerId: performerId,
         status: { not: PersonalBookingStatus.CANCELLED },
         startAt: { gte: fromD, lte: toD },
-        eligibleForMotivation: true,
       },
       include: { client: true },
       orderBy: { startAt: 'asc' },
     });
+    const fromDate = new Date(`${from}T00:00:00`);
+    const toDate = new Date(`${to}T00:00:00`);
+    const sheetLines = await this.prisma.trainerDaySheetLine.findMany({
+      where: {
+        sheet: {
+          clubId,
+          trainerId: performerId,
+          date: { gte: fromDate, lte: toDate },
+          status: { in: ['SA_APPROVED', 'LOCKED'] },
+        },
+      },
+      select: {
+        personalTrainingBookingId: true,
+        payable: true,
+        forceIncludeInPayroll: true,
+        clientIssue: true,
+      },
+    });
+    const sheetBookingIds = new Set(
+      sheetLines.map((l) => l.personalTrainingBookingId),
+    );
+    const payableIds = new Set(
+      sheetLines
+        .filter(
+          (l) =>
+            l.clientIssue === 'NONE' &&
+            (l.payable || l.forceIncludeInPayroll),
+        )
+        .map((l) => l.personalTrainingBookingId),
+    );
+
     for (const b of pts) {
-      const trusted = this.serviceUsage.bookingPayrollTrusted(b);
+      if (sheetBookingIds.size > 0 && !sheetBookingIds.has(b.id)) continue;
+      if (sheetBookingIds.size === 0 && !b.eligibleForMotivation) continue;
+
+      const trusted =
+        sheetBookingIds.size > 0
+          ? b.isComplimentary || payableIds.has(b.id)
+          : this.serviceUsage.bookingPayrollTrusted(b);
+
       units.push({
         id: b.id,
         kind: 'PT',
@@ -105,7 +146,7 @@ export class PayrollService {
           : 'Персональная тренировка',
         occurredAt: b.startAt.toISOString(),
         quantity: 1,
-        priceMinor: b.isComplimentary ? 0 : undefined,
+        priceMinor: b.isComplimentary ? 0 : (b.priceMinor ?? undefined),
         isComplimentary: b.isComplimentary,
         trustBand: b.trustBand as WorkUnit['trustBand'],
         trustResolution: b.trustResolution as WorkUnit['trustResolution'],
@@ -228,8 +269,22 @@ export class PayrollService {
       profile.hourlyRateMinor &&
       !compensation?.baseSalaryMinor
     ) {
-      // Rough: 8h * days in period (desk hours placeholder until timesheets exist)
-      baseSalaryMinor = profile.hourlyRateMinor * 8 * daysInclusive;
+      const hours = await this.staffRoster.hourlySummary(
+        clubId,
+        performerId,
+        from,
+        to,
+      );
+      baseSalaryMinor = hours.payMinor;
+    }
+    if (profile?.track === 'PT') {
+      const shiftPay = await this.ptTimesheet.sumShiftPayMinor(
+        clubId,
+        performerId,
+        from,
+        to,
+      );
+      baseSalaryMinor += shiftPay;
     }
 
     const locked = await this.prisma.payrollPeriodLock.findUnique({

@@ -34,6 +34,16 @@ const ALL_NAV: Array<{
     module: 'spa_booking' as const,
   },
   {
+    href: '/admin/staff-roster',
+    label: 'График',
+    permission: AdminPermission.CLIENTS_VIEW,
+  },
+  {
+    href: '/admin/pt-timesheet',
+    label: 'Табели ПТ',
+    permission: AdminPermission.CLIENTS_VIEW,
+  },
+  {
     href: '/admin/exceptions',
     label: 'Нестыковки',
     permission: AdminPermission.CLIENTS_VIEW,
@@ -47,11 +57,6 @@ const ALL_NAV: Array<{
   { href: '/admin/funnel', label: 'Воронка', permission: AdminPermission.FUNNEL_VIEW },
   { href: '/admin/reports', label: 'Отчёты', permission: AdminPermission.REPORTS_VIEW },
   { href: '/admin/tasks', label: 'Задачи' },
-  {
-    href: '/admin/settings',
-    label: 'Клуб',
-    permission: AdminPermission.SETTINGS_BRANDING,
-  },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {

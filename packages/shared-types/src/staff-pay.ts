@@ -91,6 +91,7 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         track,
         ptPercentTiers: DEFAULT_PT_TIERS.map((t) => ({ ...t })),
         ptSessionPriceMinor: 0,
+        hourlyRateMinor: 0,
       };
   }
 }
@@ -127,6 +128,8 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
       }
       break;
     case 'PT':
+      if (profile.hourlyRateMinor)
+        chips.push(`${(profile.hourlyRateMinor / 100).toFixed(0)}/ч смены`);
       if (profile.ptSessionPriceMinor)
         chips.push(
           `ПТ ${(profile.ptSessionPriceMinor / 100).toFixed(0)}`,

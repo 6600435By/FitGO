@@ -477,6 +477,8 @@ export {
 
 export * from './payroll';
 export * from './staff-pay';
+export * from './pt-timesheet';
+export * from './staff-roster';
 
 import type {
   ServiceControlLevel,
@@ -827,6 +829,7 @@ export interface ClubTheme {
   address?: string;
   phone?: string;
   website?: string;
+  workingHours?: import('./staff-roster').ClubWorkingHours;
 }
 
 export interface AtRiskClient {

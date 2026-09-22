@@ -11,6 +11,7 @@
 //   POST /v1/spa/service-sale            → обработчик SpaSalePOST
 //   POST /v1/spa/cleanup-broken-visits   → обработчик CleanupBrokenSpaVisitsPOST
 //   GET  /v1/specialist-service-debts    → обработчик SpecialistServiceDebtsGET
+//   GET  /v1/pt-session-payment         → (план) сверка оплаты ПТ: clientPhone|clientExternalId + occurredAt
 //   GET  /v1/visits
 //   GET  /v1/card
 //

@@ -364,6 +364,86 @@ export class SuperAdminService {
     };
   }
 
+  async getClubProfile(user: JwtPayload) {
+    const club = await this.prisma.club.findUnique({
+      where: { id: requireClubId(user) },
+      include: { theme: true },
+    });
+    if (!club) throw new NotFoundException('Клуб не найден');
+    return {
+      id: club.id,
+      name: club.name,
+      slug: club.slug,
+      address: club.address ?? undefined,
+      phone: club.phone ?? undefined,
+      website: club.website ?? undefined,
+      currency: club.currency,
+      externalId: club.externalId ?? undefined,
+      workingHours: club.workingHours ?? undefined,
+      theme: {
+        clubName: club.name,
+        logoUrl: club.theme?.logoUrl ?? undefined,
+        primaryColor: club.theme?.primaryColor ?? '#14b88a',
+        address: club.address ?? undefined,
+        phone: club.phone ?? undefined,
+        website: club.website ?? undefined,
+      },
+    };
+  }
+
+  async updateClubProfile(
+    user: JwtPayload,
+    data: {
+      name?: string;
+      address?: string;
+      phone?: string;
+      website?: string;
+      logoUrl?: string;
+      primaryColor?: string;
+      workingHours?: Record<string, unknown>;
+    },
+  ) {
+    const clubId = requireClubId(user);
+    await this.prisma.club.update({
+      where: { id: clubId },
+      data: {
+        ...(data.name !== undefined ? { name: data.name.trim() } : {}),
+        ...(data.address !== undefined
+          ? { address: data.address.trim() || null }
+          : {}),
+        ...(data.phone !== undefined ? { phone: data.phone.trim() || null } : {}),
+        ...(data.website !== undefined
+          ? { website: data.website.trim() || null }
+          : {}),
+        ...(data.workingHours !== undefined
+          ? { workingHours: data.workingHours as Prisma.InputJsonValue }
+          : {}),
+      },
+    });
+
+    if (data.logoUrl !== undefined || data.primaryColor !== undefined) {
+      await this.prisma.clubTheme.upsert({
+        where: { clubId },
+        update: {
+          ...(data.logoUrl !== undefined ? { logoUrl: data.logoUrl || null } : {}),
+          ...(data.primaryColor !== undefined
+            ? { primaryColor: data.primaryColor }
+            : {}),
+        },
+        create: {
+          clubId,
+          logoUrl: data.logoUrl || null,
+          primaryColor: data.primaryColor ?? '#14b88a',
+        },
+      });
+    }
+
+    await this.logAudit(user, 'CLUB_PROFILE_UPDATED', clubId, {
+      fields: Object.keys(data),
+    });
+    return this.getClubProfile(user);
+  }
+
   private async logAudit(
     user: JwtPayload,
     action: string,

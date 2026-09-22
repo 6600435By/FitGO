@@ -1680,4 +1680,350 @@ export const api = {
       token,
     );
   },
+
+  trainerPtShifts: (token: string, from: string, to: string) =>
+    request<import('@fitgo/shared-types').TrainerShiftDto[]>(
+      `/trainer/pt-timesheet/shifts?from=${from}&to=${to}`,
+      {},
+      token,
+    ),
+
+  trainerPtUpsertShift: (
+    token: string,
+    body: { id?: string; date: string; startAt: string; endAt: string },
+  ) =>
+    request<import('@fitgo/shared-types').TrainerShiftDto>(
+      '/trainer/pt-timesheet/shifts',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  trainerPtDeleteShift: (token: string, id: string) =>
+    request<{ success: boolean }>(
+      `/trainer/pt-timesheet/shifts/${id}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  trainerPtDaySheet: (token: string, date: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/trainer/pt-timesheet/day?date=${date}`,
+      {},
+      token,
+    ),
+
+  trainerPtSubmitDay: (token: string, date: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      '/trainer/pt-timesheet/day/submit',
+      { method: 'POST', body: JSON.stringify({ date }) },
+      token,
+    ),
+
+  trainerPtLateAdd: (
+    token: string,
+    body: {
+      date: string;
+      phone: string;
+      firstName: string;
+      lastName: string;
+      startAt: string;
+      isComplimentary?: boolean;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      '/trainer/pt-timesheet/day/late-add',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  trainerPtCorrectPhone: (token: string, bookingId: string, phone: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/trainer/pt-timesheet/bookings/${bookingId}/correct-phone`,
+      { method: 'POST', body: JSON.stringify({ phone }) },
+      token,
+    ),
+
+  trainerPtEscalate: (token: string, bookingId: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/trainer/pt-timesheet/bookings/${bookingId}/escalate`,
+      { method: 'POST', body: '{}' },
+      token,
+    ),
+
+  trainerPtNotThisClient: (token: string, bookingId: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/trainer/pt-timesheet/bookings/${bookingId}/not-this-client`,
+      { method: 'POST', body: '{}' },
+      token,
+    ),
+
+  adminPtClientIssues: (token: string) =>
+    request<import('@fitgo/shared-types').PtClientIssueQueueItem[]>(
+      '/admin/pt-timesheet/client-issues',
+      {},
+      token,
+    ),
+
+  adminPtSheets: (token: string, status?: string) => {
+    const q = status ? `?status=${status}` : '';
+    return request<import('@fitgo/shared-types').TrainerDaySheetDto[]>(
+      `/admin/pt-timesheet/sheets${q}`,
+      {},
+      token,
+    );
+  },
+
+  adminPtSheet: (token: string, id: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/admin/pt-timesheet/sheets/${id}`,
+      {},
+      token,
+    ),
+
+  adminPtRebindPhone: (token: string, bookingId: string, phone: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/admin/pt-timesheet/bookings/${bookingId}/rebind-phone`,
+      { method: 'POST', body: JSON.stringify({ phone }) },
+      token,
+    ),
+
+  adminPtResolveClient: (token: string, bookingId: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/admin/pt-timesheet/bookings/${bookingId}/resolve-client`,
+      { method: 'POST', body: '{}' },
+      token,
+    ),
+
+  adminPtSetPayment: (
+    token: string,
+    bookingId: string,
+    body: {
+      paymentStatus: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
+      payKind?: string;
+      priceMinor?: number;
+      verified1c?: boolean;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/admin/pt-timesheet/bookings/${bookingId}/payment`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+      token,
+    ),
+
+  adminPtVerify1c: (token: string, bookingId: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/admin/pt-timesheet/bookings/${bookingId}/verify-1c`,
+      { method: 'POST', body: '{}' },
+      token,
+    ),
+
+  adminPtApproveSheet: (token: string, id: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/admin/pt-timesheet/sheets/${id}/approve`,
+      { method: 'POST', body: '{}' },
+      token,
+    ),
+
+  saPtSheets: (token: string, status?: string) => {
+    const q = status ? `?status=${status}` : '';
+    return request<import('@fitgo/shared-types').TrainerDaySheetDto[]>(
+      `/super-admin/pt-timesheet/sheets${q}`,
+      {},
+      token,
+    );
+  },
+
+  saPtApproveSheet: (
+    token: string,
+    id: string,
+    forceBookingIds?: string[],
+  ) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/super-admin/pt-timesheet/sheets/${id}/approve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ forceBookingIds }),
+      },
+      token,
+    ),
+
+  saPtLockSheet: (token: string, id: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/super-admin/pt-timesheet/sheets/${id}/lock`,
+      { method: 'POST', body: '{}' },
+      token,
+    ),
+
+  superAdminClubProfile: (token: string) =>
+    request<{
+      id: string;
+      name: string;
+      slug: string;
+      address?: string;
+      phone?: string;
+      website?: string;
+      currency: string;
+      externalId?: string;
+      workingHours?: import('@fitgo/shared-types').ClubWorkingHours;
+      theme: ClubTheme;
+    }>('/super-admin/club-profile', {}, token),
+
+  superAdminUpdateClubProfile: (
+    token: string,
+    data: {
+      name?: string;
+      address?: string;
+      phone?: string;
+      website?: string;
+      logoUrl?: string;
+      primaryColor?: string;
+      workingHours?: import('@fitgo/shared-types').ClubWorkingHours;
+    },
+  ) =>
+    request('/super-admin/club-profile', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }, token),
+
+  adminRosterWorkingHours: (token: string) =>
+    request<import('@fitgo/shared-types').ClubWorkingHours>(
+      '/admin/staff-roster/working-hours',
+      {},
+      token,
+    ),
+
+  adminRosterStaff: (token: string, track: import('@fitgo/shared-types').StaffShiftTrack) =>
+    request<Array<{ id: string; name: string; roles: string[] }>>(
+      `/admin/staff-roster/staff?track=${track}`,
+      {},
+      token,
+    ),
+
+  adminRosterMonth: (
+    token: string,
+    year: number,
+    month: number,
+    track?: import('@fitgo/shared-types').StaffShiftTrack,
+  ) => {
+    const q = new URLSearchParams({
+      year: String(year),
+      month: String(month),
+      ...(track ? { track } : {}),
+    });
+    return request<import('@fitgo/shared-types').StaffShiftMonthCell[]>(
+      `/admin/staff-roster/month?${q}`,
+      {},
+      token,
+    );
+  },
+
+  adminRosterUpsertShift: (
+    token: string,
+    body: {
+      id?: string;
+      userId: string;
+      track: import('@fitgo/shared-types').StaffShiftTrack;
+      date: string;
+      startAt: string;
+      endAt: string;
+      note?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').StaffShiftDto>(
+      '/admin/staff-roster/shifts',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  adminRosterDeleteShift: (token: string, id: string) =>
+    request<{ success: boolean }>(
+      `/admin/staff-roster/shifts/${id}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  adminRosterMyHours: (token: string, from: string, to: string) =>
+    request<import('@fitgo/shared-types').StaffHourlySummary>(
+      `/admin/staff-roster/my-hours?from=${from}&to=${to}`,
+      {},
+      token,
+    ),
+
+  saRosterWorkingHours: (token: string) =>
+    request<import('@fitgo/shared-types').ClubWorkingHours>(
+      '/super-admin/staff-roster/working-hours',
+      {},
+      token,
+    ),
+
+  saRosterStaff: (token: string, track: import('@fitgo/shared-types').StaffShiftTrack) =>
+    request<Array<{ id: string; name: string; roles: string[] }>>(
+      `/super-admin/staff-roster/staff?track=${track}`,
+      {},
+      token,
+    ),
+
+  saRosterMonth: (
+    token: string,
+    year: number,
+    month: number,
+    track?: import('@fitgo/shared-types').StaffShiftTrack,
+  ) => {
+    const q = new URLSearchParams({
+      year: String(year),
+      month: String(month),
+      ...(track ? { track } : {}),
+    });
+    return request<import('@fitgo/shared-types').StaffShiftMonthCell[]>(
+      `/super-admin/staff-roster/month?${q}`,
+      {},
+      token,
+    );
+  },
+
+  saRosterUpsertShift: (
+    token: string,
+    body: {
+      id?: string;
+      userId: string;
+      track: import('@fitgo/shared-types').StaffShiftTrack;
+      date: string;
+      startAt: string;
+      endAt: string;
+      note?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').StaffShiftDto>(
+      '/super-admin/staff-roster/shifts',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  saRosterDeleteShift: (token: string, id: string) =>
+    request<{ success: boolean }>(
+      `/super-admin/staff-roster/shifts/${id}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  saRosterSummaries: (
+    token: string,
+    from: string,
+    to: string,
+    track?: import('@fitgo/shared-types').StaffShiftTrack,
+  ) => {
+    const q = new URLSearchParams({ from, to, ...(track ? { track } : {}) });
+    return request<import('@fitgo/shared-types').StaffHourlySummary[]>(
+      `/super-admin/staff-roster/summaries?${q}`,
+      {},
+      token,
+    );
+  },
+
+  trainerRosterMyMonth: (token: string, year: number, month: number) =>
+    request<import('@fitgo/shared-types').StaffShiftMonthCell[]>(
+      `/trainer/staff-roster/my-month?year=${year}&month=${month}`,
+      {},
+      token,
+    ),
 };

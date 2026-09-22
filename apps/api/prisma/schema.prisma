@@ -303,6 +303,41 @@ enum MotivationRateType {
   FIXED_PER_ATTENDEE
 }
 
+enum PtClientIssue {
+  NONE
+  WRONG_PHONE
+  CRM_UNMATCHED
+  IDENTITY_MISMATCH
+}
+
+enum PtSessionPayKind {
+  UNKNOWN
+  GIFT
+  BLOCK
+  PAID
+}
+
+enum TrainerShiftStatus {
+  PLANNED
+  OPEN
+  CLOSED
+}
+
+enum TrainerDaySheetStatus {
+  DRAFT
+  TRAINER_SUBMITTED
+  ADMIN_REVIEW
+  ADMIN_APPROVED
+  SA_APPROVED
+  LOCKED
+}
+
+enum StaffShiftTrack {
+  ADMIN
+  TRAINER
+  TECH
+}
+
 enum GroupClassWaitlistStatus {
   WAITING
   NOTIFIED
@@ -325,6 +360,8 @@ model Club {
   website      String?
   externalId   String?  @unique
   currency     String   @default("BYN")
+  /// Club opening hours Mon–Sun: { monday: { open, close, closed }, ... }
+  workingHours Json?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -345,6 +382,9 @@ model Club {
   motivationRates      MotivationRate[]
   payrollAdjustments   PayrollAdjustment[]
   payrollPeriodLocks   PayrollPeriodLock[]
+  trainerShifts        TrainerShift[]
+  trainerDaySheets     TrainerDaySheet[]
+  staffShifts          StaffShift[]
 }
 
 model ClubTheme {
@@ -465,6 +505,11 @@ model User {
   groupClassSessionsLed   GroupClassSession[]  @relation("GroupSessionTrainer")
   staffCompensation       StaffCompensation[]
   payrollAdjustments      PayrollAdjustment[]
+  trainerShifts           TrainerShift[]          @relation("TrainerShifts")
+  trainerDaySheets        TrainerDaySheet[]       @relation("TrainerDaySheets")
+  daySheetsAdminApproved  TrainerDaySheet[]       @relation("DaySheetAdminApprover")
+  daySheetsSaApproved     TrainerDaySheet[]       @relation("DaySheetSaApprover")
+  staffShifts             StaffShift[]            @relation("StaffShifts")
 
   @@unique([clubId, gamificationNickname])
   @@index([externalId])
@@ -785,12 +830,20 @@ model PersonalTrainingBooking {
   presenceOverrideById String?
   paidAt             DateTime?
   crmDocRef          String?
+  /// Late booking created during/after session (exception path).
+  isLateAdd          Boolean               @default(false)
+  clientIssue        PtClientIssue         @default(NONE)
+  clientIssueEscalated Boolean             @default(false)
+  payKind            PtSessionPayKind      @default(UNKNOWN)
+  priceMinor         Int?
+  forceIncludeInPayroll Boolean            @default(false)
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
 
   trainer      User                          @relation("TrainerPersonalBookings", fields: [trainerId], references: [id], onDelete: Cascade)
   client       User                          @relation("ClientPersonalBookings", fields: [clientId], references: [id], onDelete: Cascade)
   sessionGoals PersonalTrainingSessionGoal[]
+  daySheetLines TrainerDaySheetLine[]
 
   @@unique([trainerId, startAt])
   @@index([trainerId, startAt])
@@ -798,6 +851,8 @@ model PersonalTrainingBooking {
   @@index([reviewFlag, usageStatus])
   @@index([presenceStatus, startAt])
   @@index([trustBand, trustResolution])
+  @@index([clientIssue, clientIssueEscalated])
+  @@index([isLateAdd])
 }
 
 model PersonalTrainingSessionGoal {
@@ -1474,4 +1529,107 @@ model PayrollPeriodLock {
   club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
 
   @@unique([clubId, userId, periodFrom, periodTo])
+}
+
+/// Paid desk/shift hours for a PT trainer (legacy; prefer StaffShift track=TRAINER).
+model TrainerShift {
+  id        String             @id @default(cuid())
+  clubId    String
+  trainerId String
+  date      DateTime           @db.Date
+  startAt   DateTime
+  endAt     DateTime
+  status    TrainerShiftStatus @default(PLANNED)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  club    Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  trainer User @relation("TrainerShifts", fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@index([trainerId, date])
+  @@index([clubId, date])
+}
+
+/// Club-wide staff roster shifts (admins / trainers / tech). Edited by admin/SA.
+model StaffShift {
+  id        String             @id @default(cuid())
+  clubId    String
+  userId    String
+  track     StaffShiftTrack
+  date      DateTime           @db.Date
+  startAt   DateTime
+  endAt     DateTime
+  status    TrainerShiftStatus @default(PLANNED)
+  note      String?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  user User @relation("StaffShifts", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, track, date])
+  @@index([userId, date])
+}
+
+/// Daily timesheet: projection of PT bookings for the day + shift minutes.
+model TrainerDaySheet {
+  id                     String                @id @default(cuid())
+  clubId                 String
+  trainerId              String
+  date                   DateTime              @db.Date
+  status                 TrainerDaySheetStatus @default(DRAFT)
+  shiftMinutes           Int                   @default(0)
+  workedMinutes          Int                   @default(0)
+  hourlyMinor            Int                   @default(0)
+  shiftPayMinor          Int                   @default(0)
+  sessionMotivationMinor Int                   @default(0)
+  totalMinor             Int                   @default(0)
+  currency               String                @default("BYN")
+  submittedAt            DateTime?
+  adminApprovedById      String?
+  adminApprovedAt        DateTime?
+  saApprovedById         String?
+  saApprovedAt           DateTime?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+
+  club            Club                 @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  trainer         User                 @relation("TrainerDaySheets", fields: [trainerId], references: [id], onDelete: Cascade)
+  adminApprovedBy User?                @relation("DaySheetAdminApprover", fields: [adminApprovedById], references: [id], onDelete: SetNull)
+  saApprovedBy    User?                @relation("DaySheetSaApprover", fields: [saApprovedById], references: [id], onDelete: SetNull)
+  lines           TrainerDaySheetLine[]
+
+  @@unique([trainerId, date])
+  @@index([clubId, status, date])
+  @@index([status, date])
+}
+
+model TrainerDaySheetLine {
+  id                       String           @id @default(cuid())
+  sheetId                  String
+  personalTrainingBookingId String
+  clientName               String
+  clientPhone              String?
+  source                   String
+  payKind                  PtSessionPayKind @default(UNKNOWN)
+  priceMinor               Int?
+  paymentStatus            ServicePaymentStatus @default(N_A)
+  verified1c               Boolean          @default(false)
+  payable                  Boolean          @default(false)
+  countsForVolume          Boolean          @default(true)
+  isLateAdd                Boolean          @default(false)
+  clientIssue              PtClientIssue    @default(NONE)
+  clientIssueEscalated     Boolean          @default(false)
+  forceIncludeInPayroll    Boolean          @default(false)
+  motivationMinor          Int              @default(0)
+  createdAt                DateTime         @default(now())
+  updatedAt                DateTime         @updatedAt
+
+  sheet   TrainerDaySheet         @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  booking PersonalTrainingBooking @relation(fields: [personalTrainingBookingId], references: [id], onDelete: Cascade)
+
+  @@unique([sheetId, personalTrainingBookingId])
+  @@index([sheetId])
+  @@index([clientIssue, clientIssueEscalated])
+  @@index([isLateAdd])
 }

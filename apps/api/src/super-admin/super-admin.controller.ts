@@ -220,4 +220,26 @@ export class SuperAdminController {
       note: body.note ?? '',
     });
   }
+
+  @Get('club-profile')
+  getClubProfile(@CurrentUser() user: JwtPayload) {
+    return this.superAdmin.getClubProfile(user);
+  }
+
+  @Patch('club-profile')
+  updateClubProfile(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      name?: string;
+      address?: string;
+      phone?: string;
+      website?: string;
+      logoUrl?: string;
+      primaryColor?: string;
+      workingHours?: Record<string, unknown>;
+    },
+  ) {
+    return this.superAdmin.updateClubProfile(user, body);
+  }
 }

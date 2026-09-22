@@ -238,6 +238,32 @@ export class Mock1CProvider implements IFitnessClubProvider {
     ].filter((r) => r.employeeCode === code);
   }
 
+  async getPtSessionPayment(input: {
+    clientExternalId?: string;
+    clientPhone?: string;
+    trainerExternalId?: string;
+    occurredAt: string;
+  }): Promise<{
+    paymentStatus: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
+    payKind?: 'GIFT' | 'BLOCK' | 'PAID' | 'UNKNOWN';
+    priceMinor?: number;
+    docRef?: string;
+  } | null> {
+    void input.trainerExternalId;
+    if (!input.clientExternalId && !input.clientPhone) return null;
+    const last = (input.clientPhone ?? input.clientExternalId ?? '').replace(
+      /\D/g,
+      '',
+    );
+    const even = last.length > 0 && Number(last[last.length - 1]) % 2 === 0;
+    return {
+      paymentStatus: even ? 'PAID' : 'DEBT',
+      payKind: even ? 'PAID' : 'UNKNOWN',
+      priceMinor: 5000,
+      docRef: even ? `MOCK-PT-${input.occurredAt.slice(0, 10)}` : undefined,
+    };
+  }
+
   async getVisits(externalId: string, period?: VisitPeriod) {
     const entry = Object.values(MOCK_USERS).find(
       (u) => u.profile.externalId === externalId,

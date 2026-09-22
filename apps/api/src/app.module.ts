@@ -18,6 +18,8 @@ import { OsmiModule } from './osmi/osmi.module';
 import { FeaturesModule } from './features/features.module';
 import { GroupSessionModule } from './group-session/group-session.module';
 import { PayrollModule } from './payroll/payroll.module';
+import { PtTimesheetModule } from './pt-timesheet/pt-timesheet.module';
+import { StaffRosterModule } from './staff-roster/staff-roster.module';
 
 @Module({
   imports: [
@@ -40,6 +42,8 @@ import { PayrollModule } from './payroll/payroll.module';
     OsmiModule,
     GroupSessionModule,
     PayrollModule,
+    PtTimesheetModule,
+    StaffRosterModule,
   ],
 })
 export class AppModule {}

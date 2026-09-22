@@ -120,6 +120,17 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     return this.fitgo.getSpecialistServiceDebts?.(input) ?? Promise.resolve([]);
   }
 
+  getPtSessionPayment(input: {
+    clientExternalId?: string;
+    clientPhone?: string;
+    trainerExternalId?: string;
+    occurredAt: string;
+  }) {
+    return (
+      this.fitgo.getPtSessionPayment?.(input) ?? Promise.resolve(null)
+    );
+  }
+
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]> {
     return this.fitgo.getVisits(externalId, period);
   }

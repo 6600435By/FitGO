@@ -394,9 +394,19 @@ export class PersonalTrainingService {
         id: clientId,
         roles: { some: { role: Role.CLIENT } },
       },
+      include: {
+        clubMemberships: user.clubId
+          ? { where: { clubId: user.clubId }, take: 1 }
+          : false,
+      },
     });
     if (!client) {
       throw new NotFoundException('Клиент не найден');
+    }
+    if (!client.phoneNormalized && !client.phone) {
+      throw new BadRequestException(
+        'У клиента нет телефона — укажите номер перед записью',
+      );
     }
 
     const link = await this.prisma.trainerClientLink.findUnique({
@@ -409,6 +419,17 @@ export class PersonalTrainingService {
       isComplimentary,
     });
 
+    const membership = Array.isArray(client.clubMemberships)
+      ? client.clubMemberships[0]
+      : undefined;
+    const ext = client.externalId ?? membership?.externalId;
+    const clientIssue =
+      !client.phoneNormalized && !client.phone
+        ? 'WRONG_PHONE'
+        : !ext || membership?.crmStatus === 'PENDING_CRM'
+          ? 'CRM_UNMATCHED'
+          : 'NONE';
+
     const booking = await this.prisma.personalTrainingBooking.create({
       data: {
         trainerId: user.sub,
@@ -418,13 +439,18 @@ export class PersonalTrainingService {
         origin: PersonalBookingOrigin.TRAINER_ASSIGNED,
         isComplimentary,
         controlLevel: control.controlLevel,
-        reviewFlag: control.reviewFlag,
+        reviewFlag: control.reviewFlag || clientIssue !== 'NONE',
         paymentStatus: control.paymentStatus,
         usageStatus: control.usageStatus,
         presenceStatus: control.presenceStatus,
         performanceStatus: control.performanceStatus,
         eligibleForMotivation: control.eligibleForMotivation,
         bookedByUserId: control.bookedByUserId,
+        clientIssue: clientIssue as never,
+        payKind: isComplimentary ? 'GIFT' : 'UNKNOWN',
+        ...(clientIssue !== 'NONE'
+          ? { trustBand: 'AMBER' as never }
+          : {}),
       },
       include: { client: true, trainer: true },
     });

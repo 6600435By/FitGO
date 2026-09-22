@@ -309,6 +309,36 @@ export class FitgoHttpProvider {
     return Array.isArray(data) ? data : [];
   }
 
+  async getPtSessionPayment(input: {
+    clientExternalId?: string;
+    clientPhone?: string;
+    trainerExternalId?: string;
+    occurredAt: string;
+  }): Promise<{
+    paymentStatus: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
+    payKind?: 'GIFT' | 'BLOCK' | 'PAID' | 'UNKNOWN';
+    priceMinor?: number;
+    docRef?: string;
+  } | null> {
+    const q = new URLSearchParams({ occurredAt: input.occurredAt });
+    if (input.clientExternalId) q.set('clientExternalId', input.clientExternalId);
+    if (input.clientPhone) q.set('clientPhone', input.clientPhone);
+    if (input.trainerExternalId)
+      q.set('trainerExternalId', input.trainerExternalId);
+    try {
+      const data = await this.request<{
+        paymentStatus: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
+        payKind?: 'GIFT' | 'BLOCK' | 'PAID' | 'UNKNOWN';
+        priceMinor?: number;
+        docRef?: string;
+      } | null>(`/pt-session-payment?${q.toString()}`, { timeoutMs: 30_000 });
+      return data ?? null;
+    } catch {
+      // Endpoint may not be published yet on club 1C
+      return null;
+    }
+  }
+
   async getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]> {
     const params = new URLSearchParams({ externalId });
     if (period?.from) params.set('from', period.from);
