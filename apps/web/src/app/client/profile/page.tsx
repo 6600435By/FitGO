@@ -208,10 +208,10 @@ export default function ClientProfilePage() {
     setError('');
     try {
       await api.updateBodyProfile(token, {
-        heightCm: bodyForm.heightCm ? Number(bodyForm.heightCm) : null,
+        heightCm: bodyForm.heightCm ? Number(bodyForm.heightCm) : undefined,
         targetWeightKg: bodyForm.targetWeightKg
           ? Number(bodyForm.targetWeightKg)
-          : null,
+          : undefined,
       });
       setMsg('Рост и цель веса сохранены');
       loadBody();

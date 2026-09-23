@@ -55,7 +55,9 @@ export function ScheduleDayGrid({
     [dayEvents, dateStr, availabilityBlocks],
   );
 
-  const hasWorkSchedule = getDayWorkBounds(dateStr, availabilityBlocks) !== null;
+  const hasDuty = dayEvents.some((e) => e.kind === 'DUTY');
+  const hasWorkSchedule =
+    hasDuty || getDayWorkBounds(dateStr, availabilityBlocks) !== null;
 
   const timeLabels = useMemo(
     () => generateTimeLabels(bounds.start, bounds.end),

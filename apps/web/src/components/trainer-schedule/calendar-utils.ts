@@ -8,5 +8,5 @@ export function eventKindMatchesFilter(
 ): boolean {
   if (filter === 'all') return true;
   if (filter === 'group') return kind === 'GROUP';
-  return kind === 'PERSONAL' || kind === 'OPEN_SLOT' || kind === 'DRAFT_SLOT';
+  return kind === 'PERSONAL' || kind === 'DUTY' || kind === 'OPEN_SLOT' || kind === 'DRAFT_SLOT';
 }

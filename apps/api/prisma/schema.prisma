@@ -11,6 +11,7 @@ enum Role {
   CLIENT
   TRAINER
   SPECIALIST
+  TECH
   ADMIN
   SUPER_ADMIN
 }
@@ -382,6 +383,7 @@ model Club {
   motivationRates      MotivationRate[]
   payrollAdjustments   PayrollAdjustment[]
   payrollPeriodLocks   PayrollPeriodLock[]
+  payrollPayouts       PayrollPayout[]
   trainerShifts        TrainerShift[]
   trainerDaySheets     TrainerDaySheet[]
   staffShifts          StaffShift[]
@@ -429,6 +431,10 @@ model User {
   firstName  String
   lastName   String
   externalId String?
+  /// Код сотрудника в 1С (например 000000151). Для выборок по сотруднику.
+  employeeCode String? @unique
+  /// false — учётка есть, пароль входа ещё не выдан.
+  loginEnabled Boolean @default(true)
   referralCode String? @unique
   gender        Gender?
   dateOfBirth   DateTime? @db.Date
@@ -505,6 +511,7 @@ model User {
   groupClassSessionsLed   GroupClassSession[]  @relation("GroupSessionTrainer")
   staffCompensation       StaffCompensation[]
   payrollAdjustments      PayrollAdjustment[]
+  payrollPayouts          PayrollPayout[]
   trainerShifts           TrainerShift[]          @relation("TrainerShifts")
   trainerDaySheets        TrainerDaySheet[]       @relation("TrainerDaySheets")
   daySheetsAdminApproved  TrainerDaySheet[]       @relation("DaySheetAdminApprover")
@@ -1531,6 +1538,52 @@ model PayrollPeriodLock {
   @@unique([clubId, userId, periodFrom, periodTo])
 }
 
+/// Club pays in two waves: 25th = advance for days 1–15; 15th = settlement for previous month.
+enum PayrollPayoutKind {
+  /// 25th: earn for current month days 1–15 (or fixed advance for admins).
+  ADVANCE_HALF
+  /// 15th: full previous month minus already paid ADVANCE_HALF.
+  MONTH_SETTLEMENT
+}
+
+enum PayrollPayoutStatus {
+  DRAFT
+  PAID
+  VOID
+}
+
+model PayrollPayout {
+  id                String              @id @default(cuid())
+  clubId            String
+  userId            String
+  kind              PayrollPayoutKind
+  periodFrom        DateTime            @db.Date
+  periodTo          DateTime            @db.Date
+  /// Gross earned for this payout window (before deducting prior advance).
+  earnedMinor       Int
+  /// Already paid as ADVANCE_HALF for the same calendar month (settlement only).
+  priorPaidMinor    Int                 @default(0)
+  /// Net amount of this payout (earned − priorPaid).
+  totalMinor        Int
+  /// Bank card transfer (accountant). Counts in total, reduces cash.
+  cardTransferMinor Int                 @default(0)
+  /// Cash from club register = total − card.
+  cashMinor         Int
+  currency          String              @default("BYN")
+  status            PayrollPayoutStatus @default(DRAFT)
+  paidAt            DateTime?
+  note              String?
+  createdById       String
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, userId, kind, periodFrom, periodTo])
+  @@index([clubId, userId, status])
+}
+
 /// Paid desk/shift hours for a PT trainer (legacy; prefer StaffShift track=TRAINER).
 model TrainerShift {
   id        String             @id @default(cuid())
@@ -1559,6 +1612,8 @@ model StaffShift {
   date      DateTime           @db.Date
   startAt   DateTime
   endAt     DateTime
+  /// Extra paid minutes after the planned end. Admins only, 0–30. Not part of the department day cap.
+  overtimeMinutes Int                @default(0)
   status    TrainerShiftStatus @default(PLANNED)
   note      String?
   createdAt DateTime           @default(now())

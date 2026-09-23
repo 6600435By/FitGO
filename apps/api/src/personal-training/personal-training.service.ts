@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PersonalBookingStatus, Prisma, Role, AvailabilityBlockStatus, PersonalBookingOrigin, AccountStatus } from '@prisma/client';
+import { PersonalBookingStatus, Prisma, Role, AvailabilityBlockStatus, PersonalBookingOrigin, AccountStatus, StaffShiftTrack } from '@prisma/client';
 import {
   PERSONAL_TRAINING_GOAL_TEMPLATES,
   SessionType,
@@ -30,6 +30,24 @@ import { TrainerRosterService } from '../trainer/trainer-roster.service';
 import { toUsageControl } from '@fitgo/shared-types';
 
 const SESSION_DURATION_MIN = 60;
+
+type DutyWindow = { startAt: Date; endAt: Date };
+
+/** Extra booking time must sit flush against a duty edge and not cover the duty itself. */
+function extraBesideDuty(
+  start: Date,
+  end: Date,
+  duties: DutyWindow[],
+): 'ok' | 'overlap' | 'detached' {
+  const overlap = duties.some((d) => start < d.endAt && end > d.startAt);
+  if (overlap) return 'overlap';
+  const touch = duties.some(
+    (d) =>
+      end.getTime() === d.startAt.getTime() ||
+      start.getTime() === d.endAt.getTime(),
+  );
+  return touch ? 'ok' : 'detached';
+}
 
 export interface WorkSlotInput {
   dayOfWeek: number;
@@ -115,7 +133,7 @@ export class PersonalTrainingService {
       throw new BadRequestException('Некорректный период');
     }
 
-    const [groupSlots, bookings, blocks, lastPublication] = await Promise.all([
+    const [groupSlots, bookings, blocks, duties, lastPublication] = await Promise.all([
       this.fetchTrainerGroupSchedule(user, rangeStart, rangeEnd),
       this.prisma.personalTrainingBooking.findMany({
         where: {
@@ -135,6 +153,7 @@ export class PersonalTrainingService {
         },
         orderBy: { startAt: 'asc' },
       }),
+      this.dutyWindows(user.sub, rangeStart, rangeEnd),
       this.prisma.trainerSchedulePublication.findFirst({
         where: { trainerId: user.sub },
         orderBy: { publishedAt: 'desc' },
@@ -156,6 +175,16 @@ export class PersonalTrainingService {
       });
     }
 
+    for (const duty of duties) {
+      events.push({
+        id: `duty-${duty.id}`,
+        kind: 'DUTY',
+        title: 'Дежурство',
+        startAt: duty.startAt.toISOString(),
+        endAt: duty.endAt.toISOString(),
+      });
+    }
+
     for (const booking of bookings) {
       events.push({
         id: `personal-${booking.id}`,
@@ -170,7 +199,13 @@ export class PersonalTrainingService {
       });
     }
 
-    for (const block of blocks) {
+    const visibleBlocks = blocks.filter(
+      (block) =>
+        block.status === AvailabilityBlockStatus.DRAFT ||
+        extraBesideDuty(block.startAt, block.endAt, duties) === 'ok',
+    );
+
+    for (const block of visibleBlocks) {
       const overlapsBooking = bookings.some(
         (b) => b.startAt < block.endAt && b.endAt > block.startAt,
       );
@@ -184,20 +219,20 @@ export class PersonalTrainingService {
             : 'DRAFT_SLOT',
         title:
           block.status === AvailabilityBlockStatus.PUBLISHED
-            ? 'Открыто для записи'
-            : 'Черновик · открыто для записи',
+            ? 'Запись вне дежурства'
+            : 'Черновик · вне дежурства',
         startAt: block.startAt.toISOString(),
         endAt: block.endAt.toISOString(),
       });
     }
 
-    const draftBlockCount = blocks.filter(
+    const draftBlockCount = visibleBlocks.filter(
       (b) => b.status === AvailabilityBlockStatus.DRAFT,
     ).length;
 
     return {
       events: events.sort((a, b) => a.startAt.localeCompare(b.startAt)),
-      availabilityBlocks: blocks.map((b) => ({
+      availabilityBlocks: visibleBlocks.map((b) => ({
         id: b.id,
         startAt: b.startAt.toISOString(),
         endAt: b.endAt.toISOString(),
@@ -254,6 +289,14 @@ export class PersonalTrainingService {
         throw new BadRequestException('Время начала должно быть раньше окончания');
       }
     }
+
+    await this.assertExtraBesideDuty(
+      user.sub,
+      blocks.map((block) => ({
+        startAt: new Date(block.startAt),
+        endAt: new Date(block.endAt),
+      })),
+    );
 
     await this.prisma.$transaction(async (tx) => {
       await tx.trainerAvailabilityBlock.deleteMany({
@@ -346,6 +389,16 @@ export class PersonalTrainingService {
     if (draftCount === 0) {
       throw new BadRequestException('Нет черновых слотов для публикации');
     }
+
+    const drafts = await this.prisma.trainerAvailabilityBlock.findMany({
+      where: {
+        trainerId: user.sub,
+        status: AvailabilityBlockStatus.DRAFT,
+        startAt: { lt: end },
+        endAt: { gt: start },
+      },
+    });
+    await this.assertExtraBesideDuty(user.sub, drafts);
 
     await this.prisma.$transaction([
       this.prisma.trainerAvailabilityBlock.updateMany({
@@ -611,8 +664,15 @@ export class PersonalTrainingService {
       },
       orderBy: { startAt: 'asc' },
     });
+    const duties = await this.dutyWindows(trainerId, rangeStart, rangeEnd);
+    const bookable = [
+      ...duties.map((d) => ({ startAt: d.startAt, endAt: d.endAt })),
+      ...publishedBlocks.filter(
+        (block) => extraBesideDuty(block.startAt, block.endAt, duties) === 'ok',
+      ),
+    ];
 
-    if (publishedBlocks.length === 0) {
+    if (bookable.length === 0) {
       return [];
     }
 
@@ -627,7 +687,7 @@ export class PersonalTrainingService {
 
     const slots: Array<{ startAt: string; endAt: string }> = [];
 
-    for (const block of publishedBlocks) {
+    for (const block of bookable) {
       let slotStart = new Date(block.startAt);
       const blockEnd = new Date(block.endAt);
 
@@ -1298,6 +1358,41 @@ export class PersonalTrainingService {
 
   private isValidTime(value: string): boolean {
     return /^([01]\d|2[0-3]):([0-5]\d)$/.test(value);
+  }
+
+  /** Duty windows from the admin roster, padded so an adjacent extra block still sees them. */
+  private dutyWindows(trainerId: string, rangeStart: Date, rangeEnd: Date) {
+    const from = new Date(rangeStart.getTime() - 24 * 60 * 60 * 1000);
+    const to = new Date(rangeEnd.getTime() + 24 * 60 * 60 * 1000);
+    return this.prisma.staffShift.findMany({
+      where: {
+        userId: trainerId,
+        track: StaffShiftTrack.TRAINER,
+        startAt: { lt: to },
+        endAt: { gt: from },
+      },
+      orderBy: { startAt: 'asc' },
+    });
+  }
+
+  private async assertExtraBesideDuty(trainerId: string, blocks: DutyWindow[]) {
+    if (blocks.length === 0) return;
+    const min = new Date(Math.min(...blocks.map((b) => b.startAt.getTime())));
+    const max = new Date(Math.max(...blocks.map((b) => b.endAt.getTime())));
+    const duties = await this.dutyWindows(trainerId, min, max);
+    for (const block of blocks) {
+      const fit = extraBesideDuty(block.startAt, block.endAt, duties);
+      if (fit === 'overlap') {
+        throw new BadRequestException(
+          'Это время уже входит в дежурство. Его ставит администратор, отдельно открывать не нужно.',
+        );
+      }
+      if (fit === 'detached') {
+        throw new BadRequestException(
+          'Своё время можно открыть только сразу до или сразу после дежурства. Дежурство ставит администратор.',
+        );
+      }
+    }
   }
 
   private combineDateAndTime(date: Date, time: string): Date {

@@ -3,7 +3,7 @@
 import type { StaffMember, StaffPaySummary } from '@fitgo/shared-types';
 import { UserRole } from '@fitgo/shared-types';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -11,9 +11,56 @@ function randomPassword() {
   return `Fit${Math.random().toString(36).slice(2, 10)}!`;
 }
 
+type DeptFilter = 'ALL' | 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH';
+
+const DEPT_FILTERS: { id: DeptFilter; label: string; role?: UserRole }[] = [
+  { id: 'ALL', label: 'Все' },
+  { id: 'ADMIN', label: 'Админы', role: UserRole.ADMIN },
+  { id: 'TRAINER', label: 'Тренеры', role: UserRole.TRAINER },
+  { id: 'SPECIALIST', label: 'SPA', role: UserRole.SPECIALIST },
+  { id: 'TECH', label: 'Техперсонал', role: UserRole.TECH },
+];
+
+const ROLE_OPTIONS: {
+  id: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH';
+  label: string;
+}[] = [
+  { id: 'TRAINER', label: 'Тренер' },
+  { id: 'SPECIALIST', label: 'SPA-специалист' },
+  { id: 'TECH', label: 'Техперсонал' },
+  { id: 'ADMIN', label: 'Администратор' },
+];
+
+function formatRoles(roles: UserRole[]): string {
+  return roles
+    .filter((r) => r !== UserRole.CLIENT)
+    .map((r) => {
+      if (r === UserRole.ADMIN) return 'Админ';
+      if (r === UserRole.TRAINER) return 'Тренер';
+      if (r === UserRole.SPECIALIST) return 'SPA';
+      if (r === UserRole.TECH) return 'Техперсонал';
+      return r;
+    })
+    .join(', ');
+}
+
+function needsAppLogin(
+  roles: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>,
+): boolean {
+  return roles.some(
+    (r) => r === 'ADMIN' || r === 'TRAINER' || r === 'SPECIALIST',
+  );
+}
+
+function isTechOnlyMember(roles: UserRole[]): boolean {
+  const staff = roles.filter((r) => r !== UserRole.CLIENT);
+  return staff.length > 0 && staff.every((r) => r === UserRole.TECH);
+}
+
 export default function SuperAdminStaffPage() {
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [pay, setPay] = useState<StaffPaySummary[]>([]);
+  const [filter, setFilter] = useState<DeptFilter>('ALL');
   const [showForm, setShowForm] = useState(false);
   const [credentials, setCredentials] = useState<{
     email: string;
@@ -26,7 +73,7 @@ export default function SuperAdminStaffPage() {
     phone: '',
     email: '',
     password: randomPassword(),
-    role: 'TRAINER' as 'ADMIN' | 'TRAINER' | 'SPECIALIST',
+    roles: ['TRAINER'] as Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>,
   });
   const [error, setError] = useState('');
 
@@ -50,24 +97,62 @@ export default function SuperAdminStaffPage() {
 
   const payById = new Map(pay.map((p) => [p.userId, p]));
 
+  const visible = useMemo(() => {
+    if (filter === 'ALL') return staff;
+    const role = DEPT_FILTERS.find((f) => f.id === filter)?.role;
+    if (!role) return staff;
+    return staff.filter((m) => m.roles.includes(role));
+  }, [staff, filter]);
+
+  const toggleFormRole = (
+    role: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH',
+  ) => {
+    setForm((prev) => {
+      const has = prev.roles.includes(role);
+      if (has && prev.roles.length === 1) return prev;
+      return {
+        ...prev,
+        roles: has
+          ? prev.roles.filter((r) => r !== role)
+          : [...prev.roles, role],
+      };
+    });
+  };
+
   const create = async () => {
     const token = getToken();
     if (!token) return;
     setError('');
+    const appLogin = needsAppLogin(form.roles);
+    if (!form.firstName.trim() || !form.lastName.trim()) {
+      setError('Укажите имя и фамилию');
+      return;
+    }
+    if (appLogin && (!form.email.trim() || form.password.length < 6)) {
+      setError('Для входа в приложение нужны email и пароль (от 6 символов)');
+      return;
+    }
     try {
       const result = await api.superAdminCreateStaff(token, {
-        ...form,
+        firstName: form.firstName,
+        lastName: form.lastName,
         dateOfBirth: form.dateOfBirth || undefined,
         phone: form.phone || undefined,
+        roles: form.roles,
+        ...(appLogin
+          ? { email: form.email.trim(), password: form.password }
+          : {}),
       });
-      setCredentials(result.credentials);
+      if (result.credentials) setCredentials(result.credentials);
       setShowForm(false);
       setForm({
-        ...form,
         firstName: '',
         lastName: '',
+        dateOfBirth: '',
+        phone: '',
         email: '',
         password: randomPassword(),
+        roles: ['TRAINER'],
       });
       load();
     } catch (e) {
@@ -108,6 +193,23 @@ export default function SuperAdminStaffPage() {
         </button>
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        {DEPT_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            onClick={() => setFilter(f.id)}
+            className={
+              filter === f.id
+                ? 'btn-primary px-3 py-1.5 text-sm'
+                : 'btn-secondary px-3 py-1.5 text-sm'
+            }
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       {credentials && (
         <div className="card border-fitgo-500/30 bg-fitgo-500/5">
           <p className="font-medium text-fitgo-300">
@@ -126,65 +228,99 @@ export default function SuperAdminStaffPage() {
 
       {showForm && (
         <div className="card space-y-3">
-          <input
-            className="input w-full"
-            placeholder="Имя"
-            value={form.firstName}
-            onChange={(e) => setForm({ ...form, firstName: e.target.value })}
-          />
-          <input
-            className="input w-full"
-            placeholder="Фамилия"
-            value={form.lastName}
-            onChange={(e) => setForm({ ...form, lastName: e.target.value })}
-          />
-          <input
-            className="input w-full"
-            type="date"
-            value={form.dateOfBirth}
-            onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
-          />
-          <input
-            className="input w-full"
-            placeholder="Телефон"
-            value={form.phone}
-            onChange={(e) => setForm({ ...form, phone: e.target.value })}
-          />
-          <input
-            className="input w-full"
-            placeholder="Логин (email)"
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-          />
-          <div className="flex gap-2">
+          <label className="block text-xs text-slate-400">
+            Имя
             <input
-              className="input flex-1"
-              placeholder="Пароль"
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              className="input mt-1 w-full"
+              value={form.firstName}
+              onChange={(e) => setForm({ ...form, firstName: e.target.value })}
             />
-            <button
-              type="button"
-              onClick={() => setForm({ ...form, password: randomPassword() })}
-              className="btn-secondary shrink-0"
-            >
-              Сгенерировать
-            </button>
+          </label>
+          <label className="block text-xs text-slate-400">
+            Фамилия
+            <input
+              className="input mt-1 w-full"
+              value={form.lastName}
+              onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+            />
+          </label>
+          <label className="block text-xs text-slate-400">
+            Дата рождения
+            <input
+              className="input mt-1 w-full"
+              type="date"
+              value={form.dateOfBirth}
+              onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
+            />
+          </label>
+          <label className="block text-xs text-slate-400">
+            Телефон
+            <input
+              className="input mt-1 w-full"
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            />
+          </label>
+          <div>
+            <p className="text-xs text-slate-400">Подразделения (можно несколько)</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {ROLE_OPTIONS.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => toggleFormRole(r.id)}
+                  className={
+                    form.roles.includes(r.id)
+                      ? 'btn-primary px-3 py-1.5 text-sm'
+                      : 'btn-secondary px-3 py-1.5 text-sm'
+                  }
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <select
-            className="input w-full"
-            value={form.role}
-            onChange={(e) =>
-              setForm({
-                ...form,
-                role: e.target.value as 'ADMIN' | 'TRAINER' | 'SPECIALIST',
-              })
-            }
-          >
-            <option value="TRAINER">Тренер</option>
-            <option value="SPECIALIST">Спа-специалист</option>
-            <option value="ADMIN">Администратор</option>
-          </select>
+          {needsAppLogin(form.roles) ? (
+            <>
+              <label className="block text-xs text-slate-400">
+                Логин (email)
+                <input
+                  className="input mt-1 w-full"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                />
+              </label>
+              <label className="block text-xs text-slate-400">
+                Пароль
+                <div className="mt-1 flex gap-2">
+                  <input
+                    className="input flex-1"
+                    value={form.password}
+                    onChange={(e) =>
+                      setForm({ ...form, password: e.target.value })
+                    }
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm({ ...form, password: randomPassword() })
+                    }
+                    className="btn-secondary shrink-0"
+                  >
+                    Сгенерировать
+                  </button>
+                </div>
+              </label>
+            </>
+          ) : (
+            <p className="rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2 text-xs text-slate-400">
+              Техперсонал без входа в приложение — только график смен, учёт часов
+              и расчёт ЗП.
+            </p>
+          )}
+          <p className="text-xs text-slate-500">
+            Ставки и мотивация задаются после создания — откройте карточку сотрудника.
+          </p>
           <button onClick={create} className="btn-primary w-full">
             Создать
           </button>
@@ -198,7 +334,7 @@ export default function SuperAdminStaffPage() {
       </button>
 
       <ul className="space-y-2 md:hidden">
-        {staff.map((member) => {
+        {visible.map((member) => {
           const p = payById.get(member.id);
           return (
             <li key={member.id}>
@@ -209,9 +345,16 @@ export default function SuperAdminStaffPage() {
                 <div className="flex justify-between gap-3">
                   <div>
                     <p className="font-medium text-white">
-                      {member.firstName} {member.lastName}
+                      {member.lastName} {member.firstName}
                     </p>
-                    <p className="text-sm text-slate-400">{member.email}</p>
+                    <p className="text-sm text-slate-400">
+                      {member.employeeCode ? `1С ${member.employeeCode}` : member.email}
+                    </p>
+                    {isTechOnlyMember(member.roles) ? (
+                      <p className="text-xs text-slate-500">Без входа в приложение</p>
+                    ) : member.loginEnabled === false ? (
+                      <p className="text-xs text-amber-300">Вход ещё не открыт</p>
+                    ) : null}
                   </div>
                   <span
                     className={`shrink-0 text-xs ${
@@ -222,7 +365,7 @@ export default function SuperAdminStaffPage() {
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-slate-500">
-                  {member.roles.filter((r) => r !== UserRole.CLIENT).join(', ')}
+                  {formatRoles(member.roles)}
                   {p?.track ? ` · ${p.track}` : ''}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -252,7 +395,7 @@ export default function SuperAdminStaffPage() {
             </tr>
           </thead>
           <tbody>
-            {staff.map((member) => {
+            {visible.map((member) => {
               const p = payById.get(member.id);
               return (
                 <tr
@@ -266,12 +409,17 @@ export default function SuperAdminStaffPage() {
                     >
                       {member.lastName} {member.firstName}
                     </Link>
-                    <p className="text-xs text-slate-500">{member.email}</p>
+                    <p className="text-xs text-slate-500">
+                      {member.employeeCode ? `1С ${member.employeeCode}` : member.email}
+                      {isTechOnlyMember(member.roles)
+                        ? ' · без входа'
+                        : member.loginEnabled === false
+                          ? ' · вход позже'
+                          : ''}
+                    </p>
                   </td>
                   <td className="px-4 py-3 text-slate-400">
-                    {member.roles
-                      .filter((r) => r !== UserRole.CLIENT)
-                      .join(', ')}
+                    {formatRoles(member.roles)}
                     {p?.track ? (
                       <span className="ml-1 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] uppercase text-slate-300">
                         {p.track}

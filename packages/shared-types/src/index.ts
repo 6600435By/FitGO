@@ -7,6 +7,7 @@ export enum UserRole {
   CLIENT = 'CLIENT',
   TRAINER = 'TRAINER',
   SPECIALIST = 'SPECIALIST',
+  TECH = 'TECH',
   ADMIN = 'ADMIN',
   SUPER_ADMIN = 'SUPER_ADMIN',
 }
@@ -604,6 +605,7 @@ export interface TrainerWorkSlotInput {
 export type TrainerCalendarEventKind =
   | 'GROUP'
   | 'PERSONAL'
+  | 'DUTY'
   | 'OPEN_SLOT'
   | 'DRAFT_SLOT';
 
@@ -891,6 +893,10 @@ export interface StaffMember {
   lastName: string;
   phone?: string;
   dateOfBirth?: string;
+  /** Код сотрудника в 1С. */
+  employeeCode?: string;
+  /** false — пароль входа ещё не выдан. */
+  loginEnabled?: boolean;
   roles: UserRole[];
   isActive: boolean;
   createdAt: string;
@@ -898,7 +904,8 @@ export interface StaffMember {
 
 export interface StaffCreateResult {
   user: StaffMember;
-  credentials: { email: string; password: string };
+  /** Present only when the staff member can log into the app. */
+  credentials?: { email: string; password: string };
 }
 
 export interface AdminTaskItem {

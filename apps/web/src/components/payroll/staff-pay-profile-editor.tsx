@@ -4,10 +4,20 @@ import {
   DEFAULT_PT_TIERS,
   DEFAULT_SPA_QUOTA_RATES,
   defaultPayProfile,
+  departmentsForPayTrack,
+  formatMinor,
+  formatPercent,
+  packPayProfile,
+  parseDecimal,
+  parseMoneyToMinor,
+  sliceForTrack,
   type StaffPayProfile,
   type StaffPayTrack,
+  type StaffPayTrackSlice,
 } from '@fitgo/shared-types';
-import { useEffect, useState } from 'react';
+import { UserRole } from '@fitgo/shared-types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -15,21 +25,47 @@ const TRACKS: { id: StaffPayTrack; label: string }[] = [
   { id: 'ADMIN', label: 'Админ (часы + % продаж)' },
   { id: 'GROUP_TRAINER', label: 'Групповой тренер' },
   { id: 'SPA', label: 'SPA-специалист' },
+  { id: 'TECH', label: 'Техперсонал (часы)' },
   { id: 'PT', label: 'Персональный тренер' },
 ];
 
 type Props = {
   userId: string;
+  roles?: UserRole[];
   suggestedTrack?: StaffPayTrack;
 };
 
-export function StaffPayProfileEditor({ userId, suggestedTrack }: Props) {
-  const [profile, setProfile] = useState<StaffPayProfile>(
-    defaultPayProfile(suggestedTrack ?? 'PT'),
+function tracksForRoles(roles: UserRole[] | undefined): StaffPayTrack[] {
+  if (!roles?.length) return TRACKS.map((t) => t.id);
+  const out: StaffPayTrack[] = [];
+  if (roles.includes(UserRole.ADMIN)) out.push('ADMIN');
+  if (roles.includes(UserRole.TRAINER)) out.push('PT', 'GROUP_TRAINER');
+  if (roles.includes(UserRole.SPECIALIST)) out.push('SPA');
+  if (roles.includes(UserRole.TECH)) out.push('TECH');
+  return out.length ? out : TRACKS.map((t) => t.id);
+}
+
+export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) {
+  const allowed = useMemo(() => tracksForRoles(roles), [roles]);
+  const [profile, setProfile] = useState<StaffPayTrackSlice>(
+    defaultPayProfile(suggestedTrack && allowed.includes(suggestedTrack)
+      ? suggestedTrack
+      : allowed[0] ?? 'PT'),
   );
+  const [byTrack, setByTrack] = useState<
+    Partial<Record<StaffPayTrack, StaffPayTrackSlice>>
+  >({});
   const [baseSalary, setBaseSalary] = useState('0');
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
+  const [copying, setCopying] = useState(false);
+
+  const profileRef = useRef(profile);
+  const byTrackRef = useRef(byTrack);
+  const baseSalaryRef = useRef(baseSalary);
+  profileRef.current = profile;
+  byTrackRef.current = byTrack;
+  baseSalaryRef.current = baseSalary;
 
   useEffect(() => {
     const token = getToken();
@@ -37,29 +73,72 @@ export function StaffPayProfileEditor({ userId, suggestedTrack }: Props) {
     api
       .payrollStaffProfile(token, userId)
       .then((row) => {
-        if (row?.payProfile) setProfile(row.payProfile);
-        else if (suggestedTrack) setProfile(defaultPayProfile(suggestedTrack));
-        if (row) setBaseSalary(String(row.baseSalaryMinor / 100));
+        if (row?.payProfile) {
+          const packed = row.payProfile;
+          const track =
+            packed.track && allowed.includes(packed.track)
+              ? packed.track
+              : allowed[0] ?? packed.track;
+          const map: Partial<Record<StaffPayTrack, StaffPayTrackSlice>> = {
+            ...(packed.byTrack ?? {}),
+          };
+          for (const t of Object.keys(map) as StaffPayTrack[]) {
+            map[t] = { ...map[t]!, track: t };
+          }
+          map[packed.track] = sliceForTrack(packed, packed.track);
+          setByTrack(map);
+          setProfile(sliceForTrack({ ...packed, byTrack: map }, track));
+        } else if (suggestedTrack && allowed.includes(suggestedTrack)) {
+          setProfile(defaultPayProfile(suggestedTrack));
+          setByTrack({});
+        } else if (allowed[0]) {
+          setProfile(defaultPayProfile(allowed[0]));
+          setByTrack({});
+        }
+        if (row) setBaseSalary(formatMinor(row.baseSalaryMinor));
       })
       .catch(() => {
-        if (suggestedTrack) setProfile(defaultPayProfile(suggestedTrack));
+        if (suggestedTrack && allowed.includes(suggestedTrack)) {
+          setProfile(defaultPayProfile(suggestedTrack));
+        }
       });
-  }, [userId, suggestedTrack]);
+  }, [userId, suggestedTrack, allowed]);
 
-  const setTrack = (track: StaffPayTrack) => {
-    setProfile((prev) => ({ ...defaultPayProfile(track), notes: prev.notes }));
+  const switchTrack = (track: StaffPayTrack) => {
+    setByTrack((prev) => ({ ...prev, [profile.track]: profile }));
+    setProfile((prev) => {
+      const saved = byTrack[track] ?? sliceForTrack(
+        packPayProfile(prev, { ...byTrack, [prev.track]: prev }),
+        track,
+      );
+      return { ...saved, track };
+    });
+  };
+
+  const flushDrafts = () => {
+    flushSync(() => {
+      if (typeof document !== 'undefined') {
+        (document.activeElement as HTMLElement | null)?.blur?.();
+      }
+    });
   };
 
   const save = async () => {
     const token = getToken();
     if (!token) return;
+    flushDrafts();
     setSaving(true);
     setMessage('');
     try {
+      const payProfile = packPayProfile(
+        profileRef.current,
+        byTrackRef.current,
+      );
       await api.payrollSaveStaffProfile(token, userId, {
-        baseSalaryMinor: Math.round(Number(baseSalary || 0) * 100),
-        payProfile: profile,
+        baseSalaryMinor: parseMoneyToMinor(baseSalaryRef.current),
+        payProfile,
       });
+      setByTrack(payProfile.byTrack ?? {});
       setMessage('Мотивация сохранена');
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
@@ -68,109 +147,184 @@ export function StaffPayProfileEditor({ userId, suggestedTrack }: Props) {
     }
   };
 
+  const copyToDepartment = async () => {
+    const token = getToken();
+    if (!token) return;
+    flushDrafts();
+    const current = profileRef.current;
+    const depts = departmentsForPayTrack(current.track);
+    const label =
+      current.track === 'ADMIN'
+        ? 'администраторам'
+        : current.track === 'SPA'
+          ? 'SPA-специалистам'
+          : current.track === 'TECH'
+            ? 'техперсоналу'
+            : 'тренерам';
+    if (
+      !window.confirm(
+        `Скопировать текущую схему «${TRACKS.find((t) => t.id === current.track)?.label}» и оклад всем ${label}? У них перезапишется мотивация этой схемы.`,
+      )
+    ) {
+      return;
+    }
+    setCopying(true);
+    setMessage('');
+    try {
+      const payProfile = packPayProfile(current, byTrackRef.current);
+      await api.payrollSaveStaffProfile(token, userId, {
+        baseSalaryMinor: parseMoneyToMinor(baseSalaryRef.current),
+        payProfile,
+      });
+      setByTrack(payProfile.byTrack ?? {});
+      const result = await api.payrollCopyStaffProfile(token, userId, {
+        departments: depts,
+        tracks: [current.track],
+      });
+      setMessage(`Скопировано сотрудникам: ${result.copied}.`);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка копирования');
+    } finally {
+      setCopying(false);
+    }
+  };
+
+  const visibleTracks = TRACKS.filter((t) => allowed.includes(t.id));
+
   return (
     <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-4 md:p-5">
       <div>
         <h3 className="text-lg font-semibold text-white">Мотивация и ставки</h3>
         <p className="mt-1 text-sm text-slate-400">
-          Здесь задаётся схема ЗП сотрудника. Расчёт периода — во вкладке ЗП.
+          Можно задать несколько схем, если сотрудник в нескольких подразделениях.
+          Дробные ставки — через точку или запятую (например 2,5).
         </p>
       </div>
 
-      <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-        Схема
-        <select
-          className="input mt-1.5 w-full"
-          value={profile.track}
-          onChange={(e) => setTrack(e.target.value as StaffPayTrack)}
-        >
-          {TRACKS.map((t) => (
-            <option key={t.id} value={t.id}>
+      {visibleTracks.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          {visibleTracks.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => switchTrack(t.id)}
+              className={
+                profile.track === t.id
+                  ? 'btn-primary px-3 py-1.5 text-sm'
+                  : 'btn-secondary px-3 py-1.5 text-sm'
+              }
+            >
               {t.label}
-            </option>
+            </button>
           ))}
-        </select>
-      </label>
+        </div>
+      )}
 
-      <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-        Оклад / база (мес.), BYN
-        <input
-          className="input mt-1.5 w-full"
-          inputMode="decimal"
-          value={baseSalary}
-          onChange={(e) => setBaseSalary(e.target.value)}
-        />
-      </label>
+      {visibleTracks.length <= 1 && (
+        <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+          Схема
+          <select
+            className="input mt-1.5 w-full"
+            value={profile.track}
+            onChange={(e) => switchTrack(e.target.value as StaffPayTrack)}
+          >
+            {TRACKS.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      <MoneyField label="Оклад / база (мес.), BYN" value={baseSalary} onChange={setBaseSalary} />
 
       {profile.track === 'ADMIN' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
             ЗП = ставка за часы + % от продаж абонементов + % от доп. услуг.
-            Премии и штрафы добавляются в ЗП как корректировки.
+            25-го — фиксированный аванс из оклада; 15-го — расчёт за прошлый
+            месяц минус аванс.
           </p>
           <div className="grid gap-3 sm:grid-cols-3">
-            <Field
+            <MoneyField
               label="Ставка за час, BYN"
-              value={String((profile.hourlyRateMinor ?? 0) / 100)}
+              value={formatMinor(profile.hourlyRateMinor)}
               onChange={(v) =>
-                setProfile({
-                  ...profile,
-                  hourlyRateMinor: Math.round(Number(v || 0) * 100),
-                })
+                setProfile({ ...profile, hourlyRateMinor: parseMoneyToMinor(v) })
               }
             />
-            <Field
+            <PercentField
               label="% от продаж абонементов"
-              value={String(profile.membershipSalesPercent ?? 0)}
+              value={formatPercent(profile.membershipSalesPercent)}
               onChange={(v) =>
                 setProfile({
                   ...profile,
-                  membershipSalesPercent: Number(v || 0),
+                  membershipSalesPercent: parseDecimal(v),
                 })
               }
             />
-            <Field
+            <PercentField
               label="% от доп. услуг"
-              value={String(profile.extraSalesPercent ?? 0)}
+              value={formatPercent(profile.extraSalesPercent)}
               onChange={(v) =>
-                setProfile({ ...profile, extraSalesPercent: Number(v || 0) })
+                setProfile({ ...profile, extraSalesPercent: parseDecimal(v) })
               }
             />
           </div>
+          <MoneyField
+            label="Фикс аванс 25-е, BYN"
+            value={formatMinor(profile.fixedAdvanceMinor)}
+            onChange={(v) =>
+              setProfile({
+                ...profile,
+                fixedAdvanceMinor: parseMoneyToMinor(v),
+              })
+            }
+          />
         </div>
       )}
 
       {profile.track === 'GROUP_TRAINER' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
-            Ставка за проведённое занятие, если пришло не меньше минимума
-            человек. Опционально — доплата за каждого.
+            Ставка за занятие при минимуме людей. Часы дежурства — отдельно.
           </p>
+          <MoneyField
+            label="Ставка за час смены, BYN"
+            value={formatMinor(profile.hourlyRateMinor)}
+            onChange={(v) =>
+              setProfile({ ...profile, hourlyRateMinor: parseMoneyToMinor(v) })
+            }
+          />
           <div className="grid gap-3 sm:grid-cols-3">
-            <Field
+            <MoneyField
               label="Ставка за занятие, BYN"
-              value={String((profile.groupSessionRateMinor ?? 0) / 100)}
+              value={formatMinor(profile.groupSessionRateMinor)}
               onChange={(v) =>
                 setProfile({
                   ...profile,
-                  groupSessionRateMinor: Math.round(Number(v || 0) * 100),
+                  groupSessionRateMinor: parseMoneyToMinor(v),
                 })
               }
             />
-            <Field
+            <IntField
               label="Мин. человек"
               value={String(profile.groupMinAttendees ?? 1)}
               onChange={(v) =>
-                setProfile({ ...profile, groupMinAttendees: Number(v || 1) })
+                setProfile({
+                  ...profile,
+                  groupMinAttendees: Math.max(0, Math.round(parseDecimal(v) || 1)),
+                })
               }
             />
-            <Field
+            <MoneyField
               label="+ за человека, BYN"
-              value={String((profile.groupPerAttendeeMinor ?? 0) / 100)}
+              value={formatMinor(profile.groupPerAttendeeMinor)}
               onChange={(v) =>
                 setProfile({
                   ...profile,
-                  groupPerAttendeeMinor: Math.round(Number(v || 0) * 100),
+                  groupPerAttendeeMinor: parseMoneyToMinor(v),
                 })
               }
             />
@@ -181,14 +335,14 @@ export function StaffPayProfileEditor({ userId, suggestedTrack }: Props) {
       {profile.track === 'SPA' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
-            % от проданных и оказанных платных услуг + фиксированная ставка за
-            услуги из абонемента (анализ состава тела, массаж классический).
+            % от проведённых и оплаченных услуг + фиксированная ставка за услуги
+            из абонемента.
           </p>
-          <Field
-            label="% от проданных / оказанных платных услуг"
-            value={String(profile.spaSoldPercent ?? 0)}
+          <PercentField
+            label="% от проведённых / оплаченных платных услуг"
+            value={formatPercent(profile.spaSoldPercent)}
             onChange={(v) =>
-              setProfile({ ...profile, spaSoldPercent: Number(v || 0) })
+              setProfile({ ...profile, spaSoldPercent: parseDecimal(v) })
             }
           />
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -196,18 +350,15 @@ export function StaffPayProfileEditor({ userId, suggestedTrack }: Props) {
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
             {(profile.spaQuotaRates ?? DEFAULT_SPA_QUOTA_RATES).map((r, i) => (
-              <Field
+              <MoneyField
                 key={r.serviceKey}
                 label={r.label}
-                value={String(r.rateMinor / 100)}
+                value={formatMinor(r.rateMinor)}
                 onChange={(v) => {
                   const next = [
                     ...(profile.spaQuotaRates ?? DEFAULT_SPA_QUOTA_RATES),
                   ];
-                  next[i] = {
-                    ...next[i],
-                    rateMinor: Math.round(Number(v || 0) * 100),
-                  };
+                  next[i] = { ...next[i], rateMinor: parseMoneyToMinor(v) };
                   setProfile({ ...profile, spaQuotaRates: next });
                 }}
               />
@@ -216,30 +367,53 @@ export function StaffPayProfileEditor({ userId, suggestedTrack }: Props) {
         </div>
       )}
 
+      {profile.track === 'TECH' && (
+        <div className="space-y-3">
+          <p className="text-xs leading-relaxed text-slate-500">
+            Оплата по часам смены из графика. Премии и штрафы — отдельными
+            корректировками в разделе расчёта ЗП (не в этой схеме).
+          </p>
+          <MoneyField
+            label="Ставка за час, BYN"
+            value={formatMinor(profile.hourlyRateMinor)}
+            onChange={(v) =>
+              setProfile({ ...profile, hourlyRateMinor: parseMoneyToMinor(v) })
+            }
+          />
+        </div>
+      )}
+
       {profile.track === 'PT' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
-            % от оплаченной и проведённой ПТ. Подарочные идут в счёт количества
-            за месяц, но не оплачиваются. Пороги — календарный месяц. Часы смены
-            оплачиваются отдельно по ставке.
+            % от оплаченной ПТ. Подарочные идут в количество, но не в оплату.
+            Часы дежурства — по ставке за час. Штатные: 25-го — фикс аванс;
+            15-го — остаток (часть на карту, остальное из кассы).
           </p>
-          <Field
+          <MoneyField
             label="Ставка за час смены, BYN"
-            value={String((profile.hourlyRateMinor ?? 0) / 100)}
+            value={formatMinor(profile.hourlyRateMinor)}
+            onChange={(v) =>
+              setProfile({ ...profile, hourlyRateMinor: parseMoneyToMinor(v) })
+            }
+          />
+          <MoneyField
+            label="Фикс аванс 25-е, BYN"
+            value={formatMinor(profile.fixedAdvanceMinor)}
             onChange={(v) =>
               setProfile({
                 ...profile,
-                hourlyRateMinor: Math.round(Number(v || 0) * 100),
+                fixedAdvanceMinor: parseMoneyToMinor(v),
               })
             }
           />
-          <Field
+          <MoneyField
             label="Стоимость ПТ для расчёта, BYN"
-            value={String((profile.ptSessionPriceMinor ?? 0) / 100)}
+            value={formatMinor(profile.ptSessionPriceMinor)}
             onChange={(v) =>
               setProfile({
                 ...profile,
-                ptSessionPriceMinor: Math.round(Number(v || 0) * 100),
+                ptSessionPriceMinor: parseMoneyToMinor(v),
               })
             }
           />
@@ -249,21 +423,28 @@ export function StaffPayProfileEditor({ userId, suggestedTrack }: Props) {
             </p>
             {(profile.ptPercentTiers ?? DEFAULT_PT_TIERS).map((t, i) => (
               <div key={i} className="grid grid-cols-2 gap-2">
-                <Field
+                <IntField
                   label="От N тренировок"
                   value={String(t.minSessions)}
                   onChange={(v) => {
-                    const next = [...(profile.ptPercentTiers ?? DEFAULT_PT_TIERS)];
-                    next[i] = { ...next[i], minSessions: Number(v || 0) };
+                    const next = [
+                      ...(profile.ptPercentTiers ?? DEFAULT_PT_TIERS),
+                    ];
+                    next[i] = {
+                      ...next[i],
+                      minSessions: Math.max(0, Math.round(parseDecimal(v))),
+                    };
                     setProfile({ ...profile, ptPercentTiers: next });
                   }}
                 />
-                <Field
+                <PercentField
                   label="% оплаты"
-                  value={String(t.percent)}
+                  value={formatPercent(t.percent)}
                   onChange={(v) => {
-                    const next = [...(profile.ptPercentTiers ?? DEFAULT_PT_TIERS)];
-                    next[i] = { ...next[i], percent: Number(v || 0) };
+                    const next = [
+                      ...(profile.ptPercentTiers ?? DEFAULT_PT_TIERS),
+                    ];
+                    next[i] = { ...next[i], percent: parseDecimal(v) };
                     setProfile({ ...profile, ptPercentTiers: next });
                   }}
                 />
@@ -273,20 +454,30 @@ export function StaffPayProfileEditor({ userId, suggestedTrack }: Props) {
         </div>
       )}
 
-      <button
-        type="button"
-        className="btn-primary w-full sm:w-auto"
-        disabled={saving}
-        onClick={save}
-      >
-        {saving ? 'Сохранение…' : 'Сохранить мотивацию'}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="btn-primary"
+          disabled={saving || copying}
+          onClick={save}
+        >
+          {saving ? 'Сохранение…' : 'Сохранить мотивацию'}
+        </button>
+        <button
+          type="button"
+          className="btn-secondary"
+          disabled={saving || copying}
+          onClick={copyToDepartment}
+        >
+          {copying ? 'Копирование…' : 'Скопировать на подразделение'}
+        </button>
+      </div>
       {message && <p className="text-sm text-fitgo-300">{message}</p>}
     </div>
   );
 }
 
-function Field({
+function MoneyField({
   label,
   value,
   onChange,
@@ -295,14 +486,79 @@ function Field({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
   return (
     <label className="block text-xs font-medium text-slate-500">
       {label}
       <input
         className="input mt-1 w-full"
         inputMode="decimal"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          flushSync(() => onChange(draft));
+        }}
+      />
+    </label>
+  );
+}
+
+function PercentField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+  return (
+    <label className="block text-xs font-medium text-slate-500">
+      {label}
+      <input
+        className="input mt-1 w-full"
+        inputMode="decimal"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          flushSync(() => onChange(draft));
+        }}
+      />
+    </label>
+  );
+}
+
+function IntField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+  return (
+    <label className="block text-xs font-medium text-slate-500">
+      {label}
+      <input
+        className="input mt-1 w-full"
+        inputMode="numeric"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          flushSync(() => onChange(draft));
+        }}
       />
     </label>
   );

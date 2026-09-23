@@ -14,11 +14,16 @@ const STYLES: Record<
     dot: 'bg-emerald-400',
     label: 'Персональное',
   },
+  DUTY: {
+    block: 'border-l-4 border-sky-400 bg-sky-500/20 text-sky-50',
+    dot: 'bg-sky-300',
+    label: 'Дежурство',
+  },
   OPEN_SLOT: {
     block:
       'border-l-4 border-dashed border-emerald-400/70 bg-emerald-500/8 text-emerald-200',
     dot: 'bg-emerald-300/80',
-    label: 'Открыто для записи',
+    label: 'Запись вне дежурства',
   },
   DRAFT_SLOT: {
     block:
@@ -41,6 +46,7 @@ export function eventKindLabel(kind: TrainerCalendarEventKind): string {
 }
 
 export const EVENT_KIND_LEGEND: TrainerCalendarEventKind[] = [
+  'DUTY',
   'GROUP',
   'PERSONAL',
   'OPEN_SLOT',

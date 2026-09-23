@@ -30,16 +30,16 @@ const SCHEDULE_TEMPLATES: Array<{
   capacity: number;
   booked: number;
 }> = [
-  { dayOffset: 0, hour: 10, durationMin: 60, title: 'Функциональный тренинг', type: SessionType.GROUP, trainerId: '1c-trainer-001', trainerName: 'Мария Петрова', capacity: 12, booked: 6 },
+  { dayOffset: 0, hour: 10, durationMin: 60, title: 'Функциональный тренинг', type: SessionType.GROUP, trainerId: '1c-trainer-001', trainerName: 'Ирина Федотова', capacity: 12, booked: 6 },
   { dayOffset: 0, hour: 18, durationMin: 60, title: 'Кроссфит', type: SessionType.GROUP, trainerId: '1c-trainer-003', trainerName: 'Игорь Волков', capacity: 12, booked: 10 },
-  { dayOffset: 0, hour: 11, durationMin: 60, title: 'Персональная тренировка', type: SessionType.PERSONAL, trainerId: '1c-trainer-001', trainerName: 'Мария Петрова', capacity: 1, booked: 0 },
+  { dayOffset: 0, hour: 11, durationMin: 60, title: 'Персональная тренировка', type: SessionType.PERSONAL, trainerId: '1c-trainer-001', trainerName: 'Ирина Федотова', capacity: 1, booked: 0 },
   { dayOffset: 1, hour: 9, durationMin: 60, title: 'Йога для начинающих', type: SessionType.GROUP, trainerId: '1c-trainer-002', trainerName: 'Елена Козлова', capacity: 15, booked: 8 },
   { dayOffset: 1, hour: 14, durationMin: 60, title: 'Пилатес', type: SessionType.GROUP, trainerId: '1c-trainer-002', trainerName: 'Елена Козлова', capacity: 10, booked: 5 },
-  { dayOffset: 1, hour: 16, durationMin: 60, title: 'Персональная тренировка', type: SessionType.PERSONAL, trainerId: '1c-trainer-001', trainerName: 'Мария Петрова', capacity: 1, booked: 0 },
-  { dayOffset: 2, hour: 10, durationMin: 60, title: 'Стretching', type: SessionType.GROUP, trainerId: '1c-trainer-001', trainerName: 'Мария Петрова', capacity: 14, booked: 4 },
+  { dayOffset: 1, hour: 16, durationMin: 60, title: 'Персональная тренировка', type: SessionType.PERSONAL, trainerId: '1c-trainer-001', trainerName: 'Ирина Федотова', capacity: 1, booked: 0 },
+  { dayOffset: 2, hour: 10, durationMin: 60, title: 'Стretching', type: SessionType.GROUP, trainerId: '1c-trainer-001', trainerName: 'Ирина Федотова', capacity: 14, booked: 4 },
   { dayOffset: 3, hour: 18, durationMin: 60, title: 'Кроссфит', type: SessionType.GROUP, trainerId: '1c-trainer-003', trainerName: 'Игорь Волков', capacity: 12, booked: 12 },
   { dayOffset: 4, hour: 9, durationMin: 60, title: 'Йога для начинающих', type: SessionType.GROUP, trainerId: '1c-trainer-002', trainerName: 'Елена Козлова', capacity: 15, booked: 3 },
-  { dayOffset: 5, hour: 11, durationMin: 60, title: 'Персональная тренировка', type: SessionType.PERSONAL, trainerId: '1c-trainer-001', trainerName: 'Мария Петрова', capacity: 1, booked: 1 },
+  { dayOffset: 5, hour: 11, durationMin: 60, title: 'Персональная тренировка', type: SessionType.PERSONAL, trainerId: '1c-trainer-001', trainerName: 'Ирина Федотова', capacity: 1, booked: 1 },
   { dayOffset: 6, hour: 10, durationMin: 60, title: 'Пилатес', type: SessionType.GROUP, trainerId: '1c-trainer-002', trainerName: 'Елена Козлова', capacity: 10, booked: 2 },
 ];
 
@@ -180,8 +180,8 @@ export const MOCK_USERS: Record<
       clubId: MOCK_CLUB.id,
       email: 'trainer@demo.fitgo',
       phone: '+375299876543',
-      firstName: 'Мария',
-      lastName: 'Петрова',
+      firstName: 'Ирина Николаевна',
+      lastName: 'Федотова',
       roles: [UserRole.TRAINER],
     },
     membership: {
@@ -195,7 +195,7 @@ export const MOCK_USERS: Record<
     accessCard: {
       id: 'card-trainer-001',
       barcode: 'FG2026009876543',
-      clientName: 'Мария Петрова',
+      clientName: 'Федотова Ирина Николаевна',
       clubName: MOCK_CLUB.name,
     },
   },
@@ -207,8 +207,8 @@ export const MOCK_USERS: Record<
       clubId: MOCK_CLUB.id,
       email: 'admin@demo.fitgo',
       phone: '+375331112233',
-      firstName: 'Дмитрий',
-      lastName: 'Сидоров',
+      firstName: 'Мария Михайловна',
+      lastName: 'Ходанович',
       roles: [UserRole.ADMIN],
     },
     membership: {
@@ -222,7 +222,7 @@ export const MOCK_USERS: Record<
     accessCard: {
       id: 'card-admin-001',
       barcode: 'FG2026001111222',
-      clientName: 'Дмитрий Сидоров',
+      clientName: 'Ходанович Мария Михайловна',
       clubName: MOCK_CLUB.name,
     },
   },

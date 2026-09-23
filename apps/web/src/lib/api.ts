@@ -1342,9 +1342,10 @@ export const api = {
       lastName: string;
       dateOfBirth?: string;
       phone?: string;
-      email: string;
-      password: string;
-      role: 'ADMIN' | 'TRAINER' | 'SPECIALIST';
+      email?: string;
+      password?: string;
+      role?: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH';
+      roles?: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
     },
   ) =>
     request<StaffCreateResult>('/super-admin/staff', {
@@ -1362,6 +1363,7 @@ export const api = {
       phone: string;
       isActive: boolean;
       password: string;
+      roles: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
     }>,
   ) =>
     request<StaffMember & { credentials?: { email: string; password: string } }>(
@@ -1624,6 +1626,20 @@ export const api = {
       token,
     ),
 
+  payrollCopyStaffProfile: (
+    token: string,
+    userId: string,
+    body: {
+      departments: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
+      tracks?: Array<'ADMIN' | 'GROUP_TRAINER' | 'SPA' | 'TECH' | 'PT'>;
+    },
+  ) =>
+    request<{ copied: number; skipped: number }>(
+      `/super-admin/payroll/staff/${userId}/profile/copy`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
   payrollSummary: (
     token: string,
     params: { userId: string; from: string; to: string },
@@ -1658,6 +1674,72 @@ export const api = {
   ) =>
     request<import('@fitgo/shared-types').PayrollAdjustmentDto>(
       '/super-admin/payroll/adjustments',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  payrollUpdateAdjustment: (
+    token: string,
+    id: string,
+    body: { amountMinor?: number; reason?: string },
+  ) =>
+    request<import('@fitgo/shared-types').PayrollAdjustmentDto>(
+      `/super-admin/payroll/adjustments/${id}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+      token,
+    ),
+
+  payrollDeleteAdjustment: (token: string, id: string) =>
+    request<{ success: boolean }>(
+      `/super-admin/payroll/adjustments/${id}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  payrollPayouts: (token: string, userId: string) => {
+    const q = new URLSearchParams({ userId });
+    return request<import('@fitgo/shared-types').PayrollPayoutDto[]>(
+      `/super-admin/payroll/payouts?${q}`,
+      {},
+      token,
+    );
+  },
+
+  payrollPayoutPreview: (
+    token: string,
+    params: {
+      userId: string;
+      kind: import('@fitgo/shared-types').PayrollPayoutKind;
+      year: number;
+      month: number;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      userId: params.userId,
+      kind: params.kind,
+      year: String(params.year),
+      month: String(params.month),
+    });
+    return request<import('@fitgo/shared-types').PayrollPayoutPreview>(
+      `/super-admin/payroll/payouts/preview?${q}`,
+      {},
+      token,
+    );
+  },
+
+  payrollPayoutConfirm: (
+    token: string,
+    body: {
+      userId: string;
+      kind: import('@fitgo/shared-types').PayrollPayoutKind;
+      year: number;
+      month: number;
+      cardTransferMinor?: number;
+      note?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').PayrollPayoutDto>(
+      '/super-admin/payroll/payouts/confirm',
       { method: 'POST', body: JSON.stringify(body) },
       token,
     ),
@@ -1892,6 +1974,20 @@ export const api = {
       token,
     ),
 
+  adminRosterPatchDay: (
+    token: string,
+    body: {
+      date: string;
+      holiday?: boolean;
+      hours?: { open: string; close: string; closed?: boolean } | null;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').ClubWorkingHours>(
+      '/admin/staff-roster/day',
+      { method: 'PUT', body: JSON.stringify(body) },
+      token,
+    ),
+
   adminRosterStaff: (token: string, track: import('@fitgo/shared-types').StaffShiftTrack) =>
     request<Array<{ id: string; name: string; roles: string[] }>>(
       `/admin/staff-roster/staff?track=${track}`,
@@ -1921,16 +2017,39 @@ export const api = {
     token: string,
     body: {
       id?: string;
-      userId: string;
+      userId?: string;
+      userIds?: string[];
       track: import('@fitgo/shared-types').StaffShiftTrack;
       date: string;
       startAt: string;
       endAt: string;
       note?: string;
+      overtimeMinutes?: number;
     },
   ) =>
-    request<import('@fitgo/shared-types').StaffShiftDto>(
+    request<import('@fitgo/shared-types').StaffShiftDto[]>(
       '/admin/staff-roster/shifts',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  adminRosterFillShifts: (
+    token: string,
+    body: {
+      userId: string;
+      track: import('@fitgo/shared-types').StaffShiftTrack;
+      startTime: string;
+      endTime: string;
+      dates: string[];
+      overtimeMinutes?: number;
+      skipIfExists?: boolean;
+    },
+  ) =>
+    request<{
+      created: number;
+      skipped: Array<{ date: string; reason: string }>;
+    }>(
+      '/admin/staff-roster/shifts/fill',
       { method: 'POST', body: JSON.stringify(body) },
       token,
     ),
@@ -1953,6 +2072,20 @@ export const api = {
     request<import('@fitgo/shared-types').ClubWorkingHours>(
       '/super-admin/staff-roster/working-hours',
       {},
+      token,
+    ),
+
+  saRosterPatchDay: (
+    token: string,
+    body: {
+      date: string;
+      holiday?: boolean;
+      hours?: { open: string; close: string; closed?: boolean } | null;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').ClubWorkingHours>(
+      '/super-admin/staff-roster/day',
+      { method: 'PUT', body: JSON.stringify(body) },
       token,
     ),
 
@@ -1985,16 +2118,39 @@ export const api = {
     token: string,
     body: {
       id?: string;
-      userId: string;
+      userId?: string;
+      userIds?: string[];
       track: import('@fitgo/shared-types').StaffShiftTrack;
       date: string;
       startAt: string;
       endAt: string;
       note?: string;
+      overtimeMinutes?: number;
     },
   ) =>
-    request<import('@fitgo/shared-types').StaffShiftDto>(
+    request<import('@fitgo/shared-types').StaffShiftDto[]>(
       '/super-admin/staff-roster/shifts',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  saRosterFillShifts: (
+    token: string,
+    body: {
+      userId: string;
+      track: import('@fitgo/shared-types').StaffShiftTrack;
+      startTime: string;
+      endTime: string;
+      dates: string[];
+      overtimeMinutes?: number;
+      skipIfExists?: boolean;
+    },
+  ) =>
+    request<{
+      created: number;
+      skipped: Array<{ date: string; reason: string }>;
+    }>(
+      '/super-admin/staff-roster/shifts/fill',
       { method: 'POST', body: JSON.stringify(body) },
       token,
     ),

@@ -1,9 +1,12 @@
 import {
+  BadRequestException,
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -54,6 +57,24 @@ export class PayrollController {
     });
   }
 
+  @Post('staff/:userId/profile/copy')
+  copyProfile(
+    @CurrentUser() user: JwtPayload,
+    @Param('userId') userId: string,
+    @Body()
+    body: {
+      departments: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
+      tracks?: Array<'ADMIN' | 'GROUP_TRAINER' | 'SPA' | 'TECH' | 'PT'>;
+    },
+  ) {
+    return this.payroll.copyStaffPayProfile(
+      user,
+      userId,
+      body.departments ?? [],
+      body.tracks,
+    );
+  }
+
   @Get('summary')
   summary(
     @CurrentUser() user: JwtPayload,
@@ -90,6 +111,67 @@ export class PayrollController {
     },
   ) {
     return this.payroll.addAdjustment(user, body);
+  }
+
+  @Patch('adjustments/:id')
+  updateAdjustment(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { amountMinor?: number; reason?: string },
+  ) {
+    return this.payroll.updateAdjustment(user, id, body);
+  }
+
+  @Delete('adjustments/:id')
+  deleteAdjustment(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.payroll.deleteAdjustment(user, id);
+  }
+
+  @Get('payouts')
+  listPayouts(
+    @CurrentUser() user: JwtPayload,
+    @Query('userId') userId: string,
+  ) {
+    return this.payroll.listPayouts(requireClubId(user), userId);
+  }
+
+  @Get('payouts/preview')
+  previewPayout(
+    @CurrentUser() user: JwtPayload,
+    @Query('userId') userId: string,
+    @Query('kind') kind: 'ADVANCE_HALF' | 'MONTH_SETTLEMENT',
+    @Query('year') year: string,
+    @Query('month') month: string,
+  ) {
+    if (kind !== 'ADVANCE_HALF' && kind !== 'MONTH_SETTLEMENT') {
+      throw new BadRequestException('Неверный тип выплаты');
+    }
+    return this.payroll.previewPayout(
+      requireClubId(user),
+      userId,
+      kind,
+      Number(year),
+      Number(month),
+    );
+  }
+
+  @Post('payouts/confirm')
+  confirmPayout(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      userId: string;
+      kind: 'ADVANCE_HALF' | 'MONTH_SETTLEMENT';
+      year: number;
+      month: number;
+      cardTransferMinor?: number;
+      note?: string;
+    },
+  ) {
+    return this.payroll.confirmPayout(user, body);
   }
 }
 

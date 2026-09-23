@@ -11,11 +11,14 @@ import type {
 import {
   DAY_OF_WEEK_KEYS,
   DEFAULT_CLUB_WORKING_HOURS,
-  dayKeyFromDate,
+  clubHoursForDate,
+  rosterDayKind,
+  trackDayCapMinutes,
 } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { StaffDayDialog } from './staff-day-dialog';
 
 const TRACKS: Array<{ id: StaffShiftTrack; label: string }> = [
   { id: 'ADMIN', label: 'Админы' },
@@ -75,13 +78,11 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     null,
   );
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [editShift, setEditShift] = useState<StaffShiftDto | null>(null);
-  const [userId, setUserId] = useState('');
-  const [startTime, setStartTime] = useState('09:00');
-  const [endTime, setEndTime] = useState('18:00');
-  const [note, setNote] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [dayOpen, setDayOpen] = useState('07:00');
+  const [dayClose, setDayClose] = useState('23:00');
+  const [dayClosed, setDayClosed] = useState(false);
 
   const canEdit = mode === 'admin' || mode === 'super';
   const firstWeekday = useMemo(() => {
@@ -135,16 +136,6 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     load();
   }, [load]);
 
-  useEffect(() => {
-    setUserId('');
-  }, [track]);
-
-  useEffect(() => {
-    if (staff[0] && !staff.some((s) => s.id === userId)) {
-      setUserId(staff[0].id);
-    }
-  }, [staff, userId]);
-
   const shiftByDate = useMemo(() => {
     const m = new Map<string, StaffShiftDto[]>();
     for (const c of cells) m.set(c.date, c.shifts);
@@ -155,9 +146,59 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
 
   const clubDayHint = (dateStr: string) => {
     const d = new Date(`${dateStr}T12:00:00`);
-    const day = hours[dayKeyFromDate(d)];
+    const day = clubHoursForDate(hours, d);
     if (!day || day.closed) return 'закрыто';
-    return `${day.open}–${day.close}`;
+    const kind = rosterDayKind(d, hours.holidayDates ?? []);
+    const tag = kind === 'weekend' ? 'вых' : 'буд';
+    return `${day.open}–${day.close} ${tag}`;
+  };
+
+  const dayBudget = (dateStr: string) => {
+    const d = new Date(`${dateStr}T12:00:00`);
+    const kind = rosterDayKind(d, hours.holidayDates ?? []);
+    const cap = trackDayCapMinutes(track, d, hours.holidayDates ?? []);
+    const used = (shiftByDate.get(dateStr) ?? []).reduce(
+      (sum, s) => sum + s.minutes,
+      0,
+    );
+    return {
+      kind,
+      cap,
+      used,
+      holiday: (hours.holidayDates ?? []).includes(dateStr),
+      custom: Boolean(hours.dayOverrides?.[dateStr]),
+    };
+  };
+
+  useEffect(() => {
+    if (!selectedDate) return;
+    const day = clubHoursForDate(hours, new Date(`${selectedDate}T12:00:00`));
+    setDayOpen(day?.open ?? '07:00');
+    setDayClose(day?.close ?? '23:00');
+    setDayClosed(!!day?.closed);
+  }, [selectedDate, hours]);
+
+  const patchDay = async (body: {
+    date: string;
+    holiday?: boolean;
+    hours?: { open: string; close: string; closed?: boolean } | null;
+  }) => {
+    const token = getToken();
+    if (!token || !canEdit) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      const next =
+        mode === 'super'
+          ? await api.saRosterPatchDay(token, body)
+          : await api.adminRosterPatchDay(token, body);
+      setHours({ ...DEFAULT_CLUB_WORKING_HOURS, ...next });
+      setMessage('День обновлён');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const prevMonth = () => {
@@ -173,46 +214,6 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     } else setMonth((m) => m + 1);
   };
 
-  const openDay = (date: string) => {
-    setSelectedDate(date);
-    setEditShift(null);
-    const hint = clubDayHint(date);
-    if (hint !== 'закрыто' && hint.includes('–')) {
-      const [o, c] = hint.split('–');
-      setStartTime(o!);
-      setEndTime(c!);
-    }
-    setNote('');
-  };
-
-  const saveShift = async () => {
-    if (!canEdit || !selectedDate || !userId) return;
-    const token = getToken();
-    if (!token) return;
-    setBusy(true);
-    setMessage('');
-    try {
-      const body = {
-        id: editShift?.id,
-        userId,
-        track,
-        date: selectedDate,
-        startAt: new Date(`${selectedDate}T${startTime}:00`).toISOString(),
-        endAt: new Date(`${selectedDate}T${endTime}:00`).toISOString(),
-        note: note || undefined,
-      };
-      if (mode === 'super') await api.saRosterUpsertShift(token, body);
-      else await api.adminRosterUpsertShift(token, body);
-      await load();
-      setEditShift(null);
-      setMessage('Смена сохранена');
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Ошибка');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const removeShift = async (id: string) => {
     if (!canEdit) return;
     const token = getToken();
@@ -222,7 +223,6 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
       if (mode === 'super') await api.saRosterDeleteShift(token, id);
       else await api.adminRosterDeleteShift(token, id);
       await load();
-      setEditShift(null);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     } finally {
@@ -230,13 +230,118 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     }
   };
 
-  const startEdit = (s: StaffShiftDto) => {
-    setSelectedDate(s.date);
-    setEditShift(s);
-    setUserId(s.userId);
-    setStartTime(timeOf(s.startAt));
-    setEndTime(timeOf(s.endAt));
-    setNote(s.note ?? '');
+  const savePerson = async (input: {
+    id?: string;
+    userId: string;
+    start: string;
+    end: string;
+    overtimeMinutes?: number;
+  }) => {
+    if (!canEdit || !selectedDate) return false;
+    const token = getToken();
+    if (!token) return false;
+    setBusy(true);
+    setMessage('');
+    try {
+      const body = {
+        id: input.id,
+        userId: input.userId,
+        userIds: input.id ? undefined : [input.userId],
+        track,
+        date: selectedDate,
+        startAt: new Date(`${selectedDate}T${input.start}:00`).toISOString(),
+        endAt: new Date(`${selectedDate}T${input.end}:00`).toISOString(),
+        overtimeMinutes: input.overtimeMinutes,
+      };
+      if (mode === 'super') await api.saRosterUpsertShift(token, body);
+      else await api.adminRosterUpsertShift(token, body);
+      await load();
+      return true;
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const fillPerson = async (input: {
+    userId: string;
+    start: string;
+    end: string;
+    dates: string[];
+    overtimeMinutes?: number;
+  }) => {
+    if (!canEdit) return false;
+    const token = getToken();
+    if (!token) return false;
+    setBusy(true);
+    setMessage('');
+    try {
+      const body = {
+        userId: input.userId,
+        track,
+        startTime: input.start,
+        endTime: input.end,
+        dates: input.dates,
+        overtimeMinutes: input.overtimeMinutes,
+        skipIfExists: true,
+      };
+      const result =
+        mode === 'super'
+          ? await api.saRosterFillShifts(token, body)
+          : await api.adminRosterFillShifts(token, body);
+      await load();
+      const skipHint =
+        result.skipped.length > 0
+          ? ` Пропущено: ${result.skipped.length} (${result.skipped
+              .slice(0, 3)
+              .map((s) => s.date)
+              .join(', ')}${result.skipped.length > 3 ? '…' : ''})`
+          : '';
+      setMessage(`Создано смен: ${result.created}.${skipHint}`);
+      return true;
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const suggestWindow = (date: string) => {
+    const d = new Date(`${date}T12:00:00`);
+    const day = clubHoursForDate(hours, d);
+    const open = day?.open ?? '07:00';
+    const close = day?.close ?? '23:00';
+    const weekend = rosterDayKind(d, hours.holidayDates ?? []) === 'weekend';
+    const used = (shiftByDate.get(date) ?? []).reduce((sum, s) => sum + s.minutes, 0);
+    const cap = trackDayCapMinutes(track, d, hours.holidayDates ?? []);
+    const remain = Math.max(0, cap - used);
+    const pair: [string, string] =
+      used === 0
+        ? weekend
+          ? ['09:00', '21:00']
+          : ['07:00', '20:00']
+        : weekend
+          ? ['15:00', '21:00']
+          : ['12:00', '23:00'];
+    let start = pair[0] < open ? open : pair[0];
+    let end = pair[1] > close ? close : pair[1];
+    const span = (() => {
+      const [sh, sm] = start.split(':').map(Number);
+      const [eh, em] = end.split(':').map(Number);
+      return eh! * 60 + em! - (sh! * 60 + sm!);
+    })();
+    if (remain > 0 && span > remain) {
+      const [ch, cm] = close.split(':').map(Number);
+      let total = ch! * 60 + cm! - remain;
+      if (total < 0) total = 0;
+      start = `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
+      if (start < open) start = open;
+      end = close;
+    }
+    return { start, end, used, cap };
   };
 
   const summaries = Array.isArray(summary) ? summary : summary ? [summary] : [];
@@ -248,8 +353,10 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
           <h1 className="text-2xl font-semibold text-white">График смен</h1>
           <p className="text-sm text-slate-400">
             {mode === 'trainer'
-              ? 'Ваши смены из журнала админа. Открыть запись клиентов — в Расписании.'
-              : 'Распределение рабочего времени клуба. Правки пересчитывают часы и мотивацию.'}
+              ? 'Дежурство ставит администратор. Здесь его можно только смотреть. Время до или после дежурства открывается в Расписании: клиенты записываются, но ставка за эти часы не начисляется.'
+              : track === 'TRAINER'
+                ? 'Дежурство: в эти часы клиенты могут записаться, и часы идут в ставку. Время до и после тренер открывает сам.'
+              : 'Двойной щелчок по дню — добавить или изменить. Можно скопировать смену на период или выбранные дни недели.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -308,8 +415,13 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
               <button
                 key={date}
                 type="button"
-                onClick={() => openDay(date)}
-                className={`min-h-[5.5rem] rounded-lg border p-1.5 text-left transition ${
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  setSelectedDate(date);
+                  setMessage('');
+                }}
+                title="Двойной щелчок — кто работает"
+                className={`min-h-[7.5rem] rounded-lg border p-1.5 text-left align-top transition ${
                   selected
                     ? 'border-emerald-400/60 bg-emerald-500/10'
                     : closed
@@ -317,27 +429,32 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
                       : 'border-white/10 bg-slate-950/30 hover:border-white/25'
                 }`}
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-1">
                   <span className="text-sm font-medium text-white">{day}</span>
                   <span className="text-[10px] text-slate-500">
-                    {clubDayHint(date)}
+                    {shifts.length > 0
+                      ? shifts.length
+                      : (hours.holidayDates ?? []).includes(date)
+                        ? 'праздник'
+                        : ''}
                   </span>
                 </div>
-                <div className="mt-1 space-y-0.5">
-                  {shifts.slice(0, 3).map((s) => (
+                <div className="mt-1 max-h-28 space-y-0.5 overflow-y-auto">
+                  {shifts.map((s) => (
                     <div
                       key={s.id}
-                      className="truncate rounded bg-white/10 px-1 py-0.5 text-[10px] text-slate-200"
+                      className="rounded bg-emerald-500/15 px-1 py-0.5 text-[10px] leading-tight text-slate-100"
                       title={`${s.userName} ${timeOf(s.startAt)}–${timeOf(s.endAt)}`}
                     >
-                      {s.userName.split(' ')[0]} {timeOf(s.startAt)}
+                      <span className="block truncate font-medium">
+                        {s.userName.split(' ')[0]}
+                      </span>
+                      <span className="block text-emerald-200/90">
+                        {timeOf(s.startAt)}–{timeOf(s.endAt)}
+                        {s.overtimeMinutes > 0 ? ` +${s.overtimeMinutes}` : ''}
+                      </span>
                     </div>
                   ))}
-                  {shifts.length > 3 && (
-                    <div className="text-[10px] text-slate-500">
-                      +{shifts.length - 3}
-                    </div>
-                  )}
                 </div>
               </button>
             );
@@ -345,125 +462,49 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
         </div>
       </div>
 
-      {selectedDate && (
-        <div className="card space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-medium text-white">
-              {selectedDate}
-              <span className="ml-2 text-sm font-normal text-slate-400">
-                клуб: {clubDayHint(selectedDate)}
-              </span>
-            </h2>
-            <button
-              type="button"
-              className="text-sm text-slate-400 hover:text-white"
-              onClick={() => setSelectedDate(null)}
-            >
-              Закрыть
-            </button>
-          </div>
-
-          <ul className="space-y-2">
-            {(shiftByDate.get(selectedDate) ?? []).map((s) => (
-              <li
-                key={s.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 px-3 py-2"
-              >
-                <div>
-                  <p className="text-sm text-white">{s.userName}</p>
-                  <p className="text-xs text-slate-400">
-                    {timeOf(s.startAt)}–{timeOf(s.endAt)} ·{' '}
-                    {(s.minutes / 60).toFixed(1)} ч
-                    {s.note ? ` · ${s.note}` : ''}
-                  </p>
-                </div>
-                {canEdit && (
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      className="btn-secondary px-2 py-1 text-xs"
-                      onClick={() => startEdit(s)}
-                    >
-                      Изменить
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary px-2 py-1 text-xs text-red-300"
-                      onClick={() => removeShift(s.id)}
-                      disabled={busy}
-                    >
-                      Удалить
-                    </button>
-                  </div>
-                )}
-              </li>
-            ))}
-            {(shiftByDate.get(selectedDate) ?? []).length === 0 && (
-              <p className="text-sm text-slate-500">Смен нет</p>
-            )}
-          </ul>
-
-          {canEdit && (
-            <div className="grid gap-3 border-t border-white/10 pt-3 sm:grid-cols-2">
-              <label className="block text-xs text-slate-400">
-                Сотрудник
-                <select
-                  className="input mt-1 w-full"
-                  value={userId}
-                  onChange={(e) => setUserId(e.target.value)}
-                >
-                  <option value="">—</option>
-                  {staff.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-xs text-slate-400">
-                Заметка
-                <input
-                  className="input mt-1 w-full"
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                />
-              </label>
-              <label className="block text-xs text-slate-400">
-                Начало
-                <input
-                  type="time"
-                  className="input mt-1 w-full"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                />
-              </label>
-              <label className="block text-xs text-slate-400">
-                Конец
-                <input
-                  type="time"
-                  className="input mt-1 w-full"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                />
-              </label>
-              <button
-                type="button"
-                className="btn-primary sm:col-span-2"
-                disabled={busy || !userId}
-                onClick={saveShift}
-              >
-                {editShift ? 'Сохранить изменения' : 'Добавить смену'}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      {selectedDate && (() => {
+        const win = suggestWindow(selectedDate);
+        const budget = dayBudget(selectedDate);
+        return (
+          <StaffDayDialog
+            date={selectedDate}
+            shifts={shiftByDate.get(selectedDate) ?? []}
+            staff={staff}
+            canEdit={canEdit}
+            busy={busy}
+            message={message}
+            usedMinutes={win.used}
+            capMinutes={win.cap}
+            intro={
+              track === 'TRAINER'
+                ? 'Дежурство. Эти часы оплачиваются по ставке, клиенты могут записаться. Время до и после тренер ставит сам.'
+                : undefined
+            }
+            defaultStart={win.start}
+            defaultEnd={win.end}
+            allowOvertime={track === 'ADMIN'}
+            holiday={budget.holiday}
+            customHours={budget.custom}
+            dayOpen={dayOpen}
+            dayClose={dayClose}
+            dayClosed={dayClosed}
+            onDayOpen={setDayOpen}
+            onDayClose={setDayClose}
+            onDayClosed={setDayClosed}
+            onPatchDay={(body) => patchDay({ date: selectedDate, ...body })}
+            onClose={() => setSelectedDate(null)}
+            onSave={savePerson}
+            onFill={fillPerson}
+            onDelete={removeShift}
+          />
+        );
+      })()}
 
       {showMotivation && summaries.length > 0 && (
-        <div className="card space-y-3">
-          <h2 className="text-lg font-medium text-white">
-            {mode === 'super' ? 'Мотивация по сменам' : 'Моя мотивация'}
-          </h2>
+        <details className="card">
+          <summary className="cursor-pointer text-sm font-medium text-white">
+            {mode === 'super' ? 'Суммы по сменам' : 'Мои часы и сумма'}
+          </summary>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="text-xs uppercase text-slate-500">
@@ -494,7 +535,7 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
               </tbody>
             </table>
           </div>
-        </div>
+        </details>
       )}
     </div>
   );

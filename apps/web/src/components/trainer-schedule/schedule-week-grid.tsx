@@ -84,7 +84,9 @@ export function ScheduleWeekGrid({
           const overlaps = getOverlapRegions(dayStr, dayEvents);
           const isToday = dayStr === todayKey;
           const isWeekend = dayDate.getDay() === 0 || dayDate.getDay() === 6;
-          const hasWork = getDayWorkBounds(dayStr, availabilityBlocks) !== null;
+          const hasDuty = dayEvents.some((e) => e.kind === 'DUTY');
+          const hasWork =
+            hasDuty || getDayWorkBounds(dayStr, availabilityBlocks) !== null;
 
           return (
             <div

@@ -4,6 +4,7 @@ export type StaffPayTrack =
   | 'ADMIN'
   | 'GROUP_TRAINER'
   | 'SPA'
+  | 'TECH'
   | 'PT';
 
 export interface PtPercentTier {
@@ -23,7 +24,7 @@ export interface SpaQuotaServiceRate {
 
 export interface StaffPayProfile {
   track: StaffPayTrack;
-  /** ADMIN: hourly rate (minor). */
+  /** ADMIN / TECH / GROUP / PT duty: hourly rate (minor). */
   hourlyRateMinor?: number;
   /** ADMIN: % of membership sales. */
   membershipSalesPercent?: number;
@@ -42,7 +43,112 @@ export interface StaffPayProfile {
   ptPercentTiers?: PtPercentTier[];
   /** PT: session catalog price (minor) when booking has no CRM price. */
   ptSessionPriceMinor?: number;
+  /** ADMIN / штатный PT: fixed advance paid on the 25th (days 1–15), minor units. */
+  fixedAdvanceMinor?: number;
   notes?: string;
+  /**
+   * Extra department schemes for multi-role staff.
+   * Flat fields above always mirror `track` for backward compatibility.
+   */
+  byTrack?: Partial<Record<StaffPayTrack, StaffPayTrackSlice>>;
+}
+
+/** One department scheme without nested byTrack. */
+export type StaffPayTrackSlice = Omit<StaffPayProfile, 'byTrack'>;
+
+/** Role ↔ pay department for staff filters / copy. */
+export type StaffDepartment =
+  | 'ADMIN'
+  | 'TRAINER'
+  | 'SPECIALIST'
+  | 'TECH';
+
+export function payTrackForDepartment(
+  dept: StaffDepartment,
+): StaffPayTrack {
+  if (dept === 'ADMIN') return 'ADMIN';
+  if (dept === 'SPECIALIST') return 'SPA';
+  if (dept === 'TECH') return 'TECH';
+  return 'PT';
+}
+
+export function departmentsForPayTrack(track: StaffPayTrack): StaffDepartment[] {
+  if (track === 'ADMIN') return ['ADMIN'];
+  if (track === 'SPA') return ['SPECIALIST'];
+  if (track === 'TECH') return ['TECH'];
+  return ['TRAINER'];
+}
+
+/** Parse "2,5" / "2.5" to minor units (kopecks). Empty → 0. */
+export function parseMoneyToMinor(raw: string): number {
+  const n = parseDecimal(raw);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100);
+}
+
+/** Parse decimal allowing comma. */
+export function parseDecimal(raw: string): number {
+  const cleaned = raw.trim().replace(/\s/g, '').replace(',', '.');
+  if (!cleaned || cleaned === '.' || cleaned === '-') return 0;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Display minor as decimal string without forcing integers. */
+export function formatMinor(minor: number | undefined | null): string {
+  const v = (minor ?? 0) / 100;
+  if (Number.isInteger(v)) return String(v);
+  return String(Number(v.toFixed(4)).toString());
+}
+
+export function formatPercent(value: number | undefined | null): string {
+  const v = value ?? 0;
+  if (Number.isInteger(v)) return String(v);
+  return String(Number(v.toFixed(4)).toString());
+}
+
+/** Flatten profile for a track (byTrack wins, else default empty). */
+export function sliceForTrack(
+  profile: StaffPayProfile | null | undefined,
+  track: StaffPayTrack,
+): StaffPayTrackSlice {
+  if (!profile) return defaultPayProfile(track);
+  if (profile.byTrack?.[track]) {
+    return { ...profile.byTrack[track]!, track };
+  }
+  if (profile.track === track) {
+    const { byTrack: _b, ...rest } = profile;
+    return rest;
+  }
+  return defaultPayProfile(track);
+}
+
+/** All department slices stored on a profile (including primary track). */
+export function allPaySlices(
+  profile: StaffPayProfile | null | undefined,
+): StaffPayTrackSlice[] {
+  if (!profile) return [];
+  const tracks = new Set<StaffPayTrack>([profile.track]);
+  for (const t of Object.keys(profile.byTrack ?? {}) as StaffPayTrack[]) {
+    tracks.add(t);
+  }
+  return [...tracks].map((t) => sliceForTrack(profile, t));
+}
+
+/** Pack editor state: current track fields + other byTrack entries. */
+export function packPayProfile(
+  current: StaffPayTrackSlice,
+  byTrack: Partial<Record<StaffPayTrack, StaffPayTrackSlice>>,
+): StaffPayProfile {
+  const next: Partial<Record<StaffPayTrack, StaffPayTrackSlice>> = {
+    ...byTrack,
+    [current.track]: { ...current },
+  };
+  delete (next[current.track] as StaffPayProfile).byTrack;
+  return {
+    ...current,
+    byTrack: next,
+  };
 }
 
 export const DEFAULT_PT_TIERS: PtPercentTier[] = [
@@ -72,6 +178,7 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         hourlyRateMinor: 0,
         membershipSalesPercent: 0,
         extraSalesPercent: 0,
+        fixedAdvanceMinor: 0,
       };
     case 'GROUP_TRAINER':
       return {
@@ -86,12 +193,19 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         spaSoldPercent: 0,
         spaQuotaRates: DEFAULT_SPA_QUOTA_RATES.map((r) => ({ ...r })),
       };
+    case 'TECH':
+      return {
+        track,
+        hourlyRateMinor: 0,
+        notes: 'Премии и штрафы — отдельными корректировками в расчёте ЗП',
+      };
     case 'PT':
       return {
         track,
         ptPercentTiers: DEFAULT_PT_TIERS.map((t) => ({ ...t })),
         ptSessionPriceMinor: 0,
         hourlyRateMinor: 0,
+        fixedAdvanceMinor: 0,
       };
   }
 }
@@ -99,45 +213,64 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
 export function payProfileSummary(profile: StaffPayProfile | null | undefined): string[] {
   if (!profile) return ['Ставки не заданы'];
   const chips: string[] = [];
-  switch (profile.track) {
-    case 'ADMIN':
-      if (profile.hourlyRateMinor)
-        chips.push(`${(profile.hourlyRateMinor / 100).toFixed(0)}/ч`);
-      if (profile.membershipSalesPercent)
-        chips.push(`абн. ${profile.membershipSalesPercent}%`);
-      if (profile.extraSalesPercent)
-        chips.push(`доп. ${profile.extraSalesPercent}%`);
-      break;
-    case 'GROUP_TRAINER':
-      if (profile.groupSessionRateMinor)
-        chips.push(
-          `занятие ${(profile.groupSessionRateMinor / 100).toFixed(0)}`,
-        );
-      if (profile.groupMinAttendees)
-        chips.push(`от ${profile.groupMinAttendees} чел.`);
-      if (profile.groupPerAttendeeMinor)
-        chips.push(
-          `+${(profile.groupPerAttendeeMinor / 100).toFixed(0)}/чел`,
-        );
-      break;
-    case 'SPA':
-      if (profile.spaSoldPercent) chips.push(`услуги ${profile.spaSoldPercent}%`);
-      for (const r of profile.spaQuotaRates ?? []) {
-        if (r.rateMinor > 0)
-          chips.push(`${r.label}: ${(r.rateMinor / 100).toFixed(0)}`);
-      }
-      break;
-    case 'PT':
-      if (profile.hourlyRateMinor)
-        chips.push(`${(profile.hourlyRateMinor / 100).toFixed(0)}/ч смены`);
-      if (profile.ptSessionPriceMinor)
-        chips.push(
-          `ПТ ${(profile.ptSessionPriceMinor / 100).toFixed(0)}`,
-        );
-      for (const t of profile.ptPercentTiers ?? []) {
-        chips.push(`≥${t.minSessions}: ${t.percent}%`);
-      }
-      break;
+  const money = (minor: number) => {
+    const v = minor / 100;
+    return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, '');
+  };
+  for (const slice of allPaySlices(profile)) {
+    const tag =
+      allPaySlices(profile).length > 1 ? `${slice.track}: ` : '';
+    switch (slice.track) {
+      case 'ADMIN':
+        if (slice.hourlyRateMinor)
+          chips.push(`${tag}${money(slice.hourlyRateMinor)}/ч`);
+        if (slice.membershipSalesPercent)
+          chips.push(`${tag}абн. ${formatPercent(slice.membershipSalesPercent)}%`);
+        if (slice.extraSalesPercent)
+          chips.push(`${tag}доп. ${formatPercent(slice.extraSalesPercent)}%`);
+        if (slice.fixedAdvanceMinor)
+          chips.push(
+            `${tag}аванс 25-е ${money(slice.fixedAdvanceMinor)}`,
+          );
+        break;
+      case 'GROUP_TRAINER':
+        if (slice.hourlyRateMinor)
+          chips.push(`${tag}${money(slice.hourlyRateMinor)}/ч смены`);
+        if (slice.groupSessionRateMinor)
+          chips.push(`${tag}занятие ${money(slice.groupSessionRateMinor)}`);
+        if (slice.groupMinAttendees)
+          chips.push(`${tag}от ${slice.groupMinAttendees} чел.`);
+        if (slice.groupPerAttendeeMinor)
+          chips.push(`${tag}+${money(slice.groupPerAttendeeMinor)}/чел`);
+        break;
+      case 'SPA':
+        if (slice.spaSoldPercent)
+          chips.push(`${tag}услуги ${formatPercent(slice.spaSoldPercent)}%`);
+        for (const r of slice.spaQuotaRates ?? []) {
+          if (r.rateMinor > 0)
+            chips.push(`${tag}${r.label}: ${money(r.rateMinor)}`);
+        }
+        break;
+      case 'TECH':
+        if (slice.hourlyRateMinor)
+          chips.push(`${tag}${money(slice.hourlyRateMinor)}/ч`);
+        else chips.push(`${tag}часы`);
+        chips.push(`${tag}± премия/штраф`);
+        break;
+      case 'PT':
+        if (slice.hourlyRateMinor)
+          chips.push(`${tag}${money(slice.hourlyRateMinor)}/ч смены`);
+        if (slice.fixedAdvanceMinor)
+          chips.push(
+            `${tag}аванс 25-е ${money(slice.fixedAdvanceMinor)}`,
+          );
+        if (slice.ptSessionPriceMinor)
+          chips.push(`${tag}ПТ ${money(slice.ptSessionPriceMinor)}`);
+        for (const t of slice.ptPercentTiers ?? []) {
+          chips.push(`${tag}≥${t.minSessions}: ${formatPercent(t.percent)}%`);
+        }
+        break;
+    }
   }
   return chips.length ? chips : ['Ставки не заданы'];
 }

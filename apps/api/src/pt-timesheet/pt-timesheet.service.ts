@@ -86,7 +86,7 @@ export class PtTimesheetService {
     _input: { date: string; startAt: string; endAt: string; id?: string },
   ): Promise<TrainerShiftDto> {
     throw new BadRequestException(
-      'Рабочие смены задаёт админ в графике. Откройте окна записи в Расписании.',
+      'Дежурство задаёт админ в графике. Время до и после дежурства открывается в Расписании.',
     );
   }
 

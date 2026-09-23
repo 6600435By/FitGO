@@ -18,6 +18,7 @@ const ROLE_MAP: Record<Role, SharedUserRole> = {
   [Role.CLIENT]: SharedUserRole.CLIENT,
   [Role.TRAINER]: SharedUserRole.TRAINER,
   [Role.SPECIALIST]: SharedUserRole.SPECIALIST,
+  [Role.TECH]: SharedUserRole.TECH,
   [Role.ADMIN]: SharedUserRole.ADMIN,
   [Role.SUPER_ADMIN]: SharedUserRole.SUPER_ADMIN,
 };
@@ -108,6 +109,10 @@ export class AuthService {
 
     if (!user.isActive) {
       throw new UnauthorizedException('Аккаунт деактивирован');
+    }
+
+    if (!user.loginEnabled) {
+      throw new UnauthorizedException('Вход для этого сотрудника ещё не открыт');
     }
 
     const clubId = await this.clubMembership.resolveActiveClubId(

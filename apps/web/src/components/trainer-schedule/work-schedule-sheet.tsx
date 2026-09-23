@@ -1,32 +1,35 @@
 'use client';
 
-import type { TrainerAvailabilityBlock } from '@fitgo/shared-types';
-import { format, addDays, endOfMonth, startOfMonth } from 'date-fns';
+import type { TrainerAvailabilityBlock, TrainerCalendarEvent } from '@fitgo/shared-types';
+import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import { dateKey, weekDayKeys } from './schedule-grid';
+import { dateKey } from './schedule-grid';
 
 export function WorkScheduleSheet({
   periodStart,
   periodEnd,
   availabilityBlocks,
+  dutyEvents,
   onClose,
   onUpdated,
 }: {
   periodStart: string;
   periodEnd: string;
   availabilityBlocks: TrainerAvailabilityBlock[];
+  dutyEvents: TrainerCalendarEvent[];
   onClose: () => void;
   onUpdated: () => void;
 }) {
   const [selectedDate, setSelectedDate] = useState(
     format(new Date(periodStart), 'yyyy-MM-dd'),
   );
-  const [startTime, setStartTime] = useState('10:00');
-  const [endTime, setEndTime] = useState('18:00');
+  const [side, setSide] = useState<'before' | 'after'>('after');
+  const [edgeTime, setEdgeTime] = useState('23:30');
+  const [dutyId, setDutyId] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -40,6 +43,14 @@ export function WorkScheduleSheet({
       ),
     [publishedBlocks, selectedDate],
   );
+
+  const dutiesForDate = useMemo(
+    () => dutyEvents.filter((event) => dateKey(new Date(event.startAt)) === selectedDate),
+    [dutyEvents, selectedDate],
+  );
+  const duty = dutiesForDate.find((event) => event.id === dutyId) ?? dutiesForDate[0];
+
+  const timeOf = (iso: string) => format(new Date(iso), 'HH:mm');
 
   const saveDraftBlocks = async (
     blocks: Array<{ startAt: string; endAt: string }>,
@@ -67,64 +78,39 @@ export function WorkScheduleSheet({
   }));
 
   const handleSaveDay = async () => {
-    if (startTime >= endTime) {
-      setMessage('Время начала должно быть раньше окончания');
+    if (!duty) {
+      setMessage('В этот день нет дежурства. Его ставит администратор.');
+      return;
+    }
+    const boundary = side === 'before' ? timeOf(duty.startAt) : timeOf(duty.endAt);
+    const from = side === 'before' ? edgeTime : boundary;
+    const to = side === 'before' ? boundary : edgeTime;
+    if (from >= to) {
+      setMessage(
+        side === 'before'
+          ? 'Начало должно быть раньше дежурства'
+          : 'Конец должен быть позже дежурства',
+      );
       return;
     }
     setBusy(true);
     setMessage('');
     try {
-      const withoutSameDay = existingDraftPayload.filter(
-        (b) => dateKey(new Date(b.startAt)) !== selectedDate,
-      );
-      await saveDraftBlocks([
-        ...withoutSameDay,
-        buildBlock(selectedDate, startTime, endTime),
-      ]);
-      setMessage('Сохранено в черновик');
+      const withoutSameSide = existingDraftPayload.filter((block) => {
+        if (dateKey(new Date(block.startAt)) !== selectedDate) return true;
+        const sameSide =
+          side === 'before'
+            ? timeOf(block.endAt) === timeOf(duty.startAt)
+            : timeOf(block.startAt) === timeOf(duty.endAt);
+        return !sameSide;
+      });
+      await saveDraftBlocks([...withoutSameSide, buildBlock(selectedDate, from, to)]);
+      setMessage('Сохранено в черновик. Опубликуйте, чтобы клиенты увидели запись.');
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка');
     } finally {
       setBusy(false);
     }
-  };
-
-  const copyRangeToDates = async (dates: string[]) => {
-    if (startTime >= endTime) {
-      setMessage('Задайте корректный интервал времени');
-      return;
-    }
-    setBusy(true);
-    setMessage('');
-    try {
-      const replaceKeys = new Set(dates);
-      const kept = existingDraftPayload.filter(
-        (b) => !replaceKeys.has(dateKey(new Date(b.startAt))),
-      );
-      const added = dates.map((d) => buildBlock(d, startTime, endTime));
-      await saveDraftBlocks([...kept, ...added]);
-      setMessage(`Скопировано на ${dates.length} дн.`);
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Ошибка');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleCopyWeek = () => {
-    const week = weekDayKeys(new Date(`${selectedDate}T12:00:00`));
-    void copyRangeToDates(week);
-  };
-
-  const handleCopyMonth = () => {
-    const anchor = new Date(`${selectedDate}T12:00:00`);
-    const start = startOfMonth(anchor);
-    const end = endOfMonth(anchor);
-    const dates: string[] = [];
-    for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
-      dates.push(dateKey(d));
-    }
-    void copyRangeToDates(dates);
   };
 
   const handleRemoveDraft = async (blockId: string) => {
@@ -154,9 +140,9 @@ export function WorkScheduleSheet({
     <div className="fixed inset-0 z-40 flex flex-col bg-slate-950">
       <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
         <div>
-          <h2 className="text-lg font-semibold">График работы</h2>
+          <h2 className="text-lg font-semibold">Время вне дежурства</h2>
           <p className="text-sm text-slate-400">
-            Открытое время для записи — по конкретным датам
+            Только сразу до или после дежурства. Клиенты могут записаться, ставка за эти часы не начисляется.
           </p>
         </div>
         <button
@@ -177,59 +163,79 @@ export function WorkScheduleSheet({
         )}
 
         <div className="card space-y-3">
-          <p className="font-medium">День и часы приёма</p>
+          <p className="font-medium">До или после дежурства</p>
           <input
             type="date"
             value={selectedDate}
             onChange={(e) => setSelectedDate(e.target.value)}
             className="input"
           />
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="mb-1 block text-xs text-slate-400">С</label>
-              <input
-                type="time"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-slate-400">До</label>
-              <input
-                type="time"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-                className="input"
-              />
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handleSaveDay}
-              disabled={busy}
-              className="btn-primary text-sm disabled:opacity-50"
-            >
-              Сохранить день
-            </button>
-            <button
-              type="button"
-              onClick={handleCopyWeek}
-              disabled={busy}
-              className="btn-secondary text-sm disabled:opacity-50"
-            >
-              Копировать на неделю
-            </button>
-            <button
-              type="button"
-              onClick={handleCopyMonth}
-              disabled={busy}
-              className="btn-secondary text-sm disabled:opacity-50"
-            >
-              Копировать на месяц
-            </button>
-          </div>
+          {dutiesForDate.length === 0 ? (
+            <p className="text-sm text-slate-400">
+              В этот день дежурства нет. Его ставит администратор в графике смен.
+            </p>
+          ) : (
+            <>
+              {dutiesForDate.length > 1 && (
+                <select
+                  className="input w-full"
+                  value={duty?.id ?? ''}
+                  onChange={(e) => setDutyId(e.target.value)}
+                >
+                  {dutiesForDate.map((event) => (
+                    <option key={event.id} value={event.id}>
+                      Дежурство {timeOf(event.startAt)}–{timeOf(event.endAt)}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {duty && dutiesForDate.length === 1 && (
+                <p className="text-sm text-sky-200">
+                  Дежурство {timeOf(duty.startAt)}–{timeOf(duty.endAt)}. Его меняет только администратор.
+                </p>
+              )}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className={side === 'before' ? 'btn-primary text-sm' : 'btn-secondary text-sm'}
+                  onClick={() => setSide('before')}
+                >
+                  До
+                </button>
+                <button
+                  type="button"
+                  className={side === 'after' ? 'btn-primary text-sm' : 'btn-secondary text-sm'}
+                  onClick={() => setSide('after')}
+                >
+                  После
+                </button>
+              </div>
+              <label className="block text-xs text-slate-400">
+                {side === 'before' ? 'Начать приём с' : 'Принимать до'}
+                <input
+                  type="time"
+                  value={edgeTime}
+                  onChange={(e) => setEdgeTime(e.target.value)}
+                  className="input mt-1"
+                />
+              </label>
+              {duty && (
+                <p className="text-xs text-slate-500">
+                  {side === 'before'
+                    ? `Запись ${edgeTime}–${timeOf(duty.startAt)}. Ставка не начисляется.`
+                    : `Запись ${timeOf(duty.endAt)}–${edgeTime}. Ставка не начисляется.`}
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={handleSaveDay}
+                disabled={busy || !duty}
+                className="btn-primary text-sm disabled:opacity-50"
+              >
+                Сохранить в черновик
+              </button>
+            </>
+          )}
         </div>
 
         {publishedForDate.length > 0 && (

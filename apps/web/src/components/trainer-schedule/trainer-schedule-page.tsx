@@ -29,6 +29,12 @@ function EventActionDialog({
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
       <div className="card w-full max-w-sm space-y-3">
         <h3 className="font-semibold">{event.title}</h3>
+        {event.kind === 'DUTY' && (
+          <p className="text-sm text-slate-300">
+            Дежурство ставит администратор. В эти часы клиенты могут записаться, и они идут в ставку.
+            Время до или после открывается в графике работы — за него ставка не платится, только процент за тренировки.
+          </p>
+        )}
         {event.kind === 'PERSONAL' && event.bookingId && (
           <button
             type="button"
@@ -107,7 +113,7 @@ export function TrainerSchedulePage() {
             onClick={() => setShowWorkSchedule(true)}
             className="btn-secondary shrink-0 text-sm"
           >
-            График работы
+            Время вне дежурства
           </button>
         </div>
       </div>
@@ -153,6 +159,7 @@ export function TrainerSchedulePage() {
           periodStart={period.periodStart}
           periodEnd={period.periodEnd}
           availabilityBlocks={availabilityBlocks}
+          dutyEvents={events.filter((event) => event.kind === 'DUTY')}
           onClose={() => setShowWorkSchedule(false)}
           onUpdated={reload}
         />

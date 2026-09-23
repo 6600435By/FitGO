@@ -27,6 +27,7 @@ export default function SuperAdminClubSettingsPage() {
   const [primaryColor, setPrimaryColor] = useState('#14b88a');
   const [logoUrl, setLogoUrl] = useState('');
   const [hours, setHours] = useState<ClubWorkingHours>(DEFAULT_CLUB_WORKING_HOURS);
+  const [holidayInput, setHolidayInput] = useState('');
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
 
@@ -156,11 +157,12 @@ export default function SuperAdminClubSettingsPage() {
       <div className="card space-y-3">
         <h2 className="text-lg font-medium text-white">Часы работы клуба</h2>
         <p className="text-xs text-slate-500">
-          Смены сотрудников нельзя поставить вне этих окон.
+          Будни 07:00–23:00, суббота и воскресенье 09:00–21:00. Смена вне окна не
+          сохраняется. Праздник идёт по субботнему окну.
         </p>
         <div className="space-y-2">
           {DAY_OF_WEEK_KEYS.map((key) => {
-            const day = hours[key] ?? { open: '08:00', close: '22:00' };
+            const day = hours[key] ?? { open: '07:00', close: '23:00' };
             return (
               <div
                 key={key}
@@ -196,6 +198,54 @@ export default function SuperAdminClubSettingsPage() {
             );
           })}
         </div>
+      </div>
+
+      <div className="card space-y-3">
+        <h2 className="text-lg font-medium text-white">Праздники</h2>
+        <p className="text-xs text-slate-500">
+          В праздник клуб и лимит часов подразделения как в выходной: 09:00–21:00.
+          Перенесённые дни добавьте вручную.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="date"
+            className="input"
+            value={holidayInput}
+            onChange={(e) => setHolidayInput(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              if (!holidayInput) return;
+              setHours((prev) => ({
+                ...prev,
+                holidayDates: [...new Set([...(prev.holidayDates ?? []), holidayInput])].sort(),
+              }));
+              setHolidayInput('');
+            }}
+          >
+            Добавить
+          </button>
+        </div>
+        <ul className="flex flex-wrap gap-2">
+          {(hours.holidayDates ?? []).map((d) => (
+            <li key={d}>
+              <button
+                type="button"
+                className="rounded-full border border-white/15 px-2 py-1 text-xs text-slate-300"
+                onClick={() =>
+                  setHours((prev) => ({
+                    ...prev,
+                    holidayDates: (prev.holidayDates ?? []).filter((x) => x !== d),
+                  }))
+                }
+              >
+                {d} ×
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
 
       {error && <p className="text-red-400">{error}</p>}

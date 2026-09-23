@@ -132,7 +132,9 @@ export function ScheduleMonthAgenda({
               const inMonth = isSameMonth(day, date);
               const isToday = isSameDay(day, today);
               const isWeekend = day.getDay() === 0 || day.getDay() === 6;
-              const hasWork = getDayWorkBounds(key, availabilityBlocks) !== null;
+              const hasDuty = dayEvents.some((e) => e.kind === 'DUTY');
+              const hasWork =
+                hasDuty || getDayWorkBounds(key, availabilityBlocks) !== null;
               const level = loadLevel(busyCount);
 
               return (

@@ -21,8 +21,39 @@ import { AdminPermissionsService } from '../auth/admin-permissions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateAdminTaskDto } from './dto/task.dto';
 import type { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
+import { randomBytes } from 'crypto';
 
-const STAFF_ROLES: Role[] = [Role.ADMIN, Role.TRAINER, Role.SPECIALIST];
+const STAFF_ROLES: Role[] = [
+  Role.ADMIN,
+  Role.TRAINER,
+  Role.SPECIALIST,
+  Role.TECH,
+];
+
+const APP_LOGIN_ROLES = new Set(['ADMIN', 'TRAINER', 'SPECIALIST']);
+
+function needsAppLogin(
+  roles: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>,
+): boolean {
+  return roles.some((r) => APP_LOGIN_ROLES.has(r));
+}
+
+function techPlaceholderEmail(firstName: string, lastName: string): string {
+  const base = `${lastName}.${firstName}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/^\.+|\.+$/g, '')
+    .slice(0, 40);
+  const suffix = randomBytes(3).toString('hex');
+  return `tech.${base || 'worker'}.${suffix}@staff.fitgo.local`;
+}
+
+function toStaffPrismaRole(r: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH') {
+  if (r === 'ADMIN') return Role.ADMIN;
+  if (r === 'SPECIALIST') return Role.SPECIALIST;
+  if (r === 'TECH') return Role.TECH;
+  return Role.TRAINER;
+}
 
 @Injectable()
 export class SuperAdminService {
@@ -45,48 +76,68 @@ export class SuperAdminService {
   }
 
   async createStaff(user: JwtPayload, dto: CreateStaffDto) {
-    if (
-      dto.role !== 'ADMIN' &&
-      dto.role !== 'TRAINER' &&
-      dto.role !== 'SPECIALIST'
-    ) {
+    const roleList = [
+      ...new Set(
+        (dto.roles?.length ? dto.roles : dto.role ? [dto.role] : []) as Array<
+          'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'
+        >,
+      ),
+    ];
+    if (roleList.length === 0) {
       throw new BadRequestException(
-        'Можно создать только админа, тренера или специалиста',
+        'Укажите хотя бы одно подразделение: админ, тренер, SPA или техперсонал',
       );
     }
 
+    const needsLogin = needsAppLogin(roleList);
+    const email = needsLogin
+      ? (dto.email ?? '').trim().toLowerCase()
+      : techPlaceholderEmail(dto.firstName.trim(), dto.lastName.trim());
+    if (needsLogin && !email) {
+      throw new BadRequestException('Укажите логин (email) для входа в приложение');
+    }
+    const plainPassword = needsLogin
+      ? dto.password
+      : randomBytes(24).toString('hex');
+    if (needsLogin && (!plainPassword || plainPassword.length < 6)) {
+      throw new BadRequestException('Пароль не меньше 6 символов');
+    }
+
     const existing = await this.prisma.user.findFirst({
-      where: { email: dto.email },
+      where: { email },
     });
     if (existing) {
       throw new ConflictException('Пользователь с таким логином уже существует');
     }
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
-    const prismaRole =
-      dto.role === 'ADMIN'
-        ? Role.ADMIN
-        : dto.role === 'SPECIALIST'
-          ? Role.SPECIALIST
-          : Role.TRAINER;
+    const passwordHash = await bcrypt.hash(plainPassword!, 10);
+    const toPrisma = (r: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH') => {
+      if (r === 'ADMIN') return Role.ADMIN;
+      if (r === 'SPECIALIST') return Role.SPECIALIST;
+      if (r === 'TECH') return Role.TECH;
+      return Role.TRAINER;
+    };
     const clubId = requireClubId(user);
 
     const created = await this.prisma.user.create({
       data: {
         clubId,
-        email: dto.email,
+        email,
         password: passwordHash,
         firstName: dto.firstName.trim(),
         lastName: dto.lastName.trim(),
         phone: dto.phone?.trim() || null,
         dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : null,
         createdById: user.sub,
-        roles: { create: [{ role: prismaRole }] },
+        loginEnabled: needsLogin,
+        roles: {
+          create: roleList.map((r) => ({ role: toPrisma(r) })),
+        },
       },
       include: { roles: true },
     });
 
-    if (prismaRole === Role.ADMIN) {
+    if (roleList.includes('ADMIN')) {
       await this.adminPermissions.setPermissions(created.id, [
         AdminPermission.DASHBOARD_VIEW,
         AdminPermission.CLIENTS_VIEW,
@@ -94,13 +145,16 @@ export class SuperAdminService {
     }
 
     await this.logAudit(user, 'STAFF_CREATED', created.id, {
-      role: dto.role,
-      email: dto.email,
+      roles: roleList,
+      email,
+      loginEnabled: needsLogin,
     });
 
     return {
       user: this.mapStaff(created),
-      credentials: { email: dto.email, password: dto.password },
+      ...(needsLogin
+        ? { credentials: { email, password: plainPassword! } }
+        : {}),
     };
   }
 
@@ -114,6 +168,7 @@ export class SuperAdminService {
       dateOfBirth?: Date | null;
       isActive?: boolean;
       password?: string;
+      loginEnabled?: boolean;
     } = {};
 
     if (dto.firstName !== undefined) data.firstName = dto.firstName.trim();
@@ -123,7 +178,69 @@ export class SuperAdminService {
       data.dateOfBirth = dto.dateOfBirth ? new Date(dto.dateOfBirth) : null;
     }
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
-    if (dto.password) data.password = await bcrypt.hash(dto.password, 10);
+    if (dto.password) {
+      const rolesAfter = dto.roles ?? member.roles
+        .map((r) => r.role)
+        .filter((r) =>
+          ['ADMIN', 'TRAINER', 'SPECIALIST', 'TECH'].includes(r),
+        ) as Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
+      if (!needsAppLogin(rolesAfter)) {
+        throw new BadRequestException(
+          'У техперсонала нет входа в приложение — пароль не задаётся',
+        );
+      }
+      data.password = await bcrypt.hash(dto.password, 10);
+    }
+
+    if (dto.roles) {
+      const roleList = [...new Set(dto.roles)];
+      if (roleList.length === 0) {
+        throw new BadRequestException('Оставьте хотя бы одно подразделение');
+      }
+      const toPrisma = (r: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH') => {
+        if (r === 'ADMIN') return Role.ADMIN;
+        if (r === 'SPECIALIST') return Role.SPECIALIST;
+        if (r === 'TECH') return Role.TECH;
+        return Role.TRAINER;
+      };
+      const wanted = new Set(roleList.map(toPrisma));
+      const current = member.roles
+        .map((r) => r.role)
+        .filter(
+          (r): r is Role.ADMIN | Role.TRAINER | Role.SPECIALIST | Role.TECH =>
+            r === Role.ADMIN ||
+            r === Role.TRAINER ||
+            r === Role.SPECIALIST ||
+            r === Role.TECH,
+        );
+      for (const role of current) {
+        if (!wanted.has(role)) {
+          await this.prisma.userRole.delete({
+            where: { userId_role: { userId: staffId, role } },
+          });
+        }
+      }
+      for (const role of wanted) {
+        await this.prisma.userRole.upsert({
+          where: { userId_role: { userId: staffId, role } },
+          update: {},
+          create: { userId: staffId, role },
+        });
+      }
+      if (wanted.has(Role.ADMIN)) {
+        const grantCount = await this.prisma.adminPermissionGrant.count({
+          where: { userId: staffId },
+        });
+        if (grantCount === 0) {
+          await this.adminPermissions.setPermissions(staffId, [
+            AdminPermission.DASHBOARD_VIEW,
+            AdminPermission.CLIENTS_VIEW,
+          ]);
+        }
+      }
+      // TECH-only → no app login; any app role → allow login.
+      data.loginEnabled = needsAppLogin(roleList);
+    }
 
     const updated = await this.prisma.user.update({
       where: { id: member.id },
@@ -139,6 +256,7 @@ export class SuperAdminService {
 
     await this.logAudit(user, action, staffId, {
       ...(dto.password ? { passwordReset: true } : {}),
+      ...(dto.roles ? { roles: dto.roles } : {}),
     });
 
     const result: ReturnType<typeof this.mapStaff> & {
@@ -313,6 +431,8 @@ export class SuperAdminService {
     lastName: string;
     phone: string | null;
     dateOfBirth: Date | null;
+    employeeCode: string | null;
+    loginEnabled: boolean;
     isActive: boolean;
     createdAt: Date;
     roles: Array<{ role: Role }>;
@@ -321,6 +441,7 @@ export class SuperAdminService {
       [Role.CLIENT]: UserRole.CLIENT,
       [Role.TRAINER]: UserRole.TRAINER,
       [Role.SPECIALIST]: UserRole.SPECIALIST,
+      [Role.TECH]: UserRole.TECH,
       [Role.ADMIN]: UserRole.ADMIN,
       [Role.SUPER_ADMIN]: UserRole.SUPER_ADMIN,
     };
@@ -332,6 +453,8 @@ export class SuperAdminService {
       lastName: member.lastName,
       phone: member.phone ?? undefined,
       dateOfBirth: member.dateOfBirth?.toISOString().slice(0, 10),
+      employeeCode: member.employeeCode ?? undefined,
+      loginEnabled: member.loginEnabled,
       roles: member.roles.map((r) => roleMap[r.role]),
       isActive: member.isActive,
       createdAt: member.createdAt.toISOString(),

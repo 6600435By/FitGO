@@ -33,6 +33,19 @@ export class AdminStaffRosterController {
     return this.roster.getWorkingHours(requireClubId(user));
   }
 
+  @Put('day')
+  patchDay(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      date: string;
+      holiday?: boolean;
+      hours?: { open: string; close: string; closed?: boolean } | null;
+    },
+  ) {
+    return this.roster.patchDaySchedule(requireClubId(user), body);
+  }
+
   @Get('staff')
   staff(
     @CurrentUser() user: JwtPayload,
@@ -62,15 +75,34 @@ export class AdminStaffRosterController {
     @Body()
     body: {
       id?: string;
-      userId: string;
+      userId?: string;
+      userIds?: string[];
       track: StaffShiftTrack;
       date: string;
       startAt: string;
       endAt: string;
       note?: string;
+      overtimeMinutes?: number;
     },
   ) {
-    return this.roster.upsertShift(user, body);
+    return this.roster.createShifts(user, body);
+  }
+
+  @Post('shifts/fill')
+  fill(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      userId: string;
+      track: StaffShiftTrack;
+      startTime: string;
+      endTime: string;
+      dates: string[];
+      overtimeMinutes?: number;
+      skipIfExists?: boolean;
+    },
+  ) {
+    return this.roster.fillShifts(user, body);
   }
 
   @Delete('shifts/:id')
@@ -131,6 +163,19 @@ export class SuperAdminStaffRosterController {
     return this.roster.setWorkingHours(requireClubId(user), body);
   }
 
+  @Put('day')
+  patchDay(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      date: string;
+      holiday?: boolean;
+      hours?: { open: string; close: string; closed?: boolean } | null;
+    },
+  ) {
+    return this.roster.patchDaySchedule(requireClubId(user), body);
+  }
+
   @Get('staff')
   staff(
     @CurrentUser() user: JwtPayload,
@@ -160,15 +205,34 @@ export class SuperAdminStaffRosterController {
     @Body()
     body: {
       id?: string;
-      userId: string;
+      userId?: string;
+      userIds?: string[];
       track: StaffShiftTrack;
       date: string;
       startAt: string;
       endAt: string;
       note?: string;
+      overtimeMinutes?: number;
     },
   ) {
-    return this.roster.upsertShift(user, body);
+    return this.roster.createShifts(user, body);
+  }
+
+  @Post('shifts/fill')
+  fill(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      userId: string;
+      track: StaffShiftTrack;
+      startTime: string;
+      endTime: string;
+      dates: string[];
+      overtimeMinutes?: number;
+      skipIfExists?: boolean;
+    },
+  ) {
+    return this.roster.fillShifts(user, body);
   }
 
   @Delete('shifts/:id')
