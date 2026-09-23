@@ -32,6 +32,7 @@ export default function TrainerGroupJournalPage() {
     title: '',
     startAt: '',
     endAt: '',
+    roomTitle: '',
   });
 
   const load = useCallback(() => {
@@ -63,6 +64,7 @@ export default function TrainerGroupJournalPage() {
         title: openForm.title.trim() || 'Групповое занятие',
         startAt: openForm.startAt,
         endAt: openForm.endAt,
+        roomTitle: openForm.roomTitle.trim() || undefined,
       });
       setActive(s);
       load();
@@ -177,6 +179,14 @@ export default function TrainerGroupJournalPage() {
             value={openForm.endAt}
             onChange={(e) =>
               setOpenForm((f) => ({ ...f, endAt: e.target.value }))
+            }
+          />
+          <input
+            className="input"
+            placeholder="Зал (из 1С)"
+            value={openForm.roomTitle}
+            onChange={(e) =>
+              setOpenForm((f) => ({ ...f, roomTitle: e.target.value }))
             }
           />
           <button type="button" className="btn-primary" onClick={createOpen}>

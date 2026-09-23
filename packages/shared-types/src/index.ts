@@ -330,6 +330,8 @@ export interface ScheduleSlot {
   capacity: number;
   booked: number;
   available: boolean;
+  /** Forma / 1C room title (e.g. Групповой зал малый). */
+  roomTitle?: string;
   /** FitGO: клиент персональной тренировки (для ссылки тренера) */
   clientId?: string;
   waitlist?: {
@@ -899,6 +901,8 @@ export interface StaffMember {
   loginEnabled?: boolean;
   roles: UserRole[];
   isActive: boolean;
+  /** STAFF (default) or EXTERNAL (сторонние в отчёте ЗП). */
+  employmentKind?: 'STAFF' | 'EXTERNAL';
   createdAt: string;
 }
 

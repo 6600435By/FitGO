@@ -94,4 +94,8 @@ export class UpdateStaffDto {
   @IsArray()
   @IsIn(STAFF_ROLE, { each: true })
   roles?: StaffRoleId[];
+
+  @IsOptional()
+  @IsIn(['STAFF', 'EXTERNAL'])
+  employmentKind?: 'STAFF' | 'EXTERNAL';
 }

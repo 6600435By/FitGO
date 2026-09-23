@@ -178,7 +178,10 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
       });
       setByTrack(payProfile.byTrack ?? {});
       const result = await api.payrollCopyStaffProfile(token, userId, {
-        departments: depts,
+        departments: depts.filter(
+          (d): d is 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH' =>
+            d !== 'EXTERNAL',
+        ),
         tracks: [current.track],
       });
       setMessage(`Скопировано сотрудникам: ${result.copied}.`);
@@ -242,11 +245,10 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
       {profile.track === 'ADMIN' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
-            ЗП = ставка за часы + % от продаж абонементов + % от доп. услуг.
-            25-го — фиксированный аванс из оклада; 15-го — расчёт за прошлый
-            месяц минус аванс.
+            ЗП = ставка за часы (админы) или оклад (управляющая) + % продаж
+            абонементов/КП, доп. услуг, магазина и корпо (р/с вручную).
           </p>
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <MoneyField
               label="Ставка за час, BYN"
               value={formatMinor(profile.hourlyRateMinor)}
@@ -255,7 +257,7 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
               }
             />
             <PercentField
-              label="% от продаж абонементов"
+              label="% абонементы и КП"
               value={formatPercent(profile.membershipSalesPercent)}
               onChange={(v) =>
                 setProfile({
@@ -265,30 +267,57 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
               }
             />
             <PercentField
-              label="% от доп. услуг"
+              label="% доп. услуг"
               value={formatPercent(profile.extraSalesPercent)}
               onChange={(v) =>
-                setProfile({ ...profile, extraSalesPercent: parseDecimal(v) })
+                setProfile({
+                  ...profile,
+                  extraSalesPercent: parseDecimal(v),
+                })
+              }
+            />
+            <PercentField
+              label="% магазина"
+              value={formatPercent(profile.shopSalesPercent)}
+              onChange={(v) =>
+                setProfile({
+                  ...profile,
+                  shopSalesPercent: parseDecimal(v),
+                })
+              }
+            />
+            {parseMoneyToMinor(baseSalary) > 0 && (
+              <PercentField
+                label="% корпо (р/с вручную)"
+                value={formatPercent(profile.corporateSalesPercent)}
+                onChange={(v) =>
+                  setProfile({
+                    ...profile,
+                    corporateSalesPercent: parseDecimal(v),
+                  })
+                }
+              />
+            )}
+            <MoneyField
+              label="Фикс аванс 25-е, BYN"
+              value={formatMinor(profile.fixedAdvanceMinor)}
+              onChange={(v) =>
+                setProfile({
+                  ...profile,
+                  fixedAdvanceMinor: parseMoneyToMinor(v),
+                })
               }
             />
           </div>
-          <MoneyField
-            label="Фикс аванс 25-е, BYN"
-            value={formatMinor(profile.fixedAdvanceMinor)}
-            onChange={(v) =>
-              setProfile({
-                ...profile,
-                fixedAdvanceMinor: parseMoneyToMinor(v),
-              })
-            }
-          />
         </div>
       )}
 
       {profile.track === 'GROUP_TRAINER' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
-            Ставка за занятие при минимуме людей. Часы дежурства — отдельно.
+            Ставка за занятие по залу из расписания и числу людей. Клубные
+            дефолты: малый 3–5→25 / 6–8→30 / 9–10→35; большой 3–5→25 / 6–9→30 /
+            10–14→35 / 15+→40. Ниже — legacy без зала.
           </p>
           <MoneyField
             label="Ставка за час смены, BYN"
@@ -299,7 +328,7 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
           />
           <div className="grid gap-3 sm:grid-cols-3">
             <MoneyField
-              label="Ставка за занятие, BYN"
+              label="Ставка за занятие (fallback), BYN"
               value={formatMinor(profile.groupSessionRateMinor)}
               onChange={(v) =>
                 setProfile({
@@ -309,12 +338,15 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
               }
             />
             <IntField
-              label="Мин. человек"
+              label="Мин. человек (fallback)"
               value={String(profile.groupMinAttendees ?? 1)}
               onChange={(v) =>
                 setProfile({
                   ...profile,
-                  groupMinAttendees: Math.max(0, Math.round(parseDecimal(v) || 1)),
+                  groupMinAttendees: Math.max(
+                    0,
+                    Math.round(parseDecimal(v) || 1),
+                  ),
                 })
               }
             />
@@ -329,20 +361,34 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
               }
             />
           </div>
+          <p className="text-xs text-slate-500">
+            Тиры залов в профиле: {profile.groupRateTiers?.length ?? 0} (дефолты
+            клуба подставляются при новой схеме GROUP).
+          </p>
         </div>
       )}
 
       {profile.track === 'SPA' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
-            % от проведённых и оплаченных услуг + фиксированная ставка за услуги
-            из абонемента.
+            % от оплаченных услуг + фикс из абонемента + фикс AllSports (метка на
+            записи SPA).
           </p>
           <PercentField
             label="% от проведённых / оплаченных платных услуг"
             value={formatPercent(profile.spaSoldPercent)}
             onChange={(v) =>
               setProfile({ ...profile, spaSoldPercent: parseDecimal(v) })
+            }
+          />
+          <MoneyField
+            label="Ставка AllSports / партнёр, BYN"
+            value={formatMinor(profile.spaPartnerRateMinor)}
+            onChange={(v) =>
+              setProfile({
+                ...profile,
+                spaPartnerRateMinor: parseMoneyToMinor(v),
+              })
             }
           />
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">

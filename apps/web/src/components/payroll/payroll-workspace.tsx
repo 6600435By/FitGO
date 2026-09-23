@@ -1,14 +1,12 @@
 'use client';
 
+import { ClubPayrollReportPanel } from '@/components/payroll/club-payroll-report';
+import { PayrollPayoutsPanel } from '@/components/payroll/payroll-payouts-panel';
 import type {
   PayrollAdjustmentDto,
   PayrollPeriodSummary,
-  PayrollPayoutDto,
-  PayrollPayoutKind,
-  PayrollPayoutPreview,
   StaffPaySummary,
 } from '@fitgo/shared-types';
-import { parseMoneyToMinor } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
@@ -54,7 +52,7 @@ function payslipFilename(name: string, from: string, to: string): string {
   return `Raschet_${safe || 'sotrudnik'}_${period}.txt`;
 }
 
-type DeptFilter = 'ALL' | 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH';
+type DeptFilter = 'ALL' | 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH' | 'EXTERNAL';
 
 const DEPT_FILTERS: { id: DeptFilter; label: string }[] = [
   { id: 'ALL', label: 'Все' },
@@ -62,12 +60,13 @@ const DEPT_FILTERS: { id: DeptFilter; label: string }[] = [
   { id: 'TRAINER', label: 'Тренеры' },
   { id: 'SPECIALIST', label: 'SPA' },
   { id: 'TECH', label: 'Техперсонал' },
+  { id: 'EXTERNAL', label: 'Сторонние' },
 ];
 
 const TRACK_HINT: Record<string, string> = {
-  ADMIN: 'Часы + % абонементов + % доп. услуг + премии/штрафы',
-  GROUP_TRAINER: 'Ставка за занятие при мин. кол-ве человек',
-  SPA: '% от оплаченных услуг + ставка за услуги из абонемента',
+  ADMIN: 'Часы + % абонементов/доп/магазин/корпо + премии/штрафы',
+  GROUP_TRAINER: 'Тиры ставка×зал×люди (из расписания)',
+  SPA: '% услуг + абонемент + AllSports + премии/штрафы',
   TECH: 'Часы смены + премии/штрафы отдельно',
   PT: '% от оплаченных ПТ (ступени по объёму; подарки в счёт)',
 };
@@ -118,109 +117,17 @@ export function PayrollWorkspace({ mode }: Props) {
   const [deptFilter, setDeptFilter] = useState<DeptFilter>('ALL');
   const canEdit = mode === 'super';
 
-  const [payYear, setPayYear] = useState(() => today.getFullYear());
-  const [payMonth, setPayMonth] = useState(() => today.getMonth() + 1);
-  const [payKind, setPayKind] = useState<PayrollPayoutKind>('ADVANCE_HALF');
-  const [payoutPreview, setPayoutPreview] =
-    useState<PayrollPayoutPreview | null>(null);
-  const [payouts, setPayouts] = useState<PayrollPayoutDto[]>([]);
-  const [cardTransfer, setCardTransfer] = useState('');
-  const [payoutBusy, setPayoutBusy] = useState(false);
-
-  useEffect(() => {
-    if (!canEdit || !userId) {
-      setPayouts([]);
-      setPayoutPreview(null);
-      return;
-    }
-    const token = getToken();
-    if (!token) return;
-    api
-      .payrollPayouts(token, userId)
-      .then(setPayouts)
-      .catch(() => setPayouts([]));
-    setPayoutPreview(null);
-    setCardTransfer('');
-  }, [canEdit, userId]);
-
-  const loadPayoutPreview = async () => {
-    if (!canEdit) return;
-    const token = getToken();
-    if (!token || !userId) return;
-    setPayoutBusy(true);
-    setMessage('');
-    try {
-      const p = await api.payrollPayoutPreview(token, {
-        userId,
-        kind: payKind,
-        year: payYear,
-        month: payMonth,
-      });
-      setPayoutPreview(p);
-      setFrom(p.periodFrom);
-      setTo(p.periodTo);
-      setSummary(p.summary);
-      if (p.existingPayout?.status === 'PAID') {
-        setCardTransfer(
-          String((p.existingPayout.cardTransferMinor ?? 0) / 100),
-        );
-      }
-    } catch (e) {
-      setPayoutPreview(null);
-      setMessage(e instanceof Error ? e.message : 'Ошибка превью выплаты');
-    } finally {
-      setPayoutBusy(false);
-    }
-  };
-
-  const confirmPayout = async () => {
-    if (!canEdit || !payoutPreview) return;
-    if (payoutPreview.existingPayout?.status === 'PAID') {
-      setMessage('Эта выплата уже зафиксирована');
-      return;
-    }
-    if (
-      !window.confirm(
-        `Зафиксировать выплату ${money(payoutPreview.totalMinor, payoutPreview.currency)}?\nКасса: ${(payoutPreview.totalMinor - parseMoneyToMinor(cardTransfer || '0')) / 100} · Карта: ${cardTransfer || '0'}`,
-      )
-    ) {
-      return;
-    }
-    const token = getToken();
-    if (!token) return;
-    setPayoutBusy(true);
-    setMessage('');
-    try {
-      const row = await api.payrollPayoutConfirm(token, {
-        userId,
-        kind: payKind,
-        year: payYear,
-        month: payMonth,
-        cardTransferMinor: parseMoneyToMinor(cardTransfer || '0'),
-      });
-      setMessage(
-        `Выплата зафиксирована: всего ${money(row.totalMinor, row.currency)}, касса ${money(row.cashMinor, row.currency)}, карта ${money(row.cardTransferMinor, row.currency)}`,
-      );
-      const list = await api.payrollPayouts(token, userId);
-      setPayouts(list);
-      const p = await api.payrollPayoutPreview(token, {
-        userId,
-        kind: payKind,
-        year: payYear,
-        month: payMonth,
-      });
-      setPayoutPreview(p);
-      setSummary(p.summary);
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Ошибка фиксации');
-    } finally {
-      setPayoutBusy(false);
-    }
-  };
+  const [employeeReportOpen, setEmployeeReportOpen] = useState(mode === 'admin');
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [payoutsOpen, setPayoutsOpen] = useState(false);
 
   const filteredStaff = useMemo(() => {
     if (deptFilter === 'ALL') return staff;
     return staff.filter((s) => {
+      if (deptFilter === 'EXTERNAL') {
+        return s.employmentKind === 'EXTERNAL';
+      }
+      if (s.employmentKind === 'EXTERNAL') return false;
       if (s.roles.includes(deptFilter)) return true;
       if (deptFilter === 'ADMIN' && s.track === 'ADMIN') return true;
       if (
@@ -268,6 +175,7 @@ export function PayrollWorkspace({ mode }: Props) {
     if (!token || !userId) return;
     setLoading(true);
     setMessage('');
+    setEmployeeReportOpen(true);
     try {
       const s =
         mode === 'super'
@@ -308,14 +216,22 @@ export function PayrollWorkspace({ mode }: Props) {
         });
         setMessage('Корректировка обновлена');
       } else {
-        await api.payrollAdjustment(token, {
+        const created = await api.payrollAdjustment(token, {
           userId,
           amountMinor: Math.round(Number(adjAmount || 0) * 100),
           reason: adjReason.trim(),
           periodFrom: from,
           periodTo: to,
         });
-        setMessage('Корректировка добавлена');
+        setMessage(
+          created.redirectedFrom
+            ? `Период закрыт — корректировка в открытый ${created.periodFrom}–${created.periodTo} (из ${created.redirectedFrom})`
+            : 'Корректировка добавлена',
+        );
+        if (created.redirectedFrom) {
+          setFrom(created.periodFrom);
+          setTo(created.periodTo);
+        }
       }
       setAdjAmount('');
       setAdjReason('');
@@ -530,7 +446,7 @@ export function PayrollWorkspace({ mode }: Props) {
   };
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-5 pb-8 md:max-w-none">
+    <div className="mx-auto w-full max-w-5xl space-y-3 pb-8 md:max-w-none">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">
@@ -552,9 +468,71 @@ export function PayrollWorkspace({ mode }: Props) {
         )}
       </header>
 
-      <section className="rounded-2xl border border-slate-800/80 bg-gradient-to-b from-slate-900/80 to-slate-950/80 p-4 shadow-lg shadow-black/20 md:p-5">
+      {canEdit && (
+        <ClubPayrollReportPanel
+          staff={staff}
+          open={summaryOpen}
+          onToggle={() => setSummaryOpen((o) => !o)}
+          onSelectEmployee={(id, f, t) => {
+            setUserId(id);
+            setFrom(f);
+            setTo(t);
+            setEmployeeReportOpen(true);
+            void (async () => {
+              const token = getToken();
+              if (!token) return;
+              setLoading(true);
+              setMessage('');
+              try {
+                const s = await api.payrollSummary(token, {
+                  userId: id,
+                  from: f,
+                  to: t,
+                });
+                setSummary(s);
+              } catch (e) {
+                setSummary(null);
+                setMessage(e instanceof Error ? e.message : 'Ошибка');
+              } finally {
+                setLoading(false);
+              }
+            })();
+          }}
+        />
+      )}
+
+      {canEdit && (
+        <PayrollPayoutsPanel
+          staff={staff}
+          open={payoutsOpen}
+          onToggle={() => setPayoutsOpen((o) => !o)}
+        />
+      )}
+
+      <section className="rounded-xl border border-slate-800/80 bg-slate-950/80">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left md:px-4"
+          onClick={() => setEmployeeReportOpen((o) => !o)}
+        >
+          <div>
+            <h2 className="text-base font-semibold text-white">
+              Отчёт по сотруднику
+            </h2>
+            <p className="text-[11px] text-slate-500">
+              {selected
+                ? `${selected.name}${summary ? ` · ${money(summary.totalMinor, summary.currency)}` : ''}`
+                : 'Индивидуальный расчёт и проверка'}
+            </p>
+          </div>
+          <span className="text-slate-400">{employeeReportOpen ? '▾' : '▸'}</span>
+        </button>
+
+        {employeeReportOpen && (
+          <div className="space-y-3 border-t border-slate-800 px-3 pb-3 pt-3 md:px-4">
+
         {canEdit && (
-          <div className="mb-4 flex flex-wrap gap-2">
+          <div className="mb-3 flex flex-wrap gap-1.5">
             {DEPT_FILTERS.map((f) => (
               <button
                 key={f.id}
@@ -562,8 +540,8 @@ export function PayrollWorkspace({ mode }: Props) {
                 onClick={() => setDeptFilter(f.id)}
                 className={
                   deptFilter === f.id
-                    ? 'btn-primary px-3 py-1.5 text-sm'
-                    : 'btn-secondary px-3 py-1.5 text-sm'
+                    ? 'btn-primary px-2.5 py-1 text-xs'
+                    : 'btn-secondary px-2.5 py-1 text-xs'
                 }
               >
                 {f.label}
@@ -582,7 +560,7 @@ export function PayrollWorkspace({ mode }: Props) {
             <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
               Сотрудник
               <select
-                className="input mt-1.5 w-full"
+                className="input mt-1 w-full py-1.5 text-sm"
                 value={userId}
                 onChange={(e) => {
                   setUserId(e.target.value);
@@ -615,7 +593,7 @@ export function PayrollWorkspace({ mode }: Props) {
             С
             <input
               type="date"
-              className="input mt-1.5 w-full"
+              className="input mt-1 w-full py-1.5 text-sm"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
             />
@@ -624,7 +602,7 @@ export function PayrollWorkspace({ mode }: Props) {
             По
             <input
               type="date"
-              className="input mt-1.5 w-full"
+              className="input mt-1 w-full py-1.5 text-sm"
               value={to}
               onChange={(e) => setTo(e.target.value)}
             />
@@ -663,7 +641,7 @@ export function PayrollWorkspace({ mode }: Props) {
         </div>
 
         {selected && (
-          <div className="mt-4 space-y-2 border-t border-slate-800/80 pt-3">
+          <div className="mt-3 space-y-1.5 border-t border-slate-800/80 pt-2">
             <div className="flex flex-wrap items-center gap-2">
               {selected.track && (
                 <span className="rounded-md bg-slate-800 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-300">
@@ -696,202 +674,12 @@ export function PayrollWorkspace({ mode }: Props) {
             </div>
           </div>
         )}
-      </section>
-
-      {canEdit && userId && (
-        <section className="space-y-4 rounded-2xl border border-slate-800/80 bg-gradient-to-b from-slate-900/80 to-slate-950/80 p-4 md:p-5">
-          <div>
-            <h2 className="text-sm font-semibold text-white">
-              Выплаты (15 / 25)
-            </h2>
-            <p className="mt-1 text-xs leading-relaxed text-slate-500">
-              25-е — аванс за 1–15 (админы и штатные тренеры: фикс из оклада;
-              остальные — по мотивации). 15-е — расчёт за прошлый месяц минус
-              уже выплаченный аванс. Перевод на карту входит в итого, из кассы
-              уходит остаток.
-            </p>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[6rem_8rem_1fr_auto] lg:items-end">
-            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-              Год
-              <input
-                type="number"
-                className="input mt-1.5 w-full"
-                value={payYear}
-                onChange={(e) => setPayYear(Number(e.target.value) || payYear)}
-              />
-            </label>
-            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-              Месяц волны
-              <select
-                className="input mt-1.5 w-full"
-                value={payMonth}
-                onChange={(e) => setPayMonth(Number(e.target.value))}
-              >
-                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                  <option key={m} value={m}>
-                    {String(m).padStart(2, '0')}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-              Этап
-              <select
-                className="input mt-1.5 w-full"
-                value={payKind}
-                onChange={(e) =>
-                  setPayKind(e.target.value as PayrollPayoutKind)
-                }
-              >
-                <option value="ADVANCE_HALF">25-е · аванс (1–15)</option>
-                <option value="MONTH_SETTLEMENT">
-                  15-е · расчёт за прошлый месяц
-                </option>
-              </select>
-            </label>
-            <button
-              type="button"
-              className="btn-primary w-full lg:w-auto"
-              disabled={payoutBusy || !userId}
-              onClick={loadPayoutPreview}
-            >
-              {payoutBusy ? '…' : 'Превью'}
-            </button>
-          </div>
-
-          {payoutPreview && (
-            <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-                <span className="text-white">{payoutPreview.performerName}</span>
-                <span className="text-slate-400">
-                  {payoutPreview.periodFrom} — {payoutPreview.periodTo}
-                </span>
-                {payoutPreview.usesFixedAdvance && (
-                  <span className="rounded-md bg-fitgo-500/15 px-2 py-0.5 text-xs text-fitgo-300">
-                    фикс аванс
-                  </span>
-                )}
-                {payoutPreview.existingPayout?.status === 'PAID' && (
-                  <span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-300">
-                    уже выплачено
-                  </span>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                <Stat
-                  label="Начислено"
-                  value={money(
-                    payoutPreview.earnedMinor,
-                    payoutPreview.currency,
-                  )}
-                />
-                <Stat
-                  label="− Аванс 25-е"
-                  value={money(
-                    payoutPreview.priorPaidMinor,
-                    payoutPreview.currency,
-                  )}
-                />
-                <Stat
-                  label="К выплате"
-                  value={money(
-                    payoutPreview.totalMinor,
-                    payoutPreview.currency,
-                  )}
-                  emphasize
-                />
-                <Stat
-                  label="Из кассы"
-                  value={money(
-                    Math.max(
-                      0,
-                      payoutPreview.totalMinor -
-                        parseMoneyToMinor(cardTransfer || '0'),
-                    ),
-                    payoutPreview.currency,
-                  )}
-                />
-              </div>
-              {payoutPreview.hints.length > 0 && (
-                <ul className="space-y-0.5 text-xs text-slate-500">
-                  {payoutPreview.hints.map((h) => (
-                    <li key={h}>· {h}</li>
-                  ))}
-                </ul>
-              )}
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <label className="block flex-1 text-xs font-medium uppercase tracking-wide text-slate-500">
-                  На карту (бухгалтер), BYN
-                  <input
-                    className="input mt-1.5 w-full"
-                    inputMode="decimal"
-                    placeholder="0"
-                    disabled={payoutPreview.existingPayout?.status === 'PAID'}
-                    value={cardTransfer}
-                    onChange={(e) => setCardTransfer(e.target.value)}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="btn-primary w-full sm:w-auto"
-                  disabled={
-                    payoutBusy ||
-                    payoutPreview.existingPayout?.status === 'PAID' ||
-                    payoutPreview.totalMinor < 0
-                  }
-                  onClick={confirmPayout}
-                >
-                  Зафиксировать выплату
-                </button>
-              </div>
-            </div>
-          )}
-
-          {payouts.length > 0 && (
-            <div className="space-y-2">
-              <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                История выплат
-              </h3>
-              <ul className="divide-y divide-slate-800/80 rounded-xl border border-slate-800 text-sm">
-                {payouts.map((p) => (
-                  <li
-                    key={p.id}
-                    className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
-                  >
-                    <div>
-                      <span className="text-slate-300">
-                        {p.kind === 'ADVANCE_HALF'
-                          ? 'Аванс 25-е'
-                          : 'Расчёт 15-е'}
-                      </span>
-                      <span className="ml-2 text-xs text-slate-500">
-                        {p.periodFrom} — {p.periodTo}
-                      </span>
-                    </div>
-                    <div className="tabular-nums text-slate-400">
-                      <span className="text-white">
-                        {money(p.totalMinor, p.currency)}
-                      </span>
-                      <span className="ml-2 text-xs">
-                        касса {money(p.cashMinor, p.currency)} · карта{' '}
-                        {money(p.cardTransferMinor, p.currency)}
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </section>
-      )}
-
-      {message && (
-        <p className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-200">
-          {message}
-        </p>
-      )}
-
+      
+            {message && (
+              <p className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-200">
+                {message}
+              </p>
+            )}
       {summary && (
         <>
           <section className="grid grid-cols-2 gap-2.5 md:grid-cols-4 md:gap-3">
@@ -1063,6 +851,39 @@ export function PayrollWorkspace({ mode }: Props) {
                           ? `${u.quantity} ч`
                           : `×${u.quantity}`}
                       </span>
+                      {u.kind === 'GROUP' && u.roomTitle && (
+                        <span className="text-slate-500">{u.roomTitle}</span>
+                      )}
+                      {u.kind === 'SPA' && canEdit && (
+                        <button
+                          type="button"
+                          className={
+                            u.partnerSource === 'ALLSPORTS'
+                              ? 'rounded bg-emerald-900/50 px-1.5 py-0.5 text-[10px] text-emerald-300'
+                              : 'rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400'
+                          }
+                          onClick={async () => {
+                            const token = getToken();
+                            if (!token) return;
+                            const next =
+                              u.partnerSource === 'ALLSPORTS'
+                                ? null
+                                : 'ALLSPORTS';
+                            try {
+                              await api.payrollSetSpaPartner(token, u.id, next);
+                              await load();
+                            } catch (e) {
+                              setMessage(
+                                e instanceof Error ? e.message : 'Ошибка',
+                              );
+                            }
+                          }}
+                        >
+                          {u.partnerSource === 'ALLSPORTS'
+                            ? 'AllSports ✓'
+                            : 'AllSports'}
+                        </button>
+                      )}
                       {u.kind === 'SHIFT' && u.priceMinor != null && (
                         <span className="text-emerald-400">
                           {money(u.priceMinor, summary.currency)}
@@ -1171,6 +992,11 @@ export function PayrollWorkspace({ mode }: Props) {
           </p>
         </div>
       )}
+
+
+          </div>
+        )}
+      </section>
 
       {printOpen && summary && (
         <div
@@ -1303,7 +1129,7 @@ function Stat({
 }) {
   return (
     <div
-      className={`rounded-2xl border p-3 md:p-4 ${
+      className={`rounded-xl border px-2.5 py-2 md:px-3 md:py-2.5 ${
         emphasize
           ? 'border-fitgo-500/40 bg-fitgo-500/10'
           : 'border-slate-800 bg-slate-950/50'

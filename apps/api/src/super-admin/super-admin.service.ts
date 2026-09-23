@@ -169,6 +169,7 @@ export class SuperAdminService {
       isActive?: boolean;
       password?: string;
       loginEnabled?: boolean;
+      employmentKind?: 'STAFF' | 'EXTERNAL';
     } = {};
 
     if (dto.firstName !== undefined) data.firstName = dto.firstName.trim();
@@ -176,6 +177,9 @@ export class SuperAdminService {
     if (dto.phone !== undefined) data.phone = dto.phone.trim() || null;
     if (dto.dateOfBirth !== undefined) {
       data.dateOfBirth = dto.dateOfBirth ? new Date(dto.dateOfBirth) : null;
+    }
+    if (dto.employmentKind !== undefined) {
+      data.employmentKind = dto.employmentKind;
     }
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
     if (dto.password) {
@@ -207,11 +211,11 @@ export class SuperAdminService {
       const current = member.roles
         .map((r) => r.role)
         .filter(
-          (r): r is Role.ADMIN | Role.TRAINER | Role.SPECIALIST | Role.TECH =>
-            r === Role.ADMIN ||
-            r === Role.TRAINER ||
-            r === Role.SPECIALIST ||
-            r === Role.TECH,
+          (r): r is 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH' =>
+            r === 'ADMIN' ||
+            r === 'TRAINER' ||
+            r === 'SPECIALIST' ||
+            r === 'TECH',
         );
       for (const role of current) {
         if (!wanted.has(role)) {
@@ -434,6 +438,7 @@ export class SuperAdminService {
     employeeCode: string | null;
     loginEnabled: boolean;
     isActive: boolean;
+    employmentKind?: 'STAFF' | 'EXTERNAL' | string;
     createdAt: Date;
     roles: Array<{ role: Role }>;
   }) {
@@ -457,6 +462,8 @@ export class SuperAdminService {
       loginEnabled: member.loginEnabled,
       roles: member.roles.map((r) => roleMap[r.role]),
       isActive: member.isActive,
+      employmentKind:
+        member.employmentKind === 'EXTERNAL' ? 'EXTERNAL' : 'STAFF',
       createdAt: member.createdAt.toISOString(),
     };
   }

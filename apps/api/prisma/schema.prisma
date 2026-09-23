@@ -16,6 +16,11 @@ enum Role {
   SUPER_ADMIN
 }
 
+enum StaffEmploymentKind {
+  STAFF
+  EXTERNAL
+}
+
 enum AdminPermission {
   DASHBOARD_VIEW
   CLIENTS_VIEW
@@ -384,6 +389,8 @@ model Club {
   payrollAdjustments   PayrollAdjustment[]
   payrollPeriodLocks   PayrollPeriodLock[]
   payrollPayouts       PayrollPayout[]
+  payrollCorporateSales PayrollCorporateSale[]
+  payrollStaffBalances PayrollStaffBalance[]
   trainerShifts        TrainerShift[]
   trainerDaySheets     TrainerDaySheet[]
   staffShifts          StaffShift[]
@@ -443,6 +450,8 @@ model User {
   useRealNameInPublic  Boolean @default(true)
   gamificationStartedAt DateTime?
   isActive              Boolean  @default(true)
+  /// STAFF = штат; EXTERNAL = сторонние специалисты (отдельная секция ЗП).
+  employmentKind        StaffEmploymentKind @default(STAFF)
   createdById           String?
   osmiCardId            String?
   osmiBarcode           String?
@@ -512,6 +521,8 @@ model User {
   staffCompensation       StaffCompensation[]
   payrollAdjustments      PayrollAdjustment[]
   payrollPayouts          PayrollPayout[]
+  payrollCorporateSales   PayrollCorporateSale[]
+  payrollStaffBalances    PayrollStaffBalance[]
   trainerShifts           TrainerShift[]          @relation("TrainerShifts")
   trainerDaySheets        TrainerDaySheet[]       @relation("TrainerDaySheets")
   daySheetsAdminApproved  TrainerDaySheet[]       @relation("DaySheetAdminApprover")
@@ -1397,6 +1408,8 @@ model SpaBooking {
   presenceOverrideById   String?
   paidAt                 DateTime?
   specialistCompletedAt  DateTime?
+  /// Partner channel for fixed SPA rate (e.g. ALLSPORTS).
+  partnerSource          String?
   createdAt              DateTime         @default(now())
   updatedAt              DateTime         @updatedAt
 
@@ -1423,6 +1436,8 @@ model GroupClassSession {
   title                 String
   startAt               DateTime
   endAt                 DateTime
+  /// Forma / 1C room.title (e.g. Групповой зал малый).
+  roomTitle             String?
   status                GroupClassSessionStatus    @default(OPEN)
   baselineQuality       GroupSessionBaselineQuality @default(PARTIAL)
   baselineCount         Int                        @default(0)
@@ -1563,12 +1578,18 @@ model PayrollPayout {
   earnedMinor       Int
   /// Already paid as ADVANCE_HALF for the same calendar month (settlement only).
   priorPaidMinor    Int                 @default(0)
-  /// Net amount of this payout (earned − priorPaid).
+  /// Net accrued for this payout (earned − priorPaid), before carry-in.
   totalMinor        Int
-  /// Bank card transfer (accountant). Counts in total, reduces cash.
+  /// Bank card transfer (accountant).
   cardTransferMinor Int                 @default(0)
-  /// Cash from club register = total − card.
+  /// Suggested cash = payable − card (legacy / default).
   cashMinor         Int
+  /// Fact paid from cash (may differ for rounding).
+  actualCashMinor   Int                 @default(0)
+  /// Carry balance applied into this payout (+ underpay / − overpay).
+  carryInMinor      Int                 @default(0)
+  /// Balance after payout: payable − (card + actualCash).
+  carryOutMinor     Int                 @default(0)
   currency          String              @default("BYN")
   status            PayrollPayoutStatus @default(DRAFT)
   paidAt            DateTime?
@@ -1582,6 +1603,42 @@ model PayrollPayout {
 
   @@unique([clubId, userId, kind, periodFrom, periodTo])
   @@index([clubId, userId, status])
+}
+
+/// Per-employee rounding / under-over pay balance for next open payout.
+model PayrollStaffBalance {
+  id           String   @id @default(cuid())
+  clubId       String
+  userId       String
+  /// + = add next payout (club owes); − = deduct (overpaid).
+  balanceMinor Int      @default(0)
+  hint         String?
+  updatedAt    DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, userId])
+}
+
+/// Manual corporate (р/с) sales amount for manager % motivation.
+model PayrollCorporateSale {
+  id          String   @id @default(cuid())
+  clubId      String
+  userId      String
+  periodFrom  DateTime @db.Date
+  periodTo    DateTime @db.Date
+  amountMinor Int
+  note        String?
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, userId, periodFrom, periodTo])
+  @@index([clubId, periodFrom, periodTo])
 }
 
 /// Paid desk/shift hours for a PT trainer (legacy; prefer StaffShift track=TRAINER).

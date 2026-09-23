@@ -164,6 +164,44 @@ export default function SuperAdminStaffDetailPage() {
             );
           })}
         </div>
+        <div className="border-t border-slate-800 pt-3">
+          <p className="mb-2 text-xs text-slate-400">
+            Сторонний специалист — отдельная секция в сводном отчёте ЗП
+          </p>
+          <button
+            type="button"
+            disabled={rolesBusy}
+            className={
+              member.employmentKind === 'EXTERNAL'
+                ? 'btn-primary px-3 py-1.5 text-sm'
+                : 'btn-secondary px-3 py-1.5 text-sm'
+            }
+            onClick={async () => {
+              const token = getToken();
+              if (!token) return;
+              const next =
+                member.employmentKind === 'EXTERNAL' ? 'STAFF' : 'EXTERNAL';
+              setRolesBusy(true);
+              try {
+                await api.payrollSetEmployment(token, id, next);
+                setMessage(
+                  next === 'EXTERNAL'
+                    ? 'Отмечен как сторонний'
+                    : 'Штатный сотрудник',
+                );
+                load();
+              } catch (e) {
+                setMessage(e instanceof Error ? e.message : 'Ошибка');
+              } finally {
+                setRolesBusy(false);
+              }
+            }}
+          >
+            {member.employmentKind === 'EXTERNAL'
+              ? 'Сторонний ✓'
+              : 'Сделать сторонним'}
+          </button>
+        </div>
         {member.roles.includes(UserRole.ADMIN) && (
           <Link
             href={`/super-admin/permissions/${member.id}`}

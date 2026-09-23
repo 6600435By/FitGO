@@ -33,6 +33,7 @@ export class GroupSessionController {
       startAt: string;
       endAt: string;
       trainerId?: string;
+      roomTitle?: string;
     },
   ) {
     return this.sessions.openJournal(user, body);

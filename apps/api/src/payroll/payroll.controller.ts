@@ -9,10 +9,16 @@ import {
   Patch,
   Post,
   Query,
+  Res,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { UserRole } from '@fitgo/shared-types';
-import type { StaffPayProfile } from '@fitgo/shared-types';
+import type {
+  ClubPayrollSectionId,
+  StaffEmploymentKind,
+  StaffPayProfile,
+} from '@fitgo/shared-types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -75,6 +81,18 @@ export class PayrollController {
     );
   }
 
+  @Patch('staff/:userId/employment')
+  setEmployment(
+    @CurrentUser() user: JwtPayload,
+    @Param('userId') userId: string,
+    @Body() body: { employmentKind: StaffEmploymentKind },
+  ) {
+    if (body.employmentKind !== 'STAFF' && body.employmentKind !== 'EXTERNAL') {
+      throw new BadRequestException('employmentKind STAFF|EXTERNAL');
+    }
+    return this.payroll.setEmploymentKind(user, userId, body.employmentKind);
+  }
+
   @Get('summary')
   summary(
     @CurrentUser() user: JwtPayload,
@@ -87,6 +105,83 @@ export class PayrollController {
       userId,
       from,
       to,
+    );
+  }
+
+  @Get('club-summary')
+  clubSummary(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('department') department?: ClubPayrollSectionId | 'ALL' | 'MANAGER',
+  ) {
+    return this.payroll.getClubSummary(
+      requireClubId(user),
+      from,
+      to,
+      department ?? 'ALL',
+    );
+  }
+
+  @Get('club-summary.xlsx')
+  async clubSummaryXlsx(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('department') department?: ClubPayrollSectionId | 'ALL' | 'MANAGER',
+    @Res({ passthrough: true }) res?: { setHeader: (k: string, v: string) => void },
+  ) {
+    const buf = await this.payroll.exportClubSummaryXlsx(
+      requireClubId(user),
+      from,
+      to,
+      department ?? 'ALL',
+    );
+    res?.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res?.setHeader(
+      'Content-Disposition',
+      `attachment; filename="ZP_${from}_${to}.xlsx"`,
+    );
+    return new StreamableFile(buf);
+  }
+
+  @Get('corporate-sales')
+  listCorporate(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.payroll.listCorporateSales(requireClubId(user), from, to);
+  }
+
+  @Post('corporate-sales')
+  upsertCorporate(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      userId: string;
+      periodFrom: string;
+      periodTo: string;
+      amountMinor: number;
+      note?: string;
+    },
+  ) {
+    return this.payroll.upsertCorporateSale(user, body);
+  }
+
+  @Patch('spa-bookings/:bookingId/partner')
+  setSpaPartner(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+    @Body() body: { partnerSource: string | null },
+  ) {
+    return this.payroll.setSpaPartnerSource(
+      user,
+      bookingId,
+      body.partnerSource ?? null,
     );
   }
 
@@ -145,6 +240,8 @@ export class PayrollController {
     @Query('kind') kind: 'ADVANCE_HALF' | 'MONTH_SETTLEMENT',
     @Query('year') year: string,
     @Query('month') month: string,
+    @Query('periodFrom') periodFrom?: string,
+    @Query('periodTo') periodTo?: string,
   ) {
     if (kind !== 'ADVANCE_HALF' && kind !== 'MONTH_SETTLEMENT') {
       throw new BadRequestException('Неверный тип выплаты');
@@ -155,6 +252,44 @@ export class PayrollController {
       kind,
       Number(year),
       Number(month),
+      { periodFrom, periodTo },
+    );
+  }
+
+  @Get('payouts/batch-preview')
+  batchPreviewPayout(
+    @CurrentUser() user: JwtPayload,
+    @Query('kind') kind: 'ADVANCE_HALF' | 'MONTH_SETTLEMENT',
+    @Query('year') year: string,
+    @Query('month') month: string,
+    @Query('periodFrom') periodFrom?: string,
+    @Query('periodTo') periodTo?: string,
+    @Query('department') department?: string,
+    @Query('userIds') userIds?: string,
+  ) {
+    if (kind !== 'ADVANCE_HALF' && kind !== 'MONTH_SETTLEMENT') {
+      throw new BadRequestException('Неверный тип выплаты');
+    }
+    return this.payroll.previewPayoutBatch(
+      requireClubId(user),
+      kind,
+      Number(year),
+      Number(month),
+      {
+        periodFrom,
+        periodTo,
+        department: (department as
+          | 'ALL'
+          | 'MANAGER'
+          | 'ADMIN'
+          | 'TRAINER'
+          | 'SPECIALIST'
+          | 'TECH'
+          | 'EXTERNAL') || 'ALL',
+        userIds: userIds
+          ? userIds.split(',').map((s) => s.trim()).filter(Boolean)
+          : undefined,
+      },
     );
   }
 
@@ -167,11 +302,38 @@ export class PayrollController {
       kind: 'ADVANCE_HALF' | 'MONTH_SETTLEMENT';
       year: number;
       month: number;
+      periodFrom?: string;
+      periodTo?: string;
       cardTransferMinor?: number;
+      actualCashMinor?: number;
       note?: string;
     },
   ) {
     return this.payroll.confirmPayout(user, body);
+  }
+
+  @Post('payouts/confirm-batch')
+  confirmPayoutBatch(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      kind: 'ADVANCE_HALF' | 'MONTH_SETTLEMENT';
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+      items: Array<{
+        userId: string;
+        cardTransferMinor?: number;
+        actualCashMinor?: number;
+        note?: string;
+      }>;
+    },
+  ) {
+    if (!body.items?.length) {
+      throw new BadRequestException('Нет строк для подтверждения');
+    }
+    return this.payroll.confirmPayoutBatch(user, body);
   }
 }
 

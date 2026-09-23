@@ -3,25 +3,35 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   allPaySlices,
   advanceHalfRange,
+  DEFAULT_GROUP_RATE_TIERS,
   isPayrollTrusted,
   monthSettlementRange,
   payProfileSummary,
+  resolveGroupRoomKey,
+  resolveGroupSessionRateMinor,
   resolvePtPercent,
   sliceForTrack,
+  type ClubPayrollReport,
+  type ClubPayrollRow,
+  type ClubPayrollSectionId,
   type MotivationRateDto,
   type PayrollAdjustmentDto,
+  type PayrollCorporateSaleDto,
   type PayrollPeriodSummary,
   type PayrollPayoutDto,
   type PayrollPayoutKind,
   type PayrollPayoutPreview,
   type StaffCompensationDto,
   type StaffDepartment,
+  type StaffEmploymentKind,
   type StaffPayProfile,
   type StaffPaySummary,
   type StaffPayTrack,
+  type StaffSalesBreakdown,
   type WorkUnit,
 } from '@fitgo/shared-types';
 import {
@@ -33,6 +43,7 @@ import {
   PersonalBookingStatus,
   Role,
   SpaBookingStatus,
+  StaffEmploymentKind as PrismaEmploymentKind,
   TrustBand,
   TrustResolution,
 } from '@prisma/client';
@@ -43,6 +54,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PtTimesheetService } from '../pt-timesheet/pt-timesheet.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { StaffRosterService } from '../staff-roster/staff-roster.service';
+import {
+  createAnalyticsProvider,
+  fetchStaffSalesFromAnalytics,
+} from './payroll-sales.helper';
 
 function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -50,6 +65,14 @@ function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   if (!p.track) return undefined;
   return p;
 }
+
+const SECTION_LABELS: Record<ClubPayrollSectionId, string> = {
+  ADMIN: 'Администраторы / управляющая',
+  TRAINER: 'Тренеры (ПТ / ГП)',
+  SPECIALIST: 'SPA',
+  TECH: 'Техперсонал',
+  EXTERNAL: 'Сторонние специалисты',
+};
 
 /** Overlay selected track slices from source onto target (multi-role safe). */
 function mergePayTracks(
@@ -85,6 +108,7 @@ export class PayrollService {
     private readonly groupSessions: GroupSessionService,
     private readonly ptTimesheet: PtTimesheetService,
     private readonly staffRoster: StaffRosterService,
+    private readonly config: ConfigService,
   ) {}
 
   async listWorkUnits(
@@ -123,6 +147,7 @@ export class PayrollService {
         payrollTrusted: trusted,
         clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
         serviceId: b.serviceId,
+        partnerSource: b.partnerSource ?? undefined,
       });
     }
 
@@ -222,6 +247,8 @@ export class PayrollService {
             trustBand: s.trustBand as 'GREEN' | 'AMBER' | 'RED',
             trustResolution: TrustResolution.RESOLVED,
           }));
+      const roomTitle = s.roomTitle ?? undefined;
+      const roomKey = resolveGroupRoomKey(roomTitle);
       units.push({
         id: s.id,
         kind: 'GROUP',
@@ -234,6 +261,8 @@ export class PayrollService {
           s.trustBand === TrustBand.GREEN ? 'NONE' : 'RESOLVED',
         payrollTrusted: Boolean(trusted),
         sessionId: s.id,
+        roomTitle,
+        roomKey,
       });
     }
 
@@ -290,7 +319,20 @@ export class PayrollService {
     );
     const profile = asPayProfile(compensation?.payProfile);
     const rates = await this.listRates(clubId);
-    const motivationMinor = this.calcMotivation(trusted, rates, profile, from);
+    const sales = await this.resolveStaffSales(
+      clubId,
+      performerId,
+      from,
+      to,
+      profile,
+    );
+    const motivationMinor = this.calcMotivation(
+      trusted,
+      rates,
+      profile,
+      from,
+      sales,
+    );
     const adjustments = await this.listAdjustments(clubId, performerId, from, to);
     const adjustmentsMinor = adjustments.reduce((s, a) => s + a.amountMinor, 0);
 
@@ -380,6 +422,7 @@ export class PayrollService {
         'Ставка за час / мотивация не заданы или нет проверенных работ за период',
       );
     }
+    if (sales.hint) anomalyHints.push(sales.hint);
     const staffAddedGroups = trusted.filter(
       (u) => u.kind === 'GROUP' && u.trustResolution === 'RESOLVED',
     ).length;
@@ -468,7 +511,7 @@ export class PayrollService {
 
   /**
    * Preview a club pay wave.
-   * - ADVANCE_HALF (25th): days 1–15. Admins & staff trainers → fixedAdvance; others → calculated.
+   * - ADVANCE_HALF (25th): default days 1–15 (override via periodFrom/To).
    * - MONTH_SETTLEMENT (15th): previous calendar month minus paid ADVANCE_HALF.
    */
   async previewPayout(
@@ -477,6 +520,7 @@ export class PayrollService {
     kind: PayrollPayoutKind,
     year: number,
     month: number,
+    opts?: { periodFrom?: string; periodTo?: string },
   ): Promise<PayrollPayoutPreview> {
     if (month < 1 || month > 12) {
       throw new BadRequestException('Месяц 1–12');
@@ -492,10 +536,16 @@ export class PayrollService {
       kind === 'ADVANCE_HALF' &&
       (roles.includes(Role.ADMIN) || roles.includes(Role.TRAINER));
 
-    const range =
+    const defaultRange =
       kind === 'ADVANCE_HALF'
         ? advanceHalfRange(year, month)
         : monthSettlementRange(year, month);
+
+    const range = {
+      from: opts?.periodFrom?.trim() || defaultRange.from,
+      to: opts?.periodTo?.trim() || defaultRange.to,
+    };
+    this.assertPeriod(range.from, range.to);
 
     const compensation = await this.resolveCompensation(
       clubId,
@@ -517,7 +567,10 @@ export class PayrollService {
       range.to,
     );
 
-    if (kind === 'ADVANCE_HALF' && usesFixedAdvance) {
+    const periodOverridden =
+      range.from !== defaultRange.from || range.to !== defaultRange.to;
+
+    if (kind === 'ADVANCE_HALF' && usesFixedAdvance && !periodOverridden) {
       earnedMinor = fixedAdvanceMinor;
       if (fixedAdvanceMinor <= 0) {
         hints.push(
@@ -531,30 +584,40 @@ export class PayrollService {
     } else {
       earnedMinor = summary.totalMinor;
       if (kind === 'ADVANCE_HALF') {
-        hints.push('Аванс 25-е: начисление по мотивации за 1–15 число');
+        if (usesFixedAdvance && periodOverridden) {
+          hints.push(
+            `Период изменён (${range.from}–${range.to}): начисление по мотивации вместо фикса`,
+          );
+        } else {
+          hints.push(
+            `Аванс 25-е: начисление по мотивации за ${range.from}–${range.to}`,
+          );
+        }
       }
     }
 
     let priorPaidMinor = 0;
     if (kind === 'MONTH_SETTLEMENT') {
-      const adv = advanceHalfRange(
-        Number(range.from.slice(0, 4)),
-        Number(range.from.slice(5, 7)),
-      );
-      const prior = await this.prisma.payrollPayout.findFirst({
+      const y = Number(range.from.slice(0, 4));
+      const m = Number(range.from.slice(5, 7));
+      const mm = String(m).padStart(2, '0');
+      const monthStart = `${y}-${mm}-01`;
+      const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      const monthEnd = `${y}-${mm}-${String(last).padStart(2, '0')}`;
+      const priors = await this.prisma.payrollPayout.findMany({
         where: {
           clubId,
           userId,
           kind: PrismaPayoutKind.ADVANCE_HALF,
           status: PayrollPayoutStatus.PAID,
-          periodFrom: new Date(`${adv.from}T00:00:00`),
-          periodTo: new Date(`${adv.to}T00:00:00`),
+          periodFrom: { gte: new Date(`${monthStart}T00:00:00`) },
+          periodTo: { lte: new Date(`${monthEnd}T23:59:59`) },
         },
       });
-      priorPaidMinor = prior?.totalMinor ?? 0;
+      priorPaidMinor = priors.reduce((a, p) => a + p.totalMinor, 0);
       if (priorPaidMinor > 0) {
         hints.push(
-          `Вычтен аванс 25-е за ${adv.from}–${adv.to}: ${(priorPaidMinor / 100).toFixed(2)}`,
+          `Вычтен аванс 25-е за ${monthStart}–${monthEnd}: ${(priorPaidMinor / 100).toFixed(2)}`,
         );
       } else {
         hints.push('Аванс 25-е за этот месяц ещё не зафиксирован');
@@ -562,6 +625,21 @@ export class PayrollService {
     }
 
     const totalMinor = Math.max(0, earnedMinor - priorPaidMinor);
+
+    const balance = await this.prisma.payrollStaffBalance.findUnique({
+      where: { clubId_userId: { clubId, userId } },
+    });
+    const carryInMinor = balance?.balanceMinor ?? 0;
+    const carryHint = balance?.hint ?? undefined;
+    if (carryInMinor !== 0) {
+      const sign = carryInMinor > 0 ? '+' : '';
+      hints.push(
+        carryHint
+          ? `Перенос остатка ${sign}${(carryInMinor / 100).toFixed(2)}: ${carryHint}`
+          : `Перенос остатка с прошлой выплаты: ${sign}${(carryInMinor / 100).toFixed(2)}`,
+      );
+    }
+    const payableMinor = totalMinor + carryInMinor;
 
     const existing = await this.prisma.payrollPayout.findFirst({
       where: {
@@ -593,11 +671,63 @@ export class PayrollService {
       earnedMinor,
       priorPaidMinor,
       totalMinor,
+      carryInMinor,
+      carryHint,
+      payableMinor,
       currency: summary.currency,
       existingPayout: existing ? this.mapPayout(existing) : undefined,
       summary,
       hints,
     };
+  }
+
+  async previewPayoutBatch(
+    clubId: string,
+    kind: PayrollPayoutKind,
+    year: number,
+    month: number,
+    opts?: {
+      periodFrom?: string;
+      periodTo?: string;
+      department?: ClubPayrollSectionId | 'ALL' | 'MANAGER';
+      userIds?: string[];
+    },
+  ): Promise<PayrollPayoutPreview[]> {
+    const staff = await this.listStaffPaySummaries(clubId);
+    const dept = opts?.department ?? 'ALL';
+    const idSet = opts?.userIds?.length ? new Set(opts.userIds) : null;
+    const filtered = staff.filter((s) => {
+      if (idSet && !idSet.has(s.userId)) return false;
+      if (!idSet) {
+        const section = this.sectionForStaff(
+          s.employmentKind ?? 'STAFF',
+          s.roles,
+          s.track,
+        );
+        if (dept === 'ALL') return true;
+        if (dept === 'MANAGER') {
+          return s.roles.includes('ADMIN') && s.baseSalaryMinor > 0;
+        }
+        if (dept === 'ADMIN') {
+          return (
+            section === 'ADMIN' &&
+            !(s.roles.includes('ADMIN') && s.baseSalaryMinor > 0)
+          );
+        }
+        return section === dept;
+      }
+      return true;
+    });
+    const out: PayrollPayoutPreview[] = [];
+    for (const s of filtered) {
+      out.push(
+        await this.previewPayout(clubId, s.userId, kind, year, month, {
+          periodFrom: opts?.periodFrom,
+          periodTo: opts?.periodTo,
+        }),
+      );
+    }
+    return out;
   }
 
   async confirmPayout(
@@ -607,7 +737,10 @@ export class PayrollService {
       kind: PayrollPayoutKind;
       year: number;
       month: number;
+      periodFrom?: string;
+      periodTo?: string;
       cardTransferMinor?: number;
+      actualCashMinor?: number;
       note?: string;
     },
   ): Promise<PayrollPayoutDto> {
@@ -618,28 +751,46 @@ export class PayrollService {
       input.kind,
       input.year,
       input.month,
+      { periodFrom: input.periodFrom, periodTo: input.periodTo },
     );
     if (preview.existingPayout?.status === 'PAID') {
       throw new BadRequestException('Эта выплата уже зафиксирована');
     }
     const card = Math.max(0, Math.round(input.cardTransferMinor ?? 0));
-    if (card > preview.totalMinor) {
-      throw new BadRequestException(
-        'Перевод на карту не может быть больше суммы выплаты',
-      );
+    const suggestedCash = preview.payableMinor - card;
+    const actualCash =
+      input.actualCashMinor !== undefined && input.actualCashMinor !== null
+        ? Math.round(input.actualCashMinor)
+        : suggestedCash;
+    if (actualCash < 0) {
+      throw new BadRequestException('Сумма из кассы не может быть отрицательной');
     }
-    const cash = preview.totalMinor - card;
+    const payable = preview.payableMinor;
+    const paid = card + actualCash;
+    const carryOutMinor = payable - paid;
     const kind =
       input.kind === 'ADVANCE_HALF'
         ? PrismaPayoutKind.ADVANCE_HALF
         : PrismaPayoutKind.MONTH_SETTLEMENT;
+
+    const waveLabel =
+      input.kind === 'ADVANCE_HALF' ? 'аванса 25-е' : 'расчёта 15-е';
+    const carryHint =
+      carryOutMinor === 0
+        ? null
+        : carryOutMinor > 0
+          ? `недоплата ${(carryOutMinor / 100).toFixed(2)} с ${waveLabel} ${preview.periodFrom}–${preview.periodTo}`
+          : `переплата ${(Math.abs(carryOutMinor) / 100).toFixed(2)} с ${waveLabel} ${preview.periodFrom}–${preview.periodTo}`;
 
     const data = {
       earnedMinor: preview.earnedMinor,
       priorPaidMinor: preview.priorPaidMinor,
       totalMinor: preview.totalMinor,
       cardTransferMinor: card,
-      cashMinor: cash,
+      cashMinor: suggestedCash,
+      actualCashMinor: actualCash,
+      carryInMinor: preview.carryInMinor,
+      carryOutMinor,
       currency: preview.currency,
       status: PayrollPayoutStatus.PAID,
       paidAt: new Date(),
@@ -647,48 +798,101 @@ export class PayrollService {
       createdById: actor.sub,
     };
 
-    const row = await this.prisma.payrollPayout.upsert({
-      where: {
-        clubId_userId_kind_periodFrom_periodTo: {
+    const row = await this.prisma.$transaction(async (tx) => {
+      const payout = await tx.payrollPayout.upsert({
+        where: {
+          clubId_userId_kind_periodFrom_periodTo: {
+            clubId,
+            userId: input.userId,
+            kind,
+            periodFrom: new Date(`${preview.periodFrom}T00:00:00`),
+            periodTo: new Date(`${preview.periodTo}T00:00:00`),
+          },
+        },
+        create: {
           clubId,
           userId: input.userId,
           kind,
           periodFrom: new Date(`${preview.periodFrom}T00:00:00`),
           periodTo: new Date(`${preview.periodTo}T00:00:00`),
+          ...data,
         },
-      },
-      create: {
-        clubId,
-        userId: input.userId,
-        kind,
-        periodFrom: new Date(`${preview.periodFrom}T00:00:00`),
-        periodTo: new Date(`${preview.periodTo}T00:00:00`),
-        ...data,
-      },
-      update: data,
-      include: { user: true },
-    });
+        update: data,
+        include: { user: true },
+      });
 
-    await this.prisma.payrollPeriodLock.upsert({
-      where: {
-        clubId_userId_periodFrom_periodTo: {
+      await tx.payrollStaffBalance.upsert({
+        where: { clubId_userId: { clubId, userId: input.userId } },
+        create: {
+          clubId,
+          userId: input.userId,
+          balanceMinor: carryOutMinor,
+          hint: carryHint,
+        },
+        update: {
+          balanceMinor: carryOutMinor,
+          hint: carryHint,
+        },
+      });
+
+      await tx.payrollPeriodLock.upsert({
+        where: {
+          clubId_userId_periodFrom_periodTo: {
+            clubId,
+            userId: input.userId,
+            periodFrom: new Date(`${preview.periodFrom}T00:00:00`),
+            periodTo: new Date(`${preview.periodTo}T00:00:00`),
+          },
+        },
+        create: {
           clubId,
           userId: input.userId,
           periodFrom: new Date(`${preview.periodFrom}T00:00:00`),
           periodTo: new Date(`${preview.periodTo}T00:00:00`),
+          lockedById: actor.sub,
         },
-      },
-      create: {
-        clubId,
-        userId: input.userId,
-        periodFrom: new Date(`${preview.periodFrom}T00:00:00`),
-        periodTo: new Date(`${preview.periodTo}T00:00:00`),
-        lockedById: actor.sub,
-      },
-      update: { lockedAt: new Date(), lockedById: actor.sub },
+        update: { lockedAt: new Date(), lockedById: actor.sub },
+      });
+
+      return payout;
     });
 
     return this.mapPayout(row);
+  }
+
+  async confirmPayoutBatch(
+    actor: JwtPayload,
+    input: {
+      kind: PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+      items: Array<{
+        userId: string;
+        cardTransferMinor?: number;
+        actualCashMinor?: number;
+        note?: string;
+      }>;
+    },
+  ): Promise<PayrollPayoutDto[]> {
+    const results: PayrollPayoutDto[] = [];
+    for (const item of input.items) {
+      results.push(
+        await this.confirmPayout(actor, {
+          userId: item.userId,
+          kind: input.kind,
+          year: input.year,
+          month: input.month,
+          periodFrom: input.periodFrom,
+          periodTo: input.periodTo,
+          cardTransferMinor: item.cardTransferMinor,
+          actualCashMinor: item.actualCashMinor,
+          note: item.note,
+        }),
+      );
+    }
+    return results;
   }
 
   async listPayouts(
@@ -734,6 +938,9 @@ export class PayrollService {
     totalMinor: number;
     cardTransferMinor: number;
     cashMinor: number;
+    actualCashMinor?: number;
+    carryInMinor?: number;
+    carryOutMinor?: number;
     currency: string;
     status: PayrollPayoutStatus;
     paidAt: Date | null;
@@ -753,6 +960,9 @@ export class PayrollService {
       totalMinor: row.totalMinor,
       cardTransferMinor: row.cardTransferMinor,
       cashMinor: row.cashMinor,
+      actualCashMinor: row.actualCashMinor ?? row.cashMinor,
+      carryInMinor: row.carryInMinor ?? 0,
+      carryOutMinor: row.carryOutMinor ?? 0,
       currency: row.currency,
       status: row.status as PayrollPayoutDto['status'],
       paidAt: row.paidAt?.toISOString(),
@@ -840,11 +1050,35 @@ export class PayrollService {
     );
     const baseSalaryMinor =
       input.baseSalaryMinor ?? existing?.baseSalaryMinor ?? 0;
+    let payProfile = input.payProfile;
+    const slices = allPaySlices(payProfile);
+    if (
+      slices.some((s) => s.track === 'GROUP_TRAINER') &&
+      !sliceForTrack(payProfile, 'GROUP_TRAINER').groupRateTiers?.length
+    ) {
+      const packed = { ...payProfile };
+      const gt = sliceForTrack(packed, 'GROUP_TRAINER');
+      const withTiers = {
+        ...gt,
+        groupRateTiers: DEFAULT_GROUP_RATE_TIERS.map((t) => ({ ...t })),
+      };
+      if (packed.track === 'GROUP_TRAINER') {
+        payProfile = { ...packed, ...withTiers, byTrack: packed.byTrack };
+      } else {
+        payProfile = {
+          ...packed,
+          byTrack: {
+            ...(packed.byTrack ?? {}),
+            GROUP_TRAINER: withTiers,
+          },
+        };
+      }
+    }
     return this.upsertCompensation(actor, {
       userId: input.userId,
       baseSalaryMinor,
       effectiveFrom,
-      payProfile: input.payProfile,
+      payProfile,
     });
   }
 
@@ -871,6 +1105,7 @@ export class PayrollService {
       TRAINER: Role.TRAINER,
       SPECIALIST: Role.SPECIALIST,
       TECH: Role.TECH,
+      EXTERNAL: Role.SPECIALIST,
     };
     const roles = departments.map((d) => roleMap[d]);
     const tracksToCopy: StaffPayTrack[] =
@@ -964,6 +1199,10 @@ export class PayrollService {
         ),
         baseSalaryMinor: c?.baseSalaryMinor ?? 0,
         currency: c?.currency ?? 'BYN',
+        employmentKind:
+          u.employmentKind === PrismaEmploymentKind.EXTERNAL
+            ? 'EXTERNAL'
+            : 'STAFF',
       };
     });
   }
@@ -1049,19 +1288,47 @@ export class PayrollService {
       periodFrom: string;
       periodTo: string;
     },
-  ): Promise<PayrollAdjustmentDto> {
+  ): Promise<PayrollAdjustmentDto & { redirectedFrom?: string }> {
     const clubId = requireClubId(actor);
     if (!input.reason?.trim()) {
       throw new BadRequestException('Укажите причину корректировки');
     }
+    this.assertPeriod(input.periodFrom, input.periodTo);
+
+    let periodFrom = input.periodFrom;
+    let periodTo = input.periodTo;
+    let reason = input.reason.trim();
+    let redirectedFrom: string | undefined;
+
+    const locked = await this.prisma.payrollPeriodLock.findUnique({
+      where: {
+        clubId_userId_periodFrom_periodTo: {
+          clubId,
+          userId: input.userId,
+          periodFrom: new Date(`${input.periodFrom}T00:00:00`),
+          periodTo: new Date(`${input.periodTo}T00:00:00`),
+        },
+      },
+    });
+
+    if (locked) {
+      const now = new Date();
+      const openFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+      const openTo = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      periodFrom = openFrom;
+      periodTo = openTo;
+      redirectedFrom = `${input.periodFrom}–${input.periodTo}`;
+      reason = `${reason} [из закрытого ${redirectedFrom}]`;
+    }
+
     const row = await this.prisma.payrollAdjustment.create({
       data: {
         clubId,
         userId: input.userId,
         amountMinor: input.amountMinor,
-        reason: input.reason.trim(),
-        periodFrom: new Date(`${input.periodFrom}T00:00:00`),
-        periodTo: new Date(`${input.periodTo}T00:00:00`),
+        reason,
+        periodFrom: new Date(`${periodFrom}T00:00:00`),
+        periodTo: new Date(`${periodTo}T00:00:00`),
         createdById: actor.sub,
       },
     });
@@ -1070,9 +1337,10 @@ export class PayrollService {
       userId: row.userId,
       amountMinor: row.amountMinor,
       reason: row.reason,
-      periodFrom: input.periodFrom,
-      periodTo: input.periodTo,
+      periodFrom,
+      periodTo,
       createdAt: row.createdAt.toISOString(),
+      redirectedFrom,
     };
   }
 
@@ -1146,6 +1414,10 @@ export class PayrollService {
         payChips: payProfileSummary({ track: 'ADMIN' }),
         baseSalaryMinor: 0,
         currency: 'BYN',
+        employmentKind:
+          user.employmentKind === PrismaEmploymentKind.EXTERNAL
+            ? 'EXTERNAL'
+            : 'STAFF',
       },
     ];
   }
@@ -1245,9 +1517,15 @@ export class PayrollService {
     rates: MotivationRateDto[],
     profile?: StaffPayProfile,
     periodFrom?: string,
+    sales?: StaffSalesBreakdown,
   ): number {
     if (profile) {
-      return this.calcMotivationFromProfile(units, profile, periodFrom);
+      return this.calcMotivationFromProfile(
+        units,
+        profile,
+        periodFrom,
+        sales,
+      );
     }
     let total = 0;
     for (const u of units) {
@@ -1269,16 +1547,51 @@ export class PayrollService {
     units: WorkUnit[],
     profile: StaffPayProfile,
     periodFrom?: string,
+    sales?: StaffSalesBreakdown,
   ): number {
     let total = 0;
     const trusted = units.filter((u) => u.payrollTrusted);
 
     for (const slice of allPaySlices(profile)) {
+      if (slice.track === 'ADMIN' && sales) {
+        if (slice.membershipSalesPercent) {
+          total += Math.round(
+            (sales.membershipMinor * slice.membershipSalesPercent) / 100,
+          );
+        }
+        if (slice.extraSalesPercent) {
+          total += Math.round(
+            (sales.extraServicesMinor * slice.extraSalesPercent) / 100,
+          );
+        }
+        if (slice.shopSalesPercent) {
+          total += Math.round((sales.shopMinor * slice.shopSalesPercent) / 100);
+        }
+        if (slice.corporateSalesPercent) {
+          total += Math.round(
+            (sales.corporateMinor * slice.corporateSalesPercent) / 100,
+          );
+        }
+      }
+
       if (slice.track === 'GROUP_TRAINER') {
         for (const u of trusted.filter((x) => x.kind === 'GROUP')) {
-          const min = slice.groupMinAttendees ?? 1;
-          if (u.quantity < min) continue;
-          total += slice.groupSessionRateMinor ?? 0;
+          const hasTiers = (slice.groupRateTiers?.length ?? 0) > 0;
+          if (hasTiers || u.roomKey) {
+            total += resolveGroupSessionRateMinor(
+              u.quantity,
+              u.roomKey,
+              slice.groupRateTiers,
+              {
+                rateMinor: slice.groupSessionRateMinor,
+                minAttendees: slice.groupMinAttendees,
+              },
+            );
+          } else {
+            const min = slice.groupMinAttendees ?? 1;
+            if (u.quantity < min) continue;
+            total += slice.groupSessionRateMinor ?? 0;
+          }
           if (slice.groupPerAttendeeMinor) {
             total += slice.groupPerAttendeeMinor * u.quantity;
           }
@@ -1287,6 +1600,14 @@ export class PayrollService {
 
       if (slice.track === 'SPA') {
         for (const u of trusted.filter((x) => x.kind === 'SPA')) {
+          if (
+            u.partnerSource &&
+            u.partnerSource.toUpperCase() === 'ALLSPORTS' &&
+            slice.spaPartnerRateMinor
+          ) {
+            total += slice.spaPartnerRateMinor;
+            continue;
+          }
           const price = u.priceMinor ?? 0;
           if (price > 0 && slice.spaSoldPercent) {
             total += Math.round((price * slice.spaSoldPercent) / 100);
@@ -1294,7 +1615,7 @@ export class PayrollService {
             const title = u.title.toLowerCase();
             const match = slice.spaQuotaRates.find((r) => {
               if (r.serviceKey === 'BODY_COMPOSITION')
-                return /состав|анализ|inbody|компози/i.test(title);
+                return /состав|анализ|inbody|compos/i.test(title);
               if (r.serviceKey === 'CLASSIC_MASSAGE')
                 return /массаж|massage|класси/i.test(title);
               return r.serviceKey === u.serviceId;
@@ -1324,6 +1645,80 @@ export class PayrollService {
     return total;
   }
 
+  private async resolveStaffSales(
+    clubId: string,
+    userId: string,
+    from: string,
+    to: string,
+    profile?: StaffPayProfile,
+  ): Promise<StaffSalesBreakdown> {
+    const needsSales = allPaySlices(profile).some(
+      (s) =>
+        s.track === 'ADMIN' &&
+        ((s.membershipSalesPercent ?? 0) > 0 ||
+          (s.extraSalesPercent ?? 0) > 0 ||
+          (s.shopSalesPercent ?? 0) > 0 ||
+          (s.corporateSalesPercent ?? 0) > 0),
+    );
+
+    const corporate = await this.prisma.payrollCorporateSale.findFirst({
+      where: {
+        clubId,
+        userId,
+        periodFrom: new Date(`${from}T00:00:00`),
+        periodTo: new Date(`${to}T00:00:00`),
+      },
+    });
+    const corporateMinor = corporate?.amountMinor ?? 0;
+
+    if (!needsSales) {
+      return {
+        membershipMinor: 0,
+        extraServicesMinor: 0,
+        shopMinor: 0,
+        corporateMinor,
+        fromAnalytics: false,
+      };
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+      select: { employeeCode: true },
+    });
+    const provider = createAnalyticsProvider({
+      baseUrl: this.config.get<string>('FORMA_ANALYTICS_URL'),
+      apiKey: this.config.get<string>('FORMA_API_KEY'),
+      basicAuth: this.config.get<string>('FORMA_BASIC_AUTH'),
+    });
+
+    if (!provider) {
+      return {
+        membershipMinor: 0,
+        extraServicesMinor: 0,
+        shopMinor: 0,
+        corporateMinor,
+        fromAnalytics: false,
+        hint:
+          'Продажи 1С не подключены (FORMA_ANALYTICS_URL) — % от продаж = 0, корпо учитывается вручную',
+      };
+    }
+
+    const remote = await fetchStaffSalesFromAnalytics(provider, {
+      from,
+      to,
+      employeeExternalId: user?.employeeCode,
+    });
+
+    return {
+      membershipMinor: remote?.membershipMinor ?? 0,
+      extraServicesMinor: remote?.extraServicesMinor ?? 0,
+      shopMinor: remote?.shopMinor ?? 0,
+      corporateMinor,
+      fromAnalytics: remote?.fromAnalytics ?? false,
+      hint: remote?.hint,
+    };
+  }
+
   private pickRate(u: WorkUnit, rates: MotivationRateDto[]) {
     if (u.kind === 'SPA') {
       return (
@@ -1346,10 +1741,365 @@ export class PayrollService {
     const fromMs = Date.parse(`${from}T00:00:00`);
     const toMs = Date.parse(`${to}T00:00:00`);
     if (toMs < fromMs) throw new BadRequestException('Некорректный период');
-    const days =
-      Math.floor((toMs - fromMs) / 86400000) + 1;
+    const days = Math.floor((toMs - fromMs) / 86400000) + 1;
     if (days > 31) {
       throw new BadRequestException('Период не больше 31 дня');
     }
+  }
+
+  private sectionForStaff(
+    employmentKind: StaffEmploymentKind,
+    roles: string[],
+    track?: StaffPayTrack,
+  ): ClubPayrollSectionId {
+    if (employmentKind === 'EXTERNAL') return 'EXTERNAL';
+    if (roles.includes('ADMIN') || track === 'ADMIN') return 'ADMIN';
+    if (roles.includes('SPECIALIST') || track === 'SPA') return 'SPECIALIST';
+    if (roles.includes('TECH') || track === 'TECH') return 'TECH';
+    return 'TRAINER';
+  }
+
+  async getClubSummary(
+    clubId: string,
+    from: string,
+    to: string,
+    department?: ClubPayrollSectionId | 'ALL' | 'MANAGER',
+  ): Promise<ClubPayrollReport> {
+    this.assertPeriod(from, to);
+    const staff = await this.listStaffPaySummaries(clubId);
+    const isManager = (s: (typeof staff)[0]) =>
+      s.roles.includes('ADMIN') && s.baseSalaryMinor > 0;
+    const filtered = staff.filter((s) => {
+      const section = this.sectionForStaff(
+        s.employmentKind ?? 'STAFF',
+        s.roles,
+        s.track,
+      );
+      if (!department || department === 'ALL') return true;
+      if (department === 'MANAGER') return isManager(s);
+      if (department === 'ADMIN') {
+        return section === 'ADMIN' && !isManager(s);
+      }
+      return section === department;
+    });
+
+    const rows: ClubPayrollRow[] = [];
+    for (const s of filtered) {
+      const summary = await this.getPeriodSummary(clubId, s.userId, from, to);
+      const payouts = await this.prisma.payrollPayout.findMany({
+        where: {
+          clubId,
+          userId: s.userId,
+          status: PayrollPayoutStatus.PAID,
+          periodFrom: { gte: new Date(`${from}T00:00:00`) },
+          periodTo: { lte: new Date(`${to}T23:59:59`) },
+        },
+      });
+      const advancePaidMinor = payouts
+        .filter((p) => p.kind === PrismaPayoutKind.ADVANCE_HALF)
+        .reduce((a, p) => a + p.totalMinor, 0);
+      const settlementPaidMinor = payouts
+        .filter((p) => p.kind === PrismaPayoutKind.MONTH_SETTLEMENT)
+        .reduce((a, p) => a + p.totalMinor, 0);
+      const cardPaidMinor = payouts.reduce(
+        (a, p) => a + p.cardTransferMinor,
+        0,
+      );
+      const periodPaidTotalMinor = payouts.reduce((a, p) => {
+        const cash = p.actualCashMinor ?? p.cashMinor;
+        return a + p.cardTransferMinor + cash;
+      }, 0);
+      const priorPaidMinor = payouts.reduce((a, p) => a + p.totalMinor, 0);
+      const bonusMinor = summary.adjustments
+        .filter((a) => a.amountMinor > 0)
+        .reduce((a, x) => a + x.amountMinor, 0);
+      const fineMinor = Math.abs(
+        summary.adjustments
+          .filter((a) => a.amountMinor < 0)
+          .reduce((a, x) => a + x.amountMinor, 0),
+      );
+      const employmentKind = s.employmentKind ?? 'STAFF';
+      const section = this.sectionForStaff(employmentKind, s.roles, s.track);
+      const comp = await this.resolveCompensation(clubId, s.userId, from, to);
+      const sales = await this.resolveStaffSales(
+        clubId,
+        s.userId,
+        from,
+        to,
+        asPayProfile(comp?.payProfile),
+      );
+
+      rows.push({
+        userId: s.userId,
+        name: s.name,
+        section,
+        roles: s.roles,
+        track: s.track,
+        employmentKind,
+        baseSalaryMinor: summary.baseSalaryMinor,
+        motivationMinor: summary.motivationMinor,
+        bonusMinor,
+        fineMinor,
+        adjustmentsMinor: summary.adjustmentsMinor,
+        totalEarnedMinor: summary.totalMinor,
+        advancePaidMinor,
+        cardPaidMinor,
+        settlementPaidMinor,
+        periodPaidTotalMinor,
+        priorPaidMinor,
+        toPayMinor: Math.max(0, summary.totalMinor - priorPaidMinor),
+        openExceptions: summary.openExceptions,
+        locked: summary.locked,
+        currency: summary.currency,
+        payChips: summary.payChips,
+        anomalyHints: summary.anomalyHints,
+        sales,
+        workUnitCounts: {
+          spa: summary.workUnits.filter(
+            (u) => u.kind === 'SPA' && u.payrollTrusted,
+          ).length,
+          pt: summary.workUnits.filter(
+            (u) => u.kind === 'PT' && u.payrollTrusted,
+          ).length,
+          group: summary.workUnits.filter(
+            (u) => u.kind === 'GROUP' && u.payrollTrusted,
+          ).length,
+          shiftHours: summary.workUnits
+            .filter((u) => u.kind === 'SHIFT')
+            .reduce((a, u) => a + u.quantity, 0),
+        },
+      });
+    }
+
+    const sectionIds: ClubPayrollSectionId[] = [
+      'ADMIN',
+      'TRAINER',
+      'SPECIALIST',
+      'TECH',
+      'EXTERNAL',
+    ];
+    const sections = sectionIds
+      .map((id) => {
+        const sectionRows = rows.filter((r) => r.section === id);
+        const totals = {
+          baseSalaryMinor: sectionRows.reduce(
+            (a, r) => a + r.baseSalaryMinor,
+            0,
+          ),
+          motivationMinor: sectionRows.reduce(
+            (a, r) => a + r.motivationMinor,
+            0,
+          ),
+          bonusMinor: sectionRows.reduce((a, r) => a + r.bonusMinor, 0),
+          fineMinor: sectionRows.reduce((a, r) => a + r.fineMinor, 0),
+          totalEarnedMinor: sectionRows.reduce(
+            (a, r) => a + r.totalEarnedMinor,
+            0,
+          ),
+          toPayMinor: sectionRows.reduce((a, r) => a + r.toPayMinor, 0),
+        };
+        return {
+          id,
+          label: SECTION_LABELS[id],
+          rows: sectionRows,
+          totals,
+        };
+      })
+      .filter((s) => s.rows.length > 0);
+
+    return {
+      from,
+      to,
+      currency: rows[0]?.currency ?? 'BYN',
+      sections,
+      grandTotalMinor: rows.reduce((a, r) => a + r.totalEarnedMinor, 0),
+    };
+  }
+
+  async exportClubSummaryXlsx(
+    clubId: string,
+    from: string,
+    to: string,
+    department?: ClubPayrollSectionId | 'ALL' | 'MANAGER',
+  ): Promise<Buffer> {
+    const ExcelJS = await import('exceljs');
+    const report = await this.getClubSummary(clubId, from, to, department);
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('ЗП');
+    ws.addRow([
+      'Подразделение',
+      'ФИО',
+      'База',
+      'Мотивация',
+      'Премии',
+      'Штрафы',
+      'Начислено',
+      'Аванс',
+      'Карта',
+      'ЗП 15',
+      'Выплачено',
+      'К выдаче',
+      'Исключения',
+      'Комментарий',
+    ]);
+    for (const section of report.sections) {
+      for (const r of section.rows) {
+        ws.addRow([
+          section.label,
+          r.name,
+          r.baseSalaryMinor / 100,
+          r.motivationMinor / 100,
+          r.bonusMinor / 100,
+          r.fineMinor / 100,
+          r.totalEarnedMinor / 100,
+          r.advancePaidMinor / 100,
+          r.cardPaidMinor / 100,
+          r.settlementPaidMinor / 100,
+          r.periodPaidTotalMinor / 100,
+          r.toPayMinor / 100,
+          r.openExceptions,
+          [...r.anomalyHints, ...r.payChips].join('; '),
+        ]);
+      }
+      ws.addRow([
+        `${section.label} итого`,
+        '',
+        section.totals.baseSalaryMinor / 100,
+        section.totals.motivationMinor / 100,
+        section.totals.bonusMinor / 100,
+        section.totals.fineMinor / 100,
+        section.totals.totalEarnedMinor / 100,
+        '',
+        '',
+        '',
+        '',
+        section.totals.toPayMinor / 100,
+      ]);
+    }
+    ws.addRow([]);
+    ws.addRow(['Всего начислено', report.grandTotalMinor / 100]);
+    const buf = await wb.xlsx.writeBuffer();
+    return Buffer.from(buf);
+  }
+
+  async upsertCorporateSale(
+    actor: JwtPayload,
+    input: {
+      userId: string;
+      periodFrom: string;
+      periodTo: string;
+      amountMinor: number;
+      note?: string;
+    },
+  ): Promise<PayrollCorporateSaleDto> {
+    const clubId = requireClubId(actor);
+    this.assertPeriod(input.periodFrom, input.periodTo);
+    const user = await this.prisma.user.findFirst({
+      where: { id: input.userId, clubId },
+    });
+    if (!user) throw new NotFoundException('Сотрудник не найден');
+    const row = await this.prisma.payrollCorporateSale.upsert({
+      where: {
+        clubId_userId_periodFrom_periodTo: {
+          clubId,
+          userId: input.userId,
+          periodFrom: new Date(`${input.periodFrom}T00:00:00`),
+          periodTo: new Date(`${input.periodTo}T00:00:00`),
+        },
+      },
+      create: {
+        clubId,
+        userId: input.userId,
+        periodFrom: new Date(`${input.periodFrom}T00:00:00`),
+        periodTo: new Date(`${input.periodTo}T00:00:00`),
+        amountMinor: input.amountMinor,
+        note: input.note?.trim() || null,
+        createdById: actor.sub,
+      },
+      update: {
+        amountMinor: input.amountMinor,
+        note: input.note?.trim() || null,
+      },
+      include: { user: true },
+    });
+    return {
+      id: row.id,
+      userId: row.userId,
+      userName: `${row.user.lastName} ${row.user.firstName}`.trim(),
+      periodFrom: input.periodFrom,
+      periodTo: input.periodTo,
+      amountMinor: row.amountMinor,
+      note: row.note ?? undefined,
+    };
+  }
+
+  async listCorporateSales(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<PayrollCorporateSaleDto[]> {
+    const rows = await this.prisma.payrollCorporateSale.findMany({
+      where: {
+        clubId,
+        periodFrom: { gte: new Date(`${from}T00:00:00`) },
+        periodTo: { lte: new Date(`${to}T23:59:59`) },
+      },
+      include: { user: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      userId: r.userId,
+      userName: `${r.user.lastName} ${r.user.firstName}`.trim(),
+      periodFrom: r.periodFrom.toISOString().slice(0, 10),
+      periodTo: r.periodTo.toISOString().slice(0, 10),
+      amountMinor: r.amountMinor,
+      note: r.note ?? undefined,
+    }));
+  }
+
+  async setEmploymentKind(
+    actor: JwtPayload,
+    userId: string,
+    employmentKind: StaffEmploymentKind,
+  ) {
+    const clubId = requireClubId(actor);
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+    });
+    if (!user) throw new NotFoundException('Сотрудник не найден');
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        employmentKind:
+          employmentKind === 'EXTERNAL'
+            ? PrismaEmploymentKind.EXTERNAL
+            : PrismaEmploymentKind.STAFF,
+      },
+    });
+    return { userId, employmentKind };
+  }
+
+  async setSpaPartnerSource(
+    actor: JwtPayload,
+    bookingId: string,
+    partnerSource: string | null,
+  ) {
+    const clubId = requireClubId(actor);
+    const booking = await this.prisma.spaBooking.findFirst({
+      where: { id: bookingId, clubId },
+    });
+    if (!booking) throw new NotFoundException('Запись SPA не найдена');
+    const normalized =
+      partnerSource?.trim().toUpperCase() === 'ALLSPORTS'
+        ? 'ALLSPORTS'
+        : partnerSource?.trim()
+          ? partnerSource.trim().toUpperCase()
+          : null;
+    await this.prisma.spaBooking.update({
+      where: { id: bookingId },
+      data: { partnerSource: normalized },
+    });
+    return { id: bookingId, partnerSource: normalized };
   }
 }

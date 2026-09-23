@@ -31,6 +31,11 @@ export interface WorkUnit {
   clientName?: string;
   serviceId?: string;
   sessionId?: string;
+  /** Forma / 1C room title for GROUP units. */
+  roomTitle?: string;
+  roomKey?: import('./staff-pay').GroupRoomKey;
+  /** SPA partner channel, e.g. ALLSPORTS. */
+  partnerSource?: string;
 }
 
 export interface StaffCompensationDto {
@@ -52,6 +57,7 @@ export interface StaffPaySummary {
   payChips: string[];
   baseSalaryMinor: number;
   currency: string;
+  employmentKind?: import('./staff-pay').StaffEmploymentKind;
 }
 
 export interface MotivationRateDto {
@@ -72,6 +78,8 @@ export interface PayrollAdjustmentDto {
   periodFrom: string;
   periodTo: string;
   createdAt: string;
+  /** Set when original period was locked and adjustment moved to open period. */
+  redirectedFrom?: string;
 }
 
 export interface PayrollPeriodSummary {
@@ -114,6 +122,9 @@ export interface PayrollPayoutDto {
   totalMinor: number;
   cardTransferMinor: number;
   cashMinor: number;
+  actualCashMinor: number;
+  carryInMinor: number;
+  carryOutMinor: number;
   currency: string;
   status: PayrollPayoutStatus;
   paidAt?: string;
@@ -132,7 +143,13 @@ export interface PayrollPayoutPreview {
   fixedAdvanceMinor: number;
   earnedMinor: number;
   priorPaidMinor: number;
+  /** Accrued for wave (earned − prior), before carry. */
   totalMinor: number;
+  /** Balance from previous rounding (+ underpay / − overpay). */
+  carryInMinor: number;
+  carryHint?: string;
+  /** totalMinor + carryIn — amount to settle this wave. */
+  payableMinor: number;
   currency: string;
   /** Existing paid payout for this window (blocks duplicate). */
   existingPayout?: PayrollPayoutDto;
@@ -177,4 +194,92 @@ export interface TrustExceptionItem {
   trustReasons: string[];
   baselineCount?: number;
   attendedCount?: number;
+}
+
+/** Attributed sales used for ADMIN / manager motivation. */
+export interface StaffSalesBreakdown {
+  membershipMinor: number;
+  extraServicesMinor: number;
+  shopMinor: number;
+  corporateMinor: number;
+  /** True when membership/extra/shop came from Analytics API. */
+  fromAnalytics: boolean;
+  hint?: string;
+}
+
+export interface PayrollCorporateSaleDto {
+  id: string;
+  userId: string;
+  userName: string;
+  periodFrom: string;
+  periodTo: string;
+  amountMinor: number;
+  note?: string;
+}
+
+export type ClubPayrollSectionId =
+  | 'ADMIN'
+  | 'TRAINER'
+  | 'SPECIALIST'
+  | 'TECH'
+  | 'EXTERNAL';
+
+export interface ClubPayrollRow {
+  userId: string;
+  name: string;
+  section: ClubPayrollSectionId;
+  roles: string[];
+  track?: import('./staff-pay').StaffPayTrack;
+  employmentKind: import('./staff-pay').StaffEmploymentKind;
+  baseSalaryMinor: number;
+  motivationMinor: number;
+  /** Positive adjustments. */
+  bonusMinor: number;
+  /** Absolute value of negative adjustments. */
+  fineMinor: number;
+  adjustmentsMinor: number;
+  totalEarnedMinor: number;
+  /** ADVANCE_HALF paid in period. */
+  advancePaidMinor: number;
+  /** Card transfers in period. */
+  cardPaidMinor: number;
+  /** MONTH_SETTLEMENT paid in period (ЗП 15-го). */
+  settlementPaidMinor: number;
+  /** Card + actual cash paid in period. */
+  periodPaidTotalMinor: number;
+  /** Accrued payout totals (legacy). */
+  priorPaidMinor: number;
+  toPayMinor: number;
+  openExceptions: number;
+  locked: boolean;
+  currency: string;
+  payChips: string[];
+  anomalyHints: string[];
+  sales?: StaffSalesBreakdown;
+  workUnitCounts: {
+    spa: number;
+    pt: number;
+    group: number;
+    shiftHours: number;
+  };
+}
+
+export interface ClubPayrollReport {
+  from: string;
+  to: string;
+  currency: string;
+  sections: Array<{
+    id: ClubPayrollSectionId;
+    label: string;
+    rows: ClubPayrollRow[];
+    totals: {
+      baseSalaryMinor: number;
+      motivationMinor: number;
+      bonusMinor: number;
+      fineMinor: number;
+      totalEarnedMinor: number;
+      toPayMinor: number;
+    };
+  }>;
+  grandTotalMinor: number;
 }

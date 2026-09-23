@@ -39,6 +39,7 @@ export class GroupSessionService {
       startAt: string;
       endAt: string;
       trainerId?: string;
+      roomTitle?: string;
     },
   ) {
     const clubId = requireClubId(user);
@@ -74,6 +75,7 @@ export class GroupSessionService {
           title: input.title,
           startAt,
           endAt,
+          roomTitle: input.roomTitle?.trim() || null,
           status: GroupClassSessionStatus.OPEN,
           baselineQuality: GroupSessionBaselineQuality.PARTIAL,
           baselineCount: bookings.length,
@@ -105,6 +107,12 @@ export class GroupSessionService {
       await this.recomputeSessionTrust(session.id);
       session = await this.prisma.groupClassSession.findUniqueOrThrow({
         where: { id: session.id },
+        include: { members: true, trainer: true },
+      });
+    } else if (input.roomTitle?.trim() && !session.roomTitle) {
+      session = await this.prisma.groupClassSession.update({
+        where: { id: session.id },
+        data: { roomTitle: input.roomTitle.trim() },
         include: { members: true, trainer: true },
       });
     }

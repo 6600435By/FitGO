@@ -7,6 +7,15 @@ export type StaffPayTrack =
   | 'TECH'
   | 'PT';
 
+/** Club rooms used for group-class payroll tiers. */
+export type GroupRoomKey =
+  | 'GROUP_SMALL'
+  | 'GROUP_LARGE'
+  | 'GYM'
+  | 'REFORMER';
+
+export type StaffEmploymentKind = 'STAFF' | 'EXTERNAL';
+
 export interface PtPercentTier {
   /** Inclusive min count of conducted PT in calendar month (gifts count). */
   minSessions: number;
@@ -22,23 +31,40 @@ export interface SpaQuotaServiceRate {
   rateMinor: number;
 }
 
+/** Attendee range × room → fixed pay per conducted class (minor). */
+export interface GroupRateTier {
+  minAttendees: number;
+  /** Inclusive; omit = no upper bound. */
+  maxAttendees?: number;
+  roomKey: GroupRoomKey;
+  rateMinor: number;
+}
+
 export interface StaffPayProfile {
   track: StaffPayTrack;
   /** ADMIN / TECH / GROUP / PT duty: hourly rate (minor). */
   hourlyRateMinor?: number;
-  /** ADMIN: % of membership sales. */
+  /** ADMIN: % of membership sales (абонементы + КП). */
   membershipSalesPercent?: number;
   /** ADMIN: % of extra services sales. */
   extraSalesPercent?: number;
-  /** GROUP: fixed per conducted class when attendees >= min. */
+  /** ADMIN: % of shop / retail sales. */
+  shopSalesPercent?: number;
+  /** ADMIN / manager: % of manually entered corporate (р/с) sales. */
+  corporateSalesPercent?: number;
+  /** GROUP: legacy flat rate when attendees >= min (fallback if no tiers). */
   groupSessionRateMinor?: number;
   groupMinAttendees?: number;
   /** Optional per-attendee top-up above min. */
   groupPerAttendeeMinor?: number;
+  /** GROUP: attendee × room matrix (preferred). */
+  groupRateTiers?: GroupRateTier[];
   /** SPA: % of sold/rendered paid services. */
   spaSoldPercent?: number;
   /** SPA: fixed rates for membership-package services. */
   spaQuotaRates?: SpaQuotaServiceRate[];
+  /** SPA: fixed rate per AllSports / partner client visit (minor). */
+  spaPartnerRateMinor?: number;
   /** PT: volume tiers for % of paid conducted sessions. */
   ptPercentTiers?: PtPercentTier[];
   /** PT: session catalog price (minor) when booking has no CRM price. */
@@ -61,13 +87,71 @@ export type StaffDepartment =
   | 'ADMIN'
   | 'TRAINER'
   | 'SPECIALIST'
-  | 'TECH';
+  | 'TECH'
+  | 'EXTERNAL';
+
+/** Exact Forma / 1C room titles → payroll room key. */
+export const GROUP_ROOM_TITLE_MAP: Record<string, GroupRoomKey> = {
+  'Групповой зал малый': 'GROUP_SMALL',
+  'Групповой зал большой': 'GROUP_LARGE',
+  'Тренажёрный зал': 'GYM',
+  'Тренажерный зал': 'GYM',
+  'Зал реформеров': 'REFORMER',
+};
+
+export function resolveGroupRoomKey(
+  roomTitle: string | null | undefined,
+): GroupRoomKey | undefined {
+  if (!roomTitle?.trim()) return undefined;
+  const exact = GROUP_ROOM_TITLE_MAP[roomTitle.trim()];
+  if (exact) return exact;
+  const lower = roomTitle.trim().toLowerCase();
+  if (lower.includes('малы')) return 'GROUP_SMALL';
+  if (lower.includes('больш')) return 'GROUP_LARGE';
+  if (lower.includes('реформ')) return 'REFORMER';
+  if (lower.includes('тренаж')) return 'GYM';
+  return undefined;
+}
+
+/** Club default GP rates (BYN → minor). */
+export const DEFAULT_GROUP_RATE_TIERS: GroupRateTier[] = [
+  { roomKey: 'GROUP_SMALL', minAttendees: 3, maxAttendees: 5, rateMinor: 2500 },
+  { roomKey: 'GROUP_SMALL', minAttendees: 6, maxAttendees: 8, rateMinor: 3000 },
+  { roomKey: 'GROUP_SMALL', minAttendees: 9, maxAttendees: 10, rateMinor: 3500 },
+  { roomKey: 'GROUP_LARGE', minAttendees: 3, maxAttendees: 5, rateMinor: 2500 },
+  { roomKey: 'GROUP_LARGE', minAttendees: 6, maxAttendees: 9, rateMinor: 3000 },
+  { roomKey: 'GROUP_LARGE', minAttendees: 10, maxAttendees: 14, rateMinor: 3500 },
+  { roomKey: 'GROUP_LARGE', minAttendees: 15, rateMinor: 4000 },
+];
+
+export function resolveGroupSessionRateMinor(
+  attendees: number,
+  roomKey: GroupRoomKey | undefined,
+  tiers: GroupRateTier[] | undefined,
+  legacy?: { rateMinor?: number; minAttendees?: number },
+): number {
+  const table =
+    tiers && tiers.length > 0 ? tiers : DEFAULT_GROUP_RATE_TIERS;
+  if (roomKey) {
+    const match = table.find(
+      (t) =>
+        t.roomKey === roomKey &&
+        attendees >= t.minAttendees &&
+        (t.maxAttendees == null || attendees <= t.maxAttendees),
+    );
+    if (match) return match.rateMinor;
+    return 0;
+  }
+  const min = legacy?.minAttendees ?? 1;
+  if (attendees < min) return 0;
+  return legacy?.rateMinor ?? 0;
+}
 
 export function payTrackForDepartment(
   dept: StaffDepartment,
 ): StaffPayTrack {
   if (dept === 'ADMIN') return 'ADMIN';
-  if (dept === 'SPECIALIST') return 'SPA';
+  if (dept === 'SPECIALIST' || dept === 'EXTERNAL') return 'SPA';
   if (dept === 'TECH') return 'TECH';
   return 'PT';
 }
@@ -178,6 +262,8 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         hourlyRateMinor: 0,
         membershipSalesPercent: 0,
         extraSalesPercent: 0,
+        shopSalesPercent: 0,
+        corporateSalesPercent: 0,
         fixedAdvanceMinor: 0,
       };
     case 'GROUP_TRAINER':
@@ -186,12 +272,14 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         groupSessionRateMinor: 0,
         groupMinAttendees: 1,
         groupPerAttendeeMinor: 0,
+        groupRateTiers: DEFAULT_GROUP_RATE_TIERS.map((t) => ({ ...t })),
       };
     case 'SPA':
       return {
         track,
         spaSoldPercent: 0,
         spaQuotaRates: DEFAULT_SPA_QUOTA_RATES.map((r) => ({ ...r })),
+        spaPartnerRateMinor: 0,
       };
     case 'TECH':
       return {
@@ -228,6 +316,12 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           chips.push(`${tag}абн. ${formatPercent(slice.membershipSalesPercent)}%`);
         if (slice.extraSalesPercent)
           chips.push(`${tag}доп. ${formatPercent(slice.extraSalesPercent)}%`);
+        if (slice.shopSalesPercent)
+          chips.push(`${tag}магазин ${formatPercent(slice.shopSalesPercent)}%`);
+        if (slice.corporateSalesPercent)
+          chips.push(
+            `${tag}корпо ${formatPercent(slice.corporateSalesPercent)}%`,
+          );
         if (slice.fixedAdvanceMinor)
           chips.push(
             `${tag}аванс 25-е ${money(slice.fixedAdvanceMinor)}`,
@@ -236,9 +330,11 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
       case 'GROUP_TRAINER':
         if (slice.hourlyRateMinor)
           chips.push(`${tag}${money(slice.hourlyRateMinor)}/ч смены`);
-        if (slice.groupSessionRateMinor)
+        if (slice.groupRateTiers?.length)
+          chips.push(`${tag}тиры×зал (${slice.groupRateTiers.length})`);
+        else if (slice.groupSessionRateMinor)
           chips.push(`${tag}занятие ${money(slice.groupSessionRateMinor)}`);
-        if (slice.groupMinAttendees)
+        if (slice.groupMinAttendees && !slice.groupRateTiers?.length)
           chips.push(`${tag}от ${slice.groupMinAttendees} чел.`);
         if (slice.groupPerAttendeeMinor)
           chips.push(`${tag}+${money(slice.groupPerAttendeeMinor)}/чел`);
@@ -250,6 +346,8 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           if (r.rateMinor > 0)
             chips.push(`${tag}${r.label}: ${money(r.rateMinor)}`);
         }
+        if (slice.spaPartnerRateMinor)
+          chips.push(`${tag}AllSports ${money(slice.spaPartnerRateMinor)}`);
         break;
       case 'TECH':
         if (slice.hourlyRateMinor)

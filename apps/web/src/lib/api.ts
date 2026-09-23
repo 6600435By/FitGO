@@ -1548,6 +1548,7 @@ export const api = {
       title: string;
       startAt: string;
       endAt: string;
+      roomTitle?: string;
     },
   ) =>
     request<GroupClassSessionDto>('/trainer/group-sessions/open', {
@@ -1652,6 +1653,103 @@ export const api = {
     );
   },
 
+  payrollClubSummary: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      department?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.department) q.set('department', params.department);
+    return request<import('@fitgo/shared-types').ClubPayrollReport>(
+      `/super-admin/payroll/club-summary?${q}`,
+      {},
+      token,
+    );
+  },
+
+  payrollClubSummaryXlsx: async (
+    token: string,
+    params: { from: string; to: string; department?: string },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.department) q.set('department', params.department);
+    const base = API_URL;
+    const res = await fetch(
+      `${base}/super-admin/payroll/club-summary.xlsx?${q}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    return res.blob();
+  },
+
+  payrollCorporateSales: (
+    token: string,
+    params: { from: string; to: string },
+  ) => {
+    const q = new URLSearchParams(params);
+    return request<import('@fitgo/shared-types').PayrollCorporateSaleDto[]>(
+      `/super-admin/payroll/corporate-sales?${q}`,
+      {},
+      token,
+    );
+  },
+
+  payrollUpsertCorporateSale: (
+    token: string,
+    body: {
+      userId: string;
+      periodFrom: string;
+      periodTo: string;
+      amountMinor: number;
+      note?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').PayrollCorporateSaleDto>(
+      '/super-admin/payroll/corporate-sales',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  payrollSetEmployment: (
+    token: string,
+    userId: string,
+    employmentKind: import('@fitgo/shared-types').StaffEmploymentKind,
+  ) =>
+    request<{ userId: string; employmentKind: string }>(
+      `/super-admin/payroll/staff/${userId}/employment`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ employmentKind }),
+      },
+      token,
+    ),
+
+  payrollSetSpaPartner: (
+    token: string,
+    bookingId: string,
+    partnerSource: string | null,
+  ) =>
+    request<{ id: string; partnerSource: string | null }>(
+      `/super-admin/payroll/spa-bookings/${bookingId}/partner`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ partnerSource }),
+      },
+      token,
+    ),
+
   payrollLock: (
     token: string,
     body: { userId: string; from: string; to: string },
@@ -1712,6 +1810,8 @@ export const api = {
       kind: import('@fitgo/shared-types').PayrollPayoutKind;
       year: number;
       month: number;
+      periodFrom?: string;
+      periodTo?: string;
     },
   ) => {
     const q = new URLSearchParams({
@@ -1720,8 +1820,38 @@ export const api = {
       year: String(params.year),
       month: String(params.month),
     });
+    if (params.periodFrom) q.set('periodFrom', params.periodFrom);
+    if (params.periodTo) q.set('periodTo', params.periodTo);
     return request<import('@fitgo/shared-types').PayrollPayoutPreview>(
       `/super-admin/payroll/payouts/preview?${q}`,
+      {},
+      token,
+    );
+  },
+
+  payrollPayoutBatchPreview: (
+    token: string,
+    params: {
+      kind: import('@fitgo/shared-types').PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+      department?: string;
+      userIds?: string[];
+    },
+  ) => {
+    const q = new URLSearchParams({
+      kind: params.kind,
+      year: String(params.year),
+      month: String(params.month),
+    });
+    if (params.periodFrom) q.set('periodFrom', params.periodFrom);
+    if (params.periodTo) q.set('periodTo', params.periodTo);
+    if (params.department) q.set('department', params.department);
+    if (params.userIds?.length) q.set('userIds', params.userIds.join(','));
+    return request<import('@fitgo/shared-types').PayrollPayoutPreview[]>(
+      `/super-admin/payroll/payouts/batch-preview?${q}`,
       {},
       token,
     );
@@ -1734,12 +1864,37 @@ export const api = {
       kind: import('@fitgo/shared-types').PayrollPayoutKind;
       year: number;
       month: number;
+      periodFrom?: string;
+      periodTo?: string;
       cardTransferMinor?: number;
+      actualCashMinor?: number;
       note?: string;
     },
   ) =>
     request<import('@fitgo/shared-types').PayrollPayoutDto>(
       '/super-admin/payroll/payouts/confirm',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  payrollPayoutConfirmBatch: (
+    token: string,
+    body: {
+      kind: import('@fitgo/shared-types').PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+      items: Array<{
+        userId: string;
+        cardTransferMinor?: number;
+        actualCashMinor?: number;
+        note?: string;
+      }>;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').PayrollPayoutDto[]>(
+      '/super-admin/payroll/payouts/confirm-batch',
       { method: 'POST', body: JSON.stringify(body) },
       token,
     ),

@@ -46,6 +46,7 @@ export function mapFormaClass(item: FormaClassItem): ScheduleSlot {
     capacity,
     booked,
     available: availableSlots > 0 && !item.canceled,
+    roomTitle: item.room?.title,
   };
 }
 
