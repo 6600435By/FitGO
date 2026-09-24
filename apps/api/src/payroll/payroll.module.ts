@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
+import { AdminSalesModule } from '../admin-sales/admin-sales.module';
 import { GroupSessionModule } from '../group-session/group-session.module';
 import { PtTimesheetModule } from '../pt-timesheet/pt-timesheet.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
@@ -15,6 +16,7 @@ import { PayrollService } from './payroll.service';
   imports: [
     ConfigModule,
     AuthModule,
+    AdminSalesModule,
     ServiceUsageModule,
     GroupSessionModule,
     PtTimesheetModule,

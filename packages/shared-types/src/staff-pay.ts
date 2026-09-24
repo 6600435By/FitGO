@@ -46,7 +46,12 @@ export interface StaffPayProfile {
   hourlyRateMinor?: number;
   /** ADMIN: % of membership sales (абонементы + КП). */
   membershipSalesPercent?: number;
-  /** ADMIN: % of extra services sales. */
+  /**
+   * ADMIN: how membership sales are attributed.
+   * `individual` — 100% to document author; `shiftShare` — split across admins on shift that day.
+   */
+  membershipSalesAttribution?: 'individual' | 'shiftShare';
+  /** ADMIN: % of massage + solarium (доп. услуги). */
   extraSalesPercent?: number;
   /** ADMIN: % of shop / retail sales. */
   shopSalesPercent?: number;
@@ -261,6 +266,7 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         track,
         hourlyRateMinor: 0,
         membershipSalesPercent: 0,
+        membershipSalesAttribution: 'individual',
         extraSalesPercent: 0,
         shopSalesPercent: 0,
         corporateSalesPercent: 0,
@@ -312,10 +318,19 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
       case 'ADMIN':
         if (slice.hourlyRateMinor)
           chips.push(`${tag}${money(slice.hourlyRateMinor)}/ч`);
-        if (slice.membershipSalesPercent)
-          chips.push(`${tag}абн. ${formatPercent(slice.membershipSalesPercent)}%`);
+        if (slice.membershipSalesPercent) {
+          const mode =
+            slice.membershipSalesAttribution === 'shiftShare'
+              ? 'по графику'
+              : 'кто продал';
+          chips.push(
+            `${tag}абн. ${formatPercent(slice.membershipSalesPercent)}% (${mode})`,
+          );
+        }
         if (slice.extraSalesPercent)
-          chips.push(`${tag}доп. ${formatPercent(slice.extraSalesPercent)}%`);
+          chips.push(
+            `${tag}массаж/солярий ${formatPercent(slice.extraSalesPercent)}%`,
+          );
         if (slice.shopSalesPercent)
           chips.push(`${tag}магазин ${formatPercent(slice.shopSalesPercent)}%`);
         if (slice.corporateSalesPercent)

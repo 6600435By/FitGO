@@ -1,0 +1,40 @@
+---
+description: В ответах про 1С / FitGOIntegration / FitGOAnalytics / конфигуратор — кликабельные markdown-ссылки на BSL и docs, чтобы сразу открыть и скопировать
+alwaysApply: true
+---
+
+# 1C — ссылки на файлы в чате
+
+Когда ответ касается **1С**, расширения FitGO, HTTP `FitGOIntegration` / `FitGOAnalytics`, публикации, сегментов, BSL или копирования в конфигуратор:
+
+1. **Всегда** давай кликабельные markdown-ссылки на абсолютные пути (не только имена файлов).
+2. Формат: `[ИмяФайла.bsl](/absolute/path/to/file)` — пользователь открывает файл из чата одним кликом.
+3. Группируй: HTTP-сервис → общие модули → docs; не дублируй лишнее, только то, что нужно для текущего шага.
+
+## Корни (Mac)
+
+| Что | Путь |
+|-----|------|
+| BSL расширений (probe) | `/Users/machome/projects/fitgo-probe/1c-extension/` |
+| Docs probe | `/Users/machome/projects/fitgo-probe/docs/` |
+| BSL / scripts в FitGO | `/Users/machome/Projects/FitGO/scripts/windows/` |
+| Docs FitGO про 1С | `/Users/machome/Projects/FitGO/docs/` |
+
+## Частые цели
+
+**FitGOAnalytics (продажи / ЗП):**
+
+- [FitGOAnalytics_HTTPService.bsl](/Users/machome/projects/fitgo-probe/1c-extension/FitGOAnalytics_HTTPService.bsl)
+- [FitGOAnalytics_Продажи.bsl](/Users/machome/projects/fitgo-probe/1c-extension/FitGOAnalytics_Продажи.bsl)
+- [FitGOAnalytics_Настройки.bsl](/Users/machome/projects/fitgo-probe/1c-extension/FitGOAnalytics_Настройки.bsl)
+- [FitGOAnalytics_ОбщегоНазначения.bsl](/Users/machome/projects/fitgo-probe/1c-extension/FitGOAnalytics_ОбщегоНазначения.bsl)
+- [ANALYTICS_ROLES_AND_API.md](/Users/machome/projects/fitgo-probe/docs/ANALYTICS_ROLES_AND_API.md)
+- [1C_CONFIGURATOR_INSTALL.md](/Users/machome/projects/fitgo-probe/docs/1C_CONFIGURATOR_INSTALL.md)
+
+**FitGOIntegration (клиенты):**
+
+- [FitGOIntegration_HTTP.bsl](/Users/machome/Projects/FitGO/scripts/windows/FitGOIntegration_HTTP.bsl) (зеркало в репо FitGO)
+- probe: `/Users/machome/projects/fitgo-probe/1c-extension/FitGOIntegration_*.bsl`
+- [FITGO_1C_HTTP_API.md](/Users/machome/Projects/FitGO/docs/FITGO_1C_HTTP_API.md)
+
+Не проси «открой файл вручную», если можно дать ссылку.

@@ -15,6 +15,9 @@
 //   GET  /v1/visits
 //   GET  /v1/card
 //
+// Продажи админов для ЗП: ночной sync FitGO читает FitGOAnalytics GET /sales
+// (FORMA_ANALYTICS_URL), не этот HTTP-сервис. Не вызывать FFS_ПродажиАдминов.erf.
+//
 // В конфигураторе (пример freeze; consume/sale/debts — аналогично):
 //   Имя шаблона: freeze | consume-service | spa-service-sale | cleanup-broken-visits | SpecialistServiceDebts
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale

@@ -17,6 +17,7 @@ const NAV = [
   { href: '/super-admin/exceptions', label: 'Нестыковки' },
   { href: '/super-admin/pt-timesheet', label: 'Табели ПТ' },
   { href: '/super-admin/payroll', label: 'ЗП' },
+  { href: '/super-admin/sales', label: 'Продажи' },
   { href: '/super-admin/debts', label: 'Услуги специалистов' },
   { href: '/super-admin/audit', label: 'Журнал' },
 ];

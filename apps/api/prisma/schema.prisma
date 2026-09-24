@@ -394,6 +394,8 @@ model Club {
   trainerShifts        TrainerShift[]
   trainerDaySheets     TrainerDaySheet[]
   staffShifts          StaffShift[]
+  saleTransactions     SaleTransaction[]
+  salesSyncStates      SalesSyncState[]
 }
 
 model ClubTheme {
@@ -1619,6 +1621,57 @@ model PayrollStaffBalance {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([clubId, userId])
+}
+
+/// Cached desk sales from 1C (nightly sync). Used for admin «Мои продажи» and payroll %.
+model SaleTransaction {
+  id                   String    @id @default(cuid())
+  clubId               String
+  /// Document / line id in 1C
+  externalSaleId       String
+  soldAt               DateTime
+  paidAt               DateTime?
+  /// Major currency units (BYN)
+  amount               Float
+  /// membership | massage | solarium | shop
+  saleType             String
+  productName          String?
+  clientExternalId     String?
+  clientName           String?
+  /// 1C Author (employee code) — attribution target
+  employeeExternalId   String?
+  employeeName         String?
+  /// Line manager from 1C (reference only)
+  managerExternalId    String?
+  managerName          String?
+  paymentMethod        String?
+  /// false when document removed/cancelled in 1C
+  isActive             Boolean   @default(true)
+  syncedAt             DateTime  @default(now())
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, externalSaleId])
+  @@index([clubId, soldAt])
+  @@index([clubId, paidAt])
+  @@index([clubId, employeeExternalId, soldAt])
+  @@index([clubId, isActive, paidAt])
+}
+
+model SalesSyncState {
+  id           String    @id @default(cuid())
+  clubId       String
+  resourceKey  String    @default("admin_sales")
+  cursor       String?
+  lastRunAt    DateTime?
+  lastSuccessAt DateTime?
+  lastStatus   String?
+  lastError    String?
+  updatedAt    DateTime  @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, resourceKey])
 }
 
 /// Manual corporate (р/с) sales amount for manager % motivation.

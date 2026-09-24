@@ -54,6 +54,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PtTimesheetService } from '../pt-timesheet/pt-timesheet.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { StaffRosterService } from '../staff-roster/staff-roster.service';
+import { AdminSalesService } from '../admin-sales/admin-sales.service';
 import {
   createAnalyticsProvider,
   fetchStaffSalesFromAnalytics,
@@ -108,6 +109,7 @@ export class PayrollService {
     private readonly groupSessions: GroupSessionService,
     private readonly ptTimesheet: PtTimesheetService,
     private readonly staffRoster: StaffRosterService,
+    private readonly adminSales: AdminSalesService,
     private readonly config: ConfigService,
   ) {}
 
@@ -1685,6 +1687,25 @@ export class PayrollService {
       where: { id: userId, clubId },
       select: { employeeCode: true },
     });
+
+    const cached = await this.adminSales.paidBreakdownForPayroll(
+      clubId,
+      userId,
+      from,
+      to,
+    );
+    if (cached.source === 'cache') {
+      return {
+        membershipMinor: cached.membershipMinor,
+        extraServicesMinor: cached.extraServicesMinor,
+        shopMinor: cached.shopMinor,
+        corporateMinor,
+        fromAnalytics: true,
+        source: 'cache',
+        hint: cached.hint,
+      };
+    }
+
     const provider = createAnalyticsProvider({
       baseUrl: this.config.get<string>('FORMA_ANALYTICS_URL'),
       apiKey: this.config.get<string>('FORMA_API_KEY'),
@@ -1698,7 +1719,9 @@ export class PayrollService {
         shopMinor: 0,
         corporateMinor,
         fromAnalytics: false,
+        source: 'none',
         hint:
+          cached.hint ??
           'Продажи 1С не подключены (FORMA_ANALYTICS_URL) — % от продаж = 0, корпо учитывается вручную',
       };
     }
@@ -1715,7 +1738,8 @@ export class PayrollService {
       shopMinor: remote?.shopMinor ?? 0,
       corporateMinor,
       fromAnalytics: remote?.fromAnalytics ?? false,
-      hint: remote?.hint,
+      source: remote?.fromAnalytics ? 'analytics' : 'none',
+      hint: remote?.hint ?? cached.hint,
     };
   }
 

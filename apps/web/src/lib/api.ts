@@ -1918,6 +1918,80 @@ export const api = {
     );
   },
 
+  adminMySales: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      saleType?: string;
+      payment?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.saleType && params.saleType !== 'all')
+      q.set('saleType', params.saleType);
+    if (params.payment && params.payment !== 'all')
+      q.set('payment', params.payment);
+    return request<import('@fitgo/shared-types').AdminMySalesResponse>(
+      `/admin/sales/mine?${q}`,
+      {},
+      token,
+    );
+  },
+
+  superAdminSales: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      saleType?: string;
+      payment?: string;
+      q?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.saleType && params.saleType !== 'all')
+      q.set('saleType', params.saleType);
+    if (params.payment && params.payment !== 'all')
+      q.set('payment', params.payment);
+    if (params.q) q.set('q', params.q);
+    return request<import('@fitgo/shared-types').AdminSalesOverviewResponse>(
+      `/super-admin/sales?${q}`,
+      {},
+      token,
+    );
+  },
+
+  superAdminSalesStaff: (
+    token: string,
+    userId: string,
+    params: {
+      from: string;
+      to: string;
+      saleType?: string;
+      payment?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.saleType && params.saleType !== 'all')
+      q.set('saleType', params.saleType);
+    if (params.payment && params.payment !== 'all')
+      q.set('payment', params.payment);
+    return request<import('@fitgo/shared-types').AdminSalesStaffDetailResponse>(
+      `/super-admin/sales/staff/${userId}?${q}`,
+      {},
+      token,
+    );
+  },
+
+  superAdminSalesSync: (token: string) =>
+    request<{
+      upserted: number;
+      deactivated: number;
+      from: string;
+      to: string;
+    }>('/super-admin/sales/sync', { method: 'POST' }, token),
+
   trainerPtShifts: (token: string, from: string, to: string) =>
     request<import('@fitgo/shared-types').TrainerShiftDto[]>(
       `/trainer/pt-timesheet/shifts?from=${from}&to=${to}`,

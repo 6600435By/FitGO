@@ -20,6 +20,7 @@ import { GroupSessionModule } from './group-session/group-session.module';
 import { PayrollModule } from './payroll/payroll.module';
 import { PtTimesheetModule } from './pt-timesheet/pt-timesheet.module';
 import { StaffRosterModule } from './staff-roster/staff-roster.module';
+import { AdminSalesModule } from './admin-sales/admin-sales.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { StaffRosterModule } from './staff-roster/staff-roster.module';
     PayrollModule,
     PtTimesheetModule,
     StaffRosterModule,
+    AdminSalesModule,
   ],
 })
 export class AppModule {}

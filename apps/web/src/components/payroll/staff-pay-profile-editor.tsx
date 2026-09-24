@@ -245,8 +245,9 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
       {profile.track === 'ADMIN' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
-            ЗП = ставка за часы (админы) или оклад (управляющая) + % продаж
-            абонементов/КП, доп. услуг, магазина и корпо (р/с вручную).
+            ЗП = ставка за часы (админы) или оклад (управляющая) + % оплаченных
+            продаж: абонементы, массаж/солярий и магазин отдельно. Неоплаченные
+            видны в «Мои продажи», в ЗП — после оплаты в месяц оплаты.
           </p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <MoneyField
@@ -266,8 +267,34 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
                 })
               }
             />
+            <label className="block space-y-1 text-sm">
+              <span className="text-slate-400">Абонементы засчитывать</span>
+              <select
+                className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+                value={profile.membershipSalesAttribution ?? 'individual'}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    membershipSalesAttribution:
+                      e.target.value === 'shiftShare'
+                        ? 'shiftShare'
+                        : 'individual',
+                  })
+                }
+              >
+                <option value="individual">Тому, кто продал (автор 1С)</option>
+                <option value="shiftShare">
+                  По графику смены в FitGO
+                </option>
+              </select>
+              <span className="block text-xs text-slate-500">
+                «По графику»: сумма абонемента делится на админов из графика в
+                день продажи (1 — целиком, 2+ — поровну). Автор из 1С только в
+                списке.
+              </span>
+            </label>
             <PercentField
-              label="% доп. услуг"
+              label="% массаж и солярий"
               value={formatPercent(profile.extraSalesPercent)}
               onChange={(v) =>
                 setProfile({

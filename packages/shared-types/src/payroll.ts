@@ -202,8 +202,10 @@ export interface StaffSalesBreakdown {
   extraServicesMinor: number;
   shopMinor: number;
   corporateMinor: number;
-  /** True when membership/extra/shop came from Analytics API. */
+  /** True when membership/extra/shop came from cached SaleTransaction (or live fallback). */
   fromAnalytics: boolean;
+  /** Source used for membership/extra/shop. */
+  source?: 'cache' | 'analytics' | 'none';
   hint?: string;
 }
 
