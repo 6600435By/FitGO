@@ -1986,11 +1986,56 @@ export const api = {
 
   superAdminSalesSync: (token: string) =>
     request<{
-      upserted: number;
-      deactivated: number;
+      adminSales?: {
+        upserted: number;
+        deactivated: number;
+        from: string;
+        to: string;
+      };
+      clubRevenue?: {
+        upserted: number;
+        deactivated: number;
+        from: string;
+        to: string;
+      };
+      upserted?: number;
+      deactivated?: number;
+      from?: string;
+      to?: string;
+    }>('/super-admin/sales/sync', { method: 'POST' }, token),
+
+  superAdminClubSales: (
+    token: string,
+    params: {
       from: string;
       to: string;
-    }>('/super-admin/sales/sync', { method: 'POST' }, token),
+      operationType?: string;
+      paymentMethod?: string;
+      employeeExternalId?: string;
+      q?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.operationType && params.operationType !== 'all')
+      q.set('operationType', params.operationType);
+    if (params.paymentMethod && params.paymentMethod !== 'all')
+      q.set('paymentMethod', params.paymentMethod);
+    if (params.employeeExternalId)
+      q.set('employeeExternalId', params.employeeExternalId);
+    if (params.q) q.set('q', params.q);
+    return request<import('@fitgo/shared-types').ClubRevenueReportResponse>(
+      `/super-admin/sales/club?${q}`,
+      {},
+      token,
+    );
+  },
+
+  superAdminClubSaleDetail: (token: string, id: string) =>
+    request<import('@fitgo/shared-types').ClubRevenueDetailResponse>(
+      `/super-admin/sales/club/${id}`,
+      {},
+      token,
+    ),
 
   trainerPtShifts: (token: string, from: string, to: string) =>
     request<import('@fitgo/shared-types').TrainerShiftDto[]>(

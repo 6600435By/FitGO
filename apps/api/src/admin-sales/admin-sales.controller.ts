@@ -20,6 +20,8 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { AdminSalesService } from './admin-sales.service';
 import { AdminSalesSyncService } from './admin-sales-sync.service';
+import { ClubRevenueService } from './club-revenue.service';
+import { ClubRevenueSyncService } from './club-revenue-sync.service';
 
 function assertPeriod(from?: string, to?: string) {
   if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
@@ -58,7 +60,35 @@ export class SuperAdminSalesController {
   constructor(
     private readonly sales: AdminSalesService,
     private readonly sync: AdminSalesSyncService,
+    private readonly clubRevenue: ClubRevenueService,
+    private readonly clubRevenueSync: ClubRevenueSyncService,
   ) {}
+
+  @Get('club')
+  clubReport(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('operationType') operationType?: string,
+    @Query('paymentMethod') paymentMethod?: string,
+    @Query('employeeExternalId') employeeExternalId?: string,
+    @Query('q') q?: string,
+  ) {
+    assertPeriod(from, to);
+    return this.clubRevenue.report(requireClubId(user), {
+      from,
+      to,
+      operationType,
+      paymentMethod,
+      employeeExternalId,
+      q,
+    });
+  }
+
+  @Get('club/:id')
+  clubDetail(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.clubRevenue.detail(requireClubId(user), id);
+  }
 
   @Get()
   overview(
@@ -98,7 +128,13 @@ export class SuperAdminSalesController {
   }
 
   @Post('sync')
-  syncNow(@CurrentUser() user: JwtPayload) {
-    return this.sync.syncClub(requireClubId(user));
+  async syncNow(@CurrentUser() user: JwtPayload) {
+    const clubId = requireClubId(user);
+    const adminSales = await this.sync.syncClub(clubId, 'incremental');
+    const clubRevenue = await this.clubRevenueSync.syncClub(
+      clubId,
+      'incremental',
+    );
+    return { adminSales, clubRevenue };
   }
 }

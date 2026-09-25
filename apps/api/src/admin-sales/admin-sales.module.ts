@@ -9,6 +9,8 @@ import {
 import { AdminSalesSchedulerService } from './admin-sales-scheduler.service';
 import { AdminSalesService } from './admin-sales.service';
 import { AdminSalesSyncService } from './admin-sales-sync.service';
+import { ClubRevenueService } from './club-revenue.service';
+import { ClubRevenueSyncService } from './club-revenue-sync.service';
 
 @Module({
   imports: [ConfigModule, AuthModule, PrismaModule],
@@ -17,7 +19,9 @@ import { AdminSalesSyncService } from './admin-sales-sync.service';
     AdminSalesService,
     AdminSalesSyncService,
     AdminSalesSchedulerService,
+    ClubRevenueService,
+    ClubRevenueSyncService,
   ],
-  exports: [AdminSalesService, AdminSalesSyncService],
+  exports: [AdminSalesService, AdminSalesSyncService, ClubRevenueSyncService],
 })
 export class AdminSalesModule {}

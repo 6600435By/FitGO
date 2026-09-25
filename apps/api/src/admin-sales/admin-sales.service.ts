@@ -125,8 +125,8 @@ export class AdminSalesService {
     payment?: AdminSalePaymentFilter;
     attribution: MembershipSalesAttribution;
     profile?: StaffPayProfile;
-    /** For list view: filter by soldAt. Accrual uses paidAt in period. */
-    periodField: 'soldAt' | 'paidAt';
+    /** soldAt = list by sale date; paidAt = accrual; openDebt = unpaid sold ≤ period end */
+    periodField: 'soldAt' | 'paidAt' | 'openDebt';
   }): Promise<{ lines: AdminSaleLineDto[]; totals: AdminSalesTotals }> {
     const fromDt = startOfDayUtc(params.from);
     const toDt = endOfDayUtc(params.to);
@@ -143,7 +143,9 @@ export class AdminSalesService {
     const dateFilter =
       params.periodField === 'paidAt'
         ? { paidAt: { gte: fromDt, lte: toDt } }
-        : { soldAt: { gte: fromDt, lte: toDt } };
+        : params.periodField === 'openDebt'
+          ? { soldAt: { lte: toDt }, paidAt: null }
+          : { soldAt: { gte: fromDt, lte: toDt } };
 
     const orBranches: object[] = [];
 
@@ -220,6 +222,7 @@ export class AdminSalesService {
 
       const pushLine =
         params.periodField === 'soldAt' ||
+        params.periodField === 'openDebt' ||
         (paidInPeriod && params.periodField === 'paidAt');
 
       if (pushLine) {
@@ -247,8 +250,10 @@ export class AdminSalesService {
   }
 
   /**
-   * Admin «Мои продажи»: list by soldAt in period; totals accrual by paidAt in period;
-   * unpaid still listed when sold in period.
+   * Admin «Мои продажи»:
+   * - приход/начисление ЗП — только оплаты с paidAt в периоде (продажа могла быть раньше);
+   * - долг — неоплаченные с soldAt ≤ конец периода (переносится, пока не закроется);
+   * - в списке: продажи периода ∪ оплаты периода ∪ открытый долг.
    */
   async mySales(
     clubId: string,
@@ -314,49 +319,74 @@ export class AdminSalesService {
       }
     }
 
-    // Lines: sold in period (visible unpaid + paid)
-    const listed = await this.buildLinesAndTotals({
+    const common = {
       clubId,
       userId,
       employeeCodes,
       from: params.from,
       to: params.to,
       saleTypes,
-      payment: params.payment ?? 'all',
       attribution,
       profile,
+    } as const;
+
+    // Sold in period (paid + unpaid that period)
+    const listed = await this.buildLinesAndTotals({
+      ...common,
+      payment: params.payment ?? 'all',
       periodField: 'soldAt',
     });
 
-    // Accrual must use paidAt in period (may include sales sold earlier)
+    // Accrual: paidAt in period (incl. sales from earlier months)
     const accrual = await this.buildLinesAndTotals({
-      clubId,
-      userId,
-      employeeCodes,
-      from: params.from,
-      to: params.to,
-      saleTypes,
+      ...common,
       payment: 'paid',
-      attribution,
-      profile,
       periodField: 'paidAt',
     });
 
-    // Merge unpaid from list into accrual totals display
+    // Open debt through period end (carry from prior months)
+    const openDebt = await this.buildLinesAndTotals({
+      ...common,
+      payment: 'unpaid',
+      periodField: 'openDebt',
+    });
+
     let totals: AdminSalesTotals = {
       ...accrual.totals,
-      unpaidMinor: listed.totals.unpaidMinor,
+      unpaidMinor: openDebt.totals.unpaidMinor,
     };
+
+    let lines = listed.lines;
     if (params.payment === 'unpaid') {
       totals = this.applyAccrual(
         {
           ...this.emptyTotals(),
-          unpaidMinor: listed.totals.unpaidMinor,
+          unpaidMinor: openDebt.totals.unpaidMinor,
         },
         profile,
       );
+      lines = openDebt.lines;
     } else if (params.payment === 'paid') {
       totals = { ...accrual.totals, unpaidMinor: 0 };
+      lines = accrual.lines;
+    } else {
+      const byId = new Map(listed.lines.map((l) => [l.id, l]));
+      for (const l of accrual.lines) {
+        if (!byId.has(l.id)) byId.set(l.id, l);
+      }
+      for (const l of openDebt.lines) {
+        if (!byId.has(l.id)) byId.set(l.id, l);
+      }
+      lines = [...byId.values()].sort(
+        (a, b) =>
+          new Date(b.paidAt ?? b.soldAt).getTime() -
+          new Date(a.paidAt ?? a.soldAt).getTime(),
+      );
+    }
+
+    if (!hint) {
+      hint =
+        'ЗП — только с оплат в периоде (продажа могла быть раньше). Долг переносится, пока не оплачен полностью.';
     }
 
     return {
@@ -365,7 +395,7 @@ export class AdminSalesService {
       attribution,
       attributionLabel: attributionLabel(attribution),
       totals,
-      lines: listed.lines,
+      lines,
       currency: 'BYN',
       hint,
     };

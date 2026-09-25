@@ -1,7 +1,7 @@
 'use client';
 
-import { SuperAdminSalesPanel } from '@/components/admin-sales/admin-sales-panels';
+import { ClubRevenuePanel } from '@/components/admin-sales/club-revenue-panel';
 
 export default function SuperAdminSalesPage() {
-  return <SuperAdminSalesPanel />;
+  return <ClubRevenuePanel />;
 }

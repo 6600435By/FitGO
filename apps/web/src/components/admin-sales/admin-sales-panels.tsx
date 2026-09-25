@@ -73,7 +73,7 @@ function TotalsBar({
           <div className="font-semibold">{money(totals.shopPaidMinor)}</div>
         </div>
         <div>
-          <div className="text-slate-500">Неоплачено</div>
+          <div className="text-slate-500">Неоплачено (долг)</div>
           <div className="font-semibold text-amber-300">
             {money(totals.unpaidMinor)}
           </div>

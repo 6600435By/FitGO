@@ -396,6 +396,7 @@ model Club {
   staffShifts          StaffShift[]
   saleTransactions     SaleTransaction[]
   salesSyncStates      SalesSyncState[]
+  clubRevenueEntries   ClubRevenueEntry[]
 }
 
 model ClubTheme {
@@ -1672,6 +1673,46 @@ model SalesSyncState {
   club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
 
   @@unique([clubId, resourceKey])
+}
+
+/// Club revenue cache from 1C Analytics (ОтчетПоВыручке-style). Separate from SaleTransaction motivation.
+model ClubRevenueEntry {
+  id                   String    @id @default(cuid())
+  clubId               String
+  externalId           String
+  documentId           String?
+  /// payment | unpaid | refund | sale | personal_deposit | personal_credit | personal_burn
+  operationType        String
+  occurredAt           DateTime
+  paidAt               DateTime?
+  saleAmount           Float     @default(0)
+  paidAmount           Float     @default(0)
+  refundAmount         Float     @default(0)
+  amount               Float     @default(0)
+  cash                 Float     @default(0)
+  card                 Float     @default(0)
+  cashless             Float     @default(0)
+  personalAccount      Float     @default(0)
+  paymentMethod        String?
+  saleType             String?
+  productName          String?
+  clientExternalId     String?
+  clientName           String?
+  employeeExternalId   String?
+  employeeName         String?
+  countsTowardIncome   Boolean   @default(true)
+  countsTowardMotivation Boolean @default(false)
+  isActive             Boolean   @default(true)
+  syncedAt             DateTime  @default(now())
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, externalId])
+  @@index([clubId, occurredAt])
+  @@index([clubId, paidAt])
+  @@index([clubId, operationType, occurredAt])
+  @@index([clubId, employeeExternalId, occurredAt])
+  @@index([clubId, isActive, occurredAt])
 }
 
 /// Manual corporate (р/с) sales amount for manager % motivation.

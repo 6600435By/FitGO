@@ -1,15 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  FitgoAnalyticsHttpProvider,
-  type FitgoAnalyticsSalesItem,
-} from '@fitgo/1c-adapter';
+import { FitgoAnalyticsHttpProvider } from '@fitgo/1c-adapter';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeSaleType } from './admin-sales.util';
+import {
+  applyChangeLog,
+  fetchSalesOnce,
+  syncWindow,
+  upsertSaleRows,
+  type SalesSyncMode,
+} from './sales-sync-window';
 
 const RESOURCE_KEY = 'admin_sales';
-/** Rolling window synced each night (covers late payments + deletions). */
-const SYNC_LOOKBACK_DAYS = 60;
 
 @Injectable()
 export class AdminSalesSyncService {
@@ -28,11 +30,11 @@ export class AdminSalesSyncService {
     return new FitgoAnalyticsHttpProvider({ baseUrl, apiKey, basicAuth });
   }
 
-  async syncAllClubs(): Promise<void> {
+  async syncAllClubs(mode: SalesSyncMode = 'full'): Promise<void> {
     const clubs = await this.prisma.club.findMany({ select: { id: true } });
     for (const club of clubs) {
       try {
-        await this.syncClub(club.id);
+        await this.syncClub(club.id, mode);
       } catch (err) {
         this.logger.error(
           `Sales sync failed for club ${club.id}`,
@@ -42,7 +44,10 @@ export class AdminSalesSyncService {
     }
   }
 
-  async syncClub(clubId: string): Promise<{
+  async syncClub(
+    clubId: string,
+    mode: SalesSyncMode = 'incremental',
+  ): Promise<{
     upserted: number;
     deactivated: number;
     from: string;
@@ -69,11 +74,7 @@ export class AdminSalesSyncService {
       return { upserted: 0, deactivated: 0, from: '', to: '' };
     }
 
-    const to = new Date();
-    const from = new Date(to);
-    from.setUTCDate(from.getUTCDate() - SYNC_LOOKBACK_DAYS);
-    const fromStr = from.toISOString().slice(0, 10);
-    const toStr = to.toISOString().slice(0, 10);
+    const { from: fromStr, to: toStr } = syncWindow(mode, state.lastSuccessAt);
 
     try {
       /**
@@ -82,11 +83,35 @@ export class AdminSalesSyncService {
        * stays a single day — breaking «Оплата с учетом возврата» per day.
        */
       const seen = new Set<string>();
-      let upserted = 0;
-      const days = eachUtcDay(fromStr, toStr);
+      /** Bases with a payment this sync — refresh residual unpaid for debt carry. */
+      const paidBases = new Map<
+        string,
+        {
+          soldAt: Date;
+          saleAmount: number;
+          saleType: string;
+          productName: string | null;
+          clientExternalId: string | null;
+          clientName: string | null;
+          employeeExternalId: string | null;
+          employeeName: string | null;
+          paymentMethod: string | null;
+        }
+      >();
+      const pending: Parameters<typeof upsertSaleRows>[2] = [];
+      const refreshDays = await applyChangeLog(
+        this.prisma,
+        provider,
+        clubId,
+        fromStr,
+        toStr,
+      );
+      const days = [
+        ...new Set([...eachUtcDay(fromStr, toStr), ...refreshDays]),
+      ].sort();
 
       for (const day of days) {
-        const items = await this.fetchAllPages(provider, day, day);
+        const items = await fetchSalesOnce(provider, { from: day, to: day });
         for (const item of items) {
           const baseId = item.saleDocumentId?.trim();
           if (!baseId) continue;
@@ -95,6 +120,12 @@ export class AdminSalesSyncService {
           const soldAt = new Date(item.soldAt);
           const paidAt = item.paidAt ? new Date(item.paidAt) : null;
           const paidDay = paidAt ? paidAt.toISOString().slice(0, 10) : null;
+          const amount = Number(item.amount) || 0;
+          const saleAmount =
+            Number(item.saleAmount) ||
+            (paidDay ? 0 : amount) ||
+            Number(item.paidAmount) ||
+            0;
 
           // One DB row per (line × payment-day); unpaid → sold-day key.
           const externalSaleId = paidDay
@@ -102,44 +133,48 @@ export class AdminSalesSyncService {
             : `${baseId}:u${soldAt.toISOString().slice(0, 10)}`;
 
           seen.add(externalSaleId);
-
-          await this.prisma.saleTransaction.upsert({
-            where: {
-              clubId_externalSaleId: { clubId, externalSaleId },
-            },
-            create: {
-              clubId,
-              externalSaleId,
-              soldAt,
-              paidAt,
-              amount: item.amount,
-              saleType,
-              productName: item.productName ?? null,
-              clientExternalId: item.clientExternalId ?? null,
-              clientName: item.clientName ?? null,
-              employeeExternalId: item.employeeExternalId ?? null,
-              employeeName: item.employeeName ?? null,
-              paymentMethod: item.paymentMethod ?? null,
-              isActive: true,
-              syncedAt: new Date(),
-            },
-            update: {
-              soldAt,
-              paidAt,
-              amount: item.amount,
-              saleType,
-              productName: item.productName ?? null,
-              clientExternalId: item.clientExternalId ?? null,
-              clientName: item.clientName ?? null,
-              employeeExternalId: item.employeeExternalId ?? null,
-              employeeName: item.employeeName ?? null,
-              paymentMethod: item.paymentMethod ?? null,
-              isActive: true,
-              syncedAt: new Date(),
-            },
+          pending.push({
+            externalSaleId,
+            soldAt,
+            paidAt,
+            amount,
+            saleType,
+            productName: item.productName ?? null,
+            clientExternalId: item.clientExternalId ?? null,
+            clientName: item.clientName ?? null,
+            employeeExternalId: item.employeeExternalId ?? null,
+            employeeName: item.employeeName ?? null,
+            paymentMethod: item.paymentMethod ?? null,
           });
-          upserted += 1;
+
+          if (paidDay) {
+            const prev = paidBases.get(baseId);
+            paidBases.set(baseId, {
+              soldAt,
+              saleAmount: Math.max(saleAmount, prev?.saleAmount ?? 0),
+              saleType,
+              productName: item.productName ?? null,
+              clientExternalId: item.clientExternalId ?? null,
+              clientName: item.clientName ?? null,
+              employeeExternalId: item.employeeExternalId ?? null,
+              employeeName: item.employeeName ?? null,
+              paymentMethod: item.paymentMethod ?? null,
+            });
+          }
         }
+      }
+
+      await upsertSaleRows(this.prisma, clubId, pending);
+      const upserted = pending.length;
+
+      for (const [baseId, meta] of paidBases) {
+        const residualId = await reconcileAdminUnpaid(
+          this.prisma,
+          clubId,
+          baseId,
+          meta,
+        );
+        if (residualId) seen.add(residualId);
       }
 
       const windowStart = new Date(`${fromStr}T00:00:00.000Z`);
@@ -196,25 +231,107 @@ export class AdminSalesSyncService {
     }
   }
 
-  private async fetchAllPages(
-    provider: FitgoAnalyticsHttpProvider,
-    from: string,
-    to: string,
-  ): Promise<FitgoAnalyticsSalesItem[]> {
-    const pageSize = 200;
-    let page = 1;
-    const all: FitgoAnalyticsSalesItem[] = [];
-    for (;;) {
-      const data = await provider.getSales({ from, to, page, pageSize });
-      const items = data?.items ?? [];
-      all.push(...items);
-      const total = data?.total ?? items.length;
-      if (all.length >= total || items.length === 0) break;
-      page += 1;
-      if (page > 500) break;
-    }
-    return all;
-  }
+}
+
+/**
+ * Payment for a sale line → clear stale unpaid; keep residual until fully paid.
+ * Payroll uses only paid rows (paidAt in period).
+ */
+async function reconcileAdminUnpaid(
+  prisma: PrismaService,
+  clubId: string,
+  baseId: string,
+  meta: {
+    soldAt: Date;
+    saleAmount: number;
+    saleType: string;
+    productName: string | null;
+    clientExternalId: string | null;
+    clientName: string | null;
+    employeeExternalId: string | null;
+    employeeName: string | null;
+    paymentMethod: string | null;
+  },
+): Promise<string | null> {
+  const priorUnpaid = await prisma.saleTransaction.findMany({
+    where: {
+      clubId,
+      isActive: true,
+      externalSaleId: { startsWith: `${baseId}:u` },
+    },
+    select: { amount: true, soldAt: true },
+  });
+
+  await prisma.saleTransaction.updateMany({
+    where: {
+      clubId,
+      isActive: true,
+      externalSaleId: { startsWith: `${baseId}:u` },
+    },
+    data: { isActive: false, syncedAt: new Date() },
+  });
+
+  const payments = await prisma.saleTransaction.findMany({
+    where: {
+      clubId,
+      isActive: true,
+      externalSaleId: { startsWith: `${baseId}:p` },
+    },
+    select: { amount: true, soldAt: true },
+  });
+  if (!payments.length) return null;
+
+  const paidSum = payments.reduce((s, r) => s + (r.amount || 0), 0);
+  const saleAmt = Math.max(
+    meta.saleAmount,
+    ...priorUnpaid.map((r) => r.amount || 0),
+    paidSum,
+  );
+  const residual = Math.round((saleAmt - paidSum) * 100) / 100;
+  if (residual <= 0.009) return null;
+
+  const soldAt =
+    priorUnpaid[0]?.soldAt ??
+    payments.reduce<Date | null>((min, r) => {
+      if (!min || r.soldAt < min) return r.soldAt;
+      return min;
+    }, null) ??
+    meta.soldAt;
+  const externalSaleId = `${baseId}:u${soldAt.toISOString().slice(0, 10)}`;
+
+  await prisma.saleTransaction.upsert({
+    where: { clubId_externalSaleId: { clubId, externalSaleId } },
+    create: {
+      clubId,
+      externalSaleId,
+      soldAt,
+      paidAt: null,
+      amount: residual,
+      saleType: meta.saleType,
+      productName: meta.productName,
+      clientExternalId: meta.clientExternalId,
+      clientName: meta.clientName,
+      employeeExternalId: meta.employeeExternalId,
+      employeeName: meta.employeeName,
+      paymentMethod: meta.paymentMethod,
+      isActive: true,
+      syncedAt: new Date(),
+    },
+    update: {
+      soldAt,
+      paidAt: null,
+      amount: residual,
+      saleType: meta.saleType,
+      productName: meta.productName,
+      clientExternalId: meta.clientExternalId,
+      clientName: meta.clientName,
+      employeeExternalId: meta.employeeExternalId,
+      employeeName: meta.employeeName,
+      isActive: true,
+      syncedAt: new Date(),
+    },
+  });
+  return externalSaleId;
 }
 
 function eachUtcDay(fromStr: string, toStr: string): string[] {

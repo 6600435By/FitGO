@@ -2,9 +2,18 @@ import type { FitgoHttpConfig } from './types';
 
 interface FitgoAnalyticsSalesItem {
   saleDocumentId: string;
+  documentId?: string;
+  operationType?: string;
   soldAt: string;
   paidAt?: string;
   amount: number;
+  saleAmount?: number;
+  paidAmount?: number;
+  refundAmount?: number;
+  cash?: number;
+  card?: number;
+  cashless?: number;
+  personalAccount?: number;
   amountAttributed?: number;
   attributionMode?: string;
   saleType: string;
@@ -14,6 +23,8 @@ interface FitgoAnalyticsSalesItem {
   employeeExternalId?: string;
   employeeName?: string;
   paymentMethod?: string;
+  countsTowardIncome?: boolean;
+  countsTowardMotivation?: boolean;
 }
 
 interface FitgoAnalyticsSalesPage {
@@ -92,6 +103,8 @@ export class FitgoAnalyticsHttpProvider {
     employeeId?: string;
     page?: number;
     pageSize?: number;
+    /** cash = сводный отчёт по выручке; changes = журнал удалений и правок за дни событий */
+    scope?: 'cash' | 'changes';
   }): Promise<FitgoAnalyticsSalesPage | null> {
     const q = new URLSearchParams({
       from: params.from,
@@ -99,6 +112,7 @@ export class FitgoAnalyticsHttpProvider {
     });
     if (params.saleType) q.set('saleType', params.saleType);
     if (params.employeeId) q.set('employeeId', params.employeeId);
+    if (params.scope) q.set('scope', params.scope);
     if (params.page) q.set('page', String(params.page));
     if (params.pageSize) q.set('pageSize', String(params.pageSize));
     return this.request<FitgoAnalyticsSalesPage>(`/sales?${q.toString()}`);
