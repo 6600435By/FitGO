@@ -103,8 +103,8 @@ export class FitgoAnalyticsHttpProvider {
     employeeId?: string;
     page?: number;
     pageSize?: number;
-    /** cash = сводный отчёт по выручке; changes = журнал удалений и правок за дни событий */
-    scope?: 'cash' | 'changes';
+    /** cash = сводный отчёт по выручке; debt = открытые остатки долга; changes = журнал */
+    scope?: 'cash' | 'debt' | 'changes';
   }): Promise<FitgoAnalyticsSalesPage | null> {
     const q = new URLSearchParams({
       from: params.from,
@@ -114,7 +114,8 @@ export class FitgoAnalyticsHttpProvider {
     if (params.employeeId) q.set('employeeId', params.employeeId);
     if (params.scope) q.set('scope', params.scope);
     if (params.page) q.set('page', String(params.page));
-    if (params.pageSize) q.set('pageSize', String(params.pageSize));
+    // pageSize=0 means «everything in one response»; must reach 1C, not be dropped as falsy.
+    if (params.pageSize != null) q.set('pageSize', String(params.pageSize));
     return this.request<FitgoAnalyticsSalesPage>(`/sales?${q.toString()}`);
   }
 

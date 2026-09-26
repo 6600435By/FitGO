@@ -1,6 +1,18 @@
 ---
-description: Протокол отладки ошибок 1С / HTTP-интеграций (FitGOIntegration, Forma) — сначала проверка с Mac, перебор гипотез, без повторных ручных шагов для пользователя
-alwaysApply: true
+description: Протокол отладки 1С / HTTP и сверки продаж (FitGOIntegration, Analytics, Forma) — curl с Mac, без повторных F7/Apache
+alwaysApply: false
+globs:
+  - packages/1c-adapter/**
+  - apps/api/src/admin-sales/**
+  - apps/api/src/fitness/**
+  - apps/api/src/client/**
+  - apps/web/src/components/admin-sales/**
+  - apps/web/src/app/super-admin/sales/**
+  - scripts/windows/**
+  - docs/FITGO_1C_HTTP_API.md
+  - docs/1C_ROLE_DATA_MATRIX.md
+  - docs/SERVER_1C_FITGO_PUBLICATION.md
+  - docs/TEST_CLIENT.md
 ---
 
 # 1C / HTTP integration debugging protocol
@@ -24,13 +36,45 @@ alwaysApply: true
 6. **Перезапуск/reload Apache и правки в конфигураторе — только после того, как гипотеза подтверждена
    curl'ом с Mac.** Это боевой сервер клуба.
 
+## Сверка продаж / выручки (когда цифры ≠ 1С)
+
+Эталон — суммы `items` из `GET $FORMA_ANALYTICS_URL/sales?scope=cash&from=&to=` (подённо
+или с пагинацией, сверив `items.length` с `total`). Сравни с SQL по `ClubRevenueEntry` за тот же
+период — не со скрином «на глаз» и не закрывай задачу словами «FitGO — ориентир».
+
+1. Одинаковый `saleDocumentId` / `externalId` → **SUM** полей денег, не overwrite (last-wins теряет оплаты).
+2. Многостраничный unordered-запрос 1С нестабилен → для кассы предпочитать **день = один запрос**.
+3. Summary / итоги **без `take`**; лимит только на `lines` в UI.
+4. Change log (`scope=changes`) гасит только свою таблицу (`sales` | `revenue`), не обе сразу.
+5. `pageSize=0` («всё одним ответом») передавать явно (`!= null`), не через `if (pageSize)`.
+6. После смены ключа или `scope` — один **full** sync и деактивация legacy-строк (без `:cash:`).
+7. BSL analytics: [FitGOAnalytics_Продажи.bsl](/Users/machome/projects/fitgo-probe/1c-extension/FitGOAnalytics_Продажи.bsl),
+   HTTP: [FitGOAnalytics_HTTPService.bsl](/Users/machome/projects/fitgo-probe/1c-extension/FitGOAnalytics_HTTPService.bsl).
+8. **Возвраты:** в FFS это `СуммаПриход < 0`; также `СписаниеДенежныхСредств` (расход Долг/ЛС).
+   Не требовать `ТипДенежныхСредств` на шапке — иначе возвраты не попадут в `scope=cash`.
+   После правки BSL — опубликовать Analytics и «Обновить из 1С».
+9. **Долги:** `scope=cash` их не отдаёт. Нужен `scope=debt` (остатки Долг/Рассрочка, ключ `:debt:`)
+   или fallback unpaid из `/sales`. Не гасить `unpaid` cleanup'ом «без :cash:».
+   Фильтр вида оплаты / сотрудника **не** применять к итогам открытого долга.
+10. **Лицевой счёт (сверка со «ОтчетПоВыручке»):**
+    - взнос нал/карта → `personal_deposit` (в приходе);
+    - приход ЛС без нал/карты/безнала → `personal_credit` («Прочие поступления», не в приходе);
+    - оплата с ЛС (в т.ч. «безнал»-only на долге) → `payment` + `personalAccount` / безнал как в «Продажи»;
+    - сгорание = `Документ.ЗакрытиеДня` (и сгоран/обнулен/…): расход ЛС без живых денег.
+      Nest remaps 23:59 PA-only payment → `personal_burn` (пока старая публикация отдаёт их как оплату).
+      Probe BSL уже классифицирует `закрытиедня` в [FitGOAnalytics_Продажи.bsl](/Users/machome/projects/fitgo-probe/1c-extension/FitGOAnalytics_Продажи.bsl).
+      Ручной «+» у сгорания не нужен.
+
 ## Факты по контуру (проверено 2026-09-08)
 
 - FitGOIntegration: `https://192.168.1.20:8445/fitgo/hs/fitgo` + шаблон. **Все шаблоны с префиксом
   `/v1/…`** (`/v1/health`, `/v1/membership`, `/v1/membership/freeze`). Nest ходит на
   `FORMA_FITGO_URL=…/fitgo/hs/fitgo/v1`, поэтому шаблон без `/v1` из приложения недостижим.
+- FitGOAnalytics: `https://192.168.1.20:8445/fitgo/hs/analytics/v1` → `FORMA_ANALYTICS_URL`.
+  `scope=cash` — сводный приход; `scope=debt` — остатки долга; без scope — сегменты для ЗП;
+  `scope=changes` — журнал.
 - Forma API v3: `https://192.168.1.20:444/forma/hs/api/v3` — отдельная публикация и порт, не трогать
-  при работе с FitGOIntegration.
+  при работе с FitGOIntegration / Analytics.
 - Расширение FitGOIntegration должно быть **без «Защиты от опасных действий»**: проведение документов
   (заморозка и др.) в базовой конфигурации создаёт COM-объект `WinHttp.WinHttpRequest.5.1`; иначе
   HTTP-сервис отдаёт 500 «Предупреждение безопасности».

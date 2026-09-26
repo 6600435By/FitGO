@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import {
   applyChangeLog,
+  eachUtcDay,
   fetchSalesOnce,
   syncWindow,
   upsertRevenueRows,
@@ -68,33 +69,74 @@ export class ClubRevenueSyncService {
       const seen = new Set<string>();
       /** baseIds that received a payment in this sync — reconcile residual unpaid */
       const paidBaseIds = new Set<string>();
-      const pending: Parameters<typeof upsertRevenueRows>[2] = [];
+      const pending = new Map<
+        string,
+        Parameters<typeof upsertRevenueRows>[2][number]
+      >();
       const refreshDays = await applyChangeLog(
         this.prisma,
         provider,
         clubId,
         fromStr,
         toStr,
+        'revenue',
       );
-      // Cash movements are already dated. One query for the window, plus touched old days.
-      const items = await fetchSalesOnce(provider, {
-        from: fromStr,
-        to: toStr,
-        scope: 'cash',
-      });
-      for (const day of refreshDays) {
-        const extra = await fetchSalesOnce(provider, {
-          from: day,
-          to: day,
-          scope: 'cash',
-        });
-        items.push(...extra);
+      // Day by day: 1C re-runs the unordered register query for every page, so a
+      // multi-page window can duplicate some movements and skip others. A day fits one page.
+      const days = [
+        ...new Set([...eachUtcDay(fromStr, toStr), ...refreshDays]),
+      ].sort();
+      const items: FitgoAnalyticsSalesItem[] = [];
+      for (const day of days) {
+        items.push(
+          ...(await fetchSalesOnce(provider, {
+            from: day,
+            to: day,
+            scope: 'cash',
+          })),
+        );
       }
+
+      // Open debt: prefer register balances (scope=debt). Old BSL falls through to
+      // /sales for one day — then we pull unpaid lines day-by-day instead.
+      let debtSnapshot = false;
+      try {
+        const debtItems = await fetchSalesOnce(provider, {
+          from: toStr,
+          to: toStr,
+          scope: 'debt',
+        });
+        debtSnapshot = debtItems.some((i) =>
+          (i.saleDocumentId ?? '').includes(':debt:'),
+        );
+        if (debtSnapshot) {
+          items.push(...debtItems.filter((i) => i.operationType === 'unpaid'));
+        }
+      } catch {
+        debtSnapshot = false;
+      }
+      if (!debtSnapshot) {
+        for (const day of days) {
+          const sales = await fetchSalesOnce(provider, { from: day, to: day });
+          items.push(
+            ...sales.filter(
+              (i) =>
+                i.operationType === 'unpaid' ||
+                (!i.paidAt &&
+                  !(Number(i.paidAmount) > 0) &&
+                  (Number(i.saleAmount) > 0 || Number(i.amount) > 0)),
+            ),
+          );
+        }
+      }
+
+      const unpaidExternalIds = new Set<string>();
       for (const item of items) {
         const baseId = item.saleDocumentId?.trim();
         if (!baseId) continue;
 
         const mapped = mapItem(item);
+        if (!mapped) continue;
         const paidDay = mapped.paidAt
           ? mapped.paidAt.toISOString().slice(0, 10)
           : null;
@@ -104,11 +146,18 @@ export class ClubRevenueSyncService {
           : `${baseId}:u${occurredDay}`;
 
         seen.add(externalId);
+        if (mapped.operationType === 'unpaid') unpaidExternalIds.add(externalId);
         if (paidDay) paidBaseIds.add(baseId);
-        pending.push({ externalId, ...mapped });
+        // Older BSL keys omit «Основание»: one payment document covering several
+        // sales yields several movements with the same key. Sum them, never overwrite.
+        const prev = pending.get(externalId);
+        pending.set(
+          externalId,
+          prev ? mergeRevenueRows(prev, mapped) : { externalId, ...mapped },
+        );
       }
-      await upsertRevenueRows(this.prisma, clubId, pending);
-      const upserted = pending.length;
+      await upsertRevenueRows(this.prisma, clubId, [...pending.values()]);
+      const upserted = pending.size;
 
       // After payments: drop stale unpaid, keep residual debt until fully paid
       for (const baseId of paidBaseIds) {
@@ -117,19 +166,28 @@ export class ClubRevenueSyncService {
           clubId,
           baseId,
         );
-        if (residualId) seen.add(residualId);
+        if (residualId) {
+          seen.add(residualId);
+          unpaidExternalIds.add(residualId);
+        }
       }
 
-      const windowStart = new Date(`${fromStr}T00:00:00.000Z`);
-      const windowEnd = new Date(`${toStr}T23:59:59.999Z`);
+      const ranges = [
+        { from: fromStr, to: toStr },
+        ...refreshDays.map((d) => ({ from: d, to: d })),
+      ].map((r) => ({
+        gte: new Date(`${r.from}T00:00:00.000Z`),
+        lte: new Date(`${r.to}T23:59:59.999Z`),
+      }));
+      // Only cash/receipt rows in the window — unpaid carries across months.
       const existing = await this.prisma.clubRevenueEntry.findMany({
         where: {
           clubId,
           isActive: true,
-          OR: [
-            { occurredAt: { gte: windowStart, lte: windowEnd } },
-            { paidAt: { gte: windowStart, lte: windowEnd } },
-          ],
+          operationType: {
+            notIn: ['unpaid'],
+          },
+          OR: ranges.flatMap((r) => [{ occurredAt: r }, { paidAt: r }]),
         },
         select: { id: true, externalId: true },
       });
@@ -145,6 +203,53 @@ export class ClubRevenueSyncService {
         deactivated = res.count;
       }
 
+      if (debtSnapshot || unpaidExternalIds.size > 0) {
+        const staleUnpaid = await this.prisma.clubRevenueEntry.findMany({
+          where: {
+            clubId,
+            isActive: true,
+            operationType: 'unpaid',
+            ...(debtSnapshot
+              ? {}
+              : {
+                  OR: ranges.map((r) => ({ occurredAt: r })),
+                }),
+          },
+          select: { id: true, externalId: true },
+        });
+        const unpaidDrop = staleUnpaid
+          .filter((r) => !unpaidExternalIds.has(r.externalId))
+          .map((r) => r.id);
+        if (unpaidDrop.length) {
+          const res = await this.prisma.clubRevenueEntry.updateMany({
+            where: { id: { in: unpaidDrop } },
+            data: { isActive: false, syncedAt: new Date() },
+          });
+          deactivated += res.count;
+        }
+      }
+
+      // Old payment/deposit rows without :cash: (pre-scope export) — not unpaid.
+      const legacy = await this.prisma.clubRevenueEntry.updateMany({
+        where: {
+          clubId,
+          isActive: true,
+          operationType: {
+            in: [
+              'payment',
+              'refund',
+              'personal_deposit',
+              'personal_credit',
+              'personal_burn',
+              'sale',
+            ],
+          },
+          NOT: { externalId: { contains: ':cash:' } },
+        },
+        data: { isActive: false, syncedAt: new Date() },
+      });
+      deactivated += legacy.count;
+
       await this.prisma.salesSyncState.update({
         where: { id: state.id },
         data: {
@@ -157,7 +262,7 @@ export class ClubRevenueSyncService {
       });
 
       this.logger.log(
-        `Club revenue sync club=${clubId} upserted=${upserted} deactivated=${deactivated} window=${fromStr}..${toStr}`,
+        `Club revenue sync club=${clubId} upserted=${upserted} deactivated=${deactivated} unpaid=${unpaidExternalIds.size} debtSnapshot=${debtSnapshot} window=${fromStr}..${toStr}`,
       );
       return { upserted, deactivated, from: fromStr, to: toStr };
     } catch (err) {
@@ -267,39 +372,98 @@ async function reconcileClubUnpaid(
 }
 
 function mapItem(item: FitgoAnalyticsSalesItem) {
-  const operationType = normalizeOperationType(item);
-  const saleAmount = num(item.saleAmount ?? (operationType === 'unpaid' ? item.amount : 0));
-  const paidAmount = num(item.paidAmount);
+  let operationType = normalizeOperationType(item);
+  let saleAmount = num(item.saleAmount ?? (operationType === 'unpaid' ? item.amount : 0));
+  let paidAmount = num(item.paidAmount);
   const refundAmount = num(item.refundAmount);
-  const cash = num(item.cash);
-  const card = num(item.card);
-  const cashless = num(item.cashless);
-  const personalAccount = num(item.personalAccount);
+  let cash = num(item.cash);
+  let card = num(item.card);
+  let cashless = num(item.cashless);
+  let personalAccount = num(item.personalAccount);
+  let amount = num(item.amount);
+
+  // Align with 1C:
+  // - deposit without нал/карта/безнал → начисление в абонементе;
+  // - Документ.ЗакрытиеДня (23:59, только ЛС) → personal_burn;
+  // - do NOT remap cashless→PA (безнал stays cashless).
+  const atSold = new Date(item.soldAt);
+  const endOfDay =
+    (atSold.getUTCHours() === 23 && atSold.getUTCMinutes() === 59) ||
+    (atSold.getHours() === 23 && atSold.getMinutes() === 59);
+  if (
+    operationType === 'payment' &&
+    personalAccount > 0 &&
+    cash === 0 &&
+    card === 0 &&
+    cashless === 0 &&
+    endOfDay
+  ) {
+    operationType = 'personal_burn';
+    const amt = personalAccount || amount || paidAmount;
+    amount = -Math.abs(amt);
+    personalAccount = -Math.abs(amt);
+    paidAmount = 0;
+    saleAmount = 0;
+  }
+  if (
+    operationType === 'personal_deposit' &&
+    cash === 0 &&
+    card === 0 &&
+    cashless === 0
+  ) {
+    operationType = 'personal_credit';
+    personalAccount = amount || paidAmount || saleAmount;
+    paidAmount = 0;
+    saleAmount = 0;
+  }
+
   const countsTowardIncome =
-    item.countsTowardIncome ??
-    (operationType === 'payment' ||
-      operationType === 'personal_deposit' ||
-      operationType === 'refund');
+    operationType === 'personal_credit' || operationType === 'personal_burn'
+      ? false
+      : (item.countsTowardIncome ??
+        (operationType === 'payment' ||
+          operationType === 'personal_deposit' ||
+          operationType === 'refund'));
   const countsTowardMotivation =
-    item.countsTowardMotivation ??
-    (operationType === 'payment' || operationType === 'personal_deposit');
+    operationType === 'personal_credit' || operationType === 'personal_burn'
+      ? false
+      : (item.countsTowardMotivation ??
+        (operationType === 'payment' || operationType === 'personal_deposit'));
+
+  const paymentMethod =
+    operationType === 'personal_credit' ||
+    operationType === 'personal_burn' ||
+    personalAccount !== 0
+      ? inferPaymentMethod(cash, card, cashless, Math.abs(personalAccount))
+      : item.paymentMethod?.trim() ||
+        inferPaymentMethod(cash, card, cashless, personalAccount);
+
+  const productName =
+    operationType === 'personal_burn'
+      ? 'Сгорание лицевого счета'
+      : item.productName?.trim() || null;
 
   return {
     documentId: item.documentId?.trim() || null,
     operationType,
     occurredAt: new Date(item.soldAt),
-    paidAt: item.paidAt ? new Date(item.paidAt) : null,
+    paidAt:
+      operationType === 'personal_burn'
+        ? null
+        : item.paidAt
+          ? new Date(item.paidAt)
+          : null,
     saleAmount,
     paidAmount,
     refundAmount,
-    amount: num(item.amount),
+    amount,
     cash,
     card,
     cashless,
     personalAccount,
-    paymentMethod: item.paymentMethod?.trim() || inferPaymentMethod(cash, card, cashless, personalAccount),
+    paymentMethod,
     saleType: item.saleType?.trim() || null,
-    productName: item.productName?.trim() || null,
+    productName,
     clientExternalId: item.clientExternalId?.trim() || null,
     clientName: item.clientName?.trim() || null,
     employeeExternalId: item.employeeExternalId?.trim() || null,
@@ -307,6 +471,41 @@ function mapItem(item: FitgoAnalyticsSalesItem) {
     countsTowardIncome,
     countsTowardMotivation,
     isActive: true,
+  };
+}
+
+type MoneyFields = {
+  saleAmount: number;
+  paidAmount: number;
+  refundAmount: number;
+  amount: number;
+  cash: number;
+  card: number;
+  cashless: number;
+  personalAccount: number;
+  paymentMethod: string | null;
+};
+
+function mergeRevenueRows<T extends MoneyFields>(a: T, b: MoneyFields): T {
+  const sum = (x: number, y: number) => Math.round((x + y) * 100) / 100;
+  const cash = sum(a.cash, b.cash);
+  const card = sum(a.card, b.card);
+  const cashless = sum(a.cashless, b.cashless);
+  const personalAccount = sum(a.personalAccount, b.personalAccount);
+  return {
+    ...a,
+    saleAmount: sum(a.saleAmount, b.saleAmount),
+    paidAmount: sum(a.paidAmount, b.paidAmount),
+    refundAmount: sum(a.refundAmount, b.refundAmount),
+    amount: sum(a.amount, b.amount),
+    cash,
+    card,
+    cashless,
+    personalAccount,
+    paymentMethod:
+      a.paymentMethod === b.paymentMethod
+        ? a.paymentMethod
+        : inferPaymentMethod(cash, card, cashless, personalAccount),
   };
 }
 

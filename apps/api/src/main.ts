@@ -2,6 +2,15 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
+// Must be set before any HTTPS to club 1C (:8445 self-signed / expired cert).
+// apps/api/.env is loaded by ConfigModule later; set a safe local default now.
+if (
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined &&
+  process.env.NODE_ENV !== 'production'
+) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors({

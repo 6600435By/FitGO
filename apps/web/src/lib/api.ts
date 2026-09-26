@@ -2037,6 +2037,28 @@ export const api = {
       token,
     ),
 
+  superAdminClubSalesManualAdd: (
+    token: string,
+    body: {
+      kind: import('@fitgo/shared-types').ClubRevenueManualKind;
+      amount: number;
+      entryDate: string;
+      note?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').ClubRevenueManualEntryDto>(
+      '/super-admin/sales/club/manual',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  superAdminClubSalesManualDelete: (token: string, id: string) =>
+    request<{ ok?: boolean }>(
+      `/super-admin/sales/club/manual/${id}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
   trainerPtShifts: (token: string, from: string, to: string) =>
     request<import('@fitgo/shared-types').TrainerShiftDto[]>(
       `/trainer/pt-timesheet/shifts?from=${from}&to=${to}`,

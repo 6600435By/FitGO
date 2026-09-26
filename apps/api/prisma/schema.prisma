@@ -397,6 +397,7 @@ model Club {
   saleTransactions     SaleTransaction[]
   salesSyncStates      SalesSyncState[]
   clubRevenueEntries   ClubRevenueEntry[]
+  clubRevenueManuals   ClubRevenueManualEntry[]
 }
 
 model ClubTheme {
@@ -1713,6 +1714,25 @@ model ClubRevenueEntry {
   @@index([clubId, operationType, occurredAt])
   @@index([clubId, employeeExternalId, occurredAt])
   @@index([clubId, isActive, occurredAt])
+}
+
+/// Manual cash-desk lines for club revenue: Корпо (р/с) and Прочие.
+model ClubRevenueManualEntry {
+  id          String   @id @default(cuid())
+  clubId      String
+  /// corpo | other
+  kind        String
+  amountMinor Int
+  entryDate   DateTime @db.Date
+  note        String?
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, entryDate])
+  @@index([clubId, kind, entryDate])
 }
 
 /// Manual corporate (р/с) sales amount for manager % motivation.

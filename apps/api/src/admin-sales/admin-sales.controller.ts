@@ -1,6 +1,8 @@
 import {
   BadRequestException,
+  Body,
   Controller,
+  Delete,
   Get,
   Param,
   Post,
@@ -11,6 +13,7 @@ import { UserRole } from '@fitgo/shared-types';
 import type {
   AdminSalePaymentFilter,
   AdminSaleType,
+  ClubRevenueManualKind,
 } from '@fitgo/shared-types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -125,6 +128,33 @@ export class SuperAdminSalesController {
       saleType,
       payment,
     });
+  }
+
+  @Post('club/manual')
+  addManual(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      kind?: ClubRevenueManualKind;
+      amount?: number;
+      entryDate?: string;
+      note?: string;
+    },
+  ) {
+    if (!body.kind || body.amount == null || !body.entryDate) {
+      throw new BadRequestException('kind, amount, entryDate required');
+    }
+    return this.clubRevenue.addManual(requireClubId(user), user.sub, {
+      kind: body.kind,
+      amountMajor: body.amount,
+      entryDate: body.entryDate,
+      note: body.note,
+    });
+  }
+
+  @Delete('club/manual/:id')
+  deleteManual(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.clubRevenue.deleteManual(requireClubId(user), id);
   }
 
   @Post('sync')

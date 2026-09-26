@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { normalizeSaleType } from './admin-sales.util';
 import {
   applyChangeLog,
+  eachUtcDay,
   fetchSalesOnce,
   syncWindow,
   upsertSaleRows,
@@ -105,6 +106,7 @@ export class AdminSalesSyncService {
         clubId,
         fromStr,
         toStr,
+        'sales',
       );
       const days = [
         ...new Set([...eachUtcDay(fromStr, toStr), ...refreshDays]),
@@ -332,15 +334,4 @@ async function reconcileAdminUnpaid(
     },
   });
   return externalSaleId;
-}
-
-function eachUtcDay(fromStr: string, toStr: string): string[] {
-  const days: string[] = [];
-  const cur = new Date(`${fromStr}T00:00:00.000Z`);
-  const end = new Date(`${toStr}T00:00:00.000Z`);
-  while (cur <= end) {
-    days.push(cur.toISOString().slice(0, 10));
-    cur.setUTCDate(cur.getUTCDate() + 1);
-  }
-  return days;
 }

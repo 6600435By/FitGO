@@ -36,7 +36,7 @@ export async function fetchSalesOnce(
   params: {
     from: string;
     to: string;
-    scope?: 'cash' | 'changes';
+    scope?: 'cash' | 'debt' | 'changes';
     saleType?: string;
   },
 ): Promise<FitgoAnalyticsSalesItem[]> {
@@ -213,6 +213,8 @@ export async function upsertRevenueRows(
  * Удаление и правка гасят строки кэша по UUID документа.
  * Если дата документа вне окна синка — вернуть этот день, чтобы перечитать только его.
  * Старая публикация без scope=changes отдаёт обычные продажи: их operationType пропускаем.
+ * Гасим только свою таблицу: дни для перечитывания получает лишь вызвавший синк,
+ * иначе строки другой таблицы с датой вне её окна пропадут до ночного full.
  */
 export async function applyChangeLog(
   prisma: PrismaService,
@@ -220,6 +222,7 @@ export async function applyChangeLog(
   clubId: string,
   from: string,
   to: string,
+  target: 'sales' | 'revenue',
 ): Promise<string[]> {
   let items: FitgoAnalyticsSalesItem[] = [];
   try {
@@ -241,18 +244,25 @@ export async function applyChangeLog(
     seen.add(key);
 
     const prefix = `${id}:`;
-    await prisma.saleTransaction.updateMany({
-      where: { clubId, isActive: true, externalSaleId: { startsWith: prefix } },
-      data: { isActive: false, syncedAt: now },
-    });
-    await prisma.clubRevenueEntry.updateMany({
-      where: {
-        clubId,
-        isActive: true,
-        OR: [{ documentId: id }, { externalId: { startsWith: prefix } }],
-      },
-      data: { isActive: false, syncedAt: now },
-    });
+    if (target === 'sales') {
+      await prisma.saleTransaction.updateMany({
+        where: {
+          clubId,
+          isActive: true,
+          externalSaleId: { startsWith: prefix },
+        },
+        data: { isActive: false, syncedAt: now },
+      });
+    } else {
+      await prisma.clubRevenueEntry.updateMany({
+        where: {
+          clubId,
+          isActive: true,
+          OR: [{ documentId: id }, { externalId: { startsWith: prefix } }],
+        },
+        data: { isActive: false, syncedAt: now },
+      });
+    }
 
     if (action === 'update' && item.soldAt) {
       const day = item.soldAt.slice(0, 10);
@@ -260,6 +270,17 @@ export async function applyChangeLog(
     }
   }
   return [...refresh];
+}
+
+export function eachUtcDay(fromStr: string, toStr: string): string[] {
+  const days: string[] = [];
+  const cur = new Date(`${fromStr}T00:00:00.000Z`);
+  const end = new Date(`${toStr}T00:00:00.000Z`);
+  while (cur <= end) {
+    days.push(cur.toISOString().slice(0, 10));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return days;
 }
 
 function chunks<T>(rows: T[], size: number): T[][] {
