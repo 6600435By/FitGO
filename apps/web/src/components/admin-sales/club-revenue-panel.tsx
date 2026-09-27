@@ -157,7 +157,7 @@ function SummaryCards({
   const sales = s.sales;
   const revenue = s.revenue;
   const pa = s.personalAccount;
-  const cashManuals = data.manualEntries.filter((m) => m.kind !== 'burn');
+  const cashManuals = data.manualEntries;
 
   return (
     <div className="grid gap-3 lg:grid-cols-3">

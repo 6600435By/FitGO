@@ -13,8 +13,14 @@ if (
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // Comma-separated origins for SP admin-web + specialist portal (Cloudflare Pages).
+  const corsRaw = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
+  const corsOrigins = corsRaw
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
   app.enableCors({
-    origin: process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+    origin: corsOrigins.length <= 1 ? corsOrigins[0] ?? true : corsOrigins,
     credentials: true,
   });
   app.useGlobalPipes(

@@ -164,7 +164,7 @@ export default function SuperAdminStaffPage() {
     const token = getToken();
     if (!token) return;
     const res = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'}/api/super-admin/staff/export.csv`,
+      `${(process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '')}/api/super-admin/staff/export.csv`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     const blob = await res.blob();

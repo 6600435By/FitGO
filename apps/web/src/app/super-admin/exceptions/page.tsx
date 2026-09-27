@@ -42,7 +42,8 @@ export default function TrustExceptionsPage() {
 
   const resolveSpaPt = async (item: TrustExceptionItem) => {
     const token = getToken();
-    if (!token || item.kind === 'GROUP_SESSION') return;
+    if (!token) return;
+    if (item.kind !== 'SPA' && item.kind !== 'PT') return;
     const n = note[item.id]?.trim();
     if (!n) {
       setMessage('Укажите причину');

@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --bg: #f3f1ec;
+  --bg-elevated: #fffcf7;
+  --fg: #1a2421;
+  --muted: #5c6b64;
+  --line: #d9d3c8;
+  --accent: #1f9a7a;
+  --accent-fg: #ffffff;
+  --danger: #b42318;
+  --radius: 14px;
+  --shadow: 0 12px 40px rgba(18, 24, 22, 0.08);
+}
+
+html.dark {
+  color-scheme: dark;
+  --bg: #121816;
+  --bg-elevated: #1c2421;
+  --fg: #eef3f0;
+  --muted: #9aaba5;
+  --line: #2f3c37;
+  --accent: #3dba9a;
+  --accent-fg: #0b1512;
+  --danger: #f97066;
+  --shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background:
+    radial-gradient(1200px 500px at 10% -10%, rgba(31, 154, 122, 0.12), transparent 55%),
+    radial-gradient(900px 400px at 100% 0%, rgba(90, 110, 100, 0.1), transparent 50%),
+    var(--bg);
+  color: var(--fg);
+  font-family: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  .shell {
+    @apply mx-auto flex min-h-dvh max-w-3xl flex-col px-4 pb-24 pt-4 sm:px-6;
+  }
+
+  .panel {
+    background: var(--bg-elevated);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    @apply p-4;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn;
+    background: var(--accent);
+    color: var(--accent-fg);
+  }
+
+  .btn-ghost {
+    @apply btn;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--fg);
+  }
+
+  .field {
+    @apply w-full rounded-xl border px-3 py-2.5 text-sm outline-none;
+    border-color: var(--line);
+    background: var(--bg);
+    color: var(--fg);
+  }
+
+  .field:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+
+  .nav-dock {
+    @apply fixed inset-x-0 bottom-0 z-40 border-t backdrop-blur-md;
+    border-color: var(--line);
+    background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  }
+}

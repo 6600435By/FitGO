@@ -111,3 +111,27 @@ Web build: `NEXT_PUBLIC_API_URL=https://api.<домен>` (без `/api`).
 
 С VPS: `curl -sk https://86.57.152.242:8445/fitgo/hs/fitgo/v1/health` + ключи → 200.  
 С Mac **без VPN**: `https://api.<домен>/api/...` login → card/visits.
+
+---
+
+## D. Windows рядом с 1С (СП — серверное приложение)
+
+**Куда:** Windows Server клуба (рядом с 1С), не Linux VPS.  
+**Кто:** админы и супер-админ в браузере на LAN.  
+**Данные:** вариант **C** — пустой Postgres при Install (`db push` + `FITGO_SEED_MODE=minimal`), **без** dump со стенда Mac/VPS. Клиенты/продажи — sync из 1С; staff / ЗП / SPA — настройка на месте.
+
+Артефакты: [scripts/windows/fitgo-server/README.md](../scripts/windows/fitgo-server/README.md).
+
+```powershell
+# RDP, Administrator
+cd ...\FitGO\scripts\windows\fitgo-server
+.\Install-FitGO.ps1 -SourcePath C:\path\to\FitGO -SuperAdminPassword '...'
+# позже: .\Update-FitGO.ps1
+```
+
+Службы NSSM: `FitGO-API` (`:3001`), `FitGO-Web` (`:3000`).  
+`FORMA_*` в `apps/api/.env` — на LAN/`127.0.0.1`, `FITNESS_PROVIDER=forma`.
+
+Портал SPA-специалиста (`apps/specialist-web`) живёт отдельно (Cloudflare Pages); ему нужен **доверенный** HTTPS к API (не самоподписанный `:8445`). Шаблон прокси: `scripts/windows/fitgo-server/apache-fitgo-proxy.conf.template`. В `CORS_ORIGIN` — оба origin через запятую.
+
+Сегменты из 1С — Post-SP F4, не блокер приёмки СП.

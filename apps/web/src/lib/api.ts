@@ -53,7 +53,8 @@ import {
   type ProductModuleDefinition,
 } from '@fitgo/shared-types';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+/** Empty / unset = same-origin /api (Next rewrite → Nest). Absolute URL for separate hosts. */
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '');
 
 export interface AuthUser {
   id: string;

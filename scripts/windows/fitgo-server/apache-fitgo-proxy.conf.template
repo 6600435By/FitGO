@@ -1,0 +1,26 @@
+# Reverse proxy: public HTTPS → FitGO API (specialists) + optional admin web
+# Place under Apache SSL vhost (trusted cert via win-acme / Let's Encrypt).
+# Self-signed club certs will NOT work for specialist-web on Cloudflare Pages.
+#
+# Example: fitgo-api.ffs.by → this machine (MikroTik DNAT 443 → S2016)
+# Or: API on hoster.by whitelist IP (same pattern as site → 1C), SP admin stays LAN-only.
+
+# LoadModule proxy_module modules/mod_proxy.so
+# LoadModule proxy_http_module modules/mod_proxy_http.so
+# LoadModule headers_module modules/mod_headers.so
+
+# <VirtualHost *:443>
+#   ServerName fitgo-api.ffs.by
+#   SSLEngine on
+#   SSLCertificateFile "C:/Apache24/conf/fitgo-api-fullchain.pem"
+#   SSLCertificateKeyFile "C:/Apache24/conf/fitgo-api-privkey.pem"
+#
+#   # Public: API only (specialist portal). Do not expose admin UI without auth hardening.
+#   ProxyPreserveHost On
+#   ProxyPass        /api  http://127.0.0.1:3001/api
+#   ProxyPassReverse /api  http://127.0.0.1:3001/api
+#
+#   # Optional LAN-style admin on same host (prefer separate internal URL):
+#   # ProxyPass        /  http://127.0.0.1:3000/
+#   # ProxyPassReverse /  http://127.0.0.1:3000/
+# </VirtualHost>

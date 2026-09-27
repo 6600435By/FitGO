@@ -9,6 +9,7 @@ import { StaffRosterModule } from '../staff-roster/staff-roster.module';
 import {
   AdminPayrollController,
   PayrollController,
+  SpecialistPayrollController,
 } from './payroll.controller';
 import { PayrollService } from './payroll.service';
 
@@ -22,7 +23,11 @@ import { PayrollService } from './payroll.service';
     PtTimesheetModule,
     StaffRosterModule,
   ],
-  controllers: [PayrollController, AdminPayrollController],
+  controllers: [
+    PayrollController,
+    AdminPayrollController,
+    SpecialistPayrollController,
+  ],
   providers: [PayrollService],
   exports: [PayrollService],
 })

@@ -1,0 +1,7 @@
+# Cloudflare Pages — optional project hint
+# Prefer dashboard settings; this file documents intent.
+name = "fitgo-specialist"
+compatibility_date = "2026-09-01"
+
+[vars]
+# Set NEXT_PUBLIC_API_URL in Cloudflare dashboard (build-time for Next)

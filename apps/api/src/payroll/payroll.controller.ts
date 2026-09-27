@@ -367,3 +367,28 @@ export class AdminPayrollController {
     );
   }
 }
+
+/** SPA-specialist self payroll (portal / specialist-web). */
+@Controller('specialist/payroll')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.SPECIALIST)
+export class SpecialistPayrollController {
+  constructor(private readonly payroll: PayrollService) {}
+
+  @Get('summary')
+  summary(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    if (!from || !to) {
+      throw new BadRequestException('from and to are required (YYYY-MM-DD)');
+    }
+    return this.payroll.getPeriodSummary(
+      requireClubId(user),
+      user.sub,
+      from,
+      to,
+    );
+  }
+}

@@ -303,6 +303,54 @@ async function main() {
     });
   }
 
+  // Windows СП / prod: club + SUPER_ADMIN only. No demo staff/clients from Mac stand.
+  // FITGO_SEED_MODE=minimal FITGO_SUPERADMIN_PASSWORD=… pnpm db:seed
+  if (process.env.FITGO_SEED_MODE === 'minimal') {
+    const email =
+      process.env.FITGO_SUPERADMIN_EMAIL?.trim() || 'superadmin@club.local';
+    const password =
+      process.env.FITGO_SUPERADMIN_PASSWORD?.trim() ||
+      randomBytes(12).toString('base64url');
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await prisma.user.upsert({
+      where: { email },
+      update: {
+        password: passwordHash,
+        firstName: 'Super',
+        lastName: 'Admin',
+        clubId: club.id,
+        loginEnabled: true,
+        accountStatus: AccountStatus.ACTIVE,
+      },
+      create: {
+        email,
+        password: passwordHash,
+        firstName: 'Super',
+        lastName: 'Admin',
+        clubId: club.id,
+        loginEnabled: true,
+        accountStatus: AccountStatus.ACTIVE,
+      },
+    });
+    await prisma.userRole.upsert({
+      where: { userId_role: { userId: user.id, role: Role.SUPER_ADMIN } },
+      update: {},
+      create: { userId: user.id, role: Role.SUPER_ADMIN },
+    });
+    await prisma.userClubMembership.upsert({
+      where: { userId_clubId: { userId: user.id, clubId: club.id } },
+      update: { leftAt: null },
+      create: { userId: user.id, clubId: club.id },
+    });
+    console.log(
+      `Minimal seed OK: club=${club.slug}, SUPER_ADMIN=${email}` +
+        (process.env.FITGO_SUPERADMIN_PASSWORD?.trim()
+          ? ''
+          : ` (generated password: ${password})`),
+    );
+    return;
+  }
+
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
