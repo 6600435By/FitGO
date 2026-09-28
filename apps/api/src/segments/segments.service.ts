@@ -179,7 +179,7 @@ export class SegmentsService {
     if (!members.found && key === 'staff.groupTrainers') {
       await this.saveState(clubId, key, {
         lastStatus: 'skipped',
-        lastError: 'UUID сегмента Тренеры ГП ещё не задан',
+        lastError: 'Сегмент Тренера ГП приложение не найден в 1С',
         lastAdded: 0,
         lastUnchanged: 0,
       });
@@ -193,7 +193,7 @@ export class SegmentsService {
         pruned: 0,
         credentials: [],
         lastSyncedAt: new Date().toISOString(),
-        error: 'UUID сегмента Тренеры ГП ещё не задан в 1С',
+        error: 'Сегмент «Тренера ГП приложение» не найден в 1С',
       };
     }
     if (!members.found) {
@@ -326,11 +326,18 @@ export class SegmentsService {
         ? `Не удалось записать ${failed} из ${fetched}. ${failNotes.join('; ')}`
         : undefined;
 
-    // Убрать роль сегмента у тех, кого больше нет в составе 1С (soft: isActive=false если ролей не осталось)
+    // Убрать лишних из сегмента:
+    // - обычные роли: снять роль / деактивировать stub
+    // - ГП: только сбросить groupPrograms (роль TRAINER может остаться из «Тренера все»)
     const memberIds = new Set(
       members.data.map((m) => m.externalId?.trim()).filter(Boolean) as string[],
     );
-    const pruned = await this.pruneRoleNotInSegment(clubId, role, memberIds);
+    const pruned =
+      key === 'staff.groupTrainers'
+        ? await this.pruneGroupProgramsNotInSegment(clubId, memberIds)
+        : await this.pruneRoleNotInSegment(clubId, role, memberIds, {
+            keepIfGroupPrograms: key === 'staff.trainers',
+          });
 
     await this.saveState(clubId, key, {
       lastStatus: failed > 0 && added === 0 ? 'error' : 'ok',
@@ -356,11 +363,13 @@ export class SegmentsService {
   /**
    * Снимает роль сегмента с сотрудников, чьего externalId нет в актуальном составе.
    * Если staff-ролей не осталось — isActive=false. Stub 1c-* без других ролей — удаляем.
+   * keepIfGroupPrograms: для «Тренера все» не снимать TRAINER у тех, кто ещё в сегменте ГП.
    */
   private async pruneRoleNotInSegment(
     clubId: string,
     role: Role,
     memberExternalIds: Set<string>,
+    opts: { keepIfGroupPrograms?: boolean } = {},
   ): Promise<number> {
     const candidates = await this.prisma.user.findMany({
       where: {
@@ -380,6 +389,7 @@ export class SegmentsService {
     for (const u of candidates) {
       const ext = u.externalId?.trim();
       if (!ext || memberExternalIds.has(ext)) continue;
+      if (opts.keepIfGroupPrograms && u.groupPrograms) continue;
       await this.prisma.userRole.deleteMany({
         where: { userId: u.id, role },
       });
@@ -395,6 +405,32 @@ export class SegmentsService {
           data: { isActive: false },
         });
       }
+      pruned += 1;
+    }
+    return pruned;
+  }
+
+  /** Сбрасывает флаг ГП у тех, кого нет в сегменте «Тренера ГП приложение». */
+  private async pruneGroupProgramsNotInSegment(
+    clubId: string,
+    memberExternalIds: Set<string>,
+  ): Promise<number> {
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        clubId,
+        groupPrograms: true,
+        externalId: { not: null },
+      },
+      select: { id: true, externalId: true },
+    });
+    let pruned = 0;
+    for (const u of candidates) {
+      const ext = u.externalId?.trim();
+      if (!ext || memberExternalIds.has(ext)) continue;
+      await this.prisma.user.update({
+        where: { id: u.id },
+        data: { groupPrograms: false },
+      });
       pruned += 1;
     }
     return pruned;

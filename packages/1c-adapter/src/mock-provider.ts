@@ -304,8 +304,16 @@ export class Mock1CProvider implements IFitnessClubProvider {
         {
           key: 'staff.trainers',
           type: 'employee' as const,
-          uuid: '8deca45d-36c3-2cf1-11f1-b9be5450c00c',
-          name: 'Тренеры',
+          uuid: '8db17085-c20c-362e-11eb-a6793776913c',
+          name: 'Тренера все',
+          found: true,
+          count: 1,
+        },
+        {
+          key: 'staff.groupTrainers',
+          type: 'employee' as const,
+          uuid: '8deca45d-36c3-2cf1-11f1-bb326a47ed50',
+          name: 'Тренера ГП приложение',
           found: true,
           count: 1,
         },
