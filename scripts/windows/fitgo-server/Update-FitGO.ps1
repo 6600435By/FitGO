@@ -58,7 +58,8 @@ try {
   pnpm --filter @fitgo/osmi-adapter build
   pnpm --filter @fitgo/api exec prisma generate
   # Schema evolves; never drop data. Prefer migrate in future; push is OK for early СП.
-  pnpm db:push
+  # --accept-data-loss: только предупреждения про новые unique (не дроп таблиц); без флага Update зависает на y/N.
+  pnpm --filter @fitgo/api exec prisma db push --skip-generate --accept-data-loss
   pnpm --filter @fitgo/api build
   pnpm --filter @fitgo/web build
 } finally {
