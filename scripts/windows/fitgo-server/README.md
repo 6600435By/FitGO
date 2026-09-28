@@ -49,6 +49,16 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 
 Не нужно Uninstall → Install. Update = `git pull` (или подложить код) → build → restart служб.
 
+Если **`git` не найден** (часто на S2016 без Git for Windows):
+
+1. Поставить [Git for Windows](https://git-scm.com/download/win) **или** скачать zip и распаковать поверх `C:\FitGO\FitGO` (не затирая `apps\api\.env`):  
+   `https://github.com/6600435By/FitGO/archive/refs/heads/main.zip`
+2. Затем:
+
+```powershell
+.\Update-FitGO.ps1 -SkipPull
+```
+
 ## HTTPS для портала специалиста
 
 Браузер на Cloudflare Pages **не** примет самоподписанный сертификат API (как у `:8445`). Нужен доверенный сертификат (Let's Encrypt / win-acme) на поддомен, например `fitgo-api.ffs.by`, и проброс MikroTik **или** API на hoster с whitelist к 1С.
