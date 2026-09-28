@@ -2,6 +2,7 @@
 
 export type StaffPayTrack =
   | 'ADMIN'
+  | 'MANAGER'
   | 'GROUP_TRAINER'
   | 'SPA'
   | 'TECH'
@@ -49,13 +50,14 @@ export interface StaffPayProfile {
   /**
    * ADMIN: how membership sales are attributed.
    * `individual` — 100% to document author; `shiftShare` — split across admins on shift that day.
+   * MANAGER always uses club-wide totals (ignored).
    */
   membershipSalesAttribution?: 'individual' | 'shiftShare';
-  /** ADMIN: % of massage + solarium (доп. услуги). */
+  /** ADMIN / MANAGER: % of massage + solarium (доп. услуги). */
   extraSalesPercent?: number;
   /** ADMIN: % of shop / retail sales. */
   shopSalesPercent?: number;
-  /** ADMIN / manager: % of manually entered corporate (р/с) sales. */
+  /** ADMIN / MANAGER: % of manually entered corporate (р/с) sales. */
   corporateSalesPercent?: number;
   /** GROUP: legacy flat rate when attendees >= min (fallback if no tiers). */
   groupSessionRateMinor?: number;
@@ -95,6 +97,7 @@ export type StaffPayTrackSlice = Omit<StaffPayProfile, 'byTrack'>;
 /** Role ↔ pay department for staff filters / copy. */
 export type StaffDepartment =
   | 'ADMIN'
+  | 'MANAGER'
   | 'TRAINER'
   | 'SPECIALIST'
   | 'TECH'
@@ -161,6 +164,7 @@ export function payTrackForDepartment(
   dept: StaffDepartment,
 ): StaffPayTrack {
   if (dept === 'ADMIN') return 'ADMIN';
+  if (dept === 'MANAGER') return 'MANAGER';
   if (dept === 'SPECIALIST' || dept === 'EXTERNAL') return 'SPA';
   if (dept === 'TECH') return 'TECH';
   return 'PT';
@@ -168,6 +172,7 @@ export function payTrackForDepartment(
 
 export function departmentsForPayTrack(track: StaffPayTrack): StaffDepartment[] {
   if (track === 'ADMIN') return ['ADMIN'];
+  if (track === 'MANAGER') return ['MANAGER'];
   if (track === 'SPA') return ['SPECIALIST'];
   if (track === 'TECH') return ['TECH'];
   return ['TRAINER'];
@@ -278,6 +283,13 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         fixedAdvanceMinor: 0,
         considerDebtsInMotivation: true,
       };
+    case 'MANAGER':
+      return {
+        track,
+        membershipSalesPercent: 0,
+        extraSalesPercent: 0,
+        corporateSalesPercent: 0,
+      };
     case 'GROUP_TRAINER':
       return {
         track,
@@ -347,6 +359,21 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           chips.push(
             `${tag}аванс 25-е ${money(slice.fixedAdvanceMinor)}`,
           );
+        break;
+      case 'MANAGER':
+        if (slice.membershipSalesPercent)
+          chips.push(
+            `${tag}абн. клуба ${formatPercent(slice.membershipSalesPercent)}%`,
+          );
+        if (slice.extraSalesPercent)
+          chips.push(
+            `${tag}доп клуба ${formatPercent(slice.extraSalesPercent)}%`,
+          );
+        if (slice.corporateSalesPercent)
+          chips.push(
+            `${tag}корпо ${formatPercent(slice.corporateSalesPercent)}%`,
+          );
+        chips.push(`${tag}± премия/штраф`);
         break;
       case 'GROUP_TRAINER':
         if (slice.hourlyRateMinor)

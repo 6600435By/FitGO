@@ -23,6 +23,7 @@ import { getToken } from '@/lib/auth';
 
 const TRACKS: { id: StaffPayTrack; label: string }[] = [
   { id: 'ADMIN', label: 'Админ (часы + % продаж)' },
+  { id: 'MANAGER', label: 'Управляющий (оклад + % клуба)' },
   { id: 'GROUP_TRAINER', label: 'Групповой тренер' },
   { id: 'SPA', label: 'SPA-специалист' },
   { id: 'TECH', label: 'Техперсонал (часы)' },
@@ -38,6 +39,7 @@ type Props = {
 function tracksForRoles(roles: UserRole[] | undefined): StaffPayTrack[] {
   if (!roles?.length) return TRACKS.map((t) => t.id);
   const out: StaffPayTrack[] = [];
+  if (roles.includes(UserRole.MANAGER)) out.push('MANAGER');
   if (roles.includes(UserRole.ADMIN)) out.push('ADMIN');
   if (roles.includes(UserRole.TRAINER)) out.push('PT', 'GROUP_TRAINER');
   if (roles.includes(UserRole.SPECIALIST)) out.push('SPA');
@@ -156,11 +158,13 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
     const label =
       current.track === 'ADMIN'
         ? 'администраторам'
-        : current.track === 'SPA'
-          ? 'SPA-специалистам'
-          : current.track === 'TECH'
-            ? 'техперсоналу'
-            : 'тренерам';
+        : current.track === 'MANAGER'
+          ? 'управляющим'
+          : current.track === 'SPA'
+            ? 'SPA-специалистам'
+            : current.track === 'TECH'
+              ? 'техперсоналу'
+              : 'тренерам';
     if (
       !window.confirm(
         `Скопировать текущую схему «${TRACKS.find((t) => t.id === current.track)?.label}» и оклад всем ${label}? У них перезапишется мотивация этой схемы.`,
@@ -179,7 +183,7 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
       setByTrack(payProfile.byTrack ?? {});
       const result = await api.payrollCopyStaffProfile(token, userId, {
         departments: depts.filter(
-          (d): d is 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH' =>
+          (d): d is 'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH' =>
             d !== 'EXTERNAL',
         ),
         tracks: [current.track],
@@ -245,9 +249,9 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
       {profile.track === 'ADMIN' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
-            ЗП = ставка за часы (админы) или оклад (управляющая) + % оплаченных
-            продаж: абонементы, массаж/солярий и магазин отдельно. Неоплаченные
-            видны в «Мои продажи», в ЗП — после оплаты в месяц оплаты.
+            ЗП = ставка за часы + % оплаченных продаж: абонементы, массаж/солярий
+            и магазин отдельно. Безнал в процент не входит. Неоплаченные видны в
+            «Мои продажи», в ЗП — после оплаты в месяц оплаты.
           </p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <MoneyField
@@ -355,6 +359,48 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
                 </span>
               </span>
             </label>
+          </div>
+        </div>
+      )}
+
+      {profile.track === 'MANAGER' && (
+        <div className="space-y-3">
+          <p className="text-xs leading-relaxed text-slate-500">
+            ЗП = оклад + % от оплаченных продаж всего клуба (абонементы и доп.
+            услуги) + % от корпо. Безнал не входит. Премии и штрафы — отдельными
+            корректировками в расчёте ЗП.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <PercentField
+              label="% абонементы клуба"
+              value={formatPercent(profile.membershipSalesPercent)}
+              onChange={(v) =>
+                setProfile({
+                  ...profile,
+                  membershipSalesPercent: parseDecimal(v),
+                })
+              }
+            />
+            <PercentField
+              label="% доп. услуг клуба"
+              value={formatPercent(profile.extraSalesPercent)}
+              onChange={(v) =>
+                setProfile({
+                  ...profile,
+                  extraSalesPercent: parseDecimal(v),
+                })
+              }
+            />
+            <PercentField
+              label="% корпо (р/с вручную)"
+              value={formatPercent(profile.corporateSalesPercent)}
+              onChange={(v) =>
+                setProfile({
+                  ...profile,
+                  corporateSalesPercent: parseDecimal(v),
+                })
+              }
+            />
           </div>
         </div>
       )}

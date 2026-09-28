@@ -160,7 +160,7 @@ export class AdminPtTimesheetController {
 
 @Controller('super-admin/pt-timesheet')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.SUPER_ADMIN)
+@Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
 export class SuperAdminPtTimesheetController {
   constructor(private readonly svc: PtTimesheetService) {}
 

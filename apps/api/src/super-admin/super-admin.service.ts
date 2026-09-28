@@ -25,16 +25,27 @@ import { randomBytes } from 'crypto';
 
 const STAFF_ROLES: Role[] = [
   Role.ADMIN,
+  Role.MANAGER,
   Role.TRAINER,
   Role.SPECIALIST,
   Role.TECH,
 ];
 
-const APP_LOGIN_ROLES = new Set(['ADMIN', 'TRAINER', 'SPECIALIST']);
+const APP_LOGIN_ROLES = new Set([
+  'ADMIN',
+  'MANAGER',
+  'TRAINER',
+  'SPECIALIST',
+]);
 
-function needsAppLogin(
-  roles: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>,
-): boolean {
+type StaffRoleLabel =
+  | 'ADMIN'
+  | 'MANAGER'
+  | 'TRAINER'
+  | 'SPECIALIST'
+  | 'TECH';
+
+function needsAppLogin(roles: StaffRoleLabel[]): boolean {
   return roles.some((r) => APP_LOGIN_ROLES.has(r));
 }
 
@@ -48,11 +59,22 @@ function techPlaceholderEmail(firstName: string, lastName: string): string {
   return `tech.${base || 'worker'}.${suffix}@staff.fitgo.local`;
 }
 
-function toStaffPrismaRole(r: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH') {
+function toStaffPrismaRole(r: StaffRoleLabel): Role {
   if (r === 'ADMIN') return Role.ADMIN;
+  if (r === 'MANAGER') return Role.MANAGER;
   if (r === 'SPECIALIST') return Role.SPECIALIST;
   if (r === 'TECH') return Role.TECH;
   return Role.TRAINER;
+}
+
+function isStaffRoleLabel(r: string): r is StaffRoleLabel {
+  return (
+    r === 'ADMIN' ||
+    r === 'MANAGER' ||
+    r === 'TRAINER' ||
+    r === 'SPECIALIST' ||
+    r === 'TECH'
+  );
 }
 
 @Injectable()
@@ -78,14 +100,12 @@ export class SuperAdminService {
   async createStaff(user: JwtPayload, dto: CreateStaffDto) {
     const roleList = [
       ...new Set(
-        (dto.roles?.length ? dto.roles : dto.role ? [dto.role] : []) as Array<
-          'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'
-        >,
+        (dto.roles?.length ? dto.roles : dto.role ? [dto.role] : []) as StaffRoleLabel[],
       ),
     ];
     if (roleList.length === 0) {
       throw new BadRequestException(
-        'Укажите хотя бы одно подразделение: админ, тренер, SPA или техперсонал',
+        'Укажите хотя бы одно подразделение: управляющий, админ, тренер, SPA или техперсонал',
       );
     }
 
@@ -111,12 +131,6 @@ export class SuperAdminService {
     }
 
     const passwordHash = await bcrypt.hash(plainPassword!, 10);
-    const toPrisma = (r: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH') => {
-      if (r === 'ADMIN') return Role.ADMIN;
-      if (r === 'SPECIALIST') return Role.SPECIALIST;
-      if (r === 'TECH') return Role.TECH;
-      return Role.TRAINER;
-    };
     const clubId = requireClubId(user);
 
     const created = await this.prisma.user.create({
@@ -131,7 +145,7 @@ export class SuperAdminService {
         createdById: user.sub,
         loginEnabled: needsLogin,
         roles: {
-          create: roleList.map((r) => ({ role: toPrisma(r) })),
+          create: roleList.map((r) => ({ role: toStaffPrismaRole(r) })),
         },
       },
       include: { roles: true },
@@ -183,11 +197,8 @@ export class SuperAdminService {
     }
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
     if (dto.password) {
-      const rolesAfter = dto.roles ?? member.roles
-        .map((r) => r.role)
-        .filter((r) =>
-          ['ADMIN', 'TRAINER', 'SPECIALIST', 'TECH'].includes(r),
-        ) as Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
+      const rolesAfter = (dto.roles ??
+        member.roles.map((r) => r.role).filter(isStaffRoleLabel)) as StaffRoleLabel[];
       if (!needsAppLogin(rolesAfter)) {
         throw new BadRequestException(
           'У техперсонала нет входа в приложение — пароль не задаётся',
@@ -197,30 +208,18 @@ export class SuperAdminService {
     }
 
     if (dto.roles) {
-      const roleList = [...new Set(dto.roles)];
+      const roleList = [...new Set(dto.roles)] as StaffRoleLabel[];
       if (roleList.length === 0) {
         throw new BadRequestException('Оставьте хотя бы одно подразделение');
       }
-      const toPrisma = (r: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH') => {
-        if (r === 'ADMIN') return Role.ADMIN;
-        if (r === 'SPECIALIST') return Role.SPECIALIST;
-        if (r === 'TECH') return Role.TECH;
-        return Role.TRAINER;
-      };
-      const wanted = new Set(roleList.map(toPrisma));
+      const wanted = new Set(roleList.map(toStaffPrismaRole));
       const current = member.roles
         .map((r) => r.role)
-        .filter(
-          (r): r is 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH' =>
-            r === 'ADMIN' ||
-            r === 'TRAINER' ||
-            r === 'SPECIALIST' ||
-            r === 'TECH',
-        );
+        .filter(isStaffRoleLabel);
       for (const role of current) {
-        if (!wanted.has(role)) {
+        if (!wanted.has(role as Role)) {
           await this.prisma.userRole.delete({
-            where: { userId_role: { userId: staffId, role } },
+            where: { userId_role: { userId: staffId, role: role as Role } },
           });
         }
       }
@@ -449,6 +448,7 @@ export class SuperAdminService {
       [Role.SPECIALIST]: UserRole.SPECIALIST,
       [Role.TECH]: UserRole.TECH,
       [Role.ADMIN]: UserRole.ADMIN,
+      [Role.MANAGER]: UserRole.MANAGER,
       [Role.SUPER_ADMIN]: UserRole.SUPER_ADMIN,
     };
 

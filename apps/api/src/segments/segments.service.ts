@@ -15,6 +15,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 const STAFF_KEYS = [
   'staff.admins',
+  'staff.managers',
   'staff.spa',
   'staff.trainers',
   'staff.groupTrainers',
@@ -22,6 +23,7 @@ const STAFF_KEYS = [
 
 const ROLE_BY_KEY: Record<string, Role> = {
   'staff.admins': Role.ADMIN,
+  'staff.managers': Role.MANAGER,
   'staff.spa': Role.SPECIALIST,
   'staff.trainers': Role.TRAINER,
   'staff.groupTrainers': Role.TRAINER,
@@ -137,7 +139,7 @@ export class SegmentsService {
     }
     if (totalFetched === 0) {
       throw new ServiceUnavailableException(
-        '1С вернула 0 сотрудников по всем staff-сегментам. Проверьте: 1) в конфигураторе обновлён FitGOIntegration_Клиенты.bsl и переопубликован fitgo; 2) в сегментах нажато «Сформировать сегмент»; 3) имена сегментов: «Администраторы приложение», «Спа специалисты», «Тренера все», «Тренера ГП приложение».',
+        '1С вернула 0 сотрудников по всем staff-сегментам. Проверьте: 1) в конфигураторе обновлён FitGOIntegration_Клиенты.bsl и переопубликован fitgo; 2) в сегментах нажато «Сформировать сегмент»; 3) имена сегментов: «Администраторы приложение», «Управляющий», «Спа специалисты», «Тренера все», «Тренера ГП приложение».',
       );
     }
 
@@ -394,8 +396,9 @@ export class SegmentsService {
       members.data.map((m) => m.externalId?.trim()).filter(Boolean) as string[],
     );
     // Не prune-ить весь клуб, если сегмент пустой из-за ошибки резолва
+    // Пустой состав — не prune (иначе снесём всех при ошибке/до «Сформировать сегмент»)
     const pruned =
-      members.data.length === 0 && badName
+      members.data.length === 0
         ? 0
         : key === 'staff.groupTrainers'
           ? await this.pruneGroupProgramsNotInSegment(clubId, memberIds)

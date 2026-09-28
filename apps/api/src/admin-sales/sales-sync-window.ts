@@ -69,6 +69,10 @@ type SaleRow = {
   soldAt: Date;
   paidAt: Date | null;
   amount: number;
+  cash: number;
+  card: number;
+  cashless: number;
+  personalAccount: number;
   saleType: string;
   productName: string | null;
   clientExternalId: string | null;
@@ -91,7 +95,9 @@ export async function upsertSaleRows(
       (r) =>
         Prisma.sql`(
           ${crypto.randomUUID()}, ${clubId}, ${r.externalSaleId},
-          ${r.soldAt}, ${r.paidAt}, ${r.amount}, ${r.saleType},
+          ${r.soldAt}, ${r.paidAt}, ${r.amount},
+          ${r.cash}, ${r.card}, ${r.cashless}, ${r.personalAccount},
+          ${r.saleType},
           ${r.productName}, ${r.clientExternalId}, ${r.clientName},
           ${r.employeeExternalId}, ${r.employeeName}, ${r.paymentMethod},
           ${true}, ${now}
@@ -100,6 +106,7 @@ export async function upsertSaleRows(
     await prisma.$executeRaw`
       INSERT INTO "SaleTransaction" (
         "id", "clubId", "externalSaleId", "soldAt", "paidAt", "amount",
+        "cash", "card", "cashless", "personalAccount",
         "saleType", "productName", "clientExternalId", "clientName",
         "employeeExternalId", "employeeName", "paymentMethod",
         "isActive", "syncedAt"
@@ -109,6 +116,10 @@ export async function upsertSaleRows(
         "soldAt" = EXCLUDED."soldAt",
         "paidAt" = EXCLUDED."paidAt",
         "amount" = EXCLUDED."amount",
+        "cash" = EXCLUDED."cash",
+        "card" = EXCLUDED."card",
+        "cashless" = EXCLUDED."cashless",
+        "personalAccount" = EXCLUDED."personalAccount",
         "saleType" = EXCLUDED."saleType",
         "productName" = EXCLUDED."productName",
         "clientExternalId" = EXCLUDED."clientExternalId",

@@ -9,6 +9,7 @@ export enum UserRole {
   SPECIALIST = 'SPECIALIST',
   TECH = 'TECH',
   ADMIN = 'ADMIN',
+  MANAGER = 'MANAGER',
   SUPER_ADMIN = 'SUPER_ADMIN',
 }
 

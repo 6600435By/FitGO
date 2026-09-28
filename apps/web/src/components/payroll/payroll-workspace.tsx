@@ -177,10 +177,18 @@ function payslipFilename(name: string, from: string, to: string): string {
   return `Raschet_${safe || 'sotrudnik'}_${period}.txt`;
 }
 
-type DeptFilter = 'ALL' | 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH' | 'EXTERNAL';
+type DeptFilter =
+  | 'ALL'
+  | 'MANAGER'
+  | 'ADMIN'
+  | 'TRAINER'
+  | 'SPECIALIST'
+  | 'TECH'
+  | 'EXTERNAL';
 
 const DEPT_FILTERS: { id: DeptFilter; label: string }[] = [
   { id: 'ALL', label: 'Все' },
+  { id: 'MANAGER', label: 'Упр.' },
   { id: 'ADMIN', label: 'Админы' },
   { id: 'TRAINER', label: 'Тренеры' },
   { id: 'SPECIALIST', label: 'SPA' },
@@ -189,7 +197,8 @@ const DEPT_FILTERS: { id: DeptFilter; label: string }[] = [
 ];
 
 const TRACK_HINT: Record<string, string> = {
-  ADMIN: 'Часы + % абонементов/доп/магазин/корпо + премии/штрафы',
+  ADMIN: 'Часы + % абонементов/доп/магазин/корпо + премии/штрафы (без безнала)',
+  MANAGER: 'Оклад + % абонементов/доп клуба + корпо + премии/штрафы (без безнала)',
   GROUP_TRAINER: 'Тиры ставка×зал×люди (из расписания)',
   SPA: '% услуг + абонемент + AllSports + премии/штрафы',
   TECH: 'Часы смены + премии/штрафы отдельно',
@@ -255,6 +264,9 @@ export function PayrollWorkspace({ mode }: Props) {
         return s.employmentKind === 'EXTERNAL';
       }
       if (s.employmentKind === 'EXTERNAL') return false;
+      if (deptFilter === 'MANAGER') {
+        return s.roles.includes('MANAGER') || s.track === 'MANAGER';
+      }
       if (s.roles.includes(deptFilter)) return true;
       if (deptFilter === 'ADMIN' && s.track === 'ADMIN') return true;
       if (

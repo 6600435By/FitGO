@@ -11,20 +11,32 @@ function randomPassword() {
   return `Fit${Math.random().toString(36).slice(2, 10)}!`;
 }
 
-type DeptFilter = 'ALL' | 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH';
+type DeptFilter =
+  | 'ALL'
+  | 'MANAGER'
+  | 'ADMIN'
+  | 'TRAINER'
+  | 'GROUP_TRAINER'
+  | 'SPECIALIST'
+  | 'TECH';
 
-const DEPT_FILTERS: { id: DeptFilter; label: string; role?: UserRole }[] = [
+const DEPT_FILTERS: { id: DeptFilter; label: string }[] = [
   { id: 'ALL', label: 'Все' },
-  { id: 'ADMIN', label: 'Админы', role: UserRole.ADMIN },
-  { id: 'TRAINER', label: 'Тренеры', role: UserRole.TRAINER },
-  { id: 'SPECIALIST', label: 'SPA', role: UserRole.SPECIALIST },
-  { id: 'TECH', label: 'Техперсонал', role: UserRole.TECH },
+  { id: 'MANAGER', label: 'Упр.' },
+  { id: 'ADMIN', label: 'Админы' },
+  { id: 'TRAINER', label: 'Тренеры' },
+  { id: 'GROUP_TRAINER', label: 'Тренеры ГП' },
+  { id: 'SPECIALIST', label: 'SPA' },
+  { id: 'TECH', label: 'Техперсонал' },
 ];
 
+type StaffRoleId = 'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH';
+
 const ROLE_OPTIONS: {
-  id: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH';
+  id: StaffRoleId;
   label: string;
 }[] = [
+  { id: 'MANAGER', label: 'Управляющий' },
   { id: 'TRAINER', label: 'Тренер' },
   { id: 'SPECIALIST', label: 'SPA-специалист' },
   { id: 'TECH', label: 'Техперсонал' },
@@ -35,6 +47,7 @@ function formatRoles(roles: UserRole[]): string {
   return roles
     .filter((r) => r !== UserRole.CLIENT)
     .map((r) => {
+      if (r === UserRole.MANAGER) return 'Упр.';
       if (r === UserRole.ADMIN) return 'Админ';
       if (r === UserRole.TRAINER) return 'Тренер';
       if (r === UserRole.SPECIALIST) return 'SPA';
@@ -44,11 +57,13 @@ function formatRoles(roles: UserRole[]): string {
     .join(', ');
 }
 
-function needsAppLogin(
-  roles: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>,
-): boolean {
+function needsAppLogin(roles: StaffRoleId[]): boolean {
   return roles.some(
-    (r) => r === 'ADMIN' || r === 'TRAINER' || r === 'SPECIALIST',
+    (r) =>
+      r === 'ADMIN' ||
+      r === 'MANAGER' ||
+      r === 'TRAINER' ||
+      r === 'SPECIALIST',
   );
 }
 
@@ -73,7 +88,7 @@ export default function SuperAdminStaffPage() {
     phone: '',
     email: '',
     password: randomPassword(),
-    roles: ['TRAINER'] as Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>,
+    roles: ['TRAINER'] as StaffRoleId[],
   });
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
@@ -101,14 +116,30 @@ export default function SuperAdminStaffPage() {
 
   const visible = useMemo(() => {
     if (filter === 'ALL') return staff;
-    const role = DEPT_FILTERS.find((f) => f.id === filter)?.role;
-    if (!role) return staff;
-    return staff.filter((m) => m.roles.includes(role));
+    if (filter === 'MANAGER') {
+      return staff.filter((m) => m.roles.includes(UserRole.MANAGER));
+    }
+    if (filter === 'GROUP_TRAINER') {
+      return staff.filter((m) => m.groupPrograms);
+    }
+    if (filter === 'TRAINER') {
+      return staff.filter(
+        (m) => m.roles.includes(UserRole.TRAINER) && !m.groupPrograms,
+      );
+    }
+    if (filter === 'ADMIN') {
+      return staff.filter((m) => m.roles.includes(UserRole.ADMIN));
+    }
+    if (filter === 'SPECIALIST') {
+      return staff.filter((m) => m.roles.includes(UserRole.SPECIALIST));
+    }
+    if (filter === 'TECH') {
+      return staff.filter((m) => m.roles.includes(UserRole.TECH));
+    }
+    return staff;
   }, [staff, filter]);
 
-  const toggleFormRole = (
-    role: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH',
-  ) => {
+  const toggleFormRole = (role: StaffRoleId) => {
     setForm((prev) => {
       const has = prev.roles.includes(role);
       if (has && prev.roles.length === 1) return prev;

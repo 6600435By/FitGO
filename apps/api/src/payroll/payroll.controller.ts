@@ -29,7 +29,7 @@ import { PayrollService } from './payroll.service';
 
 @Controller('super-admin/payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.SUPER_ADMIN)
+@Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
 export class PayrollController {
   constructor(private readonly payroll: PayrollService) {}
 
@@ -69,8 +69,10 @@ export class PayrollController {
     @Param('userId') userId: string,
     @Body()
     body: {
-      departments: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
-      tracks?: Array<'ADMIN' | 'GROUP_TRAINER' | 'SPA' | 'TECH' | 'PT'>;
+      departments: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
+      tracks?: Array<
+        'ADMIN' | 'MANAGER' | 'GROUP_TRAINER' | 'SPA' | 'TECH' | 'PT'
+      >;
     },
   ) {
     return this.payroll.copyStaffPayProfile(

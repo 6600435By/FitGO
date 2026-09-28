@@ -33,7 +33,7 @@ import type { ProductModulesState } from '@fitgo/shared-types';
 
 @Controller('super-admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.SUPER_ADMIN)
+@Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
 export class SuperAdminController {
   constructor(
     private readonly superAdmin: SuperAdminService,
@@ -120,6 +120,7 @@ export class SuperAdminController {
   }
 
   @Get('audit-log')
+  @Roles(UserRole.SUPER_ADMIN)
   auditLog(@CurrentUser() user: JwtPayload) {
     return this.superAdmin.listAuditLog(user);
   }
@@ -140,11 +141,13 @@ export class SuperAdminController {
   }
 
   @Get('modules')
+  @Roles(UserRole.SUPER_ADMIN)
   getModules() {
     return this.features.getCatalog();
   }
 
   @Put('modules')
+  @Roles(UserRole.SUPER_ADMIN)
   setModules(
     @CurrentUser() user: JwtPayload,
     @Body() body: { modules: Partial<ProductModulesState> },

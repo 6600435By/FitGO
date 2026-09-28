@@ -9,13 +9,14 @@ import { StaffPayProfileEditor } from '@/components/payroll/staff-pay-profile-ed
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
-type StaffRoleId = 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH';
+type StaffRoleId = 'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH';
 
 const ROLE_OPTIONS: {
   id: StaffRoleId;
   label: string;
   role: UserRole;
 }[] = [
+  { id: 'MANAGER', label: 'Управляющий', role: UserRole.MANAGER },
   { id: 'TRAINER', label: 'Тренер', role: UserRole.TRAINER },
   { id: 'SPECIALIST', label: 'SPA-специалист', role: UserRole.SPECIALIST },
   { id: 'TECH', label: 'Техперсонал', role: UserRole.TECH },
@@ -47,6 +48,7 @@ export default function SuperAdminStaffDetailPage() {
 
   const suggestedTrack = useMemo((): StaffPayTrack | undefined => {
     if (!member) return undefined;
+    if (member.roles.includes(UserRole.MANAGER)) return 'MANAGER';
     if (member.roles.includes(UserRole.SPECIALIST)) return 'SPA';
     if (member.roles.includes(UserRole.TECH)) return 'TECH';
     if (member.roles.includes(UserRole.TRAINER)) return 'PT';

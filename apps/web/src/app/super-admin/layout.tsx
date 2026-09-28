@@ -2,10 +2,14 @@
 
 import { UserRole } from '@fitgo/shared-types';
 import type { ReactNode } from 'react';
+import { useMemo } from 'react';
 import { AuthGuard } from '@/components/auth-guard';
 import { AppShell } from '@/components/app-shell';
+import { getUser } from '@/lib/auth';
 
-const NAV = [
+const SUPER_ONLY = new Set(['/super-admin/modules', '/super-admin/audit']);
+
+const ALL_NAV = [
   { href: '/super-admin', label: 'Обзор' },
   { href: '/super-admin/analytics', label: 'Аналитика' },
   { href: '/super-admin/modules', label: 'Модули' },
@@ -23,9 +27,16 @@ const NAV = [
 ];
 
 export default function SuperAdminLayout({ children }: { children: ReactNode }) {
+  const navItems = useMemo(() => {
+    const user = getUser();
+    const isSuper = user?.roles.includes(UserRole.SUPER_ADMIN);
+    if (isSuper) return ALL_NAV;
+    return ALL_NAV.filter((item) => !SUPER_ONLY.has(item.href));
+  }, []);
+
   return (
-    <AuthGuard allowedRoles={[UserRole.SUPER_ADMIN]}>
-      <AppShell title="Супер-админ" navItems={NAV} wide>
+    <AuthGuard allowedRoles={[UserRole.SUPER_ADMIN, UserRole.MANAGER]}>
+      <AppShell title="Супер-админ" navItems={navItems} wide>
         {children}
       </AppShell>
     </AuthGuard>

@@ -294,6 +294,14 @@ export class Mock1CProvider implements IFitnessClubProvider {
           count: 2,
         },
         {
+          key: 'staff.managers',
+          type: 'employee' as const,
+          uuid: '8deca45d-36c3-2cf1-11f1-bb368b133b96',
+          name: 'Управляющий',
+          found: true,
+          count: 1,
+        },
+        {
           key: 'staff.spa',
           type: 'employee' as const,
           uuid: '81167085-c20c-362e-11eb-0a233ed68521',

@@ -15,7 +15,7 @@ import { SegmentsService } from './segments.service';
 
 @Controller('super-admin/segments')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.SUPER_ADMIN)
+@Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
 export class SegmentsController {
   constructor(private readonly segments: SegmentsService) {}
 
@@ -35,7 +35,7 @@ export class SegmentsController {
   }
 
   @Post('sync-nomenclature')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER, UserRole.ADMIN)
   syncNom(
     @CurrentUser() user: JwtPayload,
     @Query('kind') kind?: 'spa' | 'membership' | 'shop' | 'all',

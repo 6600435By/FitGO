@@ -58,7 +58,7 @@ export class AdminSalesController {
 
 @Controller('super-admin/sales')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.SUPER_ADMIN)
+@Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
 export class SuperAdminSalesController {
   constructor(
     private readonly sales: AdminSalesService,

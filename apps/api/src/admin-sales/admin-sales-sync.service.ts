@@ -123,6 +123,10 @@ export class AdminSalesSyncService {
           const paidAt = item.paidAt ? new Date(item.paidAt) : null;
           const paidDay = paidAt ? paidAt.toISOString().slice(0, 10) : null;
           const amount = Number(item.amount) || 0;
+          const cash = Number(item.cash) || 0;
+          const card = Number(item.card) || 0;
+          const cashless = Number(item.cashless) || 0;
+          const personalAccount = Number(item.personalAccount) || 0;
           const saleAmount =
             Number(item.saleAmount) ||
             (paidDay ? 0 : amount) ||
@@ -140,6 +144,10 @@ export class AdminSalesSyncService {
             soldAt,
             paidAt,
             amount,
+            cash,
+            card,
+            cashless,
+            personalAccount,
             saleType,
             productName: item.productName ?? null,
             clientExternalId: item.clientExternalId ?? null,

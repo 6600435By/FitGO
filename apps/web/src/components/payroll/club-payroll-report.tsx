@@ -63,11 +63,7 @@ export function ClubPayrollReportPanel({
   const [corpSaving, setCorpSaving] = useState(false);
 
   const managers = useMemo(() => {
-    const withSalary = staff.filter(
-      (s) => s.roles.includes('ADMIN') && s.baseSalaryMinor > 0,
-    );
-    if (withSalary.length) return withSalary;
-    return staff.filter((s) => s.roles.includes('ADMIN'));
+    return staff.filter((s) => s.roles.includes('MANAGER'));
   }, [staff]);
 
   const primaryManagerId = managers[0]?.userId ?? '';
@@ -169,7 +165,7 @@ export function ClubPayrollReportPanel({
   const saveCorporate = async () => {
     const token = getToken();
     if (!token || !primaryManagerId) {
-      setCorpMsg('Нет управляющего в Staff (админ с окладом)');
+      setCorpMsg('Нет управляющего в Staff (роль Управляющий)');
       return;
     }
     setCorpSaving(true);

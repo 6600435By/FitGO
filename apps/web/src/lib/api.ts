@@ -1381,8 +1381,8 @@ export const api = {
       phone?: string;
       email?: string;
       password?: string;
-      role?: 'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH';
-      roles?: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
+      role?: 'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH';
+      roles?: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
     },
   ) =>
     request<StaffCreateResult>('/super-admin/staff', {
@@ -1400,7 +1400,7 @@ export const api = {
       phone: string;
       isActive: boolean;
       password: string;
-      roles: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
+      roles: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
     }>,
   ) =>
     request<StaffMember & { credentials?: { email: string; password: string } }>(
@@ -1668,8 +1668,10 @@ export const api = {
     token: string,
     userId: string,
     body: {
-      departments: Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
-      tracks?: Array<'ADMIN' | 'GROUP_TRAINER' | 'SPA' | 'TECH' | 'PT'>;
+      departments: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
+      tracks?: Array<
+        'ADMIN' | 'MANAGER' | 'GROUP_TRAINER' | 'SPA' | 'TECH' | 'PT'
+      >;
     },
   ) =>
     request<{ copied: number; skipped: number }>(

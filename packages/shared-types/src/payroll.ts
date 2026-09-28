@@ -220,6 +220,7 @@ export interface PayrollCorporateSaleDto {
 }
 
 export type ClubPayrollSectionId =
+  | 'MANAGER'
   | 'ADMIN'
   | 'TRAINER'
   | 'SPECIALIST'

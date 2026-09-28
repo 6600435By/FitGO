@@ -17,6 +17,7 @@ import {
   attributionLabel,
   endOfDayUtc,
   majorToMinor,
+  motivationAmountMajor,
   startOfDayUtc,
 } from './admin-sales.util';
 
@@ -188,7 +189,8 @@ export class AdminSalesService {
       if (params.payment === 'unpaid' && paid) continue;
 
       const amountMinor = majorToMinor(row.amount);
-      let attributed = amountMinor;
+      const motivationMinor = majorToMinor(motivationAmountMajor(row));
+      let attributed = motivationMinor;
       const isMembershipShift =
         row.saleType === 'membership' && params.attribution === 'shiftShare';
 
@@ -202,7 +204,7 @@ export class AdminSalesService {
         // Not on FitGO roster that day → no share (1C author ignored for money)
         if (!onShift.includes(params.userId)) continue;
         const n = onShift.length; // ≥1 because we are included
-        attributed = Math.round(amountMinor / n);
+        attributed = Math.round(motivationMinor / n);
       }
 
       const paidInPeriod =
@@ -553,6 +555,11 @@ export class AdminSalesService {
       clubId,
       userId,
     );
+    const isManager = allPaySlices(profile).some((s) => s.track === 'MANAGER');
+    if (isManager) {
+      return this.paidClubBreakdownForPayroll(clubId, from, to);
+    }
+
     const employeeCodes = user.employeeCode ? [user.employeeCode] : [];
     if (attribution === 'individual' && !user.employeeCode) {
       return {
@@ -581,6 +588,47 @@ export class AdminSalesService {
       membershipMinor: totals.membershipPaidMinor,
       extraServicesMinor: totals.massagePaidMinor + totals.solariumPaidMinor,
       shopMinor: totals.shopPaidMinor,
+      fromAnalytics: true,
+      source: 'cache',
+    };
+  }
+
+  /**
+   * Club-wide paid sales for manager % (cash+card+ЛС, no cashless).
+   */
+  async paidClubBreakdownForPayroll(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<Omit<StaffSalesBreakdown, 'corporateMinor'>> {
+    const fromDt = startOfDayUtc(from);
+    const toDt = endOfDayUtc(to);
+    const rows = await this.prisma.saleTransaction.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        paidAt: { gte: fromDt, lte: toDt },
+        saleType: { in: ['membership', 'massage', 'solarium', 'shop'] },
+      },
+    });
+
+    let membershipMinor = 0;
+    let massagePaidMinor = 0;
+    let solariumPaidMinor = 0;
+    let shopMinor = 0;
+    for (const row of rows) {
+      const minor = majorToMinor(motivationAmountMajor(row));
+      if (minor <= 0) continue;
+      if (row.saleType === 'membership') membershipMinor += minor;
+      else if (row.saleType === 'massage') massagePaidMinor += minor;
+      else if (row.saleType === 'solarium') solariumPaidMinor += minor;
+      else if (row.saleType === 'shop') shopMinor += minor;
+    }
+
+    return {
+      membershipMinor,
+      extraServicesMinor: massagePaidMinor + solariumPaidMinor,
+      shopMinor,
       fromAnalytics: true,
       source: 'cache',
     };

@@ -82,12 +82,12 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
       if (department === 'EXTERNAL') return s.employmentKind === 'EXTERNAL';
       if (s.employmentKind === 'EXTERNAL') return false;
       if (department === 'MANAGER') {
-        return s.roles.includes('ADMIN') && s.baseSalaryMinor > 0;
+        return s.roles.includes('MANAGER');
       }
       if (department === 'ADMIN') {
         return (
           (s.roles.includes('ADMIN') || s.track === 'ADMIN') &&
-          !(s.roles.includes('ADMIN') && s.baseSalaryMinor > 0)
+          !s.roles.includes('MANAGER')
         );
       }
       if (department === 'TRAINER') {

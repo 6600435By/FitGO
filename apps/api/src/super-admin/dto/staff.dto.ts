@@ -10,10 +10,10 @@ import {
   ValidateIf,
 } from 'class-validator';
 
-const STAFF_ROLE = ['ADMIN', 'TRAINER', 'SPECIALIST', 'TECH'] as const;
+const STAFF_ROLE = ['ADMIN', 'MANAGER', 'TRAINER', 'SPECIALIST', 'TECH'] as const;
 export type StaffRoleId = (typeof STAFF_ROLE)[number];
 
-const APP_ROLES: StaffRoleId[] = ['ADMIN', 'TRAINER', 'SPECIALIST'];
+const APP_ROLES: StaffRoleId[] = ['ADMIN', 'MANAGER', 'TRAINER', 'SPECIALIST'];
 
 function dtoNeedsAppLogin(dto: {
   roles?: StaffRoleId[];

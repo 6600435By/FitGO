@@ -13,6 +13,7 @@ enum Role {
   SPECIALIST
   TECH
   ADMIN
+  MANAGER
   SUPER_ADMIN
 }
 
@@ -1652,6 +1653,11 @@ model SaleTransaction {
   paidAt               DateTime?
   /// Major currency units (BYN)
   amount               Float
+  /// Payment split from 1C (major). Motivation uses cash+card+personalAccount (no cashless).
+  cash                 Float     @default(0)
+  card                 Float     @default(0)
+  cashless             Float     @default(0)
+  personalAccount      Float     @default(0)
   /// membership | massage | solarium | shop
   saleType             String
   productName          String?

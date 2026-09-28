@@ -57,6 +57,38 @@ export function majorToMinor(amount: number): number {
   return Math.round(amount * 100);
 }
 
+/**
+ * Motivation base (major): cash + card + personalAccount.
+ * Excludes cashless. Falls back when split not yet synced.
+ */
+export function motivationAmountMajor(row: {
+  amount: number;
+  cash?: number | null;
+  card?: number | null;
+  cashless?: number | null;
+  personalAccount?: number | null;
+  paymentMethod?: string | null;
+}): number {
+  const cash = Number(row.cash) || 0;
+  const card = Number(row.card) || 0;
+  const cashless = Number(row.cashless) || 0;
+  const personalAccount = Number(row.personalAccount) || 0;
+  const splitSum = cash + card + cashless + personalAccount;
+  if (splitSum > 0.009) {
+    return cash + card + personalAccount;
+  }
+  const method = (row.paymentMethod ?? '').toLowerCase();
+  if (method === 'cashless') return 0;
+  if (method === 'cash' || method === 'card' || method === 'personalaccount') {
+    return Number(row.amount) || 0;
+  }
+  if (method === 'mixed') {
+    // Without split, cannot isolate cashless — keep full amount until re-sync.
+    return Number(row.amount) || 0;
+  }
+  return Number(row.amount) || 0;
+}
+
 export function dayKey(d: Date): string {
   return d.toISOString().slice(0, 10);
 }

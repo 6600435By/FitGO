@@ -127,7 +127,10 @@ export class AdminStaffRosterController {
     @Query('track') track?: StaffShiftTrack,
   ) {
     // Admins only see own via my-hours; SA uses super-admin route
-    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+    if (
+      !user.roles.includes(UserRole.SUPER_ADMIN) &&
+      !user.roles.includes(UserRole.MANAGER)
+    ) {
       return this.roster.hourlySummary(
         requireClubId(user),
         user.sub,
@@ -146,7 +149,7 @@ export class AdminStaffRosterController {
 
 @Controller('super-admin/staff-roster')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.SUPER_ADMIN)
+@Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
 export class SuperAdminStaffRosterController {
   constructor(private readonly roster: StaffRosterService) {}
 

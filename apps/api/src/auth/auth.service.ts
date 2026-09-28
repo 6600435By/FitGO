@@ -20,6 +20,7 @@ const ROLE_MAP: Record<Role, SharedUserRole> = {
   [Role.SPECIALIST]: SharedUserRole.SPECIALIST,
   [Role.TECH]: SharedUserRole.TECH,
   [Role.ADMIN]: SharedUserRole.ADMIN,
+  [Role.MANAGER]: SharedUserRole.MANAGER,
   [Role.SUPER_ADMIN]: SharedUserRole.SUPER_ADMIN,
 };
 

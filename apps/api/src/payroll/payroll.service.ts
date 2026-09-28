@@ -68,7 +68,8 @@ function asPayProfile(raw: unknown): StaffPayProfile | undefined {
 }
 
 const SECTION_LABELS: Record<ClubPayrollSectionId, string> = {
-  ADMIN: 'Администраторы / управляющая',
+  MANAGER: 'Управляющий',
+  ADMIN: 'Администраторы',
   TRAINER: 'Тренеры (ПТ / ГП)',
   SPECIALIST: 'SPA',
   TECH: 'Техперсонал',
@@ -726,13 +727,10 @@ export class PayrollService {
         );
         if (dept === 'ALL') return true;
         if (dept === 'MANAGER') {
-          return s.roles.includes('ADMIN') && s.baseSalaryMinor > 0;
+          return s.roles.includes('MANAGER');
         }
         if (dept === 'ADMIN') {
-          return (
-            section === 'ADMIN' &&
-            !(s.roles.includes('ADMIN') && s.baseSalaryMinor > 0)
-          );
+          return section === 'ADMIN' && !s.roles.includes('MANAGER');
         }
         return section === dept;
       }
@@ -1122,6 +1120,7 @@ export class PayrollService {
     }
     const roleMap: Record<StaffDepartment, Role> = {
       ADMIN: Role.ADMIN,
+      MANAGER: Role.MANAGER,
       TRAINER: Role.TRAINER,
       SPECIALIST: Role.SPECIALIST,
       TECH: Role.TECH,
@@ -1134,11 +1133,13 @@ export class PayrollService {
         : departments.flatMap((d) =>
             d === 'ADMIN'
               ? (['ADMIN'] as StaffPayTrack[])
-              : d === 'SPECIALIST'
-                ? (['SPA'] as StaffPayTrack[])
-                : d === 'TECH'
-                  ? (['TECH'] as StaffPayTrack[])
-                  : (['PT', 'GROUP_TRAINER'] as StaffPayTrack[]),
+              : d === 'MANAGER'
+                ? (['MANAGER'] as StaffPayTrack[])
+                : d === 'SPECIALIST'
+                  ? (['SPA'] as StaffPayTrack[])
+                  : d === 'TECH'
+                    ? (['TECH'] as StaffPayTrack[])
+                    : (['PT', 'GROUP_TRAINER'] as StaffPayTrack[]),
           );
 
     const peers = await this.prisma.user.findMany({
@@ -1178,7 +1179,13 @@ export class PayrollService {
         roles: {
           some: {
             role: {
-              in: [Role.SPECIALIST, Role.TECH, Role.TRAINER, Role.ADMIN],
+              in: [
+                Role.SPECIALIST,
+                Role.TECH,
+                Role.TRAINER,
+                Role.ADMIN,
+                Role.MANAGER,
+              ],
             },
           },
         },
@@ -1200,15 +1207,17 @@ export class PayrollService {
       const roles = u.roles.map((r) => r.role);
       const track =
         profile?.track ??
-        (roles.includes(Role.SPECIALIST)
-          ? ('SPA' as StaffPayTrack)
-          : roles.includes(Role.TECH)
-            ? ('TECH' as StaffPayTrack)
-            : roles.includes(Role.TRAINER)
-              ? ('PT' as StaffPayTrack)
-              : roles.includes(Role.ADMIN)
-                ? ('ADMIN' as StaffPayTrack)
-                : undefined);
+        (roles.includes(Role.MANAGER)
+          ? ('MANAGER' as StaffPayTrack)
+          : roles.includes(Role.SPECIALIST)
+            ? ('SPA' as StaffPayTrack)
+            : roles.includes(Role.TECH)
+              ? ('TECH' as StaffPayTrack)
+              : roles.includes(Role.TRAINER)
+                ? ('PT' as StaffPayTrack)
+                : roles.includes(Role.ADMIN)
+                  ? ('ADMIN' as StaffPayTrack)
+                  : undefined);
       return {
         userId: u.id,
         name: `${u.lastName} ${u.firstName}`.trim(),
@@ -1573,7 +1582,10 @@ export class PayrollService {
     const trusted = units.filter((u) => u.payrollTrusted);
 
     for (const slice of allPaySlices(profile)) {
-      if (slice.track === 'ADMIN' && sales) {
+      if (
+        (slice.track === 'ADMIN' || slice.track === 'MANAGER') &&
+        sales
+      ) {
         if (slice.membershipSalesPercent) {
           total += Math.round(
             (sales.membershipMinor * slice.membershipSalesPercent) / 100,
@@ -1584,7 +1596,7 @@ export class PayrollService {
             (sales.extraServicesMinor * slice.extraSalesPercent) / 100,
           );
         }
-        if (slice.shopSalesPercent) {
+        if (slice.track === 'ADMIN' && slice.shopSalesPercent) {
           total += Math.round((sales.shopMinor * slice.shopSalesPercent) / 100);
         }
         if (slice.corporateSalesPercent) {
@@ -1714,7 +1726,7 @@ export class PayrollService {
   ): Promise<StaffSalesBreakdown> {
     const needsSales = allPaySlices(profile).some(
       (s) =>
-        s.track === 'ADMIN' &&
+        (s.track === 'ADMIN' || s.track === 'MANAGER') &&
         ((s.membershipSalesPercent ?? 0) > 0 ||
           (s.extraSalesPercent ?? 0) > 0 ||
           (s.shopSalesPercent ?? 0) > 0 ||
@@ -1835,6 +1847,7 @@ export class PayrollService {
     track?: StaffPayTrack,
   ): ClubPayrollSectionId {
     if (employmentKind === 'EXTERNAL') return 'EXTERNAL';
+    if (roles.includes('MANAGER') || track === 'MANAGER') return 'MANAGER';
     if (roles.includes('ADMIN') || track === 'ADMIN') return 'ADMIN';
     if (roles.includes('SPECIALIST') || track === 'SPA') return 'SPECIALIST';
     if (roles.includes('TECH') || track === 'TECH') return 'TECH';
@@ -1849,8 +1862,7 @@ export class PayrollService {
   ): Promise<ClubPayrollReport> {
     this.assertPeriod(from, to);
     const staff = await this.listStaffPaySummaries(clubId);
-    const isManager = (s: (typeof staff)[0]) =>
-      s.roles.includes('ADMIN') && s.baseSalaryMinor > 0;
+    const isManager = (s: (typeof staff)[0]) => s.roles.includes('MANAGER');
     const filtered = staff.filter((s) => {
       const section = this.sectionForStaff(
         s.employmentKind ?? 'STAFF',

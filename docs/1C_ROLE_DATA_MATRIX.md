@@ -49,13 +49,14 @@ OSMI cloud **не используем**. Карта только через `С
 
 ## Управляющий (manager)
 
-Отдельной роли в FitGO нет → админ-аналитика / super-admin.
+Роль `MANAGER` в FitGO. Синк из сегмента 1С «Управляющий» (`staff.managers`).
+Кабинет как у супер-админа без «Модулей» и «Журнала».
 
 | Поле FitGO | Канал | Путь 1С | Статус |
 |------------|-------|---------|--------|
-| revenue / daily reports | fitgo_db | — | есть |
-| sales from 1С | future | _saleLike из scan_ | backlog |
-| FitGOAnalytics `/sales` | optional HTTP | отдельный сервис | не wired |
+| staff sync | fitgo_http `/segments` | `Справочник.СегментыСотрудников` Управляющий | wired |
+| revenue / payroll | fitgo_db | — | есть |
+| sales % (club-wide, no cashless) | fitgo_db SaleTransaction | Analytics sync | wired |
 
 ## Запись в 1С (write)
 
