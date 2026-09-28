@@ -25,8 +25,13 @@ export class SegmentsController {
   }
 
   @Post('sync-staff')
-  syncStaff(@CurrentUser() user: JwtPayload) {
-    return this.segments.syncStaffFrom1C(user);
+  syncStaff(
+    @CurrentUser() user: JwtPayload,
+    @Query('replace') replace?: string,
+  ) {
+    return this.segments.syncStaffFrom1C(user, {
+      replace: replace === '1' || replace === 'true',
+    });
   }
 
   @Post('sync-nomenclature')

@@ -1336,17 +1336,24 @@ export const api = {
   superAdminStaff: (token: string) =>
     request<StaffMember[]>('/super-admin/staff', {}, token),
 
-  superAdminSyncStaffFrom1C: (token: string) =>
+  superAdminSyncStaffFrom1C: (token: string, replace = true) =>
     request<{
       results: Array<{
         key: string;
         added: number;
         updated: number;
         unchanged: number;
+        fetched?: number;
+        pruned?: number;
         error?: string;
       }>;
       credentials: Array<{ email: string; password: string; name: string }>;
-    }>('/super-admin/segments/sync-staff', { method: 'POST' }, token),
+      removed?: number;
+    }>(
+      `/super-admin/segments/sync-staff${replace ? '?replace=1' : ''}`,
+      { method: 'POST' },
+      token,
+    ),
 
   superAdminSyncNomenclatureFrom1C: (
     token: string,

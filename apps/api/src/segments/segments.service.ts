@@ -33,6 +33,7 @@ export type SegmentSyncResult = {
   updated: number;
   unchanged: number;
   deactivated: number;
+  pruned: number;
   /** Сколько членов вернула 1С */
   fetched: number;
   credentials: Array<{ email: string; password: string; name: string }>;
@@ -93,12 +94,20 @@ export class SegmentsService {
     };
   }
 
-  async syncStaffFrom1C(user: JwtPayload): Promise<{
+  async syncStaffFrom1C(
+    user: JwtPayload,
+    opts: { replace?: boolean } = {},
+  ): Promise<{
     results: SegmentSyncResult[];
     credentials: Array<{ email: string; password: string; name: string }>;
+    removed: number;
   }> {
     this.assertLiveFitgo();
     const clubId = requireClubId(user);
+    let removed = 0;
+    if (opts.replace) {
+      removed = await this.removeSyncedStaffStubs(clubId);
+    }
     const results: SegmentSyncResult[] = [];
     const credentials: Array<{ email: string; password: string; name: string }> =
       [];
@@ -107,7 +116,23 @@ export class SegmentsService {
       results.push(r);
       credentials.push(...r.credentials);
     }
-    return { results, credentials };
+    return { results, credentials, removed };
+  }
+
+  /** Удаляет учётки, созданные sync из 1С (stub email), не трогая ручных сотрудников. */
+  private async removeSyncedStaffStubs(clubId: string): Promise<number> {
+    const stubs = await this.prisma.user.findMany({
+      where: {
+        clubId,
+        email: { startsWith: '1c-', endsWith: '@fitgo.local' },
+      },
+      select: { id: true },
+    });
+    if (stubs.length === 0) return 0;
+    const ids = stubs.map((s) => s.id);
+    await this.prisma.user.deleteMany({ where: { id: { in: ids } } });
+    this.logger.log(`Removed ${ids.length} 1C staff stubs for club ${clubId}`);
+    return ids.length;
   }
 
   async syncNomenclature(
@@ -165,6 +190,7 @@ export class SegmentsService {
         unchanged: 0,
         deactivated: 0,
         fetched: 0,
+        pruned: 0,
         credentials: [],
         lastSyncedAt: new Date().toISOString(),
         error: 'UUID сегмента Тренеры ГП ещё не задан в 1С',
@@ -300,6 +326,12 @@ export class SegmentsService {
         ? `Не удалось записать ${failed} из ${fetched}. ${failNotes.join('; ')}`
         : undefined;
 
+    // Убрать роль сегмента у тех, кого больше нет в составе 1С (soft: isActive=false если ролей не осталось)
+    const memberIds = new Set(
+      members.data.map((m) => m.externalId?.trim()).filter(Boolean) as string[],
+    );
+    const pruned = await this.pruneRoleNotInSegment(clubId, role, memberIds);
+
     await this.saveState(clubId, key, {
       lastStatus: failed > 0 && added === 0 ? 'error' : 'ok',
       lastError: error ?? null,
@@ -313,11 +345,59 @@ export class SegmentsService {
       updated,
       unchanged,
       deactivated: 0,
+      pruned,
       fetched,
       credentials,
       lastSyncedAt: new Date().toISOString(),
       error,
     };
+  }
+
+  /**
+   * Снимает роль сегмента с сотрудников, чьего externalId нет в актуальном составе.
+   * Если staff-ролей не осталось — isActive=false. Stub 1c-* без других ролей — удаляем.
+   */
+  private async pruneRoleNotInSegment(
+    clubId: string,
+    role: Role,
+    memberExternalIds: Set<string>,
+  ): Promise<number> {
+    const candidates = await this.prisma.user.findMany({
+      where: {
+        clubId,
+        externalId: { not: null },
+        roles: { some: { role } },
+      },
+      include: { roles: true },
+    });
+    let pruned = 0;
+    const staffRoles: Role[] = [
+      Role.ADMIN,
+      Role.TRAINER,
+      Role.SPECIALIST,
+      Role.TECH,
+    ];
+    for (const u of candidates) {
+      const ext = u.externalId?.trim();
+      if (!ext || memberExternalIds.has(ext)) continue;
+      await this.prisma.userRole.deleteMany({
+        where: { userId: u.id, role },
+      });
+      const remaining = u.roles.filter((r) => r.role !== role);
+      const stillStaff = remaining.some((r) => staffRoles.includes(r.role));
+      const isStub =
+        u.email.startsWith('1c-') && u.email.endsWith('@fitgo.local');
+      if (!stillStaff && isStub && !u.loginEnabled) {
+        await this.prisma.user.delete({ where: { id: u.id } });
+      } else if (!stillStaff) {
+        await this.prisma.user.update({
+          where: { id: u.id },
+          data: { isActive: false },
+        });
+      }
+      pruned += 1;
+    }
+    return pruned;
   }
 
   private async syncNomSegment(
@@ -473,6 +553,7 @@ export class SegmentsService {
       updated,
       unchanged,
       deactivated,
+      pruned: 0,
       fetched,
       credentials: [],
       lastSyncedAt: new Date().toISOString(),
@@ -496,6 +577,7 @@ export class SegmentsService {
       updated: 0,
       unchanged: 0,
       deactivated: 0,
+      pruned: 0,
       fetched: 0,
       credentials: [],
       lastSyncedAt: null,
