@@ -104,6 +104,43 @@ export class SegmentsService {
   }> {
     this.assertLiveFitgo();
     const clubId = requireClubId(user);
+    const provider = this.fitness.getProvider();
+    if (!provider.getSegmentMembers) {
+      throw new ServiceUnavailableException(
+        'getSegmentMembers недоступен — нужен FORMA_FITGO_URL',
+      );
+    }
+
+    // Сначала читаем все сегменты — не удаляем stub, если 1С вернула пустоту (битый UUID/не опубликован BSL)
+    const prefetched = new Map<
+      string,
+      {
+        found: boolean;
+        name?: string;
+        data: Array<{
+          externalId: string;
+          name: string;
+          code?: string;
+          phone?: string;
+        }>;
+      } | null
+    >();
+    let totalFetched = 0;
+    for (const key of STAFF_KEYS) {
+      const members = await provider.getSegmentMembers({ key });
+      prefetched.set(key, members);
+      if (members?.found && Array.isArray(members.data)) {
+        const bad =
+          typeof members.name === 'string' && /не найден/i.test(members.name);
+        if (!bad) totalFetched += members.data.length;
+      }
+    }
+    if (totalFetched === 0) {
+      throw new ServiceUnavailableException(
+        '1С вернула 0 сотрудников по всем staff-сегментам. Проверьте: 1) в конфигураторе обновлён FitGOIntegration_Клиенты.bsl и переопубликован fitgo; 2) в сегментах нажато «Сформировать сегмент»; 3) имена сегментов: «Администраторы приложение», «Спа специалисты», «Тренера все», «Тренера ГП приложение».',
+      );
+    }
+
     let removed = 0;
     if (opts.replace) {
       removed = await this.removeSyncedStaffStubs(clubId);
@@ -112,7 +149,7 @@ export class SegmentsService {
     const credentials: Array<{ email: string; password: string; name: string }> =
       [];
     for (const key of STAFF_KEYS) {
-      const r = await this.syncStaffSegment(clubId, key);
+      const r = await this.syncStaffSegment(clubId, key, prefetched.get(key));
       results.push(r);
       credentials.push(...r.credentials);
     }
@@ -155,6 +192,16 @@ export class SegmentsService {
   private async syncStaffSegment(
     clubId: string,
     key: string,
+    prefetched?: {
+      found: boolean;
+      name?: string;
+      data: Array<{
+        externalId: string;
+        name: string;
+        code?: string;
+        phone?: string;
+      }>;
+    } | null,
   ): Promise<SegmentSyncResult> {
     const role = ROLE_BY_KEY[key];
     if (!role) {
@@ -168,12 +215,26 @@ export class SegmentsService {
         'getSegmentMembers недоступен — нужен FORMA_FITGO_URL (FitGOIntegration)',
       );
     }
-    const members = await provider.getSegmentMembers({ key });
+    const members =
+      prefetched !== undefined
+        ? prefetched
+        : await provider.getSegmentMembers({ key });
     if (!members) {
       return this.failResult(
         clubId,
         key,
         'segments/members недоступен (404/ошибка) — опубликуйте шаблоны в FitGOIntegration',
+      );
+    }
+    // Битая ссылка UUID («Объект не найден») с пустым data — как not found
+    const badName =
+      typeof members.name === 'string' &&
+      /не найден/i.test(members.name);
+    if (members.found && badName && members.data.length === 0) {
+      return this.failResult(
+        clubId,
+        key,
+        `Сегмент ${key}: UUID не резолвится в 1С (Объект не найден). Обновите FitGOIntegration_Клиенты.bsl (поиск по имени) и переопубликуйте.`,
       );
     }
     if (!members.found && key === 'staff.groupTrainers') {
@@ -332,12 +393,15 @@ export class SegmentsService {
     const memberIds = new Set(
       members.data.map((m) => m.externalId?.trim()).filter(Boolean) as string[],
     );
+    // Не prune-ить весь клуб, если сегмент пустой из-за ошибки резолва
     const pruned =
-      key === 'staff.groupTrainers'
-        ? await this.pruneGroupProgramsNotInSegment(clubId, memberIds)
-        : await this.pruneRoleNotInSegment(clubId, role, memberIds, {
-            keepIfGroupPrograms: key === 'staff.trainers',
-          });
+      members.data.length === 0 && badName
+        ? 0
+        : key === 'staff.groupTrainers'
+          ? await this.pruneGroupProgramsNotInSegment(clubId, memberIds)
+          : await this.pruneRoleNotInSegment(clubId, role, memberIds, {
+              keepIfGroupPrograms: key === 'staff.trainers',
+            });
 
     await this.saveState(clubId, key, {
       lastStatus: failed > 0 && added === 0 ? 'error' : 'ok',
