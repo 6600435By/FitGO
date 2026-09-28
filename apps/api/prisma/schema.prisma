@@ -398,6 +398,8 @@ model Club {
   salesSyncStates      SalesSyncState[]
   clubRevenueEntries   ClubRevenueEntry[]
   clubRevenueManuals   ClubRevenueManualEntry[]
+  catalogProducts      CatalogProduct[]
+  segmentSyncStates    SegmentSyncState[]
 }
 
 model ClubTheme {
@@ -444,6 +446,8 @@ model User {
   externalId String?
   /// Код сотрудника в 1С (например 000000151). Для выборок по сотруднику.
   employeeCode String? @unique
+  /// true — тренер сегмента «Тренеры ГП» (для payroll GROUP / фильтра Staff).
+  groupPrograms Boolean @default(false)
   /// false — учётка есть, пароль входа ещё не выдан.
   loginEnabled Boolean @default(true)
   referralCode String? @unique
@@ -1235,6 +1239,12 @@ model AdminTask {
   dueAt       DateTime?
   status      AdminTaskStatus @default(OPEN)
   completedAt DateTime?
+  /// MANUAL | DEBT_OVERDUE | MEMBERSHIP_EXPIRING
+  source      String          @default("MANUAL")
+  /// Idempotency key for auto tasks (e.g. debt:{saleId}:2026-09)
+  dedupeKey   String?
+  relatedSaleId String?
+  relatedUserId String?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
@@ -1242,8 +1252,10 @@ model AdminTask {
   assignee  User @relation("AdminTaskAssignee", fields: [assigneeId], references: [id], onDelete: Cascade)
   createdBy User @relation("AdminTaskCreator", fields: [createdById], references: [id], onDelete: Cascade)
 
+  @@unique([clubId, dedupeKey])
   @@index([clubId, assigneeId, status])
   @@index([clubId, status])
+  @@index([clubId, source])
 }
 
 model StaffAuditLog {
@@ -1274,6 +1286,8 @@ model SpaService {
   priceMinor  Int
   currency    String         @default("BYN")
   active      Boolean        @default(true)
+  /// 1C nomenclature UUID from segment nom.spaCabinet
+  externalId  String?
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
@@ -1282,6 +1296,7 @@ model SpaService {
   bookings           SpaBooking[]
   quotaRuleServices  SpaQuotaRuleService[]
 
+  @@unique([clubId, externalId])
   @@index([clubId, active])
   @@index([clubId, kind])
 }
@@ -1674,6 +1689,45 @@ model SalesSyncState {
   club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
 
   @@unique([clubId, resourceKey])
+}
+
+/// Last sync timestamp per FitGO app segment key (staff.* / nom.*).
+model SegmentSyncState {
+  id            String    @id @default(cuid())
+  clubId        String
+  segmentKey    String
+  lastSyncedAt  DateTime?
+  lastStatus    String?
+  lastError     String?
+  lastAdded     Int       @default(0)
+  lastUnchanged Int       @default(0)
+  updatedAt     DateTime  @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, segmentKey])
+  @@index([clubId])
+}
+
+/// Membership / shop catalog rows synced from 1C nomenclature segments.
+model CatalogProduct {
+  id          String   @id @default(cuid())
+  clubId      String
+  /// membership | shop
+  kind        String
+  externalId  String
+  name        String
+  code        String?
+  priceMinor  Int      @default(0)
+  unit        String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, kind, externalId])
+  @@index([clubId, kind, active])
 }
 
 /// Club revenue cache from 1C Analytics (ОтчетПоВыручке-style). Separate from SaleTransaction motivation.

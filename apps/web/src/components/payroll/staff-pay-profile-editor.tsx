@@ -335,6 +335,26 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
                 })
               }
             />
+            <label className="flex items-start gap-2 text-sm sm:col-span-2 lg:col-span-3">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={profile.considerDebtsInMotivation !== false}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    considerDebtsInMotivation: e.target.checked,
+                  })
+                }
+              />
+              <span>
+                <span className="text-slate-200">Учитывать долги в мотивации</span>
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  В ЗП входят только оплаченные продажи. Просроченный долг продавца
+                  (&gt;7 дней) показывается предупреждением в расчёте.
+                </span>
+              </span>
+            </label>
           </div>
         </div>
       )}

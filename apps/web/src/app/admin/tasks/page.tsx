@@ -37,6 +37,15 @@ export default function AdminTasksPage() {
           {tasks.map((task) => (
             <li key={task.id} className="card">
               <p className="font-medium">{task.title}</p>
+              {task.source && task.source !== 'MANUAL' ? (
+                <p className="text-xs text-amber-300/90">
+                  {task.source === 'DEBT_OVERDUE'
+                    ? 'Автозадача: просроченный долг'
+                    : task.source === 'MEMBERSHIP_EXPIRING'
+                      ? 'Автозадача: абонемент истекает'
+                      : task.source}
+                </p>
+              ) : null}
               {task.description && <p className="text-sm text-slate-400">{task.description}</p>}
               {task.dueAt && <p className="text-xs text-slate-500">До: {formatDateTime(task.dueAt)}</p>}
               {task.status !== AdminTaskStatus.DONE && (

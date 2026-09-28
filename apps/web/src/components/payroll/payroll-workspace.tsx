@@ -38,6 +38,131 @@ function escapeHtml(s: string) {
     .replace(/"/g, '&quot;');
 }
 
+function payslipHtmlFromSummary(
+  summary: PayrollPeriodSummary,
+  fields: PayslipFields,
+): string {
+  const cur = summary.currency;
+  const bonuses = summary.adjustments.filter((a) => a.amountMinor > 0);
+  const fines = summary.adjustments.filter((a) => a.amountMinor < 0);
+  const parts: string[] = ['<section class="slip">', '<h1>Расчётный лист</h1>'];
+  if (fields.fio) {
+    parts.push(`<p class="meta"><strong>ФИО:</strong> ${escapeHtml(summary.performerName)}</p>`);
+  }
+  if (fields.period) {
+    parts.push(
+      `<p class="meta"><strong>Период:</strong> ${escapeHtml(summary.from)} — ${escapeHtml(summary.to)}</p>`,
+    );
+  }
+  if (fields.motivation) {
+    parts.push('<h2>Начисления</h2><table>');
+    parts.push(
+      `<tr><td>Оклад / часы</td><td class="num">${escapeHtml(money(summary.baseSalaryMinor, cur))}</td></tr>`,
+    );
+    parts.push(
+      `<tr><td>Мотивация</td><td class="num">${escapeHtml(money(summary.motivationMinor, cur))}</td></tr>`,
+    );
+    parts.push('</table>');
+    const chips =
+      summary.payChips?.length > 0 ? summary.payChips : ['Ставки не заданы'];
+    parts.push(
+      `<p class="chips">${chips.map((c) => escapeHtml(c)).join(' · ')}</p>`,
+    );
+  }
+  if (fields.bonus) {
+    parts.push('<h2>Премии</h2>');
+    if (!bonuses.length) parts.push('<p class="empty">нет</p>');
+    else {
+      parts.push('<table>');
+      for (const a of bonuses) {
+        parts.push(
+          `<tr><td>${escapeHtml(a.reason)}</td><td class="num">+${escapeHtml(money(a.amountMinor, cur))}</td></tr>`,
+        );
+      }
+      parts.push('</table>');
+    }
+  }
+  if (fields.fine) {
+    parts.push('<h2>Штрафы</h2>');
+    if (!fines.length) parts.push('<p class="empty">нет</p>');
+    else {
+      parts.push('<table>');
+      for (const a of fines) {
+        parts.push(
+          `<tr><td>${escapeHtml(a.reason)}</td><td class="num">${escapeHtml(money(a.amountMinor, cur))}</td></tr>`,
+        );
+      }
+      parts.push('</table>');
+    }
+  }
+  if (fields.shifts) {
+    const shifts = summary.workUnits.filter((u) => u.kind === 'SHIFT');
+    parts.push('<h2>Смены</h2>');
+    if (!shifts.length) parts.push('<p class="empty">нет</p>');
+    else {
+      parts.push('<table>');
+      for (const u of shifts) {
+        parts.push(
+          `<tr><td>${escapeHtml(u.occurredAt.slice(0, 10))} · ${u.quantity} ч</td><td class="num">${escapeHtml(money(u.priceMinor ?? 0, cur))}</td></tr>`,
+        );
+      }
+      parts.push('</table>');
+    }
+  }
+  if (fields.totals) {
+    parts.push(
+      `<p class="total"><strong>Итого к выплате:</strong> ${escapeHtml(money(summary.totalMinor, cur))}</p>`,
+    );
+  }
+  parts.push('</section>');
+  return parts.join('\n');
+}
+
+function printHtmlPayslips(sections: Array<{ name: string; html: string }>) {
+  if (!sections.length) return;
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute(
+    'style',
+    'position:fixed;right:0;bottom:0;width:0;height:0;border:0',
+  );
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
+  if (!doc) {
+    document.body.removeChild(iframe);
+    return;
+  }
+  const body = sections.map((s) => s.html).join('\n<div class="page-break"></div>\n');
+  doc.open();
+  doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Расчётные листы</title>
+<style>
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:24px;font-size:13px;color:#111;line-height:1.45;background:#fff}
+  .slip{max-width:640px;margin:0 auto 24px}
+  h1{font-size:18px;margin:0 0 12px;letter-spacing:-0.02em}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#555;margin:16px 0 6px}
+  table{width:100%;border-collapse:collapse}
+  td{padding:4px 0;border-bottom:1px solid #e5e7eb;vertical-align:top}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .meta{margin:4px 0;color:#333}
+  .chips{font-size:11px;color:#666;margin-top:6px}
+  .empty{color:#999;margin:0}
+  .total{margin-top:16px;padding-top:12px;border-top:2px solid #111;font-size:15px}
+  .page-break{page-break-after:always;height:0}
+  @media print{body{padding:12px}.page-break{break-after:page}}
+</style></head><body>${body}</body></html>`);
+  doc.close();
+  const run = () => {
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } finally {
+      setTimeout(() => {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      }, 800);
+    }
+  };
+  setTimeout(run, 200);
+}
+
 /** Safe filename: ФИО + period, without forbidden path characters. */
 function payslipFilename(name: string, from: string, to: string): string {
   const safe = name
@@ -115,6 +240,8 @@ export function PayrollWorkspace({ mode }: Props) {
   const [printFields, setPrintFields] = useState<PayslipFields>(DEFAULT_PAYSLIP);
   const [docPreview, setDocPreview] = useState('');
   const [deptFilter, setDeptFilter] = useState<DeptFilter>('ALL');
+  const [batchIds, setBatchIds] = useState<Set<string>>(new Set());
+  const [batchPrinting, setBatchPrinting] = useState(false);
   const canEdit = mode === 'super';
 
   const [employeeReportOpen, setEmployeeReportOpen] = useState(mode === 'admin');
@@ -412,37 +539,47 @@ export function PayrollWorkspace({ mode }: Props) {
 
   const printPayslipDoc = () => {
     const text = docPreview || buildPayslipText(printFields);
-    if (!text) return;
-    const iframe = document.createElement('iframe');
-    iframe.setAttribute(
-      'style',
-      'position:fixed;right:0;bottom:0;width:0;height:0;border:0',
-    );
-    document.body.appendChild(iframe);
-    const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-    if (!doc) {
-      document.body.removeChild(iframe);
-      setMessage('Не удалось открыть печать');
-      return;
-    }
-    doc.open();
-    doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Расчётный лист</title>
-<style>
-  body{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;padding:24px;font-size:13px;color:#111;line-height:1.45}
-  @media print{body{padding:12px}}
-</style></head><body>${escapeHtml(text)}</body></html>`);
-    doc.close();
-    const run = () => {
-      try {
-        iframe.contentWindow?.focus();
-        iframe.contentWindow?.print();
-      } finally {
-        setTimeout(() => {
-          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-        }, 800);
+    if (!text || !summary) return;
+    printHtmlPayslips([
+      {
+        name: summary.performerName,
+        html: payslipHtmlFromSummary(summary, printFields),
+      },
+    ]);
+  };
+
+  const toggleBatchId = (id: string) => {
+    setBatchIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const printBatchPayslips = async () => {
+    if (!canEdit || batchIds.size === 0) return;
+    const token = getToken();
+    if (!token) return;
+    setBatchPrinting(true);
+    setMessage('');
+    try {
+      const ids = [...batchIds];
+      const sections: Array<{ name: string; html: string }> = [];
+      for (const id of ids) {
+        const s = await api.payrollSummary(token, { userId: id, from, to });
+        sections.push({
+          name: s.performerName,
+          html: payslipHtmlFromSummary(s, DEFAULT_PAYSLIP),
+        });
       }
-    };
-    setTimeout(run, 200);
+      printHtmlPayslips(sections);
+      setMessage(`Отправлено на печать: ${sections.length} расчётник(ов)`);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка пакетной печати');
+    } finally {
+      setBatchPrinting(false);
+    }
   };
 
   return (
@@ -615,6 +752,18 @@ export function PayrollWorkspace({ mode }: Props) {
           >
             {loading ? 'Считаем…' : 'Рассчитать'}
           </button>
+          {canEdit && (
+            <button
+              type="button"
+              className="btn-secondary w-full lg:min-w-[9rem] lg:w-auto"
+              disabled={batchPrinting || batchIds.size === 0}
+              onClick={() => void printBatchPayslips()}
+            >
+              {batchPrinting
+                ? 'Печать…'
+                : `Печать (${batchIds.size})`}
+            </button>
+          )}
           <button
             type="button"
             className="btn-secondary w-full lg:w-auto"
@@ -639,6 +788,48 @@ export function PayrollWorkspace({ mode }: Props) {
             </button>
           )}
         </div>
+
+        {canEdit && filteredStaff.length > 0 && (
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                Пакетная печать расчётников
+              </p>
+              <div className="flex gap-2 text-xs">
+                <button
+                  type="button"
+                  className="text-fitgo-300 hover:underline"
+                  onClick={() =>
+                    setBatchIds(new Set(filteredStaff.map((s) => s.userId)))
+                  }
+                >
+                  Выбрать всех в фильтре
+                </button>
+                <button
+                  type="button"
+                  className="text-slate-400 hover:underline"
+                  onClick={() => setBatchIds(new Set())}
+                >
+                  Снять
+                </button>
+              </div>
+            </div>
+            <ul className="grid max-h-40 gap-1 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
+              {filteredStaff.map((s) => (
+                <li key={s.userId}>
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-slate-900">
+                    <input
+                      type="checkbox"
+                      checked={batchIds.has(s.userId)}
+                      onChange={() => toggleBatchId(s.userId)}
+                    />
+                    <span className="truncate text-slate-200">{s.name}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {selected && (
           <div className="mt-3 space-y-1.5 border-t border-slate-800/80 pt-2">

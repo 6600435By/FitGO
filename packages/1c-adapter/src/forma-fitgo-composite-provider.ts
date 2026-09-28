@@ -131,6 +131,20 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     );
   }
 
+  getGroupSessionRoster(appointmentId: string) {
+    return (
+      this.fitgo.getGroupSessionRoster?.(appointmentId) ?? Promise.resolve(null)
+    );
+  }
+
+  getSegmentsConfig() {
+    return this.fitgo.getSegmentsConfig?.() ?? Promise.resolve(null);
+  }
+
+  getSegmentMembers(input: { key?: string; uuid?: string }) {
+    return this.fitgo.getSegmentMembers?.(input) ?? Promise.resolve(null);
+  }
+
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]> {
     return this.fitgo.getVisits(externalId, period);
   }

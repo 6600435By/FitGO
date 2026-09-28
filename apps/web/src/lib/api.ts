@@ -1336,6 +1336,35 @@ export const api = {
   superAdminStaff: (token: string) =>
     request<StaffMember[]>('/super-admin/staff', {}, token),
 
+  superAdminSyncStaffFrom1C: (token: string) =>
+    request<{
+      results: Array<{
+        key: string;
+        added: number;
+        updated: number;
+        unchanged: number;
+        error?: string;
+      }>;
+      credentials: Array<{ email: string; password: string; name: string }>;
+    }>('/super-admin/segments/sync-staff', { method: 'POST' }, token),
+
+  superAdminSyncNomenclatureFrom1C: (
+    token: string,
+    kind?: 'spa' | 'membership' | 'shop' | 'all',
+  ) => {
+    const q = kind && kind !== 'all' ? `?kind=${kind}` : '';
+    return request<{
+      results: Array<{
+        key: string;
+        added: number;
+        updated: number;
+        unchanged: number;
+        deactivated: number;
+        error?: string;
+      }>;
+    }>(`/super-admin/segments/sync-nomenclature${q}`, { method: 'POST' }, token);
+  },
+
   superAdminCreateStaff: (
     token: string,
     data: {

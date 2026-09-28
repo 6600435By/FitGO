@@ -425,6 +425,24 @@ export class PayrollService {
       );
     }
     if (sales.hint) anomalyHints.push(sales.hint);
+
+    const adminSlice = sliceForTrack(profile, 'ADMIN');
+    if (
+      slices.some((s) => s.track === 'ADMIN') &&
+      adminSlice.considerDebtsInMotivation !== false
+    ) {
+      const overdue = await this.countOverdueSellerDebts(
+        clubId,
+        performerId,
+        to,
+      );
+      if (overdue.count > 0) {
+        anomalyHints.push(
+          `Просроченный долг продавца (>7 дн.): ${overdue.count} поз. на ${(overdue.amountMinor / 100).toFixed(2)} BYN — в мотивацию не входит до оплаты (см. «Мои долги»)`,
+        );
+      }
+    }
+
     const staffAddedGroups = trusted.filter(
       (u) => u.kind === 'GROUP' && u.trustResolution === 'RESOLVED',
     ).length;
@@ -1645,6 +1663,46 @@ export class PayrollService {
 
     void periodFrom;
     return total;
+  }
+
+  private async countOverdueSellerDebts(
+    clubId: string,
+    userId: string,
+    asOfYmd: string,
+  ): Promise<{ count: number; amountMinor: number }> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+      select: { employeeCode: true },
+    });
+    if (!user?.employeeCode) return { count: 0, amountMinor: 0 };
+    const cutoff = new Date(`${asOfYmd}T23:59:59`);
+    cutoff.setDate(cutoff.getDate() - 7);
+    const rows = await this.prisma.saleTransaction.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        paidAt: null,
+        employeeExternalId: user.employeeCode,
+        soldAt: { lte: cutoff },
+      },
+      select: { amount: true },
+    });
+    // Also match by UUID-style employeeExternalId if stored that way
+    const byUuid = await this.prisma.saleTransaction.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        paidAt: null,
+        employeeExternalId: userId,
+        soldAt: { lte: cutoff },
+      },
+      select: { amount: true },
+    });
+    const all = [...rows, ...byUuid];
+    const amountMinor = Math.round(
+      all.reduce((s, r) => s + Number(r.amount || 0), 0) * 100,
+    );
+    return { count: all.length, amountMinor };
   }
 
   private async resolveStaffSales(

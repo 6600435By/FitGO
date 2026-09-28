@@ -14,17 +14,22 @@
 //   GET  /v1/pt-session-payment         → (план) сверка оплаты ПТ: clientPhone|clientExternalId + occurredAt
 //   GET  /v1/visits
 //   GET  /v1/card
+//   GET  /v1/group-session-roster         → GroupSessionRosterGET (?appointmentId=)
+//   GET  /v1/segments/config              → SegmentsConfigGET
+//   GET  /v1/segments/members             → SegmentsMembersGET (?key= | ?uuid=)
 //
 // Продажи админов для ЗП: ночной sync FitGO читает FitGOAnalytics GET /sales
 // (FORMA_ANALYTICS_URL), не этот HTTP-сервис. Не вызывать FFS_ПродажиАдминов.erf.
 //
 // В конфигураторе (пример freeze; consume/sale/debts — аналогично):
 //   Имя шаблона: freeze | consume-service | spa-service-sale | cleanup-broken-visits | SpecialistServiceDebts
+//                | group-session-roster | segments-config | segments-members
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
 //                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
+//                | /v1/group-session-roster | /v1/segments/config | /v1/segments/members
 //                (без /v1 приложение метод не найдёт: Nest ходит на .../hs/fitgo/v1)
 //   Метод POST → FreezePOST | ConsumeServicePOST | SpaSalePOST | CleanupBrokenSpaVisitsPOST
-//   Метод GET  → SpecialistServiceDebtsGET
+//   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | SegmentsConfigGET | SegmentsMembersGET
 //
 // У расширения снять флаг «Защита от опасных действий»: проведение документов
 // создаёт COM-объект WinHttp (рассылки), иначе в HTTP-сервисе будет 500 «Предупреждение безопасности».
@@ -516,6 +521,61 @@
 
     Карта = FitGOIntegrationКлиенты.КартаДоступаJSON(Контрагент);
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Карта);
+КонецФункции
+
+// Состав группового занятия из 1С (эталон журнала FitGO, baselineQuality=FULL).
+// Query: appointmentId — UUID занятия из расписания Forma / ИдентификаторЗанятия.
+Функция GroupSessionRosterGET(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    AppointmentId = "";
+    Попытка
+        AppointmentId = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("appointmentId")));
+    Исключение
+    КонецПопытки;
+    Если ПустаяСтрока(AppointmentId) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "appointmentId required");
+    КонецЕсли;
+
+    Данные = FitGOIntegrationКлиенты.СоставГрупповогоЗанятияJSON(AppointmentId);
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
+КонецФункции
+
+// Карта сегментов «для приложения» (staff + nomenclature).
+Функция SegmentsConfigGET(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    Данные = FitGOIntegrationКлиенты.СегментыКонфигJSON();
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
+КонецФункции
+
+// Члены сегмента: ?key=staff.admins | ?uuid=<uuid сегмента>
+Функция SegmentsMembersGET(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    Ключ = "";
+    UuidСтр = "";
+    Попытка
+        Ключ = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("key")));
+    Исключение
+    КонецПопытки;
+    Попытка
+        UuidСтр = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("uuid")));
+    Исключение
+    КонецПопытки;
+
+    Если ПустаяСтрока(Ключ) И ПустаяСтрока(UuidСтр) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "key or uuid required");
+    КонецЕсли;
+
+    Данные = FitGOIntegrationКлиенты.СегментыЧленыJSON(Ключ, UuidСтр);
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
 КонецФункции
 
 Функция РазрешитьКонтрагента(Запрос)

@@ -21,6 +21,7 @@ import { PayrollModule } from './payroll/payroll.module';
 import { PtTimesheetModule } from './pt-timesheet/pt-timesheet.module';
 import { StaffRosterModule } from './staff-roster/staff-roster.module';
 import { AdminSalesModule } from './admin-sales/admin-sales.module';
+import { SegmentsModule } from './segments/segments.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { AdminSalesModule } from './admin-sales/admin-sales.module';
     PtTimesheetModule,
     StaffRosterModule,
     AdminSalesModule,
+    SegmentsModule,
   ],
 })
 export class AppModule {}

@@ -170,24 +170,57 @@ export default function AdminSpaPage() {
       </div>
 
       {tab === 'services' && (
-        <ul className="space-y-2">
-          {services.map((s) => (
-            <li key={s.id} className="card flex justify-between gap-2 text-sm">
-              <div>
-                <p className="font-medium">{s.name}</p>
-                <p className="text-slate-400">
-                  {s.kind} · {s.durationMin} мин · buffer {s.bufferMin}
-                </p>
-              </div>
-              <div className="text-right">
-                <p>{formatPrice(s.priceMinor, s.currency)}</p>
-                <p className="text-xs text-slate-500">
-                  {s.active ? 'активна' : 'скрыта'}
-                </p>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <div className="space-y-3">
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="btn-secondary text-sm"
+              disabled={busy}
+              onClick={async () => {
+                const token = getToken();
+                if (!token) return;
+                setBusy(true);
+                try {
+                  const res = await api.superAdminSyncNomenclatureFrom1C(
+                    token,
+                    'spa',
+                  );
+                  const r = res.results[0];
+                  setMessage(
+                    r
+                      ? `Из 1С SPA: +${r.added}, upd ${r.updated}, off ${r.deactivated}${r.error ? ` (${r.error})` : ''}`
+                      : 'Sync выполнен',
+                  );
+                  await reload();
+                } catch (err) {
+                  setMessage(err instanceof Error ? err.message : 'Ошибка sync');
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Обновить из 1С
+            </button>
+          </div>
+          <ul className="space-y-2">
+            {services.map((s) => (
+              <li key={s.id} className="card flex justify-between gap-2 text-sm">
+                <div>
+                  <p className="font-medium">{s.name}</p>
+                  <p className="text-slate-400">
+                    {s.kind} · {s.durationMin} мин · buffer {s.bufferMin}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p>{formatPrice(s.priceMinor, s.currency)}</p>
+                  <p className="text-xs text-slate-500">
+                    {s.active ? 'активна' : 'скрыта'}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {tab === 'rules' && (

@@ -339,6 +339,113 @@ export class FitgoHttpProvider {
     }
   }
 
+  async getGroupSessionRoster(appointmentId: string): Promise<{
+    data: Array<{
+      externalId: string;
+      clientName: string;
+      phone?: string;
+    }>;
+  } | null> {
+    const id = appointmentId?.trim();
+    if (!id) return null;
+    try {
+      const data = await this.request<{
+        data?: Array<{
+          externalId: string;
+          clientName: string;
+          phone?: string;
+        }>;
+      }>(
+        `/group-session-roster?appointmentId=${encodeURIComponent(id)}`,
+        { timeoutMs: 30_000 },
+      );
+      if (!data || !Array.isArray(data.data)) return null;
+      return { data: data.data };
+    } catch {
+      return null;
+    }
+  }
+
+  async getSegmentsConfig(): Promise<{
+    segments: Array<{
+      key: string;
+      uuid: string;
+      name: string;
+      type: 'employee' | 'nomenclature';
+      found: boolean;
+      count: number;
+    }>;
+  } | null> {
+    try {
+      const data = await this.request<{
+        segments?: Array<{
+          key: string;
+          uuid: string;
+          name: string;
+          type: 'employee' | 'nomenclature';
+          found: boolean;
+          count: number;
+        }>;
+      }>('/segments/config', { timeoutMs: 30_000 });
+      if (!data || !Array.isArray(data.segments)) return null;
+      return { segments: data.segments };
+    } catch {
+      return null;
+    }
+  }
+
+  async getSegmentMembers(input: {
+    key?: string;
+    uuid?: string;
+  }): Promise<{
+    key?: string;
+    uuid?: string;
+    type?: string;
+    name?: string;
+    found: boolean;
+    data: Array<{
+      externalId: string;
+      name: string;
+      code?: string;
+      phone?: string;
+      price?: number;
+      unit?: string;
+    }>;
+  } | null> {
+    if (!input.key && !input.uuid) return null;
+    const q = new URLSearchParams();
+    if (input.key) q.set('key', input.key);
+    if (input.uuid) q.set('uuid', input.uuid);
+    try {
+      const data = await this.request<{
+        key?: string;
+        uuid?: string;
+        type?: string;
+        name?: string;
+        found?: boolean;
+        data?: Array<{
+          externalId: string;
+          name: string;
+          code?: string;
+          phone?: string;
+          price?: number;
+          unit?: string;
+        }>;
+      }>(`/segments/members?${q.toString()}`, { timeoutMs: 60_000 });
+      if (!data) return null;
+      return {
+        key: data.key,
+        uuid: data.uuid,
+        type: data.type,
+        name: data.name,
+        found: Boolean(data.found),
+        data: Array.isArray(data.data) ? data.data : [],
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]> {
     const params = new URLSearchParams({ externalId });
     if (period?.from) params.set('from', period.from);

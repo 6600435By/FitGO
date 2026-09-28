@@ -901,6 +901,8 @@ export interface StaffMember {
   employeeCode?: string;
   /** false — пароль входа ещё не выдан. */
   loginEnabled?: boolean;
+  /** Тренер сегмента «Тренеры ГП». */
+  groupPrograms?: boolean;
   roles: UserRole[];
   isActive: boolean;
   /** STAFF (default) or EXTERNAL (сторонние в отчёте ЗП). */
@@ -921,6 +923,8 @@ export interface AdminTaskItem {
   status: AdminTaskStatus;
   dueAt?: string;
   completedAt?: string;
+  /** MANUAL | DEBT_OVERDUE | MEMBERSHIP_EXPIRING */
+  source?: string;
   assignee: { id: string; firstName: string; lastName: string };
   createdAt: string;
 }

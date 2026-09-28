@@ -76,6 +76,8 @@ export default function SuperAdminStaffPage() {
     roles: ['TRAINER'] as Array<'ADMIN' | 'TRAINER' | 'SPECIALIST' | 'TECH'>,
   });
   const [error, setError] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState('');
 
   const load = () => {
     const token = getToken();
@@ -185,13 +187,57 @@ export default function SuperAdminStaffPage() {
             Чипы мотивации — схема ЗП. Редактирование на карточке сотрудника.
           </p>
         </div>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          className="btn-primary shrink-0 text-sm"
-        >
-          {showForm ? 'Отмена' : '+ Добавить'}
-        </button>
+        <div className="flex shrink-0 gap-2">
+          <button
+            type="button"
+            className="btn-secondary text-sm"
+            disabled={syncing}
+            onClick={async () => {
+              const token = getToken();
+              if (!token) return;
+              setSyncing(true);
+              setError('');
+              setSyncMsg('');
+              try {
+                const res = await api.superAdminSyncStaffFrom1C(token);
+                const added = res.results.reduce((s, r) => s + r.added, 0);
+                const updated = res.results.reduce((s, r) => s + r.updated, 0);
+                const errs = res.results
+                  .filter((r) => r.error)
+                  .map((r) => `${r.key}: ${r.error}`)
+                  .join('; ');
+                setSyncMsg(
+                  `Из 1С: +${added} новых, ${updated} обновлено` +
+                    (errs ? `. ${errs}` : ''),
+                );
+                if (res.credentials[0]) {
+                  setCredentials({
+                    email: res.credentials[0].email,
+                    password: res.credentials[0].password,
+                  });
+                }
+                load();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : 'Ошибка sync');
+              } finally {
+                setSyncing(false);
+              }
+            }}
+          >
+            {syncing ? 'Обновляем…' : 'Обновить из 1С'}
+          </button>
+          <button
+            onClick={() => setShowForm(!showForm)}
+            className="btn-primary text-sm"
+          >
+            {showForm ? 'Отмена' : '+ Добавить'}
+          </button>
+        </div>
       </div>
+
+      {syncMsg ? (
+        <p className="text-sm text-fitgo-300">{syncMsg}</p>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {DEPT_FILTERS.map((f) => (

@@ -100,6 +100,7 @@ function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
       <p className="text-sm text-slate-500">Нет продаж за выбранный период</p>
     );
   }
+  const overdueCutoff = Date.now() - 7 * 86400000;
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-800">
       <table className="min-w-full text-left text-sm">
@@ -114,8 +115,17 @@ function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
           </tr>
         </thead>
         <tbody>
-          {lines.map((line) => (
-            <tr key={line.id} className="border-t border-slate-800">
+          {lines.map((line) => {
+            const unpaid = !line.paid;
+            const soldAt = line.soldAt ? new Date(line.soldAt).getTime() : 0;
+            const overdue = unpaid && soldAt > 0 && soldAt < overdueCutoff;
+            return (
+            <tr
+              key={line.id}
+              className={`border-t border-slate-800 ${
+                overdue ? 'bg-amber-500/5' : ''
+              }`}
+            >
               <td className="px-3 py-2">
                 <div>{line.clientName ?? '—'}</div>
                 {line.productName ? (
@@ -140,12 +150,15 @@ function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
               <td className="px-3 py-2">
                 {line.paid ? (
                   <span className="text-fitgo-300">Оплачена</span>
+                ) : overdue ? (
+                  <span className="text-amber-200">Долг &gt;7 дн.</span>
                 ) : (
                   <span className="text-amber-300">Не оплачена</span>
                 )}
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -188,7 +201,35 @@ export function AdminMySalesPanel() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Мои продажи</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-xl font-semibold">
+          {payment === 'unpaid' ? 'Мои долги' : 'Мои продажи'}
+        </h2>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className={`rounded-xl px-3 py-1.5 text-sm ${
+              payment === 'unpaid'
+                ? 'bg-amber-500/20 text-amber-200'
+                : 'border border-slate-700 text-slate-300 hover:bg-slate-800'
+            }`}
+            onClick={() => setPayment('unpaid')}
+          >
+            Мои долги
+          </button>
+          <button
+            type="button"
+            className={`rounded-xl px-3 py-1.5 text-sm ${
+              payment !== 'unpaid'
+                ? 'bg-fitgo-500/20 text-fitgo-300'
+                : 'border border-slate-700 text-slate-300 hover:bg-slate-800'
+            }`}
+            onClick={() => setPayment('all')}
+          >
+            Все продажи
+          </button>
+        </div>
+      </div>
       <div className="card flex flex-wrap gap-3">
         <label className="text-sm">
           <span className="mb-1 block text-slate-400">С</span>

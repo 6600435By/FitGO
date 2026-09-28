@@ -123,6 +123,51 @@ export interface IFitnessClubProvider {
     priceMinor?: number;
     docRef?: string;
   } | null>;
+  /**
+   * Group class roster from 1C for journal baseline (FULL).
+   * Optional — returns null when unsupported / not published.
+   */
+  getGroupSessionRoster?(appointmentId: string): Promise<{
+    data: Array<{
+      externalId: string;
+      clientName: string;
+      phone?: string;
+    }>;
+  } | null>;
+  /**
+   * App segment catalog (staff / nomenclature). Optional.
+   */
+  getSegmentsConfig?(): Promise<{
+    segments: Array<{
+      key: string;
+      uuid: string;
+      name: string;
+      type: 'employee' | 'nomenclature';
+      found: boolean;
+      count: number;
+    }>;
+  } | null>;
+  /**
+   * Members of a FitGO app segment. Optional.
+   */
+  getSegmentMembers?(input: {
+    key?: string;
+    uuid?: string;
+  }): Promise<{
+    key?: string;
+    uuid?: string;
+    type?: string;
+    name?: string;
+    found: boolean;
+    data: Array<{
+      externalId: string;
+      name: string;
+      code?: string;
+      phone?: string;
+      price?: number;
+      unit?: string;
+    }>;
+  } | null>;
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]>;
   getAccessCard(externalId: string): Promise<AccessCard | null>;
   getSchedule(clubExternalId: string, filters?: ScheduleFilters): Promise<ScheduleSlot[]>;

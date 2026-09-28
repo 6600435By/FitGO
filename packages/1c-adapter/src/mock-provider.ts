@@ -264,6 +264,111 @@ export class Mock1CProvider implements IFitnessClubProvider {
     };
   }
 
+  async getGroupSessionRoster(appointmentId: string) {
+    if (!appointmentId.trim()) return null;
+    return {
+      data: [
+        {
+          externalId: 'mock-client-1',
+          clientName: 'Иванов И.',
+          phone: '375291111111',
+        },
+        {
+          externalId: 'mock-client-2',
+          clientName: 'Петрова А.',
+          phone: '375292222222',
+        },
+      ],
+    };
+  }
+
+  async getSegmentsConfig() {
+    return {
+      segments: [
+        {
+          key: 'staff.admins',
+          type: 'employee' as const,
+          uuid: '8deca45d-36c3-2cf1-11f1-bb0f60dafc75',
+          name: 'Администраторы',
+          found: true,
+          count: 2,
+        },
+        {
+          key: 'staff.spa',
+          type: 'employee' as const,
+          uuid: '81167085-c20c-362e-11eb-0a233ed68521',
+          name: 'Спа специалисты',
+          found: true,
+          count: 1,
+        },
+        {
+          key: 'staff.trainers',
+          type: 'employee' as const,
+          uuid: '8deca45d-36c3-2cf1-11f1-b9be5450c00c',
+          name: 'Тренеры',
+          found: true,
+          count: 1,
+        },
+        {
+          key: 'nom.spaCabinet',
+          type: 'nomenclature' as const,
+          uuid: '8deca45d-36c3-2cf1-11f1-b9bd204f566c',
+          name: 'Услуги спа кабинета',
+          found: true,
+          count: 2,
+        },
+      ],
+    };
+  }
+
+  async getSegmentMembers(input: { key?: string; uuid?: string }) {
+    const key = input.key ?? '';
+    if (key.startsWith('nom.')) {
+      return {
+        key,
+        uuid: input.uuid ?? '',
+        type: 'nomenclature',
+        name: 'Mock nom',
+        found: true,
+        data: [
+          {
+            externalId: 'nom-1',
+            name: 'Массаж классический',
+            code: '00001',
+            priceMinor: 4500,
+          },
+          {
+            externalId: 'nom-2',
+            name: 'Солярий 10 мин',
+            code: '00002',
+            priceMinor: 800,
+          },
+        ],
+      };
+    }
+    return {
+      key,
+      uuid: input.uuid ?? '',
+      type: 'employee',
+      name: 'Mock staff',
+      found: true,
+      data: [
+        {
+          externalId: 'staff-1',
+          name: 'Админ Тест',
+          code: '000000001',
+          phone: '375291000001',
+        },
+        {
+          externalId: 'staff-2',
+          name: 'Специалист Тест',
+          code: '000000002',
+          phone: '375291000002',
+        },
+      ],
+    };
+  }
+
   async getVisits(externalId: string, period?: VisitPeriod) {
     const entry = Object.values(MOCK_USERS).find(
       (u) => u.profile.externalId === externalId,

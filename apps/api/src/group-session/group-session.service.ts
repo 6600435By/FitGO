@@ -22,14 +22,18 @@ import {
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class GroupSessionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly fitness: FitnessService,
+  ) {}
 
   /**
-   * Open or create journal: freeze baseline from FitGO bookings (PARTIAL until 1C roster).
+   * Open or create journal: prefer 1C roster (FULL), else FitGO bookings (PARTIAL).
    */
   async openJournal(
     user: JwtPayload,
@@ -67,6 +71,126 @@ export class GroupSessionService {
         include: { client: true },
       });
 
+      let roster: Array<{
+        externalId: string;
+        clientName: string;
+        phone?: string;
+      }> | null = null;
+      try {
+        const raw = await this.fitness
+          .getProvider()
+          .getGroupSessionRoster?.(input.appointmentId);
+        if (raw && Array.isArray(raw.data)) {
+          roster = raw.data.filter((r) => r.externalId?.trim());
+        }
+      } catch {
+        roster = null;
+      }
+
+      const baselineQuality =
+        roster !== null
+          ? GroupSessionBaselineQuality.FULL
+          : GroupSessionBaselineQuality.PARTIAL;
+
+      const bookingByExternal = new Map(
+        bookings
+          .filter((b) => b.client.externalId)
+          .map((b) => [b.client.externalId!, b]),
+      );
+
+      type MemberCreate = {
+        clientId: string | null;
+        externalId: string | null;
+        displayName: string;
+        source: typeof GroupSessionMemberSource.BASELINE_1C;
+        attendance: typeof GroupSessionMemberAttendance.EXPECTED;
+        visitMatched: boolean;
+        trustBand: TrustBand;
+        trustReasons: string[];
+        bookingId: string | null;
+      };
+
+      const members: MemberCreate[] = [];
+      const seenExternal = new Set<string>();
+
+      if (roster !== null) {
+        for (const row of roster) {
+          const ext = row.externalId.trim();
+          if (seenExternal.has(ext)) continue;
+          seenExternal.add(ext);
+          const booking = bookingByExternal.get(ext);
+          const client =
+            booking?.client ??
+            (await this.prisma.user.findFirst({
+              where: { clubId, externalId: ext },
+            }));
+          const trust = computeGroupMemberTrust({
+            source: 'BASELINE_1C',
+            attendance: 'EXPECTED',
+            visitMatched: booking?.presenceStatus === 'VERIFIED_1C',
+            hasCrmId: Boolean(ext || client?.id),
+          });
+          members.push({
+            clientId: client?.id ?? booking?.clientId ?? null,
+            externalId: ext,
+            displayName:
+              row.clientName.trim() ||
+              (client
+                ? `${client.lastName} ${client.firstName}`.trim()
+                : ext),
+            source: GroupSessionMemberSource.BASELINE_1C,
+            attendance: GroupSessionMemberAttendance.EXPECTED,
+            visitMatched: booking?.presenceStatus === 'VERIFIED_1C',
+            trustBand: trust.trustBand as TrustBand,
+            trustReasons: trust.trustReasons,
+            bookingId: booking?.id ?? null,
+          });
+        }
+        // FitGO bookings not in 1C roster — keep as baseline rows too
+        for (const b of bookings) {
+          const ext = b.client.externalId?.trim();
+          if (ext && seenExternal.has(ext)) continue;
+          if (ext) seenExternal.add(ext);
+          const trust = computeGroupMemberTrust({
+            source: 'BASELINE_1C',
+            attendance: 'EXPECTED',
+            visitMatched: b.presenceStatus === 'VERIFIED_1C',
+            hasCrmId: Boolean(ext || b.clientId),
+          });
+          members.push({
+            clientId: b.clientId,
+            externalId: ext ?? null,
+            displayName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+            source: GroupSessionMemberSource.BASELINE_1C,
+            attendance: GroupSessionMemberAttendance.EXPECTED,
+            visitMatched: b.presenceStatus === 'VERIFIED_1C',
+            trustBand: trust.trustBand as TrustBand,
+            trustReasons: trust.trustReasons,
+            bookingId: b.id,
+          });
+        }
+      } else {
+        for (const b of bookings) {
+          const trust = computeGroupMemberTrust({
+            source: 'BASELINE_1C',
+            attendance: 'EXPECTED',
+            visitMatched: b.presenceStatus === 'VERIFIED_1C',
+            hasCrmId: Boolean(b.client.externalId || b.clientId),
+          });
+          members.push({
+            clientId: b.clientId,
+            externalId: b.client.externalId,
+            displayName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+            source: GroupSessionMemberSource.BASELINE_1C,
+            attendance: GroupSessionMemberAttendance.EXPECTED,
+            visitMatched: b.presenceStatus === 'VERIFIED_1C',
+            trustBand: trust.trustBand as TrustBand,
+            trustReasons: trust.trustReasons,
+            bookingId: b.id,
+          });
+        }
+      }
+
       session = await this.prisma.groupClassSession.create({
         data: {
           clubId,
@@ -77,30 +201,10 @@ export class GroupSessionService {
           endAt,
           roomTitle: input.roomTitle?.trim() || null,
           status: GroupClassSessionStatus.OPEN,
-          baselineQuality: GroupSessionBaselineQuality.PARTIAL,
-          baselineCount: bookings.length,
+          baselineQuality,
+          baselineCount: members.length,
           baselineFrozenAt: new Date(),
-          members: {
-            create: bookings.map((b) => {
-              const trust = computeGroupMemberTrust({
-                source: 'BASELINE_1C',
-                attendance: 'EXPECTED',
-                visitMatched: b.presenceStatus === 'VERIFIED_1C',
-                hasCrmId: Boolean(b.client.externalId || b.clientId),
-              });
-              return {
-                clientId: b.clientId,
-                externalId: b.client.externalId,
-                displayName: `${b.client.lastName} ${b.client.firstName}`.trim(),
-                source: GroupSessionMemberSource.BASELINE_1C,
-                attendance: GroupSessionMemberAttendance.EXPECTED,
-                visitMatched: b.presenceStatus === 'VERIFIED_1C',
-                trustBand: trust.trustBand as TrustBand,
-                trustReasons: trust.trustReasons,
-                bookingId: b.id,
-              };
-            }),
-          },
+          members: { create: members },
         },
         include: { members: true, trainer: true },
       });

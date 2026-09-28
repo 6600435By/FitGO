@@ -89,6 +89,16 @@ export default function SuperAdminTasksPage() {
                 <p className="font-medium">{task.title}</p>
                 <p className="text-sm text-slate-400">
                   {task.assignee.firstName} {task.assignee.lastName}
+                  {task.source && task.source !== 'MANUAL' ? (
+                    <span className="ml-2 text-xs text-amber-300/90">
+                      ·{' '}
+                      {task.source === 'DEBT_OVERDUE'
+                        ? 'авто: долг'
+                        : task.source === 'MEMBERSHIP_EXPIRING'
+                          ? 'авто: абонемент'
+                          : task.source}
+                    </span>
+                  ) : null}
                 </p>
                 {task.dueAt && (
                   <p className="text-xs text-slate-500">До: {formatDateTime(task.dueAt)}</p>

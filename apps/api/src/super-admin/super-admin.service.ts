@@ -437,6 +437,7 @@ export class SuperAdminService {
     dateOfBirth: Date | null;
     employeeCode: string | null;
     loginEnabled: boolean;
+    groupPrograms?: boolean;
     isActive: boolean;
     employmentKind?: 'STAFF' | 'EXTERNAL' | string;
     createdAt: Date;
@@ -460,6 +461,7 @@ export class SuperAdminService {
       dateOfBirth: member.dateOfBirth?.toISOString().slice(0, 10),
       employeeCode: member.employeeCode ?? undefined,
       loginEnabled: member.loginEnabled,
+      groupPrograms: member.groupPrograms ?? false,
       roles: member.roles.map((r) => roleMap[r.role]),
       isActive: member.isActive,
       employmentKind:
@@ -476,6 +478,8 @@ export class SuperAdminService {
     dueAt: Date | null;
     completedAt: Date | null;
     createdAt: Date;
+    source?: string | null;
+    dedupeKey?: string | null;
     assignee: { id: string; firstName: string; lastName: string };
   }) {
     return {
@@ -485,6 +489,7 @@ export class SuperAdminService {
       status: task.status as AdminTaskStatus,
       dueAt: task.dueAt?.toISOString(),
       completedAt: task.completedAt?.toISOString(),
+      source: task.source ?? 'MANUAL',
       assignee: {
         id: task.assignee.id,
         firstName: task.assignee.firstName,
