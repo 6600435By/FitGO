@@ -4,6 +4,7 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Role, SpaServiceKind } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
@@ -32,6 +33,8 @@ export type SegmentSyncResult = {
   updated: number;
   unchanged: number;
   deactivated: number;
+  /** Сколько членов вернула 1С */
+  fetched: number;
   credentials: Array<{ email: string; password: string; name: string }>;
   lastSyncedAt: string | null;
   error?: string;
@@ -44,10 +47,27 @@ export class SegmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
+    private readonly config: ConfigService,
   ) {}
+
+  private assertLiveFitgo() {
+    const provider = this.config.get<string>('FITNESS_PROVIDER', 'mock');
+    const fitgoUrl = (this.config.get<string>('FORMA_FITGO_URL') ?? '').trim();
+    if (provider === 'mock') {
+      throw new ServiceUnavailableException(
+        'FITNESS_PROVIDER=mock — синхрон сегментов из 1С отключён. В apps/api/.env задайте FITNESS_PROVIDER=forma и FORMA_FITGO_URL=https://127.0.0.1:8445/fitgo/hs/fitgo/v1, затем Restart-Service FitGO-API.',
+      );
+    }
+    if (provider === 'forma' && !fitgoUrl) {
+      throw new ServiceUnavailableException(
+        'FORMA_FITGO_URL пуст — Nest не видит FitGOIntegration. Укажите URL вида https://127.0.0.1:8445/fitgo/hs/fitgo/v1 и перезапустите FitGO-API.',
+      );
+    }
+  }
 
   async getConfig(user: JwtPayload) {
     requireClubId(user);
+    this.assertLiveFitgo();
     const provider = this.fitness.getProvider();
     if (!provider.getSegmentsConfig) {
       throw new ServiceUnavailableException('Сегменты 1С не подключены');
@@ -77,6 +97,7 @@ export class SegmentsService {
     results: SegmentSyncResult[];
     credentials: Array<{ email: string; password: string; name: string }>;
   }> {
+    this.assertLiveFitgo();
     const clubId = requireClubId(user);
     const results: SegmentSyncResult[] = [];
     const credentials: Array<{ email: string; password: string; name: string }> =
@@ -93,6 +114,7 @@ export class SegmentsService {
     user: JwtPayload,
     kind: 'spa' | 'membership' | 'shop' | 'all' = 'all',
   ): Promise<{ results: SegmentSyncResult[] }> {
+    this.assertLiveFitgo();
     const clubId = requireClubId(user);
     const keys: string[] = [];
     if (kind === 'all' || kind === 'spa') keys.push('nom.spaCabinet');
@@ -115,14 +137,21 @@ export class SegmentsService {
     }
     const provider = this.fitness.getProvider();
     if (!provider.getSegmentMembers) {
-      return this.failResult(clubId, key, 'getSegmentMembers unsupported');
+      return this.failResult(
+        clubId,
+        key,
+        'getSegmentMembers недоступен — нужен FORMA_FITGO_URL (FitGOIntegration)',
+      );
     }
     const members = await provider.getSegmentMembers({ key });
     if (!members) {
-      return this.failResult(clubId, key, 'segments/members unavailable');
+      return this.failResult(
+        clubId,
+        key,
+        'segments/members недоступен (404/ошибка) — опубликуйте шаблоны в FitGOIntegration',
+      );
     }
     if (!members.found && key === 'staff.groupTrainers') {
-      // UUID later — skip quietly
       await this.saveState(clubId, key, {
         lastStatus: 'skipped',
         lastError: 'UUID сегмента Тренеры ГП ещё не задан',
@@ -135,24 +164,51 @@ export class SegmentsService {
         updated: 0,
         unchanged: 0,
         deactivated: 0,
+        fetched: 0,
         credentials: [],
         lastSyncedAt: new Date().toISOString(),
         error: 'UUID сегмента Тренеры ГП ещё не задан в 1С',
       };
     }
     if (!members.found) {
-      return this.failResult(clubId, key, 'segment not found in 1C');
+      return this.failResult(
+        clubId,
+        key,
+        `Сегмент ${key} не найден в 1С (uuid/имя). Проверьте СегментыСотрудников.`,
+      );
+    }
+
+    // Mock fingerprint — защита от «тишины» на mock-данных
+    if (
+      members.data.some(
+        (m) =>
+          m.externalId === 'staff-1' ||
+          m.externalId === 'staff-2' ||
+          m.name === 'Админ Тест',
+      )
+    ) {
+      return this.failResult(
+        clubId,
+        key,
+        'Получены mock-данные, не 1С. Задайте FITNESS_PROVIDER=forma и FORMA_FITGO_URL, перезапустите API.',
+      );
     }
 
     let added = 0;
     let updated = 0;
     let unchanged = 0;
+    let failed = 0;
+    const failNotes: string[] = [];
     const credentials: SegmentSyncResult['credentials'] = [];
     const groupPrograms = key === 'staff.groupTrainers';
+    const fetched = members.data.length;
 
     for (const m of members.data) {
       const externalId = m.externalId?.trim();
-      if (!externalId) continue;
+      if (!externalId) {
+        failed += 1;
+        continue;
+      }
       const code = m.code?.trim() || null;
       const nameParts = (m.name || '').trim().split(/\s+/);
       const lastName = nameParts[0] || 'Сотрудник';
@@ -183,21 +239,26 @@ export class SegmentsService {
           unchanged += 1;
           continue;
         }
-        await this.prisma.user.update({
-          where: { id: existing.id },
-          data: {
-            firstName,
-            lastName,
-            externalId,
-            ...(code ? { employeeCode: code } : {}),
-            ...(m.phone ? { phone: m.phone } : {}),
-            ...(groupPrograms ? { groupPrograms: true } : {}),
-            ...(!hasRole
-              ? { roles: { create: { role } } }
-              : {}),
-          },
-        });
-        updated += 1;
+        try {
+          await this.prisma.user.update({
+            where: { id: existing.id },
+            data: {
+              firstName,
+              lastName,
+              externalId,
+              ...(code ? { employeeCode: code } : {}),
+              ...(m.phone ? { phone: m.phone } : {}),
+              ...(groupPrograms ? { groupPrograms: true } : {}),
+              ...(!hasRole ? { roles: { create: { role } } } : {}),
+            },
+          });
+          updated += 1;
+        } catch (err) {
+          failed += 1;
+          failNotes.push(
+            `${m.name}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
         continue;
       }
 
@@ -227,15 +288,21 @@ export class SegmentsService {
           name: `${lastName} ${firstName}`.trim(),
         });
       } catch (err) {
-        this.logger.warn(
-          `Staff upsert failed for ${externalId}: ${err instanceof Error ? err.message : err}`,
-        );
+        failed += 1;
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Staff upsert failed for ${externalId}: ${msg}`);
+        if (failNotes.length < 5) failNotes.push(`${m.name}: ${msg}`);
       }
     }
 
+    const error =
+      failed > 0
+        ? `Не удалось записать ${failed} из ${fetched}. ${failNotes.join('; ')}`
+        : undefined;
+
     await this.saveState(clubId, key, {
-      lastStatus: 'ok',
-      lastError: null,
+      lastStatus: failed > 0 && added === 0 ? 'error' : 'ok',
+      lastError: error ?? null,
       lastAdded: added,
       lastUnchanged: unchanged + updated,
     });
@@ -246,8 +313,10 @@ export class SegmentsService {
       updated,
       unchanged,
       deactivated: 0,
+      fetched,
       credentials,
       lastSyncedAt: new Date().toISOString(),
+      error,
     };
   }
 
@@ -269,6 +338,7 @@ export class SegmentsService {
     let unchanged = 0;
     let deactivated = 0;
     const seen = new Set<string>();
+    const fetched = members.data.length;
 
     if (key === 'nom.spaCabinet') {
       for (const m of members.data) {
@@ -403,6 +473,7 @@ export class SegmentsService {
       updated,
       unchanged,
       deactivated,
+      fetched,
       credentials: [],
       lastSyncedAt: new Date().toISOString(),
     };
@@ -425,6 +496,7 @@ export class SegmentsService {
       updated: 0,
       unchanged: 0,
       deactivated: 0,
+      fetched: 0,
       credentials: [],
       lastSyncedAt: null,
       error,

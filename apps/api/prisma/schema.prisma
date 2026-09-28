@@ -445,7 +445,7 @@ model User {
   lastName   String
   externalId String?
   /// Код сотрудника в 1С (например 000000151). Для выборок по сотруднику.
-  employeeCode String? @unique
+  employeeCode String?
   /// true — тренер сегмента «Тренеры ГП» (для payroll GROUP / фильтра Staff).
   groupPrograms Boolean @default(false)
   /// false — учётка есть, пароль входа ещё не выдан.
@@ -538,7 +538,9 @@ model User {
   staffShifts             StaffShift[]            @relation("StaffShifts")
 
   @@unique([clubId, gamificationNickname])
+  @@unique([clubId, employeeCode])
   @@index([externalId])
+  @@index([clubId, employeeCode])
 }
 
 model UserRole {

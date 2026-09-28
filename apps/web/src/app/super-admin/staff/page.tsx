@@ -202,12 +202,16 @@ export default function SuperAdminStaffPage() {
                 const res = await api.superAdminSyncStaffFrom1C(token);
                 const added = res.results.reduce((s, r) => s + r.added, 0);
                 const updated = res.results.reduce((s, r) => s + r.updated, 0);
+                const fetched = res.results.reduce(
+                  (s, r) => s + (r.fetched ?? 0),
+                  0,
+                );
                 const errs = res.results
                   .filter((r) => r.error)
                   .map((r) => `${r.key}: ${r.error}`)
                   .join('; ');
                 setSyncMsg(
-                  `Из 1С: +${added} новых, ${updated} обновлено` +
+                  `Из 1С: получено ${fetched}, +${added} новых, ${updated} обновлено` +
                     (errs ? `. ${errs}` : ''),
                 );
                 if (res.credentials[0]) {
