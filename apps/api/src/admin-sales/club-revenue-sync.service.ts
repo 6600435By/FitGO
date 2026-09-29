@@ -17,6 +17,15 @@ import {
 
 const RESOURCE_KEY = 'club_revenue';
 
+export type RevenueRangeOptions = {
+  skipChangeLog?: boolean;
+  /** Historical backfill: cash movements only — no debt snapshot / unpaid days. */
+  skipDebt?: boolean;
+  /** Skip global cleanup of pre-:cash: rows (unsafe mid-backfill). */
+  skipLegacyCleanup?: boolean;
+  delayMsBetweenDays?: number;
+};
+
 @Injectable()
 export class ClubRevenueSyncService {
   private readonly logger = new Logger(ClubRevenueSyncService.name);
@@ -67,40 +76,91 @@ export class ClubRevenueSyncService {
     const { from: fromStr, to: toStr } = syncWindow(mode, state.lastSuccessAt);
 
     try {
-      const seen = new Set<string>();
-      /** baseIds that received a payment in this sync — reconcile residual unpaid */
-      const paidBaseIds = new Set<string>();
-      const pending = new Map<
-        string,
-        Parameters<typeof upsertRevenueRows>[2][number]
-      >();
-      const refreshDays = await applyChangeLog(
-        this.prisma,
-        provider,
-        clubId,
-        fromStr,
-        toStr,
-        'revenue',
-      );
-      // Day by day: 1C re-runs the unordered register query for every page, so a
-      // multi-page window can duplicate some movements and skip others. A day fits one page.
-      const days = [
-        ...new Set([...eachUtcDay(fromStr, toStr), ...refreshDays]),
-      ].sort();
-      const items: FitgoAnalyticsSalesItem[] = [];
-      for (const day of days) {
-        items.push(
-          ...(await fetchSalesOnce(provider, {
-            from: day,
-            to: day,
-            scope: 'cash',
-          })),
-        );
-      }
+      const result = await this.syncClubRange(clubId, fromStr, toStr, {});
+      await this.prisma.salesSyncState.update({
+        where: { id: state.id },
+        data: {
+          cursor: toStr,
+          lastStatus: 'ok',
+          lastSuccessAt: new Date(),
+          lastRunAt: new Date(),
+          lastError: null,
+        },
+      });
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.prisma.salesSyncState.update({
+        where: { id: state.id },
+        data: {
+          lastStatus: 'error',
+          lastError: message.slice(0, 500),
+          lastRunAt: new Date(),
+        },
+      });
+      throw err;
+    }
+  }
 
+  /**
+   * Fixed range without updating operational lastSuccessAt.
+   * Backfill: skipDebt + skipChangeLog + skipLegacyCleanup.
+   */
+  async syncClubRange(
+    clubId: string,
+    fromStr: string,
+    toStr: string,
+    options: RevenueRangeOptions = {},
+  ): Promise<{
+    upserted: number;
+    deactivated: number;
+    from: string;
+    to: string;
+  }> {
+    const provider = this.createProvider();
+    if (!provider) {
+      return { upserted: 0, deactivated: 0, from: fromStr, to: toStr };
+    }
+
+    const seen = new Set<string>();
+    const paidBaseIds = new Set<string>();
+    const pending = new Map<
+      string,
+      Parameters<typeof upsertRevenueRows>[2][number]
+    >();
+    const refreshDays = options.skipChangeLog
+      ? []
+      : await applyChangeLog(
+          this.prisma,
+          provider,
+          clubId,
+          fromStr,
+          toStr,
+          'revenue',
+        );
+    // Day by day: 1C re-runs the unordered register query for every page, so a
+    // multi-page window can duplicate some movements and skip others. A day fits one page.
+    const days = [
+      ...new Set([...eachUtcDay(fromStr, toStr), ...refreshDays]),
+    ].sort();
+    const delay = Math.max(0, options.delayMsBetweenDays ?? 0);
+    const items: FitgoAnalyticsSalesItem[] = [];
+    for (let i = 0; i < days.length; i++) {
+      const day = days[i]!;
+      if (i > 0 && delay > 0) await sleep(delay);
+      items.push(
+        ...(await fetchSalesOnce(provider, {
+          from: day,
+          to: day,
+          scope: 'cash',
+        })),
+      );
+    }
+
+    let debtSnapshot = false;
+    if (!options.skipDebt) {
       // Open debt: prefer register balances (scope=debt). Old BSL falls through to
       // /sales for one day — then we pull unpaid lines day-by-day instead.
-      let debtSnapshot = false;
       try {
         const debtItems = await fetchSalesOnce(provider, {
           from: toStr,
@@ -117,7 +177,9 @@ export class ClubRevenueSyncService {
         debtSnapshot = false;
       }
       if (!debtSnapshot) {
-        for (const day of days) {
+        for (let i = 0; i < days.length; i++) {
+          const day = days[i]!;
+          if (i > 0 && delay > 0) await sleep(delay);
           const sales = await fetchSalesOnce(provider, { from: day, to: day });
           items.push(
             ...sales.filter(
@@ -130,48 +192,50 @@ export class ClubRevenueSyncService {
           );
         }
       }
+    }
 
-      const unpaidExternalIds = new Set<string>();
-      for (const item of items) {
-        const baseId = item.saleDocumentId?.trim();
-        if (!baseId) continue;
+    const unpaidExternalIds = new Set<string>();
+    for (const item of items) {
+      const baseId = item.saleDocumentId?.trim();
+      if (!baseId) continue;
 
-        const mapped = mapItem(item);
-        if (!mapped) continue;
-        if (
-          mapped.operationType === 'unpaid' &&
-          !isCollectibleClientDebt({
-            externalId: baseId,
-            productName: mapped.productName,
-          })
-        ) {
-          continue;
-        }
-        const paidDay = mapped.paidAt
-          ? mapped.paidAt.toISOString().slice(0, 10)
-          : null;
-        const occurredDay = mapped.occurredAt.toISOString().slice(0, 10);
-        const externalId = paidDay
-          ? `${baseId}:p${paidDay}`
-          : `${baseId}:u${occurredDay}`;
-
-        seen.add(externalId);
-        if (mapped.operationType === 'unpaid') unpaidExternalIds.add(externalId);
-        if (paidDay && mapped.operationType !== 'refund') {
-          paidBaseIds.add(baseId);
-        }
-        // Older BSL keys omit «Основание»: one payment document covering several
-        // sales yields several movements with the same key. Sum them, never overwrite.
-        const prev = pending.get(externalId);
-        pending.set(
-          externalId,
-          prev ? mergeRevenueRows(prev, mapped) : { externalId, ...mapped },
-        );
+      const mapped = mapItem(item);
+      if (!mapped) continue;
+      if (
+        mapped.operationType === 'unpaid' &&
+        !isCollectibleClientDebt({
+          externalId: baseId,
+          productName: mapped.productName,
+        })
+      ) {
+        continue;
       }
-      await upsertRevenueRows(this.prisma, clubId, [...pending.values()]);
-      const upserted = pending.size;
+      const paidDay = mapped.paidAt
+        ? mapped.paidAt.toISOString().slice(0, 10)
+        : null;
+      const occurredDay = mapped.occurredAt.toISOString().slice(0, 10);
+      const externalId = paidDay
+        ? `${baseId}:p${paidDay}`
+        : `${baseId}:u${occurredDay}`;
 
-      // After payments: drop stale unpaid, keep residual debt until fully paid
+      seen.add(externalId);
+      if (mapped.operationType === 'unpaid') unpaidExternalIds.add(externalId);
+      if (paidDay && mapped.operationType !== 'refund') {
+        paidBaseIds.add(baseId);
+      }
+      // Older BSL keys omit «Основание»: one payment document covering several
+      // sales yields several movements with the same key. Sum them, never overwrite.
+      const prev = pending.get(externalId);
+      pending.set(
+        externalId,
+        prev ? mergeRevenueRows(prev, mapped) : { externalId, ...mapped },
+      );
+    }
+    await upsertRevenueRows(this.prisma, clubId, [...pending.values()]);
+    const upserted = pending.size;
+
+    // After payments: drop stale unpaid, keep residual debt until fully paid
+    if (!options.skipDebt) {
       for (const baseId of paidBaseIds) {
         const residualId = await reconcileClubUnpaid(
           this.prisma,
@@ -183,64 +247,66 @@ export class ClubRevenueSyncService {
           unpaidExternalIds.add(residualId);
         }
       }
+    }
 
-      const ranges = [
-        { from: fromStr, to: toStr },
-        ...refreshDays.map((d) => ({ from: d, to: d })),
-      ].map((r) => ({
-        gte: new Date(`${r.from}T00:00:00.000Z`),
-        lte: new Date(`${r.to}T23:59:59.999Z`),
-      }));
-      // Only cash/receipt rows in the window — unpaid carries across months.
-      const existing = await this.prisma.clubRevenueEntry.findMany({
+    const ranges = [
+      { from: fromStr, to: toStr },
+      ...refreshDays.map((d) => ({ from: d, to: d })),
+    ].map((r) => ({
+      gte: new Date(`${r.from}T00:00:00.000Z`),
+      lte: new Date(`${r.to}T23:59:59.999Z`),
+    }));
+    // Only cash/receipt rows in the window — unpaid carries across months.
+    const existing = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        operationType: {
+          notIn: ['unpaid'],
+        },
+        OR: ranges.flatMap((r) => [{ occurredAt: r }, { paidAt: r }]),
+      },
+      select: { id: true, externalId: true },
+    });
+    const toDeactivate = existing
+      .filter((r) => !seen.has(r.externalId))
+      .map((r) => r.id);
+    let deactivated = 0;
+    if (toDeactivate.length) {
+      const res = await this.prisma.clubRevenueEntry.updateMany({
+        where: { id: { in: toDeactivate } },
+        data: { isActive: false, syncedAt: new Date() },
+      });
+      deactivated = res.count;
+    }
+
+    if (!options.skipDebt && (debtSnapshot || unpaidExternalIds.size > 0)) {
+      const staleUnpaid = await this.prisma.clubRevenueEntry.findMany({
         where: {
           clubId,
           isActive: true,
-          operationType: {
-            notIn: ['unpaid'],
-          },
-          OR: ranges.flatMap((r) => [{ occurredAt: r }, { paidAt: r }]),
+          operationType: 'unpaid',
+          ...(debtSnapshot
+            ? {}
+            : {
+                OR: ranges.map((r) => ({ occurredAt: r })),
+              }),
         },
         select: { id: true, externalId: true },
       });
-      const toDeactivate = existing
-        .filter((r) => !seen.has(r.externalId))
+      const unpaidDrop = staleUnpaid
+        .filter((r) => !unpaidExternalIds.has(r.externalId))
         .map((r) => r.id);
-      let deactivated = 0;
-      if (toDeactivate.length) {
+      if (unpaidDrop.length) {
         const res = await this.prisma.clubRevenueEntry.updateMany({
-          where: { id: { in: toDeactivate } },
+          where: { id: { in: unpaidDrop } },
           data: { isActive: false, syncedAt: new Date() },
         });
-        deactivated = res.count;
+        deactivated += res.count;
       }
+    }
 
-      if (debtSnapshot || unpaidExternalIds.size > 0) {
-        const staleUnpaid = await this.prisma.clubRevenueEntry.findMany({
-          where: {
-            clubId,
-            isActive: true,
-            operationType: 'unpaid',
-            ...(debtSnapshot
-              ? {}
-              : {
-                  OR: ranges.map((r) => ({ occurredAt: r })),
-                }),
-          },
-          select: { id: true, externalId: true },
-        });
-        const unpaidDrop = staleUnpaid
-          .filter((r) => !unpaidExternalIds.has(r.externalId))
-          .map((r) => r.id);
-        if (unpaidDrop.length) {
-          const res = await this.prisma.clubRevenueEntry.updateMany({
-            where: { id: { in: unpaidDrop } },
-            data: { isActive: false, syncedAt: new Date() },
-          });
-          deactivated += res.count;
-        }
-      }
-
+    if (!options.skipLegacyCleanup) {
       // Old payment/deposit rows without :cash: (pre-scope export) — not unpaid.
       const legacy = await this.prisma.clubRevenueEntry.updateMany({
         where: {
@@ -261,36 +327,17 @@ export class ClubRevenueSyncService {
         data: { isActive: false, syncedAt: new Date() },
       });
       deactivated += legacy.count;
-
-      await this.prisma.salesSyncState.update({
-        where: { id: state.id },
-        data: {
-          cursor: toStr,
-          lastStatus: 'ok',
-          lastSuccessAt: new Date(),
-          lastRunAt: new Date(),
-          lastError: null,
-        },
-      });
-
-      this.logger.log(
-        `Club revenue sync club=${clubId} upserted=${upserted} deactivated=${deactivated} unpaid=${unpaidExternalIds.size} debtSnapshot=${debtSnapshot} window=${fromStr}..${toStr}`,
-      );
-      return { upserted, deactivated, from: fromStr, to: toStr };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await this.prisma.salesSyncState.update({
-        where: { id: state.id },
-        data: {
-          lastStatus: 'error',
-          lastError: message.slice(0, 500),
-          lastRunAt: new Date(),
-        },
-      });
-      throw err;
     }
-  }
 
+    this.logger.log(
+      `Club revenue range club=${clubId} upserted=${upserted} deactivated=${deactivated} unpaid=${unpaidExternalIds.size} debtSnapshot=${debtSnapshot} skipDebt=${!!options.skipDebt} window=${fromStr}..${toStr}`,
+    );
+    return { upserted, deactivated, from: fromStr, to: toStr };
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

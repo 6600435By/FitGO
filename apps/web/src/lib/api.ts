@@ -2157,7 +2157,7 @@ export const api = {
         mutablePass: number;
         note: string | null;
       } | null;
-    }>('/super-admin/sales/backfill', { method: 'POST', body: body ?? {} }, token),
+    }>('/super-admin/sales/backfill', { method: 'POST', body: JSON.stringify(body ?? {}) }, token),
 
   superAdminSalesBackfillStatus: (token: string) =>
     request<{

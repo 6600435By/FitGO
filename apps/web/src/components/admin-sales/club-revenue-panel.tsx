@@ -501,6 +501,8 @@ export function ClubRevenuePanel() {
   const [error, setError] = useState('');
   const [syncMsg, setSyncMsg] = useState('');
   const [loading, setLoading] = useState(false);
+  const [backfillHint, setBackfillHint] = useState('');
+  const [backfillBusy, setBackfillBusy] = useState(false);
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -527,6 +529,34 @@ export function ClubRevenuePanel() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const refreshBackfill = useCallback(async () => {
+    const token = getToken();
+    if (!token) return;
+    try {
+      const s = await api.superAdminSalesBackfillStatus(token);
+      setBackfillBusy(!!s.running);
+      const c = s.cursor;
+      const prog = c
+        ? `${c.daysDone}/${c.daysTotal} · ${c.phase} · след. ${c.nextDay}`
+        : '';
+      setBackfillHint(
+        [s.hint, prog, s.error].filter(Boolean).join(' — ') || '',
+      );
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshBackfill();
+  }, [refreshBackfill]);
+
+  useEffect(() => {
+    if (!backfillBusy) return;
+    const id = setInterval(() => void refreshBackfill(), 4000);
+    return () => clearInterval(id);
+  }, [backfillBusy, refreshBackfill]);
 
   const applyFilter = (
     key: string,
@@ -627,6 +657,36 @@ export function ClubRevenuePanel() {
     }
   };
 
+  const runBackfill = async (mode: 'full' | 'mutable-refresh') => {
+    const token = getToken();
+    if (!token) return;
+    const label =
+      mode === 'full'
+        ? 'Загрузить историю 2018–2024 (закрытые) и затем 2025–вчера? Долги не тянем — их подтянет обычный синк. 1С будет нагружена кусками с паузами (часы).'
+        : 'Перечитать только 2025–вчера после чистки долгов в 1С? Закрытые годы не трогаем.';
+    if (!window.confirm(label)) return;
+    setError('');
+    try {
+      await api.superAdminSalesBackfill(token, { mode });
+      setBackfillBusy(true);
+      await refreshBackfill();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка backfill');
+    }
+  };
+
+  const stopOrResumeBackfill = async (action: 'stop' | 'resume') => {
+    const token = getToken();
+    if (!token) return;
+    try {
+      if (action === 'stop') await api.superAdminSalesBackfillStop(token);
+      else await api.superAdminSalesBackfillResume(token);
+      await refreshBackfill();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка backfill');
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -652,6 +712,47 @@ export function ClubRevenuePanel() {
             Обновить из 1С
           </button>
         </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-slate-300">История из 1С</span>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            disabled={backfillBusy}
+            onClick={() => void runBackfill('full')}
+          >
+            2018→сейчас
+          </button>
+          <button
+            type="button"
+            className="btn-ghost text-xs"
+            disabled={backfillBusy}
+            onClick={() => void runBackfill('mutable-refresh')}
+          >
+            Только 2025–26
+          </button>
+          {backfillBusy ? (
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => void stopOrResumeBackfill('stop')}
+            >
+              Стоп
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn-ghost text-xs"
+              onClick={() => void stopOrResumeBackfill('resume')}
+            >
+              Продолжить
+            </button>
+          )}
+        </div>
+        {backfillHint ? <p className="mt-1 text-slate-500">{backfillHint}</p> : null}
+        {syncMsg ? <p className="mt-1 text-emerald-500/80">{syncMsg}</p> : null}
       </div>
 
       <div className="card grid grid-cols-1 items-end gap-3 sm:grid-cols-[auto_minmax(11rem,1fr)_minmax(11rem,1fr)]">
@@ -726,7 +827,6 @@ export function ClubRevenuePanel() {
       </div>
 
       {error ? <p className="text-sm text-rose-400">{error}</p> : null}
-      {syncMsg ? <p className="text-sm text-slate-400">{syncMsg}</p> : null}
       {loading && !data ? (
         <p className="text-sm text-slate-500">Загрузка…</p>
       ) : null}

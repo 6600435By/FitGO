@@ -27,6 +27,10 @@ import { AdminSalesService } from './admin-sales.service';
 import { AdminSalesSyncService } from './admin-sales-sync.service';
 import { ClubRevenueService } from './club-revenue.service';
 import { ClubRevenueSyncService } from './club-revenue-sync.service';
+import {
+  SalesBackfillService,
+  type StartBackfillBody,
+} from './sales-backfill.service';
 
 /** Browser / proxy often cut long syncs (~90s+) → opaque «Ошибка 500». */
 const SYNC_STALE_MS = 15 * 60 * 1000;
@@ -75,6 +79,7 @@ export class SuperAdminSalesController {
     private readonly sync: AdminSalesSyncService,
     private readonly clubRevenue: ClubRevenueService,
     private readonly clubRevenueSync: ClubRevenueSyncService,
+    private readonly backfill: SalesBackfillService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -174,6 +179,34 @@ export class SuperAdminSalesController {
   }
 
   /**
+   * Historical load 2018–sealed (no debt) then 2025–to (still no debt).
+   * Operational sync keeps current window + debt. Re-run mutable after 1C cleanup:
+   * `{ "mode": "mutable-refresh" }`.
+   */
+  @Post('backfill')
+  startBackfill(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: StartBackfillBody,
+  ) {
+    return this.backfill.start(requireClubId(user), body ?? {});
+  }
+
+  @Get('backfill-status')
+  backfillStatus(@CurrentUser() user: JwtPayload) {
+    return this.backfill.status(requireClubId(user));
+  }
+
+  @Post('backfill/stop')
+  stopBackfill(@CurrentUser() user: JwtPayload) {
+    return this.backfill.stop(requireClubId(user));
+  }
+
+  @Post('backfill/resume')
+  resumeBackfill(@CurrentUser() user: JwtPayload) {
+    return this.backfill.resume(requireClubId(user));
+  }
+
+  /**
    * Start incremental sync in the background. Awaiting both jobs in one HTTP
    * request timed out on the club server (proxy/browser) → «Ошибка 500».
    */
@@ -181,6 +214,12 @@ export class SuperAdminSalesController {
   async syncNow(@CurrentUser() user: JwtPayload) {
     const clubId = requireClubId(user);
     await this.reclaimOrphanRunning(clubId);
+    const bf = await this.backfill.status(clubId);
+    if (bf.running) {
+      throw new BadRequestException(
+        'Идёт исторический backfill — дождитесь окончания или stop, затем «Обновить из 1С».',
+      );
+    }
     const status = await this.readSyncStatus(clubId);
     if (status.running || this.syncInFlight.has(clubId)) {
       return { status: 'running' as const, ...status };
@@ -218,9 +257,11 @@ export class SuperAdminSalesController {
   private async reclaimOrphanRunning(clubId: string) {
     if (this.syncInFlight.has(clubId)) return;
     const cutoff = new Date(Date.now() - SYNC_ORPHAN_MS);
+    // Only operational keys — sales_backfill may run for hours.
     await this.prisma.salesSyncState.updateMany({
       where: {
         clubId,
+        resourceKey: { in: ['admin_sales', 'club_revenue'] },
         lastStatus: 'running',
         OR: [{ lastRunAt: null }, { lastRunAt: { lt: cutoff } }],
       },

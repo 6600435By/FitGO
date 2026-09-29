@@ -14,6 +14,13 @@ import {
 
 const RESOURCE_KEY = 'admin_sales';
 
+export type SalesRangeOptions = {
+  /** Historical backfill: skip 1C change-log (sealed years). */
+  skipChangeLog?: boolean;
+  /** Pause between day fetches to ease 1C load (ms). */
+  delayMsBetweenDays?: number;
+};
+
 @Injectable()
 export class AdminSalesSyncService {
   private readonly logger = new Logger(AdminSalesSyncService.name);
@@ -78,140 +85,7 @@ export class AdminSalesSyncService {
     const { from: fromStr, to: toStr } = syncWindow(mode, state.lastSuccessAt);
 
     try {
-      /**
-       * Day-by-day: 1C `amount` = payment allocated inside the requested period.
-       * A multi-day window would merge all payments into one amount while paidAt
-       * stays a single day — breaking «Оплата с учетом возврата» per day.
-       */
-      const seen = new Set<string>();
-      /** Bases with a payment this sync — refresh residual unpaid for debt carry. */
-      const paidBases = new Map<
-        string,
-        {
-          soldAt: Date;
-          saleAmount: number;
-          saleType: string;
-          productName: string | null;
-          clientExternalId: string | null;
-          clientName: string | null;
-          employeeExternalId: string | null;
-          employeeName: string | null;
-          paymentMethod: string | null;
-        }
-      >();
-      const pending: Parameters<typeof upsertSaleRows>[2] = [];
-      const refreshDays = await applyChangeLog(
-        this.prisma,
-        provider,
-        clubId,
-        fromStr,
-        toStr,
-        'sales',
-      );
-      const days = [
-        ...new Set([...eachUtcDay(fromStr, toStr), ...refreshDays]),
-      ].sort();
-
-      for (const day of days) {
-        const items = await fetchSalesOnce(provider, { from: day, to: day });
-        for (const item of items) {
-          const baseId = item.saleDocumentId?.trim();
-          if (!baseId) continue;
-
-          const saleType = normalizeSaleType(item.saleType, item.productName);
-          const soldAt = new Date(item.soldAt);
-          const paidAt = item.paidAt ? new Date(item.paidAt) : null;
-          const paidDay = paidAt ? paidAt.toISOString().slice(0, 10) : null;
-          const amount = Number(item.amount) || 0;
-          const cash = Number(item.cash) || 0;
-          const card = Number(item.card) || 0;
-          const cashless = Number(item.cashless) || 0;
-          const personalAccount = Number(item.personalAccount) || 0;
-          const saleAmount =
-            Number(item.saleAmount) ||
-            (paidDay ? 0 : amount) ||
-            Number(item.paidAmount) ||
-            0;
-
-          // One DB row per (line × payment-day); unpaid → sold-day key.
-          const externalSaleId = paidDay
-            ? `${baseId}:p${paidDay}`
-            : `${baseId}:u${soldAt.toISOString().slice(0, 10)}`;
-
-          seen.add(externalSaleId);
-          pending.push({
-            externalSaleId,
-            soldAt,
-            paidAt,
-            amount,
-            cash,
-            card,
-            cashless,
-            personalAccount,
-            saleType,
-            productName: item.productName ?? null,
-            clientExternalId: item.clientExternalId ?? null,
-            clientName: item.clientName ?? null,
-            employeeExternalId: item.employeeExternalId ?? null,
-            employeeName: item.employeeName ?? null,
-            paymentMethod: item.paymentMethod ?? null,
-          });
-
-          if (paidDay) {
-            const prev = paidBases.get(baseId);
-            paidBases.set(baseId, {
-              soldAt,
-              saleAmount: Math.max(saleAmount, prev?.saleAmount ?? 0),
-              saleType,
-              productName: item.productName ?? null,
-              clientExternalId: item.clientExternalId ?? null,
-              clientName: item.clientName ?? null,
-              employeeExternalId: item.employeeExternalId ?? null,
-              employeeName: item.employeeName ?? null,
-              paymentMethod: item.paymentMethod ?? null,
-            });
-          }
-        }
-      }
-
-      await upsertSaleRows(this.prisma, clubId, pending);
-      const upserted = pending.length;
-
-      for (const [baseId, meta] of paidBases) {
-        const residualId = await reconcileAdminUnpaid(
-          this.prisma,
-          clubId,
-          baseId,
-          meta,
-        );
-        if (residualId) seen.add(residualId);
-      }
-
-      const windowStart = new Date(`${fromStr}T00:00:00.000Z`);
-      const windowEnd = new Date(`${toStr}T23:59:59.999Z`);
-      const existing = await this.prisma.saleTransaction.findMany({
-        where: {
-          clubId,
-          isActive: true,
-          OR: [
-            { soldAt: { gte: windowStart, lte: windowEnd } },
-            { paidAt: { gte: windowStart, lte: windowEnd } },
-          ],
-        },
-        select: { id: true, externalSaleId: true },
-      });
-      const toDeactivate = existing
-        .filter((r) => !seen.has(r.externalSaleId))
-        .map((r) => r.id);
-      let deactivated = 0;
-      if (toDeactivate.length) {
-        const res = await this.prisma.saleTransaction.updateMany({
-          where: { id: { in: toDeactivate } },
-          data: { isActive: false, syncedAt: new Date() },
-        });
-        deactivated = res.count;
-      }
-
+      const result = await this.syncClubRange(clubId, fromStr, toStr, {});
       await this.prisma.salesSyncState.update({
         where: { id: state.id },
         data: {
@@ -222,11 +96,7 @@ export class AdminSalesSyncService {
           lastError: null,
         },
       });
-
-      this.logger.log(
-        `Sales sync club=${clubId} upserted=${upserted} deactivated=${deactivated} window=${fromStr}..${toStr} days=${days.length}`,
-      );
-      return { upserted, deactivated, from: fromStr, to: toStr };
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await this.prisma.salesSyncState.update({
@@ -241,6 +111,170 @@ export class AdminSalesSyncService {
     }
   }
 
+  /**
+   * Sync a fixed date range without touching operational SalesSyncState
+   * (lastSuccessAt). Used by historical backfill.
+   */
+  async syncClubRange(
+    clubId: string,
+    fromStr: string,
+    toStr: string,
+    options: SalesRangeOptions = {},
+  ): Promise<{
+    upserted: number;
+    deactivated: number;
+    from: string;
+    to: string;
+  }> {
+    const provider = this.createProvider();
+    if (!provider) {
+      return { upserted: 0, deactivated: 0, from: fromStr, to: toStr };
+    }
+
+    /**
+     * Day-by-day: 1C `amount` = payment allocated inside the requested period.
+     * A multi-day window would merge all payments into one amount while paidAt
+     * stays a single day — breaking «Оплата с учетом возврата» per day.
+     */
+    const seen = new Set<string>();
+    /** Bases with a payment this sync — refresh residual unpaid for debt carry. */
+    const paidBases = new Map<
+      string,
+      {
+        soldAt: Date;
+        saleAmount: number;
+        saleType: string;
+        productName: string | null;
+        clientExternalId: string | null;
+        clientName: string | null;
+        employeeExternalId: string | null;
+        employeeName: string | null;
+        paymentMethod: string | null;
+      }
+    >();
+    const pending: Parameters<typeof upsertSaleRows>[2] = [];
+    const refreshDays = options.skipChangeLog
+      ? []
+      : await applyChangeLog(
+          this.prisma,
+          provider,
+          clubId,
+          fromStr,
+          toStr,
+          'sales',
+        );
+    const days = [
+      ...new Set([...eachUtcDay(fromStr, toStr), ...refreshDays]),
+    ].sort();
+    const delay = Math.max(0, options.delayMsBetweenDays ?? 0);
+
+    for (let i = 0; i < days.length; i++) {
+      const day = days[i]!;
+      if (i > 0 && delay > 0) await sleep(delay);
+      const items = await fetchSalesOnce(provider, { from: day, to: day });
+      for (const item of items) {
+        const baseId = item.saleDocumentId?.trim();
+        if (!baseId) continue;
+
+        const saleType = normalizeSaleType(item.saleType, item.productName);
+        const soldAt = new Date(item.soldAt);
+        const paidAt = item.paidAt ? new Date(item.paidAt) : null;
+        const paidDay = paidAt ? paidAt.toISOString().slice(0, 10) : null;
+        const amount = Number(item.amount) || 0;
+        const cash = Number(item.cash) || 0;
+        const card = Number(item.card) || 0;
+        const cashless = Number(item.cashless) || 0;
+        const personalAccount = Number(item.personalAccount) || 0;
+        const saleAmount =
+          Number(item.saleAmount) ||
+          (paidDay ? 0 : amount) ||
+          Number(item.paidAmount) ||
+          0;
+
+        // One DB row per (line × payment-day); unpaid → sold-day key.
+        const externalSaleId = paidDay
+          ? `${baseId}:p${paidDay}`
+          : `${baseId}:u${soldAt.toISOString().slice(0, 10)}`;
+
+        seen.add(externalSaleId);
+        pending.push({
+          externalSaleId,
+          soldAt,
+          paidAt,
+          amount,
+          cash,
+          card,
+          cashless,
+          personalAccount,
+          saleType,
+          productName: item.productName ?? null,
+          clientExternalId: item.clientExternalId ?? null,
+          clientName: item.clientName ?? null,
+          employeeExternalId: item.employeeExternalId ?? null,
+          employeeName: item.employeeName ?? null,
+          paymentMethod: item.paymentMethod ?? null,
+        });
+
+        if (paidDay) {
+          const prev = paidBases.get(baseId);
+          paidBases.set(baseId, {
+            soldAt,
+            saleAmount: Math.max(saleAmount, prev?.saleAmount ?? 0),
+            saleType,
+            productName: item.productName ?? null,
+            clientExternalId: item.clientExternalId ?? null,
+            clientName: item.clientName ?? null,
+            employeeExternalId: item.employeeExternalId ?? null,
+            employeeName: item.employeeName ?? null,
+            paymentMethod: item.paymentMethod ?? null,
+          });
+        }
+      }
+    }
+
+    await upsertSaleRows(this.prisma, clubId, pending);
+    const upserted = pending.length;
+
+    for (const [baseId, meta] of paidBases) {
+      const residualId = await reconcileAdminUnpaid(
+        this.prisma,
+        clubId,
+        baseId,
+        meta,
+      );
+      if (residualId) seen.add(residualId);
+    }
+
+    const windowStart = new Date(`${fromStr}T00:00:00.000Z`);
+    const windowEnd = new Date(`${toStr}T23:59:59.999Z`);
+    const existing = await this.prisma.saleTransaction.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        OR: [
+          { soldAt: { gte: windowStart, lte: windowEnd } },
+          { paidAt: { gte: windowStart, lte: windowEnd } },
+        ],
+      },
+      select: { id: true, externalSaleId: true },
+    });
+    const toDeactivate = existing
+      .filter((r) => !seen.has(r.externalSaleId))
+      .map((r) => r.id);
+    let deactivated = 0;
+    if (toDeactivate.length) {
+      const res = await this.prisma.saleTransaction.updateMany({
+        where: { id: { in: toDeactivate } },
+        data: { isActive: false, syncedAt: new Date() },
+      });
+      deactivated = res.count;
+    }
+
+    this.logger.log(
+      `Sales range club=${clubId} upserted=${upserted} deactivated=${deactivated} window=${fromStr}..${toStr} days=${days.length}`,
+    );
+    return { upserted, deactivated, from: fromStr, to: toStr };
+  }
 }
 
 /**
@@ -342,4 +376,8 @@ async function reconcileAdminUnpaid(
     },
   });
   return externalSaleId;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
