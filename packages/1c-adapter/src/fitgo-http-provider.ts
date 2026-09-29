@@ -366,6 +366,78 @@ export class FitgoHttpProvider {
     }
   }
 
+  async getClassSessions(params: {
+    from: string;
+    to: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{
+    data: import('./types').FitgoClassSessionRow[];
+    page: number;
+    pageSize: number;
+    total: number;
+  } | null> {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+      page: String(params.page ?? 1),
+      pageSize: String(params.pageSize ?? 100),
+    });
+    try {
+      const data = await this.request<{
+        data?: import('./types').FitgoClassSessionRow[];
+        page?: number;
+        pageSize?: number;
+        total?: number;
+      }>(`/class-sessions?${q.toString()}`, { timeoutMs: 60_000 });
+      if (!data || !Array.isArray(data.data)) return null;
+      return {
+        data: data.data,
+        page: data.page ?? params.page ?? 1,
+        pageSize: data.pageSize ?? params.pageSize ?? 100,
+        total: data.total ?? data.data.length,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async getClubVisitsPage(params: {
+    from: string;
+    to: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{
+    data: import('./types').FitgoClubVisitRow[];
+    page: number;
+    pageSize: number;
+    total: number;
+  } | null> {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+      page: String(params.page ?? 1),
+      pageSize: String(params.pageSize ?? 500),
+    });
+    try {
+      const data = await this.request<{
+        data?: import('./types').FitgoClubVisitRow[];
+        page?: number;
+        pageSize?: number;
+        total?: number;
+      }>(`/visits?${q.toString()}`, { timeoutMs: 60_000 });
+      if (!data || !Array.isArray(data.data)) return null;
+      return {
+        data: data.data,
+        page: data.page ?? params.page ?? 1,
+        pageSize: data.pageSize ?? params.pageSize ?? 500,
+        total: data.total ?? data.data.length,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async getSegmentsConfig(): Promise<{
     segments: Array<{
       key: string;

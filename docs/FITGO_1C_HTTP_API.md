@@ -174,6 +174,8 @@ Query: `phone` или `externalId`.
 
 Query: `phone` или `externalId`; опционально `from`, `to` (ISO date).
 
+Без клиента, с `from`+`to` (+ `page`, `pageSize`): клубная страница `{ data, page, pageSize, total }` — у каждой строки есть `externalId` контрагента.
+
 ```json
 {
   "data": [
@@ -199,6 +201,10 @@ Query: `phone` или `externalId`; опционально `from`, `to` (ISO dat
 | `basisType` | `membership` \| `class` \| `service` \| `other` | Тип основания в 1С |
 
 Nest мапит `kind`/`basisType` (с эвристикой по `title`, если поля нет). Опционально позже: `serviceCode`, `classId`, `membershipId`.
+
+### GET `/class-sessions`
+
+Query: `from`, `to`, `page`, `pageSize`. Документы «Занятие» за период (ГП / ПТ / спа): статус, сотрудник, зал, состав с явкой. См. [FitGOIntegration_CLASS_SESSIONS_SPEC.md](../scripts/windows/FitGOIntegration_CLASS_SESSIONS_SPEC.md).
 
 ### GET `/card`
 

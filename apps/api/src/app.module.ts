@@ -22,6 +22,7 @@ import { PtTimesheetModule } from './pt-timesheet/pt-timesheet.module';
 import { StaffRosterModule } from './staff-roster/staff-roster.module';
 import { AdminSalesModule } from './admin-sales/admin-sales.module';
 import { SegmentsModule } from './segments/segments.module';
+import { ClassSyncModule } from './class-sync/class-sync.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { SegmentsModule } from './segments/segments.module';
     StaffRosterModule,
     AdminSalesModule,
     SegmentsModule,
+    ClassSyncModule,
   ],
 })
 export class AppModule {}

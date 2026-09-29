@@ -12,9 +12,10 @@
 //   POST /v1/spa/cleanup-broken-visits   → обработчик CleanupBrokenSpaVisitsPOST
 //   GET  /v1/specialist-service-debts    → обработчик SpecialistServiceDebtsGET
 //   GET  /v1/pt-session-payment         → (план) сверка оплаты ПТ: clientPhone|clientExternalId + occurredAt
-//   GET  /v1/visits
+//   GET  /v1/visits                       → VisitsGET (?externalId|phone | club from/to/page)
 //   GET  /v1/card
 //   GET  /v1/group-session-roster         → GroupSessionRosterGET (?appointmentId=)
+//   GET  /v1/class-sessions               → ClassSessionsGET (?from&to&page&pageSize)
 //   GET  /v1/segments/config              → SegmentsConfigGET
 //   GET  /v1/segments/members             → SegmentsMembersGET (?key= | ?uuid=)
 //
@@ -23,13 +24,14 @@
 //
 // В конфигураторе (пример freeze; consume/sale/debts — аналогично):
 //   Имя шаблона: freeze | consume-service | spa-service-sale | cleanup-broken-visits | SpecialistServiceDebts
-//                | group-session-roster | segments-config | segments-members
+//                | group-session-roster | class-sessions | segments-config | segments-members
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
 //                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
-//                | /v1/group-session-roster | /v1/segments/config | /v1/segments/members
+//                | /v1/group-session-roster | /v1/class-sessions | /v1/segments/config | /v1/segments/members
 //                (без /v1 приложение метод не найдёт: Nest ходит на .../hs/fitgo/v1)
 //   Метод POST → FreezePOST | ConsumeServicePOST | SpaSalePOST | CleanupBrokenSpaVisitsPOST
-//   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | SegmentsConfigGET | SegmentsMembersGET
+//   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | ClassSessionsGET
+//                | SegmentsConfigGET | SegmentsMembersGET
 //
 // У расширения снять флаг «Защита от опасных действий»: проведение документов
 // создаёт COM-объект WinHttp (рассылки), иначе в HTTP-сервисе будет 500 «Предупреждение безопасности».
@@ -448,6 +450,41 @@
         Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
     КонецЕсли;
 
+    // Клубная выгрузка: from+to без клиента → { data, page, pageSize, total }
+    ЕстьКлиент = ЗначениеЗаполнено(Запрос.ПараметрыЗапроса.Получить("externalId"))
+        ИЛИ ЗначениеЗаполнено(Запрос.ПараметрыЗапроса.Получить("phone"));
+    ДатаСтрС = "";
+    ДатаСтрПо = "";
+    Попытка
+        ДатаСтрС = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("from")));
+    Исключение
+    КонецПопытки;
+    Попытка
+        ДатаСтрПо = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("to")));
+    Исключение
+    КонецПопытки;
+
+    Если НЕ ЕстьКлиент И НЕ ПустаяСтрока(ДатаСтрС) И НЕ ПустаяСтрока(ДатаСтрПо) Тогда
+        Страница = 1;
+        Размер = 500;
+        Попытка
+            СтрСтр = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("page")));
+            Если НЕ ПустаяСтрока(СтрСтр) Тогда
+                Страница = Макс(1, Число(СтрСтр));
+            КонецЕсли;
+        Исключение
+        КонецПопытки;
+        Попытка
+            РазмСтр = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("pageSize")));
+            Если НЕ ПустаяСтрока(РазмСтр) Тогда
+                Размер = Мин(1000, Макс(1, Число(РазмСтр)));
+            КонецЕсли;
+        Исключение
+        КонецПопытки;
+        Данные = FitGOIntegrationКлиенты.ВизитыКлубаJSON(ДатаСтрС, ДатаСтрПо, Страница, Размер);
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
+    КонецЕсли;
+
     Контрагент = РазрешитьКонтрагента(Запрос);
     Если Контрагент = Неопределено Тогда
         Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(404, "Client not found");
@@ -540,6 +577,48 @@
     КонецЕсли;
 
     Данные = FitGOIntegrationКлиенты.СоставГрупповогоЗанятияJSON(AppointmentId);
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
+КонецФункции
+
+// Документы занятий за период (ГП / ПТ / спа): статус, сотрудник, зал, состав с явкой.
+// Query: from, to (YYYY-MM-DD), page (default 1), pageSize (default 100, max 500).
+Функция ClassSessionsGET(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    ДатаСтрС = "";
+    ДатаСтрПо = "";
+    Попытка
+        ДатаСтрС = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("from")));
+    Исключение
+    КонецПопытки;
+    Попытка
+        ДатаСтрПо = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("to")));
+    Исключение
+    КонецПопытки;
+    Если ПустаяСтрока(ДатаСтрС) Или ПустаяСтрока(ДатаСтрПо) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "from and to required (YYYY-MM-DD)");
+    КонецЕсли;
+
+    Страница = 1;
+    Размер = 100;
+    Попытка
+        СтрСтр = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("page")));
+        Если НЕ ПустаяСтрока(СтрСтр) Тогда
+            Страница = Макс(1, Число(СтрСтр));
+        КонецЕсли;
+    Исключение
+    КонецПопытки;
+    Попытка
+        РазмСтр = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("pageSize")));
+        Если НЕ ПустаяСтрока(РазмСтр) Тогда
+            Размер = Мин(500, Макс(1, Число(РазмСтр)));
+        КонецЕсли;
+    Исключение
+    КонецПопытки;
+
+    Данные = FitGOIntegrationКлиенты.ЗанятияПериодаJSON(ДатаСтрС, ДатаСтрПо, Страница, Размер);
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
 КонецФункции
 

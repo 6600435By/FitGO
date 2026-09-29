@@ -297,6 +297,27 @@ enum GroupSessionMemberAttendance {
   REMOVED
 }
 
+/// Snapshot of Документ.Занятие from FitGOIntegration class-sessions sync.
+enum OnexClassKind {
+  GROUP
+  PT
+  SPA
+}
+
+enum OnexClassStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum OnexClassMemberAttendance {
+  EXPECTED
+  ATTENDED
+  NO_SHOW
+  CANCELLED
+}
+
 enum MotivationRateKind {
   SPA_SERVICE
   SPA_KIND
@@ -401,6 +422,8 @@ model Club {
   clubRevenueManuals   ClubRevenueManualEntry[]
   catalogProducts      CatalogProduct[]
   segmentSyncStates    SegmentSyncState[]
+  onexClassSessions    OnexClassSession[]
+  clubHallVisits       ClubHallVisit[]
 }
 
 model ClubTheme {
@@ -1920,4 +1943,87 @@ model TrainerDaySheetLine {
   @@index([sheetId])
   @@index([clientIssue, clientIssueEscalated])
   @@index([isLateAdd])
+}
+
+/// Club-wide 1C class document cache (Документ.Занятие) for payroll + history.
+model OnexClassSession {
+  id                   String          @id @default(cuid())
+  clubId               String
+  /// UUID / ИдентификаторЗанятия from 1C
+  externalId           String
+  number               String?
+  kind                 OnexClassKind
+  status               OnexClassStatus
+  title                String
+  startAt              DateTime
+  endAt                DateTime?
+  durationMin          Int?
+  employeeExternalId   String?
+  employeeName         String?
+  roomTitle            String?
+  bookedCount          Int             @default(0)
+  headerAttendedCount  Int             @default(0)
+  /// Count of ATTENDED members — source for payroll quantity
+  attendedCount        Int             @default(0)
+  isActive             Boolean         @default(true)
+  /// When true, open-period sync must not overwrite payroll-facing fields
+  payrollLocked        Boolean         @default(false)
+  syncedAt             DateTime        @default(now())
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  club    Club                  @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  members OnexClassSessionMember[]
+
+  @@unique([clubId, externalId])
+  @@index([clubId, startAt])
+  @@index([clubId, kind, startAt])
+  @@index([clubId, employeeExternalId, startAt])
+  @@index([clubId, isActive, startAt])
+  @@index([clubId, status, startAt])
+}
+
+model OnexClassSessionMember {
+  id             String                     @id @default(cuid())
+  sessionId      String
+  externalId     String
+  clientName     String
+  attendance     OnexClassMemberAttendance  @default(EXPECTED)
+  cancelled      Boolean                    @default(false)
+  paymentBasis   String?
+  quantity       Int                        @default(1)
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+
+  session OnexClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, externalId])
+  @@index([externalId])
+  @@index([sessionId, attendance])
+}
+
+/// Club-wide hall visits (Документ.Посещение) — client history, not GP payroll qty.
+model ClubHallVisit {
+  id           String   @id @default(cuid())
+  clubId       String
+  externalId   String
+  /// Client 1C UUID
+  clientExternalId String?
+  visitDate    String
+  checkIn      DateTime?
+  checkOut     DateTime?
+  title        String?
+  kind         String?
+  basisType    String?
+  isActive     Boolean  @default(true)
+  syncedAt     DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, externalId])
+  @@index([clubId, visitDate])
+  @@index([clubId, clientExternalId, visitDate])
+  @@index([clubId, isActive, visitDate])
 }

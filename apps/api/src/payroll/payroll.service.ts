@@ -55,6 +55,7 @@ import { PtTimesheetService } from '../pt-timesheet/pt-timesheet.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { StaffRosterService } from '../staff-roster/staff-roster.service';
 import { AdminSalesService } from '../admin-sales/admin-sales.service';
+import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import {
   createAnalyticsProvider,
   fetchStaffSalesFromAnalytics,
@@ -111,6 +112,7 @@ export class PayrollService {
     private readonly ptTimesheet: PtTimesheetService,
     private readonly staffRoster: StaffRosterService,
     private readonly adminSales: AdminSalesService,
+    private readonly classSessionsSync: ClassSessionsSyncService,
     private readonly config: ConfigService,
   ) {}
 
@@ -267,6 +269,51 @@ export class PayrollService {
         roomTitle,
         roomKey,
       });
+    }
+
+    // Fallback: completed 1C class docs not yet mirrored as GroupClassSession
+    const performer = await this.prisma.user.findFirst({
+      where: { id: performerId, clubId },
+    });
+    if (performer) {
+      const seenAppt = new Set(groups.map((g) => g.appointmentId));
+      const name = `${performer.lastName} ${performer.firstName}`.trim();
+      const onex = await this.prisma.onexClassSession.findMany({
+        where: {
+          clubId,
+          kind: 'GROUP',
+          status: 'COMPLETED',
+          isActive: true,
+          startAt: { gte: fromD, lte: toD },
+          OR: [
+            ...(performer.externalId
+              ? [{ employeeExternalId: performer.externalId }]
+              : []),
+            ...(name ? [{ employeeName: name }] : []),
+          ],
+        },
+        orderBy: { startAt: 'asc' },
+      });
+      for (const o of onex) {
+        if (seenAppt.has(o.externalId)) continue;
+        const qty = o.attendedCount;
+        if (qty <= 0) continue;
+        const roomTitle = o.roomTitle ?? undefined;
+        units.push({
+          id: `onex:${o.id}`,
+          kind: 'GROUP',
+          performerId,
+          title: o.title,
+          occurredAt: o.startAt.toISOString(),
+          quantity: qty,
+          trustBand: 'GREEN',
+          trustResolution: 'NONE',
+          payrollTrusted: true,
+          sessionId: o.id,
+          roomTitle,
+          roomKey: resolveGroupRoomKey(roomTitle),
+        });
+      }
     }
 
     return units.sort(
@@ -527,6 +574,9 @@ export class PayrollService {
       },
       data: { status: GroupClassSessionStatus.LOCKED },
     });
+    await this.classSessionsSync
+      .markPayrollLocked(clubId, performerId, from, to)
+      .catch(() => undefined);
     return this.getPeriodSummary(clubId, performerId, from, to);
   }
 

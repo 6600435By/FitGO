@@ -24,6 +24,45 @@ export interface VisitPeriod {
   to?: string;
 }
 
+export interface FitgoClassSessionMemberRow {
+  externalId: string;
+  clientName: string;
+  attendance: 'ATTENDED' | 'NO_SHOW' | 'EXPECTED' | 'CANCELLED';
+  cancelled?: boolean;
+  paymentBasis?: string;
+  quantity?: number;
+}
+
+export interface FitgoClassSessionRow {
+  id: string;
+  number?: string;
+  kind: 'GROUP' | 'PT' | 'SPA';
+  status: 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+  title: string;
+  startAt: string;
+  endAt?: string;
+  durationMin?: number;
+  employeeExternalId?: string;
+  employeeName?: string;
+  roomTitle?: string;
+  bookedCount?: number;
+  headerAttendedCount?: number;
+  attendedCount?: number;
+  members?: FitgoClassSessionMemberRow[];
+}
+
+export interface FitgoClubVisitRow {
+  id: string;
+  date: string;
+  checkIn?: string;
+  checkOut?: string;
+  clubName?: string;
+  externalId?: string;
+  title?: string;
+  kind?: string;
+  basisType?: string;
+}
+
 export interface BookingContext {
   phone?: string;
   name?: string;
@@ -133,6 +172,34 @@ export interface IFitnessClubProvider {
       clientName: string;
       phone?: string;
     }>;
+  } | null>;
+  /**
+   * Club class documents (Документ.Занятие) for a date range. Optional.
+   */
+  getClassSessions?(params: {
+    from: string;
+    to: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{
+    data: FitgoClassSessionRow[];
+    page: number;
+    pageSize: number;
+    total: number;
+  } | null>;
+  /**
+   * Club hall visits without client filter. Optional.
+   */
+  getClubVisitsPage?(params: {
+    from: string;
+    to: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{
+    data: FitgoClubVisitRow[];
+    page: number;
+    pageSize: number;
+    total: number;
   } | null>;
   /**
    * App segment catalog (staff / nomenclature). Optional.

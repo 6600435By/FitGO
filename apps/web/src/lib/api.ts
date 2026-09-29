@@ -1729,6 +1729,59 @@ export const api = {
     );
   },
 
+  /** Re-read Документ.Занятие for period from 1C, then caller reloads summary. */
+  classSyncRefreshForPayroll: (
+    token: string,
+    body: { from: string; to: string; userId?: string },
+    mode: 'super' | 'admin' = 'super',
+  ) =>
+    request<{
+      from: string;
+      to: string;
+      sessionsUpserted: number;
+      membersUpserted: number;
+      journalsTouched: number;
+      endpointMissing: boolean;
+      periodLocked?: boolean;
+      message: string;
+    }>(
+      mode === 'super'
+        ? '/super-admin/class-sync/refresh-for-payroll'
+        : '/admin/class-sync/refresh-for-payroll',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  classSyncSessions: (
+    token: string,
+    body?: { from?: string; to?: string; yearToDate?: boolean },
+  ) =>
+    request<{
+      from: string;
+      to: string;
+      sessionsUpserted: number;
+      endpointMissing: boolean;
+    }>(
+      '/super-admin/class-sync/sessions',
+      { method: 'POST', body: JSON.stringify(body ?? {}) },
+      token,
+    ),
+
+  classSyncVisits: (
+    token: string,
+    body?: { from?: string; to?: string; yearToDate?: boolean },
+  ) =>
+    request<{
+      from: string;
+      to: string;
+      upserted: number;
+      endpointMissing: boolean;
+    }>(
+      '/super-admin/class-sync/visits',
+      { method: 'POST', body: JSON.stringify(body ?? {}) },
+      token,
+    ),
+
   payrollClubSummary: (
     token: string,
     params: {
@@ -2078,6 +2131,64 @@ export const api = {
       adminStatus: string | null;
       revenueStatus: string | null;
     }>('/super-admin/sales/sync-status', {}, token),
+
+  superAdminSalesBackfill: (
+    token: string,
+    body?: {
+      from?: string;
+      to?: string;
+      sealedUntil?: string;
+      mode?: 'full' | 'mutable-refresh';
+    },
+  ) =>
+    request<{
+      status: 'started' | 'running';
+      running: boolean;
+      error: string | null;
+      hint: string | null;
+      cursor: {
+        phase: string;
+        nextDay: string;
+        daysDone: number;
+        daysTotal: number;
+        planFrom: string;
+        planTo: string;
+        sealedUntil: string;
+        mutablePass: number;
+        note: string | null;
+      } | null;
+    }>('/super-admin/sales/backfill', { method: 'POST', body: body ?? {} }, token),
+
+  superAdminSalesBackfillStatus: (token: string) =>
+    request<{
+      running: boolean;
+      jobStatus: string | null;
+      error: string | null;
+      hint: string | null;
+      lastRunAt: string | null;
+      lastSuccessAt: string | null;
+      cursor: {
+        phase: string;
+        nextDay: string;
+        daysDone: number;
+        daysTotal: number;
+        planFrom: string;
+        planTo: string;
+        sealedUntil: string;
+        upsertedSales: number;
+        upsertedRevenue: number;
+        lastChunkFrom: string | null;
+        lastChunkTo: string | null;
+        mutablePass: number;
+        note: string | null;
+      } | null;
+    }>('/super-admin/sales/backfill-status', {}, token),
+
+  superAdminSalesBackfillStop: (token: string) =>
+    request<unknown>('/super-admin/sales/backfill/stop', { method: 'POST' }, token),
+
+  superAdminSalesBackfillResume: (token: string) =>
+    request<unknown>('/super-admin/sales/backfill/resume', { method: 'POST' }, token),
 
   superAdminClubSales: (
     token: string,

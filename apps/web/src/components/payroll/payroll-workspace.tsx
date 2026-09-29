@@ -242,6 +242,7 @@ export function PayrollWorkspace({ mode }: Props) {
   const [summary, setSummary] = useState<PayrollPeriodSummary | null>(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [syncing1c, setSyncing1c] = useState(false);
   const [adjAmount, setAdjAmount] = useState('');
   const [adjReason, setAdjReason] = useState('');
   const [editingAdjId, setEditingAdjId] = useState<string | null>(null);
@@ -326,6 +327,28 @@ export function PayrollWorkspace({ mode }: Props) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshFrom1c = async () => {
+    const token = getToken();
+    if (!token || !userId) return;
+    setSyncing1c(true);
+    setMessage('');
+    try {
+      const res = await api.classSyncRefreshForPayroll(
+        token,
+        { from, to, userId },
+        mode === 'super' ? 'super' : 'admin',
+      );
+      setMessage(res.message);
+      if (!res.periodLocked) {
+        await load();
+      }
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка обновления из 1С');
+    } finally {
+      setSyncing1c(false);
     }
   };
 
@@ -763,6 +786,15 @@ export function PayrollWorkspace({ mode }: Props) {
             onClick={load}
           >
             {loading ? 'Считаем…' : 'Рассчитать'}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary w-full lg:min-w-[9.5rem] lg:w-auto"
+            disabled={syncing1c || loading || !userId}
+            onClick={() => void refreshFrom1c()}
+            title="Перечитать занятия из 1С за выбранный период и пересчитать"
+          >
+            {syncing1c ? 'Обновляем…' : 'Обновить из 1С'}
           </button>
           {canEdit && (
             <button
