@@ -593,15 +593,34 @@ export function ClubRevenuePanel() {
     const token = getToken();
     if (!token) return;
     setSyncMsg('Синхронизация…');
+    setError('');
     try {
-      const r = await api.superAdminSalesSync(token);
-      const cr = r.clubRevenue;
-      setSyncMsg(
-        cr
-          ? `Обновлено: ${cr.upserted} строк (${cr.from}…${cr.to})`
-          : 'Синхронизация завершена',
-      );
-      await load();
+      await api.superAdminSalesSync(token);
+      const deadline = Date.now() + 12 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const s = await api.superAdminSalesSyncStatus(token);
+        if (s.running) {
+          setSyncMsg('Синхронизация… (идёт обмен с 1С)');
+          continue;
+        }
+        if (s.error) {
+          throw new Error(s.error);
+        }
+        setSyncMsg(
+          s.lastSyncedAt
+            ? `Обновлено: ${new Date(s.lastSyncedAt).toLocaleString('ru-RU', {
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })}`
+            : 'Синхронизация завершена',
+        );
+        await load();
+        return;
+      }
+      throw new Error('Синхронизация слишком долгая — обновите страницу через пару минут');
     } catch (e) {
       setSyncMsg('');
       setError(e instanceof Error ? e.message : 'Ошибка синхронизации');

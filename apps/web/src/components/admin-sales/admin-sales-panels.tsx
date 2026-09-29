@@ -367,11 +367,30 @@ export function SuperAdminSalesPanel() {
     if (!token) return;
     setSyncMsg('Синхронизация…');
     try {
-      const r = await api.superAdminSalesSync(token);
-      setSyncMsg(
-        `Готово: ${r.upserted} строк, снято ${r.deactivated} (${r.from}–${r.to})`,
-      );
-      await load();
+      await api.superAdminSalesSync(token);
+      const deadline = Date.now() + 12 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const s = await api.superAdminSalesSyncStatus(token);
+        if (s.running) {
+          setSyncMsg('Синхронизация… (идёт обмен с 1С)');
+          continue;
+        }
+        if (s.error) throw new Error(s.error);
+        setSyncMsg(
+          s.lastSyncedAt
+            ? `Готово (${new Date(s.lastSyncedAt).toLocaleString('ru-RU', {
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })})`
+            : 'Синхронизация завершена',
+        );
+        await load();
+        return;
+      }
+      throw new Error('Синхронизация слишком долгая — обновите страницу через пару минут');
     } catch (e) {
       setSyncMsg(e instanceof Error ? e.message : 'Ошибка sync');
     }

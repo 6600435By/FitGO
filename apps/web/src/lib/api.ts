@@ -2062,23 +2062,22 @@ export const api = {
 
   superAdminSalesSync: (token: string) =>
     request<{
-      adminSales?: {
-        upserted: number;
-        deactivated: number;
-        from: string;
-        to: string;
-      };
-      clubRevenue?: {
-        upserted: number;
-        deactivated: number;
-        from: string;
-        to: string;
-      };
-      upserted?: number;
-      deactivated?: number;
-      from?: string;
-      to?: string;
+      status: 'started' | 'running';
+      running?: boolean;
+      error?: string | null;
+      lastSyncedAt?: string | null;
+      adminStatus?: string | null;
+      revenueStatus?: string | null;
     }>('/super-admin/sales/sync', { method: 'POST' }, token),
+
+  superAdminSalesSyncStatus: (token: string) =>
+    request<{
+      running: boolean;
+      error: string | null;
+      lastSyncedAt: string | null;
+      adminStatus: string | null;
+      revenueStatus: string | null;
+    }>('/super-admin/sales/sync-status', {}, token),
 
   superAdminClubSales: (
     token: string,

@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Logger,
   Param,
   Post,
   Query,
@@ -21,10 +22,16 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { PrismaService } from '../prisma/prisma.service';
 import { AdminSalesService } from './admin-sales.service';
 import { AdminSalesSyncService } from './admin-sales-sync.service';
 import { ClubRevenueService } from './club-revenue.service';
 import { ClubRevenueSyncService } from './club-revenue-sync.service';
+
+/** Browser / proxy often cut long syncs (~90s+) → opaque «Ошибка 500». */
+const SYNC_STALE_MS = 15 * 60 * 1000;
+/** After API restart DB may still say running — reclaim if no in-process lock. */
+const SYNC_ORPHAN_MS = 90 * 1000;
 
 function assertPeriod(from?: string, to?: string) {
   if (!from || !to || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
@@ -60,11 +67,15 @@ export class AdminSalesController {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
 export class SuperAdminSalesController {
+  private readonly logger = new Logger(SuperAdminSalesController.name);
+  private readonly syncInFlight = new Set<string>();
+
   constructor(
     private readonly sales: AdminSalesService,
     private readonly sync: AdminSalesSyncService,
     private readonly clubRevenue: ClubRevenueService,
     private readonly clubRevenueSync: ClubRevenueSyncService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Get('club')
@@ -157,14 +168,136 @@ export class SuperAdminSalesController {
     return this.clubRevenue.deleteManual(requireClubId(user), id);
   }
 
+  @Get('sync-status')
+  syncStatus(@CurrentUser() user: JwtPayload) {
+    return this.readSyncStatus(requireClubId(user));
+  }
+
+  /**
+   * Start incremental sync in the background. Awaiting both jobs in one HTTP
+   * request timed out on the club server (proxy/browser) → «Ошибка 500».
+   */
   @Post('sync')
   async syncNow(@CurrentUser() user: JwtPayload) {
     const clubId = requireClubId(user);
-    const adminSales = await this.sync.syncClub(clubId, 'incremental');
-    const clubRevenue = await this.clubRevenueSync.syncClub(
-      clubId,
-      'incremental',
+    await this.reclaimOrphanRunning(clubId);
+    const status = await this.readSyncStatus(clubId);
+    if (status.running || this.syncInFlight.has(clubId)) {
+      return { status: 'running' as const, ...status };
+    }
+
+    this.syncInFlight.add(clubId);
+    // Mark running before HTTP returns so the UI poll does not treat idle as done.
+    const now = new Date();
+    for (const resourceKey of ['admin_sales', 'club_revenue'] as const) {
+      await this.prisma.salesSyncState.upsert({
+        where: { clubId_resourceKey: { clubId, resourceKey } },
+        create: {
+          clubId,
+          resourceKey,
+          lastStatus: 'running',
+          lastRunAt: now,
+          lastError: null,
+        },
+        update: {
+          lastStatus: 'running',
+          lastRunAt: now,
+          lastError: null,
+        },
+      });
+    }
+    void this.runSyncBackground(clubId);
+
+    return {
+      status: 'started' as const,
+      ...(await this.readSyncStatus(clubId)),
+    };
+  }
+
+  /** Clear leftover `running` rows after crash/restart (no in-process lock). */
+  private async reclaimOrphanRunning(clubId: string) {
+    if (this.syncInFlight.has(clubId)) return;
+    const cutoff = new Date(Date.now() - SYNC_ORPHAN_MS);
+    await this.prisma.salesSyncState.updateMany({
+      where: {
+        clubId,
+        lastStatus: 'running',
+        OR: [{ lastRunAt: null }, { lastRunAt: { lt: cutoff } }],
+      },
+      data: {
+        lastStatus: 'error',
+        lastError: 'Синхронизация прервана (перезапуск API). Нажмите «Обновить из 1С» ещё раз.',
+        lastRunAt: new Date(),
+      },
+    });
+  }
+
+  private async runSyncBackground(clubId: string) {
+    try {
+      try {
+        await this.sync.syncClub(clubId, 'incremental');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await this.prisma.salesSyncState.updateMany({
+          where: { clubId, resourceKey: 'club_revenue', lastStatus: 'running' },
+          data: {
+            lastStatus: 'error',
+            lastError: message.slice(0, 500),
+            lastRunAt: new Date(),
+          },
+        });
+        throw err;
+      }
+      await this.clubRevenueSync.syncClub(clubId, 'incremental');
+    } catch (err) {
+      this.logger.error(
+        `Background sales sync failed club=${clubId}: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+    } finally {
+      this.syncInFlight.delete(clubId);
+    }
+  }
+
+  private async readSyncStatus(clubId: string) {
+    const rows = await this.prisma.salesSyncState.findMany({
+      where: {
+        clubId,
+        resourceKey: { in: ['admin_sales', 'club_revenue'] },
+      },
+    });
+    const byKey = Object.fromEntries(rows.map((r) => [r.resourceKey, r]));
+    const admin = byKey['admin_sales'];
+    const revenue = byKey['club_revenue'];
+    const now = Date.now();
+    const isFreshRunning = (row?: (typeof rows)[number]) => {
+      if (!row || row.lastStatus !== 'running' || !row.lastRunAt) return false;
+      const age = now - row.lastRunAt.getTime();
+      if (age >= SYNC_STALE_MS) return false;
+      // Prefer in-process lock; otherwise only trust very recent DB mark.
+      if (this.syncInFlight.has(clubId)) return true;
+      return age < SYNC_ORPHAN_MS;
+    };
+
+    const running =
+      this.syncInFlight.has(clubId) ||
+      isFreshRunning(admin) ||
+      isFreshRunning(revenue);
+
+    const errors = [admin?.lastError, revenue?.lastError].filter(
+      (e): e is string => !!e?.trim(),
     );
-    return { adminSales, clubRevenue };
+    const lastSuccessAt = [admin?.lastSuccessAt, revenue?.lastSuccessAt]
+      .filter((d): d is Date => !!d)
+      .sort((a, b) => b.getTime() - a.getTime())[0];
+
+    return {
+      running,
+      adminStatus: admin?.lastStatus ?? null,
+      revenueStatus: revenue?.lastStatus ?? null,
+      error: errors[0] ?? null,
+      lastSyncedAt: lastSuccessAt?.toISOString() ?? null,
+    };
   }
 }
