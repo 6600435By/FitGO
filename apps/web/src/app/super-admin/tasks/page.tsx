@@ -12,6 +12,7 @@ export default function SuperAdminTasksPage() {
   const [admins, setAdmins] = useState<StaffMember[]>([]);
   const [form, setForm] = useState({ assigneeId: '', title: '', description: '', dueAt: '' });
   const [showForm, setShowForm] = useState(false);
+  const [topic, setTopic] = useState<'all' | 'staff_debt' | 'client_debt' | 'membership'>('all');
 
   const load = () => {
     const token = getToken();
@@ -50,6 +51,14 @@ export default function SuperAdminTasksPage() {
     load();
   };
 
+  const filters = [
+    { id: 'all' as const, label: 'Все' },
+    { id: 'staff_debt' as const, label: 'Долги сотрудников' },
+    { id: 'client_debt' as const, label: 'Долги клиентов' },
+    { id: 'membership' as const, label: 'Абонементы' },
+  ];
+  const visible = tasks.filter((task) => topic === 'all' || task.topic === topic);
+
   const statusLabel: Record<AdminTaskStatus, string> = {
     OPEN: 'Открыта',
     IN_PROGRESS: 'В работе',
@@ -64,6 +73,19 @@ export default function SuperAdminTasksPage() {
         <button onClick={() => setShowForm(!showForm)} className="btn-primary text-sm">
           {showForm ? 'Отмена' : '+ Задача'}
         </button>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {filters.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setTopic(item.id)}
+            className={topic === item.id ? 'btn-primary text-xs' : 'btn-secondary text-xs'}
+          >
+            {item.label}
+          </button>
+        ))}
       </div>
 
       {showForm && (
@@ -82,7 +104,10 @@ export default function SuperAdminTasksPage() {
       )}
 
       <ul className="space-y-3">
-        {tasks.map((task) => (
+        {visible.length === 0 && (
+          <li className="text-sm text-slate-400">Нет задач в этом фильтре</li>
+        )}
+        {visible.map((task) => (
           <li key={task.id} className="card">
             <div className="flex justify-between gap-2">
               <div>
@@ -92,11 +117,13 @@ export default function SuperAdminTasksPage() {
                   {task.source && task.source !== 'MANUAL' ? (
                     <span className="ml-2 text-xs text-amber-300/90">
                       ·{' '}
-                      {task.source === 'DEBT_OVERDUE'
-                        ? 'авто: долг'
-                        : task.source === 'MEMBERSHIP_EXPIRING'
-                          ? 'авто: абонемент'
-                          : task.source}
+                      {task.source === 'STAFF_DEBT'
+                        ? 'авто: долг сотрудника'
+                        : task.source === 'DEBT_OVERDUE'
+                          ? 'авто: долг клиента'
+                          : task.source === 'MEMBERSHIP_EXPIRING'
+                            ? 'авто: абонемент'
+                            : task.source}
                     </span>
                   ) : null}
                 </p>

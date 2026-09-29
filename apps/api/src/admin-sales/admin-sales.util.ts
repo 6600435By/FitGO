@@ -8,6 +8,10 @@ export function normalizeSaleType(
   const t = (rawType ?? '').toLowerCase();
   const name = (productName ?? '').toLowerCase();
 
+  // Segment «Тренировки» is its own saleType after analytics is republished.
+  // Payroll still books it with memberships (packages have no separate bucket).
+  if (t === 'training') return 'membership';
+
   // Name wins over raw type: 1C used to tag solarium packages as membership
   // because ЧленствоПакетУслуг is filled on «Солярий 30/60».
   if (

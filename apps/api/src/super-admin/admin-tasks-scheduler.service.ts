@@ -107,16 +107,19 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       if (existing) continue;
 
       const amount = Number(sale.amount || 0).toFixed(2);
+      const staffDebt = /\(\s*сотрудник\s*\)/i.test(sale.clientName ?? '');
       await this.prisma.adminTask.create({
         data: {
           clubId,
           assigneeId: seller.id,
           createdById: systemUser.id,
-          title: `Долг клиента: ${sale.clientName ?? 'клиент'} (${amount} BYN)`,
+          title: staffDebt
+            ? `Долг сотрудника: ${sale.clientName ?? 'сотрудник'} (${amount} BYN)`
+            : `Долг клиента: ${sale.clientName ?? 'клиент'} (${amount} BYN)`,
           description: `Неоплаченная продажа старше ${DEBT_DAYS} дн. ${sale.productName ?? sale.saleType}. Дата продажи: ${sale.soldAt.toISOString().slice(0, 10)}.`,
           dueAt: new Date(),
           status: AdminTaskStatus.OPEN,
-          source: 'DEBT_OVERDUE',
+          source: staffDebt ? 'STAFF_DEBT' : 'DEBT_OVERDUE',
           dedupeKey,
           relatedSaleId: sale.id,
           relatedUserId: seller.id,

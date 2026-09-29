@@ -55,9 +55,10 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="card space-y-4">
           <div>
-            <label className="mb-2 block text-sm text-slate-400">Email</label>
+            <label className="mb-2 block text-sm text-slate-400">Логин</label>
             <input
-              type="email"
+              type="text"
+              autoComplete="username"
               className="input"
               value={email}
               onChange={(e) => setEmail(e.target.value)}

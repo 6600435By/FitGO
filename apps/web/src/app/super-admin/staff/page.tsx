@@ -87,6 +87,7 @@ export default function SuperAdminStaffPage() {
     dateOfBirth: '',
     phone: '',
     email: '',
+    loginTouched: false,
     password: randomPassword(),
     roles: ['TRAINER'] as StaffRoleId[],
   });
@@ -161,8 +162,8 @@ export default function SuperAdminStaffPage() {
       setError('Укажите имя и фамилию');
       return;
     }
-    if (appLogin && (!form.email.trim() || form.password.length < 6)) {
-      setError('Для входа в приложение нужны email и пароль (от 6 символов)');
+    if (appLogin && form.password.length < 6) {
+      setError('Пароль не короче 6 символов. Логин по умолчанию — фамилия, его можно изменить.');
       return;
     }
     try {
@@ -173,7 +174,10 @@ export default function SuperAdminStaffPage() {
         phone: form.phone || undefined,
         roles: form.roles,
         ...(appLogin
-          ? { email: form.email.trim(), password: form.password }
+          ? {
+              ...(form.email.trim() ? { email: form.email.trim() } : {}),
+              password: form.password,
+            }
           : {}),
       });
       if (result.credentials) setCredentials(result.credentials);
@@ -184,6 +188,7 @@ export default function SuperAdminStaffPage() {
         dateOfBirth: '',
         phone: '',
         email: '',
+        loginTouched: false,
         password: randomPassword(),
         roles: ['TRAINER'],
       });
@@ -327,7 +332,15 @@ export default function SuperAdminStaffPage() {
             <input
               className="input mt-1 w-full"
               value={form.lastName}
-              onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  lastName: e.target.value,
+                  email: prev.loginTouched
+                    ? prev.email
+                    : e.target.value.trim().replace(/\s+/g, ''),
+                }))
+              }
             />
           </label>
           <label className="block text-xs text-slate-400">
@@ -369,11 +382,18 @@ export default function SuperAdminStaffPage() {
           {needsAppLogin(form.roles) ? (
             <>
               <label className="block text-xs text-slate-400">
-                Логин (email)
+                Логин
                 <input
                   className="input mt-1 w-full"
+                  placeholder="По умолчанию фамилия"
                   value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      email: e.target.value,
+                      loginTouched: true,
+                    })
+                  }
                 />
               </label>
               <label className="block text-xs text-slate-400">
@@ -433,9 +453,7 @@ export default function SuperAdminStaffPage() {
                     <p className="font-medium text-white">
                       {member.lastName} {member.firstName}
                     </p>
-                    <p className="text-sm text-slate-400">
-                      {member.employeeCode ? `1С ${member.employeeCode}` : member.email}
-                    </p>
+                    <p className="text-sm text-slate-400">Логин: {member.email}</p>
                     {isTechOnlyMember(member.roles) ? (
                       <p className="text-xs text-slate-500">Без входа в приложение</p>
                     ) : member.loginEnabled === false ? (
@@ -496,7 +514,7 @@ export default function SuperAdminStaffPage() {
                       {member.lastName} {member.firstName}
                     </Link>
                     <p className="text-xs text-slate-500">
-                      {member.employeeCode ? `1С ${member.employeeCode}` : member.email}
+                      Логин: {member.email}
                       {isTechOnlyMember(member.roles)
                         ? ' · без входа'
                         : member.loginEnabled === false

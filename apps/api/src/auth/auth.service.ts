@@ -90,8 +90,9 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
+    const login = dto.email.trim();
     const user = await this.prisma.user.findFirst({
-      where: { email: dto.email },
+      where: { email: { equals: login, mode: 'insensitive' } },
       include: {
         roles: true,
         club: true,
@@ -99,7 +100,7 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new UnauthorizedException('Неверный email или пароль');
+      throw new UnauthorizedException('Неверный логин или пароль');
     }
 
     if (user.accountStatus === AccountStatus.SHADOW) {
@@ -130,7 +131,7 @@ export class AuthService {
 
     const valid = await bcrypt.compare(dto.password, user.password);
     if (!valid) {
-      throw new UnauthorizedException('Неверный email или пароль');
+      throw new UnauthorizedException('Неверный логин или пароль');
     }
 
     const { accessToken } = await this.signToken(user);

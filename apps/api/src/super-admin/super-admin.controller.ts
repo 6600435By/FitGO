@@ -125,6 +125,11 @@ export class SuperAdminController {
     return this.superAdmin.listAuditLog(user);
   }
 
+  @Get('overview')
+  getOverview(@CurrentUser() user: JwtPayload) {
+    return this.analytics.getClubOverview(user);
+  }
+
   @Get('analytics')
   getAnalytics(
     @CurrentUser() user: JwtPayload,

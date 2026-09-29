@@ -2,7 +2,9 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import {
   AdminPermission,
@@ -15,6 +17,7 @@ import {
   Role,
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { adminTaskTopic } from '../admin/task-topic';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { AdminPermissionsService } from '../auth/admin-permissions.service';
@@ -22,6 +25,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { CreateAdminTaskDto } from './dto/task.dto';
 import type { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 import { randomBytes } from 'crypto';
+import { allocateStaffLogin, isCodeStubEmail } from '../auth/staff-login';
 
 const STAFF_ROLES: Role[] = [
   Role.ADMIN,
@@ -78,16 +82,59 @@ function isStaffRoleLabel(r: string): r is StaffRoleLabel {
 }
 
 @Injectable()
-export class SuperAdminService {
+export class SuperAdminService implements OnModuleInit {
+  private readonly logger = new Logger(SuperAdminService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly adminPermissions: AdminPermissionsService,
   ) {}
 
+  async onModuleInit() {
+    try {
+      const clubs = await this.prisma.club.findMany({ select: { id: true } });
+      for (const club of clubs) {
+        await this.normalizeCodeLogins(club.id);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Staff login normalize skipped: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  /** Rewrites 1C-code logins (`000000173@staff.fitgo.local`, `1c-…@fitgo.local`) to the surname. */
+  async normalizeCodeLogins(clubId: string) {
+    const stubs = await this.prisma.user.findMany({
+      where: {
+        clubId,
+        roles: { some: { role: { in: STAFF_ROLES } } },
+      },
+      select: { id: true, email: true, lastName: true },
+      orderBy: [{ lastName: 'asc' }, { createdAt: 'asc' }],
+    });
+    for (const member of stubs) {
+      if (!isCodeStubEmail(member.email)) continue;
+      const email = await allocateStaffLogin(
+        this.prisma,
+        member.lastName,
+        member.id,
+      );
+      if (email.toLowerCase() === member.email.toLowerCase()) continue;
+      await this.prisma.user.update({
+        where: { id: member.id },
+        data: { email },
+      });
+      this.logger.log(`Staff login ${member.email} → ${email}`);
+    }
+  }
+
   async listStaff(user: JwtPayload) {
+    const clubId = requireClubId(user);
+    await this.normalizeCodeLogins(clubId);
     const staff = await this.prisma.user.findMany({
       where: {
-        clubId: requireClubId(user),
+        clubId,
         roles: { some: { role: { in: STAFF_ROLES } } },
       },
       include: { roles: true },
@@ -110,12 +157,14 @@ export class SuperAdminService {
     }
 
     const needsLogin = needsAppLogin(roleList);
+    const requested = (dto.email ?? '').trim();
     const email = needsLogin
-      ? (dto.email ?? '').trim().toLowerCase()
+      ? requested
+        ? requested.includes('@')
+          ? requested.toLowerCase()
+          : requested
+        : await allocateStaffLogin(this.prisma, dto.lastName)
       : techPlaceholderEmail(dto.firstName.trim(), dto.lastName.trim());
-    if (needsLogin && !email) {
-      throw new BadRequestException('Укажите логин (email) для входа в приложение');
-    }
     const plainPassword = needsLogin
       ? dto.password
       : randomBytes(24).toString('hex');
@@ -124,7 +173,7 @@ export class SuperAdminService {
     }
 
     const existing = await this.prisma.user.findFirst({
-      where: { email },
+      where: { email: { equals: email, mode: 'insensitive' } },
     });
     if (existing) {
       throw new ConflictException('Пользователь с таким логином уже существует');
@@ -184,6 +233,7 @@ export class SuperAdminService {
       password?: string;
       loginEnabled?: boolean;
       employmentKind?: 'STAFF' | 'EXTERNAL';
+      email?: string;
     } = {};
 
     if (dto.firstName !== undefined) data.firstName = dto.firstName.trim();
@@ -194,6 +244,24 @@ export class SuperAdminService {
     }
     if (dto.employmentKind !== undefined) {
       data.employmentKind = dto.employmentKind;
+    }
+    if (dto.email !== undefined) {
+      const raw = dto.email.trim();
+      if (!raw || raw.length > 80) {
+        throw new BadRequestException('Укажите логин');
+      }
+      const email = raw.includes('@') ? raw.toLowerCase() : raw;
+      const taken = await this.prisma.user.findFirst({
+        where: {
+          email: { equals: email, mode: 'insensitive' },
+          NOT: { id: staffId },
+        },
+        select: { id: true },
+      });
+      if (taken) {
+        throw new ConflictException('Пользователь с таким логином уже существует');
+      }
+      data.email = email;
     }
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
     if (dto.password) {
@@ -304,7 +372,20 @@ export class SuperAdminService {
       orderBy: [{ status: 'asc' }, { dueAt: 'asc' }, { createdAt: 'desc' }],
     });
 
-    return tasks.map((task) => this.mapTask(task));
+    const saleIds = tasks
+      .map((task) => task.relatedSaleId)
+      .filter((id): id is string => !!id);
+    const sales = saleIds.length
+      ? await this.prisma.saleTransaction.findMany({
+          where: { id: { in: saleIds } },
+          select: { id: true, clientName: true },
+        })
+      : [];
+    const clientBySale = new Map(sales.map((sale) => [sale.id, sale.clientName]));
+
+    return tasks.map((task) =>
+      this.mapTask(task, clientBySale.get(task.relatedSaleId ?? '') ?? null),
+    );
   }
 
   async createTask(user: JwtPayload, dto: CreateAdminTaskDto) {
@@ -470,18 +551,21 @@ export class SuperAdminService {
     };
   }
 
-  private mapTask(task: {
-    id: string;
-    title: string;
-    description: string | null;
-    status: PrismaAdminTaskStatus;
-    dueAt: Date | null;
-    completedAt: Date | null;
-    createdAt: Date;
-    source?: string | null;
-    dedupeKey?: string | null;
-    assignee: { id: string; firstName: string; lastName: string };
-  }) {
+  private mapTask(
+    task: {
+      id: string;
+      title: string;
+      description: string | null;
+      status: PrismaAdminTaskStatus;
+      dueAt: Date | null;
+      completedAt: Date | null;
+      createdAt: Date;
+      source?: string | null;
+      dedupeKey?: string | null;
+      assignee: { id: string; firstName: string; lastName: string };
+    },
+    clientName?: string | null,
+  ) {
     return {
       id: task.id,
       title: task.title,
@@ -490,6 +574,11 @@ export class SuperAdminService {
       dueAt: task.dueAt?.toISOString(),
       completedAt: task.completedAt?.toISOString(),
       source: task.source ?? 'MANUAL',
+      topic: adminTaskTopic({
+        source: task.source,
+        title: task.title,
+        clientName,
+      }),
       assignee: {
         id: task.assignee.id,
         firstName: task.assignee.firstName,

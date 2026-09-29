@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { AdminTaskStatus, MembershipStatus } from '@fitgo/shared-types';
 import { AdminTaskStatus as PrismaAdminTaskStatus } from '@prisma/client';
+import { adminTaskTopic } from './task-topic';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { FitnessService } from '../fitness/fitness.service';
@@ -285,6 +286,17 @@ export class AdminService {
       orderBy: [{ status: 'asc' }, { dueAt: 'asc' }],
     });
 
+    const saleIds = tasks
+      .map((task) => task.relatedSaleId)
+      .filter((id): id is string => !!id);
+    const sales = saleIds.length
+      ? await this.prisma.saleTransaction.findMany({
+          where: { id: { in: saleIds } },
+          select: { id: true, clientName: true },
+        })
+      : [];
+    const clientBySale = new Map(sales.map((sale) => [sale.id, sale.clientName]));
+
     return tasks.map((task) => ({
       id: task.id,
       title: task.title,
@@ -292,6 +304,12 @@ export class AdminService {
       status: task.status as AdminTaskStatus,
       dueAt: task.dueAt?.toISOString(),
       completedAt: task.completedAt?.toISOString(),
+      source: task.source ?? 'MANUAL',
+      topic: adminTaskTopic({
+        source: task.source,
+        title: task.title,
+        clientName: clientBySale.get(task.relatedSaleId ?? '') ?? null,
+      }),
       createdAt: task.createdAt.toISOString(),
     }));
   }

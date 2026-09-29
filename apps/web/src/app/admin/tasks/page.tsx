@@ -9,6 +9,7 @@ import { formatDateTime } from '@/lib/utils';
 
 export default function AdminTasksPage() {
   const [tasks, setTasks] = useState<AdminTaskItem[]>([]);
+  const [topic, setTopic] = useState<'all' | 'staff_debt' | 'client_debt' | 'membership'>('all');
 
   const load = () => {
     const token = getToken();
@@ -27,23 +28,45 @@ export default function AdminTasksPage() {
     load();
   };
 
+  const filters = [
+    { id: 'all' as const, label: 'Все' },
+    { id: 'staff_debt' as const, label: 'Долги сотрудников' },
+    { id: 'client_debt' as const, label: 'Долги клиентов' },
+    { id: 'membership' as const, label: 'Абонементы' },
+  ];
+  const visible = tasks.filter((task) => topic === 'all' || task.topic === topic);
+
   return (
     <div className="space-y-4">
       <h2 className="text-xl font-semibold">Мои задачи</h2>
-      {tasks.length === 0 ? (
+      <div className="flex flex-wrap gap-2">
+        {filters.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => setTopic(item.id)}
+            className={topic === item.id ? 'btn-primary text-xs' : 'btn-secondary text-xs'}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      {visible.length === 0 ? (
         <p className="text-slate-400">Нет назначенных задач</p>
       ) : (
         <ul className="space-y-3">
-          {tasks.map((task) => (
+          {visible.map((task) => (
             <li key={task.id} className="card">
               <p className="font-medium">{task.title}</p>
               {task.source && task.source !== 'MANUAL' ? (
                 <p className="text-xs text-amber-300/90">
-                  {task.source === 'DEBT_OVERDUE'
-                    ? 'Автозадача: просроченный долг'
-                    : task.source === 'MEMBERSHIP_EXPIRING'
-                      ? 'Автозадача: абонемент истекает'
-                      : task.source}
+                  {task.source === 'STAFF_DEBT'
+                    ? 'Автозадача: долг сотрудника'
+                    : task.source === 'DEBT_OVERDUE'
+                      ? 'Автозадача: долг клиента'
+                      : task.source === 'MEMBERSHIP_EXPIRING'
+                        ? 'Автозадача: абонемент истекает'
+                        : task.source}
                 </p>
               ) : null}
               {task.description && <p className="text-sm text-slate-400">{task.description}</p>}

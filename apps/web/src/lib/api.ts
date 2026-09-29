@@ -1398,6 +1398,7 @@ export const api = {
       lastName: string;
       dateOfBirth: string;
       phone: string;
+      email: string;
       isActive: boolean;
       password: string;
       roles: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
@@ -1462,6 +1463,42 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(data),
     }, token),
+
+  superAdminOverview: (token: string) =>
+    request<{
+      asOf: string;
+      currency: string;
+      onShift: Array<{
+        userId: string;
+        name: string;
+        role: string;
+        startAt: string;
+        endAt: string;
+      }>;
+      openTasks: number;
+      revenue: {
+        currentMinor: number;
+        prevMonthMinor: number;
+        prevYearMinor: number;
+        from: string;
+        to: string;
+        prevMonthTo: string;
+        prevYearTo: string;
+      };
+      visits: {
+        available: boolean;
+        current: number | null;
+        prevMonth: number | null;
+        prevYear: number | null;
+        hint: string | null;
+      };
+      salesMix: Array<{
+        key: string;
+        label: string;
+        amountMinor: number;
+        share: number;
+      }>;
+    }>('/super-admin/overview', {}, token),
 
   superAdminAnalytics: (token: string, period?: '7d' | '30d' | '90d') => {
     const q = period ? `?period=${period}` : '';

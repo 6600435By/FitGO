@@ -140,6 +140,19 @@ export class FitgoAnalyticsHttpProvider {
     if (params.groupBy) q.set('groupBy', params.groupBy);
     return this.request<FitgoAnalyticsRevenue>(`/stats/revenue?${q.toString()}`);
   }
+
+  /** Club hall visits: Документ.Посещение. Needs published template /v1/stats/visits. */
+  async getVisitCount(params: {
+    from: string;
+    to: string;
+  }): Promise<number | null> {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    const data = await this.request<{ count?: number }>(
+      `/stats/visits?${q.toString()}`,
+    );
+    if (!data || typeof data.count !== 'number') return null;
+    return data.count;
+  }
 }
 
 export type {

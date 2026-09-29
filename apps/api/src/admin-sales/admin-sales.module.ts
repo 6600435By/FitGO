@@ -22,6 +22,11 @@ import { ClubRevenueSyncService } from './club-revenue-sync.service';
     ClubRevenueService,
     ClubRevenueSyncService,
   ],
-  exports: [AdminSalesService, AdminSalesSyncService, ClubRevenueSyncService],
+  exports: [
+    AdminSalesService,
+    AdminSalesSyncService,
+    ClubRevenueService,
+    ClubRevenueSyncService,
+  ],
 })
 export class AdminSalesModule {}

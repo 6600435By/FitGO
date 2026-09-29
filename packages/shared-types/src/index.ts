@@ -924,8 +924,10 @@ export interface AdminTaskItem {
   status: AdminTaskStatus;
   dueAt?: string;
   completedAt?: string;
-  /** MANUAL | DEBT_OVERDUE | MEMBERSHIP_EXPIRING */
+  /** MANUAL | DEBT_OVERDUE | STAFF_DEBT | MEMBERSHIP_EXPIRING */
   source?: string;
+  /** Display filter: staff_debt | client_debt | membership | other */
+  topic?: 'staff_debt' | 'client_debt' | 'membership' | 'other';
   assignee: { id: string; firstName: string; lastName: string };
   createdAt: string;
 }

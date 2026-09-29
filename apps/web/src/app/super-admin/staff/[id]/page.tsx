@@ -27,6 +27,7 @@ export default function SuperAdminStaffDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [member, setMember] = useState<StaffMember | null>(null);
   const [password, setPassword] = useState('');
+  const [login, setLogin] = useState('');
   const [credentials, setCredentials] = useState<{
     email: string;
     password: string;
@@ -38,7 +39,9 @@ export default function SuperAdminStaffDetailPage() {
     const token = getToken();
     if (!token) return;
     api.superAdminStaff(token).then((list) => {
-      setMember(list.find((s) => s.id === id) ?? null);
+      const next = list.find((s) => s.id === id) ?? null;
+      setMember(next);
+      if (next) setLogin(next.email);
     });
   };
 
@@ -121,7 +124,7 @@ export default function SuperAdminStaffDetailPage() {
         {member.employeeCode && (
           <p className="text-sm text-slate-300">Код 1С: {member.employeeCode}</p>
         )}
-        <p className="text-sm text-slate-400">{member.email}</p>
+        <p className="text-sm text-slate-400">Логин: {member.email}</p>
         {member.loginEnabled === false && (
           <p className="mt-1 text-sm text-amber-300">
             {member.roles.every(
@@ -219,6 +222,41 @@ export default function SuperAdminStaffDetailPage() {
         roles={member.roles}
         suggestedTrack={suggestedTrack}
       />
+
+      {!member.roles.every(
+        (r) => r === UserRole.TECH || r === UserRole.CLIENT,
+      ) && (
+        <div className="rounded-2xl border border-slate-800 p-4 space-y-2">
+          <p className="font-medium">Логин</p>
+          <p className="text-xs text-slate-400">
+            По умолчанию фамилия. Можно заменить на другой логин или email.
+          </p>
+          <input
+            className="input w-full"
+            value={login}
+            onChange={(e) => setLogin(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn-secondary w-full"
+            onClick={async () => {
+              const token = getToken();
+              if (!token || !login.trim()) return;
+              try {
+                await api.superAdminUpdateStaff(token, id, {
+                  email: login.trim(),
+                });
+                setMessage('Логин обновлён');
+                load();
+              } catch (e) {
+                setMessage(e instanceof Error ? e.message : 'Ошибка');
+              }
+            }}
+          >
+            Сохранить логин
+          </button>
+        </div>
+      )}
 
       {credentials && (
         <div className="card border-fitgo-500/30 bg-fitgo-500/5 text-sm">

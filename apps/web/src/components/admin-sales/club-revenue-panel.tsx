@@ -1,5 +1,6 @@
 'use client';
 
+import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   ClubRevenueDetailResponse,
@@ -484,9 +485,12 @@ function amountForLine(line: ClubRevenueLineDto): number {
 }
 
 export function ClubRevenuePanel() {
+  const search = useSearchParams();
   const bounds = useMemo(() => monthBounds(), []);
-  const [from, setFrom] = useState(bounds.from);
-  const [to, setTo] = useState(bounds.to);
+  const [from, setFrom] = useState(
+    () => search.get('from') || bounds.from,
+  );
+  const [to, setTo] = useState(() => search.get('to') || bounds.to);
   const [operationType, setOperationType] = useState('all');
   const [paymentMethod, setPaymentMethod] = useState('all');
   const [filterKey, setFilterKey] = useState('all');

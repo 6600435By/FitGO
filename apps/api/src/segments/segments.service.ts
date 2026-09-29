@@ -10,6 +10,11 @@ import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import {
+  allocateStaffLogin,
+  isCodeStubEmail,
+  isDisposableStaffLogin,
+} from '../auth/staff-login';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -163,7 +168,22 @@ export class SegmentsService {
     const stubs = await this.prisma.user.findMany({
       where: {
         clubId,
-        email: { startsWith: '1c-', endsWith: '@fitgo.local' },
+        loginEnabled: false,
+        OR: [
+          { email: { startsWith: '1c-', endsWith: '@fitgo.local' } },
+          {
+            AND: [
+              { email: { endsWith: '@staff.fitgo.local' } },
+              { NOT: { email: { startsWith: 'tech.' } } },
+            ],
+          },
+          {
+            AND: [
+              { externalId: { not: null } },
+              { NOT: { email: { contains: '@' } } },
+            ],
+          },
+        ],
       },
       select: { id: true },
     });
@@ -317,13 +337,18 @@ export class SegmentsService {
 
       if (existing) {
         const hasRole = existing.roles.some((r) => r.role === role);
+        const renameLogin = isCodeStubEmail(existing.email);
+        const nextLogin = renameLogin
+          ? await allocateStaffLogin(this.prisma, lastName, existing.id)
+          : existing.email;
         const needUpdate =
           existing.firstName !== firstName ||
           existing.lastName !== lastName ||
           (code && existing.employeeCode !== code) ||
           existing.externalId !== externalId ||
           (groupPrograms && !existing.groupPrograms) ||
-          !hasRole;
+          !hasRole ||
+          nextLogin !== existing.email;
         if (!needUpdate) {
           unchanged += 1;
           continue;
@@ -335,6 +360,7 @@ export class SegmentsService {
               firstName,
               lastName,
               externalId,
+              ...(renameLogin ? { email: nextLogin } : {}),
               ...(code ? { employeeCode: code } : {}),
               ...(m.phone ? { phone: m.phone } : {}),
               ...(groupPrograms ? { groupPrograms: true } : {}),
@@ -352,7 +378,7 @@ export class SegmentsService {
       }
 
       const plainPassword = randomBytes(9).toString('base64url').slice(0, 12);
-      const email = stubEmail(code || externalId);
+      const email = await allocateStaffLogin(this.prisma, lastName);
       const passwordHash = await bcrypt.hash(plainPassword, 10);
       try {
         await this.prisma.user.create({
@@ -462,8 +488,7 @@ export class SegmentsService {
       });
       const remaining = u.roles.filter((r) => r.role !== role);
       const stillStaff = remaining.some((r) => staffRoles.includes(r.role));
-      const isStub =
-        u.email.startsWith('1c-') && u.email.endsWith('@fitgo.local');
+      const isStub = isDisposableStaffLogin(u.email);
       if (!stillStaff && isStub && !u.loginEnabled) {
         await this.prisma.user.delete({ where: { id: u.id } });
       } else if (!stillStaff) {
@@ -712,11 +737,6 @@ export class SegmentsService {
       },
     });
   }
-}
-
-function stubEmail(key: string) {
-  const safe = key.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24) || 'staff';
-  return `1c-${safe.toLowerCase()}@fitgo.local`;
 }
 
 function inferSpaKind(name: string): SpaServiceKind {

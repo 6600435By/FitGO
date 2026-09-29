@@ -9,6 +9,7 @@ import type {
   ClubRevenueReportResponse,
   ClubRevenueSummary,
 } from '@fitgo/shared-types';
+import { isCollectibleClientDebt } from './club-revenue-debt';
 import { PrismaService } from '../prisma/prisma.service';
 
 function toMinor(major: number): number {
@@ -361,12 +362,12 @@ export class ClubRevenueService {
       .filter((r): r is Row => r != null)
       .map((r) => attachEmployee(r, staffBySaleDoc));
 
-    const enrichedOpenDebt = (openDebt as Row[]).map((r) =>
-      attachEmployee(r, staffBySaleDoc),
-    );
-    const enrichedLineDebt = (lineOpenDebt as Row[]).map((r) =>
-      attachEmployee(r, staffBySaleDoc),
-    );
+    const enrichedOpenDebt = (openDebt as Row[])
+      .filter((r) => isCollectibleClientDebt(r))
+      .map((r) => attachEmployee(r, staffBySaleDoc));
+    const enrichedLineDebt = (lineOpenDebt as Row[])
+      .filter((r) => isCollectibleClientDebt(r))
+      .map((r) => attachEmployee(r, staffBySaleDoc));
 
     const manualDtos: ClubRevenueManualEntryDto[] = manuals.map((m) => ({
       id: m.id,
@@ -587,6 +588,62 @@ export class ClubRevenueService {
         .map((r) => this.toLine(r, from, to)),
       currency: club?.currency ?? 'BYN',
     };
+  }
+
+  /** Same «Выручка» total as the sales tab, without loading the line table. */
+  async cashRevenueMinor(
+    clubId: string,
+    fromIso: string,
+    toIso: string,
+  ): Promise<number> {
+    const from = new Date(`${fromIso}T00:00:00.000Z`);
+    const to = new Date(`${toIso}T23:59:59.999Z`);
+    const [receipts, manuals] = await Promise.all([
+      this.prisma.clubRevenueEntry.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          OR: [
+            {
+              operationType: { in: ['payment', 'refund'] },
+              paidAt: { gte: from, lte: to },
+            },
+            {
+              operationType: {
+                in: ['personal_deposit', 'personal_credit', 'personal_burn'],
+              },
+              occurredAt: { gte: from, lte: to },
+            },
+            {
+              operationType: 'sale',
+              paidAt: { gte: from, lte: to },
+              paidAmount: { gt: 0 },
+            },
+          ],
+        },
+      }),
+      this.prisma.clubRevenueManualEntry.findMany({
+        where: { clubId, entryDate: { gte: from, lte: to } },
+      }),
+    ]);
+    const normalized = (receipts as Row[])
+      .map(normalizeReceiptRow)
+      .filter((r): r is Row => r != null);
+    const summary = this.buildSummary({
+      receipts: normalized,
+      soldInPeriod: [],
+      openDebt: [],
+      formedSalesMinor: 0,
+      manuals: manuals.map((m) => ({
+        id: m.id,
+        kind: m.kind as ClubRevenueManualKind,
+        amountMinor: m.amountMinor,
+        entryDate: m.entryDate.toISOString().slice(0, 10),
+        note: m.note,
+        createdAt: m.createdAt.toISOString(),
+      })),
+    });
+    return summary.revenue.totalMinor;
   }
 
   private buildSummary(input: {

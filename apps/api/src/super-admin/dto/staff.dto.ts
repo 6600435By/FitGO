@@ -2,10 +2,10 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
-  IsEmail,
   IsIn,
   IsOptional,
   IsString,
+  MaxLength,
   MinLength,
   ValidateIf,
 } from 'class-validator';
@@ -42,9 +42,10 @@ export class CreateStaffDto {
   @IsString()
   phone?: string;
 
-  /** Required when staff needs app access (not TECH-only). */
-  @ValidateIf((o: CreateStaffDto) => dtoNeedsAppLogin(o))
-  @IsEmail()
+  /** Default is the surname. Optional override: another login or an email. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
   email?: string;
 
   @ValidateIf((o: CreateStaffDto) => dtoNeedsAppLogin(o))
@@ -80,6 +81,11 @@ export class UpdateStaffDto {
   @IsOptional()
   @IsString()
   phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  email?: string;
 
   @IsOptional()
   @IsBoolean()

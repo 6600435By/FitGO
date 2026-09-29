@@ -4,6 +4,7 @@ import {
   FitgoAnalyticsHttpProvider,
   type FitgoAnalyticsSalesItem,
 } from '@fitgo/1c-adapter';
+import { isCollectibleClientDebt } from './club-revenue-debt';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   applyChangeLog,
@@ -137,6 +138,15 @@ export class ClubRevenueSyncService {
 
         const mapped = mapItem(item);
         if (!mapped) continue;
+        if (
+          mapped.operationType === 'unpaid' &&
+          !isCollectibleClientDebt({
+            externalId: baseId,
+            productName: mapped.productName,
+          })
+        ) {
+          continue;
+        }
         const paidDay = mapped.paidAt
           ? mapped.paidAt.toISOString().slice(0, 10)
           : null;
@@ -147,7 +157,9 @@ export class ClubRevenueSyncService {
 
         seen.add(externalId);
         if (mapped.operationType === 'unpaid') unpaidExternalIds.add(externalId);
-        if (paidDay) paidBaseIds.add(baseId);
+        if (paidDay && mapped.operationType !== 'refund') {
+          paidBaseIds.add(baseId);
+        }
         // Older BSL keys omit «Основание»: one payment document covering several
         // sales yields several movements with the same key. Sum them, never overwrite.
         const prev = pending.get(externalId);
@@ -299,17 +311,22 @@ async function reconcileClubUnpaid(
     data: { isActive: false, syncedAt: new Date() },
   });
 
+  // A refund is not an open sale. Using its negative amount as «paid»
+  // used to invent a residual unpaid row (product «Возврат»).
+  if (baseId.includes(':refund:')) return null;
+
   const payments = await prisma.clubRevenueEntry.findMany({
     where: {
       clubId,
       isActive: true,
       externalId: { startsWith: `${baseId}:p` },
+      operationType: { not: 'refund' },
     },
   });
   if (!payments.length) return null;
 
   const paidSum = payments.reduce(
-    (s, r) => s + (r.paidAmount || r.amount || 0),
+    (s, r) => s + (r.paidAmount > 0 ? r.paidAmount : 0),
     0,
   );
   const saleAmt = Math.max(
