@@ -46,7 +46,9 @@ Response `200`:
 `status`: `SCHEDULED` | `IN_PROGRESS` | `COMPLETED` | `CANCELLED`  
 `attendance`: `ATTENDED` | `NO_SHOW` | `EXPECTED` | `CANCELLED`
 
-Payroll uses `attendedCount` when `status=COMPLETED` (count of ATTENDED rows), not `headerAttendedCount`.
+Payroll uses `attendedCount` when `status=COMPLETED` (prefer ATTENDED members; fall back to `headerAttendedCount` / шапка «посетило»).
+
+Attendance mapping reads `СтатусПрибытия` (and aliases / boolean); if members stay EXPECTED but header «посетило» covers all active rows, they are treated as ATTENDED.
 
 Handlers: `ClassSessionsGET` in [`FitGOIntegration_HTTP.bsl`](FitGOIntegration_HTTP.bsl), `ЗанятияПериодаJSON` in [`FitGOIntegration_Клиенты.bsl`](FitGOIntegration_Клиенты.bsl).
 

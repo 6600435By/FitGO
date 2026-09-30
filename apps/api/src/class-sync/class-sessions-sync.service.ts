@@ -200,10 +200,16 @@ export class ClassSessionsSyncService {
     const endAt = row.endAt ? parseDateTime(row.endAt) : null;
     const kind = mapKind(row.kind);
     const status = mapStatus(row.status);
-    const attendedCount =
-      typeof row.attendedCount === 'number'
-        ? row.attendedCount
-        : (row.members ?? []).filter((m) => m.attendance === 'ATTENDED').length;
+    const memberAttended = (row.members ?? []).filter(
+      (m) => m.attendance === 'ATTENDED',
+    ).length;
+    const fromApi =
+      typeof row.attendedCount === 'number' ? row.attendedCount : 0;
+    const fromHeader =
+      typeof row.headerAttendedCount === 'number'
+        ? row.headerAttendedCount
+        : 0;
+    const attendedCount = Math.max(fromApi, fromHeader, memberAttended);
 
     const existing = await this.prisma.onexClassSession.findUnique({
       where: { clubId_externalId: { clubId, externalId } },

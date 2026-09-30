@@ -322,7 +322,7 @@ export class PayrollService {
       });
       for (const o of onex) {
         if (seenAppt.has(o.externalId)) continue;
-        const qty = o.attendedCount;
+        const qty = Math.max(o.attendedCount, o.headerAttendedCount ?? 0);
         if (qty <= 0) continue;
         const key = onexSessionKey(o.externalId);
         remarkKeys.push(key);

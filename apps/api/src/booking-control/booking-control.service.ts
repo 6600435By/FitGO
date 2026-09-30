@@ -167,6 +167,15 @@ export class BookingControlService {
         }
       }
 
+      const groupHeadcount =
+        kind === 'GROUP'
+          ? Math.max(
+              s.attendedCount ?? 0,
+              s.headerAttendedCount ?? 0,
+              s.members.filter((m) => m.attendance === 'ATTENDED').length,
+            )
+          : undefined;
+
       items.push({
         sessionKey,
         kind,
@@ -183,7 +192,7 @@ export class BookingControlService {
             : primaryMember?.clientName ?? '—',
         roomTitle: s.roomTitle ?? undefined,
         number: s.number ?? undefined,
-        attendeeCount: kind === 'GROUP' ? s.attendedCount : undefined,
+        attendeeCount: groupHeadcount,
         payment: kind === 'GROUP' ? 'N_A' : payment,
         needsReview: openKeys.has(sessionKey),
         fitgoBookingId,
@@ -369,6 +378,20 @@ export class BookingControlService {
             : inferPaymentFromBasis(m.paymentBasis),
       }));
 
+      let groupHeadcount: number | undefined;
+      if (kind === 'GROUP') {
+        this.promoteGroupAttendanceFromHeader(
+          members,
+          s.headerAttendedCount,
+          s.status,
+        );
+        groupHeadcount = Math.max(
+          s.attendedCount ?? 0,
+          s.headerAttendedCount ?? 0,
+          members.filter((m) => m.attendance === 'ATTENDED').length,
+        );
+      }
+
       return {
         sessionKey,
         kind,
@@ -382,7 +405,7 @@ export class BookingControlService {
           kind === 'GROUP' ? undefined : primary?.clientName ?? '—',
         roomTitle: s.roomTitle ?? undefined,
         number: s.number ?? undefined,
-        attendeeCount: kind === 'GROUP' ? s.attendedCount : undefined,
+        attendeeCount: groupHeadcount,
         payment:
           kind === 'GROUP'
             ? 'N_A'
@@ -703,6 +726,26 @@ export class BookingControlService {
       (s.employeeName &&
         s.employeeName.trim().toLowerCase() === name.toLowerCase());
     if (!ok) throw new ForbiddenException('Чужое занятие');
+  }
+
+  private promoteGroupAttendanceFromHeader(
+    members: BookingControlMember[],
+    headerAttendedCount: number,
+    status: string,
+  ) {
+    if (String(status).toUpperCase() !== 'COMPLETED') return;
+    const active = members.filter(
+      (m) => m.attendance !== 'CANCELLED',
+    );
+    const attended = active.filter((m) => m.attendance === 'ATTENDED');
+    if (attended.length > 0) return;
+    if (headerAttendedCount <= 0) return;
+    if (headerAttendedCount < active.length) return;
+    for (const m of active) {
+      if (m.attendance === 'EXPECTED' || m.attendance === 'NO_SHOW') {
+        m.attendance = 'ATTENDED';
+      }
+    }
   }
 
   private matchPtInMemory(
