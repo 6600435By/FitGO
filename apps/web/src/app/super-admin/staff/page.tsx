@@ -15,8 +15,9 @@ type DeptFilter =
   | 'ALL'
   | 'MANAGER'
   | 'ADMIN'
-  | 'TRAINER'
-  | 'GROUP_TRAINER'
+  | 'TRAINER_GP'
+  | 'TRAINER_STAFF'
+  | 'TRAINER_CLUB'
   | 'SPECIALIST'
   | 'TECH';
 
@@ -24,8 +25,9 @@ const DEPT_FILTERS: { id: DeptFilter; label: string }[] = [
   { id: 'ALL', label: 'Все' },
   { id: 'MANAGER', label: 'Упр.' },
   { id: 'ADMIN', label: 'Админы' },
-  { id: 'TRAINER', label: 'Тренеры' },
-  { id: 'GROUP_TRAINER', label: 'Тренеры ГП' },
+  { id: 'TRAINER_GP', label: 'Тренеры ГП' },
+  { id: 'TRAINER_STAFF', label: 'Тренеры штат' },
+  { id: 'TRAINER_CLUB', label: 'Тренеры клуб' },
   { id: 'SPECIALIST', label: 'SPA' },
   { id: 'TECH', label: 'Техперсонал' },
 ];
@@ -67,6 +69,15 @@ function needsAppLogin(roles: StaffRoleId[]): boolean {
   );
 }
 
+function trainerGroupLabels(member: StaffMember): string[] {
+  if (!member.roles.includes(UserRole.TRAINER)) return [];
+  const labels: string[] = [];
+  if (member.groupPrograms) labels.push('ГП');
+  if (member.trainerStaff) labels.push('Штат');
+  if (member.trainerClub) labels.push('Клуб');
+  return labels;
+}
+
 function isTechOnlyMember(roles: UserRole[]): boolean {
   const staff = roles.filter((r) => r !== UserRole.CLIENT);
   return staff.length > 0 && staff.every((r) => r === UserRole.TECH);
@@ -90,6 +101,9 @@ export default function SuperAdminStaffPage() {
     loginTouched: false,
     password: randomPassword(),
     roles: ['TRAINER'] as StaffRoleId[],
+    trainerGp: false,
+    trainerStaff: true,
+    trainerClub: false,
   });
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
@@ -120,13 +134,14 @@ export default function SuperAdminStaffPage() {
     if (filter === 'MANAGER') {
       return staff.filter((m) => m.roles.includes(UserRole.MANAGER));
     }
-    if (filter === 'GROUP_TRAINER') {
+    if (filter === 'TRAINER_GP') {
       return staff.filter((m) => m.groupPrograms);
     }
-    if (filter === 'TRAINER') {
-      return staff.filter(
-        (m) => m.roles.includes(UserRole.TRAINER) && !m.groupPrograms,
-      );
+    if (filter === 'TRAINER_STAFF') {
+      return staff.filter((m) => m.trainerStaff);
+    }
+    if (filter === 'TRAINER_CLUB') {
+      return staff.filter((m) => m.trainerClub);
     }
     if (filter === 'ADMIN') {
       return staff.filter((m) => m.roles.includes(UserRole.ADMIN));
@@ -173,6 +188,13 @@ export default function SuperAdminStaffPage() {
         dateOfBirth: form.dateOfBirth || undefined,
         phone: form.phone || undefined,
         roles: form.roles,
+        ...(form.roles.includes('TRAINER')
+          ? {
+              groupPrograms: form.trainerGp,
+              trainerStaff: form.trainerStaff,
+              trainerClub: form.trainerClub,
+            }
+          : {}),
         ...(appLogin
           ? {
               ...(form.email.trim() ? { email: form.email.trim() } : {}),
@@ -191,6 +213,9 @@ export default function SuperAdminStaffPage() {
         loginTouched: false,
         password: randomPassword(),
         roles: ['TRAINER'],
+        trainerGp: false,
+        trainerStaff: true,
+        trainerClub: false,
       });
       load();
     } catch (e) {
@@ -220,7 +245,8 @@ export default function SuperAdminStaffPage() {
         <div>
           <h2 className="text-xl font-semibold md:text-2xl">Сотрудники</h2>
           <p className="text-sm text-slate-400">
-            Чипы мотивации — схема ЗП. Редактирование на карточке сотрудника.
+            Тренеры делятся на ГП, штат и клуб. Группы и ставки — на карточке,
+            оттуда схема копируется на выбранные группы.
           </p>
         </div>
         <div className="flex shrink-0 gap-2">
@@ -379,6 +405,37 @@ export default function SuperAdminStaffPage() {
               ))}
             </div>
           </div>
+          {form.roles.includes('TRAINER') ? (
+            <div>
+              <p className="text-xs text-slate-400">
+                Группы тренера (можно несколько)
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(
+                  [
+                    ['trainerGp', 'Тренеры ГП'],
+                    ['trainerStaff', 'Тренеры штат'],
+                    ['trainerClub', 'Тренеры клуб'],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() =>
+                      setForm((prev) => ({ ...prev, [key]: !prev[key] }))
+                    }
+                    className={
+                      form[key]
+                        ? 'btn-primary px-3 py-1.5 text-sm'
+                        : 'btn-secondary px-3 py-1.5 text-sm'
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {needsAppLogin(form.roles) ? (
             <>
               <label className="block text-xs text-slate-400">
@@ -470,6 +527,9 @@ export default function SuperAdminStaffPage() {
                 </div>
                 <p className="mt-1 text-xs text-slate-500">
                   {formatRoles(member.roles)}
+                  {trainerGroupLabels(member).length
+                    ? ` · ${trainerGroupLabels(member).join(', ')}`
+                    : ''}
                   {p?.track ? ` · ${p.track}` : ''}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -524,6 +584,11 @@ export default function SuperAdminStaffPage() {
                   </td>
                   <td className="px-4 py-3 text-slate-400">
                     {formatRoles(member.roles)}
+                    {trainerGroupLabels(member).length ? (
+                      <span className="mt-1 block text-xs text-slate-300">
+                        {trainerGroupLabels(member).join(' · ')}
+                      </span>
+                    ) : null}
                     {p?.track ? (
                       <span className="ml-1 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] uppercase text-slate-300">
                         {p.track}

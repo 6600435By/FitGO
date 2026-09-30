@@ -1,6 +1,6 @@
 /** «Контроль записей» — unified register of 1C class docs + unmatched FitGO bookings. */
 
-export type BookingControlKind = 'GROUP' | 'PT' | 'SPA';
+export type BookingControlKind = 'GROUP' | 'PT' | 'SPA' | 'SOLARIUM';
 
 export type BookingControlStatus =
   | 'SCHEDULED'
@@ -17,7 +17,10 @@ export type BookingControlPayment =
   | 'UNKNOWN'
   | 'N_A';
 
-export type BookingControlSource = '1C' | 'FITGO';
+export type BookingControlSource = '1C' | 'FITGO' | 'SALE';
+
+/** How a PT/SPA line was paid — shown as «продажа» / «абонемент». */
+export type BookingControlPayTag = 'SALE' | 'PACKAGE';
 
 export interface BookingControlRemark {
   id: string;
@@ -39,7 +42,7 @@ export interface BookingControlMember {
 }
 
 export interface BookingControlListItem {
-  /** Opaque id for API detail / remarks: 1c:{externalId} or fitgo:{kind}:{bookingId} */
+  /** Opaque id for API detail / remarks: 1c:{externalId}, fitgo:{kind}:{bookingId}, sale:PT:{docRef} */
   sessionKey: string;
   kind: BookingControlKind;
   source: BookingControlSource;
@@ -54,9 +57,12 @@ export interface BookingControlListItem {
   number?: string;
   attendeeCount?: number;
   payment?: BookingControlPayment;
+  /** «продажа» vs «абонемент» for one-time / package PT. */
+  payTag?: BookingControlPayTag;
   needsReview: boolean;
   /** Linked FitGO booking id when matched or FitGO-only. */
   fitgoBookingId?: string;
+  priceMinor?: number;
 }
 
 export interface BookingControlDetail extends BookingControlListItem {
@@ -66,7 +72,6 @@ export interface BookingControlDetail extends BookingControlListItem {
   remarksHistory: BookingControlRemark[];
   fitgoBookedAt?: string;
   crmDocRef?: string;
-  priceMinor?: number;
 }
 
 export interface BookingControlListQuery {
@@ -90,6 +95,10 @@ export function fitgoSessionKey(
   return `fitgo:${kind}:${bookingId}`;
 }
 
+export function saleSessionKey(kind: 'PT', docRef: string): string {
+  return `sale:${kind}:${encodeURIComponent(docRef)}`;
+}
+
 export function parseSessionKey(sessionKey: string): {
   source: BookingControlSource;
   kind?: BookingControlKind;
@@ -98,7 +107,15 @@ export function parseSessionKey(sessionKey: string): {
   if (sessionKey.startsWith('1c:')) {
     return { source: '1C', id: sessionKey.slice(3) };
   }
-  const m = /^fitgo:(GROUP|PT|SPA):(.+)$/.exec(sessionKey);
+  const sale = /^sale:(PT):(.+)$/.exec(sessionKey);
+  if (sale) {
+    return {
+      source: 'SALE',
+      kind: sale[1] as BookingControlKind,
+      id: decodeURIComponent(sale[2]),
+    };
+  }
+  const m = /^fitgo:(GROUP|PT|SPA|SOLARIUM):(.+)$/.exec(sessionKey);
   if (m) {
     return {
       source: 'FITGO',
@@ -133,12 +150,32 @@ export function inferPaymentFromBasis(
   return 'PAID';
 }
 
+export function inferPayTag(input: {
+  paySource?: string | null;
+  payment?: BookingControlPayment;
+  source?: BookingControlSource;
+}): BookingControlPayTag | undefined {
+  if (input.source === 'SALE') return 'SALE';
+  const ps = (input.paySource ?? '').toUpperCase();
+  if (ps === 'PACKAGE') return 'PACKAGE';
+  if (ps === 'SALE') return 'SALE';
+  if (input.payment === 'QUOTA') return 'PACKAGE';
+  if (input.payment === 'PAID' || input.payment === 'DEBT') return 'SALE';
+  return undefined;
+}
+
+export function payTagLabelRu(t: BookingControlPayTag | undefined): string {
+  if (t === 'SALE') return 'продажа';
+  if (t === 'PACKAGE') return 'абонемент';
+  return '';
+}
+
 export function paymentLabelRu(p: BookingControlPayment | undefined): string {
   switch (p) {
     case 'PAID':
       return 'Оплачено';
     case 'DEBT':
-      return 'Долг';
+      return 'Нет оплаты';
     case 'QUOTA':
       return 'Абонемент';
     case 'PARTNER':

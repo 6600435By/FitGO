@@ -63,6 +63,21 @@ export class CreateStaffDto {
   @IsOptional()
   @IsIn(STAFF_ROLE)
   role?: StaffRoleId;
+
+  /** Trainer group «Тренеры ГП». Ignored unless roles include TRAINER. */
+  @IsOptional()
+  @IsBoolean()
+  groupPrograms?: boolean;
+
+  /** Trainer group «Тренеры штат». */
+  @IsOptional()
+  @IsBoolean()
+  trainerStaff?: boolean;
+
+  /** Trainer group «Тренеры клуб». */
+  @IsOptional()
+  @IsBoolean()
+  trainerClub?: boolean;
 }
 
 export class UpdateStaffDto {
@@ -104,4 +119,16 @@ export class UpdateStaffDto {
   @IsOptional()
   @IsIn(['STAFF', 'EXTERNAL'])
   employmentKind?: 'STAFF' | 'EXTERNAL';
+
+  @IsOptional()
+  @IsBoolean()
+  groupPrograms?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  trainerStaff?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  trainerClub?: boolean;
 }

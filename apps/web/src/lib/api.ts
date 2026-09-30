@@ -1383,6 +1383,9 @@ export const api = {
       password?: string;
       role?: 'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH';
       roles?: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
+      groupPrograms?: boolean;
+      trainerStaff?: boolean;
+      trainerClub?: boolean;
     },
   ) =>
     request<StaffCreateResult>('/super-admin/staff', {
@@ -1402,6 +1405,9 @@ export const api = {
       isActive: boolean;
       password: string;
       roles: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
+      groupPrograms: boolean;
+      trainerStaff: boolean;
+      trainerClub: boolean;
     }>,
   ) =>
     request<StaffMember & { credentials?: { email: string; password: string } }>(
@@ -1775,8 +1781,9 @@ export const api = {
     body: {
       departments: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
       tracks?: Array<
-        'ADMIN' | 'MANAGER' | 'GROUP_TRAINER' | 'SPA' | 'TECH' | 'PT'
+        'ADMIN' | 'MANAGER' | 'GROUP_TRAINER' | 'SPA' | 'TECH' | 'PT' | 'CLUB'
       >;
+      trainerGroups?: Array<'GP' | 'STAFF' | 'CLUB'>;
     },
   ) =>
     request<{ copied: number; skipped: number }>(

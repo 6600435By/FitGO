@@ -2,6 +2,7 @@
 
 import {
   paymentLabelRu,
+  payTagLabelRu,
   type BookingControlDetail,
   type BookingControlKind,
   type BookingControlListItem,
@@ -58,6 +59,7 @@ function statusRu(s: BookingControlStatus) {
 function kindRu(k: BookingControlKind) {
   if (k === 'GROUP') return 'ГП';
   if (k === 'PT') return 'ПТ';
+  if (k === 'SOLARIUM') return 'Соляр.';
   return 'SPA';
 }
 
@@ -66,7 +68,7 @@ export function BookingControlPanel({
   canResolve = false,
   fixedKind,
   title = 'Контроль записей',
-  subtitle = 'Занятия из 1С. Запись FitGO без документа 1С — отдельно, в ЗП не идёт.',
+  subtitle = 'Занятия из 1С. Разовые ПТ из продажи — отдельно. Запись FitGO без 1С — в ЗП не идёт.',
 }: Props) {
   const [from, setFrom] = useState(daysAgoIso(7));
   const [to, setTo] = useState(todayIso());
@@ -191,6 +193,7 @@ export function BookingControlPanel({
               <option value="GROUP">ГП</option>
               <option value="PT">ПТ</option>
               <option value="SPA">SPA</option>
+              <option value="SOLARIUM">Солярий</option>
             </select>
           </label>
         )}
@@ -207,7 +210,11 @@ export function BookingControlPanel({
             <option value="CANCELLED">Отменено</option>
           </select>
         </label>
-        {(kind === 'PT' || kind === 'SPA' || kind === 'ALL' || fixedKind) && (
+        {(kind === 'PT' ||
+          kind === 'SPA' ||
+          kind === 'SOLARIUM' ||
+          kind === 'ALL' ||
+          fixedKind) && (
           <label className="text-[11px] text-slate-500">
             Оплата
             <select
@@ -217,7 +224,7 @@ export function BookingControlPanel({
             >
               <option value="ALL">Все</option>
               <option value="PAID">Оплачено</option>
-              <option value="DEBT">Долг</option>
+              <option value="DEBT">Нет оплаты</option>
             </select>
           </label>
         )}
@@ -255,11 +262,16 @@ export function BookingControlPanel({
       ) : (
         <ul className="divide-y divide-slate-800 overflow-hidden rounded-xl border border-slate-800">
           {items.map((item) => {
+            const tag = payTagLabelRu(item.payTag);
             const meta =
               item.kind === 'GROUP'
                 ? `${item.performerName} · ${item.attendeeCount ?? 0} чел.`
                 : `${item.clientName ?? '—'} · ${item.performerName}${
                     item.payment ? ` · ${paymentLabelRu(item.payment)}` : ''
+                  }${
+                    item.priceMinor != null && item.source === 'SALE'
+                      ? ` · ${(item.priceMinor / 100).toFixed(2)}`
+                      : ''
                   }`;
             return (
               <li key={item.sessionKey}>
@@ -281,6 +293,22 @@ export function BookingControlPanel({
                   <span className="hidden shrink-0 text-xs text-slate-500 sm:inline">
                     {statusRu(item.status)}
                   </span>
+                  {tag ? (
+                    <span
+                      className={
+                        item.payTag === 'SALE'
+                          ? 'shrink-0 rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] text-emerald-300'
+                          : 'shrink-0 rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] text-sky-300'
+                      }
+                    >
+                      {tag}
+                    </span>
+                  ) : null}
+                  {item.payment === 'DEBT' && (
+                    <span className="shrink-0 rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] text-rose-300">
+                      нет оплаты
+                    </span>
+                  )}
                   {item.source === 'FITGO' && (
                     <span className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">
                       нет в 1С
@@ -310,6 +338,9 @@ export function BookingControlPanel({
                     <p className="text-xs text-slate-500">
                       {kindRu(selected.kind)} · {statusRu(selected.status)}
                       {selected.number ? ` · № ${selected.number}` : ''}
+                      {selected.payTag
+                        ? ` · ${payTagLabelRu(selected.payTag)}`
+                        : ''}
                     </p>
                     <h2 className="truncate text-lg font-semibold">
                       {selected.title}
@@ -344,9 +375,29 @@ export function BookingControlPanel({
                       : ''}
                   </p>
                 )}
+                {selected.source === 'SALE' && selected.payment === 'PAID' && (
+                  <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+                    Разовая ПТ из строки продажи 1С (исполнитель + сумма). В ЗП:
+                    сумма × % из карточки мотивации ПТ.
+                  </p>
+                )}
+                {selected.source === 'SALE' && selected.payment === 'DEBT' && (
+                  <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                    Нет оплаты — в ЗП не входит, пока продажа не оплачена в 1С.
+                  </p>
+                )}
                 {selected.kind !== 'GROUP' && (
-                  <p className="text-sm text-slate-300">
+                  <p
+                    className={
+                      selected.payment === 'DEBT'
+                        ? 'text-sm font-medium text-rose-300'
+                        : 'text-sm text-slate-300'
+                    }
+                  >
                     {paymentLabelRu(selected.payment)}
+                    {selected.payTag
+                      ? ` · ${payTagLabelRu(selected.payTag)}`
+                      : ''}
                     {selected.priceMinor != null
                       ? ` · ${(selected.priceMinor / 100).toFixed(2)} BYN`
                       : ''}

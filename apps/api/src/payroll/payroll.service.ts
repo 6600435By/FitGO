@@ -9,15 +9,20 @@ import {
   advanceHalfRange,
   DEFAULT_GROUP_RATE_TIERS,
   monthSettlementRange,
+  payProfileForCalculation,
   payProfileSummary,
   resolveGroupRoomKey,
   resolveGroupSessionRateMinor,
   resolvePtPercent,
   sliceForTrack,
+  TRAINER_GROUP_TRACK,
+  trainerPayFlags,
+  type TrainerGroupId,
   inferPaymentFromBasis,
   onexSessionKey,
   paymentCountsForMoney,
   paymentCountsForVolume,
+  saleSessionKey,
   type ClubPayrollReport,
   type ClubPayrollRow,
   type ClubPayrollSectionId,
@@ -60,6 +65,7 @@ import { StaffRosterService } from '../staff-roster/staff-roster.service';
 import { AdminSalesService } from '../admin-sales/admin-sales.service';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import { BookingControlService } from '../booking-control/booking-control.service';
+import { FitnessService } from '../fitness/fitness.service';
 import {
   createAnalyticsProvider,
   fetchStaffSalesFromAnalytics,
@@ -118,6 +124,7 @@ export class PayrollService {
     private readonly adminSales: AdminSalesService,
     private readonly classSessionsSync: ClassSessionsSyncService,
     private readonly bookingControl: BookingControlService,
+    private readonly fitness: FitnessService,
     private readonly config: ConfigService,
   ) {}
 
@@ -210,7 +217,8 @@ export class PayrollService {
       }
     }
 
-    // ── PT from 1C ─────────────────────────────────────────────────────────
+    // ── PT from 1C class docs (block/package → unitPriceMinor = blockPrice/N) ─
+    // SOLARIUM never enters trainer payroll (admin % of paid solarium sales only).
     const onexPt = await this.prisma.onexClassSession.findMany({
       where: {
         clubId,
@@ -223,11 +231,13 @@ export class PayrollService {
       include: { members: true },
       orderBy: { startAt: 'asc' },
     });
+    const coveredSaleDays = new Set<string>();
     for (const o of onexPt) {
       const key = onexSessionKey(o.externalId);
       remarkKeys.push(key);
       const primary = o.members.find((m) => !m.cancelled) ?? o.members[0];
       const payment = inferPaymentFromBasis(primary?.paymentBasis);
+      const paySource = (primary?.paySource ?? '').toUpperCase();
       const matched = await this.prisma.personalTrainingBooking.findFirst({
         where: {
           trainerId: performerId,
@@ -239,17 +249,35 @@ export class PayrollService {
         include: { client: true },
       });
       const isGift = payment === 'GIFT' || matched?.isComplimentary === true;
+      const unitFromPackage =
+        primary?.unitPriceMinor != null && primary.unitPriceMinor > 0
+          ? primary.unitPriceMinor
+          : undefined;
+      // Package/block write-offs pay from unit price; one-time cash sales pay via sale lines below
+      const isPackage = paySource === 'PACKAGE' || payment === 'QUOTA';
       const trusted =
         paymentCountsForVolume(payment) &&
-        (isGift || paymentCountsForMoney(payment));
+        (isGift ||
+          (isPackage && paymentCountsForMoney(payment)) ||
+          (!isPackage &&
+            paySource !== 'SALE' &&
+            paymentCountsForMoney(payment) &&
+            (unitFromPackage != null || (matched?.priceMinor ?? 0) > 0)));
+      const priceMinor = isGift
+        ? 0
+        : (unitFromPackage ?? matched?.priceMinor ?? undefined);
       units.push({
         id: matched?.id ?? `onex:${o.id}`,
         kind: 'PT',
         performerId,
-        title: isGift ? 'Подарочная ПТ' : o.title || 'Персональная тренировка',
+        title: isGift
+          ? 'Подарочная ПТ'
+          : isPackage
+            ? `${o.title || 'ПТ'} (абонемент)`
+            : o.title || 'Персональная тренировка',
         occurredAt: o.startAt.toISOString(),
         quantity: 1,
-        priceMinor: isGift ? 0 : (matched?.priceMinor ?? undefined),
+        priceMinor,
         isComplimentary: isGift,
         trustBand: 'GREEN',
         trustResolution: 'NONE',
@@ -261,6 +289,71 @@ export class PayrollService {
             : undefined),
         sessionId: o.id,
       });
+      if (
+        trusted &&
+        isPackage &&
+        (priceMinor ?? 0) > 0 &&
+        primary?.clientName
+      ) {
+        coveredSaleDays.add(
+          `${o.startAt.toISOString().slice(0, 10)}|${primary.clientName.trim().toLowerCase()}`,
+        );
+      }
+    }
+
+    // ── One-time PT from 1C sale lines (Исполнитель + сумма) × PT% ───────────
+    const ptSaleUnitKeys = new Map<string, string>();
+    const ptSalesFn = this.fitness.getProvider().getTrainerPtSales;
+    if (ptSalesFn && performer) {
+      try {
+        const sales = await ptSalesFn.call(this.fitness.getProvider(), {
+          from,
+          to,
+        });
+        const ext = performer.externalId?.replace(/^0+/, '') ?? '';
+        const name = performerName.toLowerCase();
+        for (const sale of sales) {
+          const code = (sale.employeeCode ?? '').replace(/^0+/, '');
+          const saleName = (sale.employeeName ?? '').trim().toLowerCase();
+          const matchCode =
+            (performer.externalId &&
+              (sale.employeeCode === performer.externalId ||
+                (ext && code && ext === code))) ||
+            false;
+          const matchName = name && saleName && name === saleName;
+          if (!matchCode && !matchName) continue;
+          if (sale.paymentStatus !== 'PAID') continue;
+          const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
+          if (amountMinor <= 0) continue;
+          const day = (sale.occurredAt || '').slice(0, 10);
+          const clientKey = `${day}|${(sale.clientName ?? '').trim().toLowerCase()}`;
+          if (coveredSaleDays.has(clientKey)) continue;
+          const sk = saleSessionKey(
+            'PT',
+            sale.docRef || sale.externalId || `${day}-${sale.clientName}`,
+          );
+          remarkKeys.push(sk);
+          const unitId = `ptsale:${sale.docRef || sale.externalId}`;
+          units.push({
+            id: unitId,
+            kind: 'PT',
+            performerId,
+            title: `${sale.serviceName || 'Разовая ПТ'} (продажа)`,
+            occurredAt: sale.occurredAt?.includes('T')
+              ? sale.occurredAt
+              : `${day}T12:00:00.000Z`,
+            quantity: 1,
+            priceMinor: amountMinor,
+            trustBand: 'GREEN',
+            trustResolution: 'NONE',
+            payrollTrusted: true,
+            clientName: sale.clientName,
+          });
+          ptSaleUnitKeys.set(unitId, sk);
+        }
+      } catch {
+        // Endpoint may be unpublished
+      }
     }
 
     // ── GROUP from journal + Onex fallback (dedupe) ─────────────────────────
@@ -350,6 +443,7 @@ export class PayrollService {
       [...new Set(remarkKeys)],
     );
     const unitKey = new Map<string, string>();
+    for (const [id, sk] of ptSaleUnitKeys) unitKey.set(id, sk);
     for (const o of onexSpa) {
       const sk = onexSessionKey(o.externalId);
       unitKey.set(`onex:${o.id}`, sk);
@@ -401,8 +495,16 @@ export class PayrollService {
     this.assertPeriod(from, to);
     const performer = await this.prisma.user.findFirst({
       where: { id: performerId, clubId },
+      include: { roles: true },
     });
     if (!performer) throw new NotFoundException('Сотрудник не найден');
+    const trainerFlags = trainerPayFlags({
+      roles: performer.roles.map((r) => r.role),
+      groupPrograms: performer.groupPrograms,
+      trainerStaff: performer.trainerStaff,
+      trainerClub: performer.trainerClub,
+      trainerGroupsSet: performer.trainerGroupsSet,
+    });
 
     const workUnits = await this.listWorkUnits(clubId, performerId, from, to);
 
@@ -437,7 +539,10 @@ export class PayrollService {
       from,
       to,
     );
-    const profile = asPayProfile(compensation?.payProfile);
+    const profile = payProfileForCalculation(
+      asPayProfile(compensation?.payProfile),
+      trainerFlags,
+    );
     const rates = await this.listRates(clubId);
     const sales = await this.resolveStaffSales(
       clubId,
@@ -473,6 +578,7 @@ export class PayrollService {
     const hasHourlyDesk = slices.some(
       (s) =>
         s.track !== 'PT' &&
+        s.track !== 'CLUB' &&
         typeof s.hourlyRateMinor === 'number' &&
         s.hourlyRateMinor > 0,
     );
@@ -694,7 +800,16 @@ export class PayrollService {
       range.from,
       range.to,
     );
-    const profile = asPayProfile(compensation?.payProfile);
+    const profile = payProfileForCalculation(
+      asPayProfile(compensation?.payProfile),
+      trainerPayFlags({
+        roles,
+        groupPrograms: user.groupPrograms,
+        trainerStaff: user.trainerStaff,
+        trainerClub: user.trainerClub,
+        trainerGroupsSet: user.trainerGroupsSet,
+      }),
+    );
     const fixedAdvanceMinor = usesFixedAdvance
       ? this.resolveFixedAdvance(profile, roles)
       : 0;
@@ -1229,11 +1344,72 @@ export class PayrollService {
     sourceUserId: string,
     departments: StaffDepartment[],
     tracks?: StaffPayTrack[],
+    trainerGroups?: TrainerGroupId[],
   ): Promise<{ copied: number; skipped: number }> {
     const clubId = requireClubId(actor);
     const source = await this.getStaffPayProfile(clubId, sourceUserId);
     if (!source?.payProfile) {
       throw new BadRequestException('Сначала сохраните мотивацию у источника');
+    }
+    if (trainerGroups?.length) {
+      const allowed: TrainerGroupId[] = ['GP', 'STAFF', 'CLUB'];
+      const groups = [...new Set(trainerGroups)].filter((g): g is TrainerGroupId =>
+        allowed.includes(g),
+      );
+      if (!groups.length) {
+        throw new BadRequestException('Укажите группу тренеров');
+      }
+      const copiedIds = new Set<string>();
+      const effectiveFrom = new Date().toISOString().slice(0, 10);
+      const ordered = (['GP', 'CLUB', 'STAFF'] as TrainerGroupId[]).filter((g) =>
+        groups.includes(g),
+      );
+      for (const group of ordered) {
+        const track = TRAINER_GROUP_TRACK[group];
+        const peers = await this.prisma.user.findMany({
+          where: {
+            clubId,
+            isActive: true,
+            id: { not: sourceUserId },
+            roles: { some: { role: Role.TRAINER } },
+            ...(group === 'GP' ? { groupPrograms: true } : {}),
+            ...(group === 'CLUB' ? { trainerClub: true } : {}),
+            ...(group === 'STAFF'
+              ? {
+                  OR: [
+                    { trainerStaff: true },
+                    {
+                      trainerGroupsSet: false,
+                      groupPrograms: false,
+                      trainerStaff: false,
+                      trainerClub: false,
+                    },
+                  ],
+                }
+              : {}),
+          },
+          select: { id: true },
+        });
+        for (const peer of peers) {
+          const existing = await this.getStaffPayProfile(clubId, peer.id);
+          const merged = mergePayTracks(
+            existing?.payProfile,
+            source.payProfile,
+            [track],
+          );
+          await this.upsertCompensation(actor, {
+            userId: peer.id,
+            baseSalaryMinor:
+              group === 'STAFF'
+                ? source.baseSalaryMinor
+                : (existing?.baseSalaryMinor ?? 0),
+            effectiveFrom,
+            payProfile: merged,
+          });
+          copiedIds.add(peer.id);
+        }
+      }
+      return { copied: copiedIds.size, skipped: 0 };
     }
     if (!departments.length) {
       throw new BadRequestException('Укажите подразделение для копирования');
@@ -1777,7 +1953,7 @@ export class PayrollService {
         }
       }
 
-      if (slice.track === 'PT') {
+      if (slice.track === 'PT' || slice.track === 'CLUB') {
         const ptUnits = trusted.filter((x) => x.kind === 'PT');
         const monthCount = ptUnits.length;
         const pct = resolvePtPercent(monthCount, slice.ptPercentTiers);

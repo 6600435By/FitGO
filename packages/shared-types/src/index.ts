@@ -905,8 +905,12 @@ export interface StaffMember {
   employeeCode?: string;
   /** false — пароль входа ещё не выдан. */
   loginEnabled?: boolean;
-  /** Тренер сегмента «Тренеры ГП». */
+  /** Тренер группы «Тренеры ГП». */
   groupPrograms?: boolean;
+  /** Тренер группы «Тренеры штат». */
+  trainerStaff?: boolean;
+  /** Тренер группы «Тренеры клуб». */
+  trainerClub?: boolean;
   roles: UserRole[];
   isActive: boolean;
   /** STAFF (default) or EXTERNAL (сторонние в отчёте ЗП). */

@@ -17,9 +17,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   fitgoSessionKey,
   inferPaymentFromBasis,
+  inferPayTag,
   mapOnexStatusToControl,
   onexSessionKey,
   parseSessionKey,
+  saleSessionKey,
   type BookingControlDetail,
   type BookingControlKind,
   type BookingControlListItem,
@@ -27,9 +29,11 @@ import {
   type BookingControlPayment,
   type BookingControlRemark,
   type BookingControlStatus,
+  type SpecialistServiceDebt,
   UserRole,
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { FitnessService } from '../fitness/fitness.service';
 
 type ListFilters = {
   from: string;
@@ -45,7 +49,10 @@ type ListFilters = {
 
 @Injectable()
 export class BookingControlService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly fitness: FitnessService,
+  ) {}
 
   async list(
     clubId: string,
@@ -151,6 +158,14 @@ export class BookingControlService {
         kind === 'GROUP'
           ? ('N_A' as BookingControlPayment)
           : inferPaymentFromBasis(primaryMember?.paymentBasis);
+      const payTag =
+        kind === 'PT' || kind === 'SPA'
+          ? inferPayTag({
+              paySource: primaryMember?.paySource,
+              payment,
+              source: '1C',
+            })
+          : undefined;
 
       let fitgoBookingId: string | undefined;
       if (kind === 'PT') {
@@ -194,9 +209,54 @@ export class BookingControlService {
         number: s.number ?? undefined,
         attendeeCount: groupHeadcount,
         payment: kind === 'GROUP' ? 'N_A' : payment,
+        payTag,
         needsReview: openKeys.has(sessionKey),
         fitgoBookingId,
+        priceMinor: primaryMember?.unitPriceMinor ?? undefined,
       });
+    }
+
+    // One-time PT from 1C sale lines (Исполнитель + сумма), no class doc required
+    if (!kindFilter || kindFilter === OnexClassKind.PT) {
+      const ptSales = await this.fetchTrainerPtSales(
+        filters.from,
+        filters.to,
+      );
+      for (const sale of ptSales) {
+        if (
+          !this.saleMatchesPerformerFilter(
+            sale,
+            performerFilterId,
+            performerExt,
+            performerName,
+            staffByExt,
+          )
+        ) {
+          continue;
+        }
+        const sessionKey = saleSessionKey('PT', sale.docRef || sale.externalId);
+        const payment: BookingControlPayment =
+          sale.paymentStatus === 'PAID' ? 'PAID' : 'DEBT';
+        const performerId =
+          (sale.employeeCode && staffByExt.get(sale.employeeCode)?.id) ||
+          this.findStaffIdByName(staffByExt, sale.employeeName);
+        items.push({
+          sessionKey,
+          kind: 'PT',
+          source: 'SALE',
+          title: sale.serviceName || 'Разовая ПТ (продажа)',
+          startAt: this.normalizeOccurredAt(sale.occurredAt),
+          status: 'COMPLETED',
+          performerName: sale.employeeName?.trim() || '—',
+          performerId,
+          clientName: sale.clientName || '—',
+          number: sale.docRef || undefined,
+          payment,
+          payTag: 'SALE',
+          needsReview: openKeys.has(sessionKey),
+          priceMinor: Math.round((Number(sale.amount) || 0) * 100),
+        });
+      }
     }
 
     // FitGO-only PT/SPA
@@ -392,6 +452,23 @@ export class BookingControlService {
         );
       }
 
+      const payment: BookingControlPayment =
+        kind === 'GROUP'
+          ? 'N_A'
+          : inferPaymentFromBasis(primary?.paymentBasis);
+      const payTag =
+        kind === 'PT' || kind === 'SPA'
+          ? inferPayTag({
+              paySource: primary?.paySource,
+              payment,
+              source: '1C',
+            })
+          : undefined;
+      const unitPrice = primary?.unitPriceMinor ?? undefined;
+      const matchedPrice = matched
+        ? (matched as { priceMinor?: number | null }).priceMinor ?? undefined
+        : undefined;
+
       return {
         sessionKey,
         kind,
@@ -406,10 +483,8 @@ export class BookingControlService {
         roomTitle: s.roomTitle ?? undefined,
         number: s.number ?? undefined,
         attendeeCount: groupHeadcount,
-        payment:
-          kind === 'GROUP'
-            ? 'N_A'
-            : inferPaymentFromBasis(primary?.paymentBasis),
+        payment,
+        payTag,
         needsReview: Boolean(open),
         fitgoBookingId: matched?.id,
         durationMin: s.durationMin ?? undefined,
@@ -423,10 +498,43 @@ export class BookingControlService {
           ? (matched as { crmDocRef?: string | null }).crmDocRef ??
             s.externalId
           : s.externalId,
-        priceMinor: matched
-          ? (matched as { priceMinor?: number | null }).priceMinor ??
-            undefined
-          : undefined,
+        priceMinor: unitPrice ?? matchedPrice,
+      };
+    }
+
+    if (parsed.source === 'SALE') {
+      // Re-fetch recent sales window (endpoint max 31d) to resolve detail by docRef
+      const sales = await this.fetchTrainerPtSales(
+        this.ymdDaysAgo(31),
+        this.ymdToday(),
+      );
+      const sale = sales.find(
+        (r) => (r.docRef || r.externalId) === parsed.id,
+      );
+      if (!sale) throw new NotFoundException('Продажа не найдена');
+      if (viewer?.ownOnly) {
+        await this.assertOwnSale(clubId, viewer.userId, sale);
+      }
+      const payment: BookingControlPayment =
+        sale.paymentStatus === 'PAID' ? 'PAID' : 'DEBT';
+      return {
+        sessionKey,
+        kind: 'PT',
+        source: 'SALE',
+        title: sale.serviceName || 'Разовая ПТ (продажа)',
+        startAt: this.normalizeOccurredAt(sale.occurredAt),
+        status: 'COMPLETED',
+        performerName: sale.employeeName?.trim() || '—',
+        clientName: sale.clientName || '—',
+        number: sale.docRef || undefined,
+        payment,
+        payTag: 'SALE',
+        needsReview: Boolean(open),
+        members: [],
+        remark: open,
+        remarksHistory: mappedRemarks,
+        crmDocRef: sale.docRef || undefined,
+        priceMinor: Math.round((Number(sale.amount) || 0) * 100),
       };
     }
 
@@ -560,7 +668,9 @@ export class BookingControlService {
     const kind =
       parsed.source === '1C'
         ? await this.kindFromOnex(clubId, parsed.id)
-        : (parsed.kind as SessionRemarkKind);
+        : parsed.source === 'SALE'
+          ? SessionRemarkKind.PT
+          : (parsed.kind as SessionRemarkKind);
 
     const row = await this.prisma.sessionRemark.create({
       data: {
@@ -694,6 +804,104 @@ export class BookingControlService {
       if (u.externalId) map.set(u.externalId, u);
     }
     return map;
+  }
+
+  private async fetchTrainerPtSales(
+    from: string,
+    to: string,
+  ): Promise<SpecialistServiceDebt[]> {
+    const provider = this.fitness.getProvider();
+    const fn = provider.getTrainerPtSales;
+    if (!fn) return [];
+    try {
+      return await fn.call(provider, { from, to });
+    } catch {
+      return [];
+    }
+  }
+
+  private saleMatchesPerformerFilter(
+    sale: SpecialistServiceDebt,
+    performerFilterId: string | undefined,
+    performerExt: string | undefined,
+    performerName: string | undefined,
+    staffByExt: Map<
+      string,
+      { id: string; externalId: string | null; firstName: string; lastName: string }
+    >,
+  ): boolean {
+    if (!performerFilterId) return true;
+    if (performerExt && sale.employeeCode) {
+      const a = performerExt.replace(/^0+/, '');
+      const b = sale.employeeCode.replace(/^0+/, '');
+      if (a && b && a === b) return true;
+      if (sale.employeeCode === performerExt) return true;
+    }
+    if (performerName && sale.employeeName) {
+      if (
+        sale.employeeName.trim().toLowerCase() ===
+        performerName.trim().toLowerCase()
+      ) {
+        return true;
+      }
+    }
+    const byCode = sale.employeeCode
+      ? staffByExt.get(sale.employeeCode)
+      : undefined;
+    if (byCode?.id === performerFilterId) return true;
+    return false;
+  }
+
+  private findStaffIdByName(
+    staffByExt: Map<
+      string,
+      { id: string; firstName: string; lastName: string }
+    >,
+    employeeName: string | undefined,
+  ): string | undefined {
+    const n = (employeeName ?? '').trim().toLowerCase();
+    if (!n) return undefined;
+    for (const u of staffByExt.values()) {
+      const full = `${u.lastName} ${u.firstName}`.trim().toLowerCase();
+      if (full === n) return u.id;
+    }
+    return undefined;
+  }
+
+  private normalizeOccurredAt(raw: string): string {
+    if (!raw?.trim()) return new Date().toISOString();
+    const d = new Date(raw.includes('T') ? raw : `${raw}T12:00:00`);
+    return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+  }
+
+  private ymdToday(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  private ymdDaysAgo(n: number): string {
+    return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+  }
+
+  private async assertOwnSale(
+    clubId: string,
+    userId: string,
+    sale: SpecialistServiceDebt,
+  ) {
+    const u = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+    });
+    if (!u) throw new ForbiddenException('Чужая продажа');
+    const name = `${u.lastName} ${u.firstName}`.trim().toLowerCase();
+    const codeOk =
+      u.externalId &&
+      sale.employeeCode &&
+      (u.externalId === sale.employeeCode ||
+        u.externalId.replace(/^0+/, '') ===
+          sale.employeeCode.replace(/^0+/, ''));
+    const nameOk =
+      sale.employeeName &&
+      sale.employeeName.trim().toLowerCase() === name;
+    if (!codeOk && !nameOk) throw new ForbiddenException('Чужая продажа');
   }
 
   private async kindFromOnex(

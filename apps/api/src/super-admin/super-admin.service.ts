@@ -141,6 +141,36 @@ export class SuperAdminService implements OnModuleInit {
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
     });
 
+    const pending = staff.filter(
+      (member) =>
+        !member.trainerGroupsSet &&
+        member.roles.some((r) => r.role === Role.TRAINER),
+    );
+    if (pending.length) {
+      const toStaff = pending.filter(
+        (member) =>
+          !member.groupPrograms && !member.trainerStaff && !member.trainerClub,
+      );
+      const rest = pending.filter((member) => !toStaff.includes(member));
+      if (toStaff.length) {
+        await this.prisma.user.updateMany({
+          where: { id: { in: toStaff.map((member) => member.id) } },
+          data: { trainerStaff: true, trainerGroupsSet: true },
+        });
+        for (const member of toStaff) {
+          member.trainerStaff = true;
+          member.trainerGroupsSet = true;
+        }
+      }
+      if (rest.length) {
+        await this.prisma.user.updateMany({
+          where: { id: { in: rest.map((member) => member.id) } },
+          data: { trainerGroupsSet: true },
+        });
+        for (const member of rest) member.trainerGroupsSet = true;
+      }
+    }
+
     return staff.map((member) => this.mapStaff(member));
   }
 
@@ -181,6 +211,14 @@ export class SuperAdminService implements OnModuleInit {
 
     const passwordHash = await bcrypt.hash(plainPassword!, 10);
     const clubId = requireClubId(user);
+    const isTrainer = roleList.includes('TRAINER');
+    const groupPrograms = isTrainer && !!dto.groupPrograms;
+    const trainerClub = isTrainer && !!dto.trainerClub;
+    const trainerStaff = isTrainer
+      ? dto.trainerStaff !== undefined
+        ? dto.trainerStaff
+        : !groupPrograms && !trainerClub
+      : false;
 
     const created = await this.prisma.user.create({
       data: {
@@ -193,6 +231,10 @@ export class SuperAdminService implements OnModuleInit {
         dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : null,
         createdById: user.sub,
         loginEnabled: needsLogin,
+        groupPrograms,
+        trainerStaff,
+        trainerClub,
+        trainerGroupsSet: isTrainer,
         roles: {
           create: roleList.map((r) => ({ role: toStaffPrismaRole(r) })),
         },
@@ -234,6 +276,10 @@ export class SuperAdminService implements OnModuleInit {
       loginEnabled?: boolean;
       employmentKind?: 'STAFF' | 'EXTERNAL';
       email?: string;
+      groupPrograms?: boolean;
+      trainerStaff?: boolean;
+      trainerClub?: boolean;
+      trainerGroupsSet?: boolean;
     } = {};
 
     if (dto.firstName !== undefined) data.firstName = dto.firstName.trim();
@@ -244,6 +290,16 @@ export class SuperAdminService implements OnModuleInit {
     }
     if (dto.employmentKind !== undefined) {
       data.employmentKind = dto.employmentKind;
+    }
+    if (
+      dto.groupPrograms !== undefined ||
+      dto.trainerStaff !== undefined ||
+      dto.trainerClub !== undefined
+    ) {
+      if (dto.groupPrograms !== undefined) data.groupPrograms = dto.groupPrograms;
+      if (dto.trainerStaff !== undefined) data.trainerStaff = dto.trainerStaff;
+      if (dto.trainerClub !== undefined) data.trainerClub = dto.trainerClub;
+      data.trainerGroupsSet = true;
     }
     if (dto.email !== undefined) {
       const raw = dto.email.trim();
@@ -518,6 +574,8 @@ export class SuperAdminService implements OnModuleInit {
     employeeCode: string | null;
     loginEnabled: boolean;
     groupPrograms?: boolean;
+    trainerStaff?: boolean;
+    trainerClub?: boolean;
     isActive: boolean;
     employmentKind?: 'STAFF' | 'EXTERNAL' | string;
     createdAt: Date;
@@ -543,6 +601,8 @@ export class SuperAdminService implements OnModuleInit {
       employeeCode: member.employeeCode ?? undefined,
       loginEnabled: member.loginEnabled,
       groupPrograms: member.groupPrograms ?? false,
+      trainerStaff: member.trainerStaff ?? false,
+      trainerClub: member.trainerClub ?? false,
       roles: member.roles.map((r) => roleMap[r.role]),
       isActive: member.isActive,
       employmentKind:

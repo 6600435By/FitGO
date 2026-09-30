@@ -23,6 +23,15 @@ const ROLE_OPTIONS: {
   { id: 'ADMIN', label: 'Администратор', role: UserRole.ADMIN },
 ];
 
+const TRAINER_GROUP_OPTIONS: {
+  id: 'gp' | 'staff' | 'club';
+  label: string;
+}[] = [
+  { id: 'gp', label: 'Тренеры ГП' },
+  { id: 'staff', label: 'Тренеры штат' },
+  { id: 'club', label: 'Тренеры клуб' },
+];
+
 export default function SuperAdminStaffDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [member, setMember] = useState<StaffMember | null>(null);
@@ -54,9 +63,12 @@ export default function SuperAdminStaffDetailPage() {
     if (member.roles.includes(UserRole.MANAGER)) return 'MANAGER';
     if (member.roles.includes(UserRole.SPECIALIST)) return 'SPA';
     if (member.roles.includes(UserRole.TECH)) return 'TECH';
-    if (member.groupPrograms && member.roles.includes(UserRole.TRAINER))
-      return 'GROUP_TRAINER';
-    if (member.roles.includes(UserRole.TRAINER)) return 'PT';
+    if (member.roles.includes(UserRole.TRAINER)) {
+      if (member.trainerStaff) return 'PT';
+      if (member.trainerClub) return 'CLUB';
+      if (member.groupPrograms) return 'GROUP_TRAINER';
+      return 'PT';
+    }
     if (member.roles.includes(UserRole.ADMIN)) return 'ADMIN';
     return undefined;
   }, [member]);
@@ -97,6 +109,30 @@ export default function SuperAdminStaffDetailPage() {
     try {
       await api.superAdminUpdateStaff(token, id, { roles: next });
       setMessage('Подразделения обновлены');
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка');
+    } finally {
+      setRolesBusy(false);
+    }
+  };
+
+  const toggleTrainerGroup = async (group: 'gp' | 'staff' | 'club') => {
+    const token = getToken();
+    if (!token || !member) return;
+    const next = {
+      groupPrograms: !!member.groupPrograms,
+      trainerStaff: !!member.trainerStaff,
+      trainerClub: !!member.trainerClub,
+    };
+    if (group === 'gp') next.groupPrograms = !next.groupPrograms;
+    if (group === 'staff') next.trainerStaff = !next.trainerStaff;
+    if (group === 'club') next.trainerClub = !next.trainerClub;
+    setRolesBusy(true);
+    setMessage('');
+    try {
+      await api.superAdminUpdateStaff(token, id, next);
+      setMessage('Группы тренера обновлены');
       load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
@@ -171,6 +207,39 @@ export default function SuperAdminStaffDetailPage() {
             );
           })}
         </div>
+        {member.roles.includes(UserRole.TRAINER) ? (
+          <div className="border-t border-slate-800 pt-3 space-y-2">
+            <p className="text-xs text-slate-400">
+              Группы тренера. Можно несколько: тренер попадает в каждый
+              выбранный список, а ниже открываются поля этих схем.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {TRAINER_GROUP_OPTIONS.map((group) => {
+                const on =
+                  group.id === 'gp'
+                    ? !!member.groupPrograms
+                    : group.id === 'staff'
+                      ? !!member.trainerStaff
+                      : !!member.trainerClub;
+                return (
+                  <button
+                    key={group.id}
+                    type="button"
+                    disabled={rolesBusy}
+                    onClick={() => toggleTrainerGroup(group.id)}
+                    className={
+                      on
+                        ? 'btn-primary px-3 py-1.5 text-sm'
+                        : 'btn-secondary px-3 py-1.5 text-sm'
+                    }
+                  >
+                    {group.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
         <div className="border-t border-slate-800 pt-3">
           <p className="mb-2 text-xs text-slate-400">
             Сторонний специалист — отдельная секция в сводном отчёте ЗП
@@ -223,6 +292,15 @@ export default function SuperAdminStaffDetailPage() {
         userId={id}
         roles={member.roles}
         suggestedTrack={suggestedTrack}
+        trainerGroups={
+          member.roles.includes(UserRole.TRAINER)
+            ? {
+                gp: !!member.groupPrograms,
+                staff: !!member.trainerStaff,
+                club: !!member.trainerClub,
+              }
+            : undefined
+        }
       />
 
       {!member.roles.every(

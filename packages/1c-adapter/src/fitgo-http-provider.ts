@@ -402,6 +402,25 @@ export class FitgoHttpProvider {
     }
   }
 
+  async getTrainerPtSales(input: {
+    from: string;
+    to: string;
+  }): Promise<import('@fitgo/shared-types').SpecialistServiceDebt[]> {
+    const q = new URLSearchParams({
+      from: input.from,
+      to: input.to,
+    });
+    try {
+      const data = await this.request<
+        import('@fitgo/shared-types').SpecialistServiceDebt[]
+      >(`/trainer-pt-sales?${q.toString()}`, { timeoutMs: 120_000 });
+      return Array.isArray(data) ? data : [];
+    } catch {
+      // Endpoint may not be published yet on club 1C
+      return [];
+    }
+  }
+
   async getClubVisitsPage(params: {
     from: string;
     to: string;

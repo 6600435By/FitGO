@@ -6,7 +6,79 @@ export type StaffPayTrack =
   | 'GROUP_TRAINER'
   | 'SPA'
   | 'TECH'
-  | 'PT';
+  | 'PT'
+  | 'CLUB';
+
+/** Staff-tab trainer subdivisions. A trainer may belong to several. */
+export type TrainerGroupId = 'GP' | 'STAFF' | 'CLUB';
+
+export const TRAINER_GROUP_TRACK: Record<TrainerGroupId, StaffPayTrack> = {
+  GP: 'GROUP_TRAINER',
+  STAFF: 'PT',
+  CLUB: 'CLUB',
+};
+
+export interface TrainerPayFlags {
+  isTrainer: boolean;
+  /** Stored choice. Until the first save, untagged trainers count as штат. */
+  groupsSet: boolean;
+  gp: boolean;
+  staff: boolean;
+  club: boolean;
+}
+
+export function trainerPayFlags(input: {
+  roles: readonly string[];
+  groupPrograms?: boolean | null;
+  trainerStaff?: boolean | null;
+  trainerClub?: boolean | null;
+  trainerGroupsSet?: boolean | null;
+}): TrainerPayFlags {
+  const isTrainer = input.roles.includes('TRAINER');
+  const groupsSet = !!input.trainerGroupsSet;
+  const gp = !!input.groupPrograms;
+  const club = !!input.trainerClub;
+  let staff = !!input.trainerStaff;
+  if (isTrainer && !groupsSet && !gp && !staff && !club) staff = true;
+  return { isTrainer, groupsSet, gp, staff, club };
+}
+
+/**
+ * Pay slices that actually accrue for this person.
+ * Штат and клуб both price PT sessions — if both are on, штат wins so % is not doubled.
+ * Клуб rates stay stored so they can be copied onto the club group.
+ */
+export function payProfileForCalculation(
+  profile: StaffPayProfile | null | undefined,
+  flags: TrainerPayFlags,
+): StaffPayProfile | undefined {
+  if (!profile) return undefined;
+  if (!flags.isTrainer) return profile;
+  const stored = allPaySlices(profile);
+  const hasGroupSlice = stored.some((slice) => slice.track === 'GROUP_TRAINER');
+  const hasPtSlice = stored.some((slice) => slice.track === 'PT');
+  // GP-only trainers who were still on the PT scheme keep it until a GP scheme is saved.
+  const keepLegacyPt = flags.gp && !flags.staff && !flags.club && !hasGroupSlice && hasPtSlice;
+  const slices = stored.filter((slice) => {
+    if (slice.track === 'GROUP_TRAINER') return flags.gp;
+    if (slice.track === 'PT') return flags.staff || keepLegacyPt;
+    if (slice.track === 'CLUB') return flags.club && !flags.staff;
+    return true;
+  });
+  if (!slices.length) {
+    return {
+      track: 'PT',
+      ptPercentTiers: [{ minSessions: 0, percent: 0 }],
+      hourlyRateMinor: 0,
+      fixedAdvanceMinor: 0,
+      ptSessionPriceMinor: 0,
+    };
+  }
+  const byTrack: NonNullable<StaffPayProfile['byTrack']> = {};
+  for (const slice of slices) byTrack[slice.track] = slice;
+  const primary = slices[0]!;
+  return { ...primary, track: primary.track, byTrack };
+}
 
 /** Club rooms used for group-class payroll tiers. */
 export type GroupRoomKey =
@@ -319,6 +391,12 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         hourlyRateMinor: 0,
         fixedAdvanceMinor: 0,
       };
+    case 'CLUB':
+      return {
+        track,
+        ptPercentTiers: DEFAULT_PT_TIERS.map((t) => ({ ...t })),
+        ptSessionPriceMinor: 0,
+      };
   }
 }
 
@@ -329,9 +407,18 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
     const v = minor / 100;
     return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, '');
   };
+  const sliceCount = allPaySlices(profile).length;
   for (const slice of allPaySlices(profile)) {
     const tag =
-      allPaySlices(profile).length > 1 ? `${slice.track}: ` : '';
+      sliceCount > 1
+        ? slice.track === 'GROUP_TRAINER'
+          ? 'ГП: '
+          : slice.track === 'PT'
+            ? 'штат: '
+            : slice.track === 'CLUB'
+              ? 'клуб: '
+              : `${slice.track}: `
+        : '';
     switch (slice.track) {
       case 'ADMIN':
         if (slice.hourlyRateMinor)
@@ -433,6 +520,13 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           chips.push(
             `${tag}аванс 25-е ${money(slice.fixedAdvanceMinor)}`,
           );
+        if (slice.ptSessionPriceMinor)
+          chips.push(`${tag}ПТ ${money(slice.ptSessionPriceMinor)}`);
+        for (const t of slice.ptPercentTiers ?? []) {
+          chips.push(`${tag}≥${t.minSessions}: ${formatPercent(t.percent)}%`);
+        }
+        break;
+      case 'CLUB':
         if (slice.ptSessionPriceMinor)
           chips.push(`${tag}ПТ ${money(slice.ptSessionPriceMinor)}`);
         for (const t of slice.ptPercentTiers ?? []) {

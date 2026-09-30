@@ -273,6 +273,8 @@ export class ClassSessionsSyncService {
           cancelled: Boolean(m.cancelled) || m.attendance === 'CANCELLED',
           paymentBasis: m.paymentBasis?.trim() || null,
           quantity: m.quantity && m.quantity > 0 ? m.quantity : 1,
+          paySource: mapPaySource(m.paySource),
+          unitPriceMinor: majorToMinorOrNull(m.unitAmount),
         },
         update: {
           clientName: m.clientName?.trim() || mid,
@@ -280,6 +282,8 @@ export class ClassSessionsSyncService {
           cancelled: Boolean(m.cancelled) || m.attendance === 'CANCELLED',
           paymentBasis: m.paymentBasis?.trim() || null,
           quantity: m.quantity && m.quantity > 0 ? m.quantity : 1,
+          paySource: mapPaySource(m.paySource),
+          unitPriceMinor: majorToMinorOrNull(m.unitAmount),
         },
       });
       memberCount += 1;
@@ -589,7 +593,19 @@ function mapKind(k: string): OnexClassKind {
   const u = (k || '').toUpperCase();
   if (u === 'PT') return OnexClassKind.PT;
   if (u === 'SPA') return OnexClassKind.SPA;
+  if (u === 'SOLARIUM') return OnexClassKind.SOLARIUM;
   return OnexClassKind.GROUP;
+}
+
+function mapPaySource(raw: string | undefined): string | null {
+  const u = (raw || '').toUpperCase();
+  if (u === 'PACKAGE' || u === 'SALE' || u === 'UNKNOWN') return u;
+  return null;
+}
+
+function majorToMinorOrNull(amount: number | undefined): number | null {
+  if (amount == null || !Number.isFinite(amount) || amount <= 0) return null;
+  return Math.round(amount * 100);
 }
 
 function mapStatus(s: string): OnexClassStatus {

@@ -16,6 +16,7 @@
 //   GET  /v1/card
 //   GET  /v1/group-session-roster         → GroupSessionRosterGET (?appointmentId=)
 //   GET  /v1/class-sessions               → ClassSessionsGET (?from&to&page&pageSize)
+//   GET  /v1/trainer-pt-sales             → TrainerPtSalesGET (?from&to) — разовые ПТ с Исполнителем
 //   GET  /v1/segments/config              → SegmentsConfigGET
 //   GET  /v1/segments/members             → SegmentsMembersGET (?key= | ?uuid=)
 //
@@ -27,11 +28,10 @@
 //                | group-session-roster | class-sessions | segments-config | segments-members
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
 //                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
-//                | /v1/group-session-roster | /v1/class-sessions | /v1/segments/config | /v1/segments/members
-//                (без /v1 приложение метод не найдёт: Nest ходит на .../hs/fitgo/v1)
-//   Метод POST → FreezePOST | ConsumeServicePOST | SpaSalePOST | CleanupBrokenSpaVisitsPOST
+//                | /v1/group-session-roster | /v1/class-sessions | /v1/trainer-pt-sales
+//                | /v1/segments/config | /v1/segments/members
 //   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | ClassSessionsGET
-//                | SegmentsConfigGET | SegmentsMembersGET
+//                | TrainerPtSalesGET | SegmentsConfigGET | SegmentsMembersGET
 //
 // У расширения снять флаг «Защита от опасных действий»: проведение документов
 // создаёт COM-объект WinHttp (рассылки), иначе в HTTP-сервисе будет 500 «Предупреждение безопасности».
@@ -619,6 +619,30 @@
     КонецПопытки;
 
     Данные = FitGOIntegrationКлиенты.ЗанятияПериодаJSON(ДатаСтрС, ДатаСтрПо, Страница, Размер);
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
+КонецФункции
+
+// Разовые ПТ из продаж с Исполнителем (оказаны при продаже, без документа Занятие).
+Функция TrainerPtSalesGET(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    ДатаСтрС = "";
+    ДатаСтрПо = "";
+    Попытка
+        ДатаСтрС = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("from")));
+    Исключение
+    КонецПопытки;
+    Попытка
+        ДатаСтрПо = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("to")));
+    Исключение
+    КонецПопытки;
+    Если ПустаяСтрока(ДатаСтрС) Или ПустаяСтрока(ДатаСтрПо) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "from and to required (YYYY-MM-DD)");
+    КонецЕсли;
+
+    Данные = FitGOIntegrationКлиенты.ПродажиПтИсполнителейJSON(ДатаСтрС, ДатаСтрПо);
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
 КонецФункции
 

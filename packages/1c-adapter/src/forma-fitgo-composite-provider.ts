@@ -146,6 +146,10 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     return this.fitgo.getClassSessions?.(params) ?? Promise.resolve(null);
   }
 
+  getTrainerPtSales(input: { from: string; to: string }) {
+    return this.fitgo.getTrainerPtSales?.(input) ?? Promise.resolve([]);
+  }
+
   getClubVisitsPage(params: {
     from: string;
     to: string;

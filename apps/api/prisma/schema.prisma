@@ -302,6 +302,7 @@ enum OnexClassKind {
   GROUP
   PT
   SPA
+  SOLARIUM
 }
 
 enum OnexClassStatus {
@@ -323,6 +324,7 @@ enum SessionRemarkKind {
   GROUP
   PT
   SPA
+  SOLARIUM
 }
 
 enum SessionRemarkStatus {
@@ -483,8 +485,14 @@ model User {
   externalId String?
   /// Код сотрудника в 1С (например 000000151). Для выборок по сотруднику.
   employeeCode String?
-  /// true — тренер сегмента «Тренеры ГП» (для payroll GROUP / фильтра Staff).
+  /// true — тренер группы «Тренеры ГП» (ставки занятий).
   groupPrograms Boolean @default(false)
+  /// true — тренер группы «Тренеры штат» (оклад, час, аванс, % ПТ).
+  trainerStaff Boolean @default(false)
+  /// true — тренер группы «Тренеры клуб» (% ПТ без оклада и аванса).
+  trainerClub Boolean @default(false)
+  /// false — группы ещё не выбирали; список Staff один раз относит не-ГП тренеров в штат.
+  trainerGroupsSet Boolean @default(false)
   /// false — учётка есть, пароль входа ещё не выдан.
   loginEnabled Boolean @default(true)
   referralCode String? @unique
@@ -2007,6 +2015,10 @@ model OnexClassSessionMember {
   cancelled      Boolean                    @default(false)
   paymentBasis   String?
   quantity       Int                        @default(1)
+  /// SALE | PACKAGE | UNKNOWN — how this PT/SPA line is paid
+  paySource      String?
+  /// Unit amount for payroll (minor): sale line or blockPrice/N
+  unitPriceMinor Int?
   createdAt      DateTime                   @default(now())
   updatedAt      DateTime                   @updatedAt
 

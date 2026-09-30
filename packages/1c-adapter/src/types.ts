@@ -31,12 +31,16 @@ export interface FitgoClassSessionMemberRow {
   cancelled?: boolean;
   paymentBasis?: string;
   quantity?: number;
+  /** SALE | PACKAGE | UNKNOWN */
+  paySource?: string;
+  /** Unit price in major currency (blockPrice/N or sale line). */
+  unitAmount?: number;
 }
 
 export interface FitgoClassSessionRow {
   id: string;
   number?: string;
-  kind: 'GROUP' | 'PT' | 'SPA';
+  kind: 'GROUP' | 'PT' | 'SPA' | 'SOLARIUM';
   status: 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
   title: string;
   startAt: string;
@@ -187,6 +191,14 @@ export interface IFitnessClubProvider {
     pageSize: number;
     total: number;
   } | null>;
+  /**
+   * One-time PT sale lines with Исполнитель (no class document required).
+   * Optional — returns [] when unsupported.
+   */
+  getTrainerPtSales?(input: {
+    from: string;
+    to: string;
+  }): Promise<import('@fitgo/shared-types').SpecialistServiceDebt[]>;
   /**
    * Club hall visits without client filter. Optional.
    */

@@ -347,6 +347,12 @@ export class SegmentsService {
           (code && existing.employeeCode !== code) ||
           existing.externalId !== externalId ||
           (groupPrograms && !existing.groupPrograms) ||
+          (role === Role.TRAINER &&
+            !groupPrograms &&
+            !existing.trainerGroupsSet &&
+            !existing.groupPrograms &&
+            !existing.trainerStaff &&
+            !existing.trainerClub) ||
           !hasRole ||
           nextLogin !== existing.email;
         if (!needUpdate) {
@@ -363,7 +369,17 @@ export class SegmentsService {
               ...(renameLogin ? { email: nextLogin } : {}),
               ...(code ? { employeeCode: code } : {}),
               ...(m.phone ? { phone: m.phone } : {}),
-              ...(groupPrograms ? { groupPrograms: true } : {}),
+              ...(groupPrograms
+                ? { groupPrograms: true, trainerGroupsSet: true }
+                : {}),
+              ...(role === Role.TRAINER &&
+              !groupPrograms &&
+              !existing.trainerGroupsSet &&
+              !existing.groupPrograms &&
+              !existing.trainerStaff &&
+              !existing.trainerClub
+                ? { trainerStaff: true, trainerGroupsSet: true }
+                : {}),
               ...(!hasRole ? { roles: { create: { role } } } : {}),
             },
           });
@@ -393,6 +409,9 @@ export class SegmentsService {
             employeeCode: code,
             loginEnabled: false,
             groupPrograms,
+            trainerStaff: role === Role.TRAINER && !groupPrograms,
+            trainerClub: false,
+            trainerGroupsSet: role === Role.TRAINER,
             roles: { create: [{ role }] },
           },
         });

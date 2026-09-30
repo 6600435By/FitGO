@@ -40,11 +40,30 @@ const TRACKS: { id: StaffPayTrack; label: string }[] = [
   { id: 'PT', label: 'Персональный тренер' },
 ];
 
+const TRAINER_PAY_TRACKS: StaffPayTrack[] = ['PT', 'GROUP_TRAINER', 'CLUB'];
+
+export type TrainerGroupSelection = {
+  gp: boolean;
+  staff: boolean;
+  club: boolean;
+};
+
 type Props = {
   userId: string;
   roles?: UserRole[];
   suggestedTrack?: StaffPayTrack;
+  /** When set, trainer schemes render as sections instead of extra track buttons. */
+  trainerGroups?: TrainerGroupSelection;
 };
+
+function activeTrainerTracks(groups: TrainerGroupSelection | undefined): StaffPayTrack[] {
+  if (!groups) return [];
+  const out: StaffPayTrack[] = [];
+  if (groups.gp) out.push('GROUP_TRAINER');
+  if (groups.staff) out.push('PT');
+  if (groups.club) out.push('CLUB');
+  return out;
+}
 
 function tracksForRoles(roles: UserRole[] | undefined): StaffPayTrack[] {
   if (!roles?.length) return TRACKS.map((t) => t.id);
@@ -57,8 +76,17 @@ function tracksForRoles(roles: UserRole[] | undefined): StaffPayTrack[] {
   return out.length ? out : TRACKS.map((t) => t.id);
 }
 
-export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) {
+export function StaffPayProfileEditor({
+  userId,
+  roles,
+  suggestedTrack,
+  trainerGroups,
+}: Props) {
   const allowed = useMemo(() => tracksForRoles(roles), [roles]);
+  const stacked = !!trainerGroups;
+  const trainerTracks = activeTrainerTracks(trainerGroups);
+  const trainerGroupsRef = useRef(trainerGroups);
+  trainerGroupsRef.current = trainerGroups;
   const [profile, setProfile] = useState<StaffPayTrackSlice>(
     defaultPayProfile(suggestedTrack && allowed.includes(suggestedTrack)
       ? suggestedTrack
@@ -87,7 +115,7 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
       .then((row) => {
         if (row?.payProfile) {
           const packed = row.payProfile;
-          const track =
+          let track =
             packed.track && allowed.includes(packed.track)
               ? packed.track
               : allowed[0] ?? packed.track;
@@ -98,6 +126,15 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
             map[t] = { ...map[t]!, track: t };
           }
           map[packed.track] = sliceForTrack(packed, packed.track);
+          const others = allowed.filter((t) => !TRAINER_PAY_TRACKS.includes(t));
+          if (
+            trainerGroupsRef.current &&
+            others.length &&
+            TRAINER_PAY_TRACKS.includes(track)
+          ) {
+            map[track] = sliceForTrack({ ...packed, byTrack: map }, track);
+            track = others[0]!;
+          }
           setByTrack(map);
           setProfile(sliceForTrack({ ...packed, byTrack: map }, track));
         } else if (suggestedTrack && allowed.includes(suggestedTrack)) {
@@ -135,6 +172,64 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
     });
   };
 
+  const readSlice = (track: StaffPayTrack): StaffPayTrackSlice => {
+    if (profile.track === track) return profile;
+    return byTrack[track] ?? defaultPayProfile(track);
+  };
+
+  const writeSlice = (track: StaffPayTrack, next: StaffPayTrackSlice) => {
+    const slice = { ...next, track };
+    if (profile.track === track) setProfile(slice);
+    else setByTrack((prev) => ({ ...prev, [track]: slice }));
+  };
+
+  const assembleProfile = () => {
+    const current = profileRef.current;
+    const map: Partial<Record<StaffPayTrack, StaffPayTrackSlice>> = {
+      ...byTrackRef.current,
+      [current.track]: { ...current, track: current.track },
+    };
+    const groups = trainerGroupsRef.current;
+    if (groups) {
+      const active = activeTrainerTracks(groups);
+      for (const track of active) {
+        map[track] = { ...(map[track] ?? defaultPayProfile(track)), track };
+      }
+      for (const track of TRAINER_PAY_TRACKS) {
+        if (!active.includes(track)) delete map[track];
+      }
+    }
+    let primary = { ...current, track: current.track };
+    if (
+      groups &&
+      TRAINER_PAY_TRACKS.includes(primary.track) &&
+      !map[primary.track]
+    ) {
+      const active = activeTrainerTracks(groups);
+      primary =
+        (active[0] && map[active[0]]) || {
+          track: 'PT',
+          ptPercentTiers: [{ minSessions: 0, percent: 0 }],
+          hourlyRateMinor: 0,
+          fixedAdvanceMinor: 0,
+          ptSessionPriceMinor: 0,
+        };
+      map[primary.track] = primary;
+    }
+    const salaryHidden =
+      !!groups &&
+      !groups.staff &&
+      !(roles ?? []).some(
+        (role) => role === UserRole.MANAGER || role === UserRole.ADMIN,
+      );
+    return {
+      payProfile: packPayProfile(primary, map),
+      baseSalaryMinor: salaryHidden
+        ? 0
+        : parseMoneyToMinor(baseSalaryRef.current),
+    };
+  };
+
   const save = async () => {
     const token = getToken();
     if (!token) return;
@@ -142,15 +237,13 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
     setSaving(true);
     setMessage('');
     try {
-      const payProfile = packPayProfile(
-        profileRef.current,
-        byTrackRef.current,
-      );
+      const { payProfile, baseSalaryMinor } = assembleProfile();
       await api.payrollSaveStaffProfile(token, userId, {
-        baseSalaryMinor: parseMoneyToMinor(baseSalaryRef.current),
+        baseSalaryMinor,
         payProfile,
       });
       setByTrack(payProfile.byTrack ?? {});
+      setProfile(sliceForTrack(payProfile, payProfile.track));
       setMessage('Мотивация сохранена');
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
@@ -163,41 +256,83 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
     const token = getToken();
     if (!token) return;
     flushDrafts();
-    const current = profileRef.current;
-    const depts = departmentsForPayTrack(current.track);
-    const label =
-      current.track === 'ADMIN'
-        ? 'администраторам'
-        : current.track === 'MANAGER'
-          ? 'управляющим'
-          : current.track === 'SPA'
-            ? 'SPA-специалистам'
-            : current.track === 'TECH'
-              ? 'техперсоналу'
-              : 'тренерам';
-    if (
-      !window.confirm(
-        `Скопировать текущую схему «${TRACKS.find((t) => t.id === current.track)?.label}» и оклад всем ${label}? У них перезапишется мотивация этой схемы.`,
-      )
-    ) {
-      return;
+    const groups = trainerGroupsRef.current;
+    const selectedGroups = groups
+      ? [
+          groups.gp ? ('GP' as const) : null,
+          groups.staff ? ('STAFF' as const) : null,
+          groups.club ? ('CLUB' as const) : null,
+        ].filter((group): group is 'GP' | 'STAFF' | 'CLUB' => !!group)
+      : [];
+    if (selectedGroups.length) {
+      const names = selectedGroups.map((group) =>
+        group === 'GP'
+          ? 'Тренеры ГП'
+          : group === 'STAFF'
+            ? 'Тренеры штат'
+            : 'Тренеры клуб',
+      );
+      const lines = [
+        groups?.gp ? 'ГП — ставки занятий' : null,
+        groups?.staff ? 'Штат — оклад, час, аванс и % ПТ' : null,
+        groups?.club ? 'Клуб — % ПТ' : null,
+      ].filter(Boolean);
+      if (
+        !window.confirm(
+          `Скопировать схемы в группы: ${names.join(', ')}?\n\n${lines.join('\n')}\n\nУ коллег изменится только схема своей группы.`,
+        )
+      ) {
+        return;
+      }
+    } else {
+      const current = profileRef.current;
+      const label =
+        current.track === 'ADMIN'
+          ? 'администраторам'
+          : current.track === 'MANAGER'
+            ? 'управляющим'
+            : current.track === 'SPA'
+              ? 'SPA-специалистам'
+              : current.track === 'TECH'
+                ? 'техперсоналу'
+                : 'тренерам';
+      if (
+        !window.confirm(
+          `Скопировать текущую схему «${TRACKS.find((t) => t.id === current.track)?.label}» и оклад всем ${label}? У них перезапишется мотивация этой схемы.`,
+        )
+      ) {
+        return;
+      }
     }
     setCopying(true);
     setMessage('');
     try {
-      const payProfile = packPayProfile(current, byTrackRef.current);
+      const { payProfile, baseSalaryMinor } = assembleProfile();
       await api.payrollSaveStaffProfile(token, userId, {
-        baseSalaryMinor: parseMoneyToMinor(baseSalaryRef.current),
+        baseSalaryMinor,
         payProfile,
       });
       setByTrack(payProfile.byTrack ?? {});
-      const result = await api.payrollCopyStaffProfile(token, userId, {
-        departments: depts.filter(
-          (d): d is 'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH' =>
-            d !== 'EXTERNAL',
-        ),
-        tracks: [current.track],
-      });
+      setProfile(sliceForTrack(payProfile, payProfile.track));
+      const result = selectedGroups.length
+        ? await api.payrollCopyStaffProfile(token, userId, {
+            departments: ['TRAINER'],
+            tracks: activeTrainerTracks(groups),
+            trainerGroups: selectedGroups,
+          })
+        : await api.payrollCopyStaffProfile(token, userId, {
+            departments: departmentsForPayTrack(profileRef.current.track).filter(
+              (
+                department,
+              ): department is
+                | 'ADMIN'
+                | 'MANAGER'
+                | 'TRAINER'
+                | 'SPECIALIST'
+                | 'TECH' => department !== 'EXTERNAL',
+            ),
+            tracks: [profileRef.current.track],
+          });
       setMessage(`Скопировано сотрудникам: ${result.copied}.`);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка копирования');
@@ -206,17 +341,53 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
     }
   };
 
-  const visibleTracks = TRACKS.filter((t) => allowed.includes(t.id));
+  const visibleTracks = TRACKS.filter((t) =>
+    stacked
+      ? allowed.includes(t.id) && !TRAINER_PAY_TRACKS.includes(t.id)
+      : allowed.includes(t.id),
+  );
+  const showSalary =
+    !stacked ||
+    !!trainerGroups?.staff ||
+    (roles ?? []).some(
+      (role) => role === UserRole.MANAGER || role === UserRole.ADMIN,
+    );
+  const copyLabel =
+    trainerTracks.length > 1
+      ? 'Скопировать на выбранные группы'
+      : trainerTracks.length === 1
+        ? `Скопировать на «${
+            trainerGroups?.gp
+              ? 'Тренеры ГП'
+              : trainerGroups?.club
+                ? 'Тренеры клуб'
+                : 'Тренеры штат'
+          }»`
+        : 'Скопировать на подразделение';
 
   return (
     <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-4 md:p-5">
       <div>
         <h3 className="text-lg font-semibold text-white">Мотивация и ставки</h3>
         <p className="mt-1 text-sm text-slate-400">
-          Можно задать несколько схем, если сотрудник в нескольких подразделениях.
-          Дробные ставки — через точку или запятую (например 2,5).
+          {stacked
+            ? 'Поля открываются по группам тренера. Копирование переносит каждую схему только в свою группу. Дробные ставки — через точку или запятую.'
+            : 'Можно задать несколько схем, если сотрудник в нескольких подразделениях. Дробные ставки — через точку или запятую (например 2,5).'}
         </p>
       </div>
+
+      {stacked && trainerGroups?.staff && trainerGroups.club ? (
+        <p className="text-xs leading-relaxed text-slate-500">
+          В расчёте ЗП этого тренера персональные тренировки идут по штату.
+          Поля клуба здесь, чтобы скопировать их на группу «Тренеры клуб».
+        </p>
+      ) : null}
+
+      {stacked && trainerTracks.length === 0 ? (
+        <p className="text-sm text-slate-400">
+          Отметьте группу тренера выше — появятся поля этой схемы.
+        </p>
+      ) : null}
 
       {visibleTracks.length > 1 && (
         <div className="flex flex-wrap gap-2">
@@ -237,7 +408,7 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
         </div>
       )}
 
-      {visibleTracks.length <= 1 && (
+      {!stacked && visibleTracks.length <= 1 && (
         <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
           Схема
           <select
@@ -254,7 +425,48 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
         </label>
       )}
 
-      <MoneyField label="Оклад / база (мес.), BYN" value={baseSalary} onChange={setBaseSalary} />
+      {showSalary ? (
+        <MoneyField
+          label="Оклад / база (мес.), BYN"
+          value={baseSalary}
+          onChange={setBaseSalary}
+        />
+      ) : null}
+
+      {stacked && trainerGroups?.gp ? (
+        <div className="space-y-3 rounded-xl border border-slate-800 p-3">
+          <p className="text-sm font-medium text-white">Тренеры ГП</p>
+          <GroupTrainerRates
+            profile={readSlice('GROUP_TRAINER')}
+            onChange={(next) => writeSlice('GROUP_TRAINER', next)}
+          />
+        </div>
+      ) : null}
+
+      {stacked && trainerGroups?.staff ? (
+        <div className="space-y-3 rounded-xl border border-slate-800 p-3">
+          <p className="text-sm font-medium text-white">Тренеры штат</p>
+          <PtPercentFields
+            profile={readSlice('PT')}
+            onChange={(next) => writeSlice('PT', next)}
+            showShift
+          />
+        </div>
+      ) : null}
+
+      {stacked && trainerGroups?.club ? (
+        <div className="space-y-3 rounded-xl border border-slate-800 p-3">
+          <p className="text-sm font-medium text-white">Тренеры клуб</p>
+          <p className="text-xs leading-relaxed text-slate-500">
+            Только % от оплаченной ПТ. Без оклада, ставки за час и аванса.
+          </p>
+          <PtPercentFields
+            profile={readSlice('CLUB')}
+            onChange={(next) => writeSlice('CLUB', next)}
+            showShift={false}
+          />
+        </div>
+      ) : null}
 
       {profile.track === 'ADMIN' && (
         <div className="space-y-3">
@@ -415,7 +627,7 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
         </div>
       )}
 
-      {profile.track === 'GROUP_TRAINER' && (
+      {profile.track === 'GROUP_TRAINER' && !stacked && (
         <GroupTrainerRates
           profile={profile}
           onChange={setProfile}
@@ -483,7 +695,7 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
         </div>
       )}
 
-      {profile.track === 'PT' && (
+      {profile.track === 'PT' && !stacked && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
             % от оплаченной ПТ. Подарочные идут в количество, но не в оплату.
@@ -563,16 +775,93 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
         >
           {saving ? 'Сохранение…' : 'Сохранить мотивацию'}
         </button>
-        <button
-          type="button"
-          className="btn-secondary"
-          disabled={saving || copying}
-          onClick={copyToDepartment}
-        >
-          {copying ? 'Копирование…' : 'Скопировать на подразделение'}
-        </button>
+        {stacked && trainerTracks.length === 0 ? null : (
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={saving || copying}
+            onClick={copyToDepartment}
+          >
+            {copying ? 'Копирование…' : copyLabel}
+          </button>
+        )}
       </div>
       {message && <p className="text-sm text-fitgo-300">{message}</p>}
+    </div>
+  );
+}
+
+function PtPercentFields({
+  profile,
+  onChange,
+  showShift,
+}: {
+  profile: StaffPayTrackSlice;
+  onChange: (next: StaffPayTrackSlice) => void;
+  showShift: boolean;
+}) {
+  return (
+    <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-slate-500">
+        {showShift
+          ? '% от оплаченной ПТ. Подарочные идут в количество, но не в оплату. Часы дежурства — по ставке за час. 25-го — фикс аванс; 15-го — остаток.'
+          : '% от оплаченной ПТ. Подарочные идут в количество, но не в оплату.'}
+      </p>
+      {showShift ? (
+        <>
+          <MoneyField
+            label="Ставка за час смены, BYN"
+            value={formatMinor(profile.hourlyRateMinor)}
+            onChange={(v) =>
+              onChange({ ...profile, hourlyRateMinor: parseMoneyToMinor(v) })
+            }
+          />
+          <MoneyField
+            label="Фикс аванс 25-е, BYN"
+            value={formatMinor(profile.fixedAdvanceMinor)}
+            onChange={(v) =>
+              onChange({ ...profile, fixedAdvanceMinor: parseMoneyToMinor(v) })
+            }
+          />
+        </>
+      ) : null}
+      <MoneyField
+        label="Стоимость ПТ для расчёта, BYN"
+        value={formatMinor(profile.ptSessionPriceMinor)}
+        onChange={(v) =>
+          onChange({ ...profile, ptSessionPriceMinor: parseMoneyToMinor(v) })
+        }
+      />
+      <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+          Ступени %
+        </p>
+        {(profile.ptPercentTiers ?? DEFAULT_PT_TIERS).map((tier, i) => (
+          <div key={i} className="grid grid-cols-2 gap-2">
+            <IntField
+              label="От N тренировок"
+              value={String(tier.minSessions)}
+              onChange={(v) => {
+                const next = [...(profile.ptPercentTiers ?? DEFAULT_PT_TIERS)];
+                next[i] = {
+                  ...next[i],
+                  minSessions: Math.max(0, Math.round(parseDecimal(v))),
+                };
+                onChange({ ...profile, ptPercentTiers: next });
+              }}
+            />
+            <PercentField
+              label="% оплаты"
+              value={formatPercent(tier.percent)}
+              onChange={(v) => {
+                const next = [...(profile.ptPercentTiers ?? DEFAULT_PT_TIERS)];
+                next[i] = { ...next[i], percent: parseDecimal(v) };
+                onChange({ ...profile, ptPercentTiers: next });
+              }}
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
