@@ -8,13 +8,16 @@ import {
   allPaySlices,
   advanceHalfRange,
   DEFAULT_GROUP_RATE_TIERS,
-  isPayrollTrusted,
   monthSettlementRange,
   payProfileSummary,
   resolveGroupRoomKey,
   resolveGroupSessionRateMinor,
   resolvePtPercent,
   sliceForTrack,
+  inferPaymentFromBasis,
+  onexSessionKey,
+  paymentCountsForMoney,
+  paymentCountsForVolume,
   type ClubPayrollReport,
   type ClubPayrollRow,
   type ClubPayrollSectionId,
@@ -56,6 +59,7 @@ import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { StaffRosterService } from '../staff-roster/staff-roster.service';
 import { AdminSalesService } from '../admin-sales/admin-sales.service';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
+import { BookingControlService } from '../booking-control/booking-control.service';
 import {
   createAnalyticsProvider,
   fetchStaffSalesFromAnalytics,
@@ -113,6 +117,7 @@ export class PayrollService {
     private readonly staffRoster: StaffRosterService,
     private readonly adminSales: AdminSalesService,
     private readonly classSessionsSync: ClassSessionsSyncService,
+    private readonly bookingControl: BookingControlService,
     private readonly config: ConfigService,
   ) {}
 
@@ -125,104 +130,140 @@ export class PayrollService {
     const fromD = new Date(`${from}T00:00:00`);
     const toD = new Date(`${to}T23:59:59.999`);
     const units: WorkUnit[] = [];
+    const remarkKeys: string[] = [];
 
-    const spa = await this.prisma.spaBooking.findMany({
+    const performer = await this.prisma.user.findFirst({
+      where: { id: performerId, clubId },
+    });
+    const performerExt = performer?.externalId ?? undefined;
+    const performerName = performer
+      ? `${performer.lastName} ${performer.firstName}`.trim()
+      : '';
+
+    const performerOr =
+      performerExt || performerName
+        ? {
+            OR: [
+              ...(performerExt
+                ? [{ employeeExternalId: performerExt }]
+                : []),
+              ...(performerName ? [{ employeeName: performerName }] : []),
+            ],
+          }
+        : { employeeExternalId: '__none__' };
+
+    // ── SPA from 1C (Onex) — FitGO-only never pays ─────────────────────────
+    const onexSpa = await this.prisma.onexClassSession.findMany({
       where: {
         clubId,
-        specialistId: performerId,
-        status: { not: SpaBookingStatus.CANCELLED },
+        kind: 'SPA',
+        status: 'COMPLETED',
+        isActive: true,
         startAt: { gte: fromD, lte: toD },
-        eligibleForMotivation: true,
+        ...performerOr,
       },
-      include: { service: true, client: true },
+      include: { members: true },
       orderBy: { startAt: 'asc' },
     });
-    for (const b of spa) {
-      const trusted = this.serviceUsage.bookingPayrollTrusted(b);
+    for (const o of onexSpa) {
+      const key = onexSessionKey(o.externalId);
+      remarkKeys.push(key);
+      const primary = o.members.find((m) => !m.cancelled) ?? o.members[0];
+      const payment = inferPaymentFromBasis(primary?.paymentBasis);
+      const matched = await this.prisma.spaBooking.findFirst({
+        where: {
+          clubId,
+          specialistId: performerId,
+          OR: [
+            { crmDocRef: o.externalId },
+            ...(o.number ? [{ crmDocRef: o.number }] : []),
+          ],
+        },
+        include: { service: true, client: true },
+      });
+      const priceMinor =
+        matched?.priceMinor ?? matched?.service.priceMinor ?? undefined;
+      const partner =
+        payment === 'PARTNER'
+          ? 'ALLSPORTS'
+          : matched?.partnerSource ?? undefined;
       units.push({
-        id: b.id,
+        id: matched?.id ?? `onex:${o.id}`,
         kind: 'SPA',
         performerId,
-        title: b.service.name,
-        occurredAt: b.startAt.toISOString(),
+        title: o.title,
+        occurredAt: o.startAt.toISOString(),
         quantity: 1,
-        priceMinor: b.priceMinor ?? b.service.priceMinor,
-        trustBand: b.trustBand as WorkUnit['trustBand'],
-        trustResolution: b.trustResolution as WorkUnit['trustResolution'],
-        payrollTrusted: trusted,
-        clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
-        serviceId: b.serviceId,
-        partnerSource: b.partnerSource ?? undefined,
+        priceMinor,
+        trustBand: 'GREEN',
+        trustResolution: 'NONE',
+        payrollTrusted: paymentCountsForMoney(payment),
+        clientName: primary?.clientName,
+        serviceId: matched?.serviceId,
+        partnerSource: partner,
+        sessionId: o.id,
       });
+      // stash payment on a side channel via title prefix? Better: use isComplimentary false
+      // and partnerSource / price for calc. For QUOTA leave price 0 and rely on spaQuotaRates.
+      if (payment === 'QUOTA' && units[units.length - 1]) {
+        units[units.length - 1].priceMinor = 0;
+      }
     }
 
-    const pts = await this.prisma.personalTrainingBooking.findMany({
+    // ── PT from 1C ─────────────────────────────────────────────────────────
+    const onexPt = await this.prisma.onexClassSession.findMany({
       where: {
-        trainerId: performerId,
-        status: { not: PersonalBookingStatus.CANCELLED },
+        clubId,
+        kind: 'PT',
+        status: 'COMPLETED',
+        isActive: true,
         startAt: { gte: fromD, lte: toD },
+        ...performerOr,
       },
-      include: { client: true },
+      include: { members: true },
       orderBy: { startAt: 'asc' },
     });
-    const fromDate = new Date(`${from}T00:00:00`);
-    const toDate = new Date(`${to}T00:00:00`);
-    const sheetLines = await this.prisma.trainerDaySheetLine.findMany({
-      where: {
-        sheet: {
-          clubId,
+    for (const o of onexPt) {
+      const key = onexSessionKey(o.externalId);
+      remarkKeys.push(key);
+      const primary = o.members.find((m) => !m.cancelled) ?? o.members[0];
+      const payment = inferPaymentFromBasis(primary?.paymentBasis);
+      const matched = await this.prisma.personalTrainingBooking.findFirst({
+        where: {
           trainerId: performerId,
-          date: { gte: fromDate, lte: toDate },
-          status: { in: ['SA_APPROVED', 'LOCKED'] },
+          OR: [
+            { crmDocRef: o.externalId },
+            ...(o.number ? [{ crmDocRef: o.number }] : []),
+          ],
         },
-      },
-      select: {
-        personalTrainingBookingId: true,
-        payable: true,
-        forceIncludeInPayroll: true,
-        clientIssue: true,
-      },
-    });
-    const sheetBookingIds = new Set(
-      sheetLines.map((l) => l.personalTrainingBookingId),
-    );
-    const payableIds = new Set(
-      sheetLines
-        .filter(
-          (l) =>
-            l.clientIssue === 'NONE' &&
-            (l.payable || l.forceIncludeInPayroll),
-        )
-        .map((l) => l.personalTrainingBookingId),
-    );
-
-    for (const b of pts) {
-      if (sheetBookingIds.size > 0 && !sheetBookingIds.has(b.id)) continue;
-      if (sheetBookingIds.size === 0 && !b.eligibleForMotivation) continue;
-
+        include: { client: true },
+      });
+      const isGift = payment === 'GIFT' || matched?.isComplimentary === true;
       const trusted =
-        sheetBookingIds.size > 0
-          ? b.isComplimentary || payableIds.has(b.id)
-          : this.serviceUsage.bookingPayrollTrusted(b);
-
+        paymentCountsForVolume(payment) &&
+        (isGift || paymentCountsForMoney(payment));
       units.push({
-        id: b.id,
+        id: matched?.id ?? `onex:${o.id}`,
         kind: 'PT',
         performerId,
-        title: b.isComplimentary
-          ? 'Подарочная ПТ'
-          : 'Персональная тренировка',
-        occurredAt: b.startAt.toISOString(),
+        title: isGift ? 'Подарочная ПТ' : o.title || 'Персональная тренировка',
+        occurredAt: o.startAt.toISOString(),
         quantity: 1,
-        priceMinor: b.isComplimentary ? 0 : (b.priceMinor ?? undefined),
-        isComplimentary: b.isComplimentary,
-        trustBand: b.trustBand as WorkUnit['trustBand'],
-        trustResolution: b.trustResolution as WorkUnit['trustResolution'],
-        payrollTrusted: trusted,
-        clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+        priceMinor: isGift ? 0 : (matched?.priceMinor ?? undefined),
+        isComplimentary: isGift,
+        trustBand: 'GREEN',
+        trustResolution: 'NONE',
+        payrollTrusted: Boolean(trusted),
+        clientName:
+          primary?.clientName ??
+          (matched
+            ? `${matched.client.lastName} ${matched.client.firstName}`.trim()
+            : undefined),
+        sessionId: o.id,
       });
     }
 
+    // ── GROUP from journal + Onex fallback (dedupe) ─────────────────────────
     await this.groupSessions.promoteAutoReady(clubId, fromD, toD);
 
     const groups = await this.prisma.groupClassSession.findMany({
@@ -241,19 +282,15 @@ export class PayrollService {
       orderBy: { startAt: 'asc' },
     });
     for (const s of groups) {
+      const key = onexSessionKey(s.appointmentId);
+      remarkKeys.push(key);
       const qty = s.approvedAttendedCount ?? 0;
       const trusted =
         qty > 0 &&
         (s.status === GroupClassSessionStatus.APPROVED ||
           s.status === GroupClassSessionStatus.AUTO_READY ||
-          s.status === GroupClassSessionStatus.LOCKED) &&
-        (s.trustBand === TrustBand.GREEN ||
-          isPayrollTrusted({
-            trustBand: s.trustBand as 'GREEN' | 'AMBER' | 'RED',
-            trustResolution: TrustResolution.RESOLVED,
-          }));
+          s.status === GroupClassSessionStatus.LOCKED);
       const roomTitle = s.roomTitle ?? undefined;
-      const roomKey = resolveGroupRoomKey(roomTitle);
       units.push({
         id: s.id,
         kind: 'GROUP',
@@ -261,23 +298,17 @@ export class PayrollService {
         title: s.title,
         occurredAt: s.startAt.toISOString(),
         quantity: qty,
-        trustBand: s.trustBand as WorkUnit['trustBand'],
-        trustResolution:
-          s.trustBand === TrustBand.GREEN ? 'NONE' : 'RESOLVED',
+        trustBand: 'GREEN',
+        trustResolution: 'NONE',
         payrollTrusted: Boolean(trusted),
         sessionId: s.id,
         roomTitle,
-        roomKey,
+        roomKey: resolveGroupRoomKey(roomTitle),
       });
     }
 
-    // Fallback: completed 1C class docs not yet mirrored as GroupClassSession
-    const performer = await this.prisma.user.findFirst({
-      where: { id: performerId, clubId },
-    });
     if (performer) {
       const seenAppt = new Set(groups.map((g) => g.appointmentId));
-      const name = `${performer.lastName} ${performer.firstName}`.trim();
       const onex = await this.prisma.onexClassSession.findMany({
         where: {
           clubId,
@@ -285,12 +316,7 @@ export class PayrollService {
           status: 'COMPLETED',
           isActive: true,
           startAt: { gte: fromD, lte: toD },
-          OR: [
-            ...(performer.externalId
-              ? [{ employeeExternalId: performer.externalId }]
-              : []),
-            ...(name ? [{ employeeName: name }] : []),
-          ],
+          ...performerOr,
         },
         orderBy: { startAt: 'asc' },
       });
@@ -298,6 +324,8 @@ export class PayrollService {
         if (seenAppt.has(o.externalId)) continue;
         const qty = o.attendedCount;
         if (qty <= 0) continue;
+        const key = onexSessionKey(o.externalId);
+        remarkKeys.push(key);
         const roomTitle = o.roomTitle ?? undefined;
         units.push({
           id: `onex:${o.id}`,
@@ -314,6 +342,48 @@ export class PayrollService {
           roomKey: resolveGroupRoomKey(roomTitle),
         });
       }
+    }
+
+    // Open remarks hold payroll
+    const openKeys = await this.bookingControl.openRemarkKeys(
+      clubId,
+      [...new Set(remarkKeys)],
+    );
+    const unitKey = new Map<string, string>();
+    for (const o of onexSpa) {
+      const sk = onexSessionKey(o.externalId);
+      unitKey.set(`onex:${o.id}`, sk);
+      for (const u of units) {
+        if (u.kind === 'SPA' && u.sessionId === o.id) unitKey.set(u.id, sk);
+      }
+    }
+    for (const o of onexPt) {
+      const sk = onexSessionKey(o.externalId);
+      unitKey.set(`onex:${o.id}`, sk);
+      for (const u of units) {
+        if (u.kind === 'PT' && u.sessionId === o.id) unitKey.set(u.id, sk);
+      }
+    }
+    for (const g of groups) {
+      unitKey.set(g.id, onexSessionKey(g.appointmentId));
+    }
+    const onexGroupIds = units
+      .filter((u) => u.kind === 'GROUP' && String(u.id).startsWith('onex:'))
+      .map((u) => u.sessionId!)
+      .filter(Boolean);
+    if (onexGroupIds.length) {
+      const onexGroupRows = await this.prisma.onexClassSession.findMany({
+        where: { id: { in: onexGroupIds } },
+        select: { id: true, externalId: true },
+      });
+      for (const o of onexGroupRows) {
+        unitKey.set(`onex:${o.id}`, onexSessionKey(o.externalId));
+      }
+    }
+
+    for (const u of units) {
+      const sk = unitKey.get(u.id);
+      if (sk && openKeys.has(sk)) u.payrollTrusted = false;
     }
 
     return units.sort(

@@ -5,7 +5,7 @@ import { BookingControlPanel } from '@/components/booking-control/booking-contro
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
-export default function SuperAdminBookingControlPage() {
+export default function AdminBookingControlPage() {
   const panelApi = useMemo(
     () => ({
       list: async (params: {
@@ -15,33 +15,27 @@ export default function SuperAdminBookingControlPage() {
         status?: string;
         needsReview?: boolean;
         payment?: string;
-        performerId?: string;
       }) => {
         const token = getToken();
         if (!token) return [];
-        return api.bookingControlList(token, 'super-admin', params);
+        return api.bookingControlList(token, 'admin', params);
       },
       detail: async (sessionKey: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
-        return api.bookingControlDetail(token, 'super-admin', sessionKey);
+        return api.bookingControlDetail(token, 'admin', sessionKey);
       },
       openRemark: async (sessionKey: string, comment: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
-        return api.bookingControlRemark(
-          token,
-          'super-admin',
-          sessionKey,
-          comment,
-        );
+        return api.bookingControlRemark(token, 'admin', sessionKey, comment);
       },
       resolveRemark: async (sessionKey: string, adminComment: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
         return api.bookingControlResolve(
           token,
-          'super-admin',
+          'admin',
           sessionKey,
           adminComment,
         );

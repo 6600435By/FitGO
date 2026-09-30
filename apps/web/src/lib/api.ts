@@ -1531,6 +1531,74 @@ export const api = {
       token,
     ),
 
+  bookingControlList: (
+    token: string,
+    base: 'super-admin' | 'admin' | 'trainer' | 'specialist',
+    params: {
+      from: string;
+      to: string;
+      kind?: string;
+      status?: string;
+      needsReview?: boolean;
+      payment?: string;
+      performerId?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.kind && params.kind !== 'ALL') q.set('kind', params.kind);
+    if (params.status && params.status !== 'ALL') q.set('status', params.status);
+    if (params.payment && params.payment !== 'ALL')
+      q.set('payment', params.payment);
+    if (params.needsReview) q.set('needsReview', '1');
+    if (params.performerId) q.set('performerId', params.performerId);
+    return request<import('@fitgo/shared-types').BookingControlListItem[]>(
+      `/${base}/booking-control?${q}`,
+      {},
+      token,
+    );
+  },
+
+  bookingControlDetail: (
+    token: string,
+    base: 'super-admin' | 'admin' | 'trainer' | 'specialist',
+    sessionKey: string,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control?sessionKey=${encodeURIComponent(sessionKey)}`,
+      {},
+      token,
+    ),
+
+  bookingControlRemark: (
+    token: string,
+    base: 'super-admin' | 'admin' | 'trainer' | 'specialist',
+    sessionKey: string,
+    comment: string,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlRemark>(
+      `/${base}/booking-control/remark`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sessionKey, comment }),
+      },
+      token,
+    ),
+
+  bookingControlResolve: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    sessionKey: string,
+    adminComment: string,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlRemark>(
+      `/${base}/booking-control/resolve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sessionKey, adminComment }),
+      },
+      token,
+    ),
+
   superAdminAckReview: (
     token: string,
     kind: string,

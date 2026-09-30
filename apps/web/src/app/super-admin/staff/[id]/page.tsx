@@ -54,6 +54,8 @@ export default function SuperAdminStaffDetailPage() {
     if (member.roles.includes(UserRole.MANAGER)) return 'MANAGER';
     if (member.roles.includes(UserRole.SPECIALIST)) return 'SPA';
     if (member.roles.includes(UserRole.TECH)) return 'TECH';
+    if (member.groupPrograms && member.roles.includes(UserRole.TRAINER))
+      return 'GROUP_TRAINER';
     if (member.roles.includes(UserRole.TRAINER)) return 'PT';
     if (member.roles.includes(UserRole.ADMIN)) return 'ADMIN';
     return undefined;

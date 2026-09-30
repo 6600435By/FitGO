@@ -136,4 +136,36 @@ export const api = {
       {},
       token,
     ),
+
+  bookingControlList: (
+    token: string,
+    params: { from: string; to: string; needsReview?: boolean },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+      kind: 'SPA',
+    });
+    if (params.needsReview) q.set('needsReview', '1');
+    return request<
+      import('@fitgo/shared-types').BookingControlListItem[]
+    >(`/specialist/booking-control?${q}`, {}, token);
+  },
+
+  bookingControlDetail: (token: string, sessionKey: string) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/specialist/booking-control?sessionKey=${encodeURIComponent(sessionKey)}`,
+      {},
+      token,
+    ),
+
+  bookingControlRemark: (
+    token: string,
+    sessionKey: string,
+    comment: string,
+  ) =>
+    request(`/specialist/booking-control/remark`, {
+      method: 'POST',
+      body: JSON.stringify({ sessionKey, comment }),
+    }, token),
 };

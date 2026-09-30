@@ -485,6 +485,9 @@ export * from './admin-sales';
 export * from './club-revenue';
 export * from './pt-timesheet';
 export * from './staff-roster';
+export * from './booking-control';
+export * from './booking-control';
+export * from './booking-control';
 
 import type {
   ServiceControlLevel,

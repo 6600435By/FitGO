@@ -5,7 +5,7 @@ import { BookingControlPanel } from '@/components/booking-control/booking-contro
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
-export default function SuperAdminBookingControlPage() {
+export default function TrainerMySessionsPage() {
   const panelApi = useMemo(
     () => ({
       list: async (params: {
@@ -15,40 +15,30 @@ export default function SuperAdminBookingControlPage() {
         status?: string;
         needsReview?: boolean;
         payment?: string;
-        performerId?: string;
       }) => {
         const token = getToken();
         if (!token) return [];
-        return api.bookingControlList(token, 'super-admin', params);
+        return api.bookingControlList(token, 'trainer', params);
       },
       detail: async (sessionKey: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
-        return api.bookingControlDetail(token, 'super-admin', sessionKey);
+        return api.bookingControlDetail(token, 'trainer', sessionKey);
       },
       openRemark: async (sessionKey: string, comment: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
-        return api.bookingControlRemark(
-          token,
-          'super-admin',
-          sessionKey,
-          comment,
-        );
-      },
-      resolveRemark: async (sessionKey: string, adminComment: string) => {
-        const token = getToken();
-        if (!token) throw new Error('Нет сессии');
-        return api.bookingControlResolve(
-          token,
-          'super-admin',
-          sessionKey,
-          adminComment,
-        );
+        return api.bookingControlRemark(token, 'trainer', sessionKey, comment);
       },
     }),
     [],
   );
 
-  return <BookingControlPanel api={panelApi} canResolve />;
+  return (
+    <BookingControlPanel
+      api={panelApi}
+      title="Мои занятия"
+      subtitle="Только ваши занятия из 1С. Замечание отправит занятие на проверку администратору."
+    />
+  );
 }

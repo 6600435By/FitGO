@@ -49,6 +49,11 @@ const ALL_NAV: Array<{
     permission: AdminPermission.CLIENTS_VIEW,
   },
   {
+    href: '/admin/booking-control',
+    label: 'Контроль записей',
+    permission: AdminPermission.CLIENTS_VIEW,
+  },
+  {
     href: '/admin/payroll',
     label: 'ЗП',
     permission: AdminPermission.REPORTS_VIEW,

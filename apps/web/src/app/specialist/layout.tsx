@@ -7,6 +7,7 @@ import { AppShell } from '@/components/app-shell';
 
 const NAV = [
   { href: '/specialist/schedule', label: 'Расписание' },
+  { href: '/specialist/my-sessions', label: 'Мои занятия' },
 ];
 
 export default function SpecialistLayout({ children }: { children: ReactNode }) {

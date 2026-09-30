@@ -378,9 +378,32 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
       case 'GROUP_TRAINER':
         if (slice.hourlyRateMinor)
           chips.push(`${tag}${money(slice.hourlyRateMinor)}/ч смены`);
-        if (slice.groupRateTiers?.length)
-          chips.push(`${tag}тиры×зал (${slice.groupRateTiers.length})`);
-        else if (slice.groupSessionRateMinor)
+        if (slice.groupRateTiers?.length) {
+          const roomLabel: Record<GroupRoomKey, string> = {
+            GROUP_SMALL: 'малый',
+            GROUP_LARGE: 'большой',
+            GYM: 'тренаж',
+            REFORMER: 'реформер',
+          };
+          const order: GroupRoomKey[] = [
+            'GROUP_SMALL',
+            'GROUP_LARGE',
+            'GYM',
+            'REFORMER',
+          ];
+          for (const room of order) {
+            const rows = slice.groupRateTiers.filter((t) => t.roomKey === room);
+            if (!rows.length) continue;
+            const parts = rows.map((t) => {
+              const span =
+                t.maxAttendees == null
+                  ? `${t.minAttendees}+`
+                  : `${t.minAttendees}–${t.maxAttendees}`;
+              return `${span}: ${money(t.rateMinor)}`;
+            });
+            chips.push(`${tag}${roomLabel[room]} ${parts.join(', ')}`);
+          }
+        } else if (slice.groupSessionRateMinor)
           chips.push(`${tag}занятие ${money(slice.groupSessionRateMinor)}`);
         if (slice.groupMinAttendees && !slice.groupRateTiers?.length)
           chips.push(`${tag}от ${slice.groupMinAttendees} чел.`);

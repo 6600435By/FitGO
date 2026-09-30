@@ -5,7 +5,7 @@ import { BookingControlPanel } from '@/components/booking-control/booking-contro
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
-export default function SuperAdminBookingControlPage() {
+export default function SpecialistMySessionsPage() {
   const panelApi = useMemo(
     () => ({
       list: async (params: {
@@ -15,40 +15,39 @@ export default function SuperAdminBookingControlPage() {
         status?: string;
         needsReview?: boolean;
         payment?: string;
-        performerId?: string;
       }) => {
         const token = getToken();
         if (!token) return [];
-        return api.bookingControlList(token, 'super-admin', params);
+        return api.bookingControlList(token, 'specialist', {
+          ...params,
+          kind: 'SPA',
+        });
       },
       detail: async (sessionKey: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
-        return api.bookingControlDetail(token, 'super-admin', sessionKey);
+        return api.bookingControlDetail(token, 'specialist', sessionKey);
       },
       openRemark: async (sessionKey: string, comment: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
         return api.bookingControlRemark(
           token,
-          'super-admin',
+          'specialist',
           sessionKey,
           comment,
-        );
-      },
-      resolveRemark: async (sessionKey: string, adminComment: string) => {
-        const token = getToken();
-        if (!token) throw new Error('Нет сессии');
-        return api.bookingControlResolve(
-          token,
-          'super-admin',
-          sessionKey,
-          adminComment,
         );
       },
     }),
     [],
   );
 
-  return <BookingControlPanel api={panelApi} canResolve />;
+  return (
+    <BookingControlPanel
+      api={panelApi}
+      fixedKind="SPA"
+      title="Мои занятия"
+      subtitle="Ваши SPA-занятия из 1С. Замечание отправит запись на проверку."
+    />
+  );
 }

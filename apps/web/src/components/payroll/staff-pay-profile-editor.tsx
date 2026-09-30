@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  DEFAULT_GROUP_RATE_TIERS,
   DEFAULT_PT_TIERS,
   DEFAULT_SPA_QUOTA_RATES,
   defaultPayProfile,
@@ -11,6 +12,8 @@ import {
   parseDecimal,
   parseMoneyToMinor,
   sliceForTrack,
+  type GroupRateTier,
+  type GroupRoomKey,
   type StaffPayProfile,
   type StaffPayTrack,
   type StaffPayTrackSlice,
@@ -20,6 +23,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+
+const GROUP_ROOM_SECTIONS: { key: GroupRoomKey; label: string }[] = [
+  { key: 'GROUP_SMALL', label: 'Малый зал' },
+  { key: 'GROUP_LARGE', label: 'Большой зал' },
+  { key: 'GYM', label: 'Тренажёрный зал' },
+  { key: 'REFORMER', label: 'Зал реформеров' },
+];
 
 const TRACKS: { id: StaffPayTrack; label: string }[] = [
   { id: 'ADMIN', label: 'Админ (часы + % продаж)' },
@@ -406,59 +416,10 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
       )}
 
       {profile.track === 'GROUP_TRAINER' && (
-        <div className="space-y-3">
-          <p className="text-xs leading-relaxed text-slate-500">
-            Ставка за занятие по залу из расписания и числу людей. Клубные
-            дефолты: малый 3–5→25 / 6–8→30 / 9–10→35; большой 3–5→25 / 6–9→30 /
-            10–14→35 / 15+→40. Ниже — legacy без зала.
-          </p>
-          <MoneyField
-            label="Ставка за час смены, BYN"
-            value={formatMinor(profile.hourlyRateMinor)}
-            onChange={(v) =>
-              setProfile({ ...profile, hourlyRateMinor: parseMoneyToMinor(v) })
-            }
-          />
-          <div className="grid gap-3 sm:grid-cols-3">
-            <MoneyField
-              label="Ставка за занятие (fallback), BYN"
-              value={formatMinor(profile.groupSessionRateMinor)}
-              onChange={(v) =>
-                setProfile({
-                  ...profile,
-                  groupSessionRateMinor: parseMoneyToMinor(v),
-                })
-              }
-            />
-            <IntField
-              label="Мин. человек (fallback)"
-              value={String(profile.groupMinAttendees ?? 1)}
-              onChange={(v) =>
-                setProfile({
-                  ...profile,
-                  groupMinAttendees: Math.max(
-                    0,
-                    Math.round(parseDecimal(v) || 1),
-                  ),
-                })
-              }
-            />
-            <MoneyField
-              label="+ за человека, BYN"
-              value={formatMinor(profile.groupPerAttendeeMinor)}
-              onChange={(v) =>
-                setProfile({
-                  ...profile,
-                  groupPerAttendeeMinor: parseMoneyToMinor(v),
-                })
-              }
-            />
-          </div>
-          <p className="text-xs text-slate-500">
-            Тиры залов в профиле: {profile.groupRateTiers?.length ?? 0} (дефолты
-            клуба подставляются при новой схеме GROUP).
-          </p>
-        </div>
+        <GroupTrainerRates
+          profile={profile}
+          onChange={setProfile}
+        />
       )}
 
       {profile.track === 'SPA' && (
@@ -612,6 +573,137 @@ export function StaffPayProfileEditor({ userId, roles, suggestedTrack }: Props) 
         </button>
       </div>
       {message && <p className="text-sm text-fitgo-300">{message}</p>}
+    </div>
+  );
+}
+
+function groupTiersOf(profile: StaffPayTrackSlice): GroupRateTier[] {
+  return profile.groupRateTiers?.length
+    ? profile.groupRateTiers
+    : DEFAULT_GROUP_RATE_TIERS.map((t) => ({ ...t }));
+}
+
+function GroupTrainerRates({
+  profile,
+  onChange,
+}: {
+  profile: StaffPayTrackSlice;
+  onChange: (next: StaffPayTrackSlice) => void;
+}) {
+  const tiers = groupTiersOf(profile);
+
+  const updateTier = (index: number, patch: Partial<GroupRateTier>) => {
+    const next = tiers.map((t) => ({ ...t }));
+    next[index] = { ...next[index], ...patch };
+    onChange({ ...profile, groupRateTiers: next });
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-slate-500">
+        Ставка за занятие по залу и числу людей. Диапазоны — клубный стандарт,
+        суммы и границы можно изменить. Меньше 3 человек — 0. Пустое «До» —
+        ставка действует и дальше (большой зал от 15).
+      </p>
+      <MoneyField
+        label="Ставка за час смены, BYN"
+        value={formatMinor(profile.hourlyRateMinor)}
+        onChange={(v) =>
+          onChange({ ...profile, hourlyRateMinor: parseMoneyToMinor(v) })
+        }
+      />
+      {GROUP_ROOM_SECTIONS.map((room) => {
+        const rows = tiers
+          .map((t, index) => ({ t, index }))
+          .filter(({ t }) => t.roomKey === room.key);
+        if (!rows.length) return null;
+        return (
+          <div
+            key={room.key}
+            className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3"
+          >
+            <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+              {room.label}
+            </p>
+            {rows.map(({ t, index }) => (
+              <div key={index} className="grid grid-cols-3 gap-2">
+                <IntField
+                  label="От, чел."
+                  value={String(t.minAttendees)}
+                  onChange={(v) =>
+                    updateTier(index, {
+                      minAttendees: Math.max(0, Math.round(parseDecimal(v))),
+                    })
+                  }
+                />
+                <IntField
+                  label="До, чел."
+                  value={t.maxAttendees == null ? '' : String(t.maxAttendees)}
+                  onChange={(v) => {
+                    const trimmed = v.trim();
+                    updateTier(index, {
+                      maxAttendees: trimmed
+                        ? Math.max(0, Math.round(parseDecimal(trimmed)))
+                        : undefined,
+                    });
+                  }}
+                />
+                <MoneyField
+                  label="Ставка, BYN"
+                  value={formatMinor(t.rateMinor)}
+                  onChange={(v) =>
+                    updateTier(index, { rateMinor: parseMoneyToMinor(v) })
+                  }
+                />
+              </div>
+            ))}
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        className="btn-secondary text-sm"
+        onClick={() =>
+          onChange({
+            ...profile,
+            groupRateTiers: DEFAULT_GROUP_RATE_TIERS.map((t) => ({ ...t })),
+          })
+        }
+      >
+        Вернуть стандарт клуба
+      </button>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MoneyField
+          label="Ставка за занятие (без зала), BYN"
+          value={formatMinor(profile.groupSessionRateMinor)}
+          onChange={(v) =>
+            onChange({
+              ...profile,
+              groupSessionRateMinor: parseMoneyToMinor(v),
+            })
+          }
+        />
+        <IntField
+          label="Мин. человек (без зала)"
+          value={String(profile.groupMinAttendees ?? 1)}
+          onChange={(v) =>
+            onChange({
+              ...profile,
+              groupMinAttendees: Math.max(0, Math.round(parseDecimal(v) || 1)),
+            })
+          }
+        />
+        <MoneyField
+          label="+ за человека, BYN"
+          value={formatMinor(profile.groupPerAttendeeMinor)}
+          onChange={(v) =>
+            onChange({
+              ...profile,
+              groupPerAttendeeMinor: parseMoneyToMinor(v),
+            })
+          }
+        />
+      </div>
     </div>
   );
 }

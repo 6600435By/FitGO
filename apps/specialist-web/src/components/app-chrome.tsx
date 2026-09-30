@@ -8,6 +8,7 @@ import { clearAuth, getToken, getUser, requireSpecialist } from '@/lib/auth';
 
 const NAV = [
   { href: '/journal', label: 'Журнал' },
+  { href: '/my-sessions', label: 'Мои занятия' },
   { href: '/payroll', label: 'Моя ЗП' },
 ];
 

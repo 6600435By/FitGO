@@ -17,6 +17,7 @@ const ALL_NAV: Array<{
   { href: '/trainer/shifts', label: 'Смены' },
   { href: '/trainer/pt-timesheet', label: 'Табель ПТ' },
   { href: '/trainer/group-journal', label: 'Журнал групп' },
+  { href: '/trainer/my-sessions', label: 'Мои занятия' },
   { href: '/trainer/clients', label: 'Клиенты', module: 'trainer_crm' },
   { href: '/trainer/messages', label: 'Сообщения', module: 'messaging' },
 ];

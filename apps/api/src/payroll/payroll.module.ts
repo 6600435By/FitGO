@@ -7,6 +7,7 @@ import { PtTimesheetModule } from '../pt-timesheet/pt-timesheet.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import { StaffRosterModule } from '../staff-roster/staff-roster.module';
 import { ClassSyncModule } from '../class-sync/class-sync.module';
+import { BookingControlModule } from '../booking-control/booking-control.module';
 import {
   AdminPayrollController,
   PayrollController,
@@ -24,6 +25,7 @@ import { PayrollService } from './payroll.service';
     PtTimesheetModule,
     StaffRosterModule,
     ClassSyncModule,
+    BookingControlModule,
   ],
   controllers: [
     PayrollController,

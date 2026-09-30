@@ -23,6 +23,7 @@ import { StaffRosterModule } from './staff-roster/staff-roster.module';
 import { AdminSalesModule } from './admin-sales/admin-sales.module';
 import { SegmentsModule } from './segments/segments.module';
 import { ClassSyncModule } from './class-sync/class-sync.module';
+import { BookingControlModule } from './booking-control/booking-control.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { ClassSyncModule } from './class-sync/class-sync.module';
     AdminSalesModule,
     SegmentsModule,
     ClassSyncModule,
+    BookingControlModule,
   ],
 })
 export class AppModule {}

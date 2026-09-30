@@ -318,6 +318,18 @@ enum OnexClassMemberAttendance {
   CANCELLED
 }
 
+/// Remark on a class/session row in «Контроль записей».
+enum SessionRemarkKind {
+  GROUP
+  PT
+  SPA
+}
+
+enum SessionRemarkStatus {
+  OPEN
+  CLOSED
+}
+
 enum MotivationRateKind {
   SPA_SERVICE
   SPA_KIND
@@ -424,6 +436,7 @@ model Club {
   segmentSyncStates    SegmentSyncState[]
   onexClassSessions    OnexClassSession[]
   clubHallVisits       ClubHallVisit[]
+  sessionRemarks       SessionRemark[]
 }
 
 model ClubTheme {
@@ -560,6 +573,8 @@ model User {
   daySheetsAdminApproved  TrainerDaySheet[]       @relation("DaySheetAdminApprover")
   daySheetsSaApproved     TrainerDaySheet[]       @relation("DaySheetSaApprover")
   staffShifts             StaffShift[]            @relation("StaffShifts")
+  sessionRemarksStaff     SessionRemark[]         @relation("SessionRemarkStaff")
+  sessionRemarksAdmin     SessionRemark[]         @relation("SessionRemarkAdmin")
 
   @@unique([clubId, gamificationNickname])
   @@unique([clubId, employeeCode])
@@ -2000,6 +2015,31 @@ model OnexClassSessionMember {
   @@unique([sessionId, externalId])
   @@index([externalId])
   @@index([sessionId, attendance])
+}
+
+/// Staff/admin remark on a register session (holds payroll while OPEN).
+model SessionRemark {
+  id            String               @id @default(cuid())
+  clubId        String
+  kind          SessionRemarkKind
+  /// Stable key: "1c:{onexExternalId}" or "fitgo:PT|SPA|GROUP:{bookingId}".
+  sessionKey    String
+  status        SessionRemarkStatus  @default(OPEN)
+  staffComment  String
+  staffId       String
+  adminComment  String?
+  adminId       String?
+  closedAt      DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  club  Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  staff User @relation("SessionRemarkStaff", fields: [staffId], references: [id], onDelete: Cascade)
+  admin User? @relation("SessionRemarkAdmin", fields: [adminId], references: [id], onDelete: SetNull)
+
+  @@index([clubId, status, createdAt])
+  @@index([clubId, sessionKey, status])
+  @@index([staffId])
 }
 
 /// Club-wide hall visits (Документ.Посещение) — client history, not GP payroll qty.
