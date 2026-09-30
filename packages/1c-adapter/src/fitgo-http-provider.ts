@@ -402,6 +402,43 @@ export class FitgoHttpProvider {
     }
   }
 
+  async setClassSessionAttendance(input: {
+    appointmentId: string;
+    clientExternalId: string;
+    attendance: 'ATTENDED' | 'NO_SHOW';
+  }): Promise<{
+    ok: boolean;
+    appointmentId: string;
+    clientExternalId: string;
+    attendance: 'ATTENDED' | 'NO_SHOW';
+  }> {
+    const data = await this.request<{
+      ok?: boolean;
+      appointmentId?: string;
+      clientExternalId?: string;
+      attendance?: string;
+    }>('/class-sessions/attendance', {
+      method: 'POST',
+      body: {
+        appointmentId: input.appointmentId,
+        clientExternalId: input.clientExternalId,
+        attendance: input.attendance,
+      },
+      timeoutMs: 30_000,
+    });
+    if (!data?.ok) {
+      throw new Error('FitGO 1C API failed to set class session attendance');
+    }
+    const attendance =
+      data.attendance === 'NO_SHOW' ? 'NO_SHOW' : 'ATTENDED';
+    return {
+      ok: true,
+      appointmentId: data.appointmentId ?? input.appointmentId,
+      clientExternalId: data.clientExternalId ?? input.clientExternalId,
+      attendance,
+    };
+  }
+
   async getTrainerPtSales(input: {
     from: string;
     to: string;

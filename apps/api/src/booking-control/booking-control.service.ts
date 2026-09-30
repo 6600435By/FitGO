@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import {
   OnexClassKind,
+  OnexClassMemberAttendance,
   OnexClassStatus,
   PersonalBookingStatus,
   SessionRemarkKind,
@@ -13,6 +14,7 @@ import {
   SpaBookingStatus,
 } from '@prisma/client';
 import { requireClubId } from '../auth/require-club-id';
+import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   fitgoSessionKey,
@@ -52,6 +54,7 @@ export class BookingControlService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
+    private readonly classSessions: ClassSessionsSyncService,
   ) {}
 
   async list(
@@ -182,14 +185,34 @@ export class BookingControlService {
         }
       }
 
-      const groupHeadcount =
+      const memberSnapshot: BookingControlMember[] = s.members.map((m) => ({
+        externalId: m.externalId,
+        clientName: m.clientName,
+        attendance: (m.cancelled
+          ? 'CANCELLED'
+          : m.attendance) as BookingControlMember['attendance'],
+        paymentBasis: m.paymentBasis ?? undefined,
+      }));
+      if (kind === 'GROUP') {
+        this.promoteGroupAttendanceFromHeader(
+          memberSnapshot,
+          s.headerAttendedCount ?? 0,
+          s.status,
+        );
+      }
+      const counts =
         kind === 'GROUP'
-          ? Math.max(
-              s.attendedCount ?? 0,
-              s.headerAttendedCount ?? 0,
-              s.members.filter((m) => m.attendance === 'ATTENDED').length,
+          ? this.attendanceCounts(
+              memberSnapshot,
+              Math.max(s.attendedCount ?? 0, s.headerAttendedCount ?? 0),
             )
-          : undefined;
+          : memberSnapshot.length
+            ? this.attendanceCounts(memberSnapshot)
+            : this.singleClientCounts(status, {
+                arrived:
+                  memberSnapshot.some((m) => m.attendance === 'ATTENDED') ||
+                  undefined,
+              });
 
       items.push({
         sessionKey,
@@ -207,7 +230,10 @@ export class BookingControlService {
             : primaryMember?.clientName ?? '—',
         roomTitle: s.roomTitle ?? undefined,
         number: s.number ?? undefined,
-        attendeeCount: groupHeadcount,
+        attendeeCount: counts.arrivedCount,
+        bookedCount: counts.bookedCount,
+        arrivedCount: counts.arrivedCount,
+        noShowCount: counts.noShowCount,
         payment: kind === 'GROUP' ? 'N_A' : payment,
         payTag,
         needsReview: openKeys.has(sessionKey),
@@ -240,6 +266,9 @@ export class BookingControlService {
         const performerId =
           (sale.employeeCode && staffByExt.get(sale.employeeCode)?.id) ||
           this.findStaffIdByName(staffByExt, sale.employeeName);
+        const saleCounts = this.singleClientCounts('COMPLETED', {
+          arrived: payment === 'PAID',
+        });
         items.push({
           sessionKey,
           kind: 'PT',
@@ -251,6 +280,10 @@ export class BookingControlService {
           performerId,
           clientName: sale.clientName || '—',
           number: sale.docRef || undefined,
+          attendeeCount: saleCounts.arrivedCount,
+          bookedCount: saleCounts.bookedCount,
+          arrivedCount: saleCounts.arrivedCount,
+          noShowCount: saleCounts.noShowCount,
           payment,
           payTag: 'SALE',
           needsReview: openKeys.has(sessionKey),
@@ -276,6 +309,13 @@ export class BookingControlService {
           continue;
         }
         const sessionKey = fitgoSessionKey('PT', b.id);
+        const status: BookingControlStatus =
+          b.status === PersonalBookingStatus.CANCELLED
+            ? 'CANCELLED'
+            : b.status === PersonalBookingStatus.COMPLETED
+              ? 'COMPLETED'
+              : 'SCHEDULED';
+        const counts = this.singleClientCounts(status);
         items.push({
           sessionKey,
           kind: 'PT',
@@ -285,15 +325,14 @@ export class BookingControlService {
             : 'Персональная тренировка',
           startAt: b.startAt.toISOString(),
           endAt: b.endAt.toISOString(),
-          status:
-            b.status === PersonalBookingStatus.CANCELLED
-              ? 'CANCELLED'
-              : b.status === PersonalBookingStatus.COMPLETED
-                ? 'COMPLETED'
-                : 'SCHEDULED',
+          status,
           performerName: `${b.trainer.lastName} ${b.trainer.firstName}`.trim(),
           performerId: b.trainerId,
           clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+          attendeeCount: counts.arrivedCount,
+          bookedCount: counts.bookedCount,
+          arrivedCount: counts.arrivedCount,
+          noShowCount: counts.noShowCount,
           payment: b.isComplimentary
             ? 'GIFT'
             : b.paymentStatus === 'PAID'
@@ -323,6 +362,13 @@ export class BookingControlService {
           continue;
         }
         const sessionKey = fitgoSessionKey('SPA', b.id);
+        const status: BookingControlStatus =
+          b.status === SpaBookingStatus.CANCELLED
+            ? 'CANCELLED'
+            : b.status === SpaBookingStatus.COMPLETED
+              ? 'COMPLETED'
+              : 'SCHEDULED';
+        const counts = this.singleClientCounts(status);
         items.push({
           sessionKey,
           kind: 'SPA',
@@ -330,16 +376,15 @@ export class BookingControlService {
           title: b.service.name,
           startAt: b.startAt.toISOString(),
           endAt: b.endAt.toISOString(),
-          status:
-            b.status === SpaBookingStatus.CANCELLED
-              ? 'CANCELLED'
-              : b.status === SpaBookingStatus.COMPLETED
-                ? 'COMPLETED'
-                : 'SCHEDULED',
+          status,
           performerName:
             `${b.specialist.lastName} ${b.specialist.firstName}`.trim(),
           performerId: b.specialistId,
           clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+          attendeeCount: counts.arrivedCount,
+          bookedCount: counts.bookedCount,
+          arrivedCount: counts.arrivedCount,
+          noShowCount: counts.noShowCount,
           payment:
             b.partnerSource?.toUpperCase() === 'ALLSPORTS'
               ? 'PARTNER'
@@ -439,17 +484,26 @@ export class BookingControlService {
       }));
 
       let groupHeadcount: number | undefined;
+      let counts = {
+        bookedCount: 0,
+        arrivedCount: 0,
+        noShowCount: 0,
+      };
       if (kind === 'GROUP') {
         this.promoteGroupAttendanceFromHeader(
           members,
           s.headerAttendedCount,
           s.status,
         );
-        groupHeadcount = Math.max(
-          s.attendedCount ?? 0,
-          s.headerAttendedCount ?? 0,
-          members.filter((m) => m.attendance === 'ATTENDED').length,
+        counts = this.attendanceCounts(
+          members,
+          Math.max(s.attendedCount ?? 0, s.headerAttendedCount ?? 0),
         );
+        groupHeadcount = counts.arrivedCount;
+      } else {
+        counts = members.length
+          ? this.attendanceCounts(members)
+          : this.singleClientCounts(mapOnexStatusToControl(s.status));
       }
 
       const payment: BookingControlPayment =
@@ -482,7 +536,10 @@ export class BookingControlService {
           kind === 'GROUP' ? undefined : primary?.clientName ?? '—',
         roomTitle: s.roomTitle ?? undefined,
         number: s.number ?? undefined,
-        attendeeCount: groupHeadcount,
+        attendeeCount: groupHeadcount ?? counts.arrivedCount,
+        bookedCount: counts.bookedCount,
+        arrivedCount: counts.arrivedCount,
+        noShowCount: counts.noShowCount,
         payment,
         payTag,
         needsReview: Boolean(open),
@@ -517,6 +574,9 @@ export class BookingControlService {
       }
       const payment: BookingControlPayment =
         sale.paymentStatus === 'PAID' ? 'PAID' : 'DEBT';
+      const saleCounts = this.singleClientCounts('COMPLETED', {
+        arrived: payment === 'PAID',
+      });
       return {
         sessionKey,
         kind: 'PT',
@@ -527,10 +587,21 @@ export class BookingControlService {
         performerName: sale.employeeName?.trim() || '—',
         clientName: sale.clientName || '—',
         number: sale.docRef || undefined,
+        attendeeCount: saleCounts.arrivedCount,
+        bookedCount: saleCounts.bookedCount,
+        arrivedCount: saleCounts.arrivedCount,
+        noShowCount: saleCounts.noShowCount,
         payment,
         payTag: 'SALE',
         needsReview: Boolean(open),
-        members: [],
+        members: [
+          {
+            externalId: sale.externalId || sale.docRef || 'sale',
+            clientName: sale.clientName || '—',
+            attendance: payment === 'PAID' ? 'ATTENDED' : 'EXPECTED',
+            payment,
+          },
+        ],
         remark: open,
         remarksHistory: mappedRemarks,
         crmDocRef: sale.docRef || undefined,
@@ -549,6 +620,13 @@ export class BookingControlService {
       if (viewer?.ownOnly && b.trainerId !== viewer.userId) {
         throw new ForbiddenException('Чужое занятие');
       }
+      const status: BookingControlStatus =
+        b.status === PersonalBookingStatus.COMPLETED
+          ? 'COMPLETED'
+          : b.status === PersonalBookingStatus.CANCELLED
+            ? 'CANCELLED'
+            : 'SCHEDULED';
+      const counts = this.singleClientCounts(status);
       return {
         sessionKey,
         kind: 'PT',
@@ -558,15 +636,14 @@ export class BookingControlService {
           : 'Персональная тренировка',
         startAt: b.startAt.toISOString(),
         endAt: b.endAt.toISOString(),
-        status:
-          b.status === PersonalBookingStatus.COMPLETED
-            ? 'COMPLETED'
-            : b.status === PersonalBookingStatus.CANCELLED
-              ? 'CANCELLED'
-              : 'SCHEDULED',
+        status,
         performerName: `${b.trainer.lastName} ${b.trainer.firstName}`.trim(),
         performerId: b.trainerId,
         clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+        attendeeCount: counts.arrivedCount,
+        bookedCount: counts.bookedCount,
+        arrivedCount: counts.arrivedCount,
+        noShowCount: counts.noShowCount,
         payment: b.isComplimentary
           ? 'GIFT'
           : b.paymentStatus === 'PAID'
@@ -594,6 +671,13 @@ export class BookingControlService {
       if (viewer?.ownOnly && b.specialistId !== viewer.userId) {
         throw new ForbiddenException('Чужое занятие');
       }
+      const status: BookingControlStatus =
+        b.status === SpaBookingStatus.COMPLETED
+          ? 'COMPLETED'
+          : b.status === SpaBookingStatus.CANCELLED
+            ? 'CANCELLED'
+            : 'SCHEDULED';
+      const counts = this.singleClientCounts(status);
       return {
         sessionKey,
         kind: 'SPA',
@@ -601,16 +685,15 @@ export class BookingControlService {
         title: b.service.name,
         startAt: b.startAt.toISOString(),
         endAt: b.endAt.toISOString(),
-        status:
-          b.status === SpaBookingStatus.COMPLETED
-            ? 'COMPLETED'
-            : b.status === SpaBookingStatus.CANCELLED
-              ? 'CANCELLED'
-              : 'SCHEDULED',
+        status,
         performerName:
           `${b.specialist.lastName} ${b.specialist.firstName}`.trim(),
         performerId: b.specialistId,
         clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+        attendeeCount: counts.arrivedCount,
+        bookedCount: counts.bookedCount,
+        arrivedCount: counts.arrivedCount,
+        noShowCount: counts.noShowCount,
         payment:
           b.partnerSource?.toUpperCase() === 'ALLSPORTS'
             ? 'PARTNER'
@@ -633,6 +716,115 @@ export class BookingControlService {
     }
 
     throw new BadRequestException('Групповые FitGO-only строки не поддерживаются');
+  }
+
+  /** Re-pull Документ.Занятие from 1C for the selected period. */
+  async refreshFrom1c(clubId: string, from: string, to: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      throw new BadRequestException('Некорректные даты from/to');
+    }
+    if (from > to) {
+      throw new BadRequestException('from must be ≤ to');
+    }
+    const sync = await this.classSessions.syncClub(clubId, { from, to });
+    return {
+      ...sync,
+      message: sync.endpointMissing
+        ? 'Шаблон GET /v1/class-sessions ещё не опубликован в 1С.'
+        : `Обновлено занятий: ${sync.sessionsUpserted}.`,
+    };
+  }
+
+  /**
+   * Mark GROUP roster member arrived / no-show in 1C and mirror locally.
+   * Admin / manager / super-admin only (enforced by controller roles).
+   */
+  async setGroupAttendance(
+    clubId: string,
+    sessionKey: string,
+    clientExternalId: string,
+    attendance: 'ATTENDED' | 'NO_SHOW',
+  ): Promise<BookingControlDetail> {
+    const clientId = clientExternalId?.trim();
+    if (!clientId) {
+      throw new BadRequestException('Не указан клиент');
+    }
+    if (attendance !== 'ATTENDED' && attendance !== 'NO_SHOW') {
+      throw new BadRequestException('attendance: ATTENDED или NO_SHOW');
+    }
+
+    const parsed = parseSessionKey(sessionKey);
+    if (!parsed || parsed.source !== '1C') {
+      throw new BadRequestException(
+        'Явку можно ставить только по занятию из 1С',
+      );
+    }
+
+    const session = await this.prisma.onexClassSession.findFirst({
+      where: { clubId, externalId: parsed.id, isActive: true },
+      include: { members: true },
+    });
+    if (!session) throw new NotFoundException('Занятие не найдено');
+    if (session.kind !== OnexClassKind.GROUP) {
+      throw new BadRequestException(
+        'Отметки Прибыл/Не прибыл доступны только для групповых занятий',
+      );
+    }
+
+    const member = session.members.find((m) => m.externalId === clientId);
+    if (!member) {
+      throw new NotFoundException('Клиент не в составе занятия');
+    }
+    if (member.cancelled) {
+      throw new BadRequestException('Строка отменена — явку менять нельзя');
+    }
+
+    const provider = this.fitness.getProvider();
+    if (!provider.setClassSessionAttendance) {
+      throw new BadRequestException(
+        'Провайдер 1С не поддерживает запись явки (нужен FitGO HTTP)',
+      );
+    }
+
+    try {
+      await provider.setClassSessionAttendance({
+        appointmentId: session.externalId,
+        clientExternalId: clientId,
+        attendance,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new BadRequestException(
+        msg.includes('FitGO 1C API')
+          ? msg
+          : `Не удалось записать явку в 1С: ${msg}`,
+      );
+    }
+
+    const dbAttendance =
+      attendance === 'ATTENDED'
+        ? OnexClassMemberAttendance.ATTENDED
+        : OnexClassMemberAttendance.NO_SHOW;
+
+    await this.prisma.onexClassSessionMember.update({
+      where: { id: member.id },
+      data: { attendance: dbAttendance },
+    });
+
+    const members = await this.prisma.onexClassSessionMember.findMany({
+      where: { sessionId: session.id },
+    });
+    const arrivedCount = members.filter(
+      (m) =>
+        !m.cancelled &&
+        m.attendance === OnexClassMemberAttendance.ATTENDED,
+    ).length;
+    await this.prisma.onexClassSession.update({
+      where: { id: session.id },
+      data: { attendedCount: arrivedCount },
+    });
+
+    return this.detail(clubId, sessionKey);
   }
 
   async openRemark(
@@ -954,6 +1146,52 @@ export class BookingControlService {
         m.attendance = 'ATTENDED';
       }
     }
+  }
+
+  /** Booked / arrived / no-show from roster (CANCELLED excluded from booked). */
+  private attendanceCounts(
+    members: BookingControlMember[],
+    fallbackArrived = 0,
+  ): {
+    bookedCount: number;
+    arrivedCount: number;
+    noShowCount: number;
+  } {
+    const active = members.filter((m) => m.attendance !== 'CANCELLED');
+    const arrivedFromMembers = active.filter(
+      (m) => m.attendance === 'ATTENDED',
+    ).length;
+    const arrivedCount = Math.max(arrivedFromMembers, fallbackArrived);
+    const bookedCount = Math.max(active.length, arrivedCount);
+    return {
+      bookedCount,
+      arrivedCount,
+      noShowCount: Math.max(0, bookedCount - arrivedCount),
+    };
+  }
+
+  private singleClientCounts(
+    status: BookingControlStatus,
+    opts?: { arrived?: boolean },
+  ): {
+    bookedCount: number;
+    arrivedCount: number;
+    noShowCount: number;
+  } {
+    if (status === 'CANCELLED') {
+      return { bookedCount: 0, arrivedCount: 0, noShowCount: 0 };
+    }
+    const arrived =
+      opts?.arrived === true ||
+      (opts?.arrived !== false && status === 'COMPLETED');
+    if (status === 'SCHEDULED') {
+      return { bookedCount: 1, arrivedCount: 0, noShowCount: 0 };
+    }
+    return {
+      bookedCount: 1,
+      arrivedCount: arrived ? 1 : 0,
+      noShowCount: arrived ? 0 : 1,
+    };
   }
 
   private matchPtInMemory(

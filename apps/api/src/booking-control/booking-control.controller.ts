@@ -72,6 +72,38 @@ export class BookingControlController {
     );
   }
 
+  @Post('super-admin/booking-control/refresh-from-1c')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  refreshSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { from?: string; to?: string },
+  ) {
+    return this.bookingControl.refreshFrom1c(
+      requireClubId(user),
+      body.from?.trim() || '',
+      body.to?.trim() || '',
+    );
+  }
+
+  @Post('super-admin/booking-control/attendance')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  attendanceSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      sessionKey?: string;
+      clientExternalId?: string;
+      attendance?: 'ATTENDED' | 'NO_SHOW';
+    },
+  ) {
+    return this.bookingControl.setGroupAttendance(
+      requireClubId(user),
+      body.sessionKey ?? '',
+      body.clientExternalId ?? '',
+      body.attendance ?? 'ATTENDED',
+    );
+  }
+
   @Get('admin/booking-control')
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
   listAdmin(@CurrentUser() user: JwtPayload, @Query() query: ListQuery) {
@@ -107,6 +139,38 @@ export class BookingControlController {
       user,
       body.sessionKey ?? '',
       body.adminComment ?? '',
+    );
+  }
+
+  @Post('admin/booking-control/refresh-from-1c')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  refreshAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { from?: string; to?: string },
+  ) {
+    return this.bookingControl.refreshFrom1c(
+      requireClubId(user),
+      body.from?.trim() || '',
+      body.to?.trim() || '',
+    );
+  }
+
+  @Post('admin/booking-control/attendance')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  attendanceAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      sessionKey?: string;
+      clientExternalId?: string;
+      attendance?: 'ATTENDED' | 'NO_SHOW';
+    },
+  ) {
+    return this.bookingControl.setGroupAttendance(
+      requireClubId(user),
+      body.sessionKey ?? '',
+      body.clientExternalId ?? '',
+      body.attendance ?? 'ATTENDED',
     );
   }
 

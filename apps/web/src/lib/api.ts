@@ -1605,6 +1605,40 @@ export const api = {
       token,
     ),
 
+  bookingControlRefreshFrom1c: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    body: { from: string; to: string },
+  ) =>
+    request<{
+      from: string;
+      to: string;
+      sessionsUpserted: number;
+      membersUpserted: number;
+      journalsTouched: number;
+      endpointMissing: boolean;
+      message: string;
+    }>(
+      `/${base}/booking-control/refresh-from-1c`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  bookingControlSetAttendance: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    body: {
+      sessionKey: string;
+      clientExternalId: string;
+      attendance: 'ATTENDED' | 'NO_SHOW';
+    },
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/attendance`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
   superAdminAckReview: (
     token: string,
     kind: string,

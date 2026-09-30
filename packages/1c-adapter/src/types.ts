@@ -192,6 +192,20 @@ export interface IFitnessClubProvider {
     total: number;
   } | null>;
   /**
+   * Mark group-class roster attendance in 1C (Документ.Занятие.СоставЗанятия).
+   * Optional — unsupported providers throw.
+   */
+  setClassSessionAttendance?(input: {
+    appointmentId: string;
+    clientExternalId: string;
+    attendance: 'ATTENDED' | 'NO_SHOW';
+  }): Promise<{
+    ok: boolean;
+    appointmentId: string;
+    clientExternalId: string;
+    attendance: 'ATTENDED' | 'NO_SHOW';
+  }>;
+  /**
    * One-time PT sale lines with Исполнитель (no class document required).
    * Optional — returns [] when unsupported.
    */

@@ -55,7 +55,14 @@ export interface BookingControlListItem {
   clientName?: string;
   roomTitle?: string;
   number?: string;
+  /** @deprecated Prefer arrivedCount — kept for older clients. */
   attendeeCount?: number;
+  /** Active roster size (not cancelled). */
+  bookedCount?: number;
+  /** Marked arrived / attended. */
+  arrivedCount?: number;
+  /** Booked but not arrived (expected + no-show). */
+  noShowCount?: number;
   payment?: BookingControlPayment;
   /** «продажа» vs «абонемент» for one-time / package PT. */
   payTag?: BookingControlPayTag;

@@ -40,9 +40,29 @@ export default function AdminBookingControlPage() {
           adminComment,
         );
       },
+      refreshFrom1c: async (from: string, to: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlRefreshFrom1c(token, 'admin', { from, to });
+      },
+      setAttendance: async (
+        sessionKey: string,
+        clientExternalId: string,
+        attendance: 'ATTENDED' | 'NO_SHOW',
+      ) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlSetAttendance(token, 'admin', {
+          sessionKey,
+          clientExternalId,
+          attendance,
+        });
+      },
     }),
     [],
   );
 
-  return <BookingControlPanel api={panelApi} canResolve />;
+  return (
+    <BookingControlPanel api={panelApi} canResolve canMarkAttendance />
+  );
 }

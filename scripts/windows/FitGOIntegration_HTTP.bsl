@@ -16,6 +16,7 @@
 //   GET  /v1/card
 //   GET  /v1/group-session-roster         → GroupSessionRosterGET (?appointmentId=)
 //   GET  /v1/class-sessions               → ClassSessionsGET (?from&to&page&pageSize)
+//   POST /v1/class-sessions/attendance    → ClassSessionAttendancePOST (явка состава ГП)
 //   GET  /v1/trainer-pt-sales             → TrainerPtSalesGET (?from&to) — разовые ПТ с Исполнителем
 //   GET  /v1/segments/config              → SegmentsConfigGET
 //   GET  /v1/segments/members             → SegmentsMembersGET (?key= | ?uuid=)
@@ -28,10 +29,11 @@
 //                | group-session-roster | class-sessions | segments-config | segments-members
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
 //                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
-//                | /v1/group-session-roster | /v1/class-sessions | /v1/trainer-pt-sales
-//                | /v1/segments/config | /v1/segments/members
+//                | /v1/group-session-roster | /v1/class-sessions | /v1/class-sessions/attendance
+//                | /v1/trainer-pt-sales | /v1/segments/config | /v1/segments/members
 //   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | ClassSessionsGET
 //                | TrainerPtSalesGET | SegmentsConfigGET | SegmentsMembersGET
+//   Метод POST → ClassSessionAttendancePOST (шаблон /v1/class-sessions/attendance)
 //
 // У расширения снять флаг «Защита от опасных действий»: проведение документов
 // создаёт COM-объект WinHttp (рассылки), иначе в HTTP-сервисе будет 500 «Предупреждение безопасности».
@@ -620,6 +622,57 @@
 
     Данные = FitGOIntegrationКлиенты.ЗанятияПериодаJSON(ДатаСтрС, ДатаСтрПо, Страница, Размер);
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
+КонецФункции
+
+// Явка клиента в составе Документ.Занятие (Прибыл / Не прибыл).
+// Тело: {"appointmentId":"<uuid>","clientExternalId":"<uuid>","attendance":"ATTENDED"|"NO_SHOW"}
+Функция ClassSessionAttendancePOST(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    ТелоСтрока = Запрос.ПолучитьТелоКакСтроку();
+    Чтение = Новый ЧтениеJSON;
+    Чтение.УстановитьСтроку(ТелоСтрока);
+    Данные = Неопределено;
+    Попытка
+        Данные = ПрочитатьJSON(Чтение);
+    Исключение
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "Invalid JSON body");
+    КонецПопытки;
+    Чтение.Закрыть();
+
+    Если ТипЗнч(Данные) <> Тип("Структура") Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "JSON object required");
+    КонецЕсли;
+
+    AppointmentId = "";
+    ClientExternalId = "";
+    Attendance = "";
+    Если Данные.Свойство("appointmentId") Тогда
+        AppointmentId = СокрЛП(Строка(Данные.appointmentId));
+    КонецЕсли;
+    Если Данные.Свойство("clientExternalId") Тогда
+        ClientExternalId = СокрЛП(Строка(Данные.clientExternalId));
+    КонецЕсли;
+    Если Данные.Свойство("attendance") Тогда
+        Attendance = СокрЛП(Строка(Данные.attendance));
+    КонецЕсли;
+
+    Результат = FitGOIntegrationКлиенты.УстановитьЯвкуСоставаЗанятияJSON(
+        AppointmentId, ClientExternalId, Attendance);
+    Если НЕ Результат.ok Тогда
+        Код = 400;
+        Сообщение = Результат.error;
+        Если СтрНайти(ВРег(Сообщение), "NOT FOUND") > 0 Тогда
+            Код = 404;
+        ИначеЕсли СтрНайти(ВРег(Сообщение), "NOT IN SESSION") > 0 Тогда
+            Код = 404;
+        КонецЕсли;
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(Код, Сообщение);
+    КонецЕсли;
+
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Результат);
 КонецФункции
 
 // Разовые ПТ из продаж с Исполнителем (оказаны при продаже, без документа Занятие).
