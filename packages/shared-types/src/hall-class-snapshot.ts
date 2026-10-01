@@ -10,10 +10,13 @@ export interface HallClassSnapshotItem {
   offsetMin: number;
   slotAt: string;
   status: HallClassSnapshotStatus;
+  /** Failed tries so far; 1 means a retry is scheduled or in progress. */
+  captureAttempts?: number;
+  nextAttemptAt?: string;
   cameraLabel?: string;
   errorMessage?: string;
   capturedAt?: string;
-  /** Relative API path for JPEG when CAPTURED (JWT required). */
+  /** Snapshot id for image fetch when CAPTURED. */
   imagePath?: string;
 }
 

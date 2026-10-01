@@ -672,7 +672,10 @@ export function BookingControlPanel({
                               ? 'снято'
                               : snap.status === 'FAILED'
                                 ? `не снято${snap.errorMessage ? `: ${snap.errorMessage}` : ''}`
-                                : 'ожидается'}
+                                : snap.captureAttempts &&
+                                    snap.captureAttempts > 0
+                                  ? `повтор${snap.nextAttemptAt ? ` ~${formatDateTime(snap.nextAttemptAt)}` : ''}${snap.errorMessage ? ` · ${snap.errorMessage}` : ''}`
+                                  : 'ожидается'}
                           </p>
                           {photoUrls[snap.id] ? (
                             // eslint-disable-next-line @next/next/no-img-element

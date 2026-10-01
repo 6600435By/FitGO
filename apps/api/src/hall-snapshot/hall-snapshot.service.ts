@@ -23,8 +23,11 @@ import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.serv
 import { PrismaService } from '../prisma/prisma.service';
 
 const SNAPSHOT_OFFSETS_MIN = [20, 40] as const;
-/** Capture window after slotAt (agent may poll every 30s). */
+/** Capture window after slotAt / nextAttemptAt (agent may poll every 30s). */
 const DUE_WINDOW_MS = 3 * 60 * 1000;
+const RETRY_DELAY_MS = 5 * 60 * 1000;
+/** First failure schedules one retry; second failure → FAILED. */
+const MAX_CAPTURE_ATTEMPTS_BEFORE_FAIL = 1;
 const RETENTION_DAYS = 60;
 
 @Injectable()
@@ -162,13 +165,24 @@ export class HallSnapshotService {
   async listDue(clubId: string): Promise<HallClassSnapshotDueItem[]> {
     const now = new Date();
     const windowStart = new Date(now.getTime() - DUE_WINDOW_MS);
+
     const rows = await this.prisma.hallClassSnapshot.findMany({
       where: {
         clubId,
         status: HallClassSnapshotStatus.PENDING,
-        slotAt: { gte: windowStart, lte: now },
+        OR: [
+          {
+            captureAttempts: 0,
+            nextAttemptAt: null,
+            slotAt: { gte: windowStart, lte: now },
+          },
+          {
+            captureAttempts: { gt: 0 },
+            nextAttemptAt: { gte: windowStart, lte: now },
+          },
+        ],
       },
-      orderBy: { slotAt: 'asc' },
+      orderBy: [{ nextAttemptAt: 'asc' }, { slotAt: 'asc' }],
       take: 50,
     });
     return rows.map((r) => ({
@@ -212,6 +226,7 @@ export class HallSnapshotService {
         filePath,
         capturedAt: new Date(),
         errorMessage: null,
+        nextAttemptAt: null,
         cameraLabel: meta?.cameraLabel?.trim() || row.cameraLabel,
         cameraKey: meta?.cameraKey?.trim() || row.cameraKey,
       },
@@ -231,13 +246,42 @@ export class HallSnapshotService {
     if (row.status === HallClassSnapshotStatus.CAPTURED) {
       return this.toItem(row);
     }
+
+    const msg = (errorMessage || 'capture failed').slice(0, 500);
+    const noCamera =
+      /no camera|нет камеры/i.test(msg);
+
+    // Permanent fail: no matching camera, or already used the one retry
+    if (
+      noCamera ||
+      row.captureAttempts >= MAX_CAPTURE_ATTEMPTS_BEFORE_FAIL
+    ) {
+      const updated = await this.prisma.hallClassSnapshot.update({
+        where: { id: row.id },
+        data: {
+          status: HallClassSnapshotStatus.FAILED,
+          errorMessage: msg,
+          nextAttemptAt: null,
+          captureAttempts: row.captureAttempts + 1,
+        },
+      });
+      return this.toItem(updated);
+    }
+
+    // Schedule one retry in 5 minutes
+    const nextAttemptAt = new Date(Date.now() + RETRY_DELAY_MS);
     const updated = await this.prisma.hallClassSnapshot.update({
       where: { id: row.id },
       data: {
-        status: HallClassSnapshotStatus.FAILED,
-        errorMessage: (errorMessage || 'capture failed').slice(0, 500),
+        status: HallClassSnapshotStatus.PENDING,
+        captureAttempts: row.captureAttempts + 1,
+        nextAttemptAt,
+        errorMessage: `${msg} (повтор ~${nextAttemptAt.toISOString().slice(11, 16)} UTC)`,
       },
     });
+    this.logger.warn(
+      `Hall snapshot ${row.id} retry at ${nextAttemptAt.toISOString()}: ${msg}`,
+    );
     return this.toItem(updated);
   }
 
@@ -307,6 +351,8 @@ export class HallSnapshotService {
     offsetMin: number;
     slotAt: Date;
     status: HallClassSnapshotStatus;
+    captureAttempts?: number;
+    nextAttemptAt?: Date | null;
     cameraLabel: string | null;
     errorMessage: string | null;
     capturedAt: Date | null;
@@ -320,6 +366,8 @@ export class HallSnapshotService {
       offsetMin: row.offsetMin,
       slotAt: row.slotAt.toISOString(),
       status: row.status,
+      captureAttempts: row.captureAttempts ?? 0,
+      nextAttemptAt: row.nextAttemptAt?.toISOString(),
       cameraLabel: row.cameraLabel ?? undefined,
       errorMessage: row.errorMessage ?? undefined,
       capturedAt: row.capturedAt?.toISOString(),

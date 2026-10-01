@@ -2073,6 +2073,10 @@ model HallClassSnapshot {
   offsetMin    Int
   slotAt       DateTime
   status       HallClassSnapshotStatus  @default(PENDING)
+  /// Failed capture attempts so far (0 = not yet tried; 1 = will retry once)
+  captureAttempts Int                   @default(0)
+  /// When set, agent may retry after this time (one retry, +5 min)
+  nextAttemptAt DateTime?
   /// Local path under HALL_SNAPSHOT_DIR (or var/hall-snapshots)
   filePath     String?
   /// Relative camera label from agent config (defaults to roomTitle)
@@ -2087,6 +2091,7 @@ model HallClassSnapshot {
 
   @@unique([clubId, externalId, offsetMin, cameraKey])
   @@index([clubId, status, slotAt])
+  @@index([clubId, status, nextAttemptAt])
   @@index([clubId, sessionKey])
   @@index([clubId, slotAt])
 }
