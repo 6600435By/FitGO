@@ -2,12 +2,15 @@
 # Requires: Node 20+, ffmpeg in PATH, C:\FitGO\hall-cameras.json, HALL_SNAPSHOT_AGENT_TOKEN on API.
 #
 #   .\Install-HallAgent.ps1
+#   .\Install-HallAgent.ps1 -NssmExe C:\FitGO\tools\nssm\nssm.exe
 
 param(
   [string]$NodeExe = 'C:\Program Files\nodejs\node.exe',
   [string]$AgentDir = '',
   [string]$ConfigPath = 'C:\FitGO\hall-cameras.json',
-  [string]$ServiceName = 'FitGO-HallAgent'
+  [string]$ServiceName = 'FitGO-HallAgent',
+  [string]$InstallRoot = 'C:\FitGO',
+  [string]$NssmExe = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,10 +26,22 @@ if (-not (Test-Path $ConfigPath)) {
   throw "Config missing: $ConfigPath (copy hall-cameras.example.json)"
 }
 
-$nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
-if (-not $nssmCmd) {
-  throw 'nssm not in PATH. Install NSSM (same as FitGO-API) then retry.'
+# Resolve nssm: explicit param -> FitGO tools (same as Install-FitGO) -> PATH
+if (-not $NssmExe) {
+  $candidate = Join-Path $InstallRoot 'tools\nssm\nssm.exe'
+  if (Test-Path $candidate) {
+    $NssmExe = $candidate
+  }
+  else {
+    $cmd = Get-Command nssm -ErrorAction SilentlyContinue
+    if ($cmd) { $NssmExe = $cmd.Source }
+  }
 }
+if (-not $NssmExe -or -not (Test-Path $NssmExe)) {
+  throw "nssm.exe not found. Expected $InstallRoot\tools\nssm\nssm.exe (FitGO install) or nssm in PATH."
+}
+
+Write-Host "Using nssm: $NssmExe"
 
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
@@ -36,16 +51,16 @@ if ($existing) {
   return
 }
 
-New-Item -ItemType Directory -Force -Path 'C:\FitGO\logs' | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $InstallRoot 'logs') | Out-Null
 
-& nssm install $ServiceName $NodeExe
-& nssm set $ServiceName AppParameters "`"$agentJs`" `"$ConfigPath`""
-& nssm set $ServiceName AppDirectory $AgentDir
-& nssm set $ServiceName Start SERVICE_AUTO_START
-& nssm set $ServiceName AppStdout 'C:\FitGO\logs\hall-agent.out.log'
-& nssm set $ServiceName AppStderr 'C:\FitGO\logs\hall-agent.err.log'
-& nssm start $ServiceName
+& $NssmExe install $ServiceName $NodeExe
+& $NssmExe set $ServiceName AppParameters "`"$agentJs`" `"$ConfigPath`""
+& $NssmExe set $ServiceName AppDirectory $AgentDir
+& $NssmExe set $ServiceName Start SERVICE_AUTO_START
+& $NssmExe set $ServiceName AppStdout (Join-Path $InstallRoot 'logs\hall-agent.out.log')
+& $NssmExe set $ServiceName AppStderr (Join-Path $InstallRoot 'logs\hall-agent.err.log')
+& $NssmExe start $ServiceName
 
 Write-Host "Started $ServiceName"
 Get-Service $ServiceName
-Write-Host "Logs: C:\FitGO\logs\hall-agent.out.log"
+Write-Host "Logs: $(Join-Path $InstallRoot 'logs\hall-agent.out.log')"
