@@ -1,5 +1,6 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 
 // Must be set before any HTTPS to club 1C (:8445 self-signed / expired cert).
@@ -12,7 +13,10 @@ if (
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // Hall snapshot JPEG as base64 can exceed default 100kb JSON limit
+  app.useBodyParser('json', { limit: '12mb' });
+  app.useBodyParser('urlencoded', { limit: '12mb', extended: true });
   // Comma-separated origins for SP admin-web + specialist portal (Cloudflare Pages).
   const corsRaw = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
   const corsOrigins = corsRaw

@@ -22,12 +22,12 @@ function loadConfig() {
     process.argv[2] ||
     process.env.HALL_CAMERAS_CONFIG ||
     'hall-cameras.json';
-  const raw = readFileSync(path, 'utf8');
+  const raw = readFileSync(path, 'utf8').replace(/^\uFEFF/, '');
   /** @type {Config} */
   const cfg = JSON.parse(raw);
   if (!cfg.apiBase || !cfg.agentToken || !cfg.clubId || !cfg.cameras?.length) {
     throw new Error(
-      'hall-cameras.json: нужны apiBase, agentToken, clubId, cameras[]',
+      'hall-cameras.json: need apiBase, agentToken, clubId, cameras[]',
     );
   }
   cfg.apiBase = cfg.apiBase.replace(/\/$/, '');
@@ -207,19 +207,15 @@ async function handleSlot(cfg, slot, cam) {
   }
   try {
     const jpeg = await capture(cam);
-    const form = new FormData();
-    form.append(
-      'file',
-      new Blob([new Uint8Array(jpeg)], { type: 'image/jpeg' }),
-      `${slot.offsetMin}.jpg`,
-    );
-    form.append('cameraLabel', cam.label || cam.roomTitle);
-    form.append('cameraKey', cam.roomTitle);
     await api(
       cfg,
-      `/agent/hall-snapshots/${slot.id}/upload?clubId=${encodeURIComponent(cfg.clubId)}`,
-      {},
-      form,
+      `/agent/hall-snapshots/${slot.id}/upload-json?clubId=${encodeURIComponent(cfg.clubId)}`,
+      { 'Content-Type': 'application/json' },
+      JSON.stringify({
+        jpegBase64: jpeg.toString('base64'),
+        cameraLabel: cam.label || cam.roomTitle,
+        cameraKey: '',
+      }),
     );
     console.log(
       `[ok] ${slot.roomTitle} +${slot.offsetMin}m (${jpeg.length} bytes)`,

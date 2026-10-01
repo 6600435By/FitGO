@@ -1,5 +1,7 @@
-# Optional NSSM installer for FitGO hall snapshot agent (run on club Windows server).
-# Requires: Node 20+, C:\FitGO\hall-cameras.json already filled, API token set.
+# Install FitGO hall snapshot agent as a Windows service (NSSM).
+# Requires: Node 20+, ffmpeg in PATH, C:\FitGO\hall-cameras.json, HALL_SNAPSHOT_AGENT_TOKEN on API.
+#
+#   .\Install-HallAgent.ps1
 
 param(
   [string]$NodeExe = 'C:\Program Files\nodejs\node.exe',
@@ -17,19 +19,24 @@ if (-not $AgentDir) {
 $agentJs = Join-Path $AgentDir 'agent.mjs'
 if (-not (Test-Path $NodeExe)) { throw "Node not found: $NodeExe" }
 if (-not (Test-Path $agentJs)) { throw "agent.mjs not found: $agentJs" }
-if (-not (Test-Path $ConfigPath)) { throw "Config missing: $ConfigPath (copy hall-cameras.example.json)" }
+if (-not (Test-Path $ConfigPath)) {
+  throw "Config missing: $ConfigPath (copy hall-cameras.example.json)"
+}
 
-$nssm = Get-Command nssm -ErrorAction SilentlyContinue
-if (-not $nssm) {
-  throw 'nssm not in PATH. Install NSSM or register the service manually (see README.md).'
+$nssmCmd = Get-Command nssm -ErrorAction SilentlyContinue
+if (-not $nssmCmd) {
+  throw 'nssm not in PATH. Install NSSM (same as FitGO-API) then retry.'
 }
 
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
-  Write-Host "Service $ServiceName already exists — restarting"
+  Write-Host "Service $ServiceName already exists - restarting"
   Restart-Service $ServiceName
+  Get-Service $ServiceName
   return
 }
+
+New-Item -ItemType Directory -Force -Path 'C:\FitGO\logs' | Out-Null
 
 & nssm install $ServiceName $NodeExe
 & nssm set $ServiceName AppParameters "`"$agentJs`" `"$ConfigPath`""
@@ -37,6 +44,8 @@ if ($existing) {
 & nssm set $ServiceName Start SERVICE_AUTO_START
 & nssm set $ServiceName AppStdout 'C:\FitGO\logs\hall-agent.out.log'
 & nssm set $ServiceName AppStderr 'C:\FitGO\logs\hall-agent.err.log'
-New-Item -ItemType Directory -Force -Path 'C:\FitGO\logs' | Out-Null
 & nssm start $ServiceName
+
 Write-Host "Started $ServiceName"
+Get-Service $ServiceName
+Write-Host "Logs: C:\FitGO\logs\hall-agent.out.log"

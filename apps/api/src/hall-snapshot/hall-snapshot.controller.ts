@@ -87,6 +87,42 @@ export class HallSnapshotController {
     });
   }
 
+  /** Preferred by LAN agent — avoids multer on Windows. */
+  @Post('agent/hall-snapshots/:id/upload-json')
+  @UseGuards(HallSnapshotAgentGuard)
+  uploadJson(
+    @Param('id') id: string,
+    @Query('clubId') clubId: string,
+    @Body()
+    body: {
+      jpegBase64?: string;
+      cameraLabel?: string;
+      cameraKey?: string;
+    },
+  ) {
+    const cid = clubId?.trim() || '';
+    if (!cid) {
+      throw new BadRequestException('clubId required');
+    }
+    const b64 = (body.jpegBase64 || '').replace(/^data:image\/jpeg;base64,/, '');
+    if (!b64) {
+      return this.hallSnapshots.markFailed(cid, id, 'Пустой jpegBase64');
+    }
+    let buffer: Buffer;
+    try {
+      buffer = Buffer.from(b64, 'base64');
+    } catch {
+      throw new BadRequestException('Invalid base64');
+    }
+    if (buffer.length < 100) {
+      return this.hallSnapshots.markFailed(cid, id, 'Слишком короткий JPEG');
+    }
+    return this.hallSnapshots.uploadJpeg(cid, id, buffer, {
+      cameraLabel: body.cameraLabel,
+      cameraKey: body.cameraKey,
+    });
+  }
+
   @Post('agent/hall-snapshots/:id/fail')
   @UseGuards(HallSnapshotAgentGuard)
   fail(
