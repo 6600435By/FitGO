@@ -439,6 +439,7 @@ model Club {
   onexClassSessions    OnexClassSession[]
   clubHallVisits       ClubHallVisit[]
   sessionRemarks       SessionRemark[]
+  hallClassSnapshots   HallClassSnapshot[]
 }
 
 model ClubTheme {
@@ -2052,6 +2053,42 @@ model SessionRemark {
   @@index([clubId, status, createdAt])
   @@index([clubId, sessionKey, status])
   @@index([staffId])
+}
+
+enum HallClassSnapshotStatus {
+  PENDING
+  CAPTURED
+  FAILED
+}
+
+/// Scheduled hall JPEG for GROUP class attendance check (NVR / LAN agent).
+model HallClassSnapshot {
+  id           String                   @id @default(cuid())
+  clubId       String
+  /// 1C Документ.Занятие UUID
+  externalId   String
+  sessionKey   String
+  roomTitle    String
+  /// Minutes after class start (20 or 40)
+  offsetMin    Int
+  slotAt       DateTime
+  status       HallClassSnapshotStatus  @default(PENDING)
+  /// Local path under HALL_SNAPSHOT_DIR (or var/hall-snapshots)
+  filePath     String?
+  /// Relative camera label from agent config (defaults to roomTitle)
+  cameraKey    String                   @default("")
+  cameraLabel  String?
+  errorMessage String?
+  capturedAt   DateTime?
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, externalId, offsetMin, cameraKey])
+  @@index([clubId, status, slotAt])
+  @@index([clubId, sessionKey])
+  @@index([clubId, slotAt])
 }
 
 /// Club-wide hall visits (Документ.Посещение) — client history, not GP payroll qty.

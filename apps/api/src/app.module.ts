@@ -24,6 +24,7 @@ import { AdminSalesModule } from './admin-sales/admin-sales.module';
 import { SegmentsModule } from './segments/segments.module';
 import { ClassSyncModule } from './class-sync/class-sync.module';
 import { BookingControlModule } from './booking-control/booking-control.module';
+import { HallSnapshotModule } from './hall-snapshot/hall-snapshot.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { BookingControlModule } from './booking-control/booking-control.module';
     SegmentsModule,
     ClassSyncModule,
     BookingControlModule,
+    HallSnapshotModule,
   ],
 })
 export class AppModule {}

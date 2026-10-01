@@ -38,6 +38,12 @@ export type BookingControlApi = {
     clientExternalId: string,
     attendance: 'ATTENDED' | 'NO_SHOW',
   ) => Promise<BookingControlDetail>;
+  /** Admin/manager/SA: hall NVR photos for GROUP. */
+  listHallSnapshots?: (
+    sessionKey: string,
+  ) => Promise<import('@fitgo/shared-types').HallClassSnapshotItem[]>;
+  /** Returns object URL for JPEG (caller must revoke). */
+  loadHallSnapshotImage?: (snapshotId: string) => Promise<string>;
 };
 
 type Props = {
@@ -46,6 +52,8 @@ type Props = {
   canResolve?: boolean;
   /** Admin/manager/SA: mark GROUP attendance and refresh from 1C */
   canMarkAttendance?: boolean;
+  /** Admin/manager/SA: show Photo button on GROUP detail */
+  canViewHallPhotos?: boolean;
   /** Hide kind filter (specialist SPA-only) */
   fixedKind?: BookingControlKind;
   title?: string;
@@ -102,6 +110,7 @@ export function BookingControlPanel({
   api,
   canResolve = false,
   canMarkAttendance = false,
+  canViewHallPhotos = false,
   fixedKind,
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
@@ -122,6 +131,13 @@ export function BookingControlPanel({
   const [comment, setComment] = useState('');
   const [adminComment, setAdminComment] = useState('');
   const [detailLoading, setDetailLoading] = useState(false);
+  const [photosOpen, setPhotosOpen] = useState(false);
+  const [photosLoading, setPhotosLoading] = useState(false);
+  const [photos, setPhotos] = useState<
+    import('@fitgo/shared-types').HallClassSnapshotItem[]
+  >([]);
+  const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
+  const [photosError, setPhotosError] = useState('');
 
   const load = useCallback(() => {
     setLoading(true);
@@ -165,6 +181,7 @@ export function BookingControlPanel({
     setDetailLoading(true);
     setComment('');
     setAdminComment('');
+    closePhotos();
     try {
       const d = await api.detail(sessionKey);
       setSelected(d);
@@ -172,6 +189,51 @@ export function BookingControlPanel({
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const closePhotos = () => {
+    setPhotosOpen(false);
+    setPhotos([]);
+    setPhotosError('');
+    setPhotoUrls((prev) => {
+      for (const url of Object.values(prev)) {
+        URL.revokeObjectURL(url);
+      }
+      return {};
+    });
+  };
+
+  const openPhotos = async () => {
+    if (!selected || !api.listHallSnapshots) return;
+    setPhotosOpen(true);
+    setPhotosLoading(true);
+    setPhotosError('');
+    setPhotoUrls((prev) => {
+      for (const url of Object.values(prev)) {
+        URL.revokeObjectURL(url);
+      }
+      return {};
+    });
+    try {
+      const list = await api.listHallSnapshots(selected.sessionKey);
+      setPhotos(list);
+      if (api.loadHallSnapshotImage) {
+        const urls: Record<string, string> = {};
+        for (const snap of list) {
+          if (snap.status !== 'CAPTURED') continue;
+          try {
+            urls[snap.id] = await api.loadHallSnapshotImage(snap.id);
+          } catch {
+            /* show status without image */
+          }
+        }
+        setPhotoUrls(urls);
+      }
+    } catch (e) {
+      setPhotosError(e instanceof Error ? e.message : 'Ошибка загрузки фото');
+    } finally {
+      setPhotosLoading(false);
     }
   };
 
@@ -541,14 +603,90 @@ export function BookingControlPanel({
                       </span>
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    className="btn-secondary shrink-0 text-sm"
-                    onClick={() => setSelected(null)}
-                  >
-                    Закрыть
-                  </button>
+                  <div className="flex shrink-0 gap-2">
+                    {canViewHallPhotos &&
+                      selected.kind === 'GROUP' &&
+                      selected.source === '1C' &&
+                      api.listHallSnapshots && (
+                        <button
+                          type="button"
+                          className="btn-secondary text-sm"
+                          onClick={() => void openPhotos()}
+                        >
+                          Фото
+                        </button>
+                      )}
+                    <button
+                      type="button"
+                      className="btn-secondary text-sm"
+                      onClick={() => {
+                        closePhotos();
+                        setSelected(null);
+                      }}
+                    >
+                      Закрыть
+                    </button>
+                  </div>
                 </div>
+                {photosOpen && (
+                  <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                        Фото зала (+20 / +40 мин)
+                      </p>
+                      <button
+                        type="button"
+                        className="text-xs text-slate-400 hover:text-slate-200"
+                        onClick={closePhotos}
+                      >
+                        Скрыть
+                      </button>
+                    </div>
+                    {photosLoading && (
+                      <p className="text-sm text-slate-400">Загрузка…</p>
+                    )}
+                    {photosError ? (
+                      <p className="text-sm text-rose-300">{photosError}</p>
+                    ) : null}
+                    {!photosLoading && !photosError && photos.length === 0 && (
+                      <p className="text-sm text-slate-400">
+                        Снимков пока нет. Агент снимет кадры через 20 и 40 минут
+                        после начала, если зал привязан к камере.
+                      </p>
+                    )}
+                    <ul className="space-y-3">
+                      {photos.map((snap) => (
+                        <li
+                          key={snap.id}
+                          className="rounded-lg border border-slate-800 p-2 text-sm"
+                        >
+                          <p className="text-slate-300">
+                            +{snap.offsetMin} мин ·{' '}
+                            {formatDateTime(snap.slotAt)}
+                            {snap.cameraLabel
+                              ? ` · ${snap.cameraLabel}`
+                              : ''}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {snap.status === 'CAPTURED'
+                              ? 'снято'
+                              : snap.status === 'FAILED'
+                                ? `не снято${snap.errorMessage ? `: ${snap.errorMessage}` : ''}`
+                                : 'ожидается'}
+                          </p>
+                          {photoUrls[snap.id] ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={photoUrls[snap.id]}
+                              alt={`Снимок +${snap.offsetMin} мин`}
+                              className="mt-2 max-h-64 w-full rounded-md object-contain"
+                            />
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {selected.source === 'FITGO' && (
                   <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
                     Ещё нет в 1С — в ЗП не входит.

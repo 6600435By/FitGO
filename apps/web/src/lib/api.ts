@@ -1639,6 +1639,37 @@ export const api = {
       token,
     ),
 
+  bookingControlHallSnapshots: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    sessionKey: string,
+  ) =>
+    request<import('@fitgo/shared-types').HallClassSnapshotItem[]>(
+      `/${base}/booking-control/hall-snapshots?sessionKey=${encodeURIComponent(sessionKey)}`,
+      {},
+      token,
+    ),
+
+  bookingControlHallSnapshotImageUrl: async (
+    token: string,
+    base: 'super-admin' | 'admin',
+    snapshotId: string,
+  ): Promise<string> => {
+    const response = await fetch(
+      `${API_URL}/api/${base}/booking-control/hall-snapshots/${encodeURIComponent(snapshotId)}/image`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(
+        (error as { message?: string }).message ??
+          `Ошибка ${response.status}`,
+      );
+    }
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  },
+
   superAdminAckReview: (
     token: string,
     kind: string,

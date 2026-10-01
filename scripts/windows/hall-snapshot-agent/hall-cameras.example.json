@@ -1,0 +1,24 @@
+{
+  "apiBase": "http://127.0.0.1:3001",
+  "agentToken": "REPLACE_WITH_HALL_SNAPSHOT_AGENT_TOKEN",
+  "clubId": "REPLACE_WITH_CLUB_UUID",
+  "pollMs": 30000,
+  "cameras": [
+    {
+      "roomTitle": "Групповой зал большой",
+      "mode": "rtsp",
+      "url": "rtsp://fitgo-snap:REPLACE@192.168.1.108:554/cam/realmonitor?channel=12&subtype=0",
+      "username": "fitgo-snap",
+      "password": "REPLACE",
+      "label": "D12"
+    },
+    {
+      "roomTitle": "Групповой зал малый",
+      "mode": "rtsp",
+      "url": "rtsp://fitgo-snap:REPLACE@192.168.1.108:554/cam/realmonitor?channel=6&subtype=0",
+      "username": "fitgo-snap",
+      "password": "REPLACE",
+      "label": "D6"
+    }
+  ]
+}

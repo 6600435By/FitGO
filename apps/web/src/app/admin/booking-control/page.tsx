@@ -58,11 +58,30 @@ export default function AdminBookingControlPage() {
           attendance,
         });
       },
+      listHallSnapshots: async (sessionKey: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlHallSnapshots(token, 'admin', sessionKey);
+      },
+      loadHallSnapshotImage: async (snapshotId: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlHallSnapshotImageUrl(
+          token,
+          'admin',
+          snapshotId,
+        );
+      },
     }),
     [],
   );
 
   return (
-    <BookingControlPanel api={panelApi} canResolve canMarkAttendance />
+    <BookingControlPanel
+      api={panelApi}
+      canResolve
+      canMarkAttendance
+      canViewHallPhotos
+    />
   );
 }
