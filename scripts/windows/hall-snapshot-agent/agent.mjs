@@ -133,6 +133,8 @@ function ffmpegOneFrame(rtspUrl) {
         rtspUrl,
         '-frames:v',
         '1',
+        '-update',
+        '1',
         out,
       ],
       { encoding: 'utf8', timeout: 20_000 },

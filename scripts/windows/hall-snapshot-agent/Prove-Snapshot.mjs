@@ -214,6 +214,8 @@ function tryRtsp(channel) {
         rtsp,
         '-frames:v',
         '1',
+        '-update',
+        '1',
         out,
       ],
       { encoding: 'utf8', timeout: 25000 },
