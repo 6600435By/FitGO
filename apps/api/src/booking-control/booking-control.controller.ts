@@ -104,6 +104,46 @@ export class BookingControlController {
     );
   }
 
+  @Post('super-admin/booking-control/approve')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  approveSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; comment?: string },
+  ) {
+    return this.bookingControl.approveGroup(
+      user,
+      body.sessionKey ?? '',
+      body.comment,
+    );
+  }
+
+  @Post('super-admin/booking-control/return-approval')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  returnSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; comment?: string },
+  ) {
+    return this.bookingControl.returnGroupApproval(
+      user,
+      body.sessionKey ?? '',
+      body.comment,
+    );
+  }
+
+  @Get('super-admin/booking-control/pending-approvals')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  pendingSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.bookingControl.listPendingAdminApprovals(
+      requireClubId(user),
+      from,
+      to,
+    );
+  }
+
   @Get('admin/booking-control')
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
   listAdmin(@CurrentUser() user: JwtPayload, @Query() query: ListQuery) {
@@ -174,6 +214,46 @@ export class BookingControlController {
     );
   }
 
+  @Post('admin/booking-control/approve')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  approveAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; comment?: string },
+  ) {
+    return this.bookingControl.approveGroup(
+      user,
+      body.sessionKey ?? '',
+      body.comment,
+    );
+  }
+
+  @Post('admin/booking-control/return-approval')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  returnAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; comment?: string },
+  ) {
+    return this.bookingControl.returnGroupApproval(
+      user,
+      body.sessionKey ?? '',
+      body.comment,
+    );
+  }
+
+  @Get('admin/booking-control/pending-approvals')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  pendingAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.bookingControl.listPendingAdminApprovals(
+      requireClubId(user),
+      from,
+      to,
+    );
+  }
+
   @Get('trainer/booking-control')
   @Roles(UserRole.TRAINER)
   listTrainer(@CurrentUser() user: JwtPayload, @Query() query: ListQuery) {
@@ -201,6 +281,32 @@ export class BookingControlController {
       user,
       body.sessionKey ?? '',
       body.comment ?? '',
+    );
+  }
+
+  @Post('trainer/booking-control/trainer-seen')
+  @Roles(UserRole.TRAINER)
+  trainerSeen(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; seenClientIds?: string[] },
+  ) {
+    return this.bookingControl.saveTrainerSeen(
+      user,
+      body.sessionKey ?? '',
+      body.seenClientIds ?? [],
+    );
+  }
+
+  @Post('trainer/booking-control/approve')
+  @Roles(UserRole.TRAINER)
+  approveTrainer(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; comment?: string },
+  ) {
+    return this.bookingControl.approveGroup(
+      user,
+      body.sessionKey ?? '',
+      body.comment,
     );
   }
 

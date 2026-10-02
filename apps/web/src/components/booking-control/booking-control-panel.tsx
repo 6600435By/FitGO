@@ -38,7 +38,22 @@ export type BookingControlApi = {
     clientExternalId: string,
     attendance: 'ATTENDED' | 'NO_SHOW',
   ) => Promise<BookingControlDetail>;
-  /** Admin/manager/SA: hall NVR photos for GROUP. */
+  /** Trainer: FitGO checkmarks for who was present. */
+  saveTrainerSeen?: (
+    sessionKey: string,
+    seenClientIds: string[],
+  ) => Promise<BookingControlDetail>;
+  /** Trainer / admin / SA: confirm GROUP for payroll chain. */
+  approveGroup?: (
+    sessionKey: string,
+    comment?: string,
+  ) => Promise<BookingControlDetail>;
+  /** Admin / SA: return GROUP to trainer. */
+  returnGroupApproval?: (
+    sessionKey: string,
+    comment?: string,
+  ) => Promise<BookingControlDetail>;
+  /** Admin/manager/SA/trainer: hall NVR photos for GROUP. */
   listHallSnapshots?: (
     sessionKey: string,
   ) => Promise<import('@fitgo/shared-types').HallClassSnapshotItem[]>;
@@ -52,8 +67,16 @@ type Props = {
   canResolve?: boolean;
   /** Admin/manager/SA: mark GROUP attendance and refresh from 1C */
   canMarkAttendance?: boolean;
-  /** Admin/manager/SA: show Photo button on GROUP detail */
+  /** Trainer: checkboxes for who was present */
+  canTrainerSeen?: boolean;
+  /** Confirm GROUP (trainer / admin / SA) */
+  canApproveGroup?: boolean;
+  /** Admin/SA: return to trainer */
+  canReturnApproval?: boolean;
+  /** Admin/manager/SA/trainer: show Photo button on GROUP detail */
   canViewHallPhotos?: boolean;
+  /** Open this session on mount (e.g. from admin tasks). */
+  initialSessionKey?: string;
   /** Hide kind filter (specialist SPA-only) */
   fixedKind?: BookingControlKind;
   title?: string;
@@ -110,7 +133,11 @@ export function BookingControlPanel({
   api,
   canResolve = false,
   canMarkAttendance = false,
+  canTrainerSeen = false,
+  canApproveGroup = false,
+  canReturnApproval = false,
   canViewHallPhotos = false,
+  initialSessionKey,
   fixedKind,
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
@@ -126,6 +153,8 @@ export function BookingControlPanel({
   const [loading, setLoading] = useState(true);
   const [syncing1c, setSyncing1c] = useState(false);
   const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
+  const [seenBusy, setSeenBusy] = useState(false);
+  const [approveBusy, setApproveBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [selected, setSelected] = useState<BookingControlDetail | null>(null);
   const [comment, setComment] = useState('');
@@ -138,6 +167,7 @@ export function BookingControlPanel({
   >([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [photosError, setPhotosError] = useState('');
+  const [localSeen, setLocalSeen] = useState<Set<string>>(new Set());
 
   const load = useCallback(() => {
     setLoading(true);
@@ -162,6 +192,12 @@ export function BookingControlPanel({
     load();
   }, [load]);
 
+  useEffect(() => {
+    if (!initialSessionKey) return;
+    void openDetail(initialSessionKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open once from URL
+  }, [initialSessionKey]);
+
   const visible = useMemo(() => {
     if (sourceFilter === 'ALL') return items;
     if (sourceFilter === 'SALE') {
@@ -185,6 +221,11 @@ export function BookingControlPanel({
     try {
       const d = await api.detail(sessionKey);
       setSelected(d);
+      const seen = new Set(
+        d.groupApproval?.trainerSeenClientIds ??
+          d.members.filter((m) => m.trainerSeen).map((m) => m.externalId),
+      );
+      setLocalSeen(seen);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     } finally {
@@ -305,6 +346,81 @@ export function BookingControlPanel({
       setMessage(e instanceof Error ? e.message : 'Ошибка записи явки');
     } finally {
       setAttendanceBusyId(null);
+    }
+  };
+
+  const toggleTrainerSeen = async (clientExternalId: string) => {
+    if (!selected || !api.saveTrainerSeen || selected.groupApproval?.locked) {
+      return;
+    }
+    const next = new Set(localSeen);
+    if (next.has(clientExternalId)) next.delete(clientExternalId);
+    else next.add(clientExternalId);
+    setLocalSeen(next);
+    setSeenBusy(true);
+    setMessage('');
+    try {
+      const updated = await api.saveTrainerSeen(
+        selected.sessionKey,
+        [...next],
+      );
+      setSelected(updated);
+      setLocalSeen(new Set(updated.groupApproval?.trainerSeenClientIds ?? []));
+      load();
+    } catch (e) {
+      setLocalSeen(
+        new Set(selected.groupApproval?.trainerSeenClientIds ?? []),
+      );
+      setMessage(e instanceof Error ? e.message : 'Ошибка сохранения');
+    } finally {
+      setSeenBusy(false);
+    }
+  };
+
+  const approveGroup = async () => {
+    if (!selected || !api.approveGroup) return;
+    setApproveBusy(true);
+    setMessage('');
+    try {
+      const updated = await api.approveGroup(
+        selected.sessionKey,
+        comment.trim() || undefined,
+      );
+      setSelected(updated);
+      setComment('');
+      setMessage(
+        updated.groupApproval?.phase === 'APPROVED'
+          ? 'Подтверждено — занятие в ЗП'
+          : 'Подтверждено тренером — ждёт администратора',
+      );
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка подтверждения');
+    } finally {
+      setApproveBusy(false);
+    }
+  };
+
+  const returnApproval = async () => {
+    if (!selected || !api.returnGroupApproval) return;
+    setApproveBusy(true);
+    setMessage('');
+    try {
+      const updated = await api.returnGroupApproval(
+        selected.sessionKey,
+        comment.trim() || undefined,
+      );
+      setSelected(updated);
+      setLocalSeen(
+        new Set(updated.groupApproval?.trainerSeenClientIds ?? []),
+      );
+      setComment('');
+      setMessage('Отправлено на доработку тренеру');
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка возврата');
+    } finally {
+      setApproveBusy(false);
     }
   };
 
@@ -507,6 +623,11 @@ export function BookingControlPanel({
                       {item.needsReview ? (
                         <span className="ml-1 rounded bg-rose-500/20 px-1 py-0.5 text-[10px] text-rose-300">
                           проверка
+                        </span>
+                      ) : null}
+                      {item.approvalLabel ? (
+                        <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[10px] text-amber-300">
+                          {item.approvalLabel}
                         </span>
                       ) : null}
                     </td>
@@ -739,21 +860,50 @@ export function BookingControlPanel({
                           .length}
                       )
                     </p>
+                    {selected.kind === 'GROUP' &&
+                    selected.groupApproval &&
+                    selected.groupApproval.trainerSeenCount !==
+                      (selected.arrivedCount ?? 0) ? (
+                      <p className="text-xs text-amber-300/90">
+                        Тренер отметил {selected.groupApproval.trainerSeenCount}{' '}
+                        · в 1С прибыло {selected.arrivedCount ?? 0}
+                      </p>
+                    ) : null}
                     <ul className="max-h-56 overflow-y-auto rounded-lg border border-slate-800 text-sm">
                       {selected.members.map((m) => (
                         <li
                           key={m.externalId}
                           className="flex flex-wrap items-center gap-2 border-b border-slate-900 px-2 py-1.5 last:border-0"
                         >
-                          <span className="w-14 shrink-0 text-[11px] text-slate-500">
-                            {m.attendance === 'ATTENDED'
-                              ? 'был'
-                              : m.attendance === 'NO_SHOW'
-                                ? 'не пришёл'
-                                : m.attendance === 'CANCELLED'
-                                  ? 'отмена'
-                                  : 'ожид.'}
-                          </span>
+                          {canTrainerSeen &&
+                          api.saveTrainerSeen &&
+                          selected.kind === 'GROUP' &&
+                          selected.source === '1C' &&
+                          m.attendance !== 'CANCELLED' &&
+                          !selected.groupApproval?.locked ? (
+                            <label className="flex w-8 shrink-0 cursor-pointer items-center justify-center text-[11px] text-slate-400">
+                              <input
+                                type="checkbox"
+                                className="rounded border-slate-600"
+                                checked={localSeen.has(m.externalId)}
+                                disabled={seenBusy}
+                                onChange={() => toggleTrainerSeen(m.externalId)}
+                                aria-label="Был на занятии"
+                              />
+                            </label>
+                          ) : (
+                            <span className="w-14 shrink-0 text-[11px] text-slate-500">
+                              {m.attendance === 'ATTENDED'
+                                ? 'Прибыл'
+                                : m.attendance === 'NO_SHOW'
+                                  ? 'не пришёл'
+                                  : m.attendance === 'CANCELLED'
+                                    ? 'отмена'
+                                    : localSeen.has(m.externalId) || m.trainerSeen
+                                      ? 'отмечен'
+                                      : 'ожид.'}
+                            </span>
+                          )}
                           <span className="min-w-0 flex-1 truncate">
                             {m.clientName}
                             {m.paymentBasis ? (
@@ -767,7 +917,8 @@ export function BookingControlPanel({
                           api.setAttendance &&
                           selected.kind === 'GROUP' &&
                           selected.source === '1C' &&
-                          m.attendance !== 'CANCELLED' ? (
+                          m.attendance !== 'CANCELLED' &&
+                          !selected.groupApproval?.locked ? (
                             <span className="flex shrink-0 gap-1">
                               <button
                                 type="button"
@@ -796,7 +947,83 @@ export function BookingControlPanel({
                     </ul>
                   </div>
                 )}
-                {selected.remark && (
+                {selected.kind === 'GROUP' && selected.groupApproval && (
+                  <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/40 p-2 text-xs text-slate-300">
+                    {selected.groupApproval.phase === 'APPROVED' ? (
+                      <p className="text-emerald-300">
+                        Подтверждено
+                        {selected.groupApproval.overrideName
+                          ? ` · ${selected.groupApproval.overrideName}`
+                          : selected.groupApproval.adminName
+                            ? ` · админ ${selected.groupApproval.adminName}`
+                            : ''}
+                        {selected.groupApproval.trainerName
+                          ? ` · тренер ${selected.groupApproval.trainerName}`
+                          : ''}
+                      </p>
+                    ) : selected.groupApproval.phase === 'PENDING_ADMIN' ? (
+                      <p className="text-amber-300">
+                        Проверено тренером
+                        {selected.groupApproval.trainerName
+                          ? `: ${selected.groupApproval.trainerName}`
+                          : ''}
+                        {' · ждёт администратора'}
+                      </p>
+                    ) : (
+                      <p className="text-amber-300">Ждёт подтверждения тренера</p>
+                    )}
+                    {selected.groupApproval.returnedAt ? (
+                      <p className="text-rose-300">
+                        Возврат
+                        {selected.groupApproval.returnedByName
+                          ? ` · ${selected.groupApproval.returnedByName}`
+                          : ''}
+                        {selected.groupApproval.returnComment
+                          ? `: ${selected.groupApproval.returnComment}`
+                          : ''}
+                      </p>
+                    ) : null}
+                    {selected.groupApproval.locked ? (
+                      <p className="text-slate-500">Период ЗП закрыт — только просмотр</p>
+                    ) : null}
+                  </div>
+                )}
+                {selected.kind === 'GROUP' &&
+                selected.source === '1C' &&
+                !selected.groupApproval?.locked &&
+                (canApproveGroup || canReturnApproval) ? (
+                  <div className="space-y-2">
+                    <textarea
+                      className="input min-h-[3rem] w-full text-sm"
+                      placeholder="Комментарий (необязательно)"
+                      value={comment}
+                      onChange={(e) => setComment(e.target.value)}
+                    />
+                    <div className="flex flex-col gap-2">
+                      {canApproveGroup && api.approveGroup ? (
+                        <button
+                          type="button"
+                          className="btn-primary w-full text-sm"
+                          onClick={approveGroup}
+                          disabled={approveBusy}
+                        >
+                          Подтвердить
+                        </button>
+                      ) : null}
+                      {canReturnApproval && api.returnGroupApproval ? (
+                        <button
+                          type="button"
+                          className="btn-secondary w-full text-sm"
+                          onClick={returnApproval}
+                          disabled={approveBusy}
+                        >
+                          На доработку
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+                {selected.kind !== 'GROUP' && selected.remark && (
                   <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm">
                     <p className="font-medium text-rose-200">На проверке</p>
                     <p className="mt-1 text-slate-300">
@@ -804,7 +1031,7 @@ export function BookingControlPanel({
                     </p>
                   </div>
                 )}
-                {!selected.remark && (
+                {selected.kind !== 'GROUP' && !selected.remark && (
                   <div className="space-y-2">
                     <p className="text-xs text-slate-500">
                       Замечание снимает занятие с ЗП до ответа администратора
@@ -825,7 +1052,8 @@ export function BookingControlPanel({
                     </button>
                   </div>
                 )}
-                {canResolve &&
+                {selected.kind !== 'GROUP' &&
+                  canResolve &&
                   selected.remark?.status === 'OPEN' &&
                   api.resolveRemark && (
                     <div className="space-y-2 border-t border-slate-800 pt-3">
@@ -845,6 +1073,33 @@ export function BookingControlPanel({
                       </button>
                     </div>
                   )}
+                {/* Legacy open remark on GROUP still visible */}
+                {selected.kind === 'GROUP' && selected.remark?.status === 'OPEN' && (
+                  <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm">
+                    <p className="font-medium text-rose-200">Открытое замечание</p>
+                    <p className="mt-1 text-slate-300">
+                      {selected.remark.staffName}: {selected.remark.staffComment}
+                    </p>
+                    {canResolve && api.resolveRemark ? (
+                      <div className="mt-2 space-y-2">
+                        <textarea
+                          className="input min-h-[3rem] w-full text-sm"
+                          placeholder="Ответ администратора"
+                          value={adminComment}
+                          onChange={(e) => setAdminComment(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          className="btn-primary w-full text-sm"
+                          onClick={resolve}
+                          disabled={!adminComment.trim()}
+                        >
+                          Отработано
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
             )}
           </div>

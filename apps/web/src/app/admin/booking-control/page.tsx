@@ -1,11 +1,15 @@
 'use client';
 
-import { useMemo } from 'react';
+import { Suspense, useMemo } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
-export default function AdminBookingControlPage() {
+function AdminBookingControlInner() {
+  const searchParams = useSearchParams();
+  const initialSessionKey = searchParams.get('sessionKey')?.trim() || undefined;
+
   const panelApi = useMemo(
     () => ({
       list: async (params: {
@@ -58,6 +62,21 @@ export default function AdminBookingControlPage() {
           attendance,
         });
       },
+      approveGroup: async (sessionKey: string, comment?: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlApprove(token, 'admin', sessionKey, comment);
+      },
+      returnGroupApproval: async (sessionKey: string, comment?: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlReturnApproval(
+          token,
+          'admin',
+          sessionKey,
+          comment,
+        );
+      },
       listHallSnapshots: async (sessionKey: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
@@ -81,7 +100,19 @@ export default function AdminBookingControlPage() {
       api={panelApi}
       canResolve
       canMarkAttendance
+      canApproveGroup
+      canReturnApproval
       canViewHallPhotos
+      initialSessionKey={initialSessionKey}
+      subtitle="ГП: проверьте отметки тренера, поставьте Прибыл/Не прибыл и подтвердите. Без подтверждения занятие не идёт в ЗП."
     />
+  );
+}
+
+export default function AdminBookingControlPage() {
+  return (
+    <Suspense fallback={<p className="text-sm text-slate-400">Загрузка…</p>}>
+      <AdminBookingControlInner />
+    </Suspense>
   );
 }

@@ -1639,9 +1639,69 @@ export const api = {
       token,
     ),
 
-  bookingControlHallSnapshots: (
+  bookingControlTrainerSeen: (
+    token: string,
+    sessionKey: string,
+    seenClientIds: string[],
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      '/trainer/booking-control/trainer-seen',
+      {
+        method: 'POST',
+        body: JSON.stringify({ sessionKey, seenClientIds }),
+      },
+      token,
+    ),
+
+  bookingControlApprove: (
+    token: string,
+    base: 'super-admin' | 'admin' | 'trainer',
+    sessionKey: string,
+    comment?: string,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/approve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sessionKey, comment: comment ?? '' }),
+      },
+      token,
+    ),
+
+  bookingControlReturnApproval: (
     token: string,
     base: 'super-admin' | 'admin',
+    sessionKey: string,
+    comment?: string,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/return-approval`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sessionKey, comment: comment ?? '' }),
+      },
+      token,
+    ),
+
+  bookingControlPendingApprovals: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    params?: { from?: string; to?: string },
+  ) => {
+    const q = new URLSearchParams();
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    const qs = q.toString();
+    return request<import('@fitgo/shared-types').GroupApprovalPendingTask[]>(
+      `/${base}/booking-control/pending-approvals${qs ? `?${qs}` : ''}`,
+      {},
+      token,
+    );
+  },
+
+  bookingControlHallSnapshots: (
+    token: string,
+    base: 'super-admin' | 'admin' | 'trainer',
     sessionKey: string,
   ) =>
     request<import('@fitgo/shared-types').HallClassSnapshotItem[]>(
@@ -1652,7 +1712,7 @@ export const api = {
 
   bookingControlHallSnapshotImageUrl: async (
     token: string,
-    base: 'super-admin' | 'admin',
+    base: 'super-admin' | 'admin' | 'trainer',
     snapshotId: string,
   ): Promise<string> => {
     const response = await fetch(

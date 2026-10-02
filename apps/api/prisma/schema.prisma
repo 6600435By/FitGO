@@ -440,6 +440,7 @@ model Club {
   clubHallVisits       ClubHallVisit[]
   sessionRemarks       SessionRemark[]
   hallClassSnapshots   HallClassSnapshot[]
+  groupClassApprovals  GroupClassApproval[]
 }
 
 model ClubTheme {
@@ -584,6 +585,10 @@ model User {
   staffShifts             StaffShift[]            @relation("StaffShifts")
   sessionRemarksStaff     SessionRemark[]         @relation("SessionRemarkStaff")
   sessionRemarksAdmin     SessionRemark[]         @relation("SessionRemarkAdmin")
+  groupApprovalsTrainer   GroupClassApproval[]    @relation("GroupApprovalTrainer")
+  groupApprovalsAdmin     GroupClassApproval[]    @relation("GroupApprovalAdmin")
+  groupApprovalsOverride  GroupClassApproval[]    @relation("GroupApprovalOverride")
+  groupApprovalsReturned  GroupClassApproval[]    @relation("GroupApprovalReturnedBy")
 
   @@unique([clubId, gamificationNickname])
   @@unique([clubId, employeeCode])
@@ -2028,6 +2033,46 @@ model OnexClassSessionMember {
   @@unique([sessionId, externalId])
   @@index([externalId])
   @@index([sessionId, attendance])
+}
+
+/// Dual approval for GROUP class payroll (trainer checkmarks → admin confirm).
+model GroupClassApproval {
+  id                   String    @id @default(cuid())
+  clubId               String
+  /// Stable key: "1c:{onexExternalId}"
+  sessionKey           String
+  /// clientExternalId[] marked present by trainer (FitGO-only, not 1C)
+  trainerSeenClientIds Json      @default("[]")
+  trainerUserId        String?
+  trainerName          String?
+  trainerApprovedAt    DateTime?
+  trainerComment       String?
+  adminUserId          String?
+  adminName            String?
+  adminApprovedAt      DateTime?
+  adminComment         String?
+  /// SUPER_ADMIN / MANAGER final confirm (skips trainer+admin steps)
+  overrideUserId       String?
+  overrideName         String?
+  overrideApprovedAt   DateTime?
+  overrideComment      String?
+  returnedByUserId     String?
+  returnedByName       String?
+  returnedAt           DateTime?
+  returnComment        String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  club         Club  @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  trainerUser  User? @relation("GroupApprovalTrainer", fields: [trainerUserId], references: [id], onDelete: SetNull)
+  adminUser    User? @relation("GroupApprovalAdmin", fields: [adminUserId], references: [id], onDelete: SetNull)
+  overrideUser User? @relation("GroupApprovalOverride", fields: [overrideUserId], references: [id], onDelete: SetNull)
+  returnedBy   User? @relation("GroupApprovalReturnedBy", fields: [returnedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([clubId, sessionKey])
+  @@index([clubId, trainerApprovedAt])
+  @@index([clubId, adminApprovedAt])
+  @@index([clubId, overrideApprovedAt])
 }
 
 /// Staff/admin remark on a register session (holds payroll while OPEN).

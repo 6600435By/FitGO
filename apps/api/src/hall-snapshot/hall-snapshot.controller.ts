@@ -19,6 +19,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { BookingControlService } from '../booking-control/booking-control.service';
 import { HallSnapshotAgentGuard } from './hall-snapshot-agent.guard';
 import { HallSnapshotService } from './hall-snapshot.service';
 
@@ -49,7 +50,10 @@ function readUploadBuffer(file: UploadFile | undefined): Buffer | null {
 
 @Controller()
 export class HallSnapshotController {
-  constructor(private readonly hallSnapshots: HallSnapshotService) {}
+  constructor(
+    private readonly hallSnapshots: HallSnapshotService,
+    private readonly bookingControl: BookingControlService,
+  ) {}
 
   @Get('agent/hall-snapshots/due')
   @UseGuards(HallSnapshotAgentGuard)
@@ -175,5 +179,38 @@ export class HallSnapshotController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   imageSuperAdmin(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.hallSnapshots.openImage(requireClubId(user), id);
+  }
+
+  @Get('trainer/booking-control/hall-snapshots')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.TRAINER)
+  async listTrainer(
+    @CurrentUser() user: JwtPayload,
+    @Query('sessionKey') sessionKey: string,
+  ) {
+    await this.bookingControl.detail(requireClubId(user), sessionKey ?? '', {
+      userId: user.sub,
+      ownOnly: true,
+    });
+    return this.hallSnapshots.listForSession(
+      requireClubId(user),
+      sessionKey ?? '',
+    );
+  }
+
+  @Get('trainer/booking-control/hall-snapshots/:id/image')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.TRAINER)
+  async imageTrainer(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    const clubId = requireClubId(user);
+    const snap = await this.hallSnapshots.listForSessionById(clubId, id);
+    await this.bookingControl.detail(clubId, snap.sessionKey, {
+      userId: user.sub,
+      ownOnly: true,
+    });
+    return this.hallSnapshots.openImage(clubId, id);
   }
 }

@@ -118,7 +118,8 @@ export default function TrainerGroupJournalPage() {
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Журнал групп</h1>
       <p className="text-sm text-slate-400">
-        Эталон из записи → отметьте кто был → Сдать. Цвет = доверие к составу.
+        Эталон из записи → отметьте кто был → Сдать. Для ЗП подтвердите занятие в
+        «Мои занятия» (контроль записей).
       </p>
       {message && <p className="text-sm text-amber-300">{message}</p>}
 

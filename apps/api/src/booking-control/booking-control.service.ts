@@ -18,6 +18,9 @@ import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.serv
 import { PrismaService } from '../prisma/prisma.service';
 import {
   fitgoSessionKey,
+  groupApprovalLabelRu,
+  groupApprovalPayrollEligible,
+  groupApprovalPhase,
   inferPaymentFromBasis,
   inferPayTag,
   mapOnexStatusToControl,
@@ -31,6 +34,8 @@ import {
   type BookingControlPayment,
   type BookingControlRemark,
   type BookingControlStatus,
+  type GroupApprovalPendingTask,
+  type GroupClassApprovalInfo,
   type SpecialistServiceDebt,
   UserRole,
 } from '@fitgo/shared-types';
@@ -403,11 +408,47 @@ export class BookingControlService {
 
     let out = items;
 
+    // Attach GROUP approval phase / waiting labels
+    const groupKeys = out
+      .filter((i) => i.kind === 'GROUP' && i.source === '1C')
+      .map((i) => i.sessionKey);
+    if (groupKeys.length) {
+      const approvals = await this.prisma.groupClassApproval.findMany({
+        where: { clubId, sessionKey: { in: groupKeys } },
+      });
+      const byKey = new Map(approvals.map((a) => [a.sessionKey, a]));
+      out = out.map((item) => {
+        if (item.kind !== 'GROUP' || item.source !== '1C') return item;
+        if (item.status === 'CANCELLED') return item;
+        const endMs = item.endAt
+          ? new Date(item.endAt).getTime()
+          : new Date(item.startAt).getTime();
+        // Future scheduled sessions: no approval badge yet
+        if (item.status === 'SCHEDULED' && endMs > Date.now()) return item;
+        const row = byKey.get(item.sessionKey);
+        const phase = groupApprovalPhase({
+          trainerApprovedAt: row?.trainerApprovedAt?.toISOString() ?? null,
+          adminApprovedAt: row?.adminApprovedAt?.toISOString() ?? null,
+          overrideApprovedAt: row?.overrideApprovedAt?.toISOString() ?? null,
+        });
+        return {
+          ...item,
+          approvalPhase: phase,
+          approvalLabel: groupApprovalLabelRu(phase),
+        };
+      });
+    }
+
     if (filters.status && filters.status !== 'ALL') {
       out = out.filter((i) => i.status === filters.status);
     }
     if (filters.needsReview) {
-      out = out.filter((i) => i.needsReview);
+      out = out.filter(
+        (i) =>
+          i.needsReview ||
+          i.approvalPhase === 'PENDING_TRAINER' ||
+          i.approvalPhase === 'PENDING_ADMIN',
+      );
     }
     if (filters.payment && filters.payment !== 'ALL') {
       out = out.filter((i) => {
@@ -475,7 +516,9 @@ export class BookingControlService {
       const members: BookingControlMember[] = s.members.map((m) => ({
         externalId: m.externalId,
         clientName: m.clientName,
-        attendance: m.attendance as BookingControlMember['attendance'],
+        attendance: (m.cancelled
+          ? 'CANCELLED'
+          : m.attendance) as BookingControlMember['attendance'],
         paymentBasis: m.paymentBasis ?? undefined,
         payment:
           kind === 'GROUP'
@@ -523,6 +566,24 @@ export class BookingControlService {
         ? (matched as { priceMinor?: number | null }).priceMinor ?? undefined
         : undefined;
 
+      const groupApproval =
+        kind === 'GROUP'
+          ? await this.loadGroupApprovalInfo(
+              clubId,
+              sessionKey,
+              members,
+              counts.arrivedCount,
+              s.payrollLocked,
+            )
+          : null;
+      if (groupApproval) {
+        const seen = new Set(groupApproval.trainerSeenClientIds);
+        for (const m of members) {
+          m.trainerSeen = seen.has(m.externalId);
+        }
+      }
+
+      const approvalPhase = groupApproval?.phase;
       return {
         sessionKey,
         kind,
@@ -543,6 +604,8 @@ export class BookingControlService {
         payment,
         payTag,
         needsReview: Boolean(open),
+        approvalPhase,
+        approvalLabel: groupApprovalLabelRu(approvalPhase),
         fitgoBookingId: matched?.id,
         durationMin: s.durationMin ?? undefined,
         members,
@@ -556,6 +619,7 @@ export class BookingControlService {
             s.externalId
           : s.externalId,
         priceMinor: unitPrice ?? matchedPrice,
+        groupApproval,
       };
     }
 
@@ -770,6 +834,11 @@ export class BookingControlService {
         'Отметки Прибыл/Не прибыл доступны только для групповых занятий',
       );
     }
+    if (session.payrollLocked) {
+      throw new BadRequestException(
+        'Период ЗП закрыт — явку менять нельзя',
+      );
+    }
 
     const member = session.members.find((m) => m.externalId === clientId);
     if (!member) {
@@ -825,6 +894,345 @@ export class BookingControlService {
     });
 
     return this.detail(clubId, sessionKey);
+  }
+
+  /** Trainer checkmarks (FitGO-only). Changing after admin confirm clears admin approval. */
+  async saveTrainerSeen(
+    actor: JwtPayload,
+    sessionKey: string,
+    seenClientIds: string[],
+  ): Promise<BookingControlDetail> {
+    const clubId = requireClubId(actor);
+    const session = await this.requireGroupOnex(clubId, sessionKey);
+    await this.assertOwnOnex(clubId, actor.sub, session);
+    this.assertGroupEditable(session);
+
+    const allowed = new Set(
+      session.members.filter((m) => !m.cancelled).map((m) => m.externalId),
+    );
+    const clean = [
+      ...new Set(
+        (seenClientIds ?? [])
+          .map((id) => String(id).trim())
+          .filter((id) => id && allowed.has(id)),
+      ),
+    ];
+
+    const existing = await this.prisma.groupClassApproval.findUnique({
+      where: {
+        clubId_sessionKey: { clubId, sessionKey },
+      },
+    });
+
+    const clearAdmin = Boolean(
+      existing?.adminApprovedAt || existing?.overrideApprovedAt,
+    );
+
+    await this.prisma.groupClassApproval.upsert({
+      where: { clubId_sessionKey: { clubId, sessionKey } },
+      create: {
+        clubId,
+        sessionKey,
+        trainerSeenClientIds: clean,
+      },
+      update: {
+        trainerSeenClientIds: clean,
+        ...(clearAdmin
+          ? {
+              adminUserId: null,
+              adminName: null,
+              adminApprovedAt: null,
+              adminComment: null,
+              overrideUserId: null,
+              overrideName: null,
+              overrideApprovedAt: null,
+              overrideComment: null,
+            }
+          : {}),
+      },
+    });
+
+    return this.detail(clubId, sessionKey, {
+      userId: actor.sub,
+      ownOnly: true,
+    });
+  }
+
+  /**
+   * Confirm GROUP session.
+   * Trainer → PENDING_ADMIN; Admin → APPROVED; SA/Manager → override APPROVED.
+   */
+  async approveGroup(
+    actor: JwtPayload,
+    sessionKey: string,
+    comment?: string,
+  ): Promise<BookingControlDetail> {
+    const clubId = requireClubId(actor);
+    const session = await this.requireGroupOnex(clubId, sessionKey);
+    this.assertGroupEditable(session);
+    this.assertSessionEnded(session);
+
+    const roles = actor.roles ?? [];
+    const isOverride =
+      roles.includes(UserRole.SUPER_ADMIN) ||
+      roles.includes(UserRole.MANAGER);
+    const isAdmin = roles.includes(UserRole.ADMIN);
+    const isTrainer = roles.includes(UserRole.TRAINER);
+
+    if (!isOverride && !isAdmin && !isTrainer) {
+      throw new ForbiddenException('Нет прав на подтверждение');
+    }
+
+    if (!isOverride && !isAdmin) {
+      await this.assertOwnOnex(clubId, actor.sub, session);
+    }
+
+    const actorName = await this.actorDisplayName(clubId, actor.sub);
+    const note = comment?.trim() || null;
+    const now = new Date();
+
+    const existing = await this.prisma.groupClassApproval.findUnique({
+      where: { clubId_sessionKey: { clubId, sessionKey } },
+    });
+
+    if (isOverride) {
+      await this.prisma.groupClassApproval.upsert({
+        where: { clubId_sessionKey: { clubId, sessionKey } },
+        create: {
+          clubId,
+          sessionKey,
+          overrideUserId: actor.sub,
+          overrideName: actorName,
+          overrideApprovedAt: now,
+          overrideComment: note,
+          returnedByUserId: null,
+          returnedByName: null,
+          returnedAt: null,
+          returnComment: null,
+        },
+        update: {
+          overrideUserId: actor.sub,
+          overrideName: actorName,
+          overrideApprovedAt: now,
+          overrideComment: note,
+          returnedByUserId: null,
+          returnedByName: null,
+          returnedAt: null,
+          returnComment: null,
+        },
+      });
+    } else if (isAdmin) {
+      if (!existing?.trainerApprovedAt) {
+        throw new BadRequestException(
+          'Сначала тренер должен подтвердить занятие',
+        );
+      }
+      await this.prisma.groupClassApproval.update({
+        where: { clubId_sessionKey: { clubId, sessionKey } },
+        data: {
+          adminUserId: actor.sub,
+          adminName: actorName,
+          adminApprovedAt: now,
+          adminComment: note,
+          returnedByUserId: null,
+          returnedByName: null,
+          returnedAt: null,
+          returnComment: null,
+        },
+      });
+    } else {
+      // Trainer
+      await this.prisma.groupClassApproval.upsert({
+        where: { clubId_sessionKey: { clubId, sessionKey } },
+        create: {
+          clubId,
+          sessionKey,
+          trainerUserId: actor.sub,
+          trainerName: actorName,
+          trainerApprovedAt: now,
+          trainerComment: note,
+          trainerSeenClientIds: existing?.trainerSeenClientIds ?? [],
+        },
+        update: {
+          trainerUserId: actor.sub,
+          trainerName: actorName,
+          trainerApprovedAt: now,
+          trainerComment: note,
+          // Re-confirm after rework clears prior admin/override
+          adminUserId: null,
+          adminName: null,
+          adminApprovedAt: null,
+          adminComment: null,
+          overrideUserId: null,
+          overrideName: null,
+          overrideApprovedAt: null,
+          overrideComment: null,
+          returnedByUserId: null,
+          returnedByName: null,
+          returnedAt: null,
+          returnComment: null,
+        },
+      });
+    }
+
+    return this.detail(clubId, sessionKey, {
+      userId: actor.sub,
+      ownOnly: !isOverride && !isAdmin,
+    });
+  }
+
+  /** Admin / SA / Manager: return GROUP to trainer for rework. */
+  async returnGroupApproval(
+    actor: JwtPayload,
+    sessionKey: string,
+    comment?: string,
+  ): Promise<BookingControlDetail> {
+    const clubId = requireClubId(actor);
+    if (!this.isAdminLike(actor)) {
+      throw new ForbiddenException('Только администратор');
+    }
+    const session = await this.requireGroupOnex(clubId, sessionKey);
+    this.assertGroupEditable(session);
+
+    const actorName = await this.actorDisplayName(clubId, actor.sub);
+    const note = comment?.trim() || null;
+    const now = new Date();
+
+    await this.prisma.groupClassApproval.upsert({
+      where: { clubId_sessionKey: { clubId, sessionKey } },
+      create: {
+        clubId,
+        sessionKey,
+        returnedByUserId: actor.sub,
+        returnedByName: actorName,
+        returnedAt: now,
+        returnComment: note,
+      },
+      update: {
+        trainerUserId: null,
+        trainerName: null,
+        trainerApprovedAt: null,
+        trainerComment: null,
+        adminUserId: null,
+        adminName: null,
+        adminApprovedAt: null,
+        adminComment: null,
+        overrideUserId: null,
+        overrideName: null,
+        overrideApprovedAt: null,
+        overrideComment: null,
+        returnedByUserId: actor.sub,
+        returnedByName: actorName,
+        returnedAt: now,
+        returnComment: note,
+      },
+    });
+
+    return this.detail(clubId, sessionKey);
+  }
+
+  /** Shared admin inbox: GROUP sessions waiting for admin confirm. */
+  async listPendingAdminApprovals(
+    clubId: string,
+    from?: string,
+    to?: string,
+  ): Promise<GroupApprovalPendingTask[]> {
+    const fromD = new Date(
+      `${from?.trim() || this.ymdDaysAgo(30)}T00:00:00`,
+    );
+    const toD = new Date(
+      `${to?.trim() || this.ymdToday()}T23:59:59.999`,
+    );
+
+    const now = new Date();
+    const sessions = await this.prisma.onexClassSession.findMany({
+      where: {
+        clubId,
+        kind: OnexClassKind.GROUP,
+        isActive: true,
+        status: { not: OnexClassStatus.CANCELLED },
+        startAt: { gte: fromD, lte: toD },
+        payrollLocked: false,
+      },
+      include: { members: true },
+      orderBy: { startAt: 'desc' },
+      take: 200,
+    });
+
+    const keys = sessions.map((s) => onexSessionKey(s.externalId));
+    const approvals = await this.prisma.groupClassApproval.findMany({
+      where: { clubId, sessionKey: { in: keys } },
+    });
+    const byKey = new Map(approvals.map((a) => [a.sessionKey, a]));
+
+    const out: GroupApprovalPendingTask[] = [];
+    for (const s of sessions) {
+      const endedAt = s.endAt ?? s.startAt;
+      if (endedAt > now) continue;
+      if (s.status === OnexClassStatus.SCHEDULED && endedAt > now) continue;
+      const sessionKey = onexSessionKey(s.externalId);
+      const row = byKey.get(sessionKey);
+      const phase = groupApprovalPhase({
+        trainerApprovedAt: row?.trainerApprovedAt?.toISOString() ?? null,
+        adminApprovedAt: row?.adminApprovedAt?.toISOString() ?? null,
+        overrideApprovedAt: row?.overrideApprovedAt?.toISOString() ?? null,
+      });
+      if (phase !== 'PENDING_ADMIN') continue;
+
+      const members: BookingControlMember[] = s.members.map((m) => ({
+        externalId: m.externalId,
+        clientName: m.clientName,
+        attendance: (m.cancelled
+          ? 'CANCELLED'
+          : m.attendance) as BookingControlMember['attendance'],
+      }));
+      this.promoteGroupAttendanceFromHeader(
+        members,
+        s.headerAttendedCount ?? 0,
+        s.status,
+      );
+      const counts = this.attendanceCounts(
+        members,
+        Math.max(s.attendedCount ?? 0, s.headerAttendedCount ?? 0),
+      );
+      const seenIds = this.parseSeenIds(row?.trainerSeenClientIds);
+
+      out.push({
+        sessionKey,
+        title: s.title,
+        startAt: s.startAt.toISOString(),
+        endAt: s.endAt?.toISOString(),
+        performerName: s.employeeName?.trim() || '—',
+        trainerName: row?.trainerName ?? undefined,
+        trainerApprovedAt: row?.trainerApprovedAt?.toISOString(),
+        roomTitle: s.roomTitle ?? undefined,
+        number: s.number ?? undefined,
+        bookedCount: counts.bookedCount,
+        arrivedCount: counts.arrivedCount,
+        trainerSeenCount: seenIds.length,
+      });
+    }
+    return out;
+  }
+
+  /** Session keys with payroll-eligible GROUP approval. */
+  async approvedGroupSessionKeys(
+    clubId: string,
+    keys: string[],
+  ): Promise<Set<string>> {
+    if (!keys.length) return new Set();
+    const rows = await this.prisma.groupClassApproval.findMany({
+      where: {
+        clubId,
+        sessionKey: { in: keys },
+        OR: [
+          { adminApprovedAt: { not: null } },
+          { overrideApprovedAt: { not: null } },
+        ],
+      },
+      select: { sessionKey: true },
+    });
+    return new Set(rows.map((r) => r.sessionKey));
   }
 
   async openRemark(
@@ -948,6 +1356,101 @@ export class BookingControlService {
       roles.includes(UserRole.MANAGER) ||
       roles.includes(UserRole.ADMIN)
     );
+  }
+
+  private parseSeenIds(raw: unknown): string[] {
+    if (!Array.isArray(raw)) return [];
+    return raw.map((x) => String(x)).filter(Boolean);
+  }
+
+  private async actorDisplayName(
+    clubId: string,
+    userId: string,
+  ): Promise<string> {
+    const u = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+      select: { firstName: true, lastName: true },
+    });
+    if (!u) return '—';
+    return `${u.lastName} ${u.firstName}`.trim();
+  }
+
+  private async requireGroupOnex(clubId: string, sessionKey: string) {
+    const parsed = parseSessionKey(sessionKey);
+    if (!parsed || parsed.source !== '1C') {
+      throw new BadRequestException(
+        'Подтверждение доступно только для группового занятия из 1С',
+      );
+    }
+    const session = await this.prisma.onexClassSession.findFirst({
+      where: { clubId, externalId: parsed.id, isActive: true },
+      include: { members: true },
+    });
+    if (!session) throw new NotFoundException('Занятие не найдено');
+    if (session.kind !== OnexClassKind.GROUP) {
+      throw new BadRequestException(
+        'Подтверждение доступно только для групповых занятий',
+      );
+    }
+    return session;
+  }
+
+  private assertGroupEditable(session: { payrollLocked: boolean }) {
+    if (session.payrollLocked) {
+      throw new BadRequestException(
+        'Период ЗП закрыт — занятие только для просмотра',
+      );
+    }
+  }
+
+  private assertSessionEnded(session: {
+    endAt: Date | null;
+    startAt: Date;
+  }) {
+    const end = session.endAt ?? session.startAt;
+    if (end > new Date()) {
+      throw new BadRequestException('Занятие ещё не закончилось');
+    }
+  }
+
+  private async loadGroupApprovalInfo(
+    clubId: string,
+    sessionKey: string,
+    _members: BookingControlMember[],
+    _arrivedCount: number,
+    payrollLocked: boolean,
+  ): Promise<GroupClassApprovalInfo> {
+    const row = await this.prisma.groupClassApproval.findUnique({
+      where: { clubId_sessionKey: { clubId, sessionKey } },
+    });
+    const seenIds = this.parseSeenIds(row?.trainerSeenClientIds);
+    const phase = groupApprovalPhase({
+      trainerApprovedAt: row?.trainerApprovedAt?.toISOString() ?? null,
+      adminApprovedAt: row?.adminApprovedAt?.toISOString() ?? null,
+      overrideApprovedAt: row?.overrideApprovedAt?.toISOString() ?? null,
+    });
+    return {
+      trainerSeenClientIds: seenIds,
+      trainerName: row?.trainerName ?? undefined,
+      trainerApprovedAt: row?.trainerApprovedAt?.toISOString(),
+      trainerComment: row?.trainerComment ?? undefined,
+      adminName: row?.adminName ?? undefined,
+      adminApprovedAt: row?.adminApprovedAt?.toISOString(),
+      adminComment: row?.adminComment ?? undefined,
+      overrideName: row?.overrideName ?? undefined,
+      overrideApprovedAt: row?.overrideApprovedAt?.toISOString(),
+      overrideComment: row?.overrideComment ?? undefined,
+      returnedByName: row?.returnedByName ?? undefined,
+      returnedAt: row?.returnedAt?.toISOString(),
+      returnComment: row?.returnComment ?? undefined,
+      phase,
+      trainerSeenCount: seenIds.length,
+      payrollEligible: groupApprovalPayrollEligible({
+        adminApprovedAt: row?.adminApprovedAt?.toISOString() ?? null,
+        overrideApprovedAt: row?.overrideApprovedAt?.toISOString() ?? null,
+      }),
+      locked: payrollLocked,
+    };
   }
 
   private mapRemark(r: {

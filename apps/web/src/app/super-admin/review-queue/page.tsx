@@ -67,6 +67,26 @@ export default function SuperAdminBookingControlPage() {
           attendance,
         });
       },
+      approveGroup: async (sessionKey: string, comment?: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlApprove(
+          token,
+          'super-admin',
+          sessionKey,
+          comment,
+        );
+      },
+      returnGroupApproval: async (sessionKey: string, comment?: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlReturnApproval(
+          token,
+          'super-admin',
+          sessionKey,
+          comment,
+        );
+      },
       listHallSnapshots: async (sessionKey: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
@@ -94,7 +114,10 @@ export default function SuperAdminBookingControlPage() {
       api={panelApi}
       canResolve
       canMarkAttendance
+      canApproveGroup
+      canReturnApproval
       canViewHallPhotos
+      subtitle="Можно подтвердить ГП без тренера и админа или вернуть на доработку. Без подтверждения занятие не идёт в ЗП."
     />
   );
 }

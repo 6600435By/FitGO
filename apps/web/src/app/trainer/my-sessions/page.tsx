@@ -30,6 +30,30 @@ export default function TrainerMySessionsPage() {
         if (!token) throw new Error('Нет сессии');
         return api.bookingControlRemark(token, 'trainer', sessionKey, comment);
       },
+      saveTrainerSeen: async (sessionKey: string, seenClientIds: string[]) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlTrainerSeen(token, sessionKey, seenClientIds);
+      },
+      approveGroup: async (sessionKey: string, comment?: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlApprove(token, 'trainer', sessionKey, comment);
+      },
+      listHallSnapshots: async (sessionKey: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlHallSnapshots(token, 'trainer', sessionKey);
+      },
+      loadHallSnapshotImage: async (snapshotId: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlHallSnapshotImageUrl(
+          token,
+          'trainer',
+          snapshotId,
+        );
+      },
     }),
     [],
   );
@@ -38,7 +62,10 @@ export default function TrainerMySessionsPage() {
     <BookingControlPanel
       api={panelApi}
       title="Мои занятия"
-      subtitle="Только ваши занятия из 1С. Замечание отправит занятие на проверку администратору."
+      subtitle="После занятия отметьте галочками кто был, сверьте фото и нажмите «Подтвердить». Явку в 1С ставит администратор."
+      canTrainerSeen
+      canApproveGroup
+      canViewHallPhotos
     />
   );
 }

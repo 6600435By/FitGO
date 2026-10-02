@@ -437,11 +437,17 @@ export class PayrollService {
       }
     }
 
-    // Open remarks hold payroll
+    // Open remarks hold payroll; GROUP needs dual approval (admin or SA/manager override)
+    const uniqueRemarkKeys = [...new Set(remarkKeys)];
     const openKeys = await this.bookingControl.openRemarkKeys(
       clubId,
-      [...new Set(remarkKeys)],
+      uniqueRemarkKeys,
     );
+    const approvedGroupKeys =
+      await this.bookingControl.approvedGroupSessionKeys(
+        clubId,
+        uniqueRemarkKeys,
+      );
     const unitKey = new Map<string, string>();
     for (const [id, sk] of ptSaleUnitKeys) unitKey.set(id, sk);
     for (const o of onexSpa) {
@@ -478,6 +484,9 @@ export class PayrollService {
     for (const u of units) {
       const sk = unitKey.get(u.id);
       if (sk && openKeys.has(sk)) u.payrollTrusted = false;
+      if (u.kind === 'GROUP') {
+        if (!sk || !approvedGroupKeys.has(sk)) u.payrollTrusted = false;
+      }
     }
 
     return units.sort(

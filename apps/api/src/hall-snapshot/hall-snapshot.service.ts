@@ -300,6 +300,19 @@ export class HallSnapshotService {
     return rows.map((r) => this.toItem(r));
   }
 
+  /** Resolve sessionKey for a snapshot (ownership checks). */
+  async listForSessionById(
+    clubId: string,
+    snapshotId: string,
+  ): Promise<{ sessionKey: string }> {
+    const row = await this.prisma.hallClassSnapshot.findFirst({
+      where: { id: snapshotId, clubId },
+      select: { sessionKey: true },
+    });
+    if (!row) throw new NotFoundException('Снимок не найден');
+    return { sessionKey: row.sessionKey };
+  }
+
   async openImage(
     clubId: string,
     snapshotId: string,

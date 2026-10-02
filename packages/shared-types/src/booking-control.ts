@@ -33,12 +33,42 @@ export interface BookingControlRemark {
   closedAt?: string;
 }
 
+/** Dual approval workflow for GROUP sessions (trainer → admin → payroll). */
+export type GroupApprovalPhase =
+  | 'PENDING_TRAINER'
+  | 'PENDING_ADMIN'
+  | 'APPROVED';
+
+export interface GroupClassApprovalInfo {
+  trainerSeenClientIds: string[];
+  trainerName?: string;
+  trainerApprovedAt?: string;
+  trainerComment?: string;
+  adminName?: string;
+  adminApprovedAt?: string;
+  adminComment?: string;
+  overrideName?: string;
+  overrideApprovedAt?: string;
+  overrideComment?: string;
+  returnedByName?: string;
+  returnedAt?: string;
+  returnComment?: string;
+  phase: GroupApprovalPhase;
+  /** Trainer checkmark count vs 1C arrived — shown when they differ. */
+  trainerSeenCount: number;
+  payrollEligible: boolean;
+  /** True when payroll period is locked for this session. */
+  locked: boolean;
+}
+
 export interface BookingControlMember {
   externalId: string;
   clientName: string;
   attendance: 'EXPECTED' | 'ATTENDED' | 'NO_SHOW' | 'CANCELLED';
   paymentBasis?: string;
   payment?: BookingControlPayment;
+  /** Trainer marked this client as present (FitGO checkbox). */
+  trainerSeen?: boolean;
 }
 
 export interface BookingControlListItem {
@@ -67,6 +97,9 @@ export interface BookingControlListItem {
   /** «продажа» vs «абонемент» for one-time / package PT. */
   payTag?: BookingControlPayTag;
   needsReview: boolean;
+  /** GROUP approval waiting label, e.g. «Ждёт тренера» / «Ждёт администратора». */
+  approvalLabel?: string;
+  approvalPhase?: GroupApprovalPhase;
   /** Linked FitGO booking id when matched or FitGO-only. */
   fitgoBookingId?: string;
   priceMinor?: number;
@@ -79,6 +112,23 @@ export interface BookingControlDetail extends BookingControlListItem {
   remarksHistory: BookingControlRemark[];
   fitgoBookedAt?: string;
   crmDocRef?: string;
+  groupApproval?: GroupClassApprovalInfo | null;
+}
+
+/** Shared admin inbox row for GROUP sessions awaiting admin confirm. */
+export interface GroupApprovalPendingTask {
+  sessionKey: string;
+  title: string;
+  startAt: string;
+  endAt?: string;
+  performerName: string;
+  trainerName?: string;
+  trainerApprovedAt?: string;
+  roomTitle?: string;
+  number?: string;
+  bookedCount: number;
+  arrivedCount: number;
+  trainerSeenCount: number;
 }
 
 export interface BookingControlListQuery {
@@ -213,4 +263,30 @@ export function paymentCountsForVolume(
     p === 'PARTNER' ||
     p === 'GIFT'
   );
+}
+
+/** GROUP payroll-eligible when admin confirmed or SA/manager override. */
+export function groupApprovalPayrollEligible(input: {
+  adminApprovedAt?: string | null;
+  overrideApprovedAt?: string | null;
+}): boolean {
+  return Boolean(input.adminApprovedAt || input.overrideApprovedAt);
+}
+
+export function groupApprovalPhase(input: {
+  trainerApprovedAt?: string | null;
+  adminApprovedAt?: string | null;
+  overrideApprovedAt?: string | null;
+}): GroupApprovalPhase {
+  if (input.overrideApprovedAt || input.adminApprovedAt) return 'APPROVED';
+  if (input.trainerApprovedAt) return 'PENDING_ADMIN';
+  return 'PENDING_TRAINER';
+}
+
+export function groupApprovalLabelRu(
+  phase: GroupApprovalPhase | undefined,
+): string | undefined {
+  if (phase === 'PENDING_TRAINER') return 'Ждёт тренера';
+  if (phase === 'PENDING_ADMIN') return 'Ждёт администратора';
+  return undefined;
 }
