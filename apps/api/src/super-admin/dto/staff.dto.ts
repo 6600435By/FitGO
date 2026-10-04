@@ -106,6 +106,11 @@ export class UpdateStaffDto {
   @IsBoolean()
   isActive?: boolean;
 
+  /** Explicitly open or close app login for this staff member. */
+  @IsOptional()
+  @IsBoolean()
+  loginEnabled?: boolean;
+
   @IsOptional()
   @IsString()
   @MinLength(6)

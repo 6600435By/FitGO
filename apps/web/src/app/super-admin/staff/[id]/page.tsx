@@ -32,10 +32,18 @@ const TRAINER_GROUP_OPTIONS: {
   { id: 'club', label: 'Тренеры клуб' },
 ];
 
+function randomPassword() {
+  return `Fit${Math.random().toString(36).slice(2, 10)}!`;
+}
+
+function canHaveAppLogin(roles: UserRole[]): boolean {
+  return !roles.every((r) => r === UserRole.TECH || r === UserRole.CLIENT);
+}
+
 export default function SuperAdminStaffDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [member, setMember] = useState<StaffMember | null>(null);
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState(randomPassword);
   const [login, setLogin] = useState('');
   const [credentials, setCredentials] = useState<{
     email: string;
@@ -43,6 +51,7 @@ export default function SuperAdminStaffDetailPage() {
   } | null>(null);
   const [message, setMessage] = useState('');
   const [rolesBusy, setRolesBusy] = useState(false);
+  const [accessBusy, setAccessBusy] = useState(false);
 
   const load = () => {
     const token = getToken();
@@ -83,11 +92,70 @@ export default function SuperAdminStaffDetailPage() {
 
   const resetPassword = async () => {
     const token = getToken();
-    if (!token || !password || password.length < 6) return;
-    const result = await api.superAdminUpdateStaff(token, id, { password });
-    if (result.credentials) setCredentials(result.credentials);
-    setPassword('');
-    setMessage('Пароль обновлён');
+    if (!token || !password || password.length < 6) {
+      setMessage('Пароль не короче 6 символов');
+      return;
+    }
+    setAccessBusy(true);
+    setMessage('');
+    try {
+      const result = await api.superAdminUpdateStaff(token, id, { password });
+      if (result.credentials) setCredentials(result.credentials);
+      setPassword(randomPassword());
+      setMessage('Пароль обновлён');
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка');
+    } finally {
+      setAccessBusy(false);
+    }
+  };
+
+  const openAccess = async () => {
+    const token = getToken();
+    if (!token || !member) return;
+    if (!password || password.length < 6) {
+      setMessage('Пароль не короче 6 символов');
+      return;
+    }
+    if (!login.trim()) {
+      setMessage('Укажите логин');
+      return;
+    }
+    setAccessBusy(true);
+    setMessage('');
+    try {
+      const result = await api.superAdminUpdateStaff(token, id, {
+        email: login.trim(),
+        loginEnabled: true,
+        password,
+      });
+      if (result.credentials) setCredentials(result.credentials);
+      setPassword(randomPassword());
+      setMessage('Вход открыт');
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка');
+    } finally {
+      setAccessBusy(false);
+    }
+  };
+
+  const closeAccess = async () => {
+    const token = getToken();
+    if (!token || !member) return;
+    setAccessBusy(true);
+    setMessage('');
+    try {
+      await api.superAdminUpdateStaff(token, id, { loginEnabled: false });
+      setCredentials(null);
+      setMessage('Вход закрыт');
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка');
+    } finally {
+      setAccessBusy(false);
+    }
   };
 
   const toggleRole = async (roleId: StaffRoleId) => {
@@ -303,68 +371,119 @@ export default function SuperAdminStaffDetailPage() {
         }
       />
 
-      {!member.roles.every(
-        (r) => r === UserRole.TECH || r === UserRole.CLIENT,
-      ) && (
-        <div className="rounded-2xl border border-slate-800 p-4 space-y-2">
-          <p className="font-medium">Логин</p>
-          <p className="text-xs text-slate-400">
-            По умолчанию фамилия. Можно заменить на другой логин или email.
-          </p>
-          <input
-            className="input w-full"
-            value={login}
-            onChange={(e) => setLogin(e.target.value)}
-          />
-          <button
-            type="button"
-            className="btn-secondary w-full"
-            onClick={async () => {
-              const token = getToken();
-              if (!token || !login.trim()) return;
-              try {
-                await api.superAdminUpdateStaff(token, id, {
-                  email: login.trim(),
-                });
-                setMessage('Логин обновлён');
-                load();
-              } catch (e) {
-                setMessage(e instanceof Error ? e.message : 'Ошибка');
-              }
-            }}
-          >
-            Сохранить логин
-          </button>
-        </div>
-      )}
+      {canHaveAppLogin(member.roles) && (
+        <div className="rounded-2xl border border-slate-800 p-4 space-y-3">
+          <div>
+            <h3 className="font-medium text-white">Доступ в приложение</h3>
+            <p className="text-xs text-slate-400">
+              {member.loginEnabled === false
+                ? 'Выдайте логин и пароль, чтобы сотрудник мог войти.'
+                : 'Вход открыт. Можно сменить пароль или закрыть доступ.'}
+            </p>
+          </div>
 
-      {credentials && (
-        <div className="card border-fitgo-500/30 bg-fitgo-500/5 text-sm">
-          <p>Новый пароль: {credentials.password}</p>
+          {member.loginEnabled !== false ? (
+            <p className="text-sm text-emerald-400">Вход открыт</p>
+          ) : (
+            <p className="text-sm text-amber-300">Вход ещё не открыт</p>
+          )}
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Логин</p>
+            <p className="text-xs text-slate-400">
+              По умолчанию фамилия. Можно заменить на другой логин или email.
+            </p>
+            <input
+              className="input w-full"
+              value={login}
+              onChange={(e) => setLogin(e.target.value)}
+            />
+            {member.loginEnabled !== false && (
+              <button
+                type="button"
+                className="btn-secondary w-full"
+                disabled={accessBusy}
+                onClick={async () => {
+                  const token = getToken();
+                  if (!token || !login.trim()) return;
+                  setAccessBusy(true);
+                  try {
+                    await api.superAdminUpdateStaff(token, id, {
+                      email: login.trim(),
+                    });
+                    setMessage('Логин обновлён');
+                    load();
+                  } catch (e) {
+                    setMessage(e instanceof Error ? e.message : 'Ошибка');
+                  } finally {
+                    setAccessBusy(false);
+                  }
+                }}
+              >
+                Сохранить логин
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium">
+              {member.loginEnabled === false ? 'Пароль' : 'Новый пароль'}
+            </p>
+            <input
+              className="input w-full"
+              type="text"
+              autoComplete="new-password"
+              placeholder="Не короче 6 символов"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+            {member.loginEnabled === false ? (
+              <button
+                type="button"
+                onClick={openAccess}
+                disabled={accessBusy}
+                className="btn-primary w-full"
+              >
+                {accessBusy ? 'Открытие...' : 'Открыть вход'}
+              </button>
+            ) : (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={resetPassword}
+                  disabled={accessBusy}
+                  className="btn-primary w-full"
+                >
+                  Сохранить пароль
+                </button>
+                <button
+                  type="button"
+                  onClick={closeAccess}
+                  disabled={accessBusy}
+                  className="btn-secondary w-full"
+                >
+                  Закрыть вход
+                </button>
+              </div>
+            )}
+          </div>
+
+          {credentials && (
+            <div className="rounded-xl border border-fitgo-500/30 bg-fitgo-500/5 p-3 text-sm space-y-1">
+              <p className="font-medium text-fitgo-300">Выданные данные</p>
+              <p>Логин: {credentials.email}</p>
+              <p>Пароль: {credentials.password}</p>
+              <p className="text-xs text-slate-400">
+                Сохраните и передайте сотруднику — пароль больше не покажется.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
       <button onClick={toggleActive} className="btn-secondary w-full">
         {member.isActive ? 'Деактивировать' : 'Активировать'}
       </button>
-
-      {!member.roles.every(
-        (r) => r === UserRole.TECH || r === UserRole.CLIENT,
-      ) && (
-        <div className="rounded-2xl border border-slate-800 p-4 space-y-2">
-          <p className="font-medium">Сброс пароля</p>
-          <input
-            className="input w-full"
-            type="password"
-            placeholder="Новый пароль"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <button onClick={resetPassword} className="btn-primary w-full">
-            Сохранить пароль
-          </button>
-        </div>
-      )}
 
       {message && <p className="text-fitgo-400 text-sm">{message}</p>}
     </div>

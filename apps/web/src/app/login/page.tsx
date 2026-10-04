@@ -2,22 +2,13 @@
 
 import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
-import Link from 'next/link';
 import { api } from '@/lib/api';
 import { getHomePath, saveAuth } from '@/lib/auth';
 
-const DEMO_ACCOUNTS = [
-  { email: 'client@demo.fitgo', password: 'client123', role: 'Клиент' },
-  { email: 'trainer@demo.fitgo', password: 'trainer123', role: 'Тренер' },
-  { email: 'specialist@demo.fitgo', password: 'specialist123', role: 'Спа-специалист' },
-  { email: 'admin@demo.fitgo', password: 'admin123', role: 'Администратор' },
-  { email: 'superadmin@demo.fitgo', password: 'super123', role: 'Супер-админ' },
-];
-
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('client@demo.fitgo');
-  const [password, setPassword] = useState('client123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -35,11 +26,6 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const quickLogin = (account: (typeof DEMO_ACCOUNTS)[0]) => {
-    setEmail(account.email);
-    setPassword(account.password);
   };
 
   return (
@@ -86,30 +72,6 @@ export default function LoginPage() {
             {loading ? 'Вход...' : 'Войти'}
           </button>
         </form>
-
-        <p className="mt-4 text-center text-sm text-slate-400">
-          Нет аккаунта?{' '}
-          <Link href="/register" className="text-fitgo-400 hover:underline">
-            Зарегистрироваться
-          </Link>
-        </p>
-
-        <div className="mt-6 card">
-          <p className="mb-3 text-sm font-medium text-slate-300">Демо-аккаунты</p>
-          <div className="space-y-2">
-            {DEMO_ACCOUNTS.map((account) => (
-              <button
-                key={account.email}
-                type="button"
-                onClick={() => quickLogin(account)}
-                className="flex w-full items-center justify-between rounded-xl border border-slate-800 px-4 py-3 text-left text-sm transition hover:border-fitgo-500/50 hover:bg-slate-800/50"
-              >
-                <span>{account.role}</span>
-                <span className="text-slate-500">{account.email}</span>
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
     </div>
   );

@@ -320,15 +320,34 @@ export class SuperAdminService implements OnModuleInit {
       data.email = email;
     }
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
+
+    const rolesAfter = (dto.roles ??
+      member.roles.map((r) => r.role).filter(isStaffRoleLabel)) as StaffRoleLabel[];
+    const canHaveAppLogin = needsAppLogin(rolesAfter);
+
     if (dto.password) {
-      const rolesAfter = (dto.roles ??
-        member.roles.map((r) => r.role).filter(isStaffRoleLabel)) as StaffRoleLabel[];
-      if (!needsAppLogin(rolesAfter)) {
+      if (!canHaveAppLogin) {
         throw new BadRequestException(
           'У техперсонала нет входа в приложение — пароль не задаётся',
         );
       }
       data.password = await bcrypt.hash(dto.password, 10);
+    }
+
+    if (dto.loginEnabled === true) {
+      if (!canHaveAppLogin) {
+        throw new BadRequestException(
+          'У техперсонала нет входа в приложение',
+        );
+      }
+      if (!dto.password || dto.password.length < 6) {
+        throw new BadRequestException(
+          'Чтобы открыть вход, задайте пароль не короче 6 символов',
+        );
+      }
+      data.loginEnabled = true;
+    } else if (dto.loginEnabled === false) {
+      data.loginEnabled = false;
     }
 
     if (dto.roles) {
@@ -365,8 +384,10 @@ export class SuperAdminService implements OnModuleInit {
           ]);
         }
       }
-      // TECH-only → no app login; any app role → allow login.
-      data.loginEnabled = needsAppLogin(roleList);
+      // TECH-only → force close login. App roles do not auto-open access.
+      if (!needsAppLogin(roleList)) {
+        data.loginEnabled = false;
+      }
     }
 
     const updated = await this.prisma.user.update({
@@ -375,14 +396,22 @@ export class SuperAdminService implements OnModuleInit {
       include: { roles: true },
     });
 
+    const openingLogin = dto.loginEnabled === true;
     const action = dto.isActive === false
       ? 'STAFF_DEACTIVATED'
-      : dto.password
-        ? 'STAFF_PASSWORD_RESET'
-        : 'STAFF_UPDATED';
+      : openingLogin
+        ? 'STAFF_LOGIN_OPENED'
+        : dto.loginEnabled === false
+          ? 'STAFF_LOGIN_CLOSED'
+          : dto.password
+            ? 'STAFF_PASSWORD_RESET'
+            : 'STAFF_UPDATED';
 
     await this.logAudit(user, action, staffId, {
       ...(dto.password ? { passwordReset: true } : {}),
+      ...(dto.loginEnabled !== undefined
+        ? { loginEnabled: dto.loginEnabled }
+        : {}),
       ...(dto.roles ? { roles: dto.roles } : {}),
     });
 

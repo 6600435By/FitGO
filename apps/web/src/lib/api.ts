@@ -1423,6 +1423,7 @@ export const api = {
       phone: string;
       email: string;
       isActive: boolean;
+      loginEnabled: boolean;
       password: string;
       roles: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
       groupPrograms: boolean;
