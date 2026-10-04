@@ -149,7 +149,12 @@ export class Mock1CProvider implements IFitnessClubProvider {
     }
     const svc = services[idx];
     if (svc.unlimited) {
-      return { ...m, services: [...services] };
+      return {
+        ...m,
+        services: [...services],
+        docId: `mock-spa-${input.bookingRef}`,
+        docNumber: 'MOCK-SPA',
+      };
     }
     const remaining = svc.remaining ?? 0;
     if (remaining <= 0) {
@@ -157,11 +162,15 @@ export class Mock1CProvider implements IFitnessClubProvider {
     }
     services[idx] = { ...svc, remaining: remaining - 1 };
     m.services = [...services];
-    void input.bookingRef;
     void input.occurredAt;
     void input.durationMin;
     void input.serviceId;
-    return { ...m, services: [...services] };
+    return {
+      ...m,
+      services: [...services],
+      docId: `mock-spa-${input.bookingRef}`,
+      docNumber: 'MOCK-SPA',
+    };
   }
 
   async restoreSpaVisit(
@@ -209,11 +218,14 @@ export class Mock1CProvider implements IFitnessClubProvider {
     m.debtAmount = (m.debtAmount ?? 0) + price;
     if (input.currency) m.currency = input.currency;
     void input.serviceName;
-    void input.bookingRef;
     void input.occurredAt;
     void input.serviceId;
     void input.durationMin;
-    return { ...m };
+    return {
+      ...m,
+      docId: `mock-spa-${input.bookingRef}`,
+      docNumber: 'MOCK-SPA-SALE',
+    };
   }
 
   async getSpecialistServiceDebts(_input: {

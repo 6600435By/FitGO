@@ -8,9 +8,11 @@ import {
   AvailabilityBlockStatus,
   Role,
   ServiceUsageStatus,
+  SessionApprovalKind,
   SpaBookingOrigin,
   SpaBookingStatus,
   SpaCancelledBy,
+  SpaOneCLinkStatus,
   SpaPaymentType,
   type SpaService as PrismaSpaService,
 } from '@prisma/client';
@@ -27,8 +29,10 @@ import {
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { SessionApprovalService } from '../booking-control/session-approval.service';
 import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { ClubMembershipService } from '../common/club-membership.service';
+import { normalizePhone } from '../common/phone.util';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -52,6 +56,7 @@ export class SpaBookingService {
     private readonly clubMembership: ClubMembershipService,
     private readonly notifications: NotificationsService,
     private readonly serviceUsage: ServiceUsageService,
+    private readonly sessionApproval: SessionApprovalService,
   ) {}
 
   // ─── Catalog helpers ───────────────────────────────────────────────────────
@@ -74,7 +79,8 @@ export class SpaBookingService {
     id: string;
     clubId: string;
     specialistId: string;
-    clientId: string;
+    clientId: string | null;
+    guestName?: string | null;
     serviceId: string;
     startAt: Date;
     endAt: Date;
@@ -96,7 +102,7 @@ export class SpaBookingService {
     specialistCompletedAt?: Date | null;
     paidAt?: Date | null;
     specialist: { firstName: string; lastName: string };
-    client: { firstName: string; lastName: string };
+    client: { firstName: string; lastName: string } | null;
     service: { name: string };
   }): SpaBooking {
     const usage =
@@ -117,8 +123,8 @@ export class SpaBookingService {
       specialistId: booking.specialistId,
       specialistName:
         `${booking.specialist.firstName} ${booking.specialist.lastName}`.trim(),
-      clientId: booking.clientId,
-      clientName: `${booking.client.firstName} ${booking.client.lastName}`.trim(),
+      clientId: booking.clientId ?? '',
+      clientName: this.spaClientName(booking.client, booking.guestName),
       serviceId: booking.serviceId,
       serviceName: booking.service.name,
       startAt: booking.startAt.toISOString(),
@@ -447,6 +453,159 @@ export class SpaBookingService {
     );
   }
 
+  private spaClientName(
+    client: { firstName: string; lastName: string } | null | undefined,
+    guestName?: string | null,
+  ) {
+    if (client) {
+      const name = `${client.lastName} ${client.firstName}`.trim();
+      if (name) return name;
+    }
+    return guestName?.trim() || 'Гость';
+  }
+
+  /**
+   * Local user first, then a short 1C lookup. A slow 1C does not block the form:
+   * the caller can still save a guest with the phone.
+   */
+  async lookupClientByPhone(actor: JwtPayload, rawPhone: string) {
+    const clubId = requireClubId(actor);
+    const phone = normalizePhone(rawPhone);
+    if (phone.length < 9) {
+      throw new BadRequestException('Введите номер полностью');
+    }
+
+    const local = await this.prisma.user.findFirst({
+      where: { phoneNormalized: phone },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        externalId: true,
+      },
+    });
+    if (local?.externalId) {
+      return {
+        found: true as const,
+        pending: false,
+        source: 'local' as const,
+        phone,
+        clientId: local.id,
+        externalId: local.externalId,
+        firstName: local.firstName,
+        lastName: local.lastName,
+      };
+    }
+
+    const now = new Date();
+    const cached = await this.prisma.spaPhoneLookupCache.findUnique({
+      where: { clubId_phoneNormalized: { clubId, phoneNormalized: phone } },
+    });
+    if (cached && cached.expiresAt > now) {
+      return {
+        found: cached.found,
+        pending: false,
+        source: cached.found ? ('1c' as const) : ('none' as const),
+        phone,
+        clientId: cached.localUserId ?? local?.id,
+        externalId: cached.externalId ?? undefined,
+        firstName: cached.firstName ?? local?.firstName,
+        lastName: cached.lastName ?? local?.lastName,
+      };
+    }
+
+    const provider = this.fitness.getProvider();
+    let remote: Awaited<
+      ReturnType<NonNullable<typeof provider.findClientByPhone>>
+    > | 'timeout' | null = null;
+    if (provider.findClientByPhone) {
+      remote = await Promise.race([
+        provider
+          .findClientByPhone(phone)
+          .catch(() => null),
+        new Promise<'timeout'>((resolve) =>
+          setTimeout(() => resolve('timeout'), 5_000),
+        ),
+      ]);
+    }
+
+    if (remote === 'timeout') {
+      return {
+        found: Boolean(local),
+        pending: true,
+        source: local ? ('local' as const) : ('none' as const),
+        phone,
+        clientId: local?.id,
+        externalId: local?.externalId ?? undefined,
+        firstName: local?.firstName,
+        lastName: local?.lastName,
+      };
+    }
+
+    const hit = remote && remote.externalId ? remote : null;
+    if (hit && local && !local.externalId) {
+      await this.prisma.user.update({
+        where: { id: local.id },
+        data: { externalId: hit.externalId },
+      });
+    }
+
+    const expiresAt = new Date(
+      now.getTime() + (hit ? 24 : 1) * 60 * 60 * 1000,
+    );
+    await this.prisma.spaPhoneLookupCache.upsert({
+      where: { clubId_phoneNormalized: { clubId, phoneNormalized: phone } },
+      create: {
+        clubId,
+        phoneNormalized: phone,
+        externalId: hit?.externalId,
+        firstName: hit?.firstName ?? local?.firstName,
+        lastName: hit?.lastName ?? local?.lastName,
+        localUserId: local?.id,
+        found: Boolean(hit || local),
+        expiresAt,
+      },
+      update: {
+        externalId: hit?.externalId,
+        firstName: hit?.firstName ?? local?.firstName,
+        lastName: hit?.lastName ?? local?.lastName,
+        localUserId: local?.id,
+        found: Boolean(hit || local),
+        expiresAt,
+      },
+    });
+
+    if (local) {
+      return {
+        found: true as const,
+        pending: false,
+        source: hit ? ('1c' as const) : ('local' as const),
+        phone,
+        clientId: local.id,
+        externalId: hit?.externalId ?? local.externalId ?? undefined,
+        firstName: hit?.firstName || local.firstName,
+        lastName: hit?.lastName || local.lastName,
+      };
+    }
+    if (hit) {
+      return {
+        found: true as const,
+        pending: false,
+        source: '1c' as const,
+        phone,
+        externalId: hit.externalId,
+        firstName: hit.firstName,
+        lastName: hit.lastName,
+      };
+    }
+    return {
+      found: false as const,
+      pending: false,
+      source: 'none' as const,
+      phone,
+    };
+  }
+
   // ─── Booking create ────────────────────────────────────────────────────────
 
   private async loadMembership(user: JwtPayload): Promise<Membership | null> {
@@ -478,10 +637,96 @@ export class SpaBookingService {
     return { externalId, clubId: active.clubId };
   }
 
+  private async resolveBookingClient(
+    actor: JwtPayload,
+    input: {
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+      paymentType?: 'QUOTA' | 'PAID';
+    },
+  ) {
+    let clientId = input.clientId?.trim() || undefined;
+    let guestName = input.guestName?.trim() || undefined;
+    let guestPhone = input.guestPhone?.trim() || undefined;
+    let clientExternalId: string | undefined;
+    let oneCLinkStatus: SpaOneCLinkStatus = SpaOneCLinkStatus.NOT_LINKED;
+
+    if (!clientId && guestPhone) {
+      const found = await this.lookupClientByPhone(actor, guestPhone);
+      guestPhone = found.phone;
+      if (found.clientId) {
+        clientId = found.clientId;
+        clientExternalId = found.externalId;
+        if (found.externalId) oneCLinkStatus = SpaOneCLinkStatus.LINKED;
+      } else if (found.externalId) {
+        const fromCrm = `${found.lastName ?? ''} ${found.firstName ?? ''}`.trim();
+        guestName = guestName || fromCrm || undefined;
+        clientExternalId = found.externalId;
+        oneCLinkStatus = SpaOneCLinkStatus.LINKED;
+      }
+    }
+
+    if (!clientId && !guestName) {
+      throw new BadRequestException('Укажите клиента из базы или ФИО');
+    }
+
+    let client: {
+      id: string;
+      externalId: string | null;
+      firstName: string;
+      lastName: string;
+    } | null = null;
+    let externalId: string | undefined = clientExternalId;
+    if (clientId) {
+      client = await this.prisma.user.findFirst({
+        where: {
+          id: clientId,
+          roles: { some: { role: Role.CLIENT } },
+        },
+        select: {
+          id: true,
+          externalId: true,
+          firstName: true,
+          lastName: true,
+        },
+      });
+      if (!client) throw new NotFoundException('Клиент не найден');
+      if (input.paymentType === 'QUOTA' || client.externalId || clientExternalId) {
+        try {
+          const resolved = await this.resolveExternalId(
+            clientId,
+            actor.sub === clientId
+              ? actor.externalId
+              : client.externalId ?? clientExternalId,
+          );
+          externalId = resolved.externalId;
+          oneCLinkStatus = SpaOneCLinkStatus.LINKED;
+        } catch (err) {
+          if (!clientExternalId) throw err;
+          externalId = clientExternalId;
+          oneCLinkStatus = SpaOneCLinkStatus.LINKED;
+        }
+      }
+    }
+
+    return {
+      clientId: client?.id,
+      client,
+      guestName: client ? undefined : guestName,
+      guestPhone: client ? guestPhone : guestPhone,
+      clientExternalId: externalId,
+      oneCLinkStatus,
+      externalId,
+    };
+  }
+
   async bookSpa(
     actor: JwtPayload,
     input: {
-      clientId: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
       specialistId: string;
       serviceId: string;
       startAt: string;
@@ -530,26 +775,21 @@ export class SpaBookingService {
       throw new BadRequestException('Специалист не оказывает эту услугу');
     }
 
-    const client = await this.prisma.user.findFirst({
-      where: {
-        id: input.clientId,
-        roles: { some: { role: Role.CLIENT } },
-      },
-    });
-    if (!client) throw new NotFoundException('Клиент не найден');
-
-    const { externalId } = await this.resolveExternalId(
-      input.clientId,
-      // JWT externalId only for self-book
-      actor.sub === input.clientId ? actor.externalId : client.externalId ?? undefined,
-    );
+    const resolved = await this.resolveBookingClient(actor, input);
+    const client = resolved.client;
 
     const provider = this.fitness.getProvider();
     let membership: Membership | null = null;
-    try {
-      membership = await provider.getMembership(externalId);
-    } catch {
-      membership = null;
+    if (resolved.externalId) {
+      try {
+        membership = await provider.getMembership(resolved.externalId);
+      } catch {
+        membership = null;
+      }
+    } else if (input.paymentType === 'QUOTA') {
+      throw new BadRequestException(
+        'Квоту можно списать только у клиента, найденного в 1С',
+      );
     }
 
     let membershipServiceName = input.membershipServiceName;
@@ -645,7 +885,11 @@ export class SpaBookingService {
           where: { id: existing.id },
           data: {
             clubId,
-            clientId: input.clientId,
+            clientId: resolved.clientId ?? null,
+            guestName: resolved.guestName ?? null,
+            guestPhone: resolved.guestPhone ?? null,
+            clientExternalId: resolved.clientExternalId ?? null,
+            oneCLinkStatus: resolved.oneCLinkStatus,
             serviceId: input.serviceId,
             endAt: end,
             origin: input.origin,
@@ -689,7 +933,11 @@ export class SpaBookingService {
           data: {
             clubId,
             specialistId: input.specialistId,
-            clientId: input.clientId,
+            clientId: resolved.clientId ?? null,
+            guestName: resolved.guestName ?? null,
+            guestPhone: resolved.guestPhone ?? null,
+            clientExternalId: resolved.clientExternalId ?? null,
+            oneCLinkStatus: resolved.oneCLinkStatus,
             serviceId: input.serviceId,
             startAt: start,
             endAt: end,
@@ -747,13 +995,15 @@ export class SpaBookingService {
     ) {
       const specialistName =
         `${booking.specialist.firstName} ${booking.specialist.lastName}`.trim();
-      await this.notifications.notifySpaAssigned({
-        clientId: input.clientId,
-        specialistId: input.specialistId,
-        specialistName: specialistName || 'Специалист',
-        serviceName: booking.service.name,
-        startAt: start,
-      });
+      if (resolved.clientId) {
+        await this.notifications.notifySpaAssigned({
+          clientId: resolved.clientId,
+          specialistId: input.specialistId,
+          specialistName: specialistName || 'Специалист',
+          serviceName: booking.service.name,
+          startAt: start,
+        });
+      }
     }
 
     return { booking: this.mapBooking(booking), membership };
@@ -779,7 +1029,9 @@ export class SpaBookingService {
   async specialistAssign(
     user: JwtPayload,
     dto: {
-      clientId: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
       serviceId: string;
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
@@ -796,7 +1048,9 @@ export class SpaBookingService {
   async adminAssign(
     user: JwtPayload,
     dto: {
-      clientId: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
       specialistId: string;
       serviceId: string;
       startAt: string;
@@ -820,7 +1074,15 @@ export class SpaBookingService {
     if (booking.status === SpaBookingStatus.CANCELLED) {
       throw new BadRequestException('Запись отменена');
     }
+    if (booking.endAt > new Date()) {
+      throw new BadRequestException('Занятие ещё не закончилось');
+    }
     await this.serviceUsage.markPerformerConfirmed(bookingId, 'SPA');
+    await this.sessionApproval.confirmPerformer(
+      user,
+      SessionApprovalKind.SPA,
+      bookingId,
+    );
     const refreshed = await this.prisma.spaBooking.findUniqueOrThrow({
       where: { id: bookingId },
       include: { specialist: true, client: true, service: true },
@@ -952,9 +1214,16 @@ export class SpaBookingService {
           'Отмена в 1С недоступна. Свяжитесь с администратором.',
         );
       }
+      if (!booking.clientId) {
+        throw new BadRequestException(
+          'Отмена в 1С доступна только для клиента из базы',
+        );
+      }
       const { externalId } = await this.resolveExternalId(
         booking.clientId,
-        user.sub === booking.clientId ? user.externalId : booking.client.externalId ?? undefined,
+        user.sub === booking.clientId
+          ? user.externalId
+          : booking.client?.externalId ?? booking.clientExternalId ?? undefined,
       );
       try {
         await restore.call(provider, externalId, {
@@ -980,21 +1249,21 @@ export class SpaBookingService {
       },
     });
 
-    const clientName =
-      `${booking.client.lastName} ${booking.client.firstName}`.trim() ||
-      booking.client.email;
-    await this.notifications
-      .notifyBookingCancelled({
-        clubId: booking.clubId,
-        clientId: booking.clientId,
-        clientName,
-        clientPhone: booking.client.phone ?? undefined,
-        sessionTitle: booking.service.name,
-        startAt: booking.startAt,
-        sessionType: 'spa',
-        trainerId: booking.specialistId,
-      })
-      .catch(() => undefined);
+    const clientName = this.spaClientName(booking.client, booking.guestName);
+    if (booking.clientId) {
+      await this.notifications
+        .notifyBookingCancelled({
+          clubId: booking.clubId,
+          clientId: booking.clientId,
+          clientName,
+          clientPhone: booking.client?.phone ?? booking.guestPhone ?? undefined,
+          sessionTitle: booking.service.name,
+          startAt: booking.startAt,
+          sessionType: 'spa',
+          trainerId: booking.specialistId,
+        })
+        .catch(() => undefined);
+    }
 
     return { success: true };
   }
@@ -1225,8 +1494,8 @@ export class SpaBookingService {
         title: b.service.name,
         startAt: b.startAt.toISOString(),
         endAt: b.endAt.toISOString(),
-        clientId: b.clientId,
-        clientName: `${b.client.firstName} ${b.client.lastName}`.trim(),
+        clientId: b.clientId ?? undefined,
+        clientName: this.spaClientName(b.client, b.guestName),
         bookingId: b.id,
         serviceId: b.serviceId,
         serviceName: b.service.name,

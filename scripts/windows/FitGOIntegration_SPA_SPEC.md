@@ -36,7 +36,11 @@ Request JSON:
 }
 ```
 
-Response `200`: полный membership JSON (как GET `/v1/membership`).
+Response `200`: полный membership JSON (как GET `/v1/membership`) плюс поля связи:
+- `docId` — `ИдентификаторЗанятия` (тот же `id`, что в `/v1/class-sessions`)
+- `docNumber` — номер документа
+
+FitGO сохраняет `crmDocRef = docId`. В выгрузке занятий дополнительно отдаётся `fitgoBookingRef` (из комментария `bookingRef=…`).
 
 Errors:
 

@@ -251,10 +251,45 @@ export function BookingControlPanel({
   }, [pendingKey]);
 
   const openDetail = async (sessionKey: string) => {
-    setDetailLoading(true);
     setComment('');
     setAdminComment('');
     closePhotos();
+    const listItem = items.find((i) => i.sessionKey === sessionKey);
+
+    // ПТ продажа: show modal immediately from list row (avoid hang on 1C re-fetch).
+    if (listItem?.source === 'SALE') {
+      const payment = listItem.payment;
+      setSelected({
+        ...listItem,
+        members: [
+          {
+            externalId: listItem.number || listItem.sessionKey,
+            clientName: listItem.clientName || '—',
+            attendance:
+              payment === 'PAID' || payment === 'QUOTA' ? 'ATTENDED' : 'EXPECTED',
+            payment,
+          },
+        ],
+        remark: null,
+        remarksHistory: [],
+        crmDocRef: listItem.number,
+      });
+      setLocalSeen(new Set());
+      setDetailLoading(false);
+      try {
+        const d = await api.detail(sessionKey);
+        setSelected(d);
+      } catch (e) {
+        // Keep provisional detail; only surface error if we have nothing useful.
+        if (!listItem.title) {
+          setMessage(e instanceof Error ? e.message : 'Ошибка');
+        }
+      }
+      return;
+    }
+
+    setDetailLoading(true);
+    setSelected(null);
     try {
       const d = await api.detail(sessionKey);
       setSelected(d);
@@ -265,6 +300,7 @@ export function BookingControlPanel({
       setLocalSeen(seen);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
+      setSelected(null);
     } finally {
       setDetailLoading(false);
     }
@@ -1174,6 +1210,29 @@ export function BookingControlPanel({
                     ) : null}
                   </div>
                 )}
+                {selected.kind === 'SPA' &&
+                selected.status !== 'CANCELLED' &&
+                selected.approvalPhase &&
+                selected.approvalPhase !== 'APPROVED' ? (
+                  <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/40 p-2 text-xs text-slate-300">
+                    <p className="text-amber-300">
+                      {selected.approvalLabel ??
+                        (selected.approvalPhase === 'PENDING_ADMIN'
+                          ? 'Ждёт администратора'
+                          : 'Ждёт специалиста')}
+                    </p>
+                    {canApproveGroup && api.approveGroup ? (
+                      <button
+                        type="button"
+                        className="btn-primary w-full text-sm"
+                        onClick={approveGroup}
+                        disabled={approveBusy}
+                      >
+                        Подтвердить
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
                 {selected.kind === 'GROUP' &&
                 selected.source === '1C' &&
                 !selected.groupApproval?.locked &&

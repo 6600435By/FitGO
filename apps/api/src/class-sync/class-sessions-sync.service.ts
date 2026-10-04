@@ -240,6 +240,7 @@ export class ClassSessionsSyncService {
       employeeExternalId: row.employeeExternalId?.trim() || null,
       employeeName: row.employeeName?.trim() || null,
       roomTitle: row.roomTitle?.trim() || null,
+      fitgoBookingRef: row.fitgoBookingRef?.trim() || null,
       bookedCount: row.bookedCount ?? 0,
       headerAttendedCount: row.headerAttendedCount ?? 0,
       attendedCount,

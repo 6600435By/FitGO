@@ -762,10 +762,28 @@ export const api = {
   specialistSpaBookings: (token: string) =>
     request<SpaBooking[]>('/specialist/spa-bookings', {}, token),
 
+  lookupSpaClientByPhone: (token: string, phone: string) =>
+    request<{
+      found: boolean;
+      pending: boolean;
+      source: 'local' | '1c' | 'none';
+      phone: string;
+      clientId?: string;
+      externalId?: string;
+      firstName?: string;
+      lastName?: string;
+    }>(
+      `/specialist/clients/by-phone?phone=${encodeURIComponent(phone)}`,
+      {},
+      token,
+    ),
+
   specialistAssignSpaBooking: (
     token: string,
     data: {
-      clientId: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
       serviceId: string;
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
@@ -860,7 +878,9 @@ export const api = {
   adminAssignSpaBooking: (
     token: string,
     data: {
-      clientId: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
       specialistId: string;
       serviceId: string;
       startAt: string;

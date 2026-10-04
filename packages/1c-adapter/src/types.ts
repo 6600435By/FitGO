@@ -52,6 +52,8 @@ export interface FitgoClassSessionRow {
   bookedCount?: number;
   headerAttendedCount?: number;
   attendedCount?: number;
+  /** FitGO SpaBooking id from document comment bookingRef=… */
+  fitgoBookingRef?: string;
   members?: FitgoClassSessionMemberRow[];
 }
 

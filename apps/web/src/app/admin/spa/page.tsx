@@ -33,8 +33,11 @@ export default function AdminSpaPage() {
     allowedServiceIds: [] as string[],
     allowedSpecialistIds: [] as string[],
   });
+  const [phoneLookup, setPhoneLookup] = useState('');
   const [assignForm, setAssignForm] = useState({
     clientId: '',
+    guestName: '',
+    guestPhone: '',
     specialistId: '',
     serviceId: '',
     startAt: '',
@@ -128,7 +131,19 @@ export default function AdminSpaPage() {
     if (!token) return;
     setBusy(true);
     try {
-      await api.adminAssignSpaBooking(token, assignForm);
+      await api.adminAssignSpaBooking(token, {
+        specialistId: assignForm.specialistId,
+        serviceId: assignForm.serviceId,
+        startAt: assignForm.startAt,
+        paymentType: assignForm.paymentType,
+        ...(assignForm.guestPhone
+          ? {
+              guestPhone: assignForm.guestPhone,
+              guestName: assignForm.guestName,
+              ...(assignForm.clientId ? { clientId: assignForm.clientId } : {}),
+            }
+          : { clientId: assignForm.clientId }),
+      });
       setMessage('Клиент записан');
       await reload();
     } catch (err) {
@@ -356,6 +371,57 @@ export default function AdminSpaPage() {
         <div className="space-y-4">
           <div className="card space-y-3">
             <h3 className="font-medium">Добавить запись</h3>
+            <input
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+              placeholder="Телефон — найдём клиента в 1С"
+              value={assignForm.guestPhone}
+              onChange={(e) =>
+                setAssignForm((f) => ({
+                  ...f,
+                  guestPhone: e.target.value,
+                  clientId: '',
+                }))
+              }
+              onBlur={async (e) => {
+                const raw = e.target.value;
+                if (raw.replace(/\D/g, '').length < 9) {
+                  setPhoneLookup('');
+                  return;
+                }
+                const token = getToken();
+                if (!token) return;
+                setPhoneLookup('Ищем клиента…');
+                try {
+                  const found = await api.lookupSpaClientByPhone(token, raw);
+                  const name = `${found.lastName ?? ''} ${found.firstName ?? ''}`.trim();
+                  if (found.pending) {
+                    setPhoneLookup('1С не ответила. Укажите ФИО.');
+                  } else if (!found.found) {
+                    setPhoneLookup('В 1С нет. Укажите ФИО.');
+                  } else {
+                    setPhoneLookup(name ? `Найден: ${name}` : 'Клиент найден');
+                    setAssignForm((f) => ({
+                      ...f,
+                      clientId: found.clientId ?? '',
+                      guestName: f.guestName || name,
+                    }));
+                  }
+                } catch (err) {
+                  setPhoneLookup(err instanceof Error ? err.message : 'Ошибка поиска');
+                }
+              }}
+            />
+            {phoneLookup ? (
+              <p className="text-sm text-slate-300">{phoneLookup}</p>
+            ) : null}
+            <input
+              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+              placeholder="ФИО, если клиента нет в базе"
+              value={assignForm.guestName}
+              onChange={(e) =>
+                setAssignForm((f) => ({ ...f, guestName: e.target.value }))
+              }
+            />
             <select
               className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
               value={assignForm.clientId}

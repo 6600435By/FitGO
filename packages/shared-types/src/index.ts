@@ -92,6 +92,10 @@ export interface Membership {
   freezeDaysTotal?: number;
   /** End of current freeze window when status is FROZEN */
   frozenUntil?: string;
+  /** 1C document id after SPA consume/sale (ИдентификаторЗанятия) */
+  docId?: string;
+  /** 1C document number after SPA consume/sale */
+  docNumber?: string;
 }
 
 export interface FreezeMembershipRequest {

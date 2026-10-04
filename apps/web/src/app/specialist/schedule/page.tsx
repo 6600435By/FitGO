@@ -26,12 +26,16 @@ export default function SpecialistSchedulePage() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [showAssign, setShowAssign] = useState(false);
+  const [assignMode, setAssignMode] = useState<'base' | 'phone'>('phone');
   const [assignForm, setAssignForm] = useState({
     clientId: '',
+    guestName: '',
+    guestPhone: '',
     serviceId: '',
     startAt: '',
     paymentType: 'PAID' as 'QUOTA' | 'PAID',
   });
+  const [phoneLookup, setPhoneLookup] = useState('');
 
   const period = useMemo(() => {
     const start = new Date();
@@ -124,7 +128,19 @@ export default function SpecialistSchedulePage() {
     setBusy(true);
     setMessage('');
     try {
-      await api.specialistAssignSpaBooking(token, assignForm);
+      await api.specialistAssignSpaBooking(token, {
+        serviceId: assignForm.serviceId,
+        startAt: assignForm.startAt,
+        paymentType: assignForm.paymentType,
+        ...(assignMode === 'base'
+          ? { clientId: assignForm.clientId }
+          : assignForm.clientId
+            ? { clientId: assignForm.clientId, guestPhone: assignForm.guestPhone }
+            : {
+                guestName: assignForm.guestName,
+                guestPhone: assignForm.guestPhone,
+              }),
+      });
       setShowAssign(false);
       setMessage('Клиент записан');
       await reload();
@@ -135,6 +151,44 @@ export default function SpecialistSchedulePage() {
     }
   };
 
+  const lookupPhone = async (raw: string) => {
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length < 9) {
+      setPhoneLookup('Введите номер полностью');
+      setAssignForm((f) => ({ ...f, clientId: '' }));
+      return;
+    }
+    const token = getToken();
+    if (!token) return;
+    setPhoneLookup('Ищем клиента…');
+    try {
+      const found = await api.lookupSpaClientByPhone(token, raw);
+      if (found.pending) {
+        setPhoneLookup('1С не ответила. Можно записать гостя по ФИО, телефон сохранится.');
+        setAssignForm((f) => ({ ...f, clientId: found.clientId ?? '' }));
+        return;
+      }
+      if (!found.found) {
+        setPhoneLookup('В 1С и в базе нет. Укажите ФИО — запишем как гостя.');
+        setAssignForm((f) => ({ ...f, clientId: '' }));
+        return;
+      }
+      const name = `${found.lastName ?? ''} ${found.firstName ?? ''}`.trim();
+      setPhoneLookup(
+        found.clientId
+          ? `Клиент из базы: ${name}`
+          : `Клиент из 1С: ${name}. Запись свяжется с ним.`,
+      );
+      setAssignForm((f) => ({
+        ...f,
+        clientId: found.clientId ?? '',
+        guestName: f.guestName || name,
+      }));
+    } catch (err) {
+      setPhoneLookup(err instanceof Error ? err.message : 'Ошибка поиска');
+    }
+  };
+
   const completeBooking = async (bookingId: string) => {
     const token = getToken();
     if (!token) return;
@@ -142,7 +196,7 @@ export default function SpecialistSchedulePage() {
     setMessage('');
     try {
       await api.specialistCompleteSpaBooking(token, bookingId);
-      setMessage('Услуга подтверждена');
+      setMessage('Подтверждено. Ждёт администратора.');
       await reload();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка подтверждения');
@@ -303,19 +357,18 @@ export default function SpecialistSchedulePage() {
                 )}
                 {b.usage?.performanceStatus === 'CONFIRMED_BY_PERFORMER' ? (
                   <p className="mt-2 text-xs text-emerald-400">
-                    Выполнение подтверждено
-                    {b.usage.eligibleForMotivation ? ' · в мотивацию' : ''}
+                    Специалист подтвердил · ждёт администратора
                   </p>
-                ) : (
+                ) : new Date(b.endAt) <= new Date() ? (
                   <button
                     type="button"
                     className="btn-secondary mt-2 text-sm"
                     disabled={busy}
                     onClick={() => completeBooking(b.id)}
                   >
-                    Подтвердить выполнение
+                    Подтвердить
                   </button>
-                )}
+                ) : null}
               </li>
               );
             })}
@@ -335,6 +388,23 @@ export default function SpecialistSchedulePage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="text-lg font-semibold">Добавить клиента</h3>
+            <div className="flex gap-2 text-sm">
+              <button
+                type="button"
+                className={assignMode === 'phone' ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setAssignMode('phone')}
+              >
+                По телефону
+              </button>
+              <button
+                type="button"
+                className={assignMode === 'base' ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => setAssignMode('base')}
+              >
+                Из базы
+              </button>
+            </div>
+            {assignMode === 'base' ? (
             <label className="block text-sm">
               <span className="text-slate-400">Клиент</span>
               <select
@@ -352,6 +422,40 @@ export default function SpecialistSchedulePage() {
                 ))}
               </select>
             </label>
+            ) : (
+              <>
+                <label className="block text-sm">
+                  <span className="text-slate-400">Телефон</span>
+                  <input
+                    className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2"
+                    value={assignForm.guestPhone}
+                    placeholder="375291112233"
+                    onChange={(e) =>
+                      setAssignForm((f) => ({
+                        ...f,
+                        guestPhone: e.target.value,
+                        clientId: '',
+                      }))
+                    }
+                    onBlur={(e) => lookupPhone(e.target.value)}
+                  />
+                </label>
+                {phoneLookup ? (
+                  <p className="text-sm text-slate-300">{phoneLookup}</p>
+                ) : null}
+                <label className="block text-sm">
+                  <span className="text-slate-400">ФИО</span>
+                  <input
+                    className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2"
+                    value={assignForm.guestName}
+                    placeholder="Если клиента нет в 1С"
+                    onChange={(e) =>
+                      setAssignForm((f) => ({ ...f, guestName: e.target.value }))
+                    }
+                  />
+                </label>
+              </>
+            )}
             <label className="block text-sm">
               <span className="text-slate-400">Услуга</span>
               <select
@@ -414,9 +518,12 @@ export default function SpecialistSchedulePage() {
                 className="btn-primary flex-1"
                 disabled={
                   busy ||
-                  !assignForm.clientId ||
                   !assignForm.serviceId ||
-                  !assignForm.startAt
+                  !assignForm.startAt ||
+                  (assignMode === 'base'
+                    ? !assignForm.clientId
+                    : !assignForm.guestPhone ||
+                      (!assignForm.clientId && !assignForm.guestName.trim()))
                 }
                 onClick={assignClient}
               >

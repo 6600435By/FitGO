@@ -390,8 +390,10 @@ export class ClubScheduleService {
         status,
         staffId: b.specialistId,
         staffName: `${b.specialist.lastName} ${b.specialist.firstName}`.trim(),
-        clientId: b.clientId,
-        clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+        clientId: b.clientId ?? undefined,
+        clientName: b.client
+          ? `${b.client.lastName} ${b.client.firstName}`.trim() || 'Гость'
+          : b.guestName?.trim() || 'Гость',
         bookingId: b.id,
         sessionKey: `fitgo:SPA:${b.id}`,
         booked: 1,

@@ -1,8 +1,17 @@
 import { IsISO8601, IsIn, IsOptional, IsString } from 'class-validator';
 
 export class AssignSpaBookingDto {
+  @IsOptional()
   @IsString()
-  clientId!: string;
+  clientId?: string;
+
+  @IsOptional()
+  @IsString()
+  guestName?: string;
+
+  @IsOptional()
+  @IsString()
+  guestPhone?: string;
 
   @IsString()
   serviceId!: string;

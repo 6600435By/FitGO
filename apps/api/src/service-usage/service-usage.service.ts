@@ -8,6 +8,7 @@ import {
   ServicePresenceStatus,
   ServiceUsageStatus,
   SpaBookingStatus,
+  SpaOneCLinkStatus,
   SpaPaymentType,
 } from '@prisma/client';
 import {
@@ -196,8 +197,10 @@ export class ServiceUsageService {
         id: b.id,
         kind: 'SPA',
         title: b.service.name,
-        clientId: b.clientId,
-        clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+        clientId: b.clientId ?? '',
+        clientName: b.client
+          ? `${b.client.lastName} ${b.client.firstName}`.trim() || 'Гость'
+          : b.guestName?.trim() || 'Гость',
         performerName: `${b.specialist.lastName} ${b.specialist.firstName}`.trim(),
         startAt: b.startAt.toISOString(),
         endAt: b.endAt.toISOString(),
@@ -332,7 +335,9 @@ export class ServiceUsageService {
         kind: 'SPA',
         title: b.service.name,
         performerName: `${b.specialist.lastName} ${b.specialist.firstName}`.trim(),
-        clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+        clientName: b.client
+          ? `${b.client.lastName} ${b.client.firstName}`.trim() || 'Гость'
+          : b.guestName?.trim() || 'Гость',
         startAt: b.startAt.toISOString(),
         trustBand: b.trustBand as TrustExceptionItem['trustBand'],
         trustReasons: Array.isArray(b.trustReasons)
@@ -529,7 +534,8 @@ export class ServiceUsageService {
       return;
     }
 
-    const externalId = booking.client.externalId;
+    const externalId =
+      booking.client?.externalId ?? booking.clientExternalId;
     if (!externalId) {
       throw new BadRequestException('У клиента нет CRM externalId');
     }
@@ -548,7 +554,7 @@ export class ServiceUsageService {
       if (!consume) {
         throw new BadRequestException('Списание услуги в 1С недоступно');
       }
-      await consume.call(provider, externalId, {
+      const consumed = await consume.call(provider, externalId, {
         serviceName: booking.membershipServiceName ?? booking.service.name,
         serviceId: booking.serviceId,
         bookingRef: booking.id,
@@ -557,11 +563,16 @@ export class ServiceUsageService {
         employeeName: employeeName || undefined,
         employeeCode,
       });
+      const crmDocRef =
+        consumed.docId?.trim() ||
+        consumed.docNumber?.trim() ||
+        booking.id;
       await this.prisma.spaBooking.update({
         where: { id: booking.id },
         data: {
           consumedInCrmAt: new Date(),
-          crmDocRef: booking.id,
+          crmDocRef,
+          oneCLinkStatus: SpaOneCLinkStatus.LINKED,
           usageStatus: ServiceUsageStatus.CONSUMED,
           eligibleForMotivation: true,
           paymentStatus: ServicePaymentStatus.N_A,
@@ -573,7 +584,7 @@ export class ServiceUsageService {
       if (!sell) {
         throw new BadRequestException('Продажа спа-услуги в 1С недоступна');
       }
-      await sell.call(provider, externalId, {
+      const sold = await sell.call(provider, externalId, {
         serviceName: booking.service.name,
         serviceId: booking.serviceId,
         bookingRef: booking.id,
@@ -584,11 +595,14 @@ export class ServiceUsageService {
         employeeName: employeeName || undefined,
         employeeCode,
       });
+      const crmDocRef =
+        sold.docId?.trim() || sold.docNumber?.trim() || booking.id;
       await this.prisma.spaBooking.update({
         where: { id: booking.id },
         data: {
           consumedInCrmAt: new Date(),
-          crmDocRef: booking.id,
+          crmDocRef,
+          oneCLinkStatus: SpaOneCLinkStatus.LINKED,
           usageStatus: ServiceUsageStatus.CONSUMED,
           eligibleForMotivation: true,
           paymentStatus: ServicePaymentStatus.DEBT,

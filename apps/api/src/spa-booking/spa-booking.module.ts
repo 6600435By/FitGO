@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BookingControlModule } from '../booking-control/booking-control.module';
 import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { FeaturesModule } from '../features/features.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -7,7 +8,12 @@ import { SpaBookingController } from './spa-booking.controller';
 import { SpaBookingService } from './spa-booking.service';
 
 @Module({
-  imports: [FeaturesModule, NotificationsModule, ServiceUsageModule],
+  imports: [
+    FeaturesModule,
+    NotificationsModule,
+    ServiceUsageModule,
+    BookingControlModule,
+  ],
   controllers: [SpaBookingController],
   providers: [SpaBookingService, ClubCrmLinkService],
   exports: [SpaBookingService],

@@ -47,6 +47,9 @@ interface FitgoMembershipData {
   freezeDaysRemaining?: number;
   freezeDaysTotal?: number;
   frozenUntil?: string;
+  /** Created 1C class/visit document id (same as class-sessions.id) */
+  docId?: string;
+  docNumber?: string;
 }
 
 interface FitgoVisitData {
@@ -450,10 +453,10 @@ export class FitgoHttpProvider {
     try {
       const data = await this.request<
         import('@fitgo/shared-types').SpecialistServiceDebt[]
-      >(`/trainer-pt-sales?${q.toString()}`, { timeoutMs: 120_000 });
+      >(`/trainer-pt-sales?${q.toString()}`, { timeoutMs: 12_000 });
       return Array.isArray(data) ? data : [];
     } catch {
-      // Endpoint may not be published yet on club 1C
+      // Endpoint may not be published yet on club 1C / slow publication
       return [];
     }
   }
@@ -658,6 +661,8 @@ function mapMembership(data: FitgoMembershipData): Membership {
     freezeDaysRemaining: coerceOptionalNumber(data.freezeDaysRemaining),
     freezeDaysTotal: coerceOptionalNumber(data.freezeDaysTotal),
     frozenUntil: data.frozenUntil || undefined,
+    docId: data.docId?.trim() || undefined,
+    docNumber: data.docNumber?.trim() || undefined,
   };
 }
 

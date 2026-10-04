@@ -169,6 +169,12 @@ enum SpaPaymentType {
   PAID
 }
 
+/// How a SPA booking is tied to a 1C client or document.
+enum SpaOneCLinkStatus {
+  NOT_LINKED
+  LINKED
+}
+
 enum SpaBookingOrigin {
   CLIENT_BOOKED
   SPECIALIST_ASSIGNED
@@ -1520,7 +1526,13 @@ model SpaBooking {
   id                     String           @id @default(cuid())
   clubId                 String
   specialistId           String
-  clientId               String
+  clientId               String?
+  /// Manual client when there is no app user.
+  guestName              String?
+  guestPhone             String?
+  /// 1C counterparty id when the client is not a local user.
+  clientExternalId       String?
+  oneCLinkStatus         SpaOneCLinkStatus @default(NOT_LINKED)
   serviceId              String
   startAt                DateTime
   endAt                  DateTime
@@ -1559,16 +1571,32 @@ model SpaBooking {
 
   club       Club       @relation(fields: [clubId], references: [id], onDelete: Cascade)
   specialist User       @relation("SpecialistSpaBookings", fields: [specialistId], references: [id], onDelete: Cascade)
-  client     User       @relation("ClientSpaBookings", fields: [clientId], references: [id], onDelete: Cascade)
+  client     User?      @relation("ClientSpaBookings", fields: [clientId], references: [id], onDelete: Cascade)
   service    SpaService @relation(fields: [serviceId], references: [id], onDelete: Restrict)
 
   @@unique([specialistId, startAt])
   @@index([specialistId, startAt])
   @@index([clientId])
+  @@index([clubId, clientExternalId])
   @@index([clubId, startAt])
   @@index([reviewFlag, usageStatus])
   @@index([presenceStatus, startAt])
   @@index([trustBand, trustResolution])
+}
+
+/// Short-lived phone → 1C client lookup so manual SPA booking does not hit 1C every time.
+model SpaPhoneLookupCache {
+  clubId          String
+  phoneNormalized String
+  externalId      String?
+  firstName       String?
+  lastName        String?
+  localUserId     String?
+  found           Boolean
+  expiresAt       DateTime
+  updatedAt       DateTime @updatedAt
+
+  @@id([clubId, phoneNormalized])
 }
 
 /// Group class journal for payroll (roster attestation).
@@ -2060,6 +2088,8 @@ model OnexClassSession {
   employeeExternalId   String?
   employeeName         String?
   roomTitle            String?
+  /// FitGO SpaBooking / PT booking id from 1C comment bookingRef=
+  fitgoBookingRef      String?
   bookedCount          Int             @default(0)
   headerAttendedCount  Int             @default(0)
   /// Count of ATTENDED members — source for payroll quantity
@@ -2080,6 +2110,7 @@ model OnexClassSession {
   @@index([clubId, employeeExternalId, startAt])
   @@index([clubId, isActive, startAt])
   @@index([clubId, status, startAt])
+  @@index([clubId, fitgoBookingRef])
 }
 
 model OnexClassSessionMember {

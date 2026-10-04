@@ -188,6 +188,20 @@ export class SpaBookingController {
     return this.spa.listSpecialistBookings(user);
   }
 
+  @Get('specialist/clients/by-phone')
+  @Roles(
+    UserRole.SPECIALIST,
+    UserRole.ADMIN,
+    UserRole.MANAGER,
+    UserRole.SUPER_ADMIN,
+  )
+  lookupClientByPhone(
+    @CurrentUser() user: JwtPayload,
+    @Query('phone') phone?: string,
+  ) {
+    return this.spa.lookupClientByPhone(user, phone ?? '');
+  }
+
   @Post('specialist/spa-bookings')
   @Roles(UserRole.SPECIALIST)
   specialistAssign(
@@ -196,6 +210,8 @@ export class SpaBookingController {
   ) {
     return this.spa.specialistAssign(user, {
       clientId: dto.clientId,
+      guestName: dto.guestName,
+      guestPhone: dto.guestPhone,
       serviceId: dto.serviceId,
       startAt: dto.startAt,
       paymentType: dto.paymentType,
@@ -296,6 +312,8 @@ export class SpaBookingController {
     }
     return this.spa.adminAssign(user, {
       clientId: dto.clientId,
+      guestName: dto.guestName,
+      guestPhone: dto.guestPhone,
       specialistId: dto.specialistId,
       serviceId: dto.serviceId,
       startAt: dto.startAt,

@@ -37,7 +37,9 @@ import {
   type BookingControlRemark,
   type BookingControlStatus,
   type GroupApprovalPendingTask,
+  type GroupApprovalPhase,
   type GroupClassApprovalInfo,
+  type SessionApprovalPhase,
   type SpecialistServiceDebt,
   UserRole,
 } from '@fitgo/shared-types';
@@ -256,6 +258,7 @@ export class BookingControlService {
 
     // One-time PT from 1C sale lines (Исполнитель + сумма), no class doc required
     if (wantPtSales) {
+      this.indexTrainerPtSales(ptSales);
       for (const sale of ptSales) {
         if (
           !this.saleMatchesPerformerFilter(
@@ -363,8 +366,9 @@ export class BookingControlService {
             'SPA',
             b.startAt,
             b.specialist.externalId,
-            b.client.externalId,
+            b.client?.externalId ?? b.clientExternalId,
             b.crmDocRef,
+            b.id,
           )
         ) {
           continue;
@@ -388,7 +392,7 @@ export class BookingControlService {
           performerName:
             `${b.specialist.lastName} ${b.specialist.firstName}`.trim(),
           performerId: b.specialistId,
-          clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+          clientName: this.spaClientLabel(b),
           attendeeCount: counts.arrivedCount,
           bookedCount: counts.bookedCount,
           arrivedCount: counts.arrivedCount,
@@ -448,11 +452,8 @@ export class BookingControlService {
     const spaBookingIds = out
       .filter((i) => i.kind === 'SPA' && i.fitgoBookingId)
       .map((i) => i.fitgoBookingId!);
-    await Promise.all([
-      this.sessionApproval.ensureApprovals('PT', ptBookingIds, clubId),
-      this.sessionApproval.ensureApprovals('SPA', spaBookingIds, clubId),
-    ]);
-    if (ptBookingIds.length || spaBookingIds.length) {
+    // Read-only on list (no upserts) — create approval rows on confirm/detail.
+    if (ptBookingIds.length || out.some((i) => i.kind === 'SPA')) {
       const sessionApprovals = await this.prisma.sessionApproval.findMany({
         where: {
           clubId,
@@ -460,8 +461,21 @@ export class BookingControlService {
             ...(ptBookingIds.length
               ? [{ kind: 'PT' as const, bookingId: { in: ptBookingIds } }]
               : []),
-            ...(spaBookingIds.length
-              ? [{ kind: 'SPA' as const, bookingId: { in: spaBookingIds } }]
+            ...(spaBookingIds.length ||
+            out.some((i) => i.kind === 'SPA' && i.source === '1C')
+              ? [
+                  {
+                    kind: 'SPA' as const,
+                    bookingId: {
+                      in: [
+                        ...spaBookingIds,
+                        ...out
+                          .filter((i) => i.kind === 'SPA' && i.source === '1C')
+                          .map((i) => i.sessionKey),
+                      ],
+                    },
+                  },
+                ]
               : []),
           ],
         },
@@ -470,24 +484,29 @@ export class BookingControlService {
         sessionApprovals.map((a) => [`${a.kind}:${a.bookingId}`, a]),
       );
       out = out.map((item) => {
-        if (
-          (item.kind !== 'PT' && item.kind !== 'SPA') ||
-          !item.fitgoBookingId
-        ) {
-          return item;
-        }
+        if (item.kind !== 'PT' && item.kind !== 'SPA') return item;
+        if (item.kind === 'PT' && !item.fitgoBookingId) return item;
         if (item.status === 'CANCELLED') return item;
         const endMs = item.endAt
           ? new Date(item.endAt).getTime()
           : new Date(item.startAt).getTime();
         if (item.status === 'SCHEDULED' && endMs > Date.now()) return item;
-        const row = approvalByKey.get(`${item.kind}:${item.fitgoBookingId}`);
-        if (!row) return item;
-        const phase = this.sessionApproval.phase(row);
+        const row =
+          approvalByKey.get(`${item.kind}:${item.fitgoBookingId}`) ??
+          (item.kind === 'SPA'
+            ? approvalByKey.get(`SPA:${item.sessionKey}`)
+            : undefined);
+        if (!row && item.kind !== 'SPA') return item;
+        const phase = row
+          ? this.sessionApproval.phase(row)
+          : 'PENDING_PERFORMER';
         return {
           ...item,
           approvalPhase: phase,
-          approvalLabel: sessionApprovalLabelRu(phase),
+          approvalLabel:
+            item.kind === 'SPA' && phase === 'PENDING_PERFORMER'
+              ? 'Ждёт специалиста'
+              : sessionApprovalLabelRu(phase),
         };
       });
     }
@@ -653,7 +672,38 @@ export class BookingControlService {
         }
       }
 
-      const approvalPhase = groupApproval?.phase;
+      let approvalPhase:
+        | GroupApprovalPhase
+        | SessionApprovalPhase
+        | undefined = groupApproval?.phase;
+      let approvalLabel = groupApprovalLabelRu(groupApproval?.phase);
+      if (kind === 'SPA') {
+        const approvalId = matched?.id ?? sessionKey;
+        const row = await this.prisma.sessionApproval.findUnique({
+          where: {
+            kind_bookingId: {
+              kind: SessionApprovalKind.SPA,
+              bookingId: approvalId,
+            },
+          },
+        });
+        const end = s.endAt ?? s.startAt;
+        const controlStatus = mapOnexStatusToControl(s.status);
+        const ended = end.getTime() <= Date.now();
+        if (
+          controlStatus !== 'CANCELLED' &&
+          (controlStatus !== 'SCHEDULED' || ended)
+        ) {
+          const spaPhase: SessionApprovalPhase = row
+            ? this.sessionApproval.phase(row)
+            : 'PENDING_PERFORMER';
+          approvalPhase = spaPhase;
+          approvalLabel =
+            spaPhase === 'PENDING_PERFORMER'
+              ? 'Ждёт специалиста'
+              : sessionApprovalLabelRu(spaPhase);
+        }
+      }
       return {
         sessionKey,
         kind,
@@ -675,7 +725,7 @@ export class BookingControlService {
         payTag,
         needsReview: Boolean(open),
         approvalPhase,
-        approvalLabel: groupApprovalLabelRu(approvalPhase),
+        approvalLabel,
         fitgoBookingId: matched?.id,
         durationMin: s.durationMin ?? undefined,
         members,
@@ -694,47 +744,13 @@ export class BookingControlService {
     }
 
     if (parsed.source === 'SALE') {
-      // 1C BSL rejects ranges > 30 days; search recent 30d windows until found.
+      // Prefer list cache (no 1C round-trip). Fallback: one ≤30d fetch, never multi-window loops.
       const sale = await this.findTrainerPtSale(parsed.id);
       if (!sale) throw new NotFoundException('Продажа не найдена');
       if (viewer?.ownOnly) {
         await this.assertOwnSale(clubId, viewer.userId, sale);
       }
-      const payment: BookingControlPayment =
-        sale.paymentStatus === 'PAID' ? 'PAID' : 'DEBT';
-      const saleCounts = this.singleClientCounts('COMPLETED', {
-        arrived: payment === 'PAID',
-      });
-      return {
-        sessionKey,
-        kind: 'PT',
-        source: 'SALE',
-        title: sale.serviceName || 'Разовая ПТ (продажа)',
-        startAt: this.normalizeOccurredAt(sale.occurredAt),
-        status: 'COMPLETED',
-        performerName: sale.employeeName?.trim() || '—',
-        clientName: sale.clientName || '—',
-        number: sale.docRef || undefined,
-        attendeeCount: saleCounts.arrivedCount,
-        bookedCount: saleCounts.bookedCount,
-        arrivedCount: saleCounts.arrivedCount,
-        noShowCount: saleCounts.noShowCount,
-        payment,
-        payTag: 'SALE',
-        needsReview: Boolean(open),
-        members: [
-          {
-            externalId: sale.externalId || sale.docRef || 'sale',
-            clientName: sale.clientName || '—',
-            attendance: payment === 'PAID' ? 'ATTENDED' : 'EXPECTED',
-            payment,
-          },
-        ],
-        remark: open,
-        remarksHistory: mappedRemarks,
-        crmDocRef: sale.docRef || undefined,
-        priceMinor: Math.round((Number(sale.amount) || 0) * 100),
-      };
+      return this.mapSaleDetail(sessionKey, sale, open, mappedRemarks);
     }
 
     // FitGO-only
@@ -821,7 +837,7 @@ export class BookingControlService {
         performerName:
           `${b.specialist.lastName} ${b.specialist.firstName}`.trim(),
         performerId: b.specialistId,
-        clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+        clientName: this.spaClientLabel(b),
         attendeeCount: counts.arrivedCount,
         bookedCount: counts.bookedCount,
         arrivedCount: counts.arrivedCount,
@@ -839,7 +855,10 @@ export class BookingControlService {
         needsReview: Boolean(open),
         fitgoBookingId: b.id,
         approvalPhase: approval?.phase,
-        approvalLabel: sessionApprovalLabelRu(approval?.phase),
+        approvalLabel:
+          approval?.phase === 'PENDING_PERFORMER'
+            ? 'Ждёт специалиста'
+            : sessionApprovalLabelRu(approval?.phase),
         members: [],
         remark: open,
         remarksHistory: mappedRemarks,
@@ -1051,6 +1070,14 @@ export class BookingControlService {
     }
 
     const clubId = requireClubId(actor);
+    if (parsed?.source === '1C') {
+      const onexSpa = await this.prisma.onexClassSession.findFirst({
+        where: { clubId, externalId: parsed.id, isActive: true },
+      });
+      if (onexSpa?.kind === OnexClassKind.SPA) {
+        return this.approveSpaFromOnex(actor, onexSpa, comment);
+      }
+    }
     const session = await this.requireGroupOnex(clubId, sessionKey);
     this.assertGroupEditable(session);
     this.assertSessionEnded(session);
@@ -1188,6 +1215,17 @@ export class BookingControlService {
     const prismaKind =
       kind === 'PT' ? SessionApprovalKind.PT : SessionApprovalKind.SPA;
 
+    if (kind === 'SPA') {
+      const booking = await this.prisma.spaBooking.findFirst({
+        where: { id: bookingId, clubId },
+      });
+      if (!booking) throw new NotFoundException('Запись не найдена');
+      if (booking.status === SpaBookingStatus.CANCELLED) {
+        throw new BadRequestException('Запись отменена');
+      }
+      this.assertSessionEnded(booking);
+    }
+
     if (isOverride) {
       await this.sessionApproval.ensureApproval(prismaKind, bookingId, clubId);
       await this.prisma.sessionApproval.update({
@@ -1218,6 +1256,118 @@ export class BookingControlService {
     }
 
     return this.detail(clubId, fitgoSessionKey(kind, bookingId), {
+      userId: actor.sub,
+      ownOnly: !isOverride && !isAdmin,
+    });
+  }
+
+  /** 1C SPA session with no FitGO booking: same two-step approval, keyed by 1c:{id}. */
+  private async approveSpaFromOnex(
+    actor: JwtPayload,
+    session: {
+      externalId: string;
+      number: string | null;
+      startAt: Date;
+      endAt: Date | null;
+      employeeExternalId: string | null;
+      title: string;
+      payrollLocked: boolean;
+    },
+    _comment?: string,
+  ): Promise<BookingControlDetail> {
+    const clubId = requireClubId(actor);
+    this.assertGroupEditable(session);
+    this.assertSessionEnded(session);
+
+    const matched = await this.findMatchingFitgoBooking(
+      clubId,
+      'SPA',
+      session,
+      undefined,
+    );
+    if (matched) {
+      return this.approveFitgoBooking(actor, 'SPA', matched.id, _comment);
+    }
+
+    const roles = actor.roles ?? [];
+    const isOverride =
+      roles.includes(UserRole.SUPER_ADMIN) ||
+      roles.includes(UserRole.MANAGER);
+    const isAdmin = roles.includes(UserRole.ADMIN);
+    const isPerformer = roles.includes(UserRole.SPECIALIST);
+    if (!isOverride && !isAdmin && !isPerformer) {
+      throw new ForbiddenException('Нет прав на подтверждение');
+    }
+    if (!isOverride && !isAdmin && session.employeeExternalId) {
+      const user = await this.prisma.user.findFirst({
+        where: { id: actor.sub, clubId },
+        select: { externalId: true },
+      });
+      if (
+        user?.externalId &&
+        user.externalId !== session.employeeExternalId
+      ) {
+        throw new ForbiddenException('Чужое занятие');
+      }
+    }
+
+    const bookingId = onexSessionKey(session.externalId);
+    const now = new Date();
+    if (isOverride) {
+      await this.prisma.sessionApproval.upsert({
+        where: { kind_bookingId: { kind: SessionApprovalKind.SPA, bookingId } },
+        create: {
+          clubId,
+          kind: SessionApprovalKind.SPA,
+          bookingId,
+          overrideApprovedAt: now,
+          overrideApprovedById: actor.sub,
+        },
+        update: {
+          overrideApprovedAt: now,
+          overrideApprovedById: actor.sub,
+          returnedAt: null,
+          returnReason: null,
+        },
+      });
+    } else if (isAdmin) {
+      const row = await this.sessionApproval.ensureApproval(
+        SessionApprovalKind.SPA,
+        bookingId,
+        clubId,
+      );
+      if (!row.performerConfirmedAt) {
+        throw new BadRequestException(
+          'Сначала специалист должен подтвердить запись',
+        );
+      }
+      await this.sessionApproval.adminApprove(
+        actor,
+        SessionApprovalKind.SPA,
+        bookingId,
+      );
+    } else {
+      await this.prisma.sessionApproval.upsert({
+        where: { kind_bookingId: { kind: SessionApprovalKind.SPA, bookingId } },
+        create: {
+          clubId,
+          kind: SessionApprovalKind.SPA,
+          bookingId,
+          performerConfirmedAt: now,
+        },
+        update: {
+          performerConfirmedAt: now,
+          adminApprovedAt: null,
+          adminApprovedById: null,
+          overrideApprovedAt: null,
+          overrideApprovedById: null,
+          returnedAt: null,
+          returnReason: null,
+        },
+      });
+    }
+
+    return this.detail(clubId, bookingId, {
       userId: actor.sub,
       ownOnly: !isOverride && !isAdmin,
     });
@@ -1812,6 +1962,36 @@ export class BookingControlService {
     { at: number; rows: SpecialistServiceDebt[] }
   >();
 
+  /** docRef / externalId → sale (filled on list; used by detail to avoid 1C). */
+  private readonly ptSaleByDoc = new Map<
+    string,
+    { at: number; sale: SpecialistServiceDebt }
+  >();
+
+  private indexTrainerPtSales(rows: SpecialistServiceDebt[]) {
+    const at = Date.now();
+    for (const sale of rows) {
+      const key = (sale.docRef || sale.externalId || '').trim();
+      if (!key) continue;
+      this.ptSaleByDoc.set(key, { at, sale });
+    }
+  }
+
+  private lookupTrainerPtSale(
+    docOrExt: string,
+  ): SpecialistServiceDebt | undefined {
+    const keyed = this.ptSaleByDoc.get(docOrExt);
+    if (keyed && Date.now() - keyed.at < 10 * 60_000) return keyed.sale;
+    for (const entry of this.ptSalesCache.values()) {
+      if (Date.now() - entry.at > 60_000) continue;
+      const hit = entry.rows.find(
+        (r) => (r.docRef || r.externalId) === docOrExt,
+      );
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+
   private async fetchTrainerPtSales(
     from: string,
     to: string,
@@ -1824,27 +2004,77 @@ export class BookingControlService {
     const fn = provider.getTrainerPtSales;
     if (!fn) return [];
     try {
-      const rows = await fn.call(provider, { from, to });
+      // Hard cap so a hung / missing 1C template cannot block list/detail.
+      const rows = await Promise.race([
+        fn.call(provider, { from, to }),
+        new Promise<SpecialistServiceDebt[]>((_, reject) =>
+          setTimeout(() => reject(new Error('trainer-pt-sales timeout')), 5_000),
+        ),
+      ]);
       const list = Array.isArray(rows) ? rows : [];
       this.ptSalesCache.set(key, { at: Date.now(), rows: list });
+      this.indexTrainerPtSales(list);
       return list;
     } catch {
+      this.ptSalesCache.set(key, { at: Date.now(), rows: [] });
       return [];
     }
   }
 
-  /** Resolve one sale by docRef/externalId across recent ≤30-day windows. */
+  /** Prefer in-memory index from list; at most one ≤30d 1C fetch. */
   private async findTrainerPtSale(
     docOrExt: string,
   ): Promise<SpecialistServiceDebt | undefined> {
-    for (let i = 0; i < 4; i++) {
-      const to = this.ymdDaysAgo(30 * i);
-      const from = this.ymdDaysAgo(30 * (i + 1));
-      const sales = await this.fetchTrainerPtSales(from, to);
-      const hit = sales.find((r) => (r.docRef || r.externalId) === docOrExt);
-      if (hit) return hit;
-    }
-    return undefined;
+    const cached = this.lookupTrainerPtSale(docOrExt);
+    if (cached) return cached;
+    const sales = await this.fetchTrainerPtSales(
+      this.ymdDaysAgo(30),
+      this.ymdToday(),
+    );
+    return sales.find((r) => (r.docRef || r.externalId) === docOrExt);
+  }
+
+  private mapSaleDetail(
+    sessionKey: string,
+    sale: SpecialistServiceDebt,
+    open: BookingControlRemark | null,
+    mappedRemarks: BookingControlRemark[],
+  ): BookingControlDetail {
+    const payment: BookingControlPayment =
+      sale.paymentStatus === 'PAID' ? 'PAID' : 'DEBT';
+    const saleCounts = this.singleClientCounts('COMPLETED', {
+      arrived: payment === 'PAID',
+    });
+    return {
+      sessionKey,
+      kind: 'PT',
+      source: 'SALE',
+      title: sale.serviceName || 'Разовая ПТ (продажа)',
+      startAt: this.normalizeOccurredAt(sale.occurredAt),
+      status: 'COMPLETED',
+      performerName: sale.employeeName?.trim() || '—',
+      clientName: sale.clientName || '—',
+      number: sale.docRef || undefined,
+      attendeeCount: saleCounts.arrivedCount,
+      bookedCount: saleCounts.bookedCount,
+      arrivedCount: saleCounts.arrivedCount,
+      noShowCount: saleCounts.noShowCount,
+      payment,
+      payTag: 'SALE',
+      needsReview: Boolean(open),
+      members: [
+        {
+          externalId: sale.externalId || sale.docRef || 'sale',
+          clientName: sale.clientName || '—',
+          attendance: payment === 'PAID' ? 'ATTENDED' : 'EXPECTED',
+          payment,
+        },
+      ],
+      remark: open,
+      remarksHistory: mappedRemarks,
+      crmDocRef: sale.docRef || undefined,
+      priceMinor: Math.round((Number(sale.amount) || 0) * 100),
+    };
   }
 
   private saleMatchesPerformerFilter(
@@ -2078,22 +2308,41 @@ export class BookingControlService {
     });
   }
 
+  private spaClientLabel(b: {
+    guestName?: string | null;
+    client: { firstName: string; lastName: string } | null;
+  }) {
+    if (b.client) {
+      const name = `${b.client.lastName} ${b.client.firstName}`.trim();
+      if (name) return name;
+    }
+    return b.guestName?.trim() || 'Гость';
+  }
+
   private matchSpaInMemory(
     bookings: Array<{
       id: string;
       startAt: Date;
       crmDocRef: string | null;
+      clientExternalId?: string | null;
       specialist: { externalId: string | null };
-      client: { externalId: string | null };
+      client: { externalId: string | null } | null;
     }>,
     session: {
       externalId: string;
       number: string | null;
       startAt: Date;
       employeeExternalId: string | null;
+      fitgoBookingRef?: string | null;
     },
     clientExternalId: string | undefined,
   ) {
+    if (session.fitgoBookingRef?.trim()) {
+      const byFitgo = bookings.find(
+        (b) => b.id === session.fitgoBookingRef!.trim(),
+      );
+      if (byFitgo) return byFitgo;
+    }
     const byRef = bookings.find(
       (b) =>
         b.crmDocRef &&
@@ -2112,10 +2361,11 @@ export class BookingControlService {
       ) {
         return false;
       }
+      const bookingClientId = b.client?.externalId ?? b.clientExternalId;
       if (
         clientExternalId &&
-        b.client.externalId &&
-        b.client.externalId !== clientExternalId
+        bookingClientId &&
+        bookingClientId !== clientExternalId
       ) {
         return false;
       }
@@ -2130,6 +2380,7 @@ export class BookingControlService {
       number: string | null;
       startAt: Date;
       employeeExternalId: string | null;
+      fitgoBookingRef?: string | null;
       members: Array<{ externalId: string }>;
     }>,
     kind: 'PT' | 'SPA',
@@ -2137,7 +2388,14 @@ export class BookingControlService {
     employeeExternalId: string | null | undefined,
     clientExternalId: string | null | undefined,
     crmDocRef: string | null | undefined,
+    fitgoBookingId?: string | null,
   ): boolean {
+    if (fitgoBookingId?.trim()) {
+      const id = fitgoBookingId.trim();
+      if (onex.some((o) => o.kind === kind && o.fitgoBookingRef === id)) {
+        return true;
+      }
+    }
     if (crmDocRef?.trim()) {
       const ref = crmDocRef.trim();
       if (
@@ -2182,6 +2440,7 @@ export class BookingControlService {
       startAt: Date;
       employeeExternalId: string | null;
       title: string;
+      fitgoBookingRef?: string | null;
     },
     clientExternalId: string | undefined,
   ) {
@@ -2219,6 +2478,16 @@ export class BookingControlService {
       });
     }
 
+    if (session.fitgoBookingRef?.trim()) {
+      const byFitgo = await this.prisma.spaBooking.findFirst({
+        where: {
+          clubId,
+          id: session.fitgoBookingRef.trim(),
+          status: { not: SpaBookingStatus.CANCELLED },
+        },
+      });
+      if (byFitgo) return byFitgo;
+    }
     if (session.number || session.externalId) {
       const byRef = await this.prisma.spaBooking.findFirst({
         where: {
@@ -2237,7 +2506,12 @@ export class BookingControlService {
         startAt: { gte: from, lte: to },
         status: { not: SpaBookingStatus.CANCELLED },
         ...(clientExternalId
-          ? { client: { externalId: clientExternalId } }
+          ? {
+              OR: [
+                { client: { externalId: clientExternalId } },
+                { clientExternalId },
+              ],
+            }
           : {}),
         ...(session.employeeExternalId
           ? {
