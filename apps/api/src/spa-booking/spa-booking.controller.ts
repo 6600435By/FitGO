@@ -26,6 +26,7 @@ import {
   UpsertSpaServiceDto,
 } from './dto/admin-spa.dto';
 import { BookSpaDto } from './dto/book-spa.dto';
+import { CheckSpecialistAvailabilityDto } from './dto/check-availability.dto';
 import { PublishSpecialistScheduleDto } from './dto/publish-schedule.dto';
 import { SetSpecialistAvailabilityBlocksDto } from './dto/set-availability-blocks.dto';
 import { SetSpecialistWorkScheduleDto } from './dto/set-work-schedule.dto';
@@ -138,6 +139,15 @@ export class SpaBookingController {
     @Query('to') to: string,
   ) {
     return this.spa.getAvailabilityBlocks(user, from, to);
+  }
+
+  @Post('specialist/availability/check')
+  @Roles(UserRole.SPECIALIST)
+  checkAvailabilityOverlap(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CheckSpecialistAvailabilityDto,
+  ) {
+    return this.spa.checkAvailabilityOverlap(user, dto.startAt, dto.endAt);
   }
 
   @Put('specialist/availability-blocks')

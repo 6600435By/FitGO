@@ -1,6 +1,7 @@
 # FitGO — первый deploy
 
-См. также [DEPLOY_HANDOFF.md](DEPLOY_HANDOFF.md).
+См. также [DEPLOY_HANDOFF.md](DEPLOY_HANDOFF.md).  
+**Без VPS (WordPress 2 + Apache `:8445` на клубе):** [DEPLOY_WP_PROXY.md](DEPLOY_WP_PROXY.md).
 
 ## 0. Общее
 

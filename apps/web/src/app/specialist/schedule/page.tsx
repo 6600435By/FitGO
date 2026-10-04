@@ -85,6 +85,24 @@ export default function SpecialistSchedulePage() {
     setBusy(true);
     setMessage('');
     try {
+      const check = await api.specialistAvailabilityCheck(token, {
+        startAt: period.start,
+        endAt: period.end,
+      });
+      if (check.overlaps?.length) {
+        const names = check.overlaps
+          .map((o) => o.specialistName)
+          .filter(Boolean)
+          .slice(0, 5)
+          .join(', ');
+        const ok = window.confirm(
+          `Пересекается с другими специалистами (${names || 'коллеги'}). Всё равно открыть время?`,
+        );
+        if (!ok) {
+          setBusy(false);
+          return;
+        }
+      }
       await api.specialistFillFromTemplate(token, period.start, period.end);
       const result = await api.specialistPublishSchedule(
         token,

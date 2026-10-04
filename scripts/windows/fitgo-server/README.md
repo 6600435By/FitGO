@@ -59,13 +59,19 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 .\Update-FitGO.ps1 -SkipPull
 ```
 
-## HTTPS для портала специалиста
+## Публичный доступ без VPS (`app.ffs.by`)
 
-Браузер на Cloudflare Pages **не** примет самоподписанный сертификат API (как у `:8445`). Нужен доверенный сертификат (Let's Encrypt / win-acme) на поддомен, например `fitgo-api.ffs.by`, и проброс MikroTik **или** API на hoster с whitelist к 1С.
+Сотрудники с телефона: `https://app.ffs.by` (hoster WordPress 2 → PHP-прокси → Apache NameVirtualHost `app.ffs.by` на `:8445` → Next `:3000`).
 
-Админам в клубе достаточно LAN: `http://192.168.1.20:3000`.
+- Шаблон Apache: [apache-fitgo-proxy.conf.template](./apache-fitgo-proxy.conf.template) → `C:\Apache24\conf\extra\fitgo-app-8445.conf`
+- PHP на hoster: [deploy/hoster-wp-proxy/](../../../deploy/hoster-wp-proxy/)
+- Полная инструкция: [DEPLOY_WP_PROXY.md](../../../docs/DEPLOY_WP_PROXY.md)
 
-В `CORS_ORIGIN` добавьте URL specialist-web через запятую.
+Админам в клубе без интернета: `http://192.168.1.20:3000` (сессия отдельная от `app.ffs.by`).
+
+Web build: пустой `NEXT_PUBLIC_API_URL`, `FITGO_API_PROXY_TARGET=http://127.0.0.1:3001` (ставит Install-FitGO).
+
+В `CORS_ORIGIN` добавьте `https://app.ffs.by` (и при необходимости URL specialist-web) через запятую.
 
 ## Бэкапы
 

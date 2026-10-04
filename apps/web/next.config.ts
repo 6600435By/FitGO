@@ -7,6 +7,10 @@ const apiProxyTarget =
 
 const nextConfig: NextConfig = {
   transpilePackages: ['@fitgo/shared-types'],
+  // Nest may wait on 1C up to ~120s; keep rewrite proxy above that.
+  experimental: {
+    proxyTimeout: 150_000,
+  },
   async rewrites() {
     return [
       {

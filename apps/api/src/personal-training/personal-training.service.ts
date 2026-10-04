@@ -609,6 +609,7 @@ export class PersonalTrainingService {
           orderBy: { publishedAt: 'desc' },
           take: 1,
         },
+        staffProfile: true,
       },
     });
 
@@ -620,11 +621,23 @@ export class PersonalTrainingService {
           new Date().toISOString(),
           new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
         );
+        const profile = trainer.staffProfile;
+        const showPublic = !profile?.hiddenByAdminAt;
+        const photoV = profile?.photoUpdatedAt?.getTime();
         return {
           id: trainer.id,
           firstName: trainer.firstName,
           lastName: trainer.lastName,
           hasSchedule: slots.length > 0,
+          bio: showPublic ? (profile?.bio ?? '') : '',
+          photoUrl:
+            showPublic && profile?.photoPath
+              ? `/api/media/staff/${trainer.id}/full.webp${photoV ? `?v=${photoV}` : ''}`
+              : null,
+          photoThumbUrl:
+            showPublic && profile?.photoThumbPath
+              ? `/api/media/staff/${trainer.id}/thumb.webp${photoV ? `?v=${photoV}` : ''}`
+              : null,
         };
       }),
     );

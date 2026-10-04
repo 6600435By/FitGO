@@ -1,0 +1,26 @@
+# FitGO app.ffs.by — route everything to the PHP reverse proxy.
+# Docroot must contain only index.php + this file (no WordPress).
+
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Do not loop on the proxy script itself.
+  RewriteRule ^index\.php$ - [L]
+
+  # Everything else → index.php (path preserved in REQUEST_URI).
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteRule ^ index.php [L]
+</IfModule>
+
+# Prefer long uploads / heavy screens (hoster may still enforce a lower hard limit).
+<IfModule mod_php.c>
+  php_value max_execution_time 180
+  php_value max_input_time 180
+  php_value upload_max_filesize 8M
+  php_value post_max_size 10M
+</IfModule>
+
+# Some hoster panels use php_admin_* and ignore php_value — check phpinfo().

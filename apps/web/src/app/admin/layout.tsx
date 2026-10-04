@@ -34,8 +34,13 @@ const ALL_NAV: Array<{
     module: 'spa_booking' as const,
   },
   {
+    href: '/admin/schedule',
+    label: 'Расписание',
+    permission: AdminPermission.CLIENTS_VIEW,
+  },
+  {
     href: '/admin/staff-roster',
-    label: 'График',
+    label: 'График смен',
     permission: AdminPermission.CLIENTS_VIEW,
   },
   {

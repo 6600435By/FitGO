@@ -931,14 +931,29 @@ export class ClientService {
         clubId,
         roles: { some: { role: Role.TRAINER } },
       },
+      include: { staffProfile: true },
       orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
     });
 
-    return trainers.map((trainer) => ({
-      id: trainer.id,
-      firstName: trainer.firstName,
-      lastName: trainer.lastName,
-    }));
+    return trainers.map((trainer) => {
+      const profile = trainer.staffProfile;
+      const showPublic = !profile?.hiddenByAdminAt;
+      const photoV = profile?.photoUpdatedAt?.getTime();
+      return {
+        id: trainer.id,
+        firstName: trainer.firstName,
+        lastName: trainer.lastName,
+        bio: showPublic ? (profile?.bio ?? '') : '',
+        photoUrl:
+          showPublic && profile?.photoPath
+            ? `/api/media/staff/${trainer.id}/full.webp${photoV ? `?v=${photoV}` : ''}`
+            : null,
+        photoThumbUrl:
+          showPublic && profile?.photoThumbPath
+            ? `/api/media/staff/${trainer.id}/thumb.webp${photoV ? `?v=${photoV}` : ''}`
+            : null,
+      };
+    });
   }
 
   async bookSession(user: JwtPayload, sessionId: string) {

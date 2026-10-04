@@ -249,3 +249,52 @@ model ClubDailyStats {
 // }
 //
 // Club1CConfig — deprecate after ClubIntegration migration
+
+// --- Staff public card + PT/SPA payroll gate (applied in schema.prisma 2026-10-04) ---
+// @evolution: staff public card + PT/SPA approval
+
+enum SessionApprovalKind {
+  PT
+  SPA
+}
+
+model StaffProfile {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  bio             String    @db.Text @default("")
+  photoPath       String?
+  photoThumbPath  String?
+  photoUpdatedAt  DateTime?
+  bioUpdatedAt    DateTime?
+  hiddenByAdminAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  // user User @relation(...)
+}
+
+model SessionApproval {
+  id                   String              @id @default(cuid())
+  clubId               String
+  kind                 SessionApprovalKind
+  bookingId            String
+  performerConfirmedAt DateTime?
+  adminApprovedAt      DateTime?
+  adminApprovedById    String?
+  overrideApprovedAt   DateTime?
+  overrideApprovedById String?
+  returnedAt           DateTime?
+  returnReason         String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  @@unique([kind, bookingId])
+}
+
+model SpaRoom {
+  id       String  @id @default(cuid())
+  clubId   String
+  name     String
+  isActive Boolean @default(true)
+  @@unique([clubId, name])
+}
+// User.defaultSpaRoomId String? — optional cabinet default for overlap skip
+

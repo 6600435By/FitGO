@@ -10,12 +10,15 @@
 
 | ID | Стек | Когда |
 |----|------|--------|
-| A | Vercel (web) + Railway (api + Postgres) | Быстрый тест |
-| B | Railway all-in-one (web + api + Postgres) | Один вендор |
-| C | hoster.by VPS (PM2 + Nginx) | Близко к ffs.by / тот же хостер |
+| **WP** | **WordPress 2 (PHP-прокси) + FitGO на сервере 1С `:8445`** | **Текущий прод-путь: нет VPS, MikroTik не трогаем** |
+| A | Vercel (web) + Railway (api + Postgres) | Быстрый тест (Railway egress ≠ whitelist) |
+| B | Railway all-in-one (web + api + Postgres) | Один вендор (то же ограничение egress) |
+| C | hoster.by VPS (PM2 + Nginx) | Когда появится VPS с egress = `87.232.64.100` |
 
-Конфиги в репозитории: `apps/*/railway.toml`, `apps/web/vercel.json`, `deploy/*`, `scripts/deploy-vps.sh`.  
-Пошагово: [DEPLOY.md](DEPLOY.md).
+**Ветка WP (сейчас):** [DEPLOY_WP_PROXY.md](DEPLOY_WP_PROXY.md) — шаблоны `deploy/hoster-wp-proxy/`, Apache `scripts/windows/fitgo-server/apache-fitgo-proxy.conf.template`.  
+Публичный URL: `https://app.ffs.by`. Nest к 1С — `127.0.0.1`.  
+Конфиги VPS: `apps/*/railway.toml`, `apps/web/vercel.json`, `deploy/nginx/*`, `scripts/deploy-vps.sh`.  
+Пошагово VPS: [DEPLOY.md](DEPLOY.md).
 
 ## Whitelist 1С
 

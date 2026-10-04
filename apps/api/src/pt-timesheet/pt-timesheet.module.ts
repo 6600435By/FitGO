@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { BookingControlModule } from '../booking-control/booking-control.module';
 import { FitnessModule } from '../fitness/fitness.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import { TrainerRosterModule } from '../trainer-roster/trainer-roster.module';
@@ -16,6 +17,7 @@ import { PtTimesheetService } from './pt-timesheet.service';
     ServiceUsageModule,
     TrainerRosterModule,
     FitnessModule,
+    BookingControlModule,
   ],
   controllers: [
     TrainerPtTimesheetController,

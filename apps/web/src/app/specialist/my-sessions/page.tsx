@@ -38,6 +38,16 @@ export default function SpecialistMySessionsPage() {
           comment,
         );
       },
+      approveGroup: async (sessionKey: string, comment?: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlApprove(
+          token,
+          'specialist',
+          sessionKey,
+          comment,
+        );
+      },
     }),
     [],
   );
@@ -46,8 +56,9 @@ export default function SpecialistMySessionsPage() {
     <BookingControlPanel
       api={panelApi}
       fixedKind="SPA"
-      title="Мои занятия"
-      subtitle="Ваши SPA-занятия из 1С. Замечание отправит запись на проверку."
+      title="Контроль записей"
+      subtitle="Ваши SPA-записи. Подтвердите выполнение — затем админ допустит в ЗП."
+      canApproveGroup
     />
   );
 }

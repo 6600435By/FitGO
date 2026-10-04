@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { UserRole } from '@fitgo/shared-types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { ClubMembershipService } from '../common/club-membership.service';
+import { GpScheduleService } from './gp-schedule.service';
 import { TrainerService } from './trainer.service';
 import { TrainerRosterService } from './trainer-roster.service';
 import { AddGoalDto } from './dto/add-goal.dto';
@@ -23,7 +24,17 @@ export class TrainerController {
     private readonly trainerService: TrainerService,
     private readonly roster: TrainerRosterService,
     private readonly clubMembership: ClubMembershipService,
+    private readonly gpSchedule: GpScheduleService,
   ) {}
+
+  @Get('gp-schedule')
+  getGpSchedule(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.gpSchedule.list(user, from, to);
+  }
 
   @Get('dashboard')
   getDashboard(@CurrentUser() user: JwtPayload) {

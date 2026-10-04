@@ -6,28 +6,83 @@ import { useMemo } from 'react';
 import { AuthGuard } from '@/components/auth-guard';
 import { AppShell } from '@/components/app-shell';
 import { useFeatures } from '@/components/features-provider';
+import { getUser } from '@/lib/auth';
 
-const ALL_NAV: Array<{
+type NavItem = {
   href: string;
   label: string;
   module?: 'trainer_calendar' | 'trainer_crm' | 'messaging';
-}> = [
-  { href: '/trainer', label: 'Обзор' },
-  { href: '/trainer/schedule', label: 'Расписание', module: 'trainer_calendar' },
-  { href: '/trainer/shifts', label: 'Смены' },
-  { href: '/trainer/pt-timesheet', label: 'Табель ПТ' },
-  { href: '/trainer/group-journal', label: 'Журнал групп' },
-  { href: '/trainer/my-sessions', label: 'Мои занятия' },
-  { href: '/trainer/clients', label: 'Клиенты', module: 'trainer_crm' },
-  { href: '/trainer/messages', label: 'Сообщения', module: 'messaging' },
-];
+  when?: 'gp' | 'pt' | 'always';
+};
 
 export default function TrainerLayout({ children }: { children: ReactNode }) {
   const { isEnabled } = useFeatures();
-  const navItems = useMemo(
-    () => ALL_NAV.filter((item) => !item.module || isEnabled(item.module)),
-    [isEnabled],
-  );
+  const user = getUser();
+  const isGp = Boolean(user?.groupPrograms);
+  const isPt = Boolean(user?.trainerStaff || user?.trainerClub);
+  // Legacy accounts with no flags: show both surfaces.
+  const showGp = isGp || (!isGp && !isPt);
+  const showPt = isPt || (!isGp && !isPt);
+
+  const navItems = useMemo(() => {
+    const items: NavItem[] = [
+      { href: '/trainer', label: 'Обзор', when: 'always' },
+    ];
+    if (showGp) {
+      items.push({
+        href: '/trainer/gp-schedule',
+        label: showPt ? 'Расписание ГП' : 'Мое расписание',
+        when: 'gp',
+      });
+    }
+    if (showPt) {
+      items.push({
+        href: '/trainer/schedule',
+        label: showGp ? 'Расписание ПТ' : 'Мое расписание',
+        module: 'trainer_calendar',
+        when: 'pt',
+      });
+    }
+    items.push(
+      { href: '/trainer/shifts', label: 'Смены', when: 'always' },
+      ...(showPt
+        ? [{ href: '/trainer/pt-timesheet', label: 'Табель ПТ', when: 'pt' as const }]
+        : []),
+      ...(showGp
+        ? [
+            {
+              href: '/trainer/group-journal',
+              label: 'Журнал групп',
+              when: 'gp' as const,
+            },
+          ]
+        : []),
+      {
+        href: '/trainer/my-sessions',
+        label: 'Контроль записей',
+        when: 'always',
+      },
+      ...(showPt
+        ? [
+            {
+              href: '/trainer/clients',
+              label: 'Клиенты',
+              module: 'trainer_crm' as const,
+              when: 'pt' as const,
+            },
+          ]
+        : []),
+      {
+        href: '/trainer/messages',
+        label: 'Сообщения',
+        module: 'messaging',
+        when: 'always',
+      },
+      { href: '/trainer/profile', label: 'Профиль', when: 'always' },
+    );
+
+    return items.filter((item) => !item.module || isEnabled(item.module));
+  }, [isEnabled, showGp, showPt]);
 
   return (
     <AuthGuard allowedRoles={[UserRole.TRAINER]}>

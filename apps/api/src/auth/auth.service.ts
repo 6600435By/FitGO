@@ -41,6 +41,9 @@ export class AuthService {
     phone: string | null;
     firstName: string;
     lastName: string;
+    groupPrograms?: boolean;
+    trainerStaff?: boolean;
+    trainerClub?: boolean;
     roles: { role: Role }[];
     club: {
       id: string;
@@ -58,6 +61,9 @@ export class AuthService {
       phone: user.phone ?? undefined,
       firstName: user.firstName,
       lastName: user.lastName,
+      groupPrograms: Boolean(user.groupPrograms),
+      trainerStaff: Boolean(user.trainerStaff),
+      trainerClub: Boolean(user.trainerClub),
       roles,
       club: user.club
         ? {

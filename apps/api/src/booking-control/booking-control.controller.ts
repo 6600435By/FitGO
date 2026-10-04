@@ -365,6 +365,19 @@ export class BookingControlController {
     );
   }
 
+  @Post('specialist/booking-control/approve')
+  @Roles(UserRole.SPECIALIST)
+  approveSpecialist(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; comment?: string },
+  ) {
+    return this.bookingControl.approveGroup(
+      user,
+      body.sessionKey ?? '',
+      body.comment,
+    );
+  }
+
   private list(
     clubId: string,
     query: ListQuery & { _own?: boolean },

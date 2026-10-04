@@ -486,6 +486,7 @@ export * from './club-revenue';
 export * from './pt-timesheet';
 export * from './staff-roster';
 export * from './booking-control';
+export * from './club-schedule';
 export * from './hall-class-snapshot';
 
 import type {

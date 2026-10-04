@@ -64,6 +64,9 @@ export interface AuthUser {
   phone?: string;
   firstName: string;
   lastName: string;
+  groupPrograms?: boolean;
+  trainerStaff?: boolean;
+  trainerClub?: boolean;
   roles: UserRole[];
   club?: {
     id: string;
@@ -72,6 +75,23 @@ export interface AuthUser {
     address?: string;
   };
 }
+
+export type StaffProfileDto = {
+  userId: string;
+  firstName: string;
+  lastName: string;
+  email?: string;
+  phone?: string;
+  roles: string[];
+  groupPrograms: boolean;
+  trainerStaff: boolean;
+  trainerClub: boolean;
+  bio: string;
+  photoUrl: string | null;
+  photoThumbUrl: string | null;
+  bioMax: number;
+  hiddenByAdmin: boolean;
+};
 
 export interface RegisterResponse {
   accessToken: string;
@@ -1670,7 +1690,7 @@ export const api = {
 
   bookingControlApprove: (
     token: string,
-    base: 'super-admin' | 'admin' | 'trainer',
+    base: 'super-admin' | 'admin' | 'trainer' | 'specialist',
     sessionKey: string,
     comment?: string,
   ) =>
@@ -2877,6 +2897,69 @@ export const api = {
     request<import('@fitgo/shared-types').StaffShiftMonthCell[]>(
       `/trainer/staff-roster/my-month?year=${year}&month=${month}`,
       {},
+      token,
+    ),
+
+  staffProfileMine: (token: string) =>
+    request<StaffProfileDto>('/me/staff-profile', {}, token),
+
+  staffProfileUpdateBio: (token: string, bio: string) =>
+    request<StaffProfileDto>(
+      '/me/staff-profile',
+      { method: 'PATCH', body: JSON.stringify({ bio }) },
+      token,
+    ),
+
+  clientStaffCard: (token: string, id: string) =>
+    request<StaffProfileDto>(`/client/staff/${id}`, {}, token),
+
+  trainerGpSchedule: (token: string, from: string, to: string) =>
+    request<import('@fitgo/shared-types').GpScheduleEvent[]>(
+      `/trainer/gp-schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      {},
+      token,
+    ),
+
+  adminClubSchedule: (
+    token: string,
+    base: 'admin' | 'super-admin',
+    params: {
+      from: string;
+      to: string;
+      types?: string;
+      staffIds?: string;
+      status?: string;
+      approval?: string;
+      clubId?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.types) q.set('types', params.types);
+    if (params.staffIds) q.set('staffIds', params.staffIds);
+    if (params.status) q.set('status', params.status);
+    if (params.approval) q.set('approval', params.approval);
+    if (params.clubId) q.set('clubId', params.clubId);
+    return request<import('@fitgo/shared-types').ClubScheduleEvent[]>(
+      `/${base}/club-schedule?${q}`,
+      {},
+      token,
+    );
+  },
+
+  specialistAvailabilityCheck: (
+    token: string,
+    body: { startAt: string; endAt: string },
+  ) =>
+    request<{
+      overlaps: Array<{
+        specialistId: string;
+        specialistName: string;
+        reason: string;
+        defaultSpaRoomId?: string | null;
+      }>;
+    }>(
+      '/specialist/availability/check',
+      { method: 'POST', body: JSON.stringify(body) },
       token,
     ),
 };

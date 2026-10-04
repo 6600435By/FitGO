@@ -30,6 +30,7 @@ import { normalizePhone } from '../common/phone.util';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
+import { SessionApprovalService } from '../booking-control/session-approval.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
 
 const SESSION_DURATION_MIN = 60;
@@ -60,6 +61,7 @@ export class PtTimesheetService {
     private readonly serviceUsage: ServiceUsageService,
     private readonly roster: TrainerRosterService,
     private readonly fitness: FitnessService,
+    private readonly sessionApproval: SessionApprovalService,
   ) {}
 
   // ── Shifts ──────────────────────────────────────────────────────────
@@ -647,6 +649,13 @@ export class PtTimesheetService {
         adminApprovedAt: new Date(),
       },
     });
+    const bookingIds = sheet.lines.map((l) => l.personalTrainingBookingId);
+    await this.sessionApproval.bulkAdminApprove(
+      clubId,
+      'PT',
+      bookingIds,
+      actor.sub,
+    );
     return this.toSheetDto(sheetId);
   }
 
@@ -676,6 +685,12 @@ export class PtTimesheetService {
         },
         data: { forceIncludeInPayroll: true, payable: true },
       });
+      await this.sessionApproval.bulkAdminApprove(
+        clubId,
+        'PT',
+        forceBookingIds,
+        actor.sub,
+      );
     }
     // Refresh money after force
     await this.buildOrRefreshSheet(

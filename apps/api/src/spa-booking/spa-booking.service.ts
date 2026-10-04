@@ -1275,6 +1275,121 @@ export class SpaBookingService {
     };
   }
 
+  async checkAvailabilityOverlap(
+    user: JwtPayload,
+    startAt: string,
+    endAt: string,
+  ) {
+    const start = new Date(startAt);
+    const end = new Date(endAt);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+      throw new BadRequestException('Некорректный интервал');
+    }
+
+    const clubId = requireClubId(user);
+    const me = await this.prisma.user.findFirst({
+      where: { id: user.sub, clubId },
+      select: {
+        id: true,
+        defaultSpaRoomId: true,
+      },
+    });
+    if (!me) throw new NotFoundException('Специалист не найден');
+
+    const others = await this.prisma.user.findMany({
+      where: {
+        clubId,
+        id: { not: user.sub },
+        roles: { some: { role: Role.SPECIALIST } },
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        defaultSpaRoomId: true,
+      },
+    });
+    if (!others.length) return { overlaps: [] };
+
+    const otherIds = others.map((o) => o.id);
+    const [blocks, workSlots] = await Promise.all([
+      this.prisma.specialistAvailabilityBlock.findMany({
+        where: {
+          specialistId: { in: otherIds },
+          status: AvailabilityBlockStatus.PUBLISHED,
+          startAt: { lt: end },
+          endAt: { gt: start },
+        },
+        select: { specialistId: true },
+      }),
+      this.prisma.specialistWorkSlot.findMany({
+        where: { specialistId: { in: otherIds } },
+      }),
+    ]);
+
+    const overlapping = new Map<
+      string,
+      { specialistId: string; specialistName: string; reason: 'PUBLISHED_BLOCK' | 'WORK_SCHEDULE'; defaultSpaRoomId?: string | null }
+    >();
+
+    const byId = new Map(others.map((o) => [o.id, o]));
+
+    for (const block of blocks) {
+      const specialist = byId.get(block.specialistId);
+      if (!specialist) continue;
+      if (this.shouldSkipRoomOverlap(me.defaultSpaRoomId, specialist.defaultSpaRoomId)) {
+        continue;
+      }
+      overlapping.set(block.specialistId, {
+        specialistId: specialist.id,
+        specialistName: `${specialist.lastName} ${specialist.firstName}`.trim(),
+        reason: 'PUBLISHED_BLOCK',
+        defaultSpaRoomId: specialist.defaultSpaRoomId,
+      });
+    }
+
+    const cursor = new Date(start);
+    cursor.setHours(0, 0, 0, 0);
+    const endDay = new Date(end);
+    endDay.setHours(23, 59, 59, 999);
+
+    while (cursor <= endDay) {
+      for (const slot of workSlots) {
+        if (slot.dayOfWeek !== cursor.getDay()) continue;
+        const [sh, sm] = slot.startTime.split(':').map(Number);
+        const [eh, em] = slot.endTime.split(':').map(Number);
+        const slotStart = new Date(cursor);
+        slotStart.setHours(sh, sm, 0, 0);
+        const slotEnd = new Date(cursor);
+        slotEnd.setHours(eh, em, 0, 0);
+        if (slotStart >= end || slotEnd <= start) continue;
+
+        const specialist = byId.get(slot.specialistId);
+        if (!specialist) continue;
+        if (this.shouldSkipRoomOverlap(me.defaultSpaRoomId, specialist.defaultSpaRoomId)) {
+          continue;
+        }
+        overlapping.set(slot.specialistId, {
+          specialistId: specialist.id,
+          specialistName: `${specialist.lastName} ${specialist.firstName}`.trim(),
+          reason: 'WORK_SCHEDULE',
+          defaultSpaRoomId: specialist.defaultSpaRoomId,
+        });
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    return { overlaps: [...overlapping.values()] };
+  }
+
+  private shouldSkipRoomOverlap(
+    myRoomId: string | null | undefined,
+    otherRoomId: string | null | undefined,
+  ): boolean {
+    if (!myRoomId || !otherRoomId) return false;
+    return myRoomId !== otherRoomId;
+  }
+
   async listSpecialistBookings(user: JwtPayload) {
     const bookings = await this.prisma.spaBooking.findMany({
       where: {

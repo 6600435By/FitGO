@@ -9,6 +9,7 @@ import {
   OnexClassMemberAttendance,
   OnexClassStatus,
   PersonalBookingStatus,
+  SessionApprovalKind,
   SessionRemarkKind,
   SessionRemarkStatus,
   SpaBookingStatus,
@@ -27,6 +28,7 @@ import {
   onexSessionKey,
   parseSessionKey,
   saleSessionKey,
+  sessionApprovalLabelRu,
   type BookingControlDetail,
   type BookingControlKind,
   type BookingControlListItem,
@@ -41,6 +43,7 @@ import {
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { FitnessService } from '../fitness/fitness.service';
+import { SessionApprovalService } from './session-approval.service';
 
 type ListFilters = {
   from: string;
@@ -60,6 +63,7 @@ export class BookingControlService {
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
     private readonly classSessions: ClassSessionsSyncService,
+    private readonly sessionApproval: SessionApprovalService,
   ) {}
 
   async list(
@@ -439,6 +443,58 @@ export class BookingControlService {
       });
     }
 
+    const ptBookingIds = out
+      .filter((i) => i.kind === 'PT' && i.fitgoBookingId)
+      .map((i) => i.fitgoBookingId!);
+    const spaBookingIds = out
+      .filter((i) => i.kind === 'SPA' && i.fitgoBookingId)
+      .map((i) => i.fitgoBookingId!);
+    for (const id of ptBookingIds) {
+      await this.sessionApproval.ensureApproval('PT', id, clubId);
+    }
+    for (const id of spaBookingIds) {
+      await this.sessionApproval.ensureApproval('SPA', id, clubId);
+    }
+    if (ptBookingIds.length || spaBookingIds.length) {
+      const sessionApprovals = await this.prisma.sessionApproval.findMany({
+        where: {
+          clubId,
+          OR: [
+            ...(ptBookingIds.length
+              ? [{ kind: 'PT' as const, bookingId: { in: ptBookingIds } }]
+              : []),
+            ...(spaBookingIds.length
+              ? [{ kind: 'SPA' as const, bookingId: { in: spaBookingIds } }]
+              : []),
+          ],
+        },
+      });
+      const approvalByKey = new Map(
+        sessionApprovals.map((a) => [`${a.kind}:${a.bookingId}`, a]),
+      );
+      out = out.map((item) => {
+        if (
+          (item.kind !== 'PT' && item.kind !== 'SPA') ||
+          !item.fitgoBookingId
+        ) {
+          return item;
+        }
+        if (item.status === 'CANCELLED') return item;
+        const endMs = item.endAt
+          ? new Date(item.endAt).getTime()
+          : new Date(item.startAt).getTime();
+        if (item.status === 'SCHEDULED' && endMs > Date.now()) return item;
+        const row = approvalByKey.get(`${item.kind}:${item.fitgoBookingId}`);
+        if (!row) return item;
+        const phase = this.sessionApproval.phase(row);
+        return {
+          ...item,
+          approvalPhase: phase,
+          approvalLabel: sessionApprovalLabelRu(phase),
+        };
+      });
+    }
+
     if (filters.status && filters.status !== 'ALL') {
       out = out.filter((i) => i.status === filters.status);
     }
@@ -447,7 +503,8 @@ export class BookingControlService {
         (i) =>
           i.needsReview ||
           i.approvalPhase === 'PENDING_TRAINER' ||
-          i.approvalPhase === 'PENDING_ADMIN',
+          i.approvalPhase === 'PENDING_ADMIN' ||
+          i.approvalPhase === 'PENDING_PERFORMER',
       );
     }
     if (filters.payment && filters.payment !== 'ALL') {
@@ -691,6 +748,7 @@ export class BookingControlService {
             ? 'CANCELLED'
             : 'SCHEDULED';
       const counts = this.singleClientCounts(status);
+      const approval = await this.loadSessionApprovalInfo(clubId, 'PT', b.id);
       return {
         sessionKey,
         kind: 'PT',
@@ -717,6 +775,8 @@ export class BookingControlService {
               : 'UNKNOWN',
         needsReview: Boolean(open),
         fitgoBookingId: b.id,
+        approvalPhase: approval?.phase,
+        approvalLabel: sessionApprovalLabelRu(approval?.phase),
         members: [],
         remark: open,
         remarksHistory: mappedRemarks,
@@ -742,6 +802,7 @@ export class BookingControlService {
             ? 'CANCELLED'
             : 'SCHEDULED';
       const counts = this.singleClientCounts(status);
+      const approval = await this.loadSessionApprovalInfo(clubId, 'SPA', b.id);
       return {
         sessionKey,
         kind: 'SPA',
@@ -770,6 +831,8 @@ export class BookingControlService {
                   : 'UNKNOWN',
         needsReview: Boolean(open),
         fitgoBookingId: b.id,
+        approvalPhase: approval?.phase,
+        approvalLabel: sessionApprovalLabelRu(approval?.phase),
         members: [],
         remark: open,
         remarksHistory: mappedRemarks,
@@ -967,6 +1030,19 @@ export class BookingControlService {
     sessionKey: string,
     comment?: string,
   ): Promise<BookingControlDetail> {
+    const parsed = parseSessionKey(sessionKey);
+    if (
+      parsed?.source === 'FITGO' &&
+      (parsed.kind === 'PT' || parsed.kind === 'SPA')
+    ) {
+      return this.approveFitgoBooking(
+        actor,
+        parsed.kind,
+        parsed.id,
+        comment,
+      );
+    }
+
     const clubId = requireClubId(actor);
     const session = await this.requireGroupOnex(clubId, sessionKey);
     this.assertGroupEditable(session);
@@ -1076,6 +1152,65 @@ export class BookingControlService {
     }
 
     return this.detail(clubId, sessionKey, {
+      userId: actor.sub,
+      ownOnly: !isOverride && !isAdmin,
+    });
+  }
+
+  /** Confirm FitGO PT/SPA booking via SessionApproval (performer → admin → payroll). */
+  private async approveFitgoBooking(
+    actor: JwtPayload,
+    kind: 'PT' | 'SPA',
+    bookingId: string,
+    _comment?: string,
+  ): Promise<BookingControlDetail> {
+    const clubId = requireClubId(actor);
+    const roles = actor.roles ?? [];
+    const isOverride =
+      roles.includes(UserRole.SUPER_ADMIN) ||
+      roles.includes(UserRole.MANAGER);
+    const isAdmin = roles.includes(UserRole.ADMIN);
+    const isPerformer =
+      (kind === 'PT' && roles.includes(UserRole.TRAINER)) ||
+      (kind === 'SPA' && roles.includes(UserRole.SPECIALIST));
+
+    if (!isOverride && !isAdmin && !isPerformer) {
+      throw new ForbiddenException('Нет прав на подтверждение');
+    }
+
+    const prismaKind =
+      kind === 'PT' ? SessionApprovalKind.PT : SessionApprovalKind.SPA;
+
+    if (isOverride) {
+      await this.sessionApproval.ensureApproval(prismaKind, bookingId, clubId);
+      await this.prisma.sessionApproval.update({
+        where: {
+          kind_bookingId: { kind: prismaKind, bookingId },
+        },
+        data: {
+          overrideApprovedAt: new Date(),
+          overrideApprovedById: actor.sub,
+          returnedAt: null,
+          returnReason: null,
+        },
+      });
+    } else if (isAdmin) {
+      const row = await this.sessionApproval.ensureApproval(
+        prismaKind,
+        bookingId,
+        clubId,
+      );
+      if (!row.performerConfirmedAt) {
+        throw new BadRequestException(
+          'Сначала исполнитель должен подтвердить запись',
+        );
+      }
+      await this.sessionApproval.adminApprove(actor, prismaKind, bookingId);
+    } else {
+      await this.sessionApproval.confirmPerformer(actor, prismaKind, bookingId);
+    }
+
+    return this.detail(clubId, fitgoSessionKey(kind, bookingId), {
       userId: actor.sub,
       ownOnly: !isOverride && !isAdmin,
     });
@@ -1562,6 +1697,19 @@ export class BookingControlService {
     if (end > new Date()) {
       throw new BadRequestException('Занятие ещё не закончилось');
     }
+  }
+
+  private async loadSessionApprovalInfo(
+    clubId: string,
+    kind: 'PT' | 'SPA',
+    bookingId: string,
+  ) {
+    const row = await this.sessionApproval.ensureApproval(kind, bookingId, clubId);
+    const phase = this.sessionApproval.phase(row);
+    return {
+      phase,
+      payrollEligible: this.sessionApproval.isPayrollEligible(row),
+    };
   }
 
   private async loadGroupApprovalInfo(

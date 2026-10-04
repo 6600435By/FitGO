@@ -99,7 +99,7 @@ export interface BookingControlListItem {
   needsReview: boolean;
   /** GROUP approval waiting label, e.g. «Ждёт тренера» / «Ждёт администратора». */
   approvalLabel?: string;
-  approvalPhase?: GroupApprovalPhase;
+  approvalPhase?: GroupApprovalPhase | import('./club-schedule').SessionApprovalPhase;
   /** Linked FitGO booking id when matched or FitGO-only. */
   fitgoBookingId?: string;
   priceMinor?: number;

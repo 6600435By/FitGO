@@ -441,6 +441,8 @@ model Club {
   sessionRemarks       SessionRemark[]
   hallClassSnapshots   HallClassSnapshot[]
   groupClassApprovals  GroupClassApproval[]
+  sessionApprovals     SessionApproval[]
+  spaRooms             SpaRoom[]
 }
 
 model ClubTheme {
@@ -589,11 +591,79 @@ model User {
   groupApprovalsAdmin     GroupClassApproval[]    @relation("GroupApprovalAdmin")
   groupApprovalsOverride  GroupClassApproval[]    @relation("GroupApprovalOverride")
   groupApprovalsReturned  GroupClassApproval[]    @relation("GroupApprovalReturnedBy")
+  staffProfile            StaffProfile?
+  sessionApprovalsAdmin   SessionApproval[]       @relation("SessionApprovalAdmin")
+  sessionApprovalsOverride SessionApproval[]      @relation("SessionApprovalOverride")
+  defaultSpaRoom          SpaRoom?                @relation("SpaRoomDefaultSpecialist", fields: [defaultSpaRoomId], references: [id], onDelete: SetNull)
+  defaultSpaRoomId        String?
 
   @@unique([clubId, gamificationNickname])
   @@unique([clubId, employeeCode])
   @@index([externalId])
   @@index([clubId, employeeCode])
+}
+
+/// Public bio + photo for trainers / SPA specialists (editable by staff).
+model StaffProfile {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  bio             String    @db.Text @default("")
+  photoPath       String?
+  photoThumbPath  String?
+  photoUpdatedAt  DateTime?
+  bioUpdatedAt    DateTime?
+  /// Admin can hide bio/photo from clients without deleting.
+  hiddenByAdminAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum SessionApprovalKind {
+  PT
+  SPA
+}
+
+/// Payroll gate for PT / SPA bookings (mirrors GroupClassApproval phases).
+model SessionApproval {
+  id                   String              @id @default(cuid())
+  clubId               String
+  kind                 SessionApprovalKind
+  bookingId            String
+  performerConfirmedAt DateTime?
+  adminApprovedAt      DateTime?
+  adminApprovedById    String?
+  overrideApprovedAt   DateTime?
+  overrideApprovedById String?
+  returnedAt           DateTime?
+  returnReason         String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  club         Club  @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  adminUser    User? @relation("SessionApprovalAdmin", fields: [adminApprovedById], references: [id], onDelete: SetNull)
+  overrideUser User? @relation("SessionApprovalOverride", fields: [overrideApprovedById], references: [id], onDelete: SetNull)
+
+  @@unique([kind, bookingId])
+  @@index([clubId, kind, adminApprovedAt])
+  @@index([clubId, kind, performerConfirmedAt])
+}
+
+/// Optional SPA cabinet / room for conflict checks.
+model SpaRoom {
+  id        String   @id @default(cuid())
+  clubId    String
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  club               Club  @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  defaultSpecialists User[] @relation("SpaRoomDefaultSpecialist")
+
+  @@unique([clubId, name])
+  @@index([clubId, isActive])
 }
 
 model UserRole {

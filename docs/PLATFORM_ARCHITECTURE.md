@@ -222,3 +222,4 @@ Forma на шаге 1–2 может оставаться **единственн
 |------|-----------|
 | 2026-06-17 | Первая версия: мультиклуб, интеграции, sync, mobile path |
 | 2026-06-17 | Review+QA skill: сверка кода с этим документом и `schema.platform-draft.prisma` |
+| 2026-10-04 | StaffProfile (bio/photo), SessionApproval PT/SPA payroll gate, SpaRoom; public app via WP proxy + Apache :8445 |

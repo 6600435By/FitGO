@@ -1,26 +1,47 @@
-# Reverse proxy: public HTTPS → FitGO API (specialists) + optional admin web
-# Place under Apache SSL vhost (trusted cert via win-acme / Let's Encrypt).
-# Self-signed club certs will NOT work for specialist-web on Cloudflare Pages.
+# FitGO public web via Apache :8445 (NameVirtualHost) — applied on club WS2016.
 #
-# Example: fitgo-api.ffs.by → this machine (MikroTik DNAT 443 → S2016)
-# Or: API on hoster.by whitelist IP (same pattern as site → 1C), SP admin stays LAN-only.
+# Context (branch A — no VPS, WordPress 2 on hoster.by):
+#   Phone → https://app.ffs.by (hoster SSL + PHP proxy)
+#        → https://app.ffs.by:8445 resolved to 86.57.152.242 (whitelist)
+#        → this vhost → http://127.0.0.1:3000 (Next)
+#        → Next rewrite /api → http://127.0.0.1:3001 (Nest)
+#
+# 1C publications stay on the FIRST vhost for *:8445
+# (httpd-ahssl.conf _default_:8445 / ServerName localhost:8445).
+# Requests without Host app.ffs.by (Nest → 127.0.0.1:8445, site Forma on :444)
+# never hit this block.
+#
+# Prerequisites in httpd.conf (uncomment if needed):
+#   LoadModule proxy_module modules/mod_proxy.so
+#   LoadModule proxy_http_module modules/mod_proxy_http.so
+#   LoadModule ssl_module modules/mod_ssl.so
+#
+# Install:
+#   1. Save as C:\Apache24\conf\extra\fitgo-app-8445.conf
+#   2. In httpd.conf AFTER: Include conf/extra/httpd-ahssl.conf
+#      add: Include conf/extra/fitgo-app-8445.conf
+#   3. httpd.exe -t && httpd.exe -S
+#      Expect: *:8445 default server localhost (httpd-ahssl.conf)
+#              then namevhost app.ffs.by (this file)
+#   4. Restart-Service Apache2.4
 
-# LoadModule proxy_module modules/mod_proxy.so
-# LoadModule proxy_http_module modules/mod_proxy_http.so
-# LoadModule headers_module modules/mod_headers.so
+<VirtualHost *:8445>
+  ServerName app.ffs.by
+  SSLEngine on
+  SSLCertificateFile "${SRVROOT}/conf/ssl/server.crt"
+  SSLCertificateKeyFile "${SRVROOT}/conf/ssl/server.key"
+  ProxyPreserveHost On
+  ProxyTimeout 180
+  # Global Alias /forma and /fitgo (httpd.conf) — never send to Next
+  ProxyPass        /forma !
+  ProxyPass        /fitgo !
+  ProxyPass        /  http://127.0.0.1:3000/
+  ProxyPassReverse /  http://127.0.0.1:3000/
+</VirtualHost>
 
+# --- Optional legacy (NOT used for branch A) ---
+# Separate trusted cert on :443 + MikroTik DNAT (needs router password):
 # <VirtualHost *:443>
 #   ServerName fitgo-api.ffs.by
-#   SSLEngine on
-#   SSLCertificateFile "C:/Apache24/conf/fitgo-api-fullchain.pem"
-#   SSLCertificateKeyFile "C:/Apache24/conf/fitgo-api-privkey.pem"
-#
-#   # Public: API only (specialist portal). Do not expose admin UI without auth hardening.
-#   ProxyPreserveHost On
-#   ProxyPass        /api  http://127.0.0.1:3001/api
-#   ProxyPassReverse /api  http://127.0.0.1:3001/api
-#
-#   # Optional LAN-style admin on same host (prefer separate internal URL):
-#   # ProxyPass        /  http://127.0.0.1:3000/
-#   # ProxyPassReverse /  http://127.0.0.1:3000/
+#   ...
 # </VirtualHost>
