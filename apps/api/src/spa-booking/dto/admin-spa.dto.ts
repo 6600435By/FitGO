@@ -35,6 +35,15 @@ export class UpsertSpaServiceDto {
   priceMinor!: number;
 
   @IsOptional()
+  @IsInt()
+  @Min(0)
+  priceOverrideMinor?: number | null;
+
+  @IsOptional()
+  @IsBoolean()
+  bookable?: boolean;
+
+  @IsOptional()
   @IsString()
   currency?: string;
 

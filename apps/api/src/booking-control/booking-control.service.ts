@@ -9,10 +9,12 @@ import {
   OnexClassMemberAttendance,
   OnexClassStatus,
   PersonalBookingStatus,
+  ServicePaymentStatus,
   SessionApprovalKind,
   SessionRemarkKind,
   SessionRemarkStatus,
   SpaBookingStatus,
+  SpaPaymentType,
 } from '@prisma/client';
 import { requireClubId } from '../auth/require-club-id';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
@@ -29,10 +31,12 @@ import {
   parseSessionKey,
   saleSessionKey,
   sessionApprovalLabelRu,
+  spaSettlementLabelRu,
   type BookingControlDetail,
   type BookingControlKind,
   type BookingControlListItem,
   type BookingControlMember,
+  type BookingControlPayTag,
   type BookingControlPayment,
   type BookingControlRemark,
   type BookingControlStatus,
@@ -40,6 +44,7 @@ import {
   type GroupApprovalPhase,
   type GroupClassApprovalInfo,
   type SessionApprovalPhase,
+  type SpaSettlementInfo,
   type SpecialistServiceDebt,
   UserRole,
 } from '@fitgo/shared-types';
@@ -704,6 +709,34 @@ export class BookingControlService {
               : sessionApprovalLabelRu(spaPhase);
         }
       }
+
+      let spaPayment = payment;
+      let spaPayTag = payTag;
+      let spaSettlement: SpaSettlementInfo | undefined;
+      if (kind === 'SPA') {
+        const spaBooking =
+          matched?.id
+            ? await this.prisma.spaBooking.findFirst({
+                where: { id: matched.id, clubId },
+                include: {
+                  client: { select: { externalId: true } },
+                  specialist: {
+                    select: { externalId: true, employeeCode: true },
+                  },
+                },
+              })
+            : null;
+        const settled = await this.resolveSpaSettlement({
+          booking: spaBooking,
+          onex: s,
+          paySource: primary?.paySource,
+          paymentBasis: primary?.paymentBasis,
+        });
+        spaSettlement = settled.settlement;
+        spaPayment = settled.payment;
+        spaPayTag = settled.payTag;
+      }
+
       return {
         sessionKey,
         kind,
@@ -721,8 +754,8 @@ export class BookingControlService {
         bookedCount: counts.bookedCount,
         arrivedCount: counts.arrivedCount,
         noShowCount: counts.noShowCount,
-        payment,
-        payTag,
+        payment: spaPayment,
+        payTag: spaPayTag,
         needsReview: Boolean(open),
         approvalPhase,
         approvalLabel,
@@ -740,6 +773,7 @@ export class BookingControlService {
           : s.externalId,
         priceMinor: unitPrice ?? matchedPrice,
         groupApproval,
+        spaSettlement,
       };
     }
 
@@ -826,6 +860,20 @@ export class BookingControlService {
             : 'SCHEDULED';
       const counts = this.singleClientCounts(status);
       const approval = await this.loadSessionApprovalInfo(clubId, 'SPA', b.id);
+      const settled = await this.resolveSpaSettlement({
+        booking: {
+          id: b.id,
+          paymentType: b.paymentType,
+          paymentStatus: b.paymentStatus,
+          consumedInCrmAt: b.consumedInCrmAt,
+          crmDocRef: b.crmDocRef,
+          startAt: b.startAt,
+          partnerSource: b.partnerSource,
+          client: b.client,
+          clientExternalId: b.clientExternalId,
+          specialist: b.specialist,
+        },
+      });
       return {
         sessionKey,
         kind: 'SPA',
@@ -842,16 +890,8 @@ export class BookingControlService {
         bookedCount: counts.bookedCount,
         arrivedCount: counts.arrivedCount,
         noShowCount: counts.noShowCount,
-        payment:
-          b.partnerSource?.toUpperCase() === 'ALLSPORTS'
-            ? 'PARTNER'
-            : b.paymentType === 'QUOTA'
-              ? 'QUOTA'
-              : b.paymentStatus === 'PAID'
-                ? 'PAID'
-                : b.paymentStatus === 'DEBT'
-                  ? 'DEBT'
-                  : 'UNKNOWN',
+        payment: settled.payment,
+        payTag: settled.payTag,
         needsReview: Boolean(open),
         fitgoBookingId: b.id,
         approvalPhase: approval?.phase,
@@ -865,6 +905,7 @@ export class BookingControlService {
         fitgoBookedAt: b.createdAt.toISOString(),
         crmDocRef: b.crmDocRef ?? undefined,
         priceMinor: b.priceMinor ?? b.service.priceMinor,
+        spaSettlement: settled.settlement,
       };
     }
 
@@ -2317,6 +2358,273 @@ export class BookingControlService {
       if (name) return name;
     }
     return b.guestName?.trim() || 'Гость';
+  }
+
+  /**
+   * SPA settlement vs 1C: quota visit posted, or paid sale / open debt by crmDocRef.
+   * Debts call is capped (~6s) so the card never hangs.
+   */
+  private async resolveSpaSettlement(input: {
+    booking?: {
+      id: string;
+      paymentType: SpaPaymentType;
+      paymentStatus: ServicePaymentStatus;
+      consumedInCrmAt: Date | null;
+      crmDocRef: string | null;
+      startAt: Date;
+      partnerSource?: string | null;
+      clientExternalId?: string | null;
+      client?: { externalId: string | null } | null;
+      specialist?: {
+        externalId: string | null;
+        employeeCode?: string | null;
+      } | null;
+    } | null;
+    onex?: {
+      externalId: string;
+      number: string | null;
+      status: OnexClassStatus;
+      startAt: Date;
+      employeeExternalId: string | null;
+    } | null;
+    paySource?: string | null;
+    paymentBasis?: string | null;
+  }): Promise<{
+    settlement: SpaSettlementInfo;
+    payment: BookingControlPayment;
+    payTag?: BookingControlPayTag;
+  }> {
+    const booking = input.booking;
+    const onex = input.onex;
+    const partner =
+      booking?.partnerSource?.toUpperCase() === 'ALLSPORTS';
+    if (partner) {
+      return {
+        settlement: {
+          status: 'PAID',
+          label: spaSettlementLabelRu('PAID'),
+          source: 'local',
+        },
+        payment: 'PARTNER',
+        payTag: 'SALE',
+      };
+    }
+
+    const isQuota =
+      booking?.paymentType === SpaPaymentType.QUOTA ||
+      (input.paySource ?? '').toUpperCase() === 'PACKAGE' ||
+      /членств|абонемент|пакет|квот/i.test(input.paymentBasis ?? '');
+
+    const clientExt =
+      booking?.client?.externalId?.trim() ||
+      booking?.clientExternalId?.trim() ||
+      undefined;
+    const bookingRef = booking?.id;
+    const crmRef = booking?.crmDocRef?.trim() || onex?.externalId || undefined;
+
+    let visit: {
+      found: boolean;
+      cancelled: boolean;
+      posted?: boolean;
+      num?: string;
+    } | null = null;
+    if (clientExt && bookingRef) {
+      const getStatus = this.fitness.getProvider().getSpaVisitStatus;
+      if (getStatus) {
+        try {
+          visit = await Promise.race([
+            getStatus.call(this.fitness.getProvider(), clientExt, {
+              bookingRef,
+            }),
+            new Promise<null>((resolve) =>
+              setTimeout(() => resolve(null), 5_000),
+            ),
+          ]);
+        } catch {
+          visit = null;
+        }
+      }
+    }
+
+    if (visit?.cancelled) {
+      return {
+        settlement: {
+          status: 'CANCELLED_IN_1C',
+          label: spaSettlementLabelRu('CANCELLED_IN_1C'),
+          source: 'visit',
+          visitPosted: visit.posted,
+          visitNum: visit.num,
+        },
+        payment: isQuota ? 'QUOTA' : 'UNKNOWN',
+        payTag: isQuota ? 'PACKAGE' : 'SALE',
+      };
+    }
+
+    if (isQuota) {
+      const posted =
+        visit?.posted === true ||
+        Boolean(booking?.consumedInCrmAt) ||
+        onex?.status === OnexClassStatus.COMPLETED;
+      const foundIn1c =
+        visit?.found === true ||
+        Boolean(onex) ||
+        Boolean(booking?.consumedInCrmAt);
+      if (posted && foundIn1c) {
+        return {
+          settlement: {
+            status: 'QUOTA_CONSUMED',
+            label: spaSettlementLabelRu('QUOTA_CONSUMED'),
+            source: visit?.found ? 'visit' : onex ? 'onex' : 'local',
+            visitPosted: true,
+            visitNum: visit?.num ?? onex?.number ?? undefined,
+          },
+          payment: 'QUOTA',
+          payTag: 'PACKAGE',
+        };
+      }
+      if (!foundIn1c && !booking?.consumedInCrmAt) {
+        return {
+          settlement: {
+            status: 'NOT_IN_1C',
+            label: spaSettlementLabelRu('NOT_IN_1C'),
+            source: 'local',
+          },
+          payment: 'QUOTA',
+          payTag: 'PACKAGE',
+        };
+      }
+      return {
+        settlement: {
+          status: 'UNKNOWN',
+          label: spaSettlementLabelRu('UNKNOWN'),
+          source: 'local',
+          visitPosted: visit?.posted,
+          visitNum: visit?.num,
+        },
+        payment: 'QUOTA',
+        payTag: 'PACKAGE',
+      };
+    }
+
+    // Paid path — check specialist debts by crmDocRef / bookingRef (short timeout).
+    const employeeCode =
+      booking?.specialist?.employeeCode?.trim() ||
+      booking?.specialist?.externalId?.trim() ||
+      onex?.employeeExternalId?.trim() ||
+      '';
+    const day = (booking?.startAt ?? onex?.startAt ?? new Date())
+      .toISOString()
+      .slice(0, 10);
+    let debtHit: SpecialistServiceDebt | null = null;
+    const debtsFn = this.fitness.getProvider().getSpecialistServiceDebts;
+    if (debtsFn && employeeCode) {
+      try {
+        const debts = await Promise.race([
+          debtsFn.call(this.fitness.getProvider(), {
+            from: day,
+            to: day,
+            employeeCode,
+          }),
+          new Promise<null>((resolve) =>
+            setTimeout(() => resolve(null), 6_000),
+          ),
+        ]);
+        if (Array.isArray(debts)) {
+          debtHit =
+            debts.find((d) => {
+              if (bookingRef && d.bookingRef === bookingRef) return true;
+              if (crmRef && d.docRef && d.docRef === crmRef) return true;
+              if (
+                crmRef &&
+                d.docRef &&
+                (d.docRef.includes(crmRef) || crmRef.includes(d.docRef))
+              ) {
+                return true;
+              }
+              if (
+                onex?.number &&
+                d.docRef &&
+                d.docRef.includes(onex.number)
+              ) {
+                return true;
+              }
+              return false;
+            }) ?? null;
+        }
+      } catch {
+        debtHit = null;
+      }
+    }
+
+    if (debtHit?.paymentStatus === 'PAID') {
+      if (
+        booking?.id &&
+        booking.paymentStatus !== ServicePaymentStatus.PAID
+      ) {
+        await this.prisma.spaBooking
+          .update({
+            where: { id: booking.id },
+            data: {
+              paymentStatus: ServicePaymentStatus.PAID,
+              paidAt: new Date(),
+            },
+          })
+          .catch(() => undefined);
+      }
+      return {
+        settlement: {
+          status: 'PAID',
+          label: spaSettlementLabelRu('PAID'),
+          source: 'debt',
+          visitPosted: visit?.posted,
+          visitNum: visit?.num ?? debtHit.docRef,
+        },
+        payment: 'PAID',
+        payTag: 'SALE',
+      };
+    }
+
+    if (
+      debtHit?.paymentStatus === 'DEBT' ||
+      booking?.paymentStatus === ServicePaymentStatus.DEBT ||
+      visit?.posted === true ||
+      Boolean(booking?.consumedInCrmAt) ||
+      Boolean(onex)
+    ) {
+      return {
+        settlement: {
+          status: 'AWAITING_PAYMENT',
+          label: spaSettlementLabelRu('AWAITING_PAYMENT'),
+          source: debtHit ? 'debt' : visit?.found ? 'visit' : onex ? 'onex' : 'local',
+          visitPosted: visit?.posted ?? Boolean(onex),
+          visitNum: visit?.num ?? onex?.number ?? debtHit?.docRef,
+        },
+        payment: 'DEBT',
+        payTag: 'SALE',
+      };
+    }
+
+    if (booking?.paymentStatus === ServicePaymentStatus.PAID) {
+      return {
+        settlement: {
+          status: 'PAID',
+          label: spaSettlementLabelRu('PAID'),
+          source: 'local',
+        },
+        payment: 'PAID',
+        payTag: 'SALE',
+      };
+    }
+
+    return {
+      settlement: {
+        status: 'NOT_IN_1C',
+        label: spaSettlementLabelRu('NOT_IN_1C'),
+        source: 'local',
+      },
+      payment: 'UNKNOWN',
+      payTag: 'SALE',
+    };
   }
 
   private matchSpaInMemory(

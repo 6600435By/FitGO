@@ -1069,6 +1069,30 @@ export function BookingControlPanel({
                       : ''}
                   </p>
                 )}
+                {selected.kind === 'SPA' && selected.spaSettlement ? (
+                  <p
+                    className={
+                      selected.spaSettlement.status === 'PAID' ||
+                      selected.spaSettlement.status === 'QUOTA_CONSUMED'
+                        ? 'rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200'
+                        : selected.spaSettlement.status === 'AWAITING_PAYMENT' ||
+                            selected.spaSettlement.status === 'NOT_IN_1C'
+                          ? 'rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200'
+                          : selected.spaSettlement.status === 'CANCELLED_IN_1C'
+                            ? 'rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200'
+                            : 'rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm text-slate-300'
+                    }
+                  >
+                    {selected.spaSettlement.label}
+                    {selected.spaSettlement.visitNum
+                      ? ` · док. ${selected.spaSettlement.visitNum}`
+                      : ''}
+                    {selected.crmDocRef &&
+                    selected.crmDocRef !== selected.spaSettlement.visitNum
+                      ? ` · ref ${selected.crmDocRef}`
+                      : ''}
+                  </p>
+                ) : null}
                 {selected.members.length > 0 && (
                   <div className="space-y-1">
                     <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">

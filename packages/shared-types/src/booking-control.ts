@@ -105,6 +105,43 @@ export interface BookingControlListItem {
   priceMinor?: number;
 }
 
+/** Live settlement of SPA vs 1C (quota write-off or reception payment). */
+export type SpaSettlementStatus =
+  | 'QUOTA_CONSUMED'
+  | 'AWAITING_PAYMENT'
+  | 'PAID'
+  | 'NOT_IN_1C'
+  | 'CANCELLED_IN_1C'
+  | 'UNKNOWN';
+
+export interface SpaSettlementInfo {
+  status: SpaSettlementStatus;
+  label: string;
+  /** Where the status came from. */
+  source: 'visit' | 'debt' | 'local' | 'onex';
+  visitPosted?: boolean;
+  visitNum?: string;
+}
+
+export function spaSettlementLabelRu(
+  status: SpaSettlementStatus | undefined,
+): string {
+  switch (status) {
+    case 'QUOTA_CONSUMED':
+      return 'Списано с абонемента';
+    case 'AWAITING_PAYMENT':
+      return 'Ждёт оплаты в 1С';
+    case 'PAID':
+      return 'Оплачено';
+    case 'NOT_IN_1C':
+      return 'Нет документа в 1С';
+    case 'CANCELLED_IN_1C':
+      return 'Отменено в 1С';
+    default:
+      return 'Статус в 1С неизвестен';
+  }
+}
+
 export interface BookingControlDetail extends BookingControlListItem {
   durationMin?: number;
   members: BookingControlMember[];
@@ -113,6 +150,8 @@ export interface BookingControlDetail extends BookingControlListItem {
   fitgoBookedAt?: string;
   crmDocRef?: string;
   groupApproval?: GroupClassApprovalInfo | null;
+  /** SPA only: quota write-off / payment fact from 1C. */
+  spaSettlement?: SpaSettlementInfo;
 }
 
 /** Shared admin inbox row for GROUP sessions awaiting admin confirm. */

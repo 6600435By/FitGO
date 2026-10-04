@@ -572,14 +572,17 @@ export class SegmentsService {
         const externalId = m.externalId?.trim();
         if (!externalId) continue;
         seen.add(externalId);
-        const priceMinor = Math.round(Number(m.price ?? 0) * 100);
+        const priceFromOneCMinor = Math.round(Number(m.price ?? 0) * 100);
         const existing = await this.prisma.spaService.findFirst({
           where: { clubId, externalId },
         });
         if (existing) {
+          const effectivePrice =
+            existing.priceOverrideMinor ?? priceFromOneCMinor;
           if (
             existing.name === m.name &&
-            existing.priceMinor === priceMinor &&
+            existing.priceFromOneCMinor === priceFromOneCMinor &&
+            existing.priceMinor === effectivePrice &&
             existing.active
           ) {
             unchanged += 1;
@@ -589,7 +592,9 @@ export class SegmentsService {
             where: { id: existing.id },
             data: {
               name: m.name,
-              priceMinor,
+              priceFromOneCMinor,
+              // Keep duration/buffer; only refresh 1C price + effective priceMinor.
+              priceMinor: effectivePrice,
               active: true,
             },
           });
@@ -601,9 +606,11 @@ export class SegmentsService {
               name: m.name,
               kind: inferSpaKind(m.name),
               durationMin: 60,
-              priceMinor,
+              priceFromOneCMinor,
+              priceMinor: priceFromOneCMinor,
               externalId,
               active: true,
+              bookable: false,
             },
           });
           added += 1;

@@ -1060,6 +1060,9 @@ export interface SpaService {
   durationMin: number;
   bufferMin: number;
   priceMinor: number;
+  priceFromOneCMinor?: number;
+  priceOverrideMinor?: number;
+  bookable?: boolean;
   currency: string;
   active: boolean;
 }

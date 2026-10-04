@@ -1415,6 +1415,12 @@ model SpaService {
   durationMin Int
   bufferMin   Int            @default(0)
   priceMinor  Int
+  /// Last price synced from 1C (minor units).
+  priceFromOneCMinor Int?
+  /// Super-admin override; when set, priceMinor follows this.
+  priceOverrideMinor Int?
+  /// Offer in booking dialogs (new 1C-synced rows start false).
+  bookable    Boolean        @default(true)
   currency    String         @default("BYN")
   active      Boolean        @default(true)
   /// 1C nomenclature UUID from segment nom.spaCabinet

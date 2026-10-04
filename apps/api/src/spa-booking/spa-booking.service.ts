@@ -70,6 +70,9 @@ export class SpaBookingService {
       durationMin: s.durationMin,
       bufferMin: s.bufferMin,
       priceMinor: s.priceMinor,
+      priceFromOneCMinor: s.priceFromOneCMinor ?? undefined,
+      priceOverrideMinor: s.priceOverrideMinor ?? undefined,
+      bookable: s.bookable,
       currency: s.currency,
       active: s.active,
     };
@@ -745,6 +748,11 @@ export class SpaBookingService {
       where: { id: input.serviceId, clubId, active: true },
     });
     if (!service) throw new NotFoundException('Услуга не найдена');
+    if (!service.bookable) {
+      throw new BadRequestException(
+        'Услуга скрыта из записи — включите её в каталоге супер-админа',
+      );
+    }
 
     const durationMs = (service.durationMin + service.bufferMin) * 60_000;
     const end = new Date(start.getTime() + durationMs);
@@ -1708,12 +1716,28 @@ export class SpaBookingService {
       durationMin: number;
       bufferMin?: number;
       priceMinor: number;
+      priceOverrideMinor?: number | null;
+      bookable?: boolean;
       currency?: string;
       active?: boolean;
     },
   ) {
     const clubId = requireClubId(user);
+    const override =
+      dto.priceOverrideMinor === null
+        ? null
+        : dto.priceOverrideMinor !== undefined
+          ? dto.priceOverrideMinor
+          : undefined;
     if (dto.id) {
+      const existing = await this.prisma.spaService.findFirst({
+        where: { id: dto.id, clubId },
+      });
+      if (!existing) throw new NotFoundException('Услуга не найдена');
+      const nextOverride =
+        override !== undefined ? override : existing.priceOverrideMinor;
+      const effective =
+        nextOverride ?? existing.priceFromOneCMinor ?? dto.priceMinor;
       const updated = await this.prisma.spaService.update({
         where: { id: dto.id },
         data: {
@@ -1721,7 +1745,9 @@ export class SpaBookingService {
           kind: dto.kind,
           durationMin: dto.durationMin,
           bufferMin: dto.bufferMin ?? 0,
-          priceMinor: dto.priceMinor,
+          priceOverrideMinor: nextOverride,
+          priceMinor: effective,
+          bookable: dto.bookable ?? existing.bookable,
           currency: dto.currency ?? 'BYN',
           active: dto.active ?? true,
         },
@@ -1736,6 +1762,8 @@ export class SpaBookingService {
         durationMin: dto.durationMin,
         bufferMin: dto.bufferMin ?? 0,
         priceMinor: dto.priceMinor,
+        priceOverrideMinor: override ?? null,
+        bookable: dto.bookable ?? true,
         currency: dto.currency ?? 'BYN',
         active: dto.active ?? true,
       },
