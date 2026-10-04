@@ -53,6 +53,13 @@ export type BookingControlApi = {
     sessionKey: string,
     comment?: string,
   ) => Promise<BookingControlDetail>;
+  /** Manager / super-admin: confirm many unapproved GROUP sessions. */
+  bulkApproveGroups?: (body: {
+    from: string;
+    to: string;
+    role: 'trainer' | 'admin';
+    sessionKeys: string[];
+  }) => Promise<{ confirmed: number; skipped: number }>;
   /** Admin/manager/SA/trainer: hall NVR photos for GROUP. */
   listHallSnapshots?: (
     sessionKey: string,
@@ -73,6 +80,8 @@ type Props = {
   canApproveGroup?: boolean;
   /** Admin/SA: return to trainer */
   canReturnApproval?: boolean;
+  /** Manager / super-admin: bulk confirm unapproved GROUP in the period */
+  canBulkApprove?: boolean;
   /** Admin/manager/SA/trainer: show Photo button on GROUP detail */
   canViewHallPhotos?: boolean;
   /** Open this session on mount (e.g. from admin tasks). */
@@ -136,6 +145,7 @@ export function BookingControlPanel({
   canTrainerSeen = false,
   canApproveGroup = false,
   canReturnApproval = false,
+  canBulkApprove = false,
   canViewHallPhotos = false,
   initialSessionKey,
   fixedKind,
@@ -155,6 +165,9 @@ export function BookingControlPanel({
   const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
   const [seenBusy, setSeenBusy] = useState(false);
   const [approveBusy, setApproveBusy] = useState(false);
+  const [bulkRole, setBulkRole] = useState<'trainer' | 'admin'>('admin');
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [selected, setSelected] = useState<BookingControlDetail | null>(null);
   const [comment, setComment] = useState('');
@@ -212,6 +225,24 @@ export function BookingControlPanel({
     () => items.filter((i) => i.source === 'SALE').length,
     [items],
   );
+
+  const pendingGroups = useMemo(
+    () =>
+      items.filter(
+        (i) =>
+          i.kind === 'GROUP' &&
+          i.source === '1C' &&
+          i.status !== 'CANCELLED' &&
+          (i.approvalPhase === 'PENDING_TRAINER' ||
+            i.approvalPhase === 'PENDING_ADMIN'),
+      ),
+    [items],
+  );
+  const pendingKey = pendingGroups.map((i) => i.sessionKey).join('|');
+
+  useEffect(() => {
+    setBulkSelected(new Set(pendingKey ? pendingKey.split('|') : []));
+  }, [pendingKey]);
 
   const openDetail = async (sessionKey: string) => {
     setDetailLoading(true);
@@ -430,6 +461,43 @@ export function BookingControlPanel({
     setTo(d);
   };
 
+  const toggleBulk = (sessionKey: string) => {
+    setBulkSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionKey)) next.delete(sessionKey);
+      else next.add(sessionKey);
+      return next;
+    });
+  };
+
+  const confirmBulk = async () => {
+    if (!api.bulkApproveGroups) return;
+    const sessionKeys = pendingGroups
+      .map((i) => i.sessionKey)
+      .filter((k) => bulkSelected.has(k));
+    if (!sessionKeys.length) return;
+    setBulkBusy(true);
+    setMessage('');
+    try {
+      const res = await api.bulkApproveGroups({
+        from,
+        to,
+        role: bulkRole,
+        sessionKeys,
+      });
+      setMessage(
+        `Подтверждено ${res.confirmed}` +
+          (res.skipped ? `, пропущено ${res.skipped}` : '') +
+          '. Занятия идут в расчёт ЗП.',
+      );
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка массового подтверждения');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-3">
       <div>
@@ -556,6 +624,98 @@ export function BookingControlPanel({
           ) : null}
         </div>
       </div>
+
+      {canBulkApprove && api.bulkApproveGroups ? (
+        <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 space-y-2">
+          <p className="text-sm font-medium text-white">
+            Неподтверждённые ГП за период
+            {pendingGroups.length ? ` · ${pendingGroups.length}` : ''}
+          </p>
+          <p className="text-xs text-slate-500">
+            Выполненные занятия без подтверждения. Отметка тренером или админом
+            сразу включает их в расчёт ЗП.
+          </p>
+          {pendingGroups.length === 0 ? (
+            <p className="text-sm text-slate-400">Нет таких занятий</p>
+          ) : (
+            <>
+              <label className="flex items-center gap-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={
+                    pendingGroups.length > 0 &&
+                    pendingGroups.every((i) => bulkSelected.has(i.sessionKey))
+                  }
+                  onChange={(e) => {
+                    setBulkSelected(
+                      e.target.checked
+                        ? new Set(pendingGroups.map((i) => i.sessionKey))
+                        : new Set(),
+                    );
+                  }}
+                />
+                Выбрать все
+              </label>
+              <ul className="max-h-48 overflow-y-auto rounded-lg border border-slate-800 text-sm">
+                {pendingGroups.map((item) => (
+                  <li
+                    key={item.sessionKey}
+                    className="flex items-center gap-2 border-b border-slate-900 px-2 py-1.5 last:border-0"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={bulkSelected.has(item.sessionKey)}
+                      onChange={() => toggleBulk(item.sessionKey)}
+                    />
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 truncate text-left text-slate-200"
+                      onClick={() => openDetail(item.sessionKey)}
+                    >
+                      {formatDateTime(item.startAt)} · {item.title}
+                      {item.performerName ? ` · ${item.performerName}` : ''}
+                    </button>
+                    <span className="shrink-0 text-[11px] text-amber-300">
+                      {item.approvalLabel}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="radio"
+                    name="bulk-role"
+                    checked={bulkRole === 'trainer'}
+                    onChange={() => setBulkRole('trainer')}
+                  />
+                  Подтвердить тренером
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="radio"
+                    name="bulk-role"
+                    checked={bulkRole === 'admin'}
+                    onChange={() => setBulkRole('admin')}
+                  />
+                  Подтвердить админом
+                </label>
+                <button
+                  type="button"
+                  className="btn-primary px-3 py-1.5 text-sm"
+                  disabled={
+                    bulkBusy ||
+                    pendingGroups.every((i) => !bulkSelected.has(i.sessionKey))
+                  }
+                  onClick={confirmBulk}
+                >
+                  {bulkBusy ? 'Подтверждаем…' : 'Подтвердить'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
 
       {message && <p className="text-sm text-fitgo-300">{message}</p>}
       {!loading && !fixedKind && saleCount === 0 && (kind === 'ALL' || kind === 'PT') ? (

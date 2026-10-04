@@ -104,6 +104,27 @@ export class BookingControlController {
     );
   }
 
+  @Post('super-admin/booking-control/bulk-approve')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  bulkApproveSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      from?: string;
+      to?: string;
+      role?: 'trainer' | 'admin';
+      sessionKeys?: string[];
+    },
+  ) {
+    const role = body.role === 'admin' || body.role === 'trainer' ? body.role : 'trainer';
+    return this.bookingControl.bulkApproveGroups(user, {
+      from: body.from ?? '',
+      to: body.to ?? '',
+      role,
+      sessionKeys: body.sessionKeys ?? [],
+    });
+  }
+
   @Post('super-admin/booking-control/approve')
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   approveSuperAdmin(

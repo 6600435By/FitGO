@@ -77,6 +77,16 @@ export default function SuperAdminBookingControlPage() {
           comment,
         );
       },
+      bulkApproveGroups: async (body: {
+        from: string;
+        to: string;
+        role: 'trainer' | 'admin';
+        sessionKeys: string[];
+      }) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlBulkApprove(token, body);
+      },
       returnGroupApproval: async (sessionKey: string, comment?: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
@@ -115,6 +125,7 @@ export default function SuperAdminBookingControlPage() {
       canResolve
       canMarkAttendance
       canApproveGroup
+      canBulkApprove
       canReturnApproval
       canViewHallPhotos
       subtitle="Можно подтвердить ГП без тренера и админа или вернуть на доработку. Без подтверждения занятие не идёт в ЗП."

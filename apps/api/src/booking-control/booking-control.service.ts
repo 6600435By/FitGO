@@ -1081,6 +1081,157 @@ export class BookingControlService {
     });
   }
 
+  /**
+   * Manager / super-admin: stamp many ended GROUP sessions as trainer or admin.
+   * Either stamp makes the session payroll-eligible.
+   */
+  async bulkApproveGroups(
+    actor: JwtPayload,
+    input: {
+      from: string;
+      to: string;
+      role: 'trainer' | 'admin';
+      sessionKeys: string[];
+    },
+  ): Promise<{ confirmed: number; skipped: number }> {
+    const roles = actor.roles ?? [];
+    if (
+      !roles.includes(UserRole.SUPER_ADMIN) &&
+      !roles.includes(UserRole.MANAGER)
+    ) {
+      throw new ForbiddenException(
+        'Массовое подтверждение доступно управляющему и супер-админу',
+      );
+    }
+    if (input.role !== 'trainer' && input.role !== 'admin') {
+      throw new BadRequestException('Укажите подтверждение: тренер или админ');
+    }
+    const keys = [
+      ...new Set(
+        (input.sessionKeys ?? []).map((k) => k.trim()).filter(Boolean),
+      ),
+    ];
+    if (!keys.length) {
+      throw new BadRequestException('Не выбраны занятия');
+    }
+    const fromD = new Date(`${input.from.trim()}T00:00:00`);
+    const toD = new Date(`${input.to.trim()}T23:59:59.999`);
+    if (Number.isNaN(fromD.getTime()) || Number.isNaN(toD.getTime())) {
+      throw new BadRequestException('Некорректные даты from/to');
+    }
+
+    const clubId = requireClubId(actor);
+    const actorName = await this.actorDisplayName(clubId, actor.sub);
+    const now = new Date();
+    const externalIds = keys
+      .map((k) => parseSessionKey(k))
+      .filter((p): p is NonNullable<typeof p> => p?.source === '1C')
+      .map((p) => p.id);
+
+    const sessions = await this.prisma.onexClassSession.findMany({
+      where: {
+        clubId,
+        kind: OnexClassKind.GROUP,
+        isActive: true,
+        externalId: { in: externalIds },
+        startAt: { gte: fromD, lte: toD },
+      },
+    });
+    const approvals = await this.prisma.groupClassApproval.findMany({
+      where: { clubId, sessionKey: { in: keys } },
+    });
+    const byExt = new Map(sessions.map((s) => [s.externalId, s]));
+    const byKey = new Map(approvals.map((a) => [a.sessionKey, a]));
+
+    let confirmed = 0;
+    let skipped = 0;
+    for (const key of keys) {
+      const parsed = parseSessionKey(key);
+      const session =
+        parsed?.source === '1C' ? byExt.get(parsed.id) : undefined;
+      if (!session) {
+        skipped += 1;
+        continue;
+      }
+      const endedAt = session.endAt ?? session.startAt;
+      if (
+        session.payrollLocked ||
+        session.status === OnexClassStatus.CANCELLED ||
+        endedAt > now
+      ) {
+        skipped += 1;
+        continue;
+      }
+      const row = byKey.get(key);
+      if (row?.adminApprovedAt || row?.overrideApprovedAt) {
+        skipped += 1;
+        continue;
+      }
+
+      const clearReturn = {
+        returnedByUserId: null,
+        returnedByName: null,
+        returnedAt: null,
+        returnComment: null,
+      };
+
+      if (input.role === 'admin') {
+        await this.prisma.groupClassApproval.upsert({
+          where: { clubId_sessionKey: { clubId, sessionKey: key } },
+          create: {
+            clubId,
+            sessionKey: key,
+            adminUserId: actor.sub,
+            adminName: actorName,
+            adminApprovedAt: now,
+            adminComment: 'Массовое подтверждение админом',
+          },
+          update: {
+            adminUserId: actor.sub,
+            adminName: actorName,
+            adminApprovedAt: now,
+            adminComment: 'Массовое подтверждение админом',
+            ...clearReturn,
+          },
+        });
+      } else {
+        await this.prisma.groupClassApproval.upsert({
+          where: { clubId_sessionKey: { clubId, sessionKey: key } },
+          create: {
+            clubId,
+            sessionKey: key,
+            trainerUserId: actor.sub,
+            trainerName: actorName,
+            trainerApprovedAt: now,
+            trainerComment: 'Массовое подтверждение тренером',
+            overrideUserId: actor.sub,
+            overrideName: actorName,
+            overrideApprovedAt: now,
+            overrideComment: 'Массовое подтверждение тренером',
+          },
+          update: {
+            ...(row?.trainerApprovedAt
+              ? {}
+              : {
+                  trainerUserId: actor.sub,
+                  trainerName: actorName,
+                  trainerApprovedAt: now,
+                  trainerComment: 'Массовое подтверждение тренером',
+                }),
+            overrideUserId: actor.sub,
+            overrideName: actorName,
+            overrideApprovedAt: now,
+            overrideComment: 'Массовое подтверждение тренером',
+            ...clearReturn,
+          },
+        });
+      }
+      confirmed += 1;
+    }
+
+    return { confirmed, skipped };
+  }
+
   /** Admin / SA / Manager: return GROUP to trainer for rework. */
   async returnGroupApproval(
     actor: JwtPayload,

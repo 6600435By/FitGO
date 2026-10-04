@@ -1653,6 +1653,21 @@ export const api = {
       token,
     ),
 
+  bookingControlBulkApprove: (
+    token: string,
+    body: {
+      from: string;
+      to: string;
+      role: 'trainer' | 'admin';
+      sessionKeys: string[];
+    },
+  ) =>
+    request<{ confirmed: number; skipped: number }>(
+      '/super-admin/booking-control/bulk-approve',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
   bookingControlApprove: (
     token: string,
     base: 'super-admin' | 'admin' | 'trainer',
