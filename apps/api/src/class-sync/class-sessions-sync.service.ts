@@ -37,13 +37,18 @@ export class ClassSessionsSyncService {
     private readonly serviceUsage: ServiceUsageService,
   ) {}
 
-  /** Past calendar month start → today (open payroll window). */
+  /** Past calendar month start → today+31d (schedule + open payroll window). */
   operationalWindow(now = new Date()): { from: string; to: string } {
-    const to = now.toISOString().slice(0, 10);
     const prev = new Date(
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1),
     );
-    return { from: prev.toISOString().slice(0, 10), to };
+    const ahead = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 31),
+    );
+    return {
+      from: prev.toISOString().slice(0, 10),
+      to: ahead.toISOString().slice(0, 10),
+    };
   }
 
   /** 1 Jan current year → today. */

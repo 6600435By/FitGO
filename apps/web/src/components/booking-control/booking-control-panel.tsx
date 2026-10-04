@@ -86,6 +86,9 @@ type Props = {
   canViewHallPhotos?: boolean;
   /** Open this session on mount (e.g. from admin tasks). */
   initialSessionKey?: string;
+  /** Optional date range from deep-link (schedule → booking-control). */
+  initialFrom?: string;
+  initialTo?: string;
   /** Hide kind filter (specialist SPA-only) */
   fixedKind?: BookingControlKind;
   title?: string;
@@ -148,12 +151,14 @@ export function BookingControlPanel({
   canBulkApprove = false,
   canViewHallPhotos = false,
   initialSessionKey,
+  initialFrom,
+  initialTo,
   fixedKind,
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
 }: Props) {
-  const [from, setFrom] = useState(daysAgoIso(7));
-  const [to, setTo] = useState(todayIso());
+  const [from, setFrom] = useState(initialFrom?.trim() || daysAgoIso(7));
+  const [to, setTo] = useState(initialTo?.trim() || todayIso());
   const [kind, setKind] = useState<string>(fixedKind ?? 'ALL');
   const [status, setStatus] = useState('ALL');
   const [payment, setPayment] = useState('ALL');

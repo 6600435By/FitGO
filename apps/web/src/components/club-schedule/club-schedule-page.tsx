@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { format, addDays, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import type { ClubScheduleEvent } from '@fitgo/shared-types';
@@ -21,17 +22,35 @@ const TYPE_CLASS: Record<string, string> = {
   DUTY: 'border-l-slate-500',
 };
 
+function isPendingPhase(phase: string | undefined): boolean {
+  return (
+    phase === 'PENDING_ADMIN' ||
+    phase === 'PENDING_TRAINER' ||
+    phase === 'PENDING_PERFORMER'
+  );
+}
+
 export function ClubSchedulePage({
   apiBase,
 }: {
   apiBase: 'admin' | 'super-admin';
 }) {
+  const router = useRouter();
   const [day, setDay] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [types, setTypes] = useState('GROUP,PT,SPA');
   const [events, setEvents] = useState<ClubScheduleEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingOnly, setPendingOnly] = useState(false);
+
+  const maxDay = useMemo(
+    () => format(addDays(new Date(), 31), 'yyyy-MM-dd'),
+    [],
+  );
+  const minDay = useMemo(
+    () => format(addDays(new Date(), -31), 'yyyy-MM-dd'),
+    [],
+  );
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -43,7 +62,6 @@ export function ClubSchedulePage({
         from: day,
         to: day,
         types,
-        approval: pendingOnly ? 'PENDING_ADMIN' : undefined,
       });
       setEvents(list);
     } catch (e) {
@@ -51,27 +69,41 @@ export function ClubSchedulePage({
     } finally {
       setLoading(false);
     }
-  }, [apiBase, day, types, pendingOnly]);
+  }, [apiBase, day, types]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const sorted = useMemo(
-    () =>
-      [...events].sort(
-        (a, b) =>
-          new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
-      ),
-    [events],
-  );
-
-  const pendingCount = events.filter(
-    (e) =>
-      e.approvalPhase === 'PENDING_ADMIN' ||
-      e.approvalPhase === 'PENDING_TRAINER' ||
-      e.approvalPhase === 'PENDING_PERFORMER',
+  const pendingCount = events.filter((e) =>
+    isPendingPhase(e.approvalPhase),
   ).length;
+
+  const sorted = useMemo(() => {
+    const base = [...events].sort(
+      (a, b) =>
+        new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
+    );
+    if (!pendingOnly) return base;
+    return base.filter((e) => isPendingPhase(e.approvalPhase));
+  }, [events, pendingOnly]);
+
+  const openEvent = (ev: ClubScheduleEvent) => {
+    if (!ev.sessionKey) return;
+    const eventDay = format(parseISO(ev.startAt), 'yyyy-MM-dd');
+    const q = new URLSearchParams({
+      sessionKey: ev.sessionKey,
+      from: eventDay,
+      to: eventDay,
+    });
+    router.push(`/${apiBase}/booking-control?${q.toString()}`);
+  };
+
+  const shiftDay = (delta: number) => {
+    const next = format(addDays(parseISO(day), delta), 'yyyy-MM-dd');
+    if (next < minDay || next > maxDay) return;
+    setDay(next);
+  };
 
   return (
     <div className="space-y-4">
@@ -81,9 +113,8 @@ export function ClubSchedulePage({
           <button
             type="button"
             className="btn-secondary text-sm"
-            onClick={() =>
-              setDay(format(addDays(parseISO(day), -1), 'yyyy-MM-dd'))
-            }
+            onClick={() => shiftDay(-1)}
+            disabled={day <= minDay}
           >
             ‹
           </button>
@@ -91,7 +122,12 @@ export function ClubSchedulePage({
             type="date"
             className="input date-field text-sm"
             value={day}
-            onChange={(e) => setDay(e.target.value)}
+            min={minDay}
+            max={maxDay}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v >= minDay && v <= maxDay) setDay(v);
+            }}
           />
           <button
             type="button"
@@ -103,9 +139,8 @@ export function ClubSchedulePage({
           <button
             type="button"
             className="btn-secondary text-sm"
-            onClick={() =>
-              setDay(format(addDays(parseISO(day), 1), 'yyyy-MM-dd'))
-            }
+            onClick={() => shiftDay(1)}
+            disabled={day >= maxDay}
           >
             ›
           </button>
@@ -149,6 +184,9 @@ export function ClubSchedulePage({
         {format(parseISO(`${day}T12:00:00`), 'EEEE, d MMMM yyyy', {
           locale: ru,
         })}
+        <span className="ml-2 text-slate-600">
+          · можно листать до {format(parseISO(`${maxDay}T12:00:00`), 'd MMM', { locale: ru })}
+        </span>
       </p>
 
       {error && (
@@ -162,33 +200,47 @@ export function ClubSchedulePage({
       )}
 
       <ul className="space-y-2">
-        {sorted.map((ev) => (
-          <li
-            key={`${ev.type}-${ev.id}`}
-            className={`card border-l-4 ${TYPE_CLASS[ev.type] ?? 'border-l-slate-600'}`}
-          >
-            <div className="flex justify-between gap-2">
-              <div>
-                <p className="text-xs text-slate-500">
-                  {TYPE_LABEL[ev.type] ?? ev.type}
-                  {ev.staffName ? ` · ${ev.staffName}` : ''}
-                </p>
-                <p className="font-medium text-slate-100 mt-0.5">
-                  {format(parseISO(ev.startAt), 'HH:mm')}–
-                  {format(parseISO(ev.endAt), 'HH:mm')} · {ev.title}
-                </p>
-                <p className="text-xs text-slate-400 mt-1">
-                  {ev.clientName ? `${ev.clientName} · ` : ''}
-                  {ev.booked != null
-                    ? `записано ${ev.booked}${ev.capacity ? `/${ev.capacity}` : ''} · `
-                    : ''}
-                  {ev.approvalLabel || ev.status}
-                  {ev.payrollLocked ? ' · ЗП закрыт' : ''}
-                </p>
-              </div>
-            </div>
-          </li>
-        ))}
+        {sorted.map((ev) => {
+          const clickable = Boolean(ev.sessionKey);
+          return (
+            <li key={`${ev.type}-${ev.id}`}>
+              <button
+                type="button"
+                disabled={!clickable}
+                onClick={() => openEvent(ev)}
+                className={`card border-l-4 w-full text-left transition ${
+                  TYPE_CLASS[ev.type] ?? 'border-l-slate-600'
+                } ${
+                  clickable
+                    ? 'hover:border-fitgo-500/50 hover:bg-slate-900/60 cursor-pointer'
+                    : 'cursor-default opacity-90'
+                }`}
+              >
+                <div className="flex justify-between gap-2">
+                  <div>
+                    <p className="text-xs text-slate-500">
+                      {TYPE_LABEL[ev.type] ?? ev.type}
+                      {ev.staffName ? ` · ${ev.staffName}` : ''}
+                    </p>
+                    <p className="font-medium text-slate-100 mt-0.5">
+                      {format(parseISO(ev.startAt), 'HH:mm')}–
+                      {format(parseISO(ev.endAt), 'HH:mm')} · {ev.title}
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {ev.clientName ? `${ev.clientName} · ` : ''}
+                      {ev.booked != null
+                        ? `записано ${ev.booked}${ev.capacity ? `/${ev.capacity}` : ''} · `
+                        : ''}
+                      {ev.approvalLabel || ev.status}
+                      {ev.payrollLocked ? ' · ЗП закрыт' : ''}
+                      {clickable ? ' · открыть →' : ''}
+                    </p>
+                  </div>
+                </div>
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

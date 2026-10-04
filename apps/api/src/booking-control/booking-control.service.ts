@@ -95,67 +95,70 @@ export class BookingControlService {
       performerName = `${u.lastName} ${u.firstName}`.trim();
     }
 
-    const onex = await this.prisma.onexClassSession.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        startAt: { gte: fromD, lte: toD },
-        ...(kindFilter ? { kind: kindFilter } : {}),
-        ...(performerFilterId
-          ? performerExt || performerName
-            ? {
-                OR: [
-                  ...(performerExt
-                    ? [{ employeeExternalId: performerExt }]
-                    : []),
-                  ...(performerName
-                    ? [{ employeeName: performerName }]
-                    : []),
-                ],
-              }
-            : { employeeExternalId: '__none__' }
-          : {}),
-      },
-      include: { members: true },
-      orderBy: { startAt: 'desc' },
-    });
-
-    const openRemarks = await this.prisma.sessionRemark.findMany({
-      where: {
-        clubId,
-        status: SessionRemarkStatus.OPEN,
-      },
-      select: { sessionKey: true },
-    });
-    const openKeys = new Set(openRemarks.map((r) => r.sessionKey));
-
-    const staffByExt = await this.loadStaffMap(clubId);
+    const wantPtSales = !kindFilter || kindFilter === OnexClassKind.PT;
 
     const items: BookingControlListItem[] = [];
     const matchedPtIds = new Set<string>();
     const matchedSpaIds = new Set<string>();
 
-    // Preload FitGO PT/SPA for in-memory match (avoid N+1)
-    const [allPt, allSpa] = await Promise.all([
-      this.prisma.personalTrainingBooking.findMany({
-        where: {
-          trainer: { clubId },
-          status: { not: PersonalBookingStatus.CANCELLED },
-          startAt: { gte: fromD, lte: toD },
-          ...(performerFilterId ? { trainerId: performerFilterId } : {}),
-        },
-        include: { client: true, trainer: true },
-      }),
-      this.prisma.spaBooking.findMany({
-        where: {
-          clubId,
-          status: { not: SpaBookingStatus.CANCELLED },
-          startAt: { gte: fromD, lte: toD },
-          ...(performerFilterId ? { specialistId: performerFilterId } : {}),
-        },
-        include: { client: true, specialist: true, service: true },
-      }),
-    ]);
+    // Parallel DB + optional 1C sales (was sequential; sales alone can take seconds).
+    const [onex, openRemarks, staffByExt, allPt, allSpa, ptSales] =
+      await Promise.all([
+        this.prisma.onexClassSession.findMany({
+          where: {
+            clubId,
+            isActive: true,
+            startAt: { gte: fromD, lte: toD },
+            ...(kindFilter ? { kind: kindFilter } : {}),
+            ...(performerFilterId
+              ? performerExt || performerName
+                ? {
+                    OR: [
+                      ...(performerExt
+                        ? [{ employeeExternalId: performerExt }]
+                        : []),
+                      ...(performerName
+                        ? [{ employeeName: performerName }]
+                        : []),
+                    ],
+                  }
+                : { employeeExternalId: '__none__' }
+              : {}),
+          },
+          include: { members: true },
+          orderBy: { startAt: 'desc' },
+        }),
+        this.prisma.sessionRemark.findMany({
+          where: {
+            clubId,
+            status: SessionRemarkStatus.OPEN,
+          },
+          select: { sessionKey: true },
+        }),
+        this.loadStaffMap(clubId),
+        this.prisma.personalTrainingBooking.findMany({
+          where: {
+            trainer: { clubId },
+            status: { not: PersonalBookingStatus.CANCELLED },
+            startAt: { gte: fromD, lte: toD },
+            ...(performerFilterId ? { trainerId: performerFilterId } : {}),
+          },
+          include: { client: true, trainer: true },
+        }),
+        this.prisma.spaBooking.findMany({
+          where: {
+            clubId,
+            status: { not: SpaBookingStatus.CANCELLED },
+            startAt: { gte: fromD, lte: toD },
+            ...(performerFilterId ? { specialistId: performerFilterId } : {}),
+          },
+          include: { client: true, specialist: true, service: true },
+        }),
+        wantPtSales
+          ? this.fetchTrainerPtSales(filters.from, filters.to)
+          : Promise.resolve([] as SpecialistServiceDebt[]),
+      ]);
+    const openKeys = new Set(openRemarks.map((r) => r.sessionKey));
 
     for (const s of onex) {
       const kind = s.kind as BookingControlKind;
@@ -252,11 +255,7 @@ export class BookingControlService {
     }
 
     // One-time PT from 1C sale lines (Исполнитель + сумма), no class doc required
-    if (!kindFilter || kindFilter === OnexClassKind.PT) {
-      const ptSales = await this.fetchTrainerPtSales(
-        filters.from,
-        filters.to,
-      );
+    if (wantPtSales) {
       for (const sale of ptSales) {
         if (
           !this.saleMatchesPerformerFilter(
@@ -449,12 +448,10 @@ export class BookingControlService {
     const spaBookingIds = out
       .filter((i) => i.kind === 'SPA' && i.fitgoBookingId)
       .map((i) => i.fitgoBookingId!);
-    for (const id of ptBookingIds) {
-      await this.sessionApproval.ensureApproval('PT', id, clubId);
-    }
-    for (const id of spaBookingIds) {
-      await this.sessionApproval.ensureApproval('SPA', id, clubId);
-    }
+    await Promise.all([
+      this.sessionApproval.ensureApprovals('PT', ptBookingIds, clubId),
+      this.sessionApproval.ensureApprovals('SPA', spaBookingIds, clubId),
+    ]);
     if (ptBookingIds.length || spaBookingIds.length) {
       const sessionApprovals = await this.prisma.sessionApproval.findMany({
         where: {
@@ -548,10 +545,26 @@ export class BookingControlService {
     const open = mappedRemarks.find((r) => r.status === 'OPEN') ?? null;
 
     if (parsed.source === '1C') {
-      const s = await this.prisma.onexClassSession.findFirst({
+      let s = await this.prisma.onexClassSession.findFirst({
         where: { clubId, externalId: parsed.id, isActive: true },
         include: { members: true },
       });
+      if (!s) {
+        // Future / freshly published class may not be in Onex yet — pull ± window once.
+        try {
+          await this.classSessions.syncRange(
+            clubId,
+            this.ymdDaysAgo(7),
+            this.ymdDaysAhead(31),
+          );
+        } catch {
+          /* ignore */
+        }
+        s = await this.prisma.onexClassSession.findFirst({
+          where: { clubId, externalId: parsed.id, isActive: true },
+          include: { members: true },
+        });
+      }
       if (!s) throw new NotFoundException('Занятие не найдено');
 
       if (viewer?.ownOnly) {
@@ -681,14 +694,8 @@ export class BookingControlService {
     }
 
     if (parsed.source === 'SALE') {
-      // Re-fetch recent sales window (endpoint max 31d) to resolve detail by docRef
-      const sales = await this.fetchTrainerPtSales(
-        this.ymdDaysAgo(31),
-        this.ymdToday(),
-      );
-      const sale = sales.find(
-        (r) => (r.docRef || r.externalId) === parsed.id,
-      );
+      // 1C BSL rejects ranges > 30 days; search recent 30d windows until found.
+      const sale = await this.findTrainerPtSale(parsed.id);
       if (!sale) throw new NotFoundException('Продажа не найдена');
       if (viewer?.ownOnly) {
         await this.assertOwnSale(clubId, viewer.userId, sale);
@@ -1800,18 +1807,44 @@ export class BookingControlService {
     return map;
   }
 
+  private readonly ptSalesCache = new Map<
+    string,
+    { at: number; rows: SpecialistServiceDebt[] }
+  >();
+
   private async fetchTrainerPtSales(
     from: string,
     to: string,
   ): Promise<SpecialistServiceDebt[]> {
+    const key = `${from}|${to}`;
+    const hit = this.ptSalesCache.get(key);
+    if (hit && Date.now() - hit.at < 60_000) return hit.rows;
+
     const provider = this.fitness.getProvider();
     const fn = provider.getTrainerPtSales;
     if (!fn) return [];
     try {
-      return await fn.call(provider, { from, to });
+      const rows = await fn.call(provider, { from, to });
+      const list = Array.isArray(rows) ? rows : [];
+      this.ptSalesCache.set(key, { at: Date.now(), rows: list });
+      return list;
     } catch {
       return [];
     }
+  }
+
+  /** Resolve one sale by docRef/externalId across recent ≤30-day windows. */
+  private async findTrainerPtSale(
+    docOrExt: string,
+  ): Promise<SpecialistServiceDebt | undefined> {
+    for (let i = 0; i < 4; i++) {
+      const to = this.ymdDaysAgo(30 * i);
+      const from = this.ymdDaysAgo(30 * (i + 1));
+      const sales = await this.fetchTrainerPtSales(from, to);
+      const hit = sales.find((r) => (r.docRef || r.externalId) === docOrExt);
+      if (hit) return hit;
+    }
+    return undefined;
   }
 
   private saleMatchesPerformerFilter(
@@ -1874,6 +1907,10 @@ export class BookingControlService {
 
   private ymdDaysAgo(n: number): string {
     return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+  }
+
+  private ymdDaysAhead(n: number): string {
+    return new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
   }
 
   private async assertOwnSale(

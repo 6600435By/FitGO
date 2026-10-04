@@ -55,7 +55,8 @@ export interface ClubScheduleQuery {
   types?: ClubScheduleEventType[];
   staffIds?: string[];
   status?: ClubScheduleStatus | 'ALL';
-  approval?: GroupApprovalPhase | SessionApprovalPhase | 'ALL';
+  /** Exact phase, or PENDING = any PENDING_* phase. */
+  approval?: GroupApprovalPhase | SessionApprovalPhase | 'PENDING' | 'ALL';
 }
 
 export interface SpaAvailabilityOverlapItem {

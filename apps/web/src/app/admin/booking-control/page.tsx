@@ -9,6 +9,8 @@ import { getToken } from '@/lib/auth';
 function AdminBookingControlInner() {
   const searchParams = useSearchParams();
   const initialSessionKey = searchParams.get('sessionKey')?.trim() || undefined;
+  const initialFrom = searchParams.get('from')?.trim() || undefined;
+  const initialTo = searchParams.get('to')?.trim() || undefined;
 
   const panelApi = useMemo(
     () => ({
@@ -104,6 +106,8 @@ function AdminBookingControlInner() {
       canReturnApproval
       canViewHallPhotos
       initialSessionKey={initialSessionKey}
+      initialFrom={initialFrom}
+      initialTo={initialTo}
       subtitle="ГП: проверьте отметки тренера, поставьте Прибыл/Не прибыл и подтвердите. Без подтверждения занятие не идёт в ЗП."
     />
   );

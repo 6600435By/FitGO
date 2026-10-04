@@ -49,6 +49,27 @@ export class SessionApprovalService {
     });
   }
 
+  /** Create missing approval rows in one round-trip (skip existing). */
+  async ensureApprovals(
+    kind: SessionApprovalKind,
+    bookingIds: string[],
+    clubId: string,
+  ) {
+    const ids = [...new Set(bookingIds.filter(Boolean))];
+    if (!ids.length) return;
+    const existing = await this.prisma.sessionApproval.findMany({
+      where: { kind, bookingId: { in: ids } },
+      select: { bookingId: true },
+    });
+    const have = new Set(existing.map((e) => e.bookingId));
+    const missing = ids.filter((id) => !have.has(id));
+    if (!missing.length) return;
+    await this.prisma.sessionApproval.createMany({
+      data: missing.map((bookingId) => ({ clubId, kind, bookingId })),
+      skipDuplicates: true,
+    });
+  }
+
   async confirmPerformer(
     actor: JwtPayload,
     kind: SessionApprovalKind,
