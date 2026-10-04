@@ -22,6 +22,19 @@ function addDays(base: Date, days: number): Date {
   return d;
 }
 
+/** Parse Forma/client filter or slot time to epoch ms (local if no zone). */
+function scheduleFilterMs(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed) return NaN;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return Date.parse(`${trimmed}T00:00:00`);
+  }
+  const normalized = trimmed.includes('T')
+    ? trimmed
+    : trimmed.replace(' ', 'T');
+  return Date.parse(normalized);
+}
+
 export class Mock1CProvider implements IFitnessClubProvider {
   private slots: ScheduleSlot[] = buildMockSchedule();
   private bookings = new Set<string>();
@@ -413,7 +426,8 @@ export class Mock1CProvider implements IFitnessClubProvider {
   }
 
   async getSchedule(clubExternalId: string, filters?: ScheduleFilters) {
-    if (clubExternalId !== MOCK_CLUB.externalId) return [];
+    // Accept any club id in mock — seed may use live FORMA_CLUB_ID UUID.
+    if (!clubExternalId) return [];
 
     this.ensureFreshSchedule();
 
@@ -424,11 +438,14 @@ export class Mock1CProvider implements IFitnessClubProvider {
     if (filters?.type) {
       slots = slots.filter((s) => s.type === filters.type);
     }
+    // Compare as instants — string compare breaks on "YYYY-MM-DD HH:mm" vs "...T..."
     if (filters?.from) {
-      slots = slots.filter((s) => s.startAt >= filters.from!);
+      const fromMs = scheduleFilterMs(filters.from);
+      slots = slots.filter((s) => scheduleFilterMs(s.startAt) >= fromMs);
     }
     if (filters?.to) {
-      slots = slots.filter((s) => s.startAt <= filters.to!);
+      const toMs = scheduleFilterMs(filters.to);
+      slots = slots.filter((s) => scheduleFilterMs(s.startAt) <= toMs);
     }
     return slots;
   }

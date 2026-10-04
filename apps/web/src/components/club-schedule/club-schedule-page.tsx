@@ -146,7 +146,9 @@ export function ClubSchedulePage({
       </div>
 
       <p className="text-sm text-slate-400">
-        {format(parseISO(day), 'EEEE, d MMMM yyyy', { locale: ru })}
+        {format(parseISO(`${day}T12:00:00`), 'EEEE, d MMMM yyyy', {
+          locale: ru,
+        })}
       </p>
 
       {error && (

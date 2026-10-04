@@ -12,6 +12,7 @@ import {
   clampScheduleRange,
   filterTrainerScheduleSlots,
   inferSlotStatus,
+  slotOverlapsDayRange,
 } from '../club-schedule/trainer-schedule.helpers';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -37,9 +38,15 @@ export class GpScheduleService {
       user,
     );
 
-    const slots = trainerSlots.filter(
-      (slot) =>
-        new Date(slot.startAt) < rangeEnd && new Date(slot.endAt) > rangeStart,
+    const slots = trainerSlots.filter((slot) =>
+      slotOverlapsDayRange(
+        slot.startAt,
+        slot.endAt,
+        fromDay,
+        toDay,
+        rangeStart,
+        rangeEnd,
+      ),
     );
     if (!slots.length) return [];
 

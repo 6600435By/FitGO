@@ -4,6 +4,7 @@ import {
   SpaBookingStatus,
 } from '@prisma/client';
 import {
+  SessionType,
   groupApprovalLabelRu,
   groupApprovalPhase,
   onexSessionKey,
@@ -13,6 +14,7 @@ import {
   type ClubScheduleQuery,
   type ClubScheduleStatus,
   type GroupApprovalPhase,
+  type ScheduleSlot,
   type SessionApprovalPhase,
 } from '@fitgo/shared-types';
 import { SessionApprovalService } from '../booking-control/session-approval.service';
@@ -23,6 +25,7 @@ import {
   inferSlotStatus,
   isFormaEmployeeId,
   mapOnexToClubStatus,
+  slotOverlapsDayRange,
 } from './trainer-schedule.helpers';
 
 @Injectable()
@@ -124,10 +127,59 @@ export class ClubScheduleService {
     >,
   ): Promise<ClubScheduleEvent[]> {
     const allSlots = await this.formaCache.getClubSchedule(clubId, fromDay, toDay);
-    let slots = allSlots.filter(
-      (slot) =>
-        new Date(slot.startAt) < rangeEnd && new Date(slot.endAt) > rangeStart,
+    let slots = allSlots.filter((slot) =>
+      slotOverlapsDayRange(
+        slot.startAt,
+        slot.endAt,
+        fromDay,
+        toDay,
+        rangeStart,
+        rangeEnd,
+      ),
     );
+
+    // Enrich + fill gaps from synced 1C Onex sessions (past / if Forma empty).
+    const onexInRange = await this.prisma.onexClassSession.findMany({
+      where: {
+        clubId,
+        kind: 'GROUP',
+        isActive: true,
+        startAt: { gte: rangeStart, lt: rangeEnd },
+      },
+    });
+    const slotIds = new Set(slots.map((s) => s.id));
+    for (const onex of onexInRange) {
+      if (slotIds.has(onex.externalId)) continue;
+      const startAt = onex.startAt.toISOString();
+      const endAt = (onex.endAt ?? onex.startAt).toISOString();
+      if (
+        !slotOverlapsDayRange(
+          startAt,
+          endAt,
+          fromDay,
+          toDay,
+          rangeStart,
+          rangeEnd,
+        )
+      ) {
+        continue;
+      }
+      const synthetic: ScheduleSlot = {
+        id: onex.externalId,
+        title: onex.title,
+        type: SessionType.GROUP,
+        startAt,
+        endAt,
+        capacity: Math.max(onex.bookedCount, 1),
+        booked: onex.bookedCount,
+        available: onex.status !== 'CANCELLED',
+        trainerId: onex.employeeExternalId ?? undefined,
+        trainerName: onex.employeeName ?? undefined,
+        roomTitle: onex.roomTitle ?? undefined,
+      };
+      slots.push(synthetic);
+      slotIds.add(onex.externalId);
+    }
 
     if (staffIds.length) {
       const staffSet = new Set(staffIds);
@@ -141,19 +193,9 @@ export class ClubScheduleService {
     }
 
     const appointmentIds = slots.map((s) => s.id);
-    const onexSessions = appointmentIds.length
-      ? await this.prisma.onexClassSession.findMany({
-          where: {
-            clubId,
-            externalId: { in: appointmentIds },
-            kind: 'GROUP',
-            isActive: true,
-          },
-        })
-      : [];
-    const onexById = new Map(onexSessions.map((s) => [s.externalId, s]));
+    const onexById = new Map(onexInRange.map((s) => [s.externalId, s]));
 
-    const sessionKeys = onexSessions.map((s) => onexSessionKey(s.externalId));
+    const sessionKeys = appointmentIds.map((id) => onexSessionKey(id));
     const approvals = sessionKeys.length
       ? await this.prisma.groupClassApproval.findMany({
           where: { clubId, sessionKey: { in: sessionKeys } },

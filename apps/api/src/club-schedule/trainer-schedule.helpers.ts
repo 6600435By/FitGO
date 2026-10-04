@@ -58,10 +58,40 @@ export function formaScheduleRange(fromDay: string, toDay: string): {
   from: string;
   to: string;
 } {
+  // Exclusive end (next calendar day 00:00) — same as client week range / planvue.
+  const end = new Date(`${toDay.slice(0, 10)}T12:00:00`);
+  end.setDate(end.getDate() + 1);
   return {
-    from: `${fromDay} 00:00`,
-    to: `${toDay} 23:59`,
+    from: `${fromDay.slice(0, 10)} 00:00`,
+    to: `${localDayKey(end)} 00:00`,
   };
+}
+
+/** YYYY-MM-DD prefix from Forma/local ISO-ish timestamps. */
+export function calendarDayKey(isoLike: string): string | null {
+  const m = isoLike.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return m?.[1] ?? null;
+}
+
+export function slotOverlapsDayRange(
+  startAt: string,
+  endAt: string,
+  fromDay: string,
+  toDay: string,
+  rangeStart: Date,
+  rangeEnd: Date,
+): boolean {
+  const day = calendarDayKey(startAt);
+  if (day && day >= fromDay && day <= toDay) return true;
+
+  const start = Date.parse(
+    startAt.includes('T') ? startAt : startAt.replace(' ', 'T'),
+  );
+  const end = Date.parse(
+    endAt.includes('T') ? endAt : endAt.replace(' ', 'T'),
+  );
+  if (Number.isNaN(start) || Number.isNaN(end)) return false;
+  return start < rangeEnd.getTime() && end > rangeStart.getTime();
 }
 
 export async function filterTrainerScheduleSlots(

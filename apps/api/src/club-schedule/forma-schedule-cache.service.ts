@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import type { ScheduleSlot } from '@fitgo/shared-types';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -11,6 +11,7 @@ type CacheEntry = {
 
 @Injectable()
 export class FormaScheduleCacheService {
+  private readonly logger = new Logger(FormaScheduleCacheService.name);
   private readonly cache = new Map<string, CacheEntry>();
   private readonly ttlMs = 5 * 60 * 1000;
 
@@ -38,11 +39,16 @@ export class FormaScheduleCacheService {
       where: { id: clubId },
       select: { externalId: true },
     });
-    if (!club?.externalId) return [];
+    const externalId =
+      club?.externalId?.trim() || process.env.FORMA_CLUB_ID?.trim() || '';
+    if (!externalId) {
+      this.logger.warn(`Club ${clubId}: no externalId / FORMA_CLUB_ID for schedule`);
+      return [];
+    }
 
     try {
       const range = formaScheduleRange(fromDay, toDay);
-      const slots = await this.fitness.getProvider().getSchedule(club.externalId, {
+      const slots = await this.fitness.getProvider().getSchedule(externalId, {
         from: range.from,
         to: range.to,
       });
@@ -51,7 +57,12 @@ export class FormaScheduleCacheService {
         slots,
       });
       return slots;
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `Forma getSchedule failed club=${clubId} ext=${externalId} ${fromDay}..${toDay}: ${message}`,
+      );
+      // Do not cache failures — allow Onex fallback in callers.
       return [];
     }
   }
