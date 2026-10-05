@@ -26,7 +26,8 @@ export class AdminTasksSchedulerService implements OnModuleInit {
 
   private async tick() {
     const now = new Date();
-    if (now.getHours() < 3) return;
+    // Night window only — daytime API restart must not re-fire (in-memory lastDayKey).
+    if (now.getHours() < 3 || now.getHours() >= 5) return;
     const dayKey = now.toISOString().slice(0, 10);
     if (this.lastDayKey === dayKey) return;
     this.lastDayKey = dayKey;
