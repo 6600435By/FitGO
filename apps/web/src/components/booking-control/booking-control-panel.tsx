@@ -103,6 +103,20 @@ function daysAgoIso(n: number) {
   return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
 }
 
+function formatDay(iso: string) {
+  return new Date(iso).toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
+function formatClock(iso: string) {
+  return new Date(iso).toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 function statusRu(s: BookingControlStatus) {
   if (s === 'COMPLETED') return 'Выполнено';
   if (s === 'CANCELLED') return 'Отменено';
@@ -793,35 +807,72 @@ export function BookingControlPanel({
         <p className="text-slate-400">Нет записей за период</p>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-slate-800">
-          <table className="min-w-full text-left text-sm">
+          <table className="w-full table-fixed text-left text-[10px] md:min-w-full md:table-auto md:text-sm">
             <thead className="bg-slate-900/80 text-slate-400">
               <tr>
-                <th className="whitespace-nowrap px-3 py-2 font-medium">
+                <th className="w-[3.4rem] whitespace-nowrap px-1 py-2 font-medium md:hidden">
+                  Дата
+                </th>
+                <th className="w-10 whitespace-nowrap px-1 py-2 font-medium md:hidden">
+                  Время
+                </th>
+                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell">
                   Дата время
                 </th>
-                <th className="px-3 py-2 font-medium">Вид</th>
-                <th className="px-3 py-2 font-medium">Наименование</th>
-                <th className="px-3 py-2 font-medium">Сотрудник</th>
-                <th className="px-3 py-2 font-medium text-right">Записано</th>
-                <th className="px-3 py-2 font-medium text-right">Прибыло</th>
-                <th className="px-3 py-2 font-medium text-right">Не прибыло</th>
-                <th className="px-3 py-2 font-medium">Статус</th>
-                <th className="px-3 py-2 font-medium">Оплата</th>
+                <th className="hidden px-3 py-2 font-medium md:table-cell">
+                  Вид
+                </th>
+                <th className="overflow-hidden whitespace-nowrap px-1 py-2 font-medium md:px-3">
+                  Наименование
+                </th>
+                <th className="hidden px-3 py-2 font-medium md:table-cell">
+                  Сотрудник
+                </th>
+                <th className="hidden px-3 py-2 text-right font-medium md:table-cell">
+                  Записано
+                </th>
+                <th className="hidden px-3 py-2 text-right font-medium md:table-cell">
+                  Прибыло
+                </th>
+                <th className="hidden px-3 py-2 text-right font-medium md:table-cell">
+                  Не прибыло
+                </th>
+                <th className="w-[5.6rem] overflow-hidden whitespace-nowrap px-1 py-2 font-medium md:w-auto md:px-3">
+                  Статус
+                </th>
+                <th className="w-[4.3rem] overflow-hidden whitespace-nowrap px-1 py-2 font-medium md:w-auto md:px-3">
+                  Оплата
+                </th>
               </tr>
             </thead>
             <tbody>
               {visible.map((item) => {
                 const a = attendanceOf(item);
+                const pay = paymentCell(item);
+                const title = [
+                  item.title,
+                  item.clientName && item.kind !== 'GROUP'
+                    ? item.clientName
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
                 return (
                   <tr
                     key={item.sessionKey}
                     className="cursor-pointer border-t border-slate-800/80 hover:bg-slate-900/60"
                     onClick={() => openDetail(item.sessionKey)}
                   >
-                    <td className="whitespace-nowrap px-3 py-2 text-slate-400">
+                    <td className="whitespace-nowrap px-1 py-2 text-slate-400 md:hidden">
+                      {formatDay(item.startAt)}
+                    </td>
+                    <td className="whitespace-nowrap px-1 py-2 tabular-nums text-slate-400 md:hidden">
+                      {formatClock(item.startAt)}
+                    </td>
+                    <td className="hidden whitespace-nowrap px-3 py-2 text-slate-400 md:table-cell">
                       {formatDateTime(item.startAt)}
                     </td>
-                    <td className="px-3 py-2 text-slate-300">
+                    <td className="hidden px-3 py-2 text-slate-300 md:table-cell">
                       {kindRu(item.kind)}
                       {item.source === 'SALE' ? (
                         <span className="ml-1 rounded bg-emerald-500/20 px-1 py-0.5 text-[10px] text-emerald-300">
@@ -834,54 +885,58 @@ export function BookingControlPanel({
                         </span>
                       ) : null}
                     </td>
-                    <td className="max-w-[16rem] truncate px-3 py-2 text-white">
-                      {item.title}
-                      {item.clientName && item.kind !== 'GROUP' ? (
-                        <span className="text-slate-500">
-                          {' '}
-                          · {item.clientName}
-                        </span>
-                      ) : null}
+                    <td className="overflow-hidden px-1 py-2 text-white md:px-3">
+                      <span className="block max-w-full truncate md:max-w-[16rem]" title={title}>
+                        {item.title}
+                        {item.clientName && item.kind !== 'GROUP' ? (
+                          <span className="text-slate-500">
+                            {' '}
+                            · {item.clientName}
+                          </span>
+                        ) : null}
+                      </span>
                       {item.needsReview ? (
-                        <span className="ml-1 rounded bg-rose-500/20 px-1 py-0.5 text-[10px] text-rose-300">
+                        <span className="ml-1 hidden rounded bg-rose-500/20 px-1 py-0.5 text-[10px] text-rose-300 md:inline">
                           проверка
                         </span>
                       ) : null}
                       {item.approvalLabel ? (
-                        <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[10px] text-amber-300">
+                        <span className="ml-1 hidden rounded bg-amber-500/20 px-1 py-0.5 text-[10px] text-amber-300 md:inline">
                           {item.approvalLabel}
                         </span>
                       ) : null}
                     </td>
-                    <td className="max-w-[12rem] truncate px-3 py-2 text-slate-300">
+                    <td className="hidden max-w-[12rem] truncate px-3 py-2 text-slate-300 md:table-cell">
                       {item.performerName}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                    <td className="hidden px-3 py-2 text-right tabular-nums text-slate-300 md:table-cell">
                       {a.booked}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-emerald-300">
+                    <td className="hidden px-3 py-2 text-right tabular-nums text-emerald-300 md:table-cell">
                       {a.arrived}
                     </td>
                     <td
                       className={
                         a.noShow > 0
-                          ? 'px-3 py-2 text-right tabular-nums text-amber-300'
-                          : 'px-3 py-2 text-right tabular-nums text-slate-500'
+                          ? 'hidden px-3 py-2 text-right tabular-nums text-amber-300 md:table-cell'
+                          : 'hidden px-3 py-2 text-right tabular-nums text-slate-500 md:table-cell'
                       }
                     >
                       {a.noShow}
                     </td>
-                    <td className="px-3 py-2 text-slate-300">
+                    <td className="overflow-hidden whitespace-nowrap px-1 py-2 text-slate-300 md:px-3">
                       {statusRu(item.status)}
                     </td>
                     <td
                       className={
                         item.payment === 'DEBT'
-                          ? 'px-3 py-2 text-rose-300'
-                          : 'px-3 py-2 text-slate-300'
+                          ? 'overflow-hidden px-1 py-2 text-rose-300 md:px-3'
+                          : 'overflow-hidden px-1 py-2 text-slate-300 md:px-3'
                       }
                     >
-                      {paymentCell(item)}
+                      <span className="block truncate" title={pay}>
+                        {pay}
+                      </span>
                     </td>
                   </tr>
                 );

@@ -14,10 +14,29 @@ import {
   SpaBookingDialog,
   toDatetimeLocalValue,
 } from '@/components/spa-board/spa-booking-dialog';
-import { SpaHoursEditor } from '@/components/spa-board/spa-hours-editor';
+import { SpaDayHoursDialog } from '@/components/spa-board/spa-day-hours-dialog';
+import {
+  normalizeHm,
+  SpaHoursEditor,
+} from '@/components/spa-board/spa-hours-editor';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
+
+function toDayIso(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function normalizeSlots(slots: SpecialistWorkSlotInput[]) {
+  return slots.map((s) => ({
+    ...s,
+    startTime: normalizeHm(s.startTime),
+    endTime: normalizeHm(s.endTime),
+  }));
+}
 
 export default function SpecialistSchedulePage() {
   const me = getUser();
@@ -45,6 +64,7 @@ export default function SpecialistSchedulePage() {
   const [selectedBooking, setSelectedBooking] = useState<SpaBoardBooking | null>(
     null,
   );
+  const [showDayHours, setShowDayHours] = useState(false);
 
   const boardPeriod = useMemo(() => {
     const start = new Date(day);
@@ -88,15 +108,44 @@ export default function SpecialistSchedulePage() {
     );
   }, [reload]);
 
+  const dayHoursForMe = useMemo(() => {
+    if (!board || !me?.id) return null;
+    const blocks = board.hours.filter(
+      (h) =>
+        h.specialistId === me.id &&
+        new Date(h.startAt) < new Date(boardPeriod.end) &&
+        new Date(h.endAt) > new Date(boardPeriod.start),
+    );
+    if (blocks.length === 0) return { startTime: null, endTime: null };
+    const start = new Date(
+      Math.min(...blocks.map((b) => new Date(b.startAt).getTime())),
+    );
+    const end = new Date(
+      Math.max(...blocks.map((b) => new Date(b.endAt).getTime())),
+    );
+    const fmt = (d: Date) =>
+      `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    return { startTime: fmt(start), endTime: fmt(end) };
+  }, [board, boardPeriod.end, boardPeriod.start, me?.id]);
+
   const saveTemplate = async () => {
     const token = getToken();
     if (!token) return;
+    if (workSlots.length === 0) {
+      setMessage('Отметьте хотя бы один рабочий день');
+      return;
+    }
     setBusy(true);
+    setMessage('');
     try {
-      await api.specialistSetWorkSchedule(token, workSlots);
+      const saved = await api.specialistSetWorkSchedule(
+        token,
+        normalizeSlots(workSlots),
+      );
+      setWorkSlots(saved);
       setMessage('Шаблон сохранён');
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Ошибка');
+      setMessage(err instanceof Error ? err.message : 'Ошибка сохранения');
     } finally {
       setBusy(false);
     }
@@ -105,9 +154,19 @@ export default function SpecialistSchedulePage() {
   const fillAndPublish = async () => {
     const token = getToken();
     if (!token) return;
+    if (workSlots.length === 0) {
+      setMessage('Отметьте хотя бы один рабочий день');
+      return;
+    }
     setBusy(true);
     setMessage('');
     try {
+      const saved = await api.specialistSetWorkSchedule(
+        token,
+        normalizeSlots(workSlots),
+      );
+      setWorkSlots(saved);
+
       const check = await api.specialistAvailabilityCheck(token, {
         startAt: publishPeriod.start,
         endAt: publishPeriod.end,
@@ -126,7 +185,7 @@ export default function SpecialistSchedulePage() {
           return;
         }
       }
-      await api.specialistFillFromTemplate(
+      const filled = await api.specialistFillFromTemplate(
         token,
         publishPeriod.start,
         publishPeriod.end,
@@ -136,10 +195,44 @@ export default function SpecialistSchedulePage() {
         publishPeriod.start,
         publishPeriod.end,
       );
-      setMessage(`Опубликовано блоков: ${result.publishedBlocks}`);
+      setMessage(
+        `Шаблон сохранён · создано ${filled.createdBlocks}, опубликовано ${result.publishedBlocks}`,
+      );
       await reload();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка публикации');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveDayHours = async (value: {
+    startTime: string | null;
+    endTime: string | null;
+  }) => {
+    const token = getToken();
+    if (!token) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.specialistSetDayHours(token, {
+        day: toDayIso(day),
+        startTime: value.startTime,
+        endTime: value.endTime,
+      });
+      setShowDayHours(false);
+      const dayLabel = day.toLocaleDateString('ru-RU', {
+        day: 'numeric',
+        month: 'short',
+      });
+      setMessage(
+        value.startTime && value.endTime
+          ? `Часы на ${dayLabel}: ${value.startTime}–${value.endTime}`
+          : `${dayLabel}: выходной`,
+      );
+      await reload();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка сохранения дня');
     } finally {
       setBusy(false);
     }
@@ -223,6 +316,7 @@ export default function SpecialistSchedulePage() {
             setShowAssign(true);
           }}
           onBookingClick={(b) => setSelectedBooking(b)}
+          onEditDayHours={() => setShowDayHours(true)}
         />
       ) : (
         <p className="text-sm text-slate-400">Загрузка доски…</p>
@@ -236,6 +330,21 @@ export default function SpecialistSchedulePage() {
         lastPublicationAt={calendar?.lastPublication?.publishedAt}
         onSaveTemplate={saveTemplate}
         onFillAndPublish={fillAndPublish}
+      />
+
+      <SpaDayHoursDialog
+        key={`${toDayIso(day)}-${dayHoursForMe?.startTime ?? 'off'}-${dayHoursForMe?.endTime ?? 'off'}`}
+        open={showDayHours}
+        dayLabel={day.toLocaleDateString('ru-RU', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+        })}
+        initialStart={dayHoursForMe?.startTime}
+        initialEnd={dayHoursForMe?.endTime}
+        busy={busy}
+        onClose={() => setShowDayHours(false)}
+        onSave={saveDayHours}
       />
 
       <section className="space-y-3">

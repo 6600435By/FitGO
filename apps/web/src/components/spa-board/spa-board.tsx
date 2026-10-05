@@ -91,6 +91,7 @@ export function SpaBoard({
   onDayChange,
   onEmptySlotClick,
   onBookingClick,
+  onEditDayHours,
   mobileStaffId,
   onMobileStaffChange,
 }: {
@@ -104,6 +105,8 @@ export function SpaBoard({
     startAt: Date;
   }) => void;
   onBookingClick?: (booking: SpaBoardBooking) => void;
+  /** Edit published hours for the selected calendar day (own or picked staff). */
+  onEditDayHours?: (args: { specialistId: string }) => void;
   mobileStaffId?: string;
   onMobileStaffChange?: (id: string) => void;
 }) {
@@ -146,8 +149,15 @@ export function SpaBoard({
     onMobileStaffChange?.(id);
   };
 
+  const staffOrdered = useMemo(() => {
+    if (!viewerSpecialistId) return board.staff;
+    const own = board.staff.filter((s) => s.id === viewerSpecialistId);
+    const rest = board.staff.filter((s) => s.id !== viewerSpecialistId);
+    return [...own, ...rest];
+  }, [board.staff, viewerSpecialistId]);
+
   const activeStaff =
-    board.staff.find((s) => s.id === selectedStaffId) ?? board.staff[0];
+    staffOrdered.find((s) => s.id === selectedStaffId) ?? staffOrdered[0];
 
   const renderColumn = (staff: SpaBoardStaff) => {
     const own = mode === 'admin' || staff.id === viewerSpecialistId;
@@ -172,6 +182,14 @@ export function SpaBoard({
           onEmptySlotClick({ specialistId: staff.id, startAt });
         }}
       >
+        {hours.map((h) => (
+          <div
+            key={h}
+            className="pointer-events-none absolute inset-x-0 border-t border-slate-800/80"
+            style={{ top: (h - DAY_START_HOUR) * 60 * PX_PER_MIN }}
+          />
+        ))}
+
         {bands.map((h) => {
           const top = Math.max(0, minutesFromDayStart(h.startAt, dayStart));
           const end = Math.min(
@@ -250,15 +268,15 @@ export function SpaBoard({
     );
   };
 
-  const timeRail = (
-    <div className="sticky left-0 z-10 w-11 shrink-0 bg-slate-950/95 sm:w-12">
+  const renderTimeRail = () => (
+    <div className="w-12 shrink-0 border-r border-slate-800 bg-slate-950">
       <div className="h-9 border-b border-slate-800" />
       <div className="relative" style={{ height }}>
         {hours.map((h) => (
           <div
             key={h}
-            className="absolute left-0 right-0 border-t border-slate-800/80 px-0.5 text-[10px] tabular-nums text-slate-500"
-            style={{ top: (h - DAY_START_HOUR) * 60 * PX_PER_MIN }}
+            className="absolute left-0 right-0 whitespace-nowrap px-1 text-[10px] tabular-nums leading-none text-slate-500"
+            style={{ top: (h - DAY_START_HOUR) * 60 * PX_PER_MIN + 2 }}
           >
             {String(h).padStart(2, '0')}:00
           </div>
@@ -294,13 +312,29 @@ export function SpaBoard({
         >
           Сегодня
         </button>
+        {onEditDayHours ? (
+          <button
+            type="button"
+            className="btn-secondary text-xs"
+            onClick={() => {
+              const id =
+                mode === 'specialist' && viewerSpecialistId
+                  ? viewerSpecialistId
+                  : activeStaff?.id;
+              if (!id) return;
+              onEditDayHours({ specialistId: id });
+            }}
+          >
+            Часы дня
+          </button>
+        ) : null}
       </div>
 
-      {/* Staff filter — phone / tablet */}
-      <div className="space-y-1.5 lg:hidden">
+      {/* Phone: one column, own schedule first */}
+      <div className="space-y-1.5 md:hidden">
         <p className="text-xs text-slate-500">Сотрудник</p>
         <div className="flex gap-1.5 overflow-x-auto pb-1">
-          {board.staff.map((s) => {
+          {staffOrdered.map((s) => {
             const on = s.id === activeStaff?.id;
             return (
               <button
@@ -321,11 +355,10 @@ export function SpaBoard({
         </div>
       </div>
 
-      {/* Phone / tablet: one column */}
-      <div className="card overflow-hidden p-0 lg:hidden">
+      <div className="card overflow-hidden p-0 md:hidden">
         {activeStaff ? (
           <div className="flex min-w-0">
-            {timeRail}
+            {renderTimeRail()}
             <div className="min-w-0 flex-1">
               <div className="flex h-9 items-center truncate border-b border-slate-800 px-2 text-xs font-medium">
                 {staffFull(activeStaff)}
@@ -343,24 +376,29 @@ export function SpaBoard({
         )}
       </div>
 
-      {/* Desktop wide: all columns */}
-      <div className="card hidden overflow-x-auto p-0 lg:block">
-        <div className="flex min-w-max">
-          {timeRail}
-          {board.staff.map((s) => (
-            <div key={s.id} className="flex w-[7.5rem] shrink-0 flex-col xl:w-36">
+      {/* Computer: all columns, time stays in its own gutter */}
+      <div className="card hidden overflow-hidden p-0 md:flex">
+        {renderTimeRail()}
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <div className="flex min-w-full">
+            {staffOrdered.map((s) => (
               <div
-                className={`flex h-9 items-center justify-center border-b border-l border-slate-800 px-1 text-center text-[11px] font-medium leading-tight ${
-                  s.id === viewerSpecialistId ? 'text-fitgo-300' : ''
-                }`}
-                title={staffFull(s)}
+                key={s.id}
+                className="flex min-w-[9rem] flex-1 flex-col"
               >
-                {staffShort(s)}
-                {s.id === viewerSpecialistId ? ' ·я' : ''}
+                <div
+                  className={`flex h-9 items-center justify-center border-b border-l border-slate-800 px-1 text-center text-[11px] font-medium leading-tight ${
+                    s.id === viewerSpecialistId ? 'text-fitgo-300' : ''
+                  }`}
+                  title={staffFull(s)}
+                >
+                  {staffShort(s)}
+                  {s.id === viewerSpecialistId ? ' · я' : ''}
+                </div>
+                {renderColumn(s)}
               </div>
-              {renderColumn(s)}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     </div>

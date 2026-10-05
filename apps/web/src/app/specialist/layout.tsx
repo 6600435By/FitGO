@@ -14,7 +14,7 @@ const NAV = [
 export default function SpecialistLayout({ children }: { children: ReactNode }) {
   return (
     <AuthGuard allowedRoles={[UserRole.SPECIALIST]}>
-      <AppShell title="Кабинет специалиста" navItems={NAV}>
+      <AppShell title="Кабинет специалиста" navItems={NAV} wide>
         {children}
       </AppShell>
     </AuthGuard>

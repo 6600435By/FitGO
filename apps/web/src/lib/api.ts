@@ -205,7 +205,13 @@ async function request<T>(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.message ?? `Ошибка ${response.status}`);
+    const raw = error.message;
+    const message = Array.isArray(raw)
+      ? raw.join('; ')
+      : typeof raw === 'string'
+        ? raw
+        : `Ошибка ${response.status}`;
+    throw new Error(message);
   }
 
   return response.json();
@@ -725,6 +731,27 @@ export const api = {
       token,
     ),
 
+  /** Set or clear published working hours for one calendar day. */
+  specialistSetDayHours: (
+    token: string,
+    body: { day: string; startTime?: string | null; endTime?: string | null },
+  ) =>
+    request<{
+      day: string;
+      startTime: string | null;
+      endTime: string | null;
+      blocks: Array<{
+        id: string;
+        startAt: string;
+        endAt: string;
+        status: 'DRAFT' | 'PUBLISHED';
+      }>;
+    }>(
+      '/specialist/availability/day',
+      { method: 'PUT', body: JSON.stringify(body) },
+      token,
+    ),
+
   specialistCalendar: (token: string, from: string, to: string) =>
     request<SpecialistCalendarResponse>(
       `/specialist/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
@@ -924,6 +951,76 @@ export const api = {
     request<{ booking: SpaBooking; membership: Membership | null }>(
       '/admin/spa-bookings',
       { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  adminCancelSpaBooking: (token: string, bookingId: string) =>
+    request<{ ok: boolean }>(
+      `/admin/spa-bookings/${bookingId}`,
+      { method: 'PATCH' },
+      token,
+    ),
+
+  adminGetSpecialistWorkSchedule: (token: string, specialistId: string) =>
+    request<SpecialistWorkSlotInput[]>(
+      `/admin/spa/specialists/${specialistId}/work-schedule`,
+      {},
+      token,
+    ),
+
+  adminSetSpecialistWorkSchedule: (
+    token: string,
+    specialistId: string,
+    slots: SpecialistWorkSlotInput[],
+  ) =>
+    request<SpecialistWorkSlotInput[]>(
+      `/admin/spa/specialists/${specialistId}/work-schedule`,
+      { method: 'PUT', body: JSON.stringify({ slots }) },
+      token,
+    ),
+
+  adminSetSpecialistDayHours: (
+    token: string,
+    specialistId: string,
+    body: { day: string; startTime?: string | null; endTime?: string | null },
+  ) =>
+    request<{
+      day: string;
+      startTime: string | null;
+      endTime: string | null;
+    }>(
+      `/admin/spa/specialists/${specialistId}/availability/day`,
+      { method: 'PUT', body: JSON.stringify(body) },
+      token,
+    ),
+
+  adminFillSpecialistFromTemplate: (
+    token: string,
+    specialistId: string,
+    periodStart: string,
+    periodEnd: string,
+  ) =>
+    request<{ createdBlocks: number }>(
+      `/admin/spa/specialists/${specialistId}/schedule/fill-from-template`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ periodStart, periodEnd }),
+      },
+      token,
+    ),
+
+  adminPublishSpecialistSchedule: (
+    token: string,
+    specialistId: string,
+    periodStart: string,
+    periodEnd: string,
+  ) =>
+    request<{ publishedBlocks: number }>(
+      `/admin/spa/specialists/${specialistId}/schedule/publish`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ periodStart, periodEnd }),
+      },
       token,
     ),
 

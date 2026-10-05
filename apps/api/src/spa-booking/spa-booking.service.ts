@@ -50,6 +50,36 @@ export interface WorkSlotInput {
 /** Клиент может отменить SPA не позднее чем за N часов до начала. */
 const SPA_CANCEL_MIN_HOURS_BEFORE = 3;
 
+/** Normalize `HH:MM` / `HH:MM:SS` from browsers to `HH:MM`. */
+function normalizeHm(raw: string): string {
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(raw.trim());
+  if (!m) {
+    throw new BadRequestException(`Некорректное время: ${raw}`);
+  }
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (hh > 23 || mm > 59) {
+    throw new BadRequestException(`Некорректное время: ${raw}`);
+  }
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function localDayBounds(day: string): { start: Date; end: Date; y: number; m: number; d: number } {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.trim());
+  if (!match) {
+    throw new BadRequestException('day must be YYYY-MM-DD');
+  }
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
+  const start = new Date(y, m - 1, d, 0, 0, 0, 0);
+  const end = new Date(y, m - 1, d, 23, 59, 59, 999);
+  if (Number.isNaN(start.getTime())) {
+    throw new BadRequestException('Некорректная дата');
+  }
+  return { start, end, y, m, d };
+}
+
 @Injectable()
 export class SpaBookingService {
   constructor(
@@ -1281,6 +1311,20 @@ export class SpaBookingService {
 
   // ─── Specialist schedule ───────────────────────────────────────────────────
 
+  private async assertClubSpecialist(user: JwtPayload, specialistId: string) {
+    const clubId = requireClubId(user);
+    const specialist = await this.prisma.user.findFirst({
+      where: {
+        id: specialistId,
+        clubId,
+        roles: { some: { role: Role.SPECIALIST } },
+      },
+      select: { id: true },
+    });
+    if (!specialist) throw new NotFoundException('Специалист не найден');
+    return specialistId;
+  }
+
   async listSpecialistOwnServices(user: JwtPayload) {
     const links = await this.prisma.specialistService.findMany({
       where: { specialistId: user.sub },
@@ -1291,9 +1335,9 @@ export class SpaBookingService {
       .map((l) => this.mapService(l.service));
   }
 
-  async getWorkSchedule(user: JwtPayload) {
+  private async getWorkScheduleById(specialistId: string) {
     const slots = await this.prisma.specialistWorkSlot.findMany({
-      where: { specialistId: user.sub },
+      where: { specialistId },
       orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
     });
     return slots.map((s) => ({
@@ -1303,38 +1347,158 @@ export class SpaBookingService {
     }));
   }
 
-  async setWorkSchedule(user: JwtPayload, slots: WorkSlotInput[]) {
-    this.validateWorkSlots(slots);
+  async getWorkSchedule(user: JwtPayload) {
+    return this.getWorkScheduleById(user.sub);
+  }
+
+  async adminGetWorkSchedule(user: JwtPayload, specialistId: string) {
+    await this.assertClubSpecialist(user, specialistId);
+    return this.getWorkScheduleById(specialistId);
+  }
+
+  private async setWorkScheduleById(
+    specialistId: string,
+    slots: WorkSlotInput[],
+  ) {
+    const normalized = slots.map((slot) => ({
+      dayOfWeek: slot.dayOfWeek,
+      startTime: normalizeHm(slot.startTime),
+      endTime: normalizeHm(slot.endTime),
+    }));
+    this.validateWorkSlots(normalized);
     await this.prisma.$transaction([
       this.prisma.specialistWorkSlot.deleteMany({
-        where: { specialistId: user.sub },
+        where: { specialistId },
       }),
       this.prisma.specialistWorkSlot.createMany({
-        data: slots.map((slot) => ({
-          specialistId: user.sub,
+        data: normalized.map((slot) => ({
+          specialistId,
           dayOfWeek: slot.dayOfWeek,
           startTime: slot.startTime,
           endTime: slot.endTime,
         })),
       }),
     ]);
-    return this.getWorkSchedule(user);
+    return this.getWorkScheduleById(specialistId);
+  }
+
+  async setWorkSchedule(user: JwtPayload, slots: WorkSlotInput[]) {
+    return this.setWorkScheduleById(user.sub, slots);
+  }
+
+  async adminSetWorkSchedule(
+    user: JwtPayload,
+    specialistId: string,
+    slots: WorkSlotInput[],
+  ) {
+    await this.assertClubSpecialist(user, specialistId);
+    return this.setWorkScheduleById(specialistId, slots);
   }
 
   private validateWorkSlots(slots: WorkSlotInput[]) {
     for (const slot of slots) {
       if (slot.startTime >= slot.endTime) {
-        throw new BadRequestException('startTime must be before endTime');
+        throw new BadRequestException('Время начала должно быть раньше окончания');
       }
     }
   }
 
-  async getAvailabilityBlocks(user: JwtPayload, from: string, to: string) {
+  /**
+   * Replace published/draft hours for one calendar day.
+   * Pass null/empty start+end to mark the day as off.
+   */
+  private async setDayHoursById(
+    specialistId: string,
+    day: string,
+    startTime?: string | null,
+    endTime?: string | null,
+  ) {
+    const { start, end, y, m, d } = localDayBounds(day);
+    const hasStart = Boolean(startTime && String(startTime).trim());
+    const hasEnd = Boolean(endTime && String(endTime).trim());
+    if (hasStart !== hasEnd) {
+      throw new BadRequestException('Укажите и начало, и конец — или очистите оба');
+    }
+
+    let blockStart: Date | null = null;
+    let blockEnd: Date | null = null;
+    let hmStart: string | null = null;
+    let hmEnd: string | null = null;
+    if (hasStart && hasEnd) {
+      hmStart = normalizeHm(String(startTime));
+      hmEnd = normalizeHm(String(endTime));
+      if (hmStart >= hmEnd) {
+        throw new BadRequestException('Время начала должно быть раньше окончания');
+      }
+      const [sh, sm] = hmStart.split(':').map(Number);
+      const [eh, em] = hmEnd.split(':').map(Number);
+      blockStart = new Date(y, m - 1, d, sh, sm, 0, 0);
+      blockEnd = new Date(y, m - 1, d, eh, em, 0, 0);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.specialistAvailabilityBlock.deleteMany({
+        where: {
+          specialistId,
+          startAt: { gte: start },
+          endAt: { lte: end },
+        },
+      });
+      if (blockStart && blockEnd) {
+        await tx.specialistAvailabilityBlock.create({
+          data: {
+            specialistId,
+            startAt: blockStart,
+            endAt: blockEnd,
+            status: AvailabilityBlockStatus.PUBLISHED,
+          },
+        });
+      }
+    });
+
+    const blocks = await this.getAvailabilityBlocksById(
+      specialistId,
+      start.toISOString(),
+      end.toISOString(),
+    );
+    return {
+      day,
+      startTime: hmStart,
+      endTime: hmEnd,
+      blocks,
+    };
+  }
+
+  async setDayHours(
+    user: JwtPayload,
+    day: string,
+    startTime?: string | null,
+    endTime?: string | null,
+  ) {
+    return this.setDayHoursById(user.sub, day, startTime, endTime);
+  }
+
+  async adminSetDayHours(
+    user: JwtPayload,
+    specialistId: string,
+    day: string,
+    startTime?: string | null,
+    endTime?: string | null,
+  ) {
+    await this.assertClubSpecialist(user, specialistId);
+    return this.setDayHoursById(specialistId, day, startTime, endTime);
+  }
+
+  private async getAvailabilityBlocksById(
+    specialistId: string,
+    from: string,
+    to: string,
+  ) {
     const rangeStart = new Date(from);
     const rangeEnd = new Date(to);
     const blocks = await this.prisma.specialistAvailabilityBlock.findMany({
       where: {
-        specialistId: user.sub,
+        specialistId,
         startAt: { lt: rangeEnd },
         endAt: { gt: rangeStart },
       },
@@ -1346,6 +1510,10 @@ export class SpaBookingService {
       endAt: b.endAt.toISOString(),
       status: b.status as 'DRAFT' | 'PUBLISHED',
     }));
+  }
+
+  async getAvailabilityBlocks(user: JwtPayload, from: string, to: string) {
+    return this.getAvailabilityBlocksById(user.sub, from, to);
   }
 
   async setAvailabilityBlocks(
@@ -1379,15 +1547,15 @@ export class SpaBookingService {
     return this.getAvailabilityBlocks(user, periodStart, periodEnd);
   }
 
-  async fillFromTemplate(
-    user: JwtPayload,
+  private async fillFromTemplateById(
+    specialistId: string,
     periodStart: string,
     periodEnd: string,
   ) {
     const start = new Date(periodStart);
     const end = new Date(periodEnd);
     const template = await this.prisma.specialistWorkSlot.findMany({
-      where: { specialistId: user.sub },
+      where: { specialistId },
     });
     if (template.length === 0) {
       throw new BadRequestException('Сначала задайте шаблон расписания');
@@ -1414,18 +1582,18 @@ export class SpaBookingService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      // Replace previous draft/published hours in the period (re-apply template).
       await tx.specialistAvailabilityBlock.deleteMany({
         where: {
-          specialistId: user.sub,
+          specialistId,
           startAt: { gte: start },
           endAt: { lte: end },
-          status: AvailabilityBlockStatus.DRAFT,
         },
       });
       if (blocks.length > 0) {
         await tx.specialistAvailabilityBlock.createMany({
           data: blocks.map((b) => ({
-            specialistId: user.sub,
+            specialistId,
             startAt: b.startAt,
             endAt: b.endAt,
             status: AvailabilityBlockStatus.DRAFT,
@@ -1437,8 +1605,26 @@ export class SpaBookingService {
     return { createdBlocks: blocks.length };
   }
 
-  async publishSchedule(
+  async fillFromTemplate(
     user: JwtPayload,
+    periodStart: string,
+    periodEnd: string,
+  ) {
+    return this.fillFromTemplateById(user.sub, periodStart, periodEnd);
+  }
+
+  async adminFillFromTemplate(
+    user: JwtPayload,
+    specialistId: string,
+    periodStart: string,
+    periodEnd: string,
+  ) {
+    await this.assertClubSpecialist(user, specialistId);
+    return this.fillFromTemplateById(specialistId, periodStart, periodEnd);
+  }
+
+  private async publishScheduleById(
+    specialistId: string,
     periodStart: string,
     periodEnd: string,
   ) {
@@ -1446,7 +1632,7 @@ export class SpaBookingService {
     const end = new Date(periodEnd);
     const result = await this.prisma.specialistAvailabilityBlock.updateMany({
       where: {
-        specialistId: user.sub,
+        specialistId,
         status: AvailabilityBlockStatus.DRAFT,
         startAt: { gte: start },
         endAt: { lte: end },
@@ -1455,12 +1641,30 @@ export class SpaBookingService {
     });
     await this.prisma.specialistSchedulePublication.create({
       data: {
-        specialistId: user.sub,
+        specialistId,
         periodStart: start,
         periodEnd: end,
       },
     });
     return { publishedBlocks: result.count };
+  }
+
+  async publishSchedule(
+    user: JwtPayload,
+    periodStart: string,
+    periodEnd: string,
+  ) {
+    return this.publishScheduleById(user.sub, periodStart, periodEnd);
+  }
+
+  async adminPublishSchedule(
+    user: JwtPayload,
+    specialistId: string,
+    periodStart: string,
+    periodEnd: string,
+  ) {
+    await this.assertClubSpecialist(user, specialistId);
+    return this.publishScheduleById(specialistId, periodStart, periodEnd);
   }
 
   async getSpecialistCalendar(
@@ -1693,6 +1897,26 @@ export class SpaBookingService {
       data: {
         status: SpaBookingStatus.CANCELLED,
         cancelledBy: SpaCancelledBy.SPECIALIST,
+        cancelledAt: new Date(),
+      },
+    });
+    return { ok: true };
+  }
+
+  async adminCancelBooking(user: JwtPayload, bookingId: string) {
+    const clubId = requireClubId(user);
+    const booking = await this.prisma.spaBooking.findFirst({
+      where: { id: bookingId, clubId },
+    });
+    if (!booking) throw new NotFoundException('Запись не найдена');
+    if (booking.status === SpaBookingStatus.CANCELLED) {
+      throw new BadRequestException('Запись уже отменена');
+    }
+    await this.prisma.spaBooking.update({
+      where: { id: bookingId },
+      data: {
+        status: SpaBookingStatus.CANCELLED,
+        cancelledBy: SpaCancelledBy.ADMIN,
         cancelledAt: new Date(),
       },
     });

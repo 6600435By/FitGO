@@ -27,6 +27,7 @@ import {
 } from './dto/admin-spa.dto';
 import { BookSpaDto } from './dto/book-spa.dto';
 import { CheckSpecialistAvailabilityDto } from './dto/check-availability.dto';
+import { SetSpecialistDayHoursDto } from './dto/set-day-hours.dto';
 import { PublishSpecialistScheduleDto } from './dto/publish-schedule.dto';
 import { SetSpecialistAvailabilityBlocksDto } from './dto/set-availability-blocks.dto';
 import { SetSpecialistWorkScheduleDto } from './dto/set-work-schedule.dto';
@@ -172,6 +173,15 @@ export class SpaBookingController {
       dto.periodEnd,
       dto.blocks,
     );
+  }
+
+  @Put('specialist/availability/day')
+  @Roles(UserRole.SPECIALIST)
+  setDayHours(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: SetSpecialistDayHoursDto,
+  ) {
+    return this.spa.setDayHours(user, dto.day, dto.startTime, dto.endTime);
   }
 
   @Post('specialist/schedule/fill-from-template')
@@ -363,5 +373,79 @@ export class SpaBookingController {
       paymentType: dto.paymentType,
       membershipServiceName: dto.membershipServiceName,
     });
+  }
+
+  @Patch('admin/spa-bookings/:bookingId')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminCancelBooking(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.spa.adminCancelBooking(user, bookingId);
+  }
+
+  @Get('admin/spa/specialists/:id/work-schedule')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminGetWorkSchedule(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.spa.adminGetWorkSchedule(user, id);
+  }
+
+  @Put('admin/spa/specialists/:id/work-schedule')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminSetWorkSchedule(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: SetSpecialistWorkScheduleDto,
+  ) {
+    return this.spa.adminSetWorkSchedule(user, id, dto.slots);
+  }
+
+  @Put('admin/spa/specialists/:id/availability/day')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminSetDayHours(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: SetSpecialistDayHoursDto,
+  ) {
+    return this.spa.adminSetDayHours(
+      user,
+      id,
+      dto.day,
+      dto.startTime,
+      dto.endTime,
+    );
+  }
+
+  @Post('admin/spa/specialists/:id/schedule/fill-from-template')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminFillFromTemplate(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: PublishSpecialistScheduleDto,
+  ) {
+    return this.spa.adminFillFromTemplate(
+      user,
+      id,
+      dto.periodStart,
+      dto.periodEnd,
+    );
+  }
+
+  @Post('admin/spa/specialists/:id/schedule/publish')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminPublishSchedule(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: PublishSpecialistScheduleDto,
+  ) {
+    return this.spa.adminPublishSchedule(
+      user,
+      id,
+      dto.periodStart,
+      dto.periodEnd,
+    );
   }
 }
