@@ -12,6 +12,8 @@ import { PrismaService } from '../prisma/prisma.service';
 @Injectable()
 export class NotificationsService implements OnModuleInit {
   private readonly logger = new Logger(NotificationsService.name);
+  private churnRunning = false;
+  private lastChurnDay = '';
 
   constructor(
     private readonly prisma: PrismaService,
@@ -20,9 +22,18 @@ export class NotificationsService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    if (this.config.get('ENABLE_NOTIFICATION_CRON') !== 'false') {
-      void this.runChurnTriggers();
-    }
+    if (this.config.get('ENABLE_NOTIFICATION_CRON') === 'false') return;
+    // Never on API start: a full client scan hammers 1C (rphost 100%).
+    setInterval(() => void this.churnTick(), 60 * 60 * 1000);
+  }
+
+  private async churnTick() {
+    const now = new Date();
+    const dayKey = now.toISOString().slice(0, 10);
+    if (now.getHours() < 4 || now.getHours() >= 6) return;
+    if (this.lastChurnDay === dayKey || this.churnRunning) return;
+    this.lastChurnDay = dayKey;
+    await this.runChurnTriggers();
   }
 
   async getNotifications(
@@ -306,83 +317,104 @@ export class NotificationsService implements OnModuleInit {
   }
 
   async runChurnTriggers() {
-    const clubs = await this.prisma.club.findMany({
-      where: { externalId: { not: null } },
-      include: { users: { include: { roles: true } } },
+    if (this.churnRunning) return;
+    this.churnRunning = true;
+    try {
+      await this.runChurnTriggersInner();
+    } finally {
+      this.churnRunning = false;
+    }
+  }
+
+  private async runChurnTriggersInner() {
+    const today = new Date();
+    const periodFrom = new Date(today.getTime() - 30 * 86400000);
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const visitPeriod = {
+      from: (periodFrom < monthStart ? periodFrom : monthStart)
+        .toISOString()
+        .slice(0, 10),
+      to: today.toISOString().slice(0, 10),
+    };
+
+    const clients = await this.prisma.user.findMany({
+      where: {
+        externalId: { not: null },
+        club: { externalId: { not: null } },
+        roles: { some: { role: 'CLIENT' } },
+      },
+      select: { id: true, externalId: true },
     });
 
-    for (const club of clubs) {
-      const clients = club.users.filter((u) =>
-        u.roles.some((r) => r.role === 'CLIENT'),
-      );
+    const provider = this.fitness.getProvider();
+    for (const client of clients) {
+      if (!client.externalId) continue;
 
-      for (const client of clients) {
-        if (!client.externalId) continue;
+      try {
+        // Sequential + pause: one light 1C call at a time, never a burst.
+        const visits = await provider.getVisits(client.externalId, visitPeriod);
+        const membership = await provider.getMembership(client.externalId);
 
-        try {
-          const provider = this.fitness.getProvider();
-          const [membership, visits] = await Promise.all([
-            provider.getMembership(client.externalId),
-            provider.getVisits(client.externalId),
-          ]);
-
-          const today = new Date();
-          const lastVisit = visits[0]?.date
-            ? new Date(visits[0].date)
-            : null;
-
-          if (lastVisit) {
-            const daysSince = Math.floor(
-              (today.getTime() - lastVisit.getTime()) / 86400000,
-            );
-            if (daysSince >= 3) {
-              await this.sendNotification(
-                client.id,
-                NotificationType.INACTIVITY,
-                'Мы скучаем!',
-                `Вы не были в клубе ${daysSince} дней. Запишитесь на тренировку!`,
-              );
-            }
+        let lastVisit: Date | null = null;
+        for (const v of visits) {
+          const d = new Date(v.date);
+          if (!Number.isNaN(d.getTime()) && (!lastVisit || d > lastVisit)) {
+            lastVisit = d;
           }
+        }
 
-          if (membership?.status === MembershipStatus.ACTIVE) {
-            const daysLeft = Math.floor(
-              (new Date(membership.validUntil).getTime() - today.getTime()) /
-                86400000,
-            );
-            if (daysLeft <= 7 && daysLeft >= 0) {
-              await this.sendNotification(
-                client.id,
-                NotificationType.MEMBERSHIP_EXPIRING,
-                'Абонемент скоро истекает',
-                `До окончания абонемента осталось ${daysLeft} дн. Продлите сейчас.`,
-              );
-            }
-          }
-
-          const visitsThisMonth = visits.filter((v) => {
-            const d = new Date(v.date);
-            return (
-              d.getMonth() === today.getMonth() &&
-              d.getFullYear() === today.getFullYear()
-            );
-          });
-
-          if (visitsThisMonth.length === 5) {
+        if (lastVisit) {
+          const daysSince = Math.floor(
+            (today.getTime() - lastVisit.getTime()) / 86400000,
+          );
+          if (daysSince >= 3) {
             await this.sendNotification(
               client.id,
-              NotificationType.MILESTONE,
-              'Отличная работа!',
-              'Это ваш 5-й визит в этом месяце. Так держать!',
+              NotificationType.INACTIVITY,
+              'Мы скучаем!',
+              `Вы не были в клубе ${daysSince} дней. Запишитесь на тренировку!`,
             );
           }
-        } catch {
-          this.logger.warn(`Churn check failed for ${client.id}`);
         }
+
+        if (membership?.status === MembershipStatus.ACTIVE) {
+          const daysLeft = Math.floor(
+            (new Date(membership.validUntil).getTime() - today.getTime()) /
+              86400000,
+          );
+          if (daysLeft <= 7 && daysLeft >= 0) {
+            await this.sendNotification(
+              client.id,
+              NotificationType.MEMBERSHIP_EXPIRING,
+              'Абонемент скоро истекает',
+              `До окончания абонемента осталось ${daysLeft} дн. Продлите сейчас.`,
+            );
+          }
+        }
+
+        const visitsThisMonth = visits.filter((v) => {
+          const d = new Date(v.date);
+          return (
+            d.getMonth() === today.getMonth() &&
+            d.getFullYear() === today.getFullYear()
+          );
+        });
+
+        if (visitsThisMonth.length === 5) {
+          await this.sendNotification(
+            client.id,
+            NotificationType.MILESTONE,
+            'Отличная работа!',
+            'Это ваш 5-й визит в этом месяце. Так держать!',
+          );
+        }
+      } catch {
+        this.logger.warn(`Churn check failed for ${client.id}`);
       }
+      await new Promise((r) => setTimeout(r, 500));
     }
 
-    this.logger.log('Churn triggers completed');
+    this.logger.log(`Churn triggers completed (${clients.length} clients)`);
   }
 
   async sendDirectMessage(
