@@ -19,14 +19,17 @@ export class ClassSyncSchedulerService implements OnModuleInit {
   onModuleInit() {
     if (this.config.get('ENABLE_CLASS_SYNC_CRON') === 'false') return;
     setInterval(() => void this.tick(), 60 * 60 * 1000);
+    // Safe: tick no-ops outside 03:00–05:00, so daytime restarts do not sync.
     void this.tick();
   }
 
   private async tick() {
     const now = new Date();
     const dayKey = now.toISOString().slice(0, 10);
-    // Once per day after 03:00 — past month + today for classes; 14d for visits
-    if (now.getHours() < 3) return;
+    // Once per calendar day in a night window only.
+    // In-memory lastDailyKey resets on API restart — without an end hour,
+    // every daytime restart re-ran a full month sync and pegged rphost.
+    if (now.getHours() < 3 || now.getHours() >= 5) return;
     if (this.lastDailyKey === dayKey) return;
     this.lastDailyKey = dayKey;
 

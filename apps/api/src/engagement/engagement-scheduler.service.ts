@@ -23,8 +23,8 @@ export class EngagementSchedulerService implements OnModuleInit {
 
   onModuleInit() {
     if (this.config.get('ENABLE_ENGAGEMENT_CRON') === 'false') return;
+    // Do not tick on boot — syncAllVisits hits 1C under WordpressUserAPI.
     setInterval(() => void this.tick(), 60 * 60 * 1000);
-    void this.tick();
   }
 
   private todayKey() {

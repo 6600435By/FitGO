@@ -19,13 +19,16 @@ export class AdminSalesSchedulerService implements OnModuleInit {
   onModuleInit() {
     if (this.config.get('ENABLE_ADMIN_SALES_CRON') === 'false') return;
     setInterval(() => void this.tick(), 60 * 60 * 1000);
+    // Safe: tick no-ops outside 02:00–04:00.
     void this.tick();
   }
 
   private async tick() {
     const now = new Date();
     const dayKey = now.toISOString().slice(0, 10);
-    if (now.getHours() < 2) return;
+    // Night window only — daytime API restart must not re-fire full sync
+    // (lastNightlyKey is in-memory and resets to '', so hour>=2 alone is unsafe).
+    if (now.getHours() < 2 || now.getHours() >= 4) return;
     if (this.lastNightlyKey === dayKey) return;
     this.lastNightlyKey = dayKey;
     this.logger.log('Starting nightly admin sales + club revenue sync');
