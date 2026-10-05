@@ -29,6 +29,7 @@ import {
   type SpaService,
   type SpaServiceEligibility,
   type SpaSpecialistSummary,
+  type SpaBoardResponse,
   type SpaBookingSlot,
   type SpaBooking,
   type SpaQuotaRule,
@@ -731,6 +732,13 @@ export const api = {
       token,
     ),
 
+  specialistSpaBoard: (token: string, from: string, to: string) =>
+    request<SpaBoardResponse>(
+      `/specialist/spa-board?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+      {},
+      token,
+    ),
+
   specialistFillFromTemplate: (
     token: string,
     periodStart: string,
@@ -822,6 +830,8 @@ export const api = {
       durationMin: number;
       bufferMin?: number;
       priceMinor: number;
+      priceOverrideMinor?: number | null;
+      bookable?: boolean;
       currency?: string;
       active?: boolean;
     },
@@ -867,6 +877,29 @@ export const api = {
       {},
       token,
     ),
+
+  adminSpaBoard: (
+    token: string,
+    from: string,
+    to: string,
+    filters?: {
+      specialistIds?: string[];
+      serviceIds?: string[];
+      status?: string;
+      approval?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({ from, to });
+    if (filters?.specialistIds?.length) {
+      q.set('specialistIds', filters.specialistIds.join(','));
+    }
+    if (filters?.serviceIds?.length) {
+      q.set('serviceIds', filters.serviceIds.join(','));
+    }
+    if (filters?.status) q.set('status', filters.status);
+    if (filters?.approval) q.set('approval', filters.approval);
+    return request<SpaBoardResponse>(`/admin/spa-board?${q}`, {}, token);
+  },
 
   adminSpaClients: (token: string) =>
     request<Array<{ id: string; firstName: string; lastName: string; phone?: string }>>(

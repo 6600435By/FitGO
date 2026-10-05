@@ -19,8 +19,11 @@ import {
 import {
   classifyVisitKind,
   SessionType,
+  sessionApprovalLabelRu,
   toUsageControl,
   type Membership,
+  type SpaBoardBooking,
+  type SpaBoardResponse,
   type SpaBooking,
   type SpaQuotaRule,
   type SpaService,
@@ -1897,5 +1900,219 @@ export class SpaBookingService {
       lastName: c.lastName,
       phone: c.phone ?? undefined,
     }));
+  }
+
+  // ─── Shared board ──────────────────────────────────────────────────────────
+
+  async getSpecialistSpaBoard(
+    user: JwtPayload,
+    from: string,
+    to: string,
+  ): Promise<SpaBoardResponse> {
+    const clubId = requireClubId(user);
+    return this.buildSpaBoard({
+      clubId,
+      from,
+      to,
+      viewerSpecialistId: user.sub,
+      revealAll: false,
+    });
+  }
+
+  async getAdminSpaBoard(
+    user: JwtPayload,
+    from: string,
+    to: string,
+    filters?: {
+      specialistIds?: string[];
+      serviceIds?: string[];
+      status?: string;
+      approval?: string;
+    },
+  ): Promise<SpaBoardResponse> {
+    const clubId = requireClubId(user);
+    return this.buildSpaBoard({
+      clubId,
+      from,
+      to,
+      revealAll: true,
+      specialistIds: filters?.specialistIds,
+      serviceIds: filters?.serviceIds,
+      status: filters?.status,
+      approval: filters?.approval,
+    });
+  }
+
+  private async buildSpaBoard(opts: {
+    clubId: string;
+    from: string;
+    to: string;
+    viewerSpecialistId?: string;
+    revealAll: boolean;
+    specialistIds?: string[];
+    serviceIds?: string[];
+    status?: string;
+    approval?: string;
+  }): Promise<SpaBoardResponse> {
+    const rangeStart = new Date(opts.from);
+    const rangeEnd = new Date(opts.to);
+    if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
+      throw new BadRequestException('Некорректный период');
+    }
+
+    const staffWhere = {
+      clubId: opts.clubId,
+      roles: { some: { role: Role.SPECIALIST } },
+      isActive: true as const,
+      ...(opts.specialistIds?.length
+        ? { id: { in: opts.specialistIds } }
+        : {}),
+    };
+
+    const statusFilter =
+      opts.status && opts.status !== 'ALL'
+        ? (opts.status as SpaBookingStatus)
+        : undefined;
+
+    const [staff, bookings] = await Promise.all([
+      this.prisma.user.findMany({
+        where: staffWhere,
+        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+        select: { id: true, firstName: true, lastName: true },
+      }),
+      this.prisma.spaBooking.findMany({
+        where: {
+          clubId: opts.clubId,
+          startAt: { lt: rangeEnd },
+          endAt: { gt: rangeStart },
+          status: statusFilter
+            ? statusFilter
+            : { in: [SpaBookingStatus.CONFIRMED, SpaBookingStatus.COMPLETED] },
+          ...(opts.specialistIds?.length
+            ? { specialistId: { in: opts.specialistIds } }
+            : {}),
+          ...(opts.serviceIds?.length
+            ? { serviceId: { in: opts.serviceIds } }
+            : {}),
+        },
+        include: { client: true, service: true },
+        orderBy: { startAt: 'asc' },
+      }),
+    ]);
+
+    const staffIds = staff.map((s) => s.id);
+    const staffIdSet = new Set(staffIds);
+    const hours =
+      staffIds.length === 0
+        ? []
+        : await this.prisma.specialistAvailabilityBlock.findMany({
+            where: {
+              specialistId: { in: staffIds },
+              startAt: { lt: rangeEnd },
+              endAt: { gt: rangeStart },
+            },
+            orderBy: { startAt: 'asc' },
+          });
+
+    const visibleHours = hours.filter((h) => {
+      if (!staffIdSet.has(h.specialistId)) return false;
+      if (opts.revealAll) return true;
+      if (h.status === AvailabilityBlockStatus.PUBLISHED) return true;
+      return (
+        h.status === AvailabilityBlockStatus.DRAFT &&
+        h.specialistId === opts.viewerSpecialistId
+      );
+    });
+
+    const bookingIds = bookings.map((b) => b.id);
+    await this.sessionApproval.ensureApprovals(
+      SessionApprovalKind.SPA,
+      bookingIds,
+      opts.clubId,
+    );
+    const approvals = bookingIds.length
+      ? await this.prisma.sessionApproval.findMany({
+          where: {
+            kind: SessionApprovalKind.SPA,
+            bookingId: { in: bookingIds },
+          },
+        })
+      : [];
+    const approvalByBooking = new Map(
+      approvals.map((a) => [a.bookingId, a] as const),
+    );
+
+    const now = Date.now();
+    const mappedBookings: SpaBoardBooking[] = [];
+    for (const b of bookings) {
+      if (!staffIdSet.has(b.specialistId)) continue;
+      const reveal =
+        opts.revealAll || b.specialistId === opts.viewerSpecialistId;
+      if (!reveal) {
+        mappedBookings.push({
+          id: b.id,
+          specialistId: b.specialistId,
+          startAt: b.startAt.toISOString(),
+          endAt: b.endAt.toISOString(),
+          busy: true,
+        });
+        continue;
+      }
+
+      const row = approvalByBooking.get(b.id);
+      const ended = b.endAt.getTime() <= now;
+      const cancelled = b.status === SpaBookingStatus.CANCELLED;
+      const phase =
+        ended && !cancelled
+          ? row
+            ? this.sessionApproval.phase(row)
+            : ('PENDING_PERFORMER' as const)
+          : undefined;
+
+      if (opts.approval && opts.approval !== 'ALL') {
+        if (opts.approval === 'PENDING') {
+          if (phase !== 'PENDING_PERFORMER' && phase !== 'PENDING_ADMIN') {
+            continue;
+          }
+        } else if (phase !== opts.approval) {
+          continue;
+        }
+      }
+
+      mappedBookings.push({
+        id: b.id,
+        specialistId: b.specialistId,
+        startAt: b.startAt.toISOString(),
+        endAt: b.endAt.toISOString(),
+        busy: false,
+        clientName: this.spaClientName(b.client, b.guestName),
+        guestPhone: b.guestPhone ?? undefined,
+        serviceId: b.serviceId,
+        serviceName: b.service.name,
+        status: b.status as SpaBoardBooking['status'],
+        paymentType: b.paymentType as SpaBoardBooking['paymentType'],
+        approvalPhase: phase,
+        approvalLabel:
+          phase === 'PENDING_PERFORMER'
+            ? 'Ждёт специалиста'
+            : sessionApprovalLabelRu(phase),
+      });
+    }
+
+    return {
+      staff: staff.map((s) => ({
+        id: s.id,
+        firstName: s.firstName,
+        lastName: s.lastName,
+      })),
+      hours: visibleHours.map((h) => ({
+        id: h.id,
+        specialistId: h.specialistId,
+        startAt: h.startAt.toISOString(),
+        endAt: h.endAt.toISOString(),
+        status: h.status as 'PUBLISHED' | 'DRAFT',
+      })),
+      bookings: mappedBookings,
+    };
   }
 }

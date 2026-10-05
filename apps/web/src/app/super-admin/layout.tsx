@@ -24,6 +24,7 @@ const ALL_NAV = [
   { href: '/super-admin/payroll', label: 'ЗП' },
   { href: '/super-admin/sales', label: 'Продажи' },
   { href: '/super-admin/debts', label: 'Услуги специалистов' },
+  { href: '/super-admin/spa-catalog', label: 'Каталог SPA' },
   { href: '/super-admin/audit', label: 'Журнал' },
 ];
 

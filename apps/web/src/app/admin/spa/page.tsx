@@ -1,12 +1,18 @@
 'use client';
 
 import type {
+  SpaBoardResponse,
   SpaBooking,
   SpaQuotaRule,
   SpaService,
   SpaSpecialistSummary,
 } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { SpaBoard } from '@/components/spa-board/spa-board';
+import {
+  SpaBookingDialog,
+  toDatetimeLocalValue,
+} from '@/components/spa-board/spa-booking-dialog';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -23,25 +29,28 @@ export default function AdminSpaPage() {
   const [rules, setRules] = useState<SpaQuotaRule[]>([]);
   const [specialists, setSpecialists] = useState<SpaSpecialistSummary[]>([]);
   const [bookings, setBookings] = useState<SpaBooking[]>([]);
+  const [board, setBoard] = useState<SpaBoardResponse | null>(null);
   const [clients, setClients] = useState<
     Array<{ id: string; firstName: string; lastName: string }>
   >([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [day, setDay] = useState(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
+  const [filterSpecialistIds, setFilterSpecialistIds] = useState<string[]>([]);
+  const [filterApproval, setFilterApproval] = useState('ALL');
+  const [showAssign, setShowAssign] = useState(false);
+  const [assignDefaults, setAssignDefaults] = useState<{
+    specialistId?: string;
+    startAt?: string;
+  }>({});
   const [ruleDraft, setRuleDraft] = useState({
     membershipServiceName: 'Массаж классический общий',
     allowedServiceIds: [] as string[],
     allowedSpecialistIds: [] as string[],
-  });
-  const [phoneLookup, setPhoneLookup] = useState('');
-  const [assignForm, setAssignForm] = useState({
-    clientId: '',
-    guestName: '',
-    guestPhone: '',
-    specialistId: '',
-    serviceId: '',
-    startAt: '',
-    paymentType: 'PAID' as 'QUOTA' | 'PAID',
   });
 
   const period = useMemo(() => {
@@ -52,22 +61,44 @@ export default function AdminSpaPage() {
     return { start: start.toISOString(), end: end.toISOString() };
   }, []);
 
+  const boardPeriod = useMemo(() => {
+    const start = new Date(day);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setHours(23, 59, 59, 999);
+    return { start: start.toISOString(), end: end.toISOString() };
+  }, [day]);
+
   const reload = useCallback(async () => {
     const token = getToken();
     if (!token) return;
-    const [svc, rls, sps, bks, cls] = await Promise.all([
+    const [svc, rls, sps, bks, cls, brd] = await Promise.all([
       api.adminSpaServices(token),
       api.adminSpaQuotaRules(token),
       api.adminSpaSpecialists(token),
       api.adminSpaCalendar(token, period.start, period.end),
       api.adminSpaClients(token),
+      api.adminSpaBoard(token, boardPeriod.start, boardPeriod.end, {
+        specialistIds: filterSpecialistIds.length
+          ? filterSpecialistIds
+          : undefined,
+        approval: filterApproval !== 'ALL' ? filterApproval : undefined,
+      }),
     ]);
     setServices(svc);
     setRules(rls);
     setSpecialists(sps);
     setBookings(bks);
     setClients(cls);
-  }, [period.end, period.start]);
+    setBoard(brd);
+  }, [
+    boardPeriod.end,
+    boardPeriod.start,
+    filterApproval,
+    filterSpecialistIds,
+    period.end,
+    period.start,
+  ]);
 
   useEffect(() => {
     reload().catch((err) =>
@@ -126,24 +157,34 @@ export default function AdminSpaPage() {
     }
   };
 
-  const assign = async () => {
+  const assignFromDialog = async (payload: {
+    specialistId?: string;
+    clientId?: string;
+    guestName?: string;
+    guestPhone?: string;
+    serviceId: string;
+    startAt: string;
+    paymentType: 'QUOTA' | 'PAID';
+  }) => {
     const token = getToken();
     if (!token) return;
+    if (!payload.specialistId) {
+      setMessage('Укажите специалиста');
+      return;
+    }
     setBusy(true);
+    setMessage('');
     try {
       await api.adminAssignSpaBooking(token, {
-        specialistId: assignForm.specialistId,
-        serviceId: assignForm.serviceId,
-        startAt: assignForm.startAt,
-        paymentType: assignForm.paymentType,
-        ...(assignForm.guestPhone
-          ? {
-              guestPhone: assignForm.guestPhone,
-              guestName: assignForm.guestName,
-              ...(assignForm.clientId ? { clientId: assignForm.clientId } : {}),
-            }
-          : { clientId: assignForm.clientId }),
+        specialistId: payload.specialistId,
+        serviceId: payload.serviceId,
+        startAt: payload.startAt,
+        paymentType: payload.paymentType,
+        clientId: payload.clientId,
+        guestName: payload.guestName,
+        guestPhone: payload.guestPhone,
       });
+      setShowAssign(false);
       setMessage('Клиент записан');
       await reload();
     } catch (err) {
@@ -168,7 +209,7 @@ export default function AdminSpaPage() {
             ['services', 'Услуги'],
             ['rules', 'Правила квоты'],
             ['specialists', 'Специалисты'],
-            ['calendar', 'Календарь'],
+            ['calendar', 'Расписание'],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -369,135 +410,64 @@ export default function AdminSpaPage() {
 
       {tab === 'calendar' && (
         <div className="space-y-4">
-          <div className="card space-y-3">
-            <h3 className="font-medium">Добавить запись</h3>
-            <input
-              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-              placeholder="Телефон — найдём клиента в 1С"
-              value={assignForm.guestPhone}
-              onChange={(e) =>
-                setAssignForm((f) => ({
-                  ...f,
-                  guestPhone: e.target.value,
-                  clientId: '',
-                }))
-              }
-              onBlur={async (e) => {
-                const raw = e.target.value;
-                if (raw.replace(/\D/g, '').length < 9) {
-                  setPhoneLookup('');
-                  return;
-                }
-                const token = getToken();
-                if (!token) return;
-                setPhoneLookup('Ищем клиента…');
-                try {
-                  const found = await api.lookupSpaClientByPhone(token, raw);
-                  const name = `${found.lastName ?? ''} ${found.firstName ?? ''}`.trim();
-                  if (found.pending) {
-                    setPhoneLookup('1С не ответила. Укажите ФИО.');
-                  } else if (!found.found) {
-                    setPhoneLookup('В 1С нет. Укажите ФИО.');
-                  } else {
-                    setPhoneLookup(name ? `Найден: ${name}` : 'Клиент найден');
-                    setAssignForm((f) => ({
-                      ...f,
-                      clientId: found.clientId ?? '',
-                      guestName: f.guestName || name,
-                    }));
-                  }
-                } catch (err) {
-                  setPhoneLookup(err instanceof Error ? err.message : 'Ошибка поиска');
-                }
-              }}
-            />
-            {phoneLookup ? (
-              <p className="text-sm text-slate-300">{phoneLookup}</p>
-            ) : null}
-            <input
-              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-              placeholder="ФИО, если клиента нет в базе"
-              value={assignForm.guestName}
-              onChange={(e) =>
-                setAssignForm((f) => ({ ...f, guestName: e.target.value }))
-              }
-            />
-            <select
-              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-              value={assignForm.clientId}
-              onChange={(e) =>
-                setAssignForm((f) => ({ ...f, clientId: e.target.value }))
-              }
-            >
-              <option value="">Клиент</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.firstName} {c.lastName}
-                </option>
-              ))}
-            </select>
-            <select
-              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-              value={assignForm.specialistId}
-              onChange={(e) =>
-                setAssignForm((f) => ({ ...f, specialistId: e.target.value }))
-              }
-            >
-              <option value="">Специалист</option>
-              {specialists.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.firstName} {s.lastName}
-                </option>
-              ))}
-            </select>
-            <select
-              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-              value={assignForm.serviceId}
-              onChange={(e) =>
-                setAssignForm((f) => ({ ...f, serviceId: e.target.value }))
-              }
-            >
-              <option value="">Услуга</option>
-              {services.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-            <input
-              type="datetime-local"
-              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-              onChange={(e) =>
-                setAssignForm((f) => ({
-                  ...f,
-                  startAt: e.target.value
-                    ? new Date(e.target.value).toISOString()
-                    : '',
-                }))
-              }
-            />
-            <select
-              className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-              value={assignForm.paymentType}
-              onChange={(e) =>
-                setAssignForm((f) => ({
-                  ...f,
-                  paymentType: e.target.value as 'QUOTA' | 'PAID',
-                }))
-              }
-            >
-              <option value="PAID">Платно</option>
-              <option value="QUOTA">По абонементу</option>
-            </select>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="btn-primary w-full"
-              disabled={busy}
-              onClick={assign}
+              className="btn-primary"
+              onClick={() => {
+                setAssignDefaults({});
+                setShowAssign(true);
+              }}
             >
-              Записать
+              Новая запись
             </button>
+            <select
+              className="input text-sm"
+              value={filterApproval}
+              onChange={(e) => setFilterApproval(e.target.value)}
+            >
+              <option value="ALL">Все статусы подтверждения</option>
+              <option value="PENDING">Ждут подтверждения</option>
+              <option value="PENDING_PERFORMER">Ждёт специалиста</option>
+              <option value="PENDING_ADMIN">Ждёт администратора</option>
+              <option value="APPROVED">Подтверждено</option>
+            </select>
+            <select
+              className="input text-sm"
+              value={filterSpecialistIds[0] ?? ''}
+              onChange={(e) =>
+                setFilterSpecialistIds(
+                  e.target.value ? [e.target.value] : [],
+                )
+              }
+            >
+              <option value="">Все специалисты</option>
+              {specialists.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.lastName} {s.firstName}
+                </option>
+              ))}
+            </select>
           </div>
+
+          {board ? (
+            <SpaBoard
+              board={board}
+              mode="admin"
+              day={day}
+              onDayChange={setDay}
+              onEmptySlotClick={({ specialistId, startAt }) => {
+                setAssignDefaults({
+                  specialistId,
+                  startAt: toDatetimeLocalValue(startAt),
+                });
+                setShowAssign(true);
+              }}
+            />
+          ) : (
+            <p className="text-sm text-slate-400">Загрузка доски…</p>
+          )}
+
           <ul className="space-y-2">
             {bookings.map((b) => (
               <li key={b.id} className="card text-sm">
@@ -515,6 +485,20 @@ export default function AdminSpaPage() {
               <li className="card text-slate-400">Записей нет</li>
             )}
           </ul>
+
+          <SpaBookingDialog
+            key={`${showAssign}-${assignDefaults.specialistId ?? ''}-${assignDefaults.startAt ?? ''}`}
+            open={showAssign}
+            onClose={() => setShowAssign(false)}
+            services={services}
+            clients={clients}
+            specialists={specialists}
+            allowPickSpecialist
+            defaultSpecialistId={assignDefaults.specialistId}
+            defaultStartAt={assignDefaults.startAt}
+            busy={busy}
+            onSubmit={assignFromDialog}
+          />
         </div>
       )}
     </div>

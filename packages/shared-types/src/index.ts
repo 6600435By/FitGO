@@ -1095,6 +1095,44 @@ export interface SpaSpecialistSummary {
   serviceIds: string[];
 }
 
+/** Shared SPA schedule board (specialist + admin). */
+export interface SpaBoardStaff {
+  id: string;
+  firstName: string;
+  lastName: string;
+}
+
+export interface SpaBoardHourBlock {
+  id: string;
+  specialistId: string;
+  startAt: string;
+  endAt: string;
+  status: 'PUBLISHED' | 'DRAFT';
+}
+
+export interface SpaBoardBooking {
+  id: string;
+  specialistId: string;
+  startAt: string;
+  endAt: string;
+  /** True when viewer must not see client/service details. */
+  busy: boolean;
+  clientName?: string;
+  guestPhone?: string;
+  serviceId?: string;
+  serviceName?: string;
+  status?: SpaBookingStatus;
+  paymentType?: SpaPaymentType;
+  approvalPhase?: import('./club-schedule').SessionApprovalPhase;
+  approvalLabel?: string;
+}
+
+export interface SpaBoardResponse {
+  staff: SpaBoardStaff[];
+  hours: SpaBoardHourBlock[];
+  bookings: SpaBoardBooking[];
+}
+
 export interface SpaBookingSlot {
   startAt: string;
   endAt: string;

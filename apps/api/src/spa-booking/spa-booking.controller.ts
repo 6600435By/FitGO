@@ -131,6 +131,16 @@ export class SpaBookingController {
     return this.spa.getSpecialistCalendar(user, from, to);
   }
 
+  @Get('specialist/spa-board')
+  @Roles(UserRole.SPECIALIST)
+  specialistSpaBoard(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.spa.getSpecialistSpaBoard(user, from, to);
+  }
+
   @Get('specialist/availability-blocks')
   @Roles(UserRole.SPECIALIST)
   getBlocks(
@@ -240,28 +250,32 @@ export class SpaBookingController {
   // ─── Admin ─────────────────────────────────────────────────────────────────
 
   @Get('admin/spa/services')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminServices(@CurrentUser() user: JwtPayload) {
     return this.spa.adminListServices(user);
   }
 
   @Post('admin/spa/services')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminUpsertService(
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpsertSpaServiceDto,
   ) {
-    return this.spa.adminUpsertService(user, dto);
+    return this.spa.adminUpsertService(user, {
+      ...dto,
+      priceOverrideMinor: dto.priceOverrideMinor,
+      bookable: dto.bookable,
+    });
   }
 
   @Get('admin/spa/quota-rules')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminQuotaRules(@CurrentUser() user: JwtPayload) {
     return this.spa.adminListQuotaRules(user);
   }
 
   @Put('admin/spa/quota-rules')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminSetQuotaRules(
     @CurrentUser() user: JwtPayload,
     @Body() dto: SetSpaQuotaRulesDto,
@@ -270,13 +284,13 @@ export class SpaBookingController {
   }
 
   @Get('admin/spa/specialists')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminSpecialists(@CurrentUser() user: JwtPayload) {
     return this.spa.adminListSpecialists(user);
   }
 
   @Put('admin/spa/specialists/:id/services')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminSetSpecialistServices(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
@@ -286,7 +300,7 @@ export class SpaBookingController {
   }
 
   @Get('admin/spa/calendar')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminCalendar(
     @CurrentUser() user: JwtPayload,
     @Query('from') from: string,
@@ -295,14 +309,43 @@ export class SpaBookingController {
     return this.spa.adminCalendar(user, from, to);
   }
 
+  @Get('admin/spa-board')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminSpaBoard(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('specialistIds') specialistIds?: string,
+    @Query('serviceIds') serviceIds?: string,
+    @Query('status') status?: string,
+    @Query('approval') approval?: string,
+  ) {
+    const split = (raw?: string) =>
+      raw
+        ?.split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    return this.spa.getAdminSpaBoard(user, from, to, {
+      specialistIds: split(specialistIds),
+      serviceIds: split(serviceIds),
+      status,
+      approval,
+    });
+  }
+
   @Get('admin/spa/clients')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.SPECIALIST)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.SUPER_ADMIN,
+    UserRole.MANAGER,
+    UserRole.SPECIALIST,
+  )
   adminClients(@CurrentUser() user: JwtPayload) {
     return this.spa.adminListClients(user);
   }
 
   @Post('admin/spa-bookings')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminAssign(
     @CurrentUser() user: JwtPayload,
     @Body() dto: AssignSpaBookingDto,
