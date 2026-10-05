@@ -556,8 +556,26 @@ export class SegmentsService {
       return this.failResult(clubId, key, 'getSegmentMembers unsupported');
     }
     const members = await provider.getSegmentMembers({ key });
-    if (!members?.found) {
-      return this.failResult(clubId, key, 'segment not found');
+    if (!members) {
+      return this.failResult(
+        clubId,
+        key,
+        'segments/members недоступен — проверьте FORMA_FITGO_URL и публикацию FitGOIntegration',
+      );
+    }
+    if (!members.found) {
+      if (key === 'nom.spaCabinet') {
+        const detail =
+          members.error === 'unknown key'
+            ? 'Ключ nom.spaCabinet нет в опубликованном FitGOIntegration — обновите BSL (КартаСегментовПриложения) и F7.'
+            : 'В 1С нет сегмента номенклатуры «Спа кабинет приложение» (uuid 8deca45d-36c3-2cf1-11f1-b9bd204f566c). Обновите FitGOIntegration_Клиенты.bsl (КартаСегментовПриложения) и переопубликуйте HTTP (F7). Если сегмент «по правилам» — нажмите в 1С «Сформировать».';
+        return this.failResult(clubId, key, detail);
+      }
+      return this.failResult(
+        clubId,
+        key,
+        members.error ? `segment not found (${members.error})` : 'segment not found',
+      );
     }
 
     let added = 0;

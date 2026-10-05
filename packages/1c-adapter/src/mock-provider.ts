@@ -354,7 +354,7 @@ export class Mock1CProvider implements IFitnessClubProvider {
           key: 'nom.spaCabinet',
           type: 'nomenclature' as const,
           uuid: '8deca45d-36c3-2cf1-11f1-b9bd204f566c',
-          name: 'Услуги спа кабинета',
+          name: 'Спа кабинет приложение',
           found: true,
           count: 2,
         },

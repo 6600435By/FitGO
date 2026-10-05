@@ -254,6 +254,7 @@ export interface IFitnessClubProvider {
     type?: string;
     name?: string;
     found: boolean;
+    error?: string;
     data: Array<{
       externalId: string;
       name: string;

@@ -534,6 +534,7 @@ export class FitgoHttpProvider {
     type?: string;
     name?: string;
     found: boolean;
+    error?: string;
     data: Array<{
       externalId: string;
       name: string;
@@ -554,6 +555,7 @@ export class FitgoHttpProvider {
         type?: string;
         name?: string;
         found?: boolean;
+        error?: string;
         data?: Array<{
           externalId: string;
           name: string;
@@ -570,6 +572,7 @@ export class FitgoHttpProvider {
         type: data.type,
         name: data.name,
         found: Boolean(data.found),
+        error: data.error,
         data: Array.isArray(data.data) ? data.data : [],
       };
     } catch {
