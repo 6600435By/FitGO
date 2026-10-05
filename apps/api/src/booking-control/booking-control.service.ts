@@ -33,12 +33,14 @@ import {
   sessionApprovalLabelRu,
   spaSettlementLabelRu,
   type BookingControlDetail,
+  type BookingControlHistoryEvent,
   type BookingControlKind,
   type BookingControlListItem,
   type BookingControlMember,
   type BookingControlPayTag,
   type BookingControlPayment,
   type BookingControlRemark,
+  type BookingControlSource,
   type BookingControlStatus,
   type GroupApprovalPendingTask,
   type GroupApprovalPhase,
@@ -737,6 +739,33 @@ export class BookingControlService {
         spaPayTag = settled.payTag;
       }
 
+      const performerName = s.employeeName?.trim() || '—';
+      const fitgoBookedAt = matched
+        ? (matched as { createdAt: Date }).createdAt?.toISOString?.()
+        : undefined;
+      const history = await this.buildBookingHistory({
+        source: '1C',
+        createdAt: matched
+          ? (matched as { createdAt?: Date }).createdAt
+          : s.startAt,
+        bookedByUserId: (matched as { bookedByUserId?: string | null } | null)
+          ?.bookedByUserId,
+        origin: (matched as { origin?: string | null } | null)?.origin,
+        performerName,
+        fitgoBookingId: matched?.id,
+        kind,
+        groupApproval,
+        sessionApprovalBookingId:
+          kind === 'SPA' || kind === 'PT'
+            ? matched?.id ?? sessionKey
+            : undefined,
+        sessionApprovalKind:
+          kind === 'SPA'
+            ? SessionApprovalKind.SPA
+            : kind === 'PT'
+              ? SessionApprovalKind.PT
+              : undefined,
+      });
       return {
         sessionKey,
         kind,
@@ -745,7 +774,7 @@ export class BookingControlService {
         startAt: s.startAt.toISOString(),
         endAt: s.endAt?.toISOString(),
         status: mapOnexStatusToControl(s.status),
-        performerName: s.employeeName?.trim() || '—',
+        performerName,
         clientName:
           kind === 'GROUP' ? undefined : primary?.clientName ?? '—',
         roomTitle: s.roomTitle ?? undefined,
@@ -764,9 +793,7 @@ export class BookingControlService {
         members,
         remark: open,
         remarksHistory: mappedRemarks,
-        fitgoBookedAt: matched
-          ? (matched as { createdAt: Date }).createdAt?.toISOString?.()
-          : undefined,
+        fitgoBookedAt,
         crmDocRef: matched
           ? (matched as { crmDocRef?: string | null }).crmDocRef ??
             s.externalId
@@ -774,6 +801,7 @@ export class BookingControlService {
         priceMinor: unitPrice ?? matchedPrice,
         groupApproval,
         spaSettlement,
+        history,
       };
     }
 
@@ -806,6 +834,17 @@ export class BookingControlService {
             : 'SCHEDULED';
       const counts = this.singleClientCounts(status);
       const approval = await this.loadSessionApprovalInfo(clubId, 'PT', b.id);
+      const performerName = `${b.trainer.lastName} ${b.trainer.firstName}`.trim();
+      const history = await this.buildBookingHistory({
+        source: 'FITGO',
+        createdAt: b.createdAt,
+        bookedByUserId: b.bookedByUserId,
+        performerName,
+        fitgoBookingId: b.id,
+        kind: 'PT',
+        sessionApprovalBookingId: b.id,
+        sessionApprovalKind: SessionApprovalKind.PT,
+      });
       return {
         sessionKey,
         kind: 'PT',
@@ -816,7 +855,7 @@ export class BookingControlService {
         startAt: b.startAt.toISOString(),
         endAt: b.endAt.toISOString(),
         status,
-        performerName: `${b.trainer.lastName} ${b.trainer.firstName}`.trim(),
+        performerName,
         performerId: b.trainerId,
         clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
         attendeeCount: counts.arrivedCount,
@@ -840,6 +879,7 @@ export class BookingControlService {
         fitgoBookedAt: b.createdAt.toISOString(),
         crmDocRef: b.crmDocRef ?? undefined,
         priceMinor: b.priceMinor ?? undefined,
+        history,
       };
     }
 
@@ -874,6 +914,19 @@ export class BookingControlService {
           specialist: b.specialist,
         },
       });
+      const performerName =
+        `${b.specialist.lastName} ${b.specialist.firstName}`.trim();
+      const history = await this.buildBookingHistory({
+        source: 'FITGO',
+        createdAt: b.createdAt,
+        bookedByUserId: b.bookedByUserId,
+        origin: b.origin,
+        performerName,
+        fitgoBookingId: b.id,
+        kind: 'SPA',
+        sessionApprovalBookingId: b.id,
+        sessionApprovalKind: SessionApprovalKind.SPA,
+      });
       return {
         sessionKey,
         kind: 'SPA',
@@ -882,8 +935,7 @@ export class BookingControlService {
         startAt: b.startAt.toISOString(),
         endAt: b.endAt.toISOString(),
         status,
-        performerName:
-          `${b.specialist.lastName} ${b.specialist.firstName}`.trim(),
+        performerName,
         performerId: b.specialistId,
         clientName: this.spaClientLabel(b),
         attendeeCount: counts.arrivedCount,
@@ -906,6 +958,7 @@ export class BookingControlService {
         crmDocRef: b.crmDocRef ?? undefined,
         priceMinor: b.priceMinor ?? b.service.priceMinor,
         spaSettlement: settled.settlement,
+        history,
       };
     }
 
@@ -2086,12 +2139,20 @@ export class BookingControlService {
     const saleCounts = this.singleClientCounts('COMPLETED', {
       arrived: payment === 'PAID',
     });
+    const at = this.normalizeOccurredAt(sale.occurredAt);
+    const history: BookingControlHistoryEvent[] = [
+      {
+        at,
+        action: 'Продажа в 1С',
+        byName: sale.employeeName?.trim() || undefined,
+      },
+    ];
     return {
       sessionKey,
       kind: 'PT',
       source: 'SALE',
       title: sale.serviceName || 'Разовая ПТ (продажа)',
-      startAt: this.normalizeOccurredAt(sale.occurredAt),
+      startAt: at,
       status: 'COMPLETED',
       performerName: sale.employeeName?.trim() || '—',
       clientName: sale.clientName || '—',
@@ -2115,7 +2176,157 @@ export class BookingControlService {
       remarksHistory: mappedRemarks,
       crmDocRef: sale.docRef || undefined,
       priceMinor: Math.round((Number(sale.amount) || 0) * 100),
+      history,
     };
+  }
+
+  /**
+   * Compact create/confirm trail from local DB only (no 1C calls).
+   * At most a few user name lookups for bookedBy / admin ids.
+   */
+  private async buildBookingHistory(input: {
+    source: BookingControlSource;
+    createdAt?: Date | null;
+    bookedByUserId?: string | null;
+    origin?: string | null;
+    performerName?: string;
+    fitgoBookingId?: string;
+    kind: BookingControlKind;
+    groupApproval?: GroupClassApprovalInfo | null;
+    sessionApprovalBookingId?: string;
+    sessionApprovalKind?: SessionApprovalKind;
+  }): Promise<BookingControlHistoryEvent[]> {
+    const events: BookingControlHistoryEvent[] = [];
+    const userIds = new Set<string>();
+    if (input.bookedByUserId) userIds.add(input.bookedByUserId);
+
+    let approval: {
+      performerConfirmedAt: Date | null;
+      adminApprovedAt: Date | null;
+      adminApprovedById: string | null;
+      overrideApprovedAt: Date | null;
+      overrideApprovedById: string | null;
+    } | null = null;
+    if (input.sessionApprovalKind && input.sessionApprovalBookingId) {
+      approval = await this.prisma.sessionApproval.findUnique({
+        where: {
+          kind_bookingId: {
+            kind: input.sessionApprovalKind,
+            bookingId: input.sessionApprovalBookingId,
+          },
+        },
+        select: {
+          performerConfirmedAt: true,
+          adminApprovedAt: true,
+          adminApprovedById: true,
+          overrideApprovedAt: true,
+          overrideApprovedById: true,
+        },
+      });
+      if (approval?.adminApprovedById) userIds.add(approval.adminApprovedById);
+      if (approval?.overrideApprovedById) {
+        userIds.add(approval.overrideApprovedById);
+      }
+    }
+
+    const names = new Map<string, string>();
+    if (userIds.size > 0) {
+      const users = await this.prisma.user.findMany({
+        where: { id: { in: [...userIds] } },
+        select: { id: true, firstName: true, lastName: true },
+      });
+      for (const u of users) {
+        names.set(u.id, `${u.lastName} ${u.firstName}`.trim());
+      }
+    }
+
+    if (input.createdAt) {
+      const byName = input.bookedByUserId
+        ? names.get(input.bookedByUserId)
+        : undefined;
+      let action = 'Создана';
+      if (!input.fitgoBookingId && input.source === '1C') {
+        action = 'Создана в 1С';
+      } else if (input.origin === 'CLIENT_BOOKED') {
+        action = 'Создана клиентом';
+      } else if (input.origin === 'SPECIALIST_ASSIGNED') {
+        action = 'Создана специалистом';
+      } else if (input.origin === 'ADMIN_ASSIGNED') {
+        action = 'Создана администратором';
+      } else if (input.source === 'FITGO') {
+        action = 'Создана в FitGO';
+      }
+      events.push({
+        at: input.createdAt.toISOString(),
+        action,
+        byName: byName || undefined,
+      });
+    }
+
+    if (input.groupApproval) {
+      const g = input.groupApproval;
+      if (g.trainerApprovedAt) {
+        events.push({
+          at: g.trainerApprovedAt,
+          action: 'Подтвердил тренер',
+          byName: g.trainerName,
+        });
+      }
+      if (g.adminApprovedAt) {
+        events.push({
+          at: g.adminApprovedAt,
+          action: 'Подтвердил администратор',
+          byName: g.adminName,
+        });
+      }
+      if (g.overrideApprovedAt) {
+        events.push({
+          at: g.overrideApprovedAt,
+          action: 'Подтвердил руководитель',
+          byName: g.overrideName,
+        });
+      }
+      if (g.returnedAt) {
+        events.push({
+          at: g.returnedAt,
+          action: 'Возврат на доработку',
+          byName: g.returnedByName,
+        });
+      }
+    }
+
+    if (approval?.performerConfirmedAt) {
+      const performerAction =
+        input.kind === 'SPA' ? 'Подтвердил специалист' : 'Подтвердил тренер';
+      events.push({
+        at: approval.performerConfirmedAt.toISOString(),
+        action: performerAction,
+        byName: input.performerName,
+      });
+    }
+    if (approval?.adminApprovedAt) {
+      events.push({
+        at: approval.adminApprovedAt.toISOString(),
+        action: 'Подтвердил администратор',
+        byName: approval.adminApprovedById
+          ? names.get(approval.adminApprovedById)
+          : undefined,
+      });
+    }
+    if (approval?.overrideApprovedAt) {
+      events.push({
+        at: approval.overrideApprovedAt.toISOString(),
+        action: 'Подтвердил руководитель',
+        byName: approval.overrideApprovedById
+          ? names.get(approval.overrideApprovedById)
+          : undefined,
+      });
+    }
+
+    events.sort(
+      (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime(),
+    );
+    return events.slice(0, 8);
   }
 
   private saleMatchesPerformerFilter(
@@ -2446,18 +2657,24 @@ export class BookingControlService {
       }
     }
 
-    if (visit?.cancelled) {
-      return {
-        settlement: {
-          status: 'CANCELLED_IN_1C',
-          label: spaSettlementLabelRu('CANCELLED_IN_1C'),
-          source: 'visit',
-          visitPosted: visit.posted,
-          visitNum: visit.num,
-        },
-        payment: isQuota ? 'QUOTA' : 'UNKNOWN',
-        payTag: isQuota ? 'PACKAGE' : 'SALE',
-      };
+    // «cancelled» без found — ложный сигнал (док не найден по комментарию).
+    // Живая matched-сессия 1С (не CANCELLED) важнее статуса visit API.
+    if (visit?.cancelled && visit.found) {
+      const onexAlive =
+        Boolean(onex) && onex!.status !== OnexClassStatus.CANCELLED;
+      if (!onexAlive) {
+        return {
+          settlement: {
+            status: 'CANCELLED_IN_1C',
+            label: spaSettlementLabelRu('CANCELLED_IN_1C'),
+            source: 'visit',
+            visitPosted: visit.posted,
+            visitNum: visit.num,
+          },
+          payment: isQuota ? 'QUOTA' : 'UNKNOWN',
+          payTag: isQuota ? 'PACKAGE' : 'SALE',
+        };
+      }
     }
 
     if (isQuota) {

@@ -142,6 +142,15 @@ export function spaSettlementLabelRu(
   }
 }
 
+/** Compact audit trail for booking cards (no extra 1C round-trips). */
+export interface BookingControlHistoryEvent {
+  /** ISO timestamp */
+  at: string;
+  /** Short RU label, e.g. «Создана», «Подтвердил тренер». */
+  action: string;
+  byName?: string;
+}
+
 export interface BookingControlDetail extends BookingControlListItem {
   durationMin?: number;
   members: BookingControlMember[];
@@ -152,6 +161,8 @@ export interface BookingControlDetail extends BookingControlListItem {
   groupApproval?: GroupClassApprovalInfo | null;
   /** SPA only: quota write-off / payment fact from 1C. */
   spaSettlement?: SpaSettlementInfo;
+  /** Who created / confirmed — small popover on the card. */
+  history?: BookingControlHistoryEvent[];
 }
 
 /** Shared admin inbox row for GROUP sessions awaiting admin confirm. */

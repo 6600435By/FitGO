@@ -201,6 +201,7 @@ export function BookingControlPanel({
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [photosError, setPhotosError] = useState('');
   const [localSeen, setLocalSeen] = useState<Set<string>>(new Set());
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -267,6 +268,7 @@ export function BookingControlPanel({
   const openDetail = async (sessionKey: string) => {
     setComment('');
     setAdminComment('');
+    setHistoryOpen(false);
     closePhotos();
     const listItem = items.find((i) => i.sessionKey === sessionKey);
 
@@ -961,6 +963,44 @@ export function BookingControlPanel({
                       {selected.payTag
                         ? ` · ${payTagLabelRu(selected.payTag)}`
                         : ''}
+                      {selected.history && selected.history.length > 0 ? (
+                        <span className="relative ml-1.5 inline-block">
+                          <button
+                            type="button"
+                            className="text-sky-400/90 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-300"
+                            aria-expanded={historyOpen}
+                            aria-label="История записи"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setHistoryOpen((v) => !v);
+                            }}
+                          >
+                            история
+                          </button>
+                          {historyOpen ? (
+                            <span
+                              role="tooltip"
+                              className="absolute left-0 top-full z-20 mt-1 w-64 rounded-lg border border-slate-700 bg-slate-900 p-2 text-left text-[11px] leading-snug text-slate-300 shadow-lg"
+                            >
+                              <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                                История
+                              </span>
+                              <ul className="space-y-1">
+                                {selected.history.map((ev, i) => (
+                                  <li key={`${ev.at}-${i}`}>
+                                    <span className="text-slate-400">
+                                      {formatDateTime(ev.at)}
+                                    </span>
+                                    {' · '}
+                                    {ev.action}
+                                    {ev.byName ? ` · ${ev.byName}` : ''}
+                                  </li>
+                                ))}
+                              </ul>
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : null}
                     </p>
                     <h2 className="truncate text-lg font-semibold">
                       {selected.title}
@@ -1019,6 +1059,7 @@ export function BookingControlPanel({
                       className="btn-secondary text-sm"
                       onClick={() => {
                         closePhotos();
+                        setHistoryOpen(false);
                         setSelected(null);
                       }}
                     >

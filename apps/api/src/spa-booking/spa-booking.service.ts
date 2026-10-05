@@ -227,10 +227,12 @@ export class SpaBookingService {
     await Promise.all(
       candidates.map(async (b) => {
         try {
+          // В комментарии 1С всегда FitGO booking.id; crmDocRef после списания = UUID документа.
           const st = await getStatus.call(provider, externalId, {
-            bookingRef: b.crmDocRef ?? b.id,
+            bookingRef: b.id,
           });
-          if (!st.cancelled) return;
+          // Отмена только при явном найденном и отменённом документе (не «не найден»).
+          if (!st.found || !st.cancelled) return;
           await this.prisma.spaBooking.update({
             where: { id: b.id },
             data: {
@@ -1320,7 +1322,7 @@ export class SpaBookingService {
       );
       try {
         await restore.call(provider, externalId, {
-          bookingRef: booking.crmDocRef ?? booking.id,
+          bookingRef: booking.id,
         });
       } catch (err) {
         const raw =
