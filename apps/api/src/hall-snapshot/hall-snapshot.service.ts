@@ -19,7 +19,6 @@ import {
   type HallClassSnapshotDueItem,
   type HallClassSnapshotItem,
 } from '@fitgo/shared-types';
-import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const SNAPSHOT_OFFSETS_MIN = [20, 40] as const;
@@ -37,7 +36,6 @@ export class HallSnapshotService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
-    private readonly classSessions: ClassSessionsSyncService,
   ) {}
 
   storageRoot(): string {
@@ -52,19 +50,9 @@ export class HallSnapshotService {
   }
 
   async syncTodayAndEnsureSlots(): Promise<void> {
-    const clubIds = await this.listClubIds();
-    const today = this.clubDateKey(new Date());
-    for (const clubId of clubIds) {
-      try {
-        await this.classSessions.syncClub(clubId, {
-          from: today,
-          to: today,
-        });
-      } catch (err) {
-        this.logger.warn(
-          `Hall snapshot 1C sync failed ${clubId}: ${String(err)}`,
-        );
-      }
+    // Local DB only. Nightly ClassSyncScheduler already pulls Документ.Занятие.
+    // Calling 1C here on API boot / every 15m opened extra WordpressUserAPI sessions.
+    for (const clubId of await this.listClubIds()) {
       try {
         await this.ensureSlotsForClub(clubId);
       } catch (err) {

@@ -22,7 +22,7 @@ export class HallSnapshotSchedulerService implements OnModuleInit {
       return;
     }
     setInterval(() => void this.tick(), 60 * 1000);
-    void this.tick();
+    // First tick is local slot ensure only (no 1C).
   }
 
   private async tick() {

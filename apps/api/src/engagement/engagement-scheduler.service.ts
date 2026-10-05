@@ -69,7 +69,9 @@ export class EngagementSchedulerService implements OnModuleInit {
         await this.league.processMonthlyRatingDecay();
       }
 
-      await this.syncAllVisits();
+      if (now.getHours() >= 4 && now.getHours() < 6) {
+        await this.syncAllVisits();
+      }
     } catch (err) {
       this.logger.error('Engagement scheduler tick failed', err);
     }
