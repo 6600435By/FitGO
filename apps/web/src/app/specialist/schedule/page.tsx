@@ -14,6 +14,7 @@ import {
   SpaBookingDialog,
   toDatetimeLocalValue,
 } from '@/components/spa-board/spa-booking-dialog';
+import { SpaBookingEditDialog } from '@/components/spa-board/spa-booking-edit-dialog';
 import { SpaDayHoursDialog } from '@/components/spa-board/spa-day-hours-dialog';
 import {
   normalizeHm,
@@ -257,6 +258,7 @@ export default function SpecialistSchedulePage() {
       await reload();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка записи');
+      throw err;
     } finally {
       setBusy(false);
     }
@@ -274,6 +276,80 @@ export default function SpecialistSchedulePage() {
       await reload();
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка подтверждения');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const moveBooking = async (args: {
+    booking: SpaBoardBooking;
+    specialistId: string;
+    startAt: Date;
+  }) => {
+    const token = getToken();
+    if (!token) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.specialistUpdateSpaBooking(token, args.booking.id, {
+        startAt: args.startAt.toISOString(),
+      });
+      setMessage('Запись перенесена');
+      await reload();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Не удалось перенести');
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveBookingCard = async (payload: {
+    specialistId?: string;
+    serviceId: string;
+    startAt: string;
+    clientId?: string;
+    guestName?: string;
+    guestPhone?: string;
+    paymentType: 'QUOTA' | 'PAID';
+  }) => {
+    const token = getToken();
+    if (!token || !selectedBooking) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.specialistUpdateSpaBooking(token, selectedBooking.id, {
+        serviceId: payload.serviceId,
+        startAt: payload.startAt,
+        clientId: payload.clientId,
+        guestName: payload.guestName,
+        guestPhone: payload.guestPhone,
+        paymentType: payload.paymentType,
+      });
+      setSelectedBooking(null);
+      setMessage('Запись сохранена');
+      await reload();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка сохранения');
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancelBookingCard = async () => {
+    const token = getToken();
+    if (!token || !selectedBooking) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.specialistCancelSpaBooking(token, selectedBooking.id);
+      setSelectedBooking(null);
+      setMessage('Запись отменена');
+      await reload();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка отмены');
+      throw err;
     } finally {
       setBusy(false);
     }
@@ -315,7 +391,10 @@ export default function SpecialistSchedulePage() {
             });
             setShowAssign(true);
           }}
-          onBookingClick={(b) => setSelectedBooking(b)}
+          onBookingDoubleClick={(b) => {
+            if (!b.busy) setSelectedBooking(b);
+          }}
+          onBookingMove={moveBooking}
           onEditDayHours={() => setShowDayHours(true)}
         />
       ) : (
@@ -411,46 +490,15 @@ export default function SpecialistSchedulePage() {
         onSubmit={assignClient}
       />
 
-      {selectedBooking && !selectedBooking.busy ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
-          <div className="card w-full max-w-md space-y-3">
-            <h3 className="font-medium">{selectedBooking.serviceName}</h3>
-            <p className="text-sm text-slate-300">
-              {selectedBooking.clientName}
-            </p>
-            <p className="text-sm text-slate-400">
-              {formatDateTime(selectedBooking.startAt)} –{' '}
-              {formatDateTime(selectedBooking.endAt)}
-            </p>
-            {selectedBooking.approvalLabel ? (
-              <p className="text-sm text-amber-300">
-                {selectedBooking.approvalLabel}
-              </p>
-            ) : null}
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="btn-secondary flex-1"
-                onClick={() => setSelectedBooking(null)}
-              >
-                Закрыть
-              </button>
-              {selectedBooking.approvalPhase === 'PENDING_PERFORMER' ||
-              (new Date(selectedBooking.endAt) <= new Date() &&
-                !selectedBooking.approvalPhase) ? (
-                <button
-                  type="button"
-                  className="btn-primary flex-1"
-                  disabled={busy}
-                  onClick={() => completeBooking(selectedBooking.id)}
-                >
-                  Подтвердить
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <SpaBookingEditDialog
+        open={Boolean(selectedBooking && !selectedBooking.busy)}
+        booking={selectedBooking}
+        services={services}
+        busy={busy}
+        onClose={() => setSelectedBooking(null)}
+        onSave={saveBookingCard}
+        onCancel={cancelBookingCard}
+      />
     </div>
   );
 }

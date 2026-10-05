@@ -1,7 +1,7 @@
 'use client';
 
 import type { SpaService } from '@fitgo/shared-types';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -43,6 +43,7 @@ export function SpaBookingDialog({
   const bookable = services.filter((s) => s.active && (s.bookable ?? true));
   const [mode, setMode] = useState<'base' | 'phone'>('phone');
   const [phoneLookup, setPhoneLookup] = useState('');
+  const [error, setError] = useState('');
   const [form, setForm] = useState({
     specialistId: defaultSpecialistId ?? '',
     clientId: '',
@@ -53,9 +54,45 @@ export function SpaBookingDialog({
     paymentType: 'PAID' as 'QUOTA' | 'PAID',
   });
 
+  useEffect(() => {
+    if (!open) return;
+    setError('');
+    setPhoneLookup('');
+    setMode('phone');
+    setForm({
+      specialistId: defaultSpecialistId ?? '',
+      clientId: '',
+      guestName: '',
+      guestPhone: '',
+      serviceId: bookable[0]?.id ?? '',
+      startAt: defaultStartAt || toDatetimeLocalValue(new Date()),
+      paymentType: 'PAID',
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when dialog opens
+  }, [open, defaultSpecialistId, defaultStartAt]);
+
   if (!open) return null;
 
   const selected = bookable.find((s) => s.id === form.serviceId);
+  const { datePart, timePart } = splitDatetimeLocal(form.startAt);
+  const startIsPast =
+    Boolean(form.startAt) && new Date(form.startAt).getTime() < Date.now();
+
+  const setDatePart = (date: string) => {
+    const time = timePart || '10:00';
+    setForm((f) => ({
+      ...f,
+      startAt: date ? `${date}T${time}` : '',
+    }));
+  };
+
+  const setTimePart = (time: string) => {
+    const date = datePart || toDatetimeLocalValue(new Date()).slice(0, 10);
+    setForm((f) => ({
+      ...f,
+      startAt: time ? `${date}T${time}` : `${date}T00:00`,
+    }));
+  };
 
   const lookupPhone = async (raw: string) => {
     const digits = raw.replace(/\D/g, '');
@@ -98,23 +135,50 @@ export function SpaBookingDialog({
   };
 
   const submit = async () => {
-    const startIso = form.startAt
-      ? new Date(form.startAt).toISOString()
-      : '';
-    await onSubmit({
-      specialistId: allowPickSpecialist ? form.specialistId : undefined,
-      serviceId: form.serviceId,
-      startAt: startIso,
-      paymentType: form.paymentType,
-      ...(mode === 'base'
-        ? { clientId: form.clientId }
-        : form.clientId
-          ? { clientId: form.clientId, guestPhone: form.guestPhone }
-          : {
-              guestName: form.guestName,
-              guestPhone: form.guestPhone,
-            }),
-    });
+    setError('');
+    if (!form.serviceId) {
+      setError('Выберите услугу');
+      return;
+    }
+    if (!form.startAt) {
+      setError('Укажите время начала');
+      return;
+    }
+    if (allowPickSpecialist && !form.specialistId) {
+      setError('Укажите специалиста');
+      return;
+    }
+    if (mode === 'base' && !form.clientId) {
+      setError('Выберите клиента из базы');
+      return;
+    }
+    if (mode === 'phone' && !form.clientId && !form.guestName.trim()) {
+      setError('Укажите ФИО клиента');
+      return;
+    }
+    const startIso = new Date(form.startAt).toISOString();
+    if (Number.isNaN(new Date(startIso).getTime())) {
+      setError('Некорректная дата');
+      return;
+    }
+    try {
+      await onSubmit({
+        specialistId: allowPickSpecialist ? form.specialistId : undefined,
+        serviceId: form.serviceId,
+        startAt: startIso,
+        paymentType: form.paymentType,
+        ...(mode === 'base'
+          ? { clientId: form.clientId }
+          : form.clientId
+            ? { clientId: form.clientId, guestPhone: form.guestPhone }
+            : {
+                guestName: form.guestName,
+                guestPhone: form.guestPhone,
+              }),
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось записать');
+    }
   };
 
   return (
@@ -122,7 +186,11 @@ export function SpaBookingDialog({
       <div className="card w-full max-w-md space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="font-medium">Новая запись</h3>
-          <button type="button" className="btn-secondary text-xs" onClick={onClose}>
+          <button
+            type="button"
+            className="btn-secondary text-xs"
+            onClick={onClose}
+          >
             Закрыть
           </button>
         </div>
@@ -236,17 +304,37 @@ export function SpaBookingDialog({
           ) : null}
         </label>
 
-        <label className="block space-y-1 text-sm">
-          <span className="text-slate-400">Начало</span>
-          <input
-            type="datetime-local"
-            className="input date-field"
-            value={form.startAt}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, startAt: e.target.value }))
-            }
-          />
-        </label>
+        <div className="space-y-1">
+          <p className="text-sm text-slate-400">Дата и время начала</p>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block space-y-1 text-sm">
+              <span className="text-[11px] text-slate-500">Дата</span>
+              <input
+                type="date"
+                className="input date-field"
+                value={datePart}
+                onChange={(e) => setDatePart(e.target.value)}
+              />
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span className="text-[11px] text-slate-500">Время</span>
+              <input
+                type="time"
+                className="input date-field"
+                step={300}
+                value={timePart}
+                onChange={(e) => setTimePart(e.target.value)}
+              />
+            </label>
+          </div>
+          <p className="text-xs text-slate-500">
+            Можно изменить вручную. Запись в прошлое — если забыли добавить
+            сразу.
+            {startIsPast ? (
+              <span className="text-amber-300/90"> Сейчас указано прошлое время.</span>
+            ) : null}
+          </p>
+        </div>
 
         <label className="block space-y-1 text-sm">
           <span className="text-slate-400">Оплата</span>
@@ -265,6 +353,12 @@ export function SpaBookingDialog({
           </select>
         </label>
 
+        {error ? (
+          <p className="rounded-xl bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+            {error}
+          </p>
+        ) : null}
+
         <button
           type="button"
           className="btn-primary w-full"
@@ -273,7 +367,7 @@ export function SpaBookingDialog({
             void submit();
           }}
         >
-          Записать
+          {busy ? 'Записываем…' : 'Записать'}
         </button>
       </div>
     </div>
@@ -286,4 +380,14 @@ export function toDatetimeLocalValue(isoOrDate: string | Date) {
   if (Number.isNaN(d.getTime())) return '';
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function splitDatetimeLocal(value: string): {
+  datePart: string;
+  timePart: string;
+} {
+  if (!value) return { datePart: '', timePart: '' };
+  const [datePart = '', timeRaw = ''] = value.split('T');
+  const timePart = timeRaw.slice(0, 5);
+  return { datePart, timePart };
 }

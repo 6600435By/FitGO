@@ -1117,7 +1117,9 @@ export interface SpaBoardBooking {
   endAt: string;
   /** True when viewer must not see client/service details. */
   busy: boolean;
+  clientId?: string;
   clientName?: string;
+  guestName?: string;
   guestPhone?: string;
   serviceId?: string;
   serviceName?: string;

@@ -31,6 +31,7 @@ import { SetSpecialistDayHoursDto } from './dto/set-day-hours.dto';
 import { PublishSpecialistScheduleDto } from './dto/publish-schedule.dto';
 import { SetSpecialistAvailabilityBlocksDto } from './dto/set-availability-blocks.dto';
 import { SetSpecialistWorkScheduleDto } from './dto/set-work-schedule.dto';
+import { UpdateSpaBookingDto } from './dto/update-spa-booking.dto';
 import { SpaBookingService } from './spa-booking.service';
 
 @Controller()
@@ -248,6 +249,16 @@ export class SpaBookingController {
     return this.spa.specialistComplete(user, bookingId);
   }
 
+  @Put('specialist/spa-bookings/:bookingId')
+  @Roles(UserRole.SPECIALIST)
+  updateSpecialistBooking(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+    @Body() dto: UpdateSpaBookingDto,
+  ) {
+    return this.spa.specialistUpdateBooking(user, bookingId, dto);
+  }
+
   @Patch('specialist/spa-bookings/:bookingId')
   @Roles(UserRole.SPECIALIST)
   cancelSpecialistBooking(
@@ -373,6 +384,16 @@ export class SpaBookingController {
       paymentType: dto.paymentType,
       membershipServiceName: dto.membershipServiceName,
     });
+  }
+
+  @Put('admin/spa-bookings/:bookingId')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminUpdateBooking(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+    @Body() dto: UpdateSpaBookingDto,
+  ) {
+    return this.spa.adminUpdateBooking(user, bookingId, dto);
   }
 
   @Patch('admin/spa-bookings/:bookingId')

@@ -838,6 +838,26 @@ export const api = {
       token,
     ),
 
+  specialistUpdateSpaBooking: (
+    token: string,
+    bookingId: string,
+    data: {
+      specialistId?: string;
+      serviceId?: string;
+      startAt?: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+      paymentType?: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+  ) =>
+    request<{ booking: SpaBooking }>(
+      `/specialist/spa-bookings/${bookingId}`,
+      { method: 'PUT', body: JSON.stringify(data) },
+      token,
+    ),
+
   specialistCompleteSpaBooking: (token: string, bookingId: string) =>
     request<SpaBooking>(
       `/specialist/spa-bookings/${bookingId}/complete`,
@@ -958,6 +978,26 @@ export const api = {
     request<{ ok: boolean }>(
       `/admin/spa-bookings/${bookingId}`,
       { method: 'PATCH' },
+      token,
+    ),
+
+  adminUpdateSpaBooking: (
+    token: string,
+    bookingId: string,
+    data: {
+      specialistId?: string;
+      serviceId?: string;
+      startAt?: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+      paymentType?: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+  ) =>
+    request<{ booking: SpaBooking }>(
+      `/admin/spa-bookings/${bookingId}`,
+      { method: 'PUT', body: JSON.stringify(data) },
       token,
     ),
 

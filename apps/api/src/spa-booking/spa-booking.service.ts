@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -757,6 +758,50 @@ export class SpaBookingService {
     };
   }
 
+  /**
+   * Staff (specialist/admin) may pick any start that fits published hours
+   * and does not overlap — not only the client self-book slot grid.
+   */
+  private async assertStaffBookingWindow(
+    specialistId: string,
+    start: Date,
+    end: Date,
+    excludeBookingId?: string,
+  ) {
+    // Past starts are allowed for staff backfill («забыли сразу добавить»).
+    if (end <= start) {
+      throw new BadRequestException('Некорректный интервал');
+    }
+
+    const covers = await this.prisma.specialistAvailabilityBlock.findFirst({
+      where: {
+        specialistId,
+        status: AvailabilityBlockStatus.PUBLISHED,
+        startAt: { lte: start },
+        endAt: { gte: end },
+      },
+    });
+    if (!covers) {
+      throw new ConflictException(
+        'Время вне рабочих часов специалиста или не опубликовано',
+      );
+    }
+
+    const overlap = await this.prisma.spaBooking.findFirst({
+      where: {
+        specialistId,
+        status: SpaBookingStatus.CONFIRMED,
+        startAt: { lt: end },
+        endAt: { gt: start },
+        ...(excludeBookingId ? { id: { not: excludeBookingId } } : {}),
+      },
+      select: { id: true },
+    });
+    if (overlap) {
+      throw new ConflictException('На это время уже есть запись');
+    }
+  }
+
   async bookSpa(
     actor: JwtPayload,
     input: {
@@ -790,18 +835,25 @@ export class SpaBookingService {
     const durationMs = (service.durationMin + service.bufferMin) * 60_000;
     const end = new Date(start.getTime() + durationMs);
 
-    const available = await this.getSpecialistAvailableSlots(
-      clubId,
-      input.specialistId,
-      input.serviceId,
-      start.toISOString(),
-      end.toISOString(),
-    );
-    const isAvailable = available.some(
-      (slot) => new Date(slot.startAt).getTime() === start.getTime(),
-    );
-    if (!isAvailable) {
-      throw new ConflictException('Выбранный слот недоступен');
+    const staffOrigin =
+      input.origin === SpaBookingOrigin.SPECIALIST_ASSIGNED ||
+      input.origin === SpaBookingOrigin.ADMIN_ASSIGNED;
+    if (staffOrigin) {
+      await this.assertStaffBookingWindow(input.specialistId, start, end);
+    } else {
+      const available = await this.getSpecialistAvailableSlots(
+        clubId,
+        input.specialistId,
+        input.serviceId,
+        start.toISOString(),
+        end.toISOString(),
+      );
+      const isAvailable = available.some(
+        (slot) => new Date(slot.startAt).getTime() === start.getTime(),
+      );
+      if (!isAvailable) {
+        throw new ConflictException('Выбранный слот недоступен');
+      }
     }
 
     const specialistOk = await this.prisma.specialistService.findUnique({
@@ -1923,6 +1975,192 @@ export class SpaBookingService {
     return { ok: true };
   }
 
+  /**
+   * Move / edit a confirmed SPA booking (staff journal drag or card form).
+   */
+  async updateStaffBooking(
+    actor: JwtPayload,
+    bookingId: string,
+    input: {
+      specialistId?: string;
+      serviceId?: string;
+      startAt?: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+      paymentType?: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+    opts: { asSpecialist: boolean },
+  ): Promise<{ booking: SpaBooking }> {
+    const clubId = requireClubId(actor);
+    const existing = await this.prisma.spaBooking.findFirst({
+      where: { id: bookingId, clubId },
+      include: { specialist: true, client: true, service: true },
+    });
+    if (!existing) throw new NotFoundException('Запись не найдена');
+    if (existing.status === SpaBookingStatus.CANCELLED) {
+      throw new BadRequestException('Запись отменена');
+    }
+    if (opts.asSpecialist && existing.specialistId !== actor.sub) {
+      throw new ForbiddenException('Можно менять только свои записи');
+    }
+
+    const specialistId = opts.asSpecialist
+      ? existing.specialistId
+      : (input.specialistId ?? existing.specialistId);
+    if (opts.asSpecialist && input.specialistId && input.specialistId !== existing.specialistId) {
+      throw new BadRequestException('Специалист не может переносить к коллеге');
+    }
+
+    const serviceId = input.serviceId ?? existing.serviceId;
+    const service = await this.prisma.spaService.findFirst({
+      where: { id: serviceId, clubId, active: true },
+    });
+    if (!service) throw new NotFoundException('Услуга не найдена');
+
+    const specialistOk = await this.prisma.specialistService.findUnique({
+      where: {
+        specialistId_serviceId: { specialistId, serviceId },
+      },
+    });
+    if (!specialistOk) {
+      throw new BadRequestException('Специалист не оказывает эту услугу');
+    }
+
+    const start = input.startAt ? new Date(input.startAt) : existing.startAt;
+    if (Number.isNaN(start.getTime())) {
+      throw new BadRequestException('Некорректная дата');
+    }
+    const durationMs = (service.durationMin + service.bufferMin) * 60_000;
+    const end = new Date(start.getTime() + durationMs);
+
+    await this.assertStaffBookingWindow(
+      specialistId,
+      start,
+      end,
+      existing.id,
+    );
+
+    const paymentType = input.paymentType ?? (
+      existing.paymentType === SpaPaymentType.QUOTA ? 'QUOTA' : 'PAID'
+    );
+    const clientTouched =
+      input.clientId !== undefined ||
+      input.guestName !== undefined ||
+      input.guestPhone !== undefined;
+
+    let clientId = existing.clientId;
+    let guestName = existing.guestName;
+    let guestPhone = existing.guestPhone;
+    let clientExternalId = existing.clientExternalId;
+    let oneCLinkStatus = existing.oneCLinkStatus;
+
+    if (clientTouched) {
+      const resolved = await this.resolveBookingClient(actor, {
+        clientId: input.clientId,
+        guestName: input.guestName,
+        guestPhone: input.guestPhone,
+      });
+      clientId = resolved.clientId ?? null;
+      guestName = resolved.guestName ?? null;
+      guestPhone = resolved.guestPhone ?? null;
+      clientExternalId = resolved.clientExternalId ?? null;
+      oneCLinkStatus = resolved.oneCLinkStatus;
+    }
+
+    let priceMinor = existing.priceMinor;
+    let membershipServiceName =
+      input.membershipServiceName !== undefined
+        ? input.membershipServiceName
+        : existing.membershipServiceName;
+
+    if (paymentType === 'PAID') {
+      priceMinor = service.priceMinor;
+      membershipServiceName = null;
+    } else if (
+      paymentType === 'QUOTA' &&
+      (input.paymentType !== undefined ||
+        input.serviceId !== undefined ||
+        input.specialistId !== undefined ||
+        input.membershipServiceName !== undefined)
+    ) {
+      // Keep existing membership name unless caller overrides; re-validate rule lightly.
+      priceMinor = 0;
+    }
+
+    try {
+      const updated = await this.prisma.spaBooking.update({
+        where: { id: existing.id },
+        data: {
+          specialistId,
+          serviceId,
+          startAt: start,
+          endAt: end,
+          clientId,
+          guestName,
+          guestPhone,
+          clientExternalId,
+          oneCLinkStatus,
+          paymentType:
+            paymentType === 'QUOTA'
+              ? SpaPaymentType.QUOTA
+              : SpaPaymentType.PAID,
+          priceMinor,
+          membershipServiceName,
+        },
+        include: { specialist: true, client: true, service: true },
+      });
+      return { booking: this.mapBooking(updated) };
+    } catch (err) {
+      if (
+        err instanceof Error &&
+        /Unique constraint/i.test(err.message)
+      ) {
+        throw new ConflictException('Слот уже занят');
+      }
+      throw err;
+    }
+  }
+
+  async specialistUpdateBooking(
+    user: JwtPayload,
+    bookingId: string,
+    input: {
+      specialistId?: string;
+      serviceId?: string;
+      startAt?: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+      paymentType?: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+  ) {
+    return this.updateStaffBooking(user, bookingId, input, {
+      asSpecialist: true,
+    });
+  }
+
+  async adminUpdateBooking(
+    user: JwtPayload,
+    bookingId: string,
+    input: {
+      specialistId?: string;
+      serviceId?: string;
+      startAt?: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+      paymentType?: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+  ) {
+    return this.updateStaffBooking(user, bookingId, input, {
+      asSpecialist: false,
+    });
+  }
+
   // ─── Admin config ──────────────────────────────────────────────────────────
 
   async adminListServices(user: JwtPayload) {
@@ -2309,7 +2547,9 @@ export class SpaBookingService {
         startAt: b.startAt.toISOString(),
         endAt: b.endAt.toISOString(),
         busy: false,
+        clientId: b.clientId ?? undefined,
         clientName: this.spaClientName(b.client, b.guestName),
+        guestName: b.guestName ?? undefined,
         guestPhone: b.guestPhone ?? undefined,
         serviceId: b.serviceId,
         serviceName: b.service.name,

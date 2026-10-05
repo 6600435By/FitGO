@@ -6,11 +6,23 @@ import type {
   SpaBoardResponse,
   SpaBoardStaff,
 } from '@fitgo/shared-types';
-import { useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 
 const DAY_START_HOUR = 8;
 const DAY_END_HOUR = 22;
 const PX_PER_MIN = 1.05;
+const GRID_STEP_MIN = 15;
+const MOUSE_DRAG_THRESHOLD_PX = 6;
+const TOUCH_SCROLL_SLOP_PX = 8;
+const TOUCH_DRAG_DELAY_MS = 480;
+const NOW_MARKER_TICK_MS = 30_000;
 
 function startOfDay(d: Date) {
   const x = new Date(d);
@@ -22,6 +34,14 @@ function addDays(d: Date, n: number) {
   const x = new Date(d);
   x.setDate(x.getDate() + n);
   return x;
+}
+
+function sameCalendarDay(a: Date, b: Date) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 
 function formatDayLabel(d: Date) {
@@ -81,6 +101,34 @@ function bookingsForStaff(
   );
 }
 
+function minutesToTimeLabel(total: number) {
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function isTouchPointer(pointerType: string) {
+  return pointerType === 'touch' || pointerType === 'pen';
+}
+
+type DragState = {
+  booking: SpaBoardBooking;
+  specialistId: string;
+  startMinutes: number;
+  durationMin: number;
+  height: number;
+  valid: boolean;
+};
+
+type PointerStart = {
+  booking: SpaBoardBooking;
+  x: number;
+  y: number;
+  height: number;
+  durationMin: number;
+  pointerType: string;
+};
+
 export type SpaBoardMode = 'specialist' | 'admin';
 
 export function SpaBoard({
@@ -90,7 +138,8 @@ export function SpaBoard({
   day,
   onDayChange,
   onEmptySlotClick,
-  onBookingClick,
+  onBookingDoubleClick,
+  onBookingMove,
   onEditDayHours,
   mobileStaffId,
   onMobileStaffChange,
@@ -104,7 +153,12 @@ export function SpaBoard({
     specialistId: string;
     startAt: Date;
   }) => void;
-  onBookingClick?: (booking: SpaBoardBooking) => void;
+  onBookingDoubleClick?: (booking: SpaBoardBooking) => void;
+  onBookingMove?: (args: {
+    booking: SpaBoardBooking;
+    specialistId: string;
+    startAt: Date;
+  }) => void | Promise<void>;
   /** Edit published hours for the selected calendar day (own or picked staff). */
   onEditDayHours?: (args: { specialistId: string }) => void;
   mobileStaffId?: string;
@@ -113,6 +167,7 @@ export function SpaBoard({
   const dayStart = startOfDay(day);
   const totalMin = (DAY_END_HOUR - DAY_START_HOUR) * 60;
   const height = totalMin * PX_PER_MIN;
+  const isToday = sameCalendarDay(dayStart, new Date());
   const hours = useMemo(
     () =>
       Array.from(
@@ -122,59 +177,414 @@ export function SpaBoard({
     [],
   );
 
+  const [nowMinutes, setNowMinutes] = useState(() => {
+    const n = new Date();
+    return n.getHours() * 60 + n.getMinutes();
+  });
+
+  useEffect(() => {
+    if (!isToday) return;
+    const tick = () => {
+      const n = new Date();
+      setNowMinutes(n.getHours() * 60 + n.getMinutes());
+    };
+    tick();
+    const timer = window.setInterval(tick, NOW_MARKER_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [isToday, dayStart]);
+
+  const staffWorkingToday = useMemo(() => {
+    const withHours = board.staff.filter(
+      (s) => hourBandsForStaff(board.hours, s.id, dayStart).length > 0,
+    );
+    if (mode === 'specialist' && viewerSpecialistId) {
+      const own = board.staff.find((s) => s.id === viewerSpecialistId);
+      if (own && !withHours.some((s) => s.id === own.id)) {
+        return [own, ...withHours];
+      }
+    }
+    return withHours.length > 0 ? withHours : board.staff;
+  }, [board.hours, board.staff, dayStart, mode, viewerSpecialistId]);
+
+  const staffOrdered = useMemo(() => {
+    if (!viewerSpecialistId) return staffWorkingToday;
+    const own = staffWorkingToday.filter((s) => s.id === viewerSpecialistId);
+    const rest = staffWorkingToday.filter((s) => s.id !== viewerSpecialistId);
+    return [...own, ...rest];
+  }, [staffWorkingToday, viewerSpecialistId]);
+
   const defaultStaffId =
     viewerSpecialistId &&
-    board.staff.some((s) => s.id === viewerSpecialistId)
+    staffOrdered.some((s) => s.id === viewerSpecialistId)
       ? viewerSpecialistId
-      : (board.staff[0]?.id ?? '');
+      : (staffOrdered[0]?.id ?? '');
 
   const [selectedStaffId, setSelectedStaffId] = useState(defaultStaffId);
 
   useEffect(() => {
-    if (mobileStaffId) {
+    if (mobileStaffId && staffOrdered.some((s) => s.id === mobileStaffId)) {
       setSelectedStaffId(mobileStaffId);
       return;
     }
     if (
       selectedStaffId &&
-      board.staff.some((s) => s.id === selectedStaffId)
+      staffOrdered.some((s) => s.id === selectedStaffId)
     ) {
       return;
     }
     setSelectedStaffId(defaultStaffId);
-  }, [board.staff, defaultStaffId, mobileStaffId, selectedStaffId]);
+  }, [defaultStaffId, mobileStaffId, selectedStaffId, staffOrdered]);
 
   const setStaff = (id: string) => {
     setSelectedStaffId(id);
     onMobileStaffChange?.(id);
   };
 
-  const staffOrdered = useMemo(() => {
-    if (!viewerSpecialistId) return board.staff;
-    const own = board.staff.filter((s) => s.id === viewerSpecialistId);
-    const rest = board.staff.filter((s) => s.id !== viewerSpecialistId);
-    return [...own, ...rest];
-  }, [board.staff, viewerSpecialistId]);
-
   const activeStaff =
     staffOrdered.find((s) => s.id === selectedStaffId) ?? staffOrdered[0];
+
+  const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const [pointerStart, setPointerStart] = useState<PointerStart | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const pointerStartRef = useRef<PointerStart | null>(null);
+  const touchArmTimerRef = useRef<number | null>(null);
+  const suppressClickRef = useRef(false);
+  const isMutatingRef = useRef(false);
+  dragRef.current = drag;
+  pointerStartRef.current = pointerStart;
+
+  const isTracking = drag !== null || pointerStart !== null;
+
+  const clearTouchArmTimer = useCallback(() => {
+    if (touchArmTimerRef.current != null) {
+      window.clearTimeout(touchArmTimerRef.current);
+      touchArmTimerRef.current = null;
+    }
+  }, []);
+
+  const canEditBooking = useCallback(
+    (b: SpaBoardBooking) => {
+      if (b.busy) return false;
+      if (mode === 'admin') return true;
+      return Boolean(viewerSpecialistId && b.specialistId === viewerSpecialistId);
+    },
+    [mode, viewerSpecialistId],
+  );
+
+  const canDrop = useCallback(
+    (specialistId: string, startMinutes: number, durationMin: number) => {
+      if (!staffOrdered.some((s) => s.id === specialistId)) return false;
+      if (mode === 'specialist' && viewerSpecialistId) {
+        if (specialistId !== viewerSpecialistId) return false;
+      }
+      if (startMinutes < 0 || startMinutes + durationMin > totalMin) return false;
+      return true;
+    },
+    [mode, staffOrdered, totalMin, viewerSpecialistId],
+  );
+
+  const beginDragFromPending = useCallback(
+    (pending: PointerStart) => {
+      clearTouchArmTimer();
+      const startMin = Math.max(
+        0,
+        Math.round(minutesFromDayStart(pending.booking.startAt, dayStart)),
+      );
+      const snapped = Math.floor(startMin / GRID_STEP_MIN) * GRID_STEP_MIN;
+      setDrag({
+        booking: pending.booking,
+        specialistId: pending.booking.specialistId,
+        startMinutes: snapped,
+        durationMin: pending.durationMin,
+        height: pending.height,
+        valid: canDrop(
+          pending.booking.specialistId,
+          snapped,
+          pending.durationMin,
+        ),
+      });
+      setPointerStart(null);
+    },
+    [canDrop, clearTouchArmTimer, dayStart],
+  );
+
+  const resolveDropTarget = useCallback(
+    (clientX: number, clientY: number) => {
+      for (const s of staffOrdered) {
+        const el = columnRefs.current.get(s.id);
+        if (!el) continue;
+        const rect = el.getBoundingClientRect();
+        if (
+          clientX < rect.left ||
+          clientX > rect.right ||
+          clientY < rect.top ||
+          clientY > rect.bottom
+        ) {
+          continue;
+        }
+        const relY = Math.max(0, Math.min(clientY - rect.top, height - 1));
+        const minsFromGrid = Math.floor(relY / PX_PER_MIN / GRID_STEP_MIN) * GRID_STEP_MIN;
+        return { specialistId: s.id, minutes: minsFromGrid };
+      }
+      return null;
+    },
+    [height, staffOrdered],
+  );
+
+  const commitMove = useCallback(
+    async (current: DragState) => {
+      if (!onBookingMove || isMutatingRef.current || !current.valid) return;
+      const originMin = Math.round(
+        minutesFromDayStart(current.booking.startAt, dayStart),
+      );
+      const moved =
+        current.specialistId !== current.booking.specialistId ||
+        Math.abs(originMin - current.startMinutes) >= 1;
+      if (!moved) return;
+
+      const startAt = new Date(
+        dayStart.getTime() +
+          (DAY_START_HOUR * 60 + current.startMinutes) * 60000,
+      );
+      isMutatingRef.current = true;
+      try {
+        await onBookingMove({
+          booking: current.booking,
+          specialistId: current.specialistId,
+          startAt,
+        });
+      } finally {
+        isMutatingRef.current = false;
+      }
+    },
+    [dayStart, onBookingMove],
+  );
+
+  const beginDragFromPendingRef = useRef(beginDragFromPending);
+  beginDragFromPendingRef.current = beginDragFromPending;
+  const commitMoveRef = useRef(commitMove);
+  commitMoveRef.current = commitMove;
+
+  useEffect(() => {
+    if (!isTracking) return;
+
+    function onPointerMove(e: PointerEvent) {
+      if (dragRef.current || pointerStartRef.current) {
+        e.preventDefault();
+      }
+
+      const pending = pointerStartRef.current;
+      const current = dragRef.current;
+
+      if (pending && !current) {
+        const dx = e.clientX - pending.x;
+        const dy = e.clientY - pending.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (isTouchPointer(pending.pointerType)) {
+          if (dist > TOUCH_SCROLL_SLOP_PX) {
+            clearTouchArmTimer();
+            setPointerStart(null);
+          }
+          return;
+        }
+
+        if (dist < MOUSE_DRAG_THRESHOLD_PX) return;
+        beginDragFromPendingRef.current(pending);
+        return;
+      }
+
+      if (!dragRef.current) return;
+      const target = resolveDropTarget(e.clientX, e.clientY);
+      if (!target) return;
+
+      setDrag((prev) => {
+        if (!prev) return prev;
+        if (
+          prev.specialistId === target.specialistId &&
+          prev.startMinutes === target.minutes
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          specialistId: target.specialistId,
+          startMinutes: target.minutes,
+          valid: canDrop(
+            target.specialistId,
+            target.minutes,
+            prev.durationMin,
+          ),
+        };
+      });
+    }
+
+    function onPointerUp() {
+      const current = dragRef.current;
+      const pending = pointerStartRef.current;
+      clearTouchArmTimer();
+      window.getSelection()?.removeAllRanges();
+
+      if (current) {
+        suppressClickRef.current = true;
+        window.setTimeout(() => {
+          suppressClickRef.current = false;
+        }, 400);
+        setDrag(null);
+        setPointerStart(null);
+        void commitMoveRef.current(current);
+        return;
+      }
+
+      if (pending) {
+        setPointerStart(null);
+      }
+    }
+
+    function onPointerCancel() {
+      clearTouchArmTimer();
+      if (dragRef.current) {
+        suppressClickRef.current = true;
+        window.setTimeout(() => {
+          suppressClickRef.current = false;
+        }, 400);
+      }
+      setDrag(null);
+      setPointerStart(null);
+    }
+
+    function onTouchMoveBlockScroll(e: TouchEvent) {
+      if (!dragRef.current) return;
+      if (e.cancelable) e.preventDefault();
+    }
+
+    window.addEventListener('touchmove', onTouchMoveBlockScroll, {
+      passive: false,
+    });
+    window.addEventListener('pointermove', onPointerMove, { passive: false });
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    return () => {
+      window.removeEventListener('touchmove', onTouchMoveBlockScroll);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+      clearTouchArmTimer();
+    };
+  }, [canDrop, clearTouchArmTimer, isTracking, resolveDropTarget]);
+
+  useEffect(() => {
+    if (!isTracking) return;
+    const prevUserSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = 'none';
+    if (drag) document.body.style.cursor = 'grabbing';
+    return () => {
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+    };
+  }, [drag, isTracking]);
+
+  const startBookingPointer = (
+    e: ReactPointerEvent,
+    booking: SpaBoardBooking,
+    blockHeight: number,
+    durationMin: number,
+  ) => {
+    if (!canEditBooking(booking) || !onBookingMove) return;
+    if (suppressClickRef.current) return;
+    e.stopPropagation();
+    e.preventDefault();
+
+    const pending: PointerStart = {
+      booking,
+      x: e.clientX,
+      y: e.clientY,
+      height: blockHeight,
+      durationMin,
+      pointerType: e.pointerType,
+    };
+
+    clearTouchArmTimer();
+    setPointerStart(pending);
+
+    if (isTouchPointer(e.pointerType)) {
+      touchArmTimerRef.current = window.setTimeout(() => {
+        const still = pointerStartRef.current;
+        if (still && still.booking.id === booking.id) {
+          beginDragFromPending(still);
+        }
+      }, TOUCH_DRAG_DELAY_MS);
+    }
+  };
+
+  const nowTop =
+    isToday &&
+    nowMinutes >= DAY_START_HOUR * 60 &&
+    nowMinutes <= DAY_END_HOUR * 60
+      ? (nowMinutes - DAY_START_HOUR * 60) * PX_PER_MIN
+      : null;
+
+  const renderNowLine = () =>
+    nowTop == null ? null : (
+      <div
+        className="pointer-events-none absolute inset-x-0 z-20"
+        style={{ top: nowTop }}
+        aria-hidden
+        title={`Сейчас ${minutesToTimeLabel(nowMinutes)}`}
+      >
+        <div className="absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 bg-rose-500/80" />
+        <span className="absolute -left-0.5 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full bg-rose-500" />
+      </div>
+    );
+
+  const renderDragPreview = (d: DragState) => (
+    <div
+      className={`pointer-events-none absolute left-1 right-1 z-30 overflow-hidden rounded-lg px-1.5 py-1 text-[11px] leading-tight shadow-lg ring-2 ${
+        d.valid
+          ? 'bg-amber-900/90 text-amber-50 ring-amber-400/80'
+          : 'bg-rose-950/90 text-rose-100 ring-rose-500/80'
+      }`}
+      style={{
+        top: d.startMinutes * PX_PER_MIN,
+        height: d.height,
+      }}
+    >
+      <p className="truncate font-medium">{d.booking.clientName ?? 'Клиент'}</p>
+      <p className="truncate opacity-80">
+        {minutesToTimeLabel(DAY_START_HOUR * 60 + d.startMinutes)} –{' '}
+        {minutesToTimeLabel(
+          DAY_START_HOUR * 60 + d.startMinutes + d.durationMin,
+        )}
+      </p>
+    </div>
+  );
 
   const renderColumn = (staff: SpaBoardStaff) => {
     const own = mode === 'admin' || staff.id === viewerSpecialistId;
     const bands = hourBandsForStaff(board.hours, staff.id, dayStart);
     const items = bookingsForStaff(board.bookings, staff.id, dayStart);
+    const isDropColumn = drag?.specialistId === staff.id;
 
     return (
       <div
-        className="relative w-full border-l border-slate-800"
+        ref={(el) => {
+          if (el) columnRefs.current.set(staff.id, el);
+          else columnRefs.current.delete(staff.id);
+        }}
+        className={`relative w-full border-l border-slate-800 ${
+          isDropColumn && drag?.valid ? 'bg-fitgo-500/5' : ''
+        }`}
         style={{ height }}
         onClick={(e) => {
+          if (suppressClickRef.current || drag || pointerStart) return;
           if (!own || !onEmptySlotClick) return;
           const rect = (
             e.currentTarget as HTMLDivElement
           ).getBoundingClientRect();
           const y = e.clientY - rect.top;
-          const mins = Math.floor(y / PX_PER_MIN / 15) * 15;
+          const mins = Math.floor(y / PX_PER_MIN / GRID_STEP_MIN) * GRID_STEP_MIN;
           if (mins < 0 || mins >= totalMin) return;
           const startAt = new Date(
             dayStart.getTime() + (DAY_START_HOUR * 60 + mins) * 60000,
@@ -219,6 +629,8 @@ export function SpaBoard({
           </p>
         ) : null}
 
+        {renderNowLine()}
+
         {items.map((b) => {
           const top = Math.max(0, minutesFromDayStart(b.startAt, dayStart));
           const end = Math.min(
@@ -226,24 +638,34 @@ export function SpaBoard({
             minutesFromDayStart(b.endAt, dayStart),
           );
           if (end <= 0 || top >= totalMin) return null;
-          const clickable = !b.busy && Boolean(onBookingClick);
+          const blockHeight = Math.max(22, (end - top) * PX_PER_MIN);
+          const durationMin = Math.max(GRID_STEP_MIN, Math.round(end - top));
+          const editable = canEditBooking(b);
+          const isDragging = drag?.booking.id === b.id;
           return (
             <button
               key={b.id}
               type="button"
-              disabled={!clickable}
-              onClick={(e) => {
+              disabled={b.busy}
+              onPointerDown={(e) => {
+                if (!editable) return;
+                startBookingPointer(e, b, blockHeight, durationMin);
+              }}
+              onDoubleClick={(e) => {
                 e.stopPropagation();
-                if (clickable) onBookingClick?.(b);
+                if (suppressClickRef.current || drag) return;
+                if (editable) onBookingDoubleClick?.(b);
               }}
               className={`absolute inset-x-1 overflow-hidden rounded-lg px-1.5 py-1 text-left text-[11px] leading-tight ${
                 b.busy
                   ? 'bg-slate-800 text-slate-400'
-                  : 'border-l-2 border-amber-500 bg-amber-950/40 text-amber-100'
-              }`}
+                  : editable
+                    ? 'cursor-grab border-l-2 border-amber-500 bg-amber-950/40 text-amber-100 active:cursor-grabbing'
+                    : 'border-l-2 border-amber-500 bg-amber-950/40 text-amber-100'
+              } ${isDragging ? 'opacity-30' : ''}`}
               style={{
                 top: top * PX_PER_MIN,
-                height: Math.max(22, (end - top) * PX_PER_MIN),
+                height: blockHeight,
               }}
             >
               {b.busy ? (
@@ -264,6 +686,8 @@ export function SpaBoard({
             </button>
           );
         })}
+
+        {drag && isDropColumn ? renderDragPreview(drag) : null}
       </div>
     );
   };
@@ -281,6 +705,18 @@ export function SpaBoard({
             {String(h).padStart(2, '0')}:00
           </div>
         ))}
+        {nowTop != null ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 z-20"
+            style={{ top: nowTop }}
+            aria-hidden
+          >
+            <div className="absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 bg-rose-500/80" />
+            <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[9px] font-medium text-rose-400">
+              {minutesToTimeLabel(nowMinutes)}
+            </span>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -372,7 +808,9 @@ export function SpaBoard({
             </div>
           </div>
         ) : (
-          <p className="p-4 text-sm text-slate-400">Нет специалистов</p>
+          <p className="p-4 text-sm text-slate-400">
+            Сегодня никто не работает
+          </p>
         )}
       </div>
 
@@ -381,23 +819,29 @@ export function SpaBoard({
         {renderTimeRail()}
         <div className="min-w-0 flex-1 overflow-x-auto">
           <div className="flex min-w-full">
-            {staffOrdered.map((s) => (
-              <div
-                key={s.id}
-                className="flex min-w-[9rem] flex-1 flex-col"
-              >
+            {staffOrdered.length === 0 ? (
+              <p className="p-4 text-sm text-slate-400">
+                Сегодня никто не работает
+              </p>
+            ) : (
+              staffOrdered.map((s) => (
                 <div
-                  className={`flex h-9 items-center justify-center border-b border-l border-slate-800 px-1 text-center text-[11px] font-medium leading-tight ${
-                    s.id === viewerSpecialistId ? 'text-fitgo-300' : ''
-                  }`}
-                  title={staffFull(s)}
+                  key={s.id}
+                  className="flex min-w-[9rem] flex-1 flex-col"
                 >
-                  {staffShort(s)}
-                  {s.id === viewerSpecialistId ? ' · я' : ''}
+                  <div
+                    className={`flex h-9 items-center justify-center border-b border-l border-slate-800 px-1 text-center text-[11px] font-medium leading-tight ${
+                      s.id === viewerSpecialistId ? 'text-fitgo-300' : ''
+                    }`}
+                    title={staffFull(s)}
+                  >
+                    {staffShort(s)}
+                    {s.id === viewerSpecialistId ? ' · я' : ''}
+                  </div>
+                  {renderColumn(s)}
                 </div>
-                {renderColumn(s)}
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>
