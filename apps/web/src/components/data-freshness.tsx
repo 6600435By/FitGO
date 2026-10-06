@@ -22,7 +22,7 @@ export type ClubSyncStatus = {
 };
 
 type Props = {
-  /** Override: show refresh for admins (default: auto from roles). */
+  /** Override: show refresh for ops (default: auto from roles). */
   canRefresh?: boolean;
   onSynced?: () => void;
   className?: string;
@@ -49,19 +49,31 @@ function cooldownLeft(until: string | null): string | null {
   return `Через ${min} мин`;
 }
 
+/** Bare Forma/WP codes were stored as "1025" before message formatting. */
+function formatSyncError(raw: string): string {
+  const t = raw.trim();
+  if (/^\d{3,5}$/.test(t)) return `Forma/WP ошибка ${t}`;
+  if (/^[\w.]+:\s*\d{3,5}$/.test(t)) {
+    const [step, code] = t.split(/:\s*/);
+    return `${step}: Forma/WP ошибка ${code}`;
+  }
+  return raw;
+}
+
 export function DataFreshness({
   canRefresh: canRefreshProp,
   onSynced,
   className = '',
 }: Props) {
   const user = getUser();
-  const canRefresh =
-    canRefreshProp ??
+  /** Full banner (hint / errors / refresh): only super-admin and manager. */
+  const isOps =
     Boolean(
       user?.roles?.some((r) =>
-        [UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER].includes(r),
+        [UserRole.SUPER_ADMIN, UserRole.MANAGER].includes(r),
       ),
     );
+  const canRefresh = canRefreshProp ?? isOps;
 
   const [status, setStatus] = useState<ClubSyncStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -76,17 +88,19 @@ export function DataFreshness({
       setErr(null);
       return s;
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Не удалось загрузить статус');
+      if (isOps) {
+        setErr(e instanceof Error ? e.message : 'Не удалось загрузить статус');
+      }
       return null;
     }
-  }, []);
+  }, [isOps]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    if (!status?.running) return;
+    if (!status?.running || !isOps) return;
     const id = setInterval(() => {
       void (async () => {
         const s = await load();
@@ -96,7 +110,7 @@ export function DataFreshness({
       })();
     }, 5000);
     return () => clearInterval(id);
-  }, [status?.running, load, onSynced]);
+  }, [status?.running, load, onSynced, isOps]);
 
   const refresh = async () => {
     const token = getToken();
@@ -130,17 +144,27 @@ export function DataFreshness({
         : 'text-red-700';
 
   const cd = cooldownLeft(status?.cooldownUntil ?? null);
-  const hint =
-    'Только сегодня (±1 день). Прошлые дни — ночью 03–04.';
+  const dataLabel = status?.dataAsOf
+    ? `Данные на ${status.dataAsOf}`
+    : 'Данные ещё не загружены из 1С';
+
+  // Staff (admin / trainer / spa / …): one line only.
+  if (!isOps && !canRefreshProp) {
+    return (
+      <div
+        className={`card !px-2 !py-1 text-xs leading-tight ${className}`}
+      >
+        <span className={`font-medium ${freshnessColor}`}>{dataLabel}</span>
+      </div>
+    );
+  }
+
+  const hint = 'Только сегодня (±1 день). Прошлые дни — ночью 03–04.';
 
   return (
-    <div className={`card !p-2.5 text-sm sm:!p-3 ${className}`}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className={`font-medium ${freshnessColor}`}>
-          {status?.dataAsOf
-            ? `Данные на ${status.dataAsOf}`
-            : 'Данные ещё не загружены из 1С'}
-        </span>
+    <div className={`card !px-2 !py-1.5 text-xs leading-tight ${className}`}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className={`font-medium ${freshnessColor}`}>{dataLabel}</span>
         {status?.sourceLabel ? (
           <span className="text-[var(--fg-muted)]">· {status.sourceLabel}</span>
         ) : null}
@@ -165,7 +189,7 @@ export function DataFreshness({
               Boolean(status?.inNightWindow)
             }
             onClick={() => void refresh()}
-            className="btn-secondary ml-auto !px-3 !py-1 text-xs"
+            className="btn-secondary ml-auto !px-2 !py-0.5 text-[11px]"
           >
             {busy || status?.running
               ? 'Обновление…'
@@ -179,16 +203,18 @@ export function DataFreshness({
       </div>
       {canRefresh ? (
         <p
-          className="mt-1 text-[11px] leading-snug text-[var(--fg-muted)] sm:text-xs"
+          className="mt-0.5 text-[10px] leading-snug text-[var(--fg-muted)]"
           title="Нажимайте, если в 1С только что прошла оплата или запись, а здесь её нет."
         >
           {hint}
         </p>
       ) : null}
-      {err ? <p className="mt-1 text-xs text-red-600">{err}</p> : null}
+      {err ? (
+        <p className="mt-0.5 text-[11px] text-red-600">{formatSyncError(err)}</p>
+      ) : null}
       {status?.lastError && canRefresh ? (
-        <p className="mt-1 break-words text-xs text-red-600">
-          Ошибка: {status.lastError}
+        <p className="mt-0.5 break-words text-[11px] text-red-600">
+          Ошибка: {formatSyncError(status.lastError)}
         </p>
       ) : null}
     </div>

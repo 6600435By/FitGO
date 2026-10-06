@@ -38,7 +38,6 @@ export class ClubSyncController {
   async status(@CurrentUser() user: JwtPayload) {
     const clubId = requireClubId(user);
     const canSeeErrors =
-      user.roles.includes(SharedUserRole.ADMIN) ||
       user.roles.includes(SharedUserRole.SUPER_ADMIN) ||
       user.roles.includes(SharedUserRole.MANAGER);
     return this.statusService.status(clubId, { includeErrors: canSeeErrors });
@@ -46,10 +45,10 @@ export class ClubSyncController {
 
   /**
    * One light club-wide pull. Second concurrent caller gets { status: 'running' }.
-   * Admins / super-admins only.
+   * Super-admin / manager (ops) — desk admins use freshness read-only.
    */
   @Post('refresh')
-  @Roles(SharedUserRole.ADMIN, SharedUserRole.SUPER_ADMIN, SharedUserRole.MANAGER)
+  @Roles(SharedUserRole.SUPER_ADMIN, SharedUserRole.MANAGER)
   async refresh(
     @CurrentUser() user: JwtPayload,
     @Body() body?: { profile?: 'LIGHT' | 'FULL' },
