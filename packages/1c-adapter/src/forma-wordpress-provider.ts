@@ -20,6 +20,7 @@ import type {
 } from './types';
 import {
   buildScheduleRange,
+  formatFormaProxyError,
   mapFormaClass,
   normalizePhone,
   unwrapFormaData,
@@ -57,7 +58,7 @@ export class FormaWordPressProxyProvider implements IFitnessClubProvider {
 
     if (!response.ok) {
       throw new Error(
-        body.message ?? body.error ?? `WordPress proxy error ${response.status}`,
+        formatFormaProxyError(body, `WordPress proxy ${response.status}`),
       );
     }
 
@@ -67,12 +68,14 @@ export class FormaWordPressProxyProvider implements IFitnessClubProvider {
       'result' in body &&
       (body as { result?: boolean }).result === false
     ) {
-      const errBody = body as { error?: number; error_message?: string; message?: string };
       throw new Error(
-        errBody.error_message ??
-          body.message ??
-          body.error ??
-          `Ошибка WordPress proxy (${errBody.error ?? 'planvueplugin'})`,
+        formatFormaProxyError(
+          body as {
+            error?: number;
+            error_message?: string;
+            message?: string;
+          },
+        ),
       );
     }
 

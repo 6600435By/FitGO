@@ -20,6 +20,7 @@ import type {
 } from './types';
 import {
   buildScheduleRange,
+  formatFormaProxyError,
   mapFormaClass,
   normalizePhone,
   unwrapFormaData,
@@ -75,7 +76,7 @@ export class FormaFitnessProvider implements IFitnessClubProvider {
 
     if (!response.ok) {
       throw new Error(
-        body.message ?? body.error ?? `Forma API error ${response.status}`,
+        formatFormaProxyError(body, `Forma API ${response.status}`),
       );
     }
 

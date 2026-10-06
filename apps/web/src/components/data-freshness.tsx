@@ -46,7 +46,7 @@ function cooldownLeft(until: string | null): string | null {
   const ms = new Date(until).getTime() - Date.now();
   if (ms <= 0) return null;
   const min = Math.ceil(ms / 60_000);
-  return `Можно через ${min} мин`;
+  return `Через ${min} мин`;
 }
 
 export function DataFreshness({
@@ -109,7 +109,7 @@ export function DataFreshness({
       if (res.status === 'cooldown') {
         setErr(
           res.reason === 'night_window'
-            ? 'Идёт ночная выгрузка (03:00–04:00)'
+            ? 'Ночная выгрузка (03–04)'
             : cooldownLeft(res.cooldownUntil) ||
                 'Подождите перед следующим обновлением',
         );
@@ -130,10 +130,12 @@ export function DataFreshness({
         : 'text-red-700';
 
   const cd = cooldownLeft(status?.cooldownUntil ?? null);
+  const hint =
+    'Только сегодня (±1 день). Прошлые дни — ночью 03–04.';
 
   return (
-    <div className={`card !p-3 text-sm ${className}`}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+    <div className={`card !p-2.5 text-sm sm:!p-3 ${className}`}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className={`font-medium ${freshnessColor}`}>
           {status?.dataAsOf
             ? `Данные на ${status.dataAsOf}`
@@ -146,15 +148,16 @@ export function DataFreshness({
           <span className="text-sky-700">
             Идёт обновление…
             {status.running.triggeredByName
-              ? ` (начал ${status.running.triggeredByName} в ${formatTime(status.running.startedAt)})`
+              ? ` (${status.running.triggeredByName}, ${formatTime(status.running.startedAt)})`
               : status.running.trigger === 'NIGHTLY'
-                ? ' (ночная выгрузка)'
+                ? ' (ночь)'
                 : ''}
           </span>
         ) : null}
         {canRefresh ? (
           <button
             type="button"
+            title={hint}
             disabled={
               busy ||
               Boolean(status?.running) ||
@@ -167,7 +170,7 @@ export function DataFreshness({
             {busy || status?.running
               ? 'Обновление…'
               : status?.inNightWindow
-                ? 'Идёт ночная выгрузка'
+                ? 'Ночная выгрузка'
                 : cd
                   ? cd
                   : 'Обновить из 1С'}
@@ -175,16 +178,17 @@ export function DataFreshness({
         ) : null}
       </div>
       {canRefresh ? (
-        <p className="mt-1 text-xs text-[var(--fg-muted)]">
-          Обновляет только сегодня (±1 день): оплаты, занятия, расписание. Правки
-          за прошлые дни подтянутся ночью (03:00–04:00). Нажимайте, если в 1С
-          только что прошла оплата или запись, а здесь её нет.
+        <p
+          className="mt-1 text-[11px] leading-snug text-[var(--fg-muted)] sm:text-xs"
+          title="Нажимайте, если в 1С только что прошла оплата или запись, а здесь её нет."
+        >
+          {hint}
         </p>
       ) : null}
       {err ? <p className="mt-1 text-xs text-red-600">{err}</p> : null}
       {status?.lastError && canRefresh ? (
-        <p className="mt-1 text-xs text-red-600">
-          Последняя ошибка: {status.lastError}
+        <p className="mt-1 break-words text-xs text-red-600">
+          Ошибка: {status.lastError}
         </p>
       ) : null}
     </div>

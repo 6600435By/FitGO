@@ -418,6 +418,11 @@ export class ClubSyncOrchestrator {
             ? ClubSyncRunStatus.FAILED
             : ClubSyncRunStatus.PARTIAL;
 
+      const firstIssue = failed[0] ?? skipped[0];
+      const lastError = firstIssue?.error
+        ? `${firstIssue.resource}: ${firstIssue.error}`
+        : null;
+
       stopHeartbeat();
       await this.prisma.clubSyncRun.update({
         where: { id: runId },
@@ -426,7 +431,7 @@ export class ClubSyncOrchestrator {
           finishedAt: new Date(),
           heartbeatAt: new Date(),
           steps,
-          lastError: failed[0]?.error ?? skipped[0]?.error ?? null,
+          lastError,
         },
       });
       this.logger.log(

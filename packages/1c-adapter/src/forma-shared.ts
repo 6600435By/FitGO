@@ -88,3 +88,31 @@ export function unwrapFormaData<T>(body: { data?: T } | T): T {
   }
   return body as T;
 }
+
+/**
+ * Forma / planvueplugin often returns `{ result: false, error: 1025 }` with no
+ * `error_message`. Passing a bare number into `new Error()` yields just "1025".
+ */
+export function formatFormaProxyError(
+  body: {
+    error?: unknown;
+    error_message?: unknown;
+    message?: unknown;
+  },
+  fallbackLabel = 'Forma/WP',
+): string {
+  const code =
+    typeof body.error === 'number' || typeof body.error === 'string'
+      ? body.error
+      : null;
+  const detailCandidates = [body.error_message, body.message];
+  const detail = detailCandidates.find(
+    (v): v is string => typeof v === 'string' && v.trim().length > 0,
+  );
+  if (detail && code != null && String(code) !== detail) {
+    return `${fallbackLabel} ${code}: ${detail}`;
+  }
+  if (detail) return detail;
+  if (code != null) return `${fallbackLabel} ошибка ${code}`;
+  return `Ошибка ${fallbackLabel}`;
+}
