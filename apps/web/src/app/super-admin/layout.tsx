@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { useMemo } from 'react';
 import { AuthGuard } from '@/components/auth-guard';
 import { AppShell } from '@/components/app-shell';
+import { DataFreshness } from '@/components/data-freshness';
 import { getUser } from '@/lib/auth';
 
 const SUPER_ONLY = new Set(['/super-admin/modules', '/super-admin/audit']);
@@ -40,6 +41,9 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
   return (
     <AuthGuard allowedRoles={[UserRole.SUPER_ADMIN, UserRole.MANAGER]}>
       <AppShell title="Супер-админ" navItems={navItems} wide>
+        <div className="mb-4">
+          <DataFreshness />
+        </div>
         {children}
       </AppShell>
     </AuthGuard>

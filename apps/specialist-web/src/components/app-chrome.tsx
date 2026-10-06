@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { DataFreshness } from '@/components/data-freshness';
 import { clearAuth, getToken, getUser, requireSpecialist } from '@/lib/auth';
 
 const NAV = [
@@ -69,7 +70,10 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </header>
-      <main className="flex-1 space-y-4">{children}</main>
+      <main className="flex-1 space-y-4">
+        <DataFreshness />
+        {children}
+      </main>
       <nav className="nav-dock">
         <div className="mx-auto flex max-w-3xl gap-1 px-2 py-2">
           {NAV.map((item) => {

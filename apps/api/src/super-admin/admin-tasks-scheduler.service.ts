@@ -38,6 +38,9 @@ export class AdminTasksSchedulerService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
+    // Nightly admin-task generation is invoked from ClubSyncOrchestrator FULL.
+    // Keep legacy cron only when club sync is off.
+    if (this.config.get('ENABLE_CLUB_SYNC_CRON') !== 'false') return;
     if (this.config.get('ENABLE_ADMIN_TASKS_CRON') === 'false') return;
     setInterval(() => void this.tick(), 60 * 60 * 1000);
     void this.tick();

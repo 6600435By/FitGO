@@ -23,7 +23,8 @@ export class NotificationsService implements OnModuleInit {
 
   onModuleInit() {
     if (this.config.get('ENABLE_NOTIFICATION_CRON') === 'false') return;
-    // Never on API start: a full client scan hammers 1C (rphost 100%).
+    // Per-client 1C churn scan disabled when club-wide sync owns membership/visits cache.
+    if (this.config.get('ENABLE_CLUB_SYNC_CRON') !== 'false') return;
     setInterval(() => void this.churnTick(), 60 * 60 * 1000);
   }
 

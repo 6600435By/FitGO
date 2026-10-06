@@ -16,12 +16,15 @@ import type {
   AdminSaleType,
   ClubRevenueManualKind,
 } from '@fitgo/shared-types';
+import { ClubSyncProfile, ClubSyncTrigger } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { ClubSyncOrchestrator } from '../club-sync/club-sync-orchestrator.service';
+import { ClubSyncStatusService } from '../club-sync/club-sync-status.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminSalesService } from './admin-sales.service';
 import { AdminSalesSyncService } from './admin-sales-sync.service';
@@ -81,6 +84,8 @@ export class SuperAdminSalesController {
     private readonly clubRevenueSync: ClubRevenueSyncService,
     private readonly backfill: SalesBackfillService,
     private readonly prisma: PrismaService,
+    private readonly clubSync: ClubSyncOrchestrator,
+    private readonly clubSyncStatus: ClubSyncStatusService,
   ) {}
 
   @Get('club')
@@ -207,49 +212,32 @@ export class SuperAdminSalesController {
   }
 
   /**
-   * Start incremental sync in the background. Awaiting both jobs in one HTTP
-   * request timed out on the club server (proxy/browser) → «Ошибка 500».
+   * Delegates to club-wide LIGHT sync (staff/sync/refresh).
+   * Kept for existing admin sales UI buttons.
    */
   @Post('sync')
   async syncNow(@CurrentUser() user: JwtPayload) {
     const clubId = requireClubId(user);
-    await this.reclaimOrphanRunning(clubId);
     const bf = await this.backfill.status(clubId);
     if (bf.running) {
       throw new BadRequestException(
         'Идёт исторический backfill — дождитесь окончания или stop, затем «Обновить из 1С».',
       );
     }
-    const status = await this.readSyncStatus(clubId);
-    if (status.running || this.syncInFlight.has(clubId)) {
-      return { status: 'running' as const, ...status };
-    }
-
-    this.syncInFlight.add(clubId);
-    // Mark running before HTTP returns so the UI poll does not treat idle as done.
-    const now = new Date();
-    for (const resourceKey of ['admin_sales', 'club_revenue'] as const) {
-      await this.prisma.salesSyncState.upsert({
-        where: { clubId_resourceKey: { clubId, resourceKey } },
-        create: {
-          clubId,
-          resourceKey,
-          lastStatus: 'running',
-          lastRunAt: now,
-          lastError: null,
-        },
-        update: {
-          lastStatus: 'running',
-          lastRunAt: now,
-          lastError: null,
-        },
-      });
-    }
-    void this.runSyncBackground(clubId);
-
+    const result = await this.clubSync.start(clubId, {
+      trigger: ClubSyncTrigger.MANUAL,
+      profile: ClubSyncProfile.LIGHT,
+      userId: user.sub,
+    });
+    const clubStatus = await this.clubSyncStatus.status(clubId, {
+      includeErrors: true,
+    });
     return {
-      status: 'started' as const,
-      ...(await this.readSyncStatus(clubId)),
+      ...result,
+      ...clubStatus,
+      running: clubStatus.running,
+      lastSyncedAt: clubStatus.dataAsOfIso,
+      syncStatus: result.status,
     };
   }
 

@@ -31,6 +31,7 @@ import { WaitlistService } from '../waitlist/waitlist.service';
 import { OsmiCardService } from '../osmi/osmi-card.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { BookingGateway } from '../club-sync/booking-gateway.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -38,6 +39,7 @@ export class ClientService {
   constructor(
     private readonly fitness: FitnessService,
     private readonly prisma: PrismaService,
+    private readonly bookingGateway: BookingGateway,
     private readonly personalTraining: PersonalTrainingService,
     private readonly spaBooking: SpaBookingService,
     private readonly notifications: NotificationsService,
@@ -87,12 +89,13 @@ export class ClientService {
     status: GroupClassBookingStatus | PersonalBookingStatus,
     endAt: Date,
   ): 'UPCOMING' | 'COMPLETED' | 'CANCELLED' {
-    if (status === 'CANCELLED') {
+    if (status === 'CANCELLED' || status === 'FAILED') {
       return 'CANCELLED';
     }
     if (status === GroupClassBookingStatus.COMPLETED) {
       return 'COMPLETED';
     }
+    // PENDING_1C still shows as upcoming until reconcile fails.
     return endAt.getTime() > Date.now() ? 'UPCOMING' : 'COMPLETED';
   }
 
@@ -956,25 +959,29 @@ export class ClientService {
     });
   }
 
-  async bookSession(user: JwtPayload, sessionId: string) {
-    const context = await this.getBookingContext(user);
-    let externalId: string;
+  async bookSession(
+    user: JwtPayload,
+    sessionId: string,
+    idempotencyKey?: string,
+  ) {
     try {
-      externalId = await this.resolveExternalId(user);
+      await this.resolveExternalId(user);
     } catch {
       throw new BadRequestException(
         'Запись на групповые доступна после оформления в 1С. Посмотрите расписание или обратитесь на ресепшен.',
       );
     }
-    const result = await this.fitness
-      .getProvider()
-      .bookSession(externalId, sessionId, context);
-
-    if (result.success) {
-      await this.saveGroupClassBooking(user, sessionId);
-    }
-
-    return result;
+    const result = await this.bookingGateway.bookGroupSession(user, sessionId, {
+      idempotencyKey,
+      origin: 'CLIENT_BOOKED',
+      bookedByUserId: user.sub,
+    });
+    return {
+      success: result.success,
+      message: result.message,
+      bookingId: result.bookingId,
+      status: result.status,
+    };
   }
 
   async cancelBooking(user: JwtPayload, sessionId: string) {

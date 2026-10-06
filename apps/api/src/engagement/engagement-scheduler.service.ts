@@ -23,7 +23,7 @@ export class EngagementSchedulerService implements OnModuleInit {
 
   onModuleInit() {
     if (this.config.get('ENABLE_ENGAGEMENT_CRON') === 'false') return;
-    // Do not tick on boot — syncAllVisits hits 1C under WordpressUserAPI.
+    // League / inactivity remain; 1C visit sync is owned by ClubSync (hall_visits).
     setInterval(() => void this.tick(), 60 * 60 * 1000);
   }
 
@@ -69,7 +69,12 @@ export class EngagementSchedulerService implements OnModuleInit {
         await this.league.processMonthlyRatingDecay();
       }
 
-      if (now.getHours() >= 4 && now.getHours() < 6) {
+      // Live per-client 1C visit sync only when club-wide sync is off.
+      if (
+        this.config.get('ENABLE_CLUB_SYNC_CRON') === 'false' &&
+        now.getHours() >= 4 &&
+        now.getHours() < 6
+      ) {
         await this.syncAllVisits();
       }
     } catch (err) {

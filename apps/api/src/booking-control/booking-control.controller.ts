@@ -7,12 +7,15 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { UserRole } from '@fitgo/shared-types';
+import { ClubSyncProfile, ClubSyncTrigger } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { ClubSyncOrchestrator } from '../club-sync/club-sync-orchestrator.service';
+import { ClubSyncStatusService } from '../club-sync/club-sync-status.service';
 import { BookingControlService } from './booking-control.service';
 
 type ListQuery = {
@@ -29,7 +32,24 @@ type ListQuery = {
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class BookingControlController {
-  constructor(private readonly bookingControl: BookingControlService) {}
+  constructor(
+    private readonly bookingControl: BookingControlService,
+    private readonly clubSync: ClubSyncOrchestrator,
+    private readonly clubSyncStatus: ClubSyncStatusService,
+  ) {}
+
+  private async refreshClubFrom1c(user: JwtPayload) {
+    const clubId = requireClubId(user);
+    const result = await this.clubSync.start(clubId, {
+      trigger: ClubSyncTrigger.MANUAL,
+      profile: ClubSyncProfile.LIGHT,
+      userId: user.sub,
+    });
+    const status = await this.clubSyncStatus.status(clubId, {
+      includeErrors: true,
+    });
+    return { ...result, ...status };
+  }
 
   @Get('super-admin/booking-control')
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
@@ -74,15 +94,8 @@ export class BookingControlController {
 
   @Post('super-admin/booking-control/refresh-from-1c')
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
-  refreshSuperAdmin(
-    @CurrentUser() user: JwtPayload,
-    @Body() body: { from?: string; to?: string },
-  ) {
-    return this.bookingControl.refreshFrom1c(
-      requireClubId(user),
-      body.from?.trim() || '',
-      body.to?.trim() || '',
-    );
+  refreshSuperAdmin(@CurrentUser() user: JwtPayload) {
+    return this.refreshClubFrom1c(user);
   }
 
   @Post('super-admin/booking-control/attendance')
@@ -205,15 +218,8 @@ export class BookingControlController {
 
   @Post('admin/booking-control/refresh-from-1c')
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
-  refreshAdmin(
-    @CurrentUser() user: JwtPayload,
-    @Body() body: { from?: string; to?: string },
-  ) {
-    return this.bookingControl.refreshFrom1c(
-      requireClubId(user),
-      body.from?.trim() || '',
-      body.to?.trim() || '',
-    );
+  refreshAdmin(@CurrentUser() user: JwtPayload) {
+    return this.refreshClubFrom1c(user);
   }
 
   @Post('admin/booking-control/attendance')

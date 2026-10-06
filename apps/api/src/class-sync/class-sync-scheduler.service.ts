@@ -17,9 +17,10 @@ export class ClassSyncSchedulerService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
+    // Replaced by ClubSyncModule NightlySyncScheduler (ENABLE_CLUB_SYNC_CRON).
+    if (this.config.get('ENABLE_CLUB_SYNC_CRON') !== 'false') return;
     if (this.config.get('ENABLE_CLASS_SYNC_CRON') === 'false') return;
     setInterval(() => void this.tick(), 60 * 60 * 1000);
-    // Safe: tick no-ops outside 03:00–05:00, so daytime restarts do not sync.
     void this.tick();
   }
 

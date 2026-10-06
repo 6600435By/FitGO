@@ -978,12 +978,11 @@ export class SpaBookingService {
 
     let booking;
     try {
-      const existing = await this.prisma.spaBooking.findUnique({
+      const existing = await this.prisma.spaBooking.findFirst({
         where: {
-          specialistId_startAt: {
-            specialistId: input.specialistId,
-            startAt: start,
-          },
+          specialistId: input.specialistId,
+          startAt: start,
+          status: { notIn: ['CANCELLED', 'FAILED'] },
         },
       });
 

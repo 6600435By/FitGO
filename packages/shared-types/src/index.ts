@@ -1168,7 +1168,7 @@ export type SpaBookingOrigin =
   | 'SPECIALIST_ASSIGNED'
   | 'ADMIN_ASSIGNED';
 
-export type SpaBookingStatus = 'CONFIRMED' | 'CANCELLED' | 'COMPLETED';
+export type SpaBookingStatus = 'PENDING_1C' | 'CONFIRMED' | 'CANCELLED' | 'COMPLETED' | 'FAILED';
 
 export type SpaCancelledBy = 'CLIENT' | 'SPECIALIST' | 'ADMIN' | 'CRM_ADMIN';
 

@@ -1,24 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { ScheduleSlot } from '@fitgo/shared-types';
-import { FitnessService } from '../fitness/fitness.service';
+import { SessionType, type ScheduleSlot } from '@fitgo/shared-types';
 import { PrismaService } from '../prisma/prisma.service';
-import { formaScheduleRange } from './trainer-schedule.helpers';
 
-type CacheEntry = {
-  expiresAt: number;
-  slots: ScheduleSlot[];
-};
-
+/**
+ * Schedule reads from ClubScheduleSlot (filled by club-sync).
+ * No live Forma calls on staff/client page loads.
+ */
 @Injectable()
 export class FormaScheduleCacheService {
   private readonly logger = new Logger(FormaScheduleCacheService.name);
-  private readonly cache = new Map<string, CacheEntry>();
-  private readonly ttlMs = 5 * 60 * 1000;
 
-  constructor(
-    private readonly fitness: FitnessService,
-    private readonly prisma: PrismaService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   cacheKey(clubId: string, fromDay: string, toDay: string): string {
     return `${clubId}|${fromDay}|${toDay}`;
@@ -29,41 +21,50 @@ export class FormaScheduleCacheService {
     fromDay: string,
     toDay: string,
   ): Promise<ScheduleSlot[]> {
-    const key = this.cacheKey(clubId, fromDay, toDay);
-    const hit = this.cache.get(key);
-    if (hit && hit.expiresAt > Date.now()) {
-      return hit.slots;
-    }
+    const rangeStart = new Date(`${fromDay}T00:00:00.000Z`);
+    const rangeEnd = new Date(`${toDay}T23:59:59.999Z`);
 
-    const club = await this.prisma.club.findUnique({
-      where: { id: clubId },
-      select: { externalId: true },
+    const rows = await this.prisma.clubScheduleSlot.findMany({
+      where: {
+        clubId,
+        startAt: { gte: rangeStart, lte: rangeEnd },
+      },
+      orderBy: { startAt: 'asc' },
     });
-    const externalId =
-      club?.externalId?.trim() || process.env.FORMA_CLUB_ID?.trim() || '';
-    if (!externalId) {
-      this.logger.warn(`Club ${clubId}: no externalId / FORMA_CLUB_ID for schedule`);
-      return [];
+
+    if (rows.length === 0) {
+      this.logger.debug(
+        `No ClubScheduleSlot rows for ${clubId} ${fromDay}..${toDay} — run staff sync`,
+      );
     }
 
-    try {
-      const range = formaScheduleRange(fromDay, toDay);
-      const slots = await this.fitness.getProvider().getSchedule(externalId, {
-        from: range.from,
-        to: range.to,
-      });
-      this.cache.set(key, {
-        expiresAt: Date.now() + this.ttlMs,
-        slots,
-      });
-      return slots;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.error(
-        `Forma getSchedule failed club=${clubId} ext=${externalId} ${fromDay}..${toDay}: ${message}`,
-      );
-      // Do not cache failures — allow Onex fallback in callers.
-      return [];
-    }
+    return rows.map((r) => {
+      const capacity = r.capacity ?? 0;
+      const booked = r.bookedIn1c ?? 0;
+      return {
+        id: r.externalId,
+        title: r.title,
+        type: mapSessionType(r.sessionType),
+        trainerName: r.trainerName ?? undefined,
+        startAt: r.startAt.toISOString(),
+        endAt: r.endAt.toISOString(),
+        capacity,
+        booked,
+        available: capacity === 0 ? true : booked < capacity,
+        roomTitle: r.roomTitle ?? undefined,
+      };
+    });
   }
+
+  /** Invalidate in-memory cache — no-op; DB is source of truth. */
+  invalidate(_clubId?: string) {
+    /* intentionally empty */
+  }
+}
+
+function mapSessionType(raw: string | null | undefined): SessionType {
+  const v = (raw ?? '').toUpperCase();
+  if (v === 'PERSONAL' || v === 'PT') return SessionType.PERSONAL;
+  if (v === 'SPA') return SessionType.SPA;
+  return SessionType.GROUP;
 }

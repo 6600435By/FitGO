@@ -182,6 +182,32 @@ Query: `days` (1…60, default 14).
 
 В конфигураторе: шаблон `/v1/memberships/expiring`, метод GET → `MembershipsExpiringGET`.
 
+### GET `/memberships` (planned — bulk snapshots)
+
+Query: `changedSince` (ISO datetime, optional), `page`, `pageSize`.
+
+Пакетная выгрузка абонементов для кэша `ClubMembershipSnapshot` в FitGO (ночная/ручная club sync). Пока эндпоинта нет — FitGO обходит клиентов через `GET /membership` с rate-limit.
+
+```json
+{
+  "data": [
+    {
+      "externalId": "uuid",
+      "status": "ACTIVE",
+      "packageName": "…",
+      "validFrom": "2026-01-01",
+      "validUntil": "2026-12-31",
+      "freezeAllowed": true,
+      "debtAmount": 0,
+      "services": []
+    }
+  ],
+  "page": 1,
+  "pageSize": 100,
+  "total": 0
+}
+```
+
 ### POST `/membership/freeze`
 
 Создаёт и проводит документ «Операция с членством, пакетом услуг» с операцией **Заморозка**. Срок действия абонемента увеличивается на `days`.

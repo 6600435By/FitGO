@@ -143,9 +143,11 @@ enum NotificationStatus {
 }
 
 enum PersonalBookingStatus {
+  PENDING_1C
   CONFIRMED
   CANCELLED
   COMPLETED
+  FAILED
 }
 
 enum AvailabilityBlockStatus {
@@ -182,9 +184,18 @@ enum SpaBookingOrigin {
 }
 
 enum SpaBookingStatus {
+  PENDING_1C
   CONFIRMED
   CANCELLED
   COMPLETED
+  FAILED
+}
+
+/// Atomic claim for SPA consume-to-1C (prevents double post).
+enum SpaConsumeState {
+  IN_PROGRESS
+  DONE
+  FAILED
 }
 
 /// Кто отменил SPA-запись (для истории клиента).
@@ -220,15 +231,36 @@ enum TrainerClientInviteStatus {
 }
 
 enum GroupClassBookingStatus {
+  PENDING_1C
   CONFIRMED
   CANCELLED
   COMPLETED
+  FAILED
 }
 
 enum GroupBookingOrigin {
   CLIENT_BOOKED
   STAFF_BOOKED
   ADMIN_BOOKED
+  /// Enrollment mirrored from 1C class session member (not booked in FitGO).
+  ONEC_IMPORTED
+}
+
+enum ClubSyncTrigger {
+  NIGHTLY
+  MANUAL
+}
+
+enum ClubSyncProfile {
+  FULL
+  LIGHT
+}
+
+enum ClubSyncRunStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
 }
 
 /// Dual-gate control for service usage (SPA / PT / group).
@@ -449,6 +481,11 @@ model Club {
   groupClassApprovals  GroupClassApproval[]
   sessionApprovals     SessionApproval[]
   spaRooms             SpaRoom[]
+  clubSyncRuns         ClubSyncRun[]
+  clubScheduleSlots    ClubScheduleSlot[]
+  clubMembershipSnapshots ClubMembershipSnapshot[]
+  trainerPtSales       TrainerPtSale[]
+  specialistServiceDebts SpecialistServiceDebt[]
 }
 
 model ClubTheme {
@@ -966,6 +1003,7 @@ model PersonalTrainingBooking {
   endAt              DateTime
   status             PersonalBookingStatus @default(CONFIRMED)
   origin             PersonalBookingOrigin @default(CLIENT_BOOKED)
+  idempotencyKey     String?               @unique
   clientCompletedAt  DateTime?
   trainerCompletedAt DateTime?
   workoutSheet       Json?
@@ -1005,7 +1043,7 @@ model PersonalTrainingBooking {
   sessionGoals PersonalTrainingSessionGoal[]
   daySheetLines TrainerDaySheetLine[]
 
-  @@unique([trainerId, startAt])
+  /// Exact-start unique removed in favor of btree_gist exclusion (overlapping ranges).
   @@index([trainerId, startAt])
   @@index([clientId])
   @@index([reviewFlag, usageStatus])
@@ -1013,6 +1051,7 @@ model PersonalTrainingBooking {
   @@index([trustBand, trustResolution])
   @@index([clientIssue, clientIssueEscalated])
   @@index([isLateAdd])
+  @@index([status])
 }
 
 model PersonalTrainingSessionGoal {
@@ -1058,6 +1097,7 @@ model GroupClassBooking {
   endAt         DateTime
   status        GroupClassBookingStatus @default(CONFIRMED)
   origin        GroupBookingOrigin      @default(CLIENT_BOOKED)
+  idempotencyKey String?                @unique
   cancelledAt   DateTime?
   controlLevel       ServiceControlLevel   @default(BASE)
   presenceStatus     ServicePresenceStatus @default(PENDING)
@@ -1084,6 +1124,7 @@ model GroupClassBooking {
   @@unique([clientId, appointmentId])
   @@index([clientId, startAt])
   @@index([clientId, status])
+  @@index([status, updatedAt])
   @@index([reviewFlag, usageStatus])
   @@index([presenceStatus, startAt])
   @@index([appointmentId])
@@ -1574,10 +1615,13 @@ model SpaBooking {
   endAt                  DateTime
   status                 SpaBookingStatus @default(CONFIRMED)
   origin                 SpaBookingOrigin @default(CLIENT_BOOKED)
+  idempotencyKey         String?          @unique
   paymentType            SpaPaymentType
   priceMinor             Int?
   membershipServiceName  String?
   consumedInCrmAt        DateTime?
+  /// Atomic claim for consume-to-1C (IN_PROGRESS → DONE/FAILED).
+  consumeState           SpaConsumeState?
   crmDocRef              String?
   cancelledBy            SpaCancelledBy?
   cancelledAt            DateTime?
@@ -1610,7 +1654,7 @@ model SpaBooking {
   client     User?      @relation("ClientSpaBookings", fields: [clientId], references: [id], onDelete: Cascade)
   service    SpaService @relation(fields: [serviceId], references: [id], onDelete: Restrict)
 
-  @@unique([specialistId, startAt])
+  /// Exact-start unique removed in favor of btree_gist exclusion (overlapping ranges).
   @@index([specialistId, startAt])
   @@index([clientId])
   @@index([clubId, clientExternalId])
@@ -1618,6 +1662,7 @@ model SpaBooking {
   @@index([reviewFlag, usageStatus])
   @@index([presenceStatus, startAt])
   @@index([trustBand, trustResolution])
+  @@index([status])
 }
 
 /// Short-lived phone → 1C client lookup so manual SPA booking does not hit 1C every time.
@@ -2302,4 +2347,140 @@ model ClubHallVisit {
   @@index([clubId, visitDate])
   @@index([clubId, clientExternalId, visitDate])
   @@index([clubId, isActive, visitDate])
+}
+
+/// One club-wide sync run (nightly FULL or manual LIGHT). Partial unique index
+/// on RUNNING clubId is applied via scripts/sql/club-sync-constraints.sql.
+model ClubSyncRun {
+  id                 String            @id @default(cuid())
+  clubId             String
+  trigger            ClubSyncTrigger
+  profile            ClubSyncProfile
+  status             ClubSyncRunStatus @default(RUNNING)
+  startedAt          DateTime          @default(now())
+  finishedAt         DateTime?
+  heartbeatAt        DateTime          @default(now())
+  triggeredByUserId  String?
+  /// Calendar night key YYYY-MM-DD (Europe/Moscow) for NIGHTLY uniqueness.
+  nightKey           String?
+  /// Per-step results: [{ resource, from?, to?, rows?, error? }, ...]
+  steps              Json              @default("[]")
+  lastError          String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, startedAt])
+  @@index([clubId, status])
+  @@unique([clubId, nightKey])
+}
+
+/// Cached Forma / 1C group-class schedule slots — staff & client schedule reads DB only.
+model ClubScheduleSlot {
+  id           String   @id @default(cuid())
+  clubId       String
+  /// Forma appointment / class id
+  externalId   String
+  title        String
+  trainerName  String?
+  roomTitle    String?
+  startAt      DateTime
+  endAt        DateTime
+  capacity     Int      @default(0)
+  bookedIn1c   Int      @default(0)
+  /// Session type hint: group | personal | …
+  sessionType  String?
+  syncedAt     DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, externalId])
+  @@index([clubId, startAt])
+  @@index([clubId, syncedAt])
+}
+
+/// Cached membership snapshot per 1C client — replaces live getMembership on staff pages.
+model ClubMembershipSnapshot {
+  id                 String   @id @default(cuid())
+  clubId             String
+  clientExternalId   String
+  clientName         String?
+  status             String?
+  packageName        String?
+  startDate          String?
+  endDate            String?
+  freezeAllowed      Boolean  @default(false)
+  debtAmount         Float    @default(0)
+  currency           String?
+  /// Remaining services JSON: [{ name, remaining, … }]
+  servicesJson       Json     @default("[]")
+  rawJson            Json?
+  syncedAt           DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, clientExternalId])
+  @@index([clubId, syncedAt])
+  @@index([clubId, endDate])
+}
+
+/// Cached trainer PT sales from FitGO HTTP GET /trainer-pt-sales.
+model TrainerPtSale {
+  id                 String   @id @default(cuid())
+  clubId             String
+  externalId         String
+  clientName         String?
+  serviceName        String?
+  occurredAt         DateTime
+  amount             Float    @default(0)
+  currency           String?
+  employeeCode       String?
+  employeeName       String?
+  docRef             String?
+  paymentStatus      String?
+  bookingRef         String?
+  isActive           Boolean  @default(true)
+  syncedAt           DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, externalId])
+  @@index([clubId, occurredAt])
+  @@index([clubId, employeeCode, occurredAt])
+  @@index([clubId, isActive, occurredAt])
+}
+
+/// Cached specialist service debts from FitGO HTTP GET /specialist-service-debts.
+model SpecialistServiceDebt {
+  id                 String   @id @default(cuid())
+  clubId             String
+  externalId         String
+  clientName         String?
+  serviceName        String?
+  occurredAt         DateTime
+  amount             Float    @default(0)
+  currency           String?
+  employeeCode       String?
+  employeeName       String?
+  docRef             String?
+  paymentStatus      String?
+  bookingRef         String?
+  isActive           Boolean  @default(true)
+  syncedAt           DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, externalId])
+  @@index([clubId, occurredAt])
+  @@index([clubId, employeeCode, occurredAt])
+  @@index([clubId, isActive, occurredAt])
 }

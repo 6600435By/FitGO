@@ -17,9 +17,10 @@ export class AdminSalesSchedulerService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
+    // Replaced by ClubSyncModule NightlySyncScheduler (ENABLE_CLUB_SYNC_CRON).
+    if (this.config.get('ENABLE_CLUB_SYNC_CRON') !== 'false') return;
     if (this.config.get('ENABLE_ADMIN_SALES_CRON') === 'false') return;
     setInterval(() => void this.tick(), 60 * 60 * 1000);
-    // Safe: tick no-ops outside 02:00–04:00.
     void this.tick();
   }
 

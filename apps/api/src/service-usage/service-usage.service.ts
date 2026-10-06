@@ -516,13 +516,23 @@ export class ServiceUsageService {
    * Consume SPA quota / record sale when dual-gate reached ATTENDED.
    */
   async consumeSpaIfReady(bookingId: string): Promise<void> {
+    // Atomic claim — second concurrent path gets 0 rows and exits.
+    const claimed = await this.prisma.spaBooking.updateMany({
+      where: {
+        id: bookingId,
+        consumedInCrmAt: null,
+        consumeState: null,
+        status: { not: SpaBookingStatus.CANCELLED },
+      },
+      data: { consumeState: 'IN_PROGRESS' },
+    });
+    if (claimed.count === 0) return;
+
     const booking = await this.prisma.spaBooking.findUnique({
       where: { id: bookingId },
       include: { specialist: true, client: true, service: true },
     });
     if (!booking) return;
-    if (booking.consumedInCrmAt) return;
-    if (booking.status === SpaBookingStatus.CANCELLED) return;
 
     const gates = computeUsageAfterGates({
       presenceStatus: booking.presenceStatus,
@@ -531,16 +541,50 @@ export class ServiceUsageService {
       consumedInCrm: false,
     });
     if (gates.usageStatus !== 'ATTENDED' && gates.usageStatus !== 'CONSUMED') {
+      await this.prisma.spaBooking.update({
+        where: { id: bookingId },
+        data: { consumeState: null },
+      });
       return;
     }
 
     const externalId =
       booking.client?.externalId ?? booking.clientExternalId;
     if (!externalId) {
+      await this.prisma.spaBooking.update({
+        where: { id: bookingId },
+        data: { consumeState: 'FAILED' },
+      });
       throw new BadRequestException('У клиента нет CRM externalId');
     }
 
     const provider = this.fitness.getProvider();
+    // Idempotent retry: if 1C already has doc for this bookingRef, adopt it.
+    if (provider.getSpaVisitStatus) {
+      try {
+        const existing = await provider.getSpaVisitStatus(externalId, {
+          bookingRef: bookingId,
+        });
+        if (existing?.found && !existing.cancelled) {
+          await this.prisma.spaBooking.update({
+            where: { id: booking.id },
+            data: {
+              consumedInCrmAt: new Date(),
+              crmDocRef: existing.num?.trim() || bookingId,
+              oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+              usageStatus: ServiceUsageStatus.CONSUMED,
+              eligibleForMotivation: true,
+              consumeState: 'DONE',
+              status: SpaBookingStatus.COMPLETED,
+            },
+          });
+          return;
+        }
+      } catch {
+        // continue to consume
+      }
+    }
+
     const employeeName = [booking.specialist.lastName, booking.specialist.firstName]
       .filter(Boolean)
       .join(' ')
@@ -552,6 +596,10 @@ export class ServiceUsageService {
     if (booking.paymentType === SpaPaymentType.QUOTA) {
       const consume = provider.consumeMembershipService;
       if (!consume) {
+        await this.prisma.spaBooking.update({
+          where: { id: bookingId },
+          data: { consumeState: 'FAILED' },
+        });
         throw new BadRequestException('Списание услуги в 1С недоступно');
       }
       const consumed = await consume.call(provider, externalId, {
@@ -577,11 +625,16 @@ export class ServiceUsageService {
           eligibleForMotivation: true,
           paymentStatus: ServicePaymentStatus.N_A,
           status: SpaBookingStatus.COMPLETED,
+          consumeState: 'DONE',
         },
       });
     } else {
       const sell = provider.sellSpaService;
       if (!sell) {
+        await this.prisma.spaBooking.update({
+          where: { id: bookingId },
+          data: { consumeState: 'FAILED' },
+        });
         throw new BadRequestException('Продажа спа-услуги в 1С недоступна');
       }
       const sold = await sell.call(provider, externalId, {
@@ -607,6 +660,7 @@ export class ServiceUsageService {
           eligibleForMotivation: true,
           paymentStatus: ServicePaymentStatus.DEBT,
           status: SpaBookingStatus.COMPLETED,
+          consumeState: 'DONE',
         },
       });
     }

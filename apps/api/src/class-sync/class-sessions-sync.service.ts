@@ -304,10 +304,86 @@ export class ClassSessionsSyncService {
     }
 
     const journal = await this.applyToGroupJournal(clubId, session, members);
+    if (kind === OnexClassKind.GROUP) {
+      await this.importGroupBookingsFromMembers(clubId, session, members);
+    }
     if (kind === OnexClassKind.PT || kind === OnexClassKind.SPA) {
       await this.applyBookingPresence(clubId, session, members, kind);
     }
     return { members: memberCount, journal };
+  }
+
+  /** Mirror 1C-only enrollments into GroupClassBooking (origin=ONEC_IMPORTED). */
+  private async importGroupBookingsFromMembers(
+    clubId: string,
+    session: {
+      externalId: string;
+      title: string;
+      startAt: Date;
+      endAt: Date | null;
+      employeeName: string | null;
+    },
+    members: FitgoClassSessionRow['members'],
+  ) {
+    const endAt =
+      session.endAt ?? new Date(session.startAt.getTime() + 60 * 60_000);
+    for (const m of members ?? []) {
+      const ext = m.externalId?.trim();
+      if (!ext) continue;
+      if (m.attendance === 'CANCELLED' || m.attendance === 'NO_SHOW') continue;
+      const client = await this.prisma.user.findFirst({
+        where: { clubId, externalId: ext },
+        select: { id: true },
+      });
+      if (!client) continue;
+      const existing = await this.prisma.groupClassBooking.findUnique({
+        where: {
+          clientId_appointmentId: {
+            clientId: client.id,
+            appointmentId: session.externalId,
+          },
+        },
+      });
+      if (existing) {
+        if (
+          existing.status === 'CANCELLED' ||
+          existing.status === 'FAILED'
+        ) {
+          await this.prisma.groupClassBooking.update({
+            where: { id: existing.id },
+            data: {
+              status: 'CONFIRMED',
+              cancelledAt: null,
+              usageStatus: 'BOOKED',
+              title: session.title,
+              trainerName: session.employeeName,
+              startAt: session.startAt,
+              endAt,
+            },
+          });
+        }
+        continue;
+      }
+      await this.prisma.groupClassBooking.create({
+        data: {
+          clientId: client.id,
+          appointmentId: session.externalId,
+          title: session.title,
+          trainerName: session.employeeName,
+          startAt: session.startAt,
+          endAt,
+          status: 'CONFIRMED',
+          origin: 'ONEC_IMPORTED',
+          controlLevel: 'BASE',
+          reviewFlag: false,
+          paymentStatus: 'N_A',
+          usageStatus: 'BOOKED',
+          presenceStatus: 'PENDING',
+          performanceStatus: 'PENDING',
+          eligibleForMotivation: false,
+        },
+      });
+    }
   }
 
   private async applyBookingPresence(

@@ -1,6 +1,7 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
+import { ClubSyncModule } from '../club-sync/club-sync.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import {
   AdminSalesController,
@@ -14,7 +15,12 @@ import { ClubRevenueSyncService } from './club-revenue-sync.service';
 import { SalesBackfillService } from './sales-backfill.service';
 
 @Module({
-  imports: [ConfigModule, AuthModule, PrismaModule],
+  imports: [
+    ConfigModule,
+    AuthModule,
+    PrismaModule,
+    forwardRef(() => ClubSyncModule),
+  ],
   controllers: [AdminSalesController, SuperAdminSalesController],
   providers: [
     AdminSalesService,

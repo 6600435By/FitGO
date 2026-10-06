@@ -279,6 +279,53 @@ export const api = {
 
   me: (token: string) => request<AuthUser>('/auth/me', {}, token),
 
+  getStaffSyncStatus: (token: string) =>
+    request<{
+      dataAsOf: string | null;
+      dataAsOfIso: string | null;
+      freshness: 'green' | 'yellow' | 'red';
+      sourceLabel: string | null;
+      running: {
+        runId: string;
+        startedAt: string;
+        triggeredByName: string | null;
+        trigger: string;
+        profile: string;
+      } | null;
+      cooldownUntil: string | null;
+      nextNightlyAt: string;
+      inNightWindow: boolean;
+      lastError: string | null;
+      lastRun: {
+        id: string;
+        status: string;
+        trigger: string;
+        finishedAt: string | null;
+        startedAt: string;
+      } | null;
+    }>('/staff/sync/status', {}, token),
+
+  postStaffSyncRefresh: (token: string) =>
+    request<{
+      status: 'started' | 'running' | 'cooldown' | 'already_nightly';
+      reason?: 'manual_cooldown' | 'night_window';
+      runId?: string;
+      dataAsOf: string | null;
+      dataAsOfIso: string | null;
+      freshness: 'green' | 'yellow' | 'red';
+      sourceLabel: string | null;
+      running: {
+        runId: string;
+        startedAt: string;
+        triggeredByName: string | null;
+        trigger: string;
+        profile: string;
+      } | null;
+      cooldownUntil: string | null;
+      inNightWindow: boolean;
+      lastError: string | null;
+    }>('/staff/sync/refresh', { method: 'POST', body: '{}' }, token),
+
   clientDashboard: (token: string) =>
     request<ClientDashboard>('/client/dashboard', {}, token),
 

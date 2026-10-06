@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ClubCrmLinkService } from '../common/club-crm-link.service';
+import { ClubSyncModule } from '../club-sync/club-sync.module';
 import { EngagementModule } from '../engagement/engagement.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { OsmiModule } from '../osmi/osmi.module';
@@ -20,6 +21,7 @@ import { ClientProfileService } from './client-profile.service';
     OsmiModule,
     TrainerRosterModule,
     EngagementModule,
+    ClubSyncModule,
   ],
   controllers: [ClientController],
   providers: [ClientService, ClientProfileService, ClubCrmLinkService],

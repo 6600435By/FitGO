@@ -59,6 +59,18 @@ export const api = {
 
   me: (token: string) => request<AuthUser>('/auth/me', {}, token),
 
+  getStaffSyncStatus: (token: string) =>
+    request<{
+      dataAsOf: string | null;
+      freshness: 'green' | 'yellow' | 'red';
+      sourceLabel: string | null;
+      running: {
+        startedAt: string;
+        triggeredByName: string | null;
+        trigger: string;
+      } | null;
+    }>('/staff/sync/status', {}, token),
+
   specialistCalendar: (token: string, from: string, to: string) =>
     request<SpecialistCalendarResponse>(
       `/specialist/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,

@@ -27,6 +27,7 @@ import { BookingControlModule } from './booking-control/booking-control.module';
 import { HallSnapshotModule } from './hall-snapshot/hall-snapshot.module';
 import { StaffProfileModule } from './staff-profile/staff-profile.module';
 import { ClubScheduleModule } from './club-schedule/club-schedule.module';
+import { ClubSyncModule } from './club-sync/club-sync.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { ClubScheduleModule } from './club-schedule/club-schedule.module';
     AdminSalesModule,
     SegmentsModule,
     ClassSyncModule,
+    ClubSyncModule,
     BookingControlModule,
     HallSnapshotModule,
     StaffProfileModule,

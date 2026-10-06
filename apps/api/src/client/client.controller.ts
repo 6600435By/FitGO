@@ -205,7 +205,11 @@ export class ClientController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: BookSessionDto,
   ) {
-    return this.clientService.bookSession(user, dto.sessionId);
+    return this.clientService.bookSession(
+      user,
+      dto.sessionId,
+      dto.idempotencyKey,
+    );
   }
 
   @Delete('bookings/:sessionId')

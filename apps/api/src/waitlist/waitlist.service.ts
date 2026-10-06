@@ -146,43 +146,51 @@ export class WaitlistService {
       throw new ConflictException('Вы уже в листе ожидания');
     }
 
-    const activeCount = await this.prisma.groupClassWaitlistEntry.count({
-      where: {
-        appointmentId: sessionId,
-        status: {
-          in: [GroupClassWaitlistStatus.WAITING, GroupClassWaitlistStatus.NOTIFIED],
+    const entry = await this.prisma.$transaction(async (tx) => {
+      // Serialize position assignment per appointment.
+      await tx.$executeRaw`
+        SELECT pg_advisory_xact_lock(hashtext(${sessionId}))
+      `;
+      const activeCount = await tx.groupClassWaitlistEntry.count({
+        where: {
+          appointmentId: sessionId,
+          status: {
+            in: [
+              GroupClassWaitlistStatus.WAITING,
+              GroupClassWaitlistStatus.NOTIFIED,
+            ],
+          },
         },
-      },
-    });
-    const position = activeCount + 1;
-
-    const entry = await this.prisma.groupClassWaitlistEntry.upsert({
-      where: {
-        clientId_appointmentId: {
+      });
+      const position = activeCount + 1;
+      return tx.groupClassWaitlistEntry.upsert({
+        where: {
+          clientId_appointmentId: {
+            clientId: user.sub,
+            appointmentId: sessionId,
+          },
+        },
+        create: {
+          clubId,
           clientId: user.sub,
           appointmentId: sessionId,
+          title: slot.title,
+          trainerName: slot.trainerName ?? null,
+          startAt: new Date(slot.startAt),
+          endAt: new Date(slot.endAt),
+          position,
+          status: GroupClassWaitlistStatus.WAITING,
         },
-      },
-      create: {
-        clubId,
-        clientId: user.sub,
-        appointmentId: sessionId,
-        title: slot.title,
-        trainerName: slot.trainerName ?? null,
-        startAt: new Date(slot.startAt),
-        endAt: new Date(slot.endAt),
-        position,
-        status: GroupClassWaitlistStatus.WAITING,
-      },
-      update: {
-        title: slot.title,
-        trainerName: slot.trainerName ?? null,
-        startAt: new Date(slot.startAt),
-        endAt: new Date(slot.endAt),
-        position,
-        status: GroupClassWaitlistStatus.WAITING,
-        notifiedAt: null,
-      },
+        update: {
+          title: slot.title,
+          trainerName: slot.trainerName ?? null,
+          startAt: new Date(slot.startAt),
+          endAt: new Date(slot.endAt),
+          position,
+          status: GroupClassWaitlistStatus.WAITING,
+          notifiedAt: null,
+        },
+      });
     });
 
     return this.mapEntry(entry);
@@ -212,6 +220,19 @@ export class WaitlistService {
   }
 
   async assertCanConfirm(user: JwtPayload, sessionId: string) {
+    const claimed = await this.prisma.groupClassWaitlistEntry.updateMany({
+      where: {
+        clientId: user.sub,
+        appointmentId: sessionId,
+        status: GroupClassWaitlistStatus.NOTIFIED,
+      },
+      // Keep NOTIFIED until onConfirmed — claim via conditional update count.
+      data: { notifiedAt: new Date() },
+    });
+    if (claimed.count === 0) {
+      throw new BadRequestException('Нет активного приглашения подтвердить запись');
+    }
+
     const entry = await this.prisma.groupClassWaitlistEntry.findFirst({
       where: {
         clientId: user.sub,

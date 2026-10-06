@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { AuthGuard } from '@/components/auth-guard';
 import { AppShell } from '@/components/app-shell';
+import { DataFreshness } from '@/components/data-freshness';
 import { useFeatures } from '@/components/features-provider';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -93,6 +94,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   return (
     <AuthGuard allowedRoles={[UserRole.ADMIN]}>
       <AppShell title="Панель администратора" navItems={navItems} wide>
+        <div className="mb-4">
+          <DataFreshness />
+        </div>
         {children}
       </AppShell>
     </AuthGuard>

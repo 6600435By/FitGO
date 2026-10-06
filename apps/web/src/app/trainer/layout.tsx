@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { useMemo } from 'react';
 import { AuthGuard } from '@/components/auth-guard';
 import { AppShell } from '@/components/app-shell';
+import { DataFreshness } from '@/components/data-freshness';
 import { useFeatures } from '@/components/features-provider';
 import { getUser } from '@/lib/auth';
 
@@ -96,6 +97,9 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
   return (
     <AuthGuard allowedRoles={[UserRole.TRAINER]}>
       <AppShell title="Кабинет тренера" navItems={navItems}>
+        <div className="mb-4">
+          <DataFreshness canRefresh={false} />
+        </div>
         {children}
       </AppShell>
     </AuthGuard>
