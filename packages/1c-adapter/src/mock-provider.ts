@@ -540,6 +540,33 @@ export class Mock1CProvider implements IFitnessClubProvider {
       }));
   }
 
+  async getExpiringMemberships(days = 14) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Object.values(MOCK_USERS)
+      .filter((u) => u.profile.roles.includes(UserRole.CLIENT) && u.membership)
+      .map((u) => {
+        const until = new Date(u.membership.validUntil);
+        const daysLeft =
+          (until.getTime() - today.getTime()) / 86400000;
+        return { u, daysLeft };
+      })
+      .filter(({ daysLeft }) => daysLeft >= 0 && daysLeft <= days)
+      .map(({ u }) => ({
+        externalId: u.profile.externalId!,
+        firstName: u.profile.firstName,
+        lastName: u.profile.lastName,
+        phone: u.profile.phone,
+        docId: u.membership.id,
+        name: u.membership.name,
+        status: u.membership.status,
+        validFrom: u.membership.validFrom,
+        validUntil: u.membership.validUntil,
+        visitsRemaining: u.membership.visitsRemaining,
+        nextMembership: null as null,
+      }));
+  }
+
   async createPayment(externalId: string, productId: string): Promise<PaymentResult> {
     const product = MOCK_PRODUCTS.find((p) => p.id === productId);
     if (!product) {

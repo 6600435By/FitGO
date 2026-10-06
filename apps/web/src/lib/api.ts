@@ -46,6 +46,9 @@ import {
   type StaffMember,
   type StaffCreateResult,
   type AdminTaskItem,
+  type AdminRenewalTaskDetail,
+  type AdminRenewalActionBody,
+  type AdminRenewalCounters,
   type SuperAdminAnalytics,
   type StaffAuditLogItem,
   AdminPermission,
@@ -153,24 +156,33 @@ export interface AdminDashboard {
     currency?: string;
   } | null;
   stats: {
-    activeMemberships: number;
-    visitsToday: number;
-    revenueToday: number;
+    needsReviewCount: number;
+    sessionsToday: {
+      total: number;
+      group: number;
+      spa: number;
+      pt: number;
+    };
+    revenueToday: {
+      total: number;
+      cash: number;
+      card: number;
+      other: number;
+      currency: string;
+      syncedAt?: string;
+    };
     expiringSoon: number;
-    bookingsToday: number;
+    pendingCrmCount?: number;
   };
-  expiringClients: Array<{
-    id: string;
-    name: string;
+  callToday: Array<{
+    taskId: string;
+    clientName: string;
+    phone?: string;
     membership: string;
     validUntil: string;
     daysLeft: number;
-  }>;
-  funnel: Array<{
     stage: string;
-    count: number;
   }>;
-  recentReports: DailyReport[];
 }
 
 export interface NotificationItem {
@@ -1548,6 +1560,34 @@ export const api = {
     request(`/admin/tasks/${taskId}`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
+    }, token),
+
+  adminRenewalCounters: (token: string) =>
+    request<AdminRenewalCounters>('/admin/tasks/renewals/counters', {}, token),
+
+  adminRefreshRenewals: (token: string) =>
+    request<{ created: number; closedRenewed: number; closedLost: number }>(
+      '/admin/tasks/renewals/refresh',
+      { method: 'POST' },
+      token,
+    ),
+
+  adminTaskDetail: (token: string, taskId: string) =>
+    request<AdminRenewalTaskDetail>(`/admin/tasks/${taskId}`, {}, token),
+
+  adminClaimTask: (token: string, taskId: string) =>
+    request<AdminTaskItem>(`/admin/tasks/${taskId}/claim`, {
+      method: 'POST',
+    }, token),
+
+  adminTaskAction: (
+    token: string,
+    taskId: string,
+    body: AdminRenewalActionBody,
+  ) =>
+    request<AdminTaskItem>(`/admin/tasks/${taskId}/action`, {
+      method: 'POST',
+      body: JSON.stringify(body),
     }, token),
 
   superAdminStaff: (token: string) =>

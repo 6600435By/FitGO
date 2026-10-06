@@ -290,6 +290,33 @@ export interface IFitnessClubProvider {
     validUntil?: string;
     lastVisit?: string;
   }>>;
+  /**
+   * Memberships expiring within `days` (FitGO HTTP GET /memberships/expiring).
+   * Includes `nextMembership` when the client already bought a future/pending one.
+   */
+  getExpiringMemberships?(days?: number): Promise<FitgoExpiringMembershipRow[]>;
+}
+
+export interface FitgoExpiringMembershipNext {
+  docId: string;
+  name: string;
+  status?: string;
+  validFrom?: string;
+  validUntil?: string;
+}
+
+export interface FitgoExpiringMembershipRow {
+  externalId: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  docId: string;
+  name: string;
+  status?: string;
+  validFrom?: string;
+  validUntil: string;
+  visitsRemaining?: number;
+  nextMembership?: FitgoExpiringMembershipNext | null;
 }
 
 export interface OneCConfig {

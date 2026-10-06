@@ -20,6 +20,7 @@
 //   GET  /v1/trainer-pt-sales             → TrainerPtSalesGET (?from&to) — разовые ПТ с Исполнителем
 //   GET  /v1/segments/config              → SegmentsConfigGET
 //   GET  /v1/segments/members             → SegmentsMembersGET (?key= | ?uuid=)
+//   GET  /v1/memberships/expiring         → MembershipsExpiringGET (?days=14)
 //
 // Продажи админов для ЗП: ночной sync FitGO читает FitGOAnalytics GET /sales
 // (FORMA_ANALYTICS_URL), не этот HTTP-сервис. Не вызывать FFS_ПродажиАдминов.erf.
@@ -27,12 +28,15 @@
 // В конфигураторе (пример freeze; consume/sale/debts — аналогично):
 //   Имя шаблона: freeze | consume-service | spa-service-sale | cleanup-broken-visits | SpecialistServiceDebts
 //                | group-session-roster | class-sessions | segments-config | segments-members
+//                | memberships-expiring
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
 //                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
 //                | /v1/group-session-roster | /v1/class-sessions | /v1/class-sessions/attendance
 //                | /v1/trainer-pt-sales | /v1/segments/config | /v1/segments/members
+//                | /v1/memberships/expiring
 //   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | ClassSessionsGET
 //                | TrainerPtSalesGET | SegmentsConfigGET | SegmentsMembersGET
+//                | MembershipsExpiringGET
 //   Метод POST → ClassSessionAttendancePOST (шаблон /v1/class-sessions/attendance)
 //
 // У расширения снять флаг «Защита от опасных действий»: проведение документов
@@ -731,6 +735,27 @@
     КонецЕсли;
 
     Данные = FitGOIntegrationКлиенты.СегментыЧленыJSON(Ключ, UuidСтр);
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
+КонецФункции
+
+// Абонементы, истекающие в ближайшие N дней (+ nextMembership, если уже куплен следующий).
+// Query: days=14 (1..60).
+Функция MembershipsExpiringGET(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    Дней = 14;
+    Попытка
+        ДнейСтр = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("days")));
+        Если НЕ ПустаяСтрока(ДнейСтр) Тогда
+            Дней = Число(ДнейСтр);
+        КонецЕсли;
+    Исключение
+        Дней = 14;
+    КонецПопытки;
+
+    Данные = FitGOIntegrationКлиенты.ИстекающиеАбонементыJSON(Дней);
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
 КонецФункции
 

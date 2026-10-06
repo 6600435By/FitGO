@@ -3,6 +3,7 @@ import { AdminSalesModule } from '../admin-sales/admin-sales.module';
 import { AuthModule } from '../auth/auth.module';
 import { FeaturesModule } from '../features/features.module';
 import { FitnessModule } from '../fitness/fitness.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import { AdminTasksSchedulerService } from './admin-tasks-scheduler.service';
 import { SuperAdminAnalyticsService } from './super-admin-analytics.service';
@@ -16,6 +17,7 @@ import { SuperAdminService } from './super-admin.service';
     ServiceUsageModule,
     FeaturesModule,
     AdminSalesModule,
+    NotificationsModule,
   ],
   controllers: [SuperAdminController],
   providers: [
@@ -23,5 +25,6 @@ import { SuperAdminService } from './super-admin.service';
     SuperAdminAnalyticsService,
     AdminTasksSchedulerService,
   ],
+  exports: [AdminTasksSchedulerService],
 })
 export class SuperAdminModule {}

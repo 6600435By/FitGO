@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { format, addDays, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { ClubScheduleEvent } from '@fitgo/shared-types';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { api } from '@/lib/api';
@@ -23,6 +24,8 @@ const TYPE_CLASS: Record<string, string> = {
   DUTY: 'border-l-slate-500',
 };
 
+const TYPE_PRESETS = new Set(['GROUP,PT,SPA', 'GROUP', 'PT', 'SPA']);
+
 function isPendingPhase(phase: string | undefined): boolean {
   return (
     phase === 'PENDING_ADMIN' ||
@@ -31,13 +34,34 @@ function isPendingPhase(phase: string | undefined): boolean {
   );
 }
 
+function normalizeTypes(raw: string | null): string {
+  if (!raw) return 'GROUP,PT,SPA';
+  const upper = raw
+    .split(',')
+    .map((t) => t.trim().toUpperCase())
+    .filter(Boolean)
+    .join(',');
+  return TYPE_PRESETS.has(upper) ? upper : 'GROUP,PT,SPA';
+}
+
 export function ClubSchedulePage({
   apiBase,
 }: {
   apiBase: 'admin' | 'super-admin';
 }) {
-  const [day, setDay] = useState(() => format(new Date(), 'yyyy-MM-dd'));
-  const [types, setTypes] = useState('GROUP,PT,SPA');
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const [day, setDay] = useState(() => {
+    const d = searchParams.get('date');
+    return d && /^\\d{4}-\\d{2}-\\d{2}$/.test(d)
+      ? d
+      : format(new Date(), 'yyyy-MM-dd');
+  });
+  const [types, setTypes] = useState(() =>
+    normalizeTypes(searchParams.get('types')),
+  );
   const [events, setEvents] = useState<ClubScheduleEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -58,6 +82,26 @@ export function ClubSchedulePage({
     () => format(addDays(new Date(), -31), 'yyyy-MM-dd'),
     [],
   );
+
+  const writeUrl = useCallback(
+    (nextDay: string, nextTypes: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('date', nextDay);
+      params.set('types', nextTypes);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  const updateDay = (next: string) => {
+    setDay(next);
+    writeUrl(next, types);
+  };
+
+  const updateTypes = (next: string) => {
+    setTypes(next);
+    writeUrl(day, next);
+  };
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -108,7 +152,7 @@ export function ClubSchedulePage({
   const shiftDay = (delta: number) => {
     const next = format(addDays(parseISO(day), delta), 'yyyy-MM-dd');
     if (next < minDay || next > maxDay) return;
-    setDay(next);
+    updateDay(next);
   };
 
   return (
@@ -132,13 +176,13 @@ export function ClubSchedulePage({
             max={maxDay}
             onChange={(e) => {
               const v = e.target.value;
-              if (v >= minDay && v <= maxDay) setDay(v);
+              if (v >= minDay && v <= maxDay) updateDay(v);
             }}
           />
           <button
             type="button"
             className="btn-secondary text-sm"
-            onClick={() => setDay(format(new Date(), 'yyyy-MM-dd'))}
+            onClick={() => updateDay(format(new Date(), 'yyyy-MM-dd'))}
           >
             Сегодня
           </button>
@@ -170,7 +214,7 @@ export function ClubSchedulePage({
                 ? 'btn-primary text-xs'
                 : 'btn-secondary text-xs'
             }
-            onClick={() => setTypes(value)}
+            onClick={() => updateTypes(value)}
           >
             {label}
           </button>

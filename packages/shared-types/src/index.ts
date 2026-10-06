@@ -438,6 +438,83 @@ export interface AdminDashboardStats {
   bookingsToday: number;
 }
 
+/** Renewal funnel stages for MEMBERSHIP_EXPIRING tasks */
+export type RenewalStage =
+  | 'NEW'
+  | 'NO_ANSWER'
+  | 'THINKING'
+  | 'WILL_RENEW'
+  | 'RENEWED'
+  | 'LOST';
+
+export const RENEWAL_LOST_REASONS = [
+  'price',
+  'moving',
+  'no_time',
+  'health',
+  'other_club',
+  'dislike',
+  'seasonal',
+  'other',
+] as const;
+
+export type RenewalLostReason = (typeof RENEWAL_LOST_REASONS)[number];
+
+export const RENEWAL_LOST_REASON_LABELS: Record<RenewalLostReason, string> = {
+  price: 'Цена',
+  moving: 'Переезд',
+  no_time: 'Нет времени',
+  health: 'Здоровье',
+  other_club: 'Другой клуб',
+  dislike: 'Не нравится',
+  seasonal: 'Сезонно',
+  other: 'Другое',
+};
+
+export interface AdminDashboardSessionsToday {
+  total: number;
+  group: number;
+  spa: number;
+  pt: number;
+}
+
+export interface AdminDashboardRevenueToday {
+  total: number;
+  cash: number;
+  card: number;
+  other: number;
+  currency: string;
+  syncedAt?: string;
+}
+
+export interface AdminDashboardCallTodayItem {
+  taskId: string;
+  clientName: string;
+  phone?: string;
+  membership: string;
+  validUntil: string;
+  daysLeft: number;
+  stage: RenewalStage;
+}
+
+export interface AdminDashboard {
+  club: {
+    id: string;
+    name: string;
+    slug: string;
+    address?: string;
+    currency?: string;
+  } | null;
+  stats: {
+    needsReviewCount: number;
+    sessionsToday: AdminDashboardSessionsToday;
+    revenueToday: AdminDashboardRevenueToday;
+    expiringSoon: number;
+    pendingCrmCount?: number;
+  };
+  callToday: AdminDashboardCallTodayItem[];
+}
+
 export type PersonalBookingOrigin =
   | 'CLIENT_BOOKED'
   | 'TRAINER_ASSIGNED';
@@ -939,8 +1016,47 @@ export interface AdminTaskItem {
   source?: string;
   /** Display filter: staff_debt | client_debt | membership | other */
   topic?: 'staff_debt' | 'client_debt' | 'membership' | 'other';
-  assignee: { id: string; firstName: string; lastName: string };
+  assignee?: { id: string; firstName: string; lastName: string };
   createdAt: string;
+  /** Renewal funnel fields (MEMBERSHIP_EXPIRING) */
+  stage?: RenewalStage;
+  nextActionAt?: string;
+  attempts?: number;
+  lostReason?: string;
+  doNotCall?: boolean;
+  clientExternalId?: string;
+  phone?: string;
+  membershipName?: string;
+  validUntil?: string;
+  daysLeft?: number;
+  docId?: string;
+}
+
+export interface AdminTaskEventItem {
+  id: string;
+  stage?: string;
+  comment?: string;
+  actorName?: string;
+  createdAt: string;
+}
+
+export interface AdminRenewalTaskDetail extends AdminTaskItem {
+  events: AdminTaskEventItem[];
+}
+
+export interface AdminRenewalActionBody {
+  stage: RenewalStage;
+  comment?: string;
+  nextActionAt?: string;
+  lostReason?: RenewalLostReason | string;
+  doNotCall?: boolean;
+}
+
+export interface AdminRenewalCounters {
+  callToday: number;
+  inProgress: number;
+  renewed: number;
+  lost: number;
 }
 
 export interface GrowthInsight {

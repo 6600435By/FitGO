@@ -211,4 +211,9 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
   createPayment(externalId: string, productId: string): Promise<PaymentResult> {
     return this.forma.createPayment(externalId, productId);
   }
+
+  getExpiringMemberships(days?: number) {
+    if (!this.fitgo.getExpiringMemberships) return Promise.resolve([]);
+    return this.fitgo.getExpiringMemberships(days);
+  }
 }

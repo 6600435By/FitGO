@@ -113,7 +113,9 @@ export default function SuperAdminTasksPage() {
               <div>
                 <p className="font-medium">{task.title}</p>
                 <p className="text-sm text-slate-400">
-                  {task.assignee.firstName} {task.assignee.lastName}
+                  {task.assignee
+                    ? `${task.assignee.firstName} ${task.assignee.lastName}`
+                    : 'Общая очередь'}
                   {task.source && task.source !== 'MANUAL' ? (
                     <span className="ml-2 text-xs text-amber-300/90">
                       ·{' '}

@@ -651,10 +651,18 @@ export class SuperAdminService implements OnModuleInit {
       createdAt: Date;
       source?: string | null;
       dedupeKey?: string | null;
-      assignee: { id: string; firstName: string; lastName: string };
+      stage?: string | null;
+      nextActionAt?: Date | null;
+      attempts?: number;
+      lostReason?: string | null;
+      doNotCall?: boolean;
+      clientExternalId?: string | null;
+      meta?: unknown;
+      assignee: { id: string; firstName: string; lastName: string } | null;
     },
     clientName?: string | null,
   ) {
+    const meta = (task.meta ?? {}) as Record<string, unknown>;
     return {
       id: task.id,
       title: task.title,
@@ -668,12 +676,28 @@ export class SuperAdminService implements OnModuleInit {
         title: task.title,
         clientName,
       }),
-      assignee: {
-        id: task.assignee.id,
-        firstName: task.assignee.firstName,
-        lastName: task.assignee.lastName,
-      },
+      assignee: task.assignee
+        ? {
+            id: task.assignee.id,
+            firstName: task.assignee.firstName,
+            lastName: task.assignee.lastName,
+          }
+        : undefined,
       createdAt: task.createdAt.toISOString(),
+      stage: task.stage ?? undefined,
+      nextActionAt: task.nextActionAt?.toISOString(),
+      attempts: task.attempts ?? 0,
+      lostReason: task.lostReason ?? undefined,
+      doNotCall: task.doNotCall ?? false,
+      clientExternalId: task.clientExternalId ?? undefined,
+      phone: typeof meta.phone === 'string' ? meta.phone : undefined,
+      membershipName:
+        typeof meta.membershipName === 'string'
+          ? meta.membershipName
+          : undefined,
+      validUntil:
+        typeof meta.validUntil === 'string' ? meta.validUntil : undefined,
+      docId: typeof meta.docId === 'string' ? meta.docId : undefined,
     };
   }
 

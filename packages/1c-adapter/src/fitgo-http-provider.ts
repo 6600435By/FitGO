@@ -580,6 +580,61 @@ export class FitgoHttpProvider {
     }
   }
 
+  async getExpiringMemberships(days = 14): Promise<
+    import('./types').FitgoExpiringMembershipRow[]
+  > {
+    const d = Math.min(60, Math.max(1, Math.floor(days) || 14));
+    try {
+      const data = await this.request<{
+        data?: Array<{
+          externalId?: string;
+          firstName?: string;
+          lastName?: string;
+          phone?: string;
+          docId?: string;
+          name?: string;
+          status?: string;
+          validFrom?: string;
+          validUntil?: string;
+          visitsRemaining?: number;
+          nextMembership?: {
+            docId?: string;
+            name?: string;
+            status?: string;
+            validFrom?: string;
+            validUntil?: string;
+          } | null;
+        }>;
+      }>(`/memberships/expiring?days=${d}`, { timeoutMs: 60_000 });
+      if (!data || !Array.isArray(data.data)) return [];
+      return data.data
+        .filter((row) => row.externalId && row.validUntil && row.docId)
+        .map((row) => ({
+          externalId: String(row.externalId),
+          firstName: row.firstName ?? '',
+          lastName: row.lastName ?? '',
+          phone: row.phone,
+          docId: String(row.docId),
+          name: row.name ?? 'Абонемент',
+          status: row.status,
+          validFrom: row.validFrom,
+          validUntil: String(row.validUntil),
+          visitsRemaining: row.visitsRemaining,
+          nextMembership: row.nextMembership?.docId
+            ? {
+                docId: String(row.nextMembership.docId),
+                name: row.nextMembership.name ?? 'Абонемент',
+                status: row.nextMembership.status,
+                validFrom: row.nextMembership.validFrom,
+                validUntil: row.nextMembership.validUntil,
+              }
+            : null,
+        }));
+    } catch {
+      return [];
+    }
+  }
+
   async getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]> {
     const params = new URLSearchParams({ externalId });
     if (period?.from) params.set('from', period.from);

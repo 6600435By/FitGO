@@ -116,6 +116,58 @@ Query: `phone` или `externalId`.
 | `freezeDaysTotal` | лимит по тарифу (если известен) |
 | `frozenUntil` | дата окончания текущей заморозки (если `status=FROZEN`) |
 
+### GET `/memberships/expiring`
+
+Query: `days` (1…60, default 14).
+
+Список абонементов со `СрокДействия` в окне `[сегодня; сегодня+days]`. Для каждого клиента — один текущий (ближайший срок) и опционально `nextMembership`, если уже куплен следующий / неактивированный абонемент.
+
+```json
+{
+  "data": [
+    {
+      "externalId": "client-uuid",
+      "firstName": "Иван",
+      "lastName": "Иванов",
+      "phone": "375296600435",
+      "docId": "membership-doc-uuid",
+      "name": "Безлимит 12 мес",
+      "status": "ACTIVE",
+      "validFrom": "2026-01-01",
+      "validUntil": "2026-04-15",
+      "visitsRemaining": 10,
+      "nextMembership": null
+    },
+    {
+      "externalId": "other-uuid",
+      "firstName": "Мария",
+      "lastName": "Петрова",
+      "phone": "375291112233",
+      "docId": "membership-a",
+      "name": "Утро 6 мес",
+      "status": "ACTIVE",
+      "validFrom": "2025-10-01",
+      "validUntil": "2026-04-10",
+      "nextMembership": {
+        "docId": "membership-b",
+        "name": "Безлимит 12 мес",
+        "status": "PENDING",
+        "validFrom": "2026-04-11",
+        "validUntil": "2027-04-10"
+      }
+    }
+  ]
+}
+```
+
+| Поле | Описание |
+|------|----------|
+| `docId` | UUID документа членства (дедуп ключ задач продления) |
+| `nextMembership` | Уже купленный следующий абонемент или `null`. Клиентов с `nextMembership != null` FitGO не ставит в задачи продления |
+| `phone` | Телефон для звонка админом |
+
+В конфигураторе: шаблон `/v1/memberships/expiring`, метод GET → `MembershipsExpiringGET`.
+
 ### POST `/membership/freeze`
 
 Создаёт и проводит документ «Операция с членством, пакетом услуг» с операцией **Заморозка**. Срок действия абонемента увеличивается на `days`.

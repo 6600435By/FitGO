@@ -1,5 +1,18 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
-import { AdminPermission, AdminTaskStatus, UserRole } from '@fitgo/shared-types';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  AdminPermission,
+  AdminTaskStatus,
+  UserRole,
+  type AdminRenewalActionBody,
+} from '@fitgo/shared-types';
 import { AdminPermissionsService } from '../auth/admin-permissions.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
@@ -31,6 +44,35 @@ export class AdminController {
   @Get('tasks')
   getMyTasks(@CurrentUser() user: JwtPayload) {
     return this.adminService.getMyTasks(user);
+  }
+
+  @Get('tasks/renewals/counters')
+  getRenewalCounters(@CurrentUser() user: JwtPayload) {
+    return this.adminService.getRenewalCounters(user);
+  }
+
+  @Post('tasks/renewals/refresh')
+  refreshRenewals(@CurrentUser() user: JwtPayload) {
+    return this.adminService.refreshRenewals(user);
+  }
+
+  @Get('tasks/:id')
+  getTaskDetail(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.adminService.getTaskDetail(user, id);
+  }
+
+  @Post('tasks/:id/claim')
+  claimTask(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.adminService.claimTask(user, id);
+  }
+
+  @Post('tasks/:id/action')
+  applyRenewalAction(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: AdminRenewalActionBody,
+  ) {
+    return this.adminService.applyRenewalAction(user, id, body);
   }
 
   @Patch('tasks/:id')
