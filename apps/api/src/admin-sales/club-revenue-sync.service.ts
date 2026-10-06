@@ -96,7 +96,9 @@ export class ClubRevenueSyncService {
       }
 
       try {
-        const result = await this.syncClubRange(clubId, fromStr, toStr, {});
+        const result = await this.syncClubRange(clubId, fromStr, toStr, {
+          skipChangeLog: true,
+        });
         await this.prisma.salesSyncState.update({
           where: { id: state.id },
           data: {

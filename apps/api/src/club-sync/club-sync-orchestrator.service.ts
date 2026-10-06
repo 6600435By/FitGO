@@ -28,6 +28,10 @@ import { TrainerPtSalesSyncService } from './trainer-pt-sales-sync.service';
 const ORPHAN_MS = 3 * 60 * 1000;
 const HEARTBEAT_MS = 20_000;
 const MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
+/** Manual LIGHT must finish fast so staff don't hammer 1C. */
+const LIGHT_RUN_BUDGET_MS = 3 * 60 * 1000;
+/** Nightly FULL has the whole night window; hard cap avoids orphan forever. */
+const FULL_RUN_BUDGET_MS = 40 * 60 * 1000;
 
 export type SyncStepResult = {
   resource: string;
@@ -232,65 +236,93 @@ export class ClubSyncOrchestrator {
         .catch(() => undefined);
     }, HEARTBEAT_MS);
 
-    const runStep = async (
-      resource: string,
-      fn: () => Promise<{ rows?: number; from?: string; to?: string }>,
-    ) => {
-      // Cut LIGHT/FULL early if night window ended for NIGHTLY.
-      if (
-        trigger === ClubSyncTrigger.NIGHTLY &&
-        !isMoscowNightWindow() &&
-        steps.length > 0
-      ) {
-        steps.push({
-          resource,
-          skipped: true,
-          error: 'Night window ended (after 04:00 Moscow)',
-        });
-        return;
-      }
-      try {
-        const res = await fn();
-        steps.push({
-          resource,
-          from: res.from,
-          to: res.to,
-          rows: res.rows ?? 0,
-        });
-        await this.prisma.clubSyncRun.update({
-          where: { id: runId },
-          data: { steps, heartbeatAt: new Date() },
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error(`Sync step ${resource} failed club=${clubId}: ${msg}`);
-        steps.push({ resource, error: msg });
-        await this.prisma.clubSyncRun.update({
-          where: { id: runId },
-          data: { steps, heartbeatAt: new Date() },
-        });
-      }
-    };
-
     try {
       const today = moscowDayKey();
       const isFull = profile === ClubSyncProfile.FULL;
+      const deadline =
+        Date.now() + (isFull ? FULL_RUN_BUDGET_MS : LIGHT_RUN_BUDGET_MS);
 
       const schedFrom = today;
-      const schedTo = addMoscowDays(today, isFull ? 14 : 7);
-      const classFrom = isFull
-        ? undefined
-        : addMoscowDays(today, -1);
+      const schedTo = addMoscowDays(today, isFull ? 14 : 2);
+      const classFrom = isFull ? undefined : addMoscowDays(today, -1);
       const classTo = isFull ? undefined : addMoscowDays(today, 1);
-      const salesMode = isFull ? 'incremental' : 'incremental';
+
+      const runStep = async (
+        resource: string,
+        fn: () => Promise<{ rows?: number; from?: string; to?: string }>,
+      ) => {
+        if (
+          trigger === ClubSyncTrigger.NIGHTLY &&
+          !isMoscowNightWindow() &&
+          steps.length > 0
+        ) {
+          steps.push({
+            resource,
+            skipped: true,
+            error: 'Night window ended (after 04:00 Moscow)',
+          });
+          return;
+        }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          steps.push({
+            resource,
+            skipped: true,
+            error: 'Run budget exceeded',
+          });
+          await this.prisma.clubSyncRun.update({
+            where: { id: runId },
+            data: { steps, heartbeatAt: new Date() },
+          });
+          return;
+        }
+        try {
+          let timeoutId: ReturnType<typeof setTimeout> | undefined;
+          const res = await Promise.race([
+            fn().finally(() => {
+              if (timeoutId !== undefined) clearTimeout(timeoutId);
+            }),
+            new Promise<never>((_, reject) => {
+              timeoutId = setTimeout(
+                () =>
+                  reject(
+                    new Error(
+                      `Step timed out (run budget, ${Math.round(remaining / 1000)}s left)`,
+                    ),
+                  ),
+                remaining,
+              );
+            }),
+          ]);
+          steps.push({
+            resource,
+            from: res.from,
+            to: res.to,
+            rows: res.rows ?? 0,
+          });
+          await this.prisma.clubSyncRun.update({
+            where: { id: runId },
+            data: { steps, heartbeatAt: new Date() },
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.logger.error(
+            `Sync step ${resource} failed club=${clubId}: ${msg}`,
+          );
+          steps.push({ resource, error: msg });
+          await this.prisma.clubSyncRun.update({
+            where: { id: runId },
+            data: { steps, heartbeatAt: new Date() },
+          });
+        }
+      };
 
       await runStep('admin_sales', async () => {
         if (isFull) {
-          const r = await this.salesSync.syncClub(clubId, salesMode);
+          const r = await this.salesSync.syncClub(clubId, 'incremental');
           return { rows: r.upserted, from: r.from, to: r.to };
         }
-        // LIGHT: quick window via revenue quick + sales incremental (sales already overlap).
-        const r = await this.salesSync.syncClub(clubId, 'incremental');
+        const r = await this.salesSync.syncClubQuick(clubId);
         return { rows: r.upserted, from: r.from, to: r.to };
       });
 
@@ -331,7 +363,9 @@ export class ClubSyncOrchestrator {
         return { rows: r.upserted, from: r.from, to: r.to };
       });
 
-      const ptFrom = isFull ? addMoscowDays(today, -14) : addMoscowDays(today, -1);
+      const ptFrom = isFull
+        ? addMoscowDays(today, -14)
+        : addMoscowDays(today, -1);
       const ptTo = today;
 
       await runStep('trainer_pt_sales', async () => {
@@ -342,22 +376,22 @@ export class ClubSyncOrchestrator {
         return { rows: r.upserted, from: r.from, to: r.to };
       });
 
-      await runStep('specialist_debts', async () => {
-        const r = await this.specialistDebts.syncClub(clubId, {
-          from: ptFrom,
-          to: ptTo,
-        });
-        return { rows: r.upserted, from: r.from, to: r.to };
-      });
-
-      await runStep('membership_snapshots', async () => {
-        const r = await this.memberships.syncClub(clubId, {
-          limit: isFull ? MEMBERSHIP_LIMITS.FULL : MEMBERSHIP_LIMITS.LIGHT,
-        });
-        return { rows: r.upserted };
-      });
-
       if (isFull) {
+        await runStep('specialist_debts', async () => {
+          const r = await this.specialistDebts.syncClub(clubId, {
+            from: ptFrom,
+            to: ptTo,
+          });
+          return { rows: r.upserted, from: r.from, to: r.to };
+        });
+
+        await runStep('membership_snapshots', async () => {
+          const r = await this.memberships.syncClub(clubId, {
+            limit: MEMBERSHIP_LIMITS.FULL,
+          });
+          return { rows: r.upserted };
+        });
+
         await runStep('admin_tasks', async () => {
           const adminTasks = this.moduleRef.get(AdminTasksSchedulerService, {
             strict: false,

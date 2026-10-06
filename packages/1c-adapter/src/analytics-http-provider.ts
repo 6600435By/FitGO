@@ -61,6 +61,10 @@ export interface FitgoAnalyticsConfig extends FitgoHttpConfig {
   baseUrl: string;
 }
 
+/** Default timeout for heavy /sales reports (1C can take tens of seconds). */
+const DEFAULT_TIMEOUT_MS = 90_000;
+const HEALTH_TIMEOUT_MS = 12_000;
+
 export class FitgoAnalyticsHttpProvider {
   constructor(private readonly config: FitgoAnalyticsConfig) {}
 
@@ -71,10 +75,27 @@ export class FitgoAnalyticsHttpProvider {
     };
   }
 
-  private async request<T>(path: string): Promise<T | null> {
+  private async request<T>(
+    path: string,
+    timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  ): Promise<T | null> {
     const base = this.config.baseUrl.replace(/\/$/, '');
     const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
-    const response = await fetch(url, { headers: this.headers() });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      const name = err instanceof Error ? err.name : '';
+      if (name === 'TimeoutError' || name === 'AbortError') {
+        throw new Error(
+          `FitGO Analytics API timeout after ${timeoutMs}ms: ${path}`,
+        );
+      }
+      throw err;
+    }
     const text = await response.text();
 
     let body: { data?: T | null; error?: { message?: string } };
@@ -92,7 +113,10 @@ export class FitgoAnalyticsHttpProvider {
   }
 
   async healthCheck(): Promise<boolean> {
-    const data = await this.request<{ status: string }>('/health');
+    const data = await this.request<{ status: string }>(
+      '/health',
+      HEALTH_TIMEOUT_MS,
+    );
     return data?.status === 'ok';
   }
 

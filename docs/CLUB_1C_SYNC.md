@@ -8,6 +8,20 @@ Staff screens read **only FitGO Postgres**. Live 1C reads happen in:
 - `BookingGateway` (group book/cancel write path + PENDING_1C reconcile)
 - Dual-gate SPA consume / attendance write-backs
 
+## Profiles
+
+| | Manual LIGHT (кнопка) | Nightly FULL (03:00–04:00 MSK) |
+|--|------------------------|--------------------------------|
+| Sales / revenue | yesterday–today, no change-log | incremental window + `scope=changes` |
+| Classes / visits | today ±1 day | provider default (wider) |
+| Schedule slots | today + 2 days | today + 14 days |
+| PT sales | today ±1 day | 14 days |
+| Specialist debts / memberships | **skipped** | full (rate-limited membership walk) |
+| Run budget | 3 min → PARTIAL | 40 min → PARTIAL |
+| Analytics HTTP timeout | 90 s per `/sales` call | same |
+
+Old-date edits (класс 25.09, оплата за июнь) → night FULL or admin date-range backfill, not the button.
+
 ## Endpoints
 
 | Method | Path | Who |

@@ -8,17 +8,23 @@ import {
 } from './moscow-time';
 import { MANUAL_COOLDOWN_MS } from './club-sync-orchestrator.service';
 
-/** Resource keys that feed the global «Данные на …» label. */
-const KEY_RESOURCES = [
+/** Resources that feed the global «Данные на …» label (updated by LIGHT + FULL). */
+const FRESHNESS_RESOURCES = [
   'admin_sales',
   'club_revenue',
   'class_sessions',
   'hall_visits',
   'schedule_slots',
   'trainer_pt_sales',
+] as const;
+
+/** Night-only extras still exposed in `resources` for debugging. */
+const NIGHT_ONLY_RESOURCES = [
   'specialist_debts',
   'membership_snapshots',
 ] as const;
+
+const KEY_RESOURCES = [...FRESHNESS_RESOURCES, ...NIGHT_ONLY_RESOURCES] as const;
 
 export type ClubSyncStatusDto = {
   dataAsOf: string | null;
@@ -67,7 +73,10 @@ export class ClubSyncStatusService {
         lastStatus: s?.lastStatus ?? null,
         lastError: opts?.includeErrors ? (s?.lastError ?? null) : null,
       };
-      if (s?.lastSuccessAt) {
+      if (
+        (FRESHNESS_RESOURCES as readonly string[]).includes(key) &&
+        s?.lastSuccessAt
+      ) {
         if (!minSuccess || s.lastSuccessAt < minSuccess) {
           minSuccess = s.lastSuccessAt;
         }

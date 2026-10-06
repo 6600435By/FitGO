@@ -52,6 +52,71 @@ export class AdminSalesSyncService {
     }
   }
 
+  /**
+   * Manual LIGHT refresh: yesterday–today only, no change-log fan-out.
+   * Never expands to the 60-day lookback used when lastSuccessAt is null.
+   */
+  async syncClubQuick(clubId: string): Promise<{
+    upserted: number;
+    deactivated: number;
+    from: string;
+    to: string;
+  }> {
+    const to = new Date();
+    const toStr = to.toISOString().slice(0, 10);
+    const from = new Date(to);
+    from.setUTCDate(from.getUTCDate() - 1);
+    const fromStr = from.toISOString().slice(0, 10);
+
+    const state = await this.prisma.salesSyncState.upsert({
+      where: {
+        clubId_resourceKey: { clubId, resourceKey: RESOURCE_KEY },
+      },
+      create: { clubId, resourceKey: RESOURCE_KEY, lastStatus: 'running' },
+      update: { lastRunAt: new Date(), lastStatus: 'running', lastError: null },
+    });
+
+    if (!this.createProvider()) {
+      await this.prisma.salesSyncState.update({
+        where: { id: state.id },
+        data: {
+          lastStatus: 'skipped',
+          lastError: 'FORMA_ANALYTICS_URL not configured',
+          lastRunAt: new Date(),
+        },
+      });
+      return { upserted: 0, deactivated: 0, from: fromStr, to: toStr };
+    }
+
+    try {
+      const result = await this.syncClubRange(clubId, fromStr, toStr, {
+        skipChangeLog: true,
+      });
+      await this.prisma.salesSyncState.update({
+        where: { id: state.id },
+        data: {
+          cursor: toStr,
+          lastStatus: 'ok',
+          lastSuccessAt: new Date(),
+          lastRunAt: new Date(),
+          lastError: null,
+        },
+      });
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await this.prisma.salesSyncState.update({
+        where: { id: state.id },
+        data: {
+          lastStatus: 'error',
+          lastError: message.slice(0, 500),
+          lastRunAt: new Date(),
+        },
+      });
+      throw err;
+    }
+  }
+
   async syncClub(
     clubId: string,
     mode: SalesSyncMode = 'incremental',
