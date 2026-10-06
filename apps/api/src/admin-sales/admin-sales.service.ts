@@ -18,8 +18,15 @@ import {
   endOfDayUtc,
   majorToMinor,
   motivationAmountMajor,
+  normalizeSaleType,
   startOfDayUtc,
 } from './admin-sales.util';
+import { isCollectibleClientDebt } from './club-revenue-debt';
+import {
+  attachEmployeeToRevenueRow,
+  buildStaffBySaleDoc,
+  saleDocIdsForRevenueRow,
+} from './club-revenue-staff';
 
 function readPayProfile(raw: unknown): StaffPayProfile | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -332,13 +339,6 @@ export class AdminSalesService {
       profile,
     } as const;
 
-    // Sold in period (paid + unpaid that period)
-    const listed = await this.buildLinesAndTotals({
-      ...common,
-      payment: params.payment ?? 'all',
-      periodField: 'soldAt',
-    });
-
     // Accrual: paidAt in period (incl. sales from earlier months)
     const accrual = await this.buildLinesAndTotals({
       ...common,
@@ -346,39 +346,45 @@ export class AdminSalesService {
       periodField: 'paidAt',
     });
 
-    // Open debt through period end — always by 1C author (кто продал).
-    // shiftShare applies only to paid accrual, not to unpaid hold / debt list.
-    const openDebt = await this.buildLinesAndTotals({
-      ...common,
-      payment: 'unpaid',
-      periodField: 'openDebt',
-      attribution: 'individual',
-    });
+    // Paid sales with soldAt in period (for «all» list). Do NOT pull
+    // SaleTransaction unpaid — cache is stale vs 1C debt register.
+    const listedPaid =
+      params.payment === 'unpaid'
+        ? { lines: [] as AdminSaleLineDto[], totals: this.emptyTotals() }
+        : await this.buildLinesAndTotals({
+            ...common,
+            payment: 'paid',
+            periodField: 'soldAt',
+          });
+
+    // Open seller debt = ClubRevenue unpaid snapshot (1C «Неоплаченные»),
+    // enriched with SaleTransaction seller when cash export left staff empty.
+    const sellerDebt = await this.sellerOpenUnpaid(clubId, userId, params.to);
 
     let totals: AdminSalesTotals = {
       ...accrual.totals,
-      unpaidMinor: openDebt.totals.unpaidMinor,
+      unpaidMinor: sellerDebt.unpaidMinor,
     };
 
-    let lines = listed.lines;
+    let lines = listedPaid.lines;
     if (params.payment === 'unpaid') {
       totals = this.applyAccrual(
         {
           ...this.emptyTotals(),
-          unpaidMinor: openDebt.totals.unpaidMinor,
+          unpaidMinor: sellerDebt.unpaidMinor,
         },
         profile,
       );
-      lines = openDebt.lines;
+      lines = sellerDebt.lines;
     } else if (params.payment === 'paid') {
       totals = { ...accrual.totals, unpaidMinor: 0 };
       lines = accrual.lines;
     } else {
-      const byId = new Map(listed.lines.map((l) => [l.id, l]));
+      const byId = new Map(listedPaid.lines.map((l) => [l.id, l]));
       for (const l of accrual.lines) {
         if (!byId.has(l.id)) byId.set(l.id, l);
       }
-      for (const l of openDebt.lines) {
+      for (const l of sellerDebt.lines) {
         if (!byId.has(l.id)) byId.set(l.id, l);
       }
       lines = [...byId.values()].sort(
@@ -390,7 +396,7 @@ export class AdminSalesService {
 
     if (!hint) {
       hint =
-        'ЗП — только с оплат в периоде (продажа могла быть раньше). Долг переносится, пока не оплачен полностью.';
+        'ЗП — только с оплат в периоде (продажа могла быть раньше). Долг — снимок неоплаченных из 1С (как продавец), переносится пока не закрыт.';
     }
 
     return {
@@ -406,35 +412,139 @@ export class AdminSalesService {
   }
 
   /**
-   * Open seller debt from ClubRevenue unpaid snapshot (1C «Неоплаченные продажи»).
-   * Prefer for payroll hints — SaleTransaction may still carry stale unpaid rows.
+   * Open seller debt from ClubRevenue unpaid (1C «Неоплаченные продажи»).
+   * Staff on unpaid rows is often empty — fill from SaleTransaction sale-doc map.
    */
-  async sellerOpenUnpaidMinor(
+  async sellerOpenUnpaid(
     clubId: string,
     userId: string,
     to: string,
-  ): Promise<number> {
+  ): Promise<{ unpaidMinor: number; lines: AdminSaleLineDto[] }> {
     const user = await this.prisma.user.findFirst({
       where: { id: userId, clubId },
-      select: { employeeCode: true },
+      select: {
+        employeeCode: true,
+        firstName: true,
+        lastName: true,
+      },
     });
     const code = user?.employeeCode?.trim();
-    if (!code) return 0;
+    if (!code || !user) {
+      return { unpaidMinor: 0, lines: [] };
+    }
+
     const toDt = endOfDayUtc(to);
-    const rows = await this.prisma.clubRevenueEntry.findMany({
+    const lastName = user.lastName.trim().toLowerCase();
+    const debtRows = await this.prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
         isActive: true,
         operationType: 'unpaid',
         occurredAt: { lte: toDt },
+      },
+      orderBy: { occurredAt: 'desc' },
+    });
+    const collectible = debtRows.filter((r) =>
+      isCollectibleClientDebt({
+        externalId: r.externalId,
+        productName: r.productName,
+      }),
+    );
+
+    const saleDocs = new Set<string>();
+    for (const r of collectible) {
+      if (r.employeeExternalId?.trim()) continue;
+      for (const id of saleDocIdsForRevenueRow(r)) saleDocs.add(id);
+    }
+
+    const docList = [...saleDocs];
+    const staffChunks: {
+      externalSaleId: string;
+      employeeExternalId: string | null;
+      employeeName: string | null;
+    }[] = [];
+    const chunkSize = 40;
+    for (let i = 0; i < docList.length; i += chunkSize) {
+      const chunk = docList.slice(i, i + chunkSize);
+      if (!chunk.length) break;
+      const part = await this.prisma.saleTransaction.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          OR: chunk.map((doc) => ({
+            externalSaleId: { startsWith: `${doc}:` },
+          })),
+        },
+        select: {
+          externalSaleId: true,
+          employeeExternalId: true,
+          employeeName: true,
+        },
+      });
+      staffChunks.push(...part);
+    }
+    // Also load rows authored by this seller (direct employee on ST).
+    const authored = await this.prisma.saleTransaction.findMany({
+      where: {
+        clubId,
+        isActive: true,
         employeeExternalId: code,
       },
-      select: { amount: true, saleAmount: true },
+      select: {
+        externalSaleId: true,
+        employeeExternalId: true,
+        employeeName: true,
+      },
+      take: 5000,
     });
-    return rows.reduce((s, r) => {
-      const major = Math.abs(Number(r.saleAmount || r.amount) || 0);
-      return s + majorToMinor(major);
-    }, 0);
+    staffChunks.push(...authored);
+
+    const staffBySaleDoc = buildStaffBySaleDoc(staffChunks);
+    const lines: AdminSaleLineDto[] = [];
+    let unpaidMinor = 0;
+
+    for (const raw of collectible) {
+      const row = attachEmployeeToRevenueRow(raw, staffBySaleDoc);
+      const empId = row.employeeExternalId?.trim() || '';
+      const empName = (row.employeeName ?? '').trim().toLowerCase();
+      const isMine =
+        empId === code ||
+        (!!lastName && empName.includes(lastName));
+      if (!isMine) continue;
+
+      const major = Math.abs(Number(row.saleAmount || row.amount) || 0);
+      const amountMinor = majorToMinor(major);
+      if (amountMinor <= 0) continue;
+      unpaidMinor += amountMinor;
+      lines.push({
+        id: row.id,
+        externalSaleId: row.externalId,
+        soldAt: row.occurredAt.toISOString(),
+        paidAt: null,
+        amountMinor,
+        attributedMinor: amountMinor,
+        saleType: normalizeSaleType(
+          row.saleType ?? undefined,
+          row.productName,
+        ),
+        productName: row.productName,
+        clientName: row.clientName,
+        employeeExternalId: empId || code,
+        employeeName: row.employeeName,
+        paid: false,
+      });
+    }
+
+    return { unpaidMinor, lines };
+  }
+
+  async sellerOpenUnpaidMinor(
+    clubId: string,
+    userId: string,
+    to: string,
+  ): Promise<number> {
+    const { unpaidMinor } = await this.sellerOpenUnpaid(clubId, userId, to);
+    return unpaidMinor;
   }
 
   async overview(

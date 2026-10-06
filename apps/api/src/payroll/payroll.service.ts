@@ -146,11 +146,23 @@ export class PayrollService {
 
     const performer = await this.prisma.user.findFirst({
       where: { id: performerId, clubId },
+      include: { roles: true },
     });
     const performerExt = performer?.externalId ?? undefined;
     const performerName = performer
       ? `${performer.lastName} ${performer.firstName}`.trim()
       : '';
+    const payFlags = performer
+      ? trainerPayFlags({
+          roles: performer.roles.map((r) => r.role),
+          groupPrograms: performer.groupPrograms,
+          trainerStaff: performer.trainerStaff,
+          trainerClub: performer.trainerClub,
+          trainerGroupsSet: performer.trainerGroupsSet,
+        })
+      : null;
+    const needsLivePtSales =
+      !!payFlags?.isTrainer && (!!payFlags.staff || !!payFlags.club);
 
     const performerOr =
       performerExt || performerName
@@ -310,9 +322,10 @@ export class PayrollService {
     }
 
     // ── One-time PT from 1C sale lines (Исполнитель + сумма) × PT% ───────────
+    // Skip live 1C for desk-only admins — was making «Рассчитать» wait on PT API.
     const ptSaleUnitKeys = new Map<string, string>();
     const ptSalesFn = this.fitness.getProvider().getTrainerPtSales;
-    if (ptSalesFn && performer) {
+    if (ptSalesFn && performer && needsLivePtSales) {
       try {
         const sales = await ptSalesFn.call(this.fitness.getProvider(), {
           from,
@@ -1928,9 +1941,10 @@ export class PayrollService {
     let amountMinor = cacheMinor;
     let source: PayrollStaffDebt['source'] = cacheMinor > 0 ? 'cache' : 'none';
     try {
+      // Short race — overview also skips live PT sales / booking 1C.
       const membership = await Promise.race([
         this.fitness.getProvider().getMembership(clientExt),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000)),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_000)),
       ]);
       if (membership && membership.debtAmount != null) {
         amountMinor = Math.round(Math.abs(Number(membership.debtAmount)) * 100);
@@ -1988,10 +2002,10 @@ export class PayrollService {
             to,
             restrictPerformerId: user.sub,
             payment: 'DEBT',
+            skipExternal: true,
           })
           .catch(() => []),
-        // Seller debt from ClubRevenue unpaid (1C «Неоплаченные»), not
-        // SaleTransaction+shiftShare which inflated the payroll hint.
+        // Seller debt from ClubRevenue unpaid (enriched seller), not stale ST.
         isAdmin
           ? this.adminSales
               .sellerOpenUnpaidMinor(clubId, user.sub, to)
