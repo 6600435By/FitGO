@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import {
   ClubSyncProfile,
   ClubSyncRunStatus,
@@ -64,6 +65,7 @@ export class ClubSyncOrchestrator {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly moduleRef: ModuleRef,
     private readonly salesSync: AdminSalesSyncService,
     private readonly revenueSync: ClubRevenueSyncService,
     private readonly classSessions: ClassSessionsSyncService,
@@ -72,7 +74,6 @@ export class ClubSyncOrchestrator {
     private readonly ptSales: TrainerPtSalesSyncService,
     private readonly specialistDebts: SpecialistDebtSyncService,
     private readonly memberships: MembershipSnapshotSyncService,
-    private readonly adminTasks: AdminTasksSchedulerService,
   ) {}
 
   async reclaimOrphan(clubId: string): Promise<void> {
@@ -358,11 +359,14 @@ export class ClubSyncOrchestrator {
 
       if (isFull) {
         await runStep('admin_tasks', async () => {
+          const adminTasks = this.moduleRef.get(AdminTasksSchedulerService, {
+            strict: false,
+          });
           const club = await this.prisma.club.findUnique({
             where: { id: clubId },
             select: { externalId: true },
           });
-          const r = await this.adminTasks.generateForClub(
+          const r = await adminTasks.generateForClub(
             clubId,
             club?.externalId ?? null,
             today,
