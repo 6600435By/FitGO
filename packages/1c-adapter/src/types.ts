@@ -316,6 +316,14 @@ export interface FitgoExpiringMembershipRow {
   validFrom?: string;
   validUntil: string;
   visitsRemaining?: number;
+  /** membership | package */
+  kind?: 'membership' | 'package' | string;
+  /** Duration in days (from 1C term or validUntil − validFrom) */
+  termDays?: number;
+  /** Sum of service quotas when not unlimited */
+  totalUnits?: number | null;
+  /** true if termDays ≤ 1 or totalUnits === 1 (one-off; Nest skips) */
+  oneOff?: boolean;
   nextMembership?: FitgoExpiringMembershipNext | null;
 }
 

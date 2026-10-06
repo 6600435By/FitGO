@@ -140,6 +140,13 @@ export function RenewalTaskSheet({
                 : ''}
               {detail.daysLeft != null ? ` · ${detail.daysLeft} дн.` : ''}
             </p>
+            {detail.termDays != null ? (
+              <p className="mt-0.5 text-xs text-slate-500">
+                {detail.termDays <= 31
+                  ? 'Месячный · окно 7 дн.'
+                  : 'Длинный · окно 14 дн.'}
+              </p>
+            ) : null}
             <p className="mt-1 text-xs text-amber-300/90">
               {STAGE_LABEL[detail.stage ?? 'NEW'] ?? detail.stage}
               {detail.assignee
@@ -210,6 +217,9 @@ export function RenewalTaskSheet({
                 Не продлевает
               </button>
             </div>
+            <p className="text-xs text-slate-500">
+              «Продлит» — звонить не нужно, кейс закроется после покупки в 1С.
+            </p>
 
             <button
               type="button"
@@ -218,7 +228,7 @@ export function RenewalTaskSheet({
               onClick={() => apply('NO_ANSWER')}
             >
               Не дозвонился
-              {detail.attempts ? ` (${detail.attempts}/3)` : ''}
+              {detail.attempts ? ` (${detail.attempts}/2)` : ' (0/2)'}
             </button>
 
             {showThinkingDate ? (

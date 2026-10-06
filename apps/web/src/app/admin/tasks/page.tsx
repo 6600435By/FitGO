@@ -219,6 +219,9 @@ function AdminTasksInner() {
                       </p>
                       <p className="mt-1 text-xs text-amber-300/90">
                         {STAGE_LABEL[task.stage ?? 'NEW'] ?? task.stage}
+                        {task.stage === 'WILL_RENEW'
+                          ? ' · ждём покупку'
+                          : ''}
                         {task.assignee
                           ? ` · ${task.assignee.firstName}`
                           : ' · свободна'}

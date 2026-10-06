@@ -21,7 +21,8 @@ import { ClubRevenueSyncService } from '../admin-sales/club-revenue-sync.service
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { AdminTasksSchedulerService, MAX_CALL_ATTEMPTS } from '../super-admin/admin-tasks-scheduler.service';
+import { AdminTasksSchedulerService, MAX_NO_ANSWER, NO_ANSWER_RETRY_DAYS } from '../super-admin/admin-tasks-scheduler.service';
+import { localDayKey } from '../club-schedule/trainer-schedule.helpers';
 import { CreateDailyReportDto } from './dto/create-daily-report.dto';
 
 @Injectable()
@@ -43,10 +44,13 @@ export class AdminService {
       where: { id: clubId },
     });
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDayKey();
     const from30 = new Date();
     from30.setDate(from30.getDate() - 30);
-    const from30Str = from30.toISOString().slice(0, 10);
+    const from30Str = localDayKey(from30);
+    const in7 = new Date();
+    in7.setDate(in7.getDate() + 7);
+    const in7Str = localDayKey(in7);
 
     const [
       reviewItems,
@@ -70,21 +74,51 @@ export class AdminService {
       this.prisma.userClubMembership.count({
         where: { clubId, leftAt: null, crmStatus: 'PENDING_CRM' },
       }),
-      this.prisma.adminTask.count({
-        where: {
-          clubId,
-          source: 'MEMBERSHIP_EXPIRING',
-          status: { in: [PrismaAdminTaskStatus.OPEN, PrismaAdminTaskStatus.IN_PROGRESS] },
-          stage: { notIn: ['RENEWED', 'LOST'] },
-        },
-      }),
+      this.prisma.adminTask
+        .findMany({
+          where: {
+            clubId,
+            source: 'MEMBERSHIP_EXPIRING',
+            status: {
+              in: [
+                PrismaAdminTaskStatus.OPEN,
+                PrismaAdminTaskStatus.IN_PROGRESS,
+              ],
+            },
+          },
+          select: { dueAt: true, meta: true },
+        })
+        .then((open) =>
+          open.filter((t) => {
+            const meta = (t.meta ?? {}) as Record<string, unknown>;
+            const vu =
+              typeof meta.validUntil === 'string'
+                ? meta.validUntil.slice(0, 10)
+                : t.dueAt
+                  ? localDayKey(t.dueAt)
+                  : null;
+            return vu != null && vu <= in7Str;
+          }).length,
+        ),
       this.prisma.adminTask.findMany({
         where: {
           clubId,
           source: 'MEMBERSHIP_EXPIRING',
-          status: { in: [PrismaAdminTaskStatus.OPEN, PrismaAdminTaskStatus.IN_PROGRESS] },
+          status: {
+            in: [
+              PrismaAdminTaskStatus.OPEN,
+              PrismaAdminTaskStatus.IN_PROGRESS,
+            ],
+          },
           nextActionAt: { lte: new Date() },
-          OR: [{ stage: null }, { stage: { notIn: ['RENEWED', 'LOST'] } }],
+          AND: [
+            {
+              OR: [
+                { stage: null },
+                { stage: { notIn: ['RENEWED', 'LOST', 'WILL_RENEW'] } },
+              ],
+            },
+          ],
         },
         orderBy: { nextActionAt: 'asc' },
         take: 5,
@@ -379,6 +413,9 @@ export class AdminService {
 
   async getMyTasks(user: JwtPayload) {
     const clubId = requireClubId(user);
+    const weekAgo = new Date();
+    weekAgo.setDate(weekAgo.getDate() - 7);
+
     const tasks = await this.prisma.adminTask.findMany({
       where: {
         clubId,
@@ -390,9 +427,13 @@ export class AdminService {
               in: [
                 PrismaAdminTaskStatus.OPEN,
                 PrismaAdminTaskStatus.IN_PROGRESS,
-                PrismaAdminTaskStatus.DONE,
               ],
             },
+          },
+          {
+            source: 'MEMBERSHIP_EXPIRING',
+            status: PrismaAdminTaskStatus.DONE,
+            completedAt: { gte: weekAgo },
           },
         ],
       },
@@ -429,7 +470,14 @@ export class AdminService {
           source: 'MEMBERSHIP_EXPIRING',
           status: { in: [PrismaAdminTaskStatus.OPEN, PrismaAdminTaskStatus.IN_PROGRESS] },
           nextActionAt: { lte: now },
-          OR: [{ stage: null }, { stage: { notIn: ['RENEWED', 'LOST'] } }],
+          AND: [
+            {
+              OR: [
+                { stage: null },
+                { stage: { notIn: ['RENEWED', 'LOST', 'WILL_RENEW'] } },
+              ],
+            },
+          ],
         },
       }),
       this.prisma.adminTask.count({
@@ -480,9 +528,52 @@ export class AdminService {
 
     if (
       task.source === 'MEMBERSHIP_EXPIRING' &&
-      task.status !== PrismaAdminTaskStatus.DONE
+      task.status !== PrismaAdminTaskStatus.DONE &&
+      task.status !== PrismaAdminTaskStatus.CANCELLED &&
+      task.clientExternalId
     ) {
-      await this.tasksScheduler.refreshMembershipRenewals(clubId);
+      // Point check only — no full club refresh
+      try {
+        const live = await this.fitness
+          .getProvider()
+          .getMembership(task.clientExternalId);
+        const meta = (task.meta ?? {}) as Record<string, unknown>;
+        const docId = typeof meta.docId === 'string' ? meta.docId : null;
+        const oldUntil =
+          typeof meta.validUntil === 'string'
+            ? meta.validUntil.slice(0, 10)
+            : null;
+        const newUntil = live?.validUntil?.slice(0, 10);
+        if (
+          live &&
+          live.id &&
+          docId &&
+          live.id !== docId &&
+          newUntil &&
+          oldUntil &&
+          newUntil > oldUntil
+        ) {
+          await this.prisma.adminTask.update({
+            where: { id: task.id },
+            data: {
+              stage: 'RENEWED',
+              status: PrismaAdminTaskStatus.DONE,
+              completedAt: new Date(),
+              nextActionAt: null,
+            },
+          });
+          await this.prisma.adminTaskEvent.create({
+            data: {
+              taskId: task.id,
+              actorId: user.sub,
+              stage: 'RENEWED',
+              comment: 'Авто при открытии: новый абонемент в 1С',
+            },
+          });
+        }
+      } catch {
+        // ignore 1C probe errors
+      }
       const refreshed = await this.prisma.adminTask.findFirst({
         where: { id: taskId, clubId },
         include: {
@@ -601,30 +692,36 @@ export class AdminService {
       finalStage = 'LOST';
     } else if (stage === 'NO_ANSWER') {
       attempts += 1;
-      if (attempts >= MAX_CALL_ATTEMPTS) {
+      if (attempts >= MAX_NO_ANSWER) {
         finalStage = 'LOST';
         status = PrismaAdminTaskStatus.DONE;
         completedAt = new Date();
         lostReason = 'no_answer';
         nextActionAt = null;
       } else {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(10, 0, 0, 0);
-        nextActionAt = tomorrow;
+        const retry = new Date();
+        retry.setDate(retry.getDate() + NO_ANSWER_RETRY_DAYS);
+        retry.setHours(10, 0, 0, 0);
+        nextActionAt = retry;
         status = PrismaAdminTaskStatus.IN_PROGRESS;
+        void this.tasksScheduler.sendNoAnswerMessage(
+          clubId,
+          task.clientExternalId,
+        );
       }
-    } else if (stage === 'THINKING' || stage === 'WILL_RENEW') {
+    } else if (stage === 'THINKING') {
       if (body.nextActionAt) {
         nextActionAt = new Date(body.nextActionAt);
-      } else if (stage === 'THINKING') {
+      } else {
         const d = new Date();
         d.setDate(d.getDate() + 3);
         d.setHours(10, 0, 0, 0);
         nextActionAt = d;
-      } else {
-        nextActionAt = task.dueAt ?? new Date();
       }
+      status = PrismaAdminTaskStatus.IN_PROGRESS;
+    } else if (stage === 'WILL_RENEW') {
+      // No call queue — wait for 1C purchase
+      nextActionAt = null;
       status = PrismaAdminTaskStatus.IN_PROGRESS;
     } else if (stage === 'LOST') {
       lostReason = body.lostReason ?? null;
@@ -654,8 +751,8 @@ export class AdminService {
         stage: finalStage,
         comment:
           body.comment?.trim() ||
-          (finalStage === 'LOST' && attempts >= MAX_CALL_ATTEMPTS
-            ? 'Не дозвонились (3 попытки)'
+          (finalStage === 'LOST' && attempts >= MAX_NO_ANSWER
+            ? `Не дозвонились (${MAX_NO_ANSWER} попытки)`
             : null),
       },
     });
@@ -756,6 +853,9 @@ export class AdminService {
       validUntil,
       daysLeft,
       docId: typeof meta.docId === 'string' ? meta.docId : undefined,
+      kind: typeof meta.kind === 'string' ? meta.kind : undefined,
+      termDays:
+        typeof meta.termDays === 'number' ? meta.termDays : undefined,
     };
   }
 

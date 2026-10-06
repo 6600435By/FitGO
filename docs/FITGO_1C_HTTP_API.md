@@ -136,6 +136,10 @@ Query: `days` (1…60, default 14).
       "validFrom": "2026-01-01",
       "validUntil": "2026-04-15",
       "visitsRemaining": 10,
+      "kind": "membership",
+      "termDays": 365,
+      "totalUnits": null,
+      "oneOff": false,
       "nextMembership": null
     },
     {
@@ -148,6 +152,10 @@ Query: `days` (1…60, default 14).
       "status": "ACTIVE",
       "validFrom": "2025-10-01",
       "validUntil": "2026-04-10",
+      "kind": "membership",
+      "termDays": 183,
+      "totalUnits": null,
+      "oneOff": false,
       "nextMembership": {
         "docId": "membership-b",
         "name": "Безлимит 12 мес",
@@ -163,8 +171,14 @@ Query: `days` (1…60, default 14).
 | Поле | Описание |
 |------|----------|
 | `docId` | UUID документа членства (дедуп ключ задач продления) |
+| `kind` | `membership` \| `package` (из `ТипЧленстваПакетаУслуг`) |
+| `termDays` | Срок действия в днях (из `СрокДействия`+тип или `validUntil − validFrom`) |
+| `totalUnits` | Сумма квот `СоставУслуг.Количество`, если нет безлимита; иначе `null` |
+| `oneOff` | `true` если `termDays ≤ 1` или `totalUnits = 1` — такие строки 1С **не отдаёт** (фильтр на стороне сервиса) |
 | `nextMembership` | Уже купленный следующий абонемент или `null`. Клиентов с `nextMembership != null` FitGO не ставит в задачи продления |
 | `phone` | Телефон для звонка админом |
+
+Разовые услуги / пакеты / членства (1 день или 1 посещение) в ответ не входят. Nest дополнительно отфильтровывает `oneOff` на случай старой публикации BSL.
 
 В конфигураторе: шаблон `/v1/memberships/expiring`, метод GET → `MembershipsExpiringGET`.
 

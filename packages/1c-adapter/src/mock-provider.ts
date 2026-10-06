@@ -546,13 +546,22 @@ export class Mock1CProvider implements IFitnessClubProvider {
     return Object.values(MOCK_USERS)
       .filter((u) => u.profile.roles.includes(UserRole.CLIENT) && u.membership)
       .map((u) => {
+        const from = new Date(u.membership.validFrom);
         const until = new Date(u.membership.validUntil);
+        const termDays = Math.max(
+          0,
+          Math.round((until.getTime() - from.getTime()) / 86400000),
+        );
         const daysLeft =
           (until.getTime() - today.getTime()) / 86400000;
-        return { u, daysLeft };
+        const oneOff = termDays <= 1;
+        return { u, daysLeft, termDays, oneOff };
       })
-      .filter(({ daysLeft }) => daysLeft >= 0 && daysLeft <= days)
-      .map(({ u }) => ({
+      .filter(
+        ({ daysLeft, oneOff }) =>
+          !oneOff && daysLeft >= 0 && daysLeft <= days,
+      )
+      .map(({ u, termDays }) => ({
         externalId: u.profile.externalId!,
         firstName: u.profile.firstName,
         lastName: u.profile.lastName,
@@ -563,6 +572,10 @@ export class Mock1CProvider implements IFitnessClubProvider {
         validFrom: u.membership.validFrom,
         validUntil: u.membership.validUntil,
         visitsRemaining: u.membership.visitsRemaining,
+        kind: 'membership' as const,
+        termDays,
+        totalUnits: null as null,
+        oneOff: false,
         nextMembership: null as null,
       }));
   }

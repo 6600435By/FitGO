@@ -597,6 +597,10 @@ export class FitgoHttpProvider {
           validFrom?: string;
           validUntil?: string;
           visitsRemaining?: number;
+          kind?: string;
+          termDays?: number;
+          totalUnits?: number | null;
+          oneOff?: boolean;
           nextMembership?: {
             docId?: string;
             name?: string;
@@ -609,27 +613,58 @@ export class FitgoHttpProvider {
       if (!data || !Array.isArray(data.data)) return [];
       return data.data
         .filter((row) => row.externalId && row.validUntil && row.docId)
-        .map((row) => ({
-          externalId: String(row.externalId),
-          firstName: row.firstName ?? '',
-          lastName: row.lastName ?? '',
-          phone: row.phone,
-          docId: String(row.docId),
-          name: row.name ?? 'Абонемент',
-          status: row.status,
-          validFrom: row.validFrom,
-          validUntil: String(row.validUntil),
-          visitsRemaining: row.visitsRemaining,
-          nextMembership: row.nextMembership?.docId
-            ? {
-                docId: String(row.nextMembership.docId),
-                name: row.nextMembership.name ?? 'Абонемент',
-                status: row.nextMembership.status,
-                validFrom: row.nextMembership.validFrom,
-                validUntil: row.nextMembership.validUntil,
-              }
-            : null,
-        }));
+        .map((row) => {
+          const validFrom = row.validFrom;
+          const validUntil = String(row.validUntil);
+          let termDays =
+            typeof row.termDays === 'number' && row.termDays > 0
+              ? Math.floor(row.termDays)
+              : undefined;
+          if (termDays == null && validFrom) {
+            const fromMs = new Date(validFrom.slice(0, 10)).getTime();
+            const untilMs = new Date(validUntil.slice(0, 10)).getTime();
+            if (!Number.isNaN(fromMs) && !Number.isNaN(untilMs)) {
+              termDays = Math.max(
+                0,
+                Math.round((untilMs - fromMs) / 86400000),
+              );
+            }
+          }
+          const totalUnits =
+            row.totalUnits === null || row.totalUnits === undefined
+              ? null
+              : Number(row.totalUnits);
+          const oneOff =
+            row.oneOff === true ||
+            (termDays != null && termDays > 0 && termDays <= 1) ||
+            totalUnits === 1;
+          return {
+            externalId: String(row.externalId),
+            firstName: row.firstName ?? '',
+            lastName: row.lastName ?? '',
+            phone: row.phone,
+            docId: String(row.docId),
+            name: row.name ?? 'Абонемент',
+            status: row.status,
+            validFrom,
+            validUntil,
+            visitsRemaining: row.visitsRemaining,
+            kind: row.kind === 'package' ? 'package' : 'membership',
+            termDays,
+            totalUnits,
+            oneOff,
+            nextMembership: row.nextMembership?.docId
+              ? {
+                  docId: String(row.nextMembership.docId),
+                  name: row.nextMembership.name ?? 'Абонемент',
+                  status: row.nextMembership.status,
+                  validFrom: row.nextMembership.validFrom,
+                  validUntil: row.nextMembership.validUntil,
+                }
+              : null,
+          };
+        })
+        .filter((row) => !row.oneOff);
     } catch {
       return [];
     }

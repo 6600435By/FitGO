@@ -1030,6 +1030,10 @@ export interface AdminTaskItem {
   validUntil?: string;
   daysLeft?: number;
   docId?: string;
+  /** membership | package */
+  kind?: string;
+  /** Duration in days — ≤31 → short window (7d) */
+  termDays?: number;
 }
 
 export interface AdminTaskEventItem {

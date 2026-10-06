@@ -80,7 +80,7 @@ export default function AdminHomePage() {
           <Bell className="mb-2 h-5 w-5 text-amber-400" />
           <p className="stat-value">{data.stats.expiringSoon}</p>
           <p className="stat-label">Истекают скоро</p>
-          <p className="mt-1 text-xs text-slate-500">14 дней · задачи →</p>
+          <p className="mt-1 text-xs text-slate-500">7 дней · задачи →</p>
         </Link>
 
         <div className="card">
