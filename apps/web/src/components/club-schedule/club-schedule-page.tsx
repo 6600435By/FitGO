@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { format, addDays, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import type { ClubScheduleEvent } from '@fitgo/shared-types';
+import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { createBookingControlApi } from '@/lib/booking-control-api';
 
 const TYPE_LABEL: Record<string, string> = {
   GROUP: 'ГП',
@@ -35,13 +36,19 @@ export function ClubSchedulePage({
 }: {
   apiBase: 'admin' | 'super-admin';
 }) {
-  const router = useRouter();
   const [day, setDay] = useState(() => format(new Date(), 'yyyy-MM-dd'));
   const [types, setTypes] = useState('GROUP,PT,SPA');
   const [events, setEvents] = useState<ClubScheduleEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingOnly, setPendingOnly] = useState(false);
+  const [openSession, setOpenSession] = useState<{
+    sessionKey: string;
+    from: string;
+    to: string;
+  } | null>(null);
+
+  const panelApi = useMemo(() => createBookingControlApi(apiBase), [apiBase]);
 
   const maxDay = useMemo(
     () => format(addDays(new Date(), 31), 'yyyy-MM-dd'),
@@ -91,12 +98,11 @@ export function ClubSchedulePage({
   const openEvent = (ev: ClubScheduleEvent) => {
     if (!ev.sessionKey) return;
     const eventDay = format(parseISO(ev.startAt), 'yyyy-MM-dd');
-    const q = new URLSearchParams({
+    setOpenSession({
       sessionKey: ev.sessionKey,
       from: eventDay,
       to: eventDay,
     });
-    router.push(`/${apiBase}/booking-control?${q.toString()}`);
   };
 
   const shiftDay = (delta: number) => {
@@ -242,6 +248,32 @@ export function ClubSchedulePage({
           );
         })}
       </ul>
+
+      {openSession ? (
+        <BookingControlPanel
+          key={openSession.sessionKey}
+          api={panelApi}
+          canResolve
+          canMarkAttendance
+          canApproveGroup
+          canBulkApprove={apiBase === 'super-admin'}
+          canReturnApproval
+          canViewHallPhotos
+          detailOnly
+          initialSessionKey={openSession.sessionKey}
+          initialFrom={openSession.from}
+          initialTo={openSession.to}
+          cancelSpaBooking={async (bookingId) => {
+            const token = getToken();
+            if (!token) throw new Error('Нет сессии');
+            await api.adminCancelSpaBooking(token, bookingId);
+          }}
+          onDetailClose={() => {
+            setOpenSession(null);
+            void load();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

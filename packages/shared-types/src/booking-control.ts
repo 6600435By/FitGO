@@ -112,6 +112,7 @@ export type SpaSettlementStatus =
   | 'PAID'
   | 'NOT_IN_1C'
   | 'CANCELLED_IN_1C'
+  | 'DELETED_IN_1C'
   | 'UNKNOWN';
 
 export interface SpaSettlementInfo {
@@ -121,6 +122,11 @@ export interface SpaSettlementInfo {
   source: 'visit' | 'debt' | 'local' | 'onex';
   visitPosted?: boolean;
   visitNum?: string;
+  /**
+   * True when FitGO may cancel/edit freely (not an alive 1C document).
+   * False when posted & found in 1C — only time/date edit, no delete.
+   */
+  editableInApp?: boolean;
 }
 
 export function spaSettlementLabelRu(
@@ -137,6 +143,8 @@ export function spaSettlementLabelRu(
       return 'Нет документа в 1С';
     case 'CANCELLED_IN_1C':
       return 'Отменено в 1С';
+    case 'DELETED_IN_1C':
+      return 'Удалено в 1С — можно править или удалить в FitGO';
     default:
       return 'Статус в 1С неизвестен';
   }

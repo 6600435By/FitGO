@@ -93,6 +93,14 @@ type Props = {
   fixedKind?: BookingControlKind;
   title?: string;
   subtitle?: string;
+  /**
+   * Only show the detail modal (no list/filters). Used from Расписание
+   * so the card opens like Контроль записей without leaving the page.
+   */
+  detailOnly?: boolean;
+  onDetailClose?: () => void;
+  /** Cancel FitGO SPA booking that is not locked in 1C. */
+  cancelSpaBooking?: (bookingId: string) => Promise<void>;
 };
 
 function todayIso() {
@@ -170,6 +178,9 @@ export function BookingControlPanel({
   fixedKind,
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
+  detailOnly = false,
+  onDetailClose,
+  cancelSpaBooking,
 }: Props) {
   const [from, setFrom] = useState(initialFrom?.trim() || daysAgoIso(7));
   const [to, setTo] = useState(initialTo?.trim() || todayIso());
@@ -204,6 +215,10 @@ export function BookingControlPanel({
   const [historyOpen, setHistoryOpen] = useState(false);
 
   const load = useCallback(() => {
+    if (detailOnly) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setMessage('');
     api
@@ -220,7 +235,17 @@ export function BookingControlPanel({
         setMessage(e instanceof Error ? e.message : 'Ошибка загрузки'),
       )
       .finally(() => setLoading(false));
-  }, [api, from, to, kind, status, payment, needsReview, fixedKind]);
+  }, [
+    api,
+    from,
+    to,
+    kind,
+    status,
+    payment,
+    needsReview,
+    fixedKind,
+    detailOnly,
+  ]);
 
   useEffect(() => {
     load();
@@ -317,6 +342,7 @@ export function BookingControlPanel({
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
       setSelected(null);
+      if (detailOnly) onDetailClose?.();
     } finally {
       setDetailLoading(false);
     }
@@ -332,6 +358,37 @@ export function BookingControlPanel({
       }
       return {};
     });
+  };
+
+  const closeDetail = () => {
+    closePhotos();
+    setHistoryOpen(false);
+    setSelected(null);
+    onDetailClose?.();
+  };
+
+  const spaEditableInApp =
+    selected?.kind === 'SPA' &&
+    selected.status !== 'CANCELLED' &&
+    Boolean(selected.fitgoBookingId) &&
+    (selected.spaSettlement?.editableInApp === true ||
+      selected.source === 'FITGO' ||
+      selected.spaSettlement?.status === 'NOT_IN_1C' ||
+      selected.spaSettlement?.status === 'DELETED_IN_1C' ||
+      selected.spaSettlement?.status === 'CANCELLED_IN_1C');
+
+  const cancelSelectedSpa = async () => {
+    if (!selected?.fitgoBookingId || !cancelSpaBooking) return;
+    if (!window.confirm('Удалить (отменить) эту SPA-запись в FitGO?')) return;
+    setMessage('');
+    try {
+      await cancelSpaBooking(selected.fitgoBookingId);
+      setMessage('Запись отменена');
+      closeDetail();
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось отменить');
+    }
   };
 
   const openPhotos = async () => {
@@ -557,7 +614,9 @@ export function BookingControlPanel({
   };
 
   return (
-    <div className="space-y-3">
+    <div className={detailOnly ? '' : 'space-y-3'}>
+      {!detailOnly && (
+      <>
       <div>
         <h1 className="text-xl font-semibold">{title}</h1>
         <p className="text-sm text-slate-400">{subtitle}</p>
@@ -947,12 +1006,31 @@ export function BookingControlPanel({
           </table>
         </div>
       )}
+      </>
+      )}
+
+      {detailOnly && message ? (
+        <p className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300 shadow-lg">
+          {message}
+        </p>
+      ) : null}
 
       {(selected || detailLoading) && (
         <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 p-4 sm:items-center">
           <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl">
             {detailLoading || !selected ? (
-              <p className="text-slate-400">Загрузка…</p>
+              <div className="space-y-3">
+                <p className="text-slate-400">Загрузка…</p>
+                {detailOnly ? (
+                  <button
+                    type="button"
+                    className="btn-secondary text-sm"
+                    onClick={closeDetail}
+                  >
+                    Закрыть
+                  </button>
+                ) : null}
+              </div>
             ) : (
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-2">
@@ -1057,11 +1135,7 @@ export function BookingControlPanel({
                     <button
                       type="button"
                       className="btn-secondary text-sm"
-                      onClick={() => {
-                        closePhotos();
-                        setHistoryOpen(false);
-                        setSelected(null);
-                      }}
+                      onClick={closeDetail}
                     >
                       Закрыть
                     </button>
@@ -1172,7 +1246,8 @@ export function BookingControlPanel({
                       selected.spaSettlement.status === 'QUOTA_CONSUMED'
                         ? 'rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200'
                         : selected.spaSettlement.status === 'AWAITING_PAYMENT' ||
-                            selected.spaSettlement.status === 'NOT_IN_1C'
+                            selected.spaSettlement.status === 'NOT_IN_1C' ||
+                            selected.spaSettlement.status === 'DELETED_IN_1C'
                           ? 'rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200'
                           : selected.spaSettlement.status === 'CANCELLED_IN_1C'
                             ? 'rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200'
@@ -1417,6 +1492,15 @@ export function BookingControlPanel({
                     </button>
                   </div>
                 )}
+                {spaEditableInApp && cancelSpaBooking ? (
+                  <button
+                    type="button"
+                    className="btn-secondary w-full text-sm text-rose-300"
+                    onClick={() => void cancelSelectedSpa()}
+                  >
+                    Удалить запись (нет живого документа в 1С)
+                  </button>
+                ) : null}
                 {selected.kind !== 'GROUP' &&
                   canResolve &&
                   selected.remark?.status === 'OPEN' &&

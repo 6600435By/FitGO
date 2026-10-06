@@ -536,7 +536,10 @@ export function AdminSpaWorkspace() {
 
       {tab === 'services' && (
         <div className="space-y-3">
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-slate-400">
+              Показаны только услуги с галочкой «Активна» в Каталоге SPA.
+            </p>
             <button
               type="button"
               className="btn-secondary text-sm"
@@ -570,22 +573,27 @@ export function AdminSpaWorkspace() {
             </button>
           </div>
           <ul className="space-y-2">
-            {services.map((s) => (
+            {services
+              .filter((s) => s.active)
+              .map((s) => (
               <li key={s.id} className="card flex justify-between gap-2 text-sm">
                 <div>
                   <p className="font-medium">{s.name}</p>
                   <p className="text-slate-400">
                     {s.kind} · {s.durationMin} мин · buffer {s.bufferMin}
+                    {(s.bookable ?? true) ? '' : ' · не в записи'}
                   </p>
                 </div>
                 <div className="text-right">
                   <p>{formatPrice(s.priceMinor, s.currency)}</p>
-                  <p className="text-xs text-slate-500">
-                    {s.active ? 'активна' : 'скрыта'}
-                  </p>
                 </div>
               </li>
             ))}
+            {services.filter((s) => s.active).length === 0 && (
+              <li className="card text-slate-400">
+                Нет активных услуг — включите «Активна» в Каталоге SPA.
+              </li>
+            )}
           </ul>
         </div>
       )}
@@ -594,10 +602,16 @@ export function AdminSpaWorkspace() {
         <div className="space-y-4">
           <div className="card space-y-3">
             <h3 className="font-medium">Правило для услуги абонемента</h3>
+            <p className="text-sm text-slate-400">
+              Укажите точное название услуги из абонемента 1С и явно отметьте,
+              какие услуги каталога можно списывать с этой квоты, когда она есть
+              у клиента.
+            </p>
             <label className="block text-sm">
               <span className="text-slate-400">Название в абонементе (1С)</span>
               <input
                 className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2"
+                list="spa-membership-service-names"
                 value={ruleDraft.membershipServiceName}
                 onChange={(e) =>
                   setRuleDraft((d) => ({
@@ -605,33 +619,59 @@ export function AdminSpaWorkspace() {
                     membershipServiceName: e.target.value,
                   }))
                 }
+                placeholder="например: Массаж классический общий"
               />
+              <datalist id="spa-membership-service-names">
+                {rules.map((r) => (
+                  <option key={r.id} value={r.membershipServiceName} />
+                ))}
+              </datalist>
             </label>
             <div>
-              <p className="mb-2 text-sm text-slate-400">Разрешённые услуги</p>
-              <div className="flex flex-wrap gap-2">
-                {services.map((s) => {
+              <p className="mb-1 text-sm text-slate-400">
+                Разрешённые услуги каталога ({ruleDraft.allowedServiceIds.length}{' '}
+                выбрано)
+              </p>
+              <p className="mb-2 text-xs text-slate-500">
+                Клиент сможет списать квоту только на отмеченные услуги и только
+                если эта строка есть в его абонементе.
+              </p>
+              <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-slate-800 p-2">
+                {services
+                  .filter((s) => s.active)
+                  .map((s) => {
                   const on = ruleDraft.allowedServiceIds.includes(s.id);
                   return (
-                    <button
+                    <label
                       key={s.id}
-                      type="button"
-                      className={`rounded-full px-3 py-1 text-xs ${
-                        on ? 'bg-fitgo-500 text-white' : 'bg-slate-800'
+                      className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${
+                        on ? 'bg-fitgo-500/15 text-fitgo-100' : 'text-slate-300'
                       }`}
-                      onClick={() =>
-                        setRuleDraft((d) => ({
-                          ...d,
-                          allowedServiceIds: on
-                            ? d.allowedServiceIds.filter((id) => id !== s.id)
-                            : [...d.allowedServiceIds, s.id],
-                        }))
-                      }
                     >
-                      {s.name}
-                    </button>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() =>
+                          setRuleDraft((d) => ({
+                            ...d,
+                            allowedServiceIds: on
+                              ? d.allowedServiceIds.filter((id) => id !== s.id)
+                              : [...d.allowedServiceIds, s.id],
+                          }))
+                        }
+                      />
+                      <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                      <span className="shrink-0 text-xs text-slate-500">
+                        {s.durationMin} мин
+                      </span>
+                    </label>
                   );
                 })}
+                {services.filter((s) => s.active).length === 0 && (
+                  <p className="px-2 py-3 text-sm text-slate-500">
+                    Нет активных услуг каталога
+                  </p>
+                )}
               </div>
             </div>
             <div>
@@ -668,7 +708,7 @@ export function AdminSpaWorkspace() {
             <button
               type="button"
               className="btn-primary"
-              disabled={busy}
+              disabled={busy || ruleDraft.allowedServiceIds.length === 0}
               onClick={saveRules}
             >
               Сохранить правило
@@ -677,11 +717,24 @@ export function AdminSpaWorkspace() {
           <ul className="space-y-2 text-sm">
             {rules.map((r) => (
               <li key={r.id} className="card">
-                <p className="font-medium">{r.membershipServiceName}</p>
-                <p className="text-slate-400">
-                  услуг: {r.allowedServiceIds.length}, специалистов:{' '}
-                  {r.allowedSpecialistIds.length}
-                </p>
+                <button
+                  type="button"
+                  className="w-full text-left"
+                  onClick={() =>
+                    setRuleDraft({
+                      membershipServiceName: r.membershipServiceName,
+                      allowedServiceIds: [...r.allowedServiceIds],
+                      allowedSpecialistIds: [...r.allowedSpecialistIds],
+                    })
+                  }
+                >
+                  <p className="font-medium">{r.membershipServiceName}</p>
+                  <p className="text-slate-400">
+                    услуг: {r.allowedServiceIds.length}, специалистов:{' '}
+                    {r.allowedSpecialistIds.length}
+                    <span className="ml-2 text-fitgo-300">· изменить</span>
+                  </p>
+                </button>
               </li>
             ))}
           </ul>
@@ -696,7 +749,9 @@ export function AdminSpaWorkspace() {
                 {sp.firstName} {sp.lastName}
               </p>
               <div className="flex flex-wrap gap-2">
-                {services.map((s) => {
+                {services
+                  .filter((s) => s.active)
+                  .map((s) => {
                   const on = sp.serviceIds.includes(s.id);
                   return (
                     <button

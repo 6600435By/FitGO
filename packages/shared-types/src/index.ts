@@ -1127,6 +1127,13 @@ export interface SpaBoardBooking {
   paymentType?: SpaPaymentType;
   approvalPhase?: import('./club-schedule').SessionApprovalPhase;
   approvalLabel?: string;
+  /**
+   * Alive document in 1C (posted / found). Delete forbidden; only time/date editable.
+   * False when never posted, cancelled in 1C, or document deleted from 1C.
+   */
+  crmLocked?: boolean;
+  /** Had a CRM write-off / sale link at some point (may be unlocked after 1C delete). */
+  consumedInCrm?: boolean;
 }
 
 export interface SpaBoardResponse {

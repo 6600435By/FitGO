@@ -196,7 +196,12 @@ export class SpaBookingService {
     }
   }
 
-  /** Подтянуть из 1С отмены/удаления визитов → CANCELLED + CRM_ADMIN. */
+  /**
+   * Подтянуть из 1С отмены/удаления визитов.
+   * — found + cancelled → CANCELLED + CRM_ADMIN
+   * — previously consumed but document missing / deletionMark → unlock CRM link
+   *   (можно снова редактировать и удалять в FitGO)
+   */
   private async syncCrmCancellations(
     clientId: string,
     bookings: Array<{
@@ -231,20 +236,57 @@ export class SpaBookingService {
           const st = await getStatus.call(provider, externalId, {
             bookingRef: b.id,
           });
-          // Отмена только при явном найденном и отменённом документе (не «не найден»).
-          if (!st.found || !st.cancelled) return;
+          if (st.found && st.cancelled) {
+            await this.prisma.spaBooking.update({
+              where: { id: b.id },
+              data: {
+                status: SpaBookingStatus.CANCELLED,
+                cancelledBy: SpaCancelledBy.CRM_ADMIN,
+                cancelledAt: new Date(),
+              },
+            });
+            return;
+          }
+          // Документ удалён / пометён на удаление / не найден — снять блокировку CRM.
+          const deleted =
+            Boolean(st.deletionMark) ||
+            (!st.found && b.consumedInCrmAt != null);
+          if (!deleted) return;
           await this.prisma.spaBooking.update({
             where: { id: b.id },
             data: {
-              status: SpaBookingStatus.CANCELLED,
-              cancelledBy: SpaCancelledBy.CRM_ADMIN,
-              cancelledAt: new Date(),
+              consumedInCrmAt: null,
+              crmDocRef: null,
             },
           });
         } catch {
           /* ignore single-booking sync errors */
         }
       }),
+    );
+  }
+
+  /** Best-effort CRM unlock/cancel for board rows (grouped by client). */
+  private async syncCrmCancellationsForBookings(
+    bookings: Array<{
+      id: string;
+      status: SpaBookingStatus;
+      consumedInCrmAt: Date | null;
+      crmDocRef: string | null;
+      clientId: string | null;
+    }>,
+  ) {
+    const byClient = new Map<string, typeof bookings>();
+    for (const b of bookings) {
+      if (!b.clientId || !b.consumedInCrmAt) continue;
+      const list = byClient.get(b.clientId) ?? [];
+      list.push(b);
+      byClient.set(b.clientId, list);
+    }
+    await Promise.all(
+      [...byClient.entries()].map(([clientId, list]) =>
+        this.syncCrmCancellations(clientId, list),
+      ),
     );
   }
 
@@ -1944,8 +1986,23 @@ export class SpaBookingService {
   async cancelSpecialistBooking(user: JwtPayload, bookingId: string) {
     const booking = await this.prisma.spaBooking.findFirst({
       where: { id: bookingId, specialistId: user.sub },
+      include: { client: true },
     });
     if (!booking) throw new NotFoundException('Запись не найдена');
+    if (booking.status === SpaBookingStatus.CANCELLED) {
+      return { ok: true };
+    }
+    if (booking.clientId && booking.consumedInCrmAt) {
+      await this.syncCrmCancellations(booking.clientId, [booking]);
+      const refreshed = await this.prisma.spaBooking.findUniqueOrThrow({
+        where: { id: bookingId },
+      });
+      if (refreshed.consumedInCrmAt) {
+        throw new BadRequestException(
+          'Запись проведена в 1С — удаление только после отмены/удаления документа в 1С',
+        );
+      }
+    }
     await this.prisma.spaBooking.update({
       where: { id: bookingId },
       data: {
@@ -1961,10 +2018,22 @@ export class SpaBookingService {
     const clubId = requireClubId(user);
     const booking = await this.prisma.spaBooking.findFirst({
       where: { id: bookingId, clubId },
+      include: { client: true },
     });
     if (!booking) throw new NotFoundException('Запись не найдена');
     if (booking.status === SpaBookingStatus.CANCELLED) {
       throw new BadRequestException('Запись уже отменена');
+    }
+    if (booking.clientId && booking.consumedInCrmAt) {
+      await this.syncCrmCancellations(booking.clientId, [booking]);
+      const refreshed = await this.prisma.spaBooking.findUniqueOrThrow({
+        where: { id: bookingId },
+      });
+      if (refreshed.consumedInCrmAt) {
+        throw new BadRequestException(
+          'Запись проведена в 1С — удаление только после отмены/удаления документа в 1С',
+        );
+      }
     }
     await this.prisma.spaBooking.update({
       where: { id: bookingId },
@@ -2006,6 +2075,38 @@ export class SpaBookingService {
     }
     if (opts.asSpecialist && existing.specialistId !== actor.sub) {
       throw new ForbiddenException('Можно менять только свои записи');
+    }
+
+    // Unlock if 1C document was cancelled/deleted since last sync.
+    if (existing.clientId && existing.consumedInCrmAt) {
+      await this.syncCrmCancellations(existing.clientId, [existing]);
+    }
+    const current = await this.prisma.spaBooking.findUniqueOrThrow({
+      where: { id: existing.id },
+    });
+    const crmLocked = Boolean(current.consumedInCrmAt);
+    if (crmLocked) {
+      const touchesNonTime =
+        (input.serviceId != null && input.serviceId !== existing.serviceId) ||
+        (input.clientId !== undefined &&
+          input.clientId !== (existing.clientId ?? undefined)) ||
+        (input.guestName !== undefined &&
+          (input.guestName ?? null) !== (existing.guestName ?? null)) ||
+        (input.guestPhone !== undefined &&
+          (input.guestPhone ?? null) !== (existing.guestPhone ?? null)) ||
+        (input.paymentType != null &&
+          input.paymentType !==
+            (existing.paymentType === SpaPaymentType.QUOTA
+              ? 'QUOTA'
+              : 'PAID')) ||
+        (input.specialistId != null &&
+          input.specialistId !== existing.specialistId &&
+          !opts.asSpecialist);
+      if (touchesNonTime) {
+        throw new BadRequestException(
+          'Запись проведена в 1С — можно менять только дату и время',
+        );
+      }
     }
 
     const specialistId = opts.asSpecialist
@@ -2238,6 +2339,33 @@ export class SpaBookingService {
     return this.mapService(created);
   }
 
+  /**
+   * Remove SPA catalog row. Hard-delete when unused; otherwise soft-hide
+   * (active=false, bookable=false) so history stays intact.
+   */
+  async adminDeleteService(user: JwtPayload, serviceId: string) {
+    const clubId = requireClubId(user);
+    const existing = await this.prisma.spaService.findFirst({
+      where: { id: serviceId, clubId },
+      include: { _count: { select: { bookings: true } } },
+    });
+    if (!existing) throw new NotFoundException('Услуга не найдена');
+
+    if (existing._count.bookings > 0) {
+      const updated = await this.prisma.spaService.update({
+        where: { id: serviceId },
+        data: { active: false, bookable: false },
+      });
+      await this.prisma.specialistService.deleteMany({
+        where: { serviceId },
+      });
+      return { deleted: false as const, hidden: true as const, service: this.mapService(updated) };
+    }
+
+    await this.prisma.spaService.delete({ where: { id: serviceId } });
+    return { deleted: true as const, hidden: false as const };
+  }
+
   async adminListQuotaRules(user: JwtPayload): Promise<SpaQuotaRule[]> {
     const clubId = requireClubId(user);
     const rules = await this.prisma.spaQuotaRule.findMany({
@@ -2438,7 +2566,7 @@ export class SpaBookingService {
         ? (opts.status as SpaBookingStatus)
         : undefined;
 
-    const [staff, bookings] = await Promise.all([
+    const [staff, bookingsRaw] = await Promise.all([
       this.prisma.user.findMany({
         where: staffWhere,
         orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
@@ -2463,6 +2591,26 @@ export class SpaBookingService {
         orderBy: { startAt: 'asc' },
       }),
     ]);
+
+    await this.syncCrmCancellationsForBookings(bookingsRaw);
+    const bookings = await this.prisma.spaBooking.findMany({
+      where: {
+        clubId: opts.clubId,
+        startAt: { lt: rangeEnd },
+        endAt: { gt: rangeStart },
+        status: statusFilter
+          ? statusFilter
+          : { in: [SpaBookingStatus.CONFIRMED, SpaBookingStatus.COMPLETED] },
+        ...(opts.specialistIds?.length
+          ? { specialistId: { in: opts.specialistIds } }
+          : {}),
+        ...(opts.serviceIds?.length
+          ? { serviceId: { in: opts.serviceIds } }
+          : {}),
+      },
+      include: { client: true, service: true },
+      orderBy: { startAt: 'asc' },
+    });
 
     const staffIds = staff.map((s) => s.id);
     const staffIdSet = new Set(staffIds);
@@ -2562,6 +2710,8 @@ export class SpaBookingService {
           phase === 'PENDING_PERFORMER'
             ? 'Ждёт специалиста'
             : sessionApprovalLabelRu(phase),
+        crmLocked: Boolean(b.consumedInCrmAt),
+        consumedInCrm: Boolean(b.consumedInCrmAt),
       });
     }
 

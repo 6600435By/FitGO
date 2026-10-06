@@ -651,10 +651,17 @@ export function SpaBoard({
                 if (!editable) return;
                 startBookingPointer(e, b, blockHeight, durationMin);
               }}
+              onClick={(e) => {
+                // Prevent column empty-slot handler from opening «Новая запись».
+                e.stopPropagation();
+                if (suppressClickRef.current || dragRef.current) return;
+                if (!b.busy && onBookingDoubleClick) onBookingDoubleClick(b);
+              }}
               onDoubleClick={(e) => {
                 e.stopPropagation();
-                if (suppressClickRef.current || drag) return;
-                if (editable) onBookingDoubleClick?.(b);
+                e.preventDefault();
+                if (suppressClickRef.current || dragRef.current) return;
+                if (!b.busy && onBookingDoubleClick) onBookingDoubleClick(b);
               }}
               className={`absolute inset-x-1 overflow-hidden rounded-lg px-1.5 py-1 text-left text-[11px] leading-tight ${
                 b.busy

@@ -48,6 +48,7 @@ export function SpaBookingEditDialog({
   onCancel: () => Promise<void>;
 }) {
   const bookable = services.filter((s) => s.active && (s.bookable ?? true));
+  const crmLocked = Boolean(booking?.crmLocked);
   const [error, setError] = useState('');
   const [form, setForm] = useState({
     specialistId: '',
@@ -103,11 +104,11 @@ export function SpaBookingEditDialog({
       setError('Укажите время начала');
       return;
     }
-    if (allowPickSpecialist && !form.specialistId) {
+    if (allowPickSpecialist && !form.specialistId && !crmLocked) {
       setError('Укажите специалиста');
       return;
     }
-    if (!form.guestName.trim() && !booking.clientId) {
+    if (!form.guestName.trim() && !booking.clientId && !crmLocked) {
       setError('Укажите ФИО клиента');
       return;
     }
@@ -117,15 +118,23 @@ export function SpaBookingEditDialog({
       return;
     }
     try {
-      await onSave({
-        specialistId: allowPickSpecialist ? form.specialistId : undefined,
-        serviceId: form.serviceId,
-        startAt: startIso,
-        clientId: booking.clientId,
-        guestName: form.guestName.trim() || undefined,
-        guestPhone: form.guestPhone.trim() || undefined,
-        paymentType: form.paymentType,
-      });
+      if (crmLocked) {
+        await onSave({
+          serviceId: booking.serviceId ?? form.serviceId,
+          startAt: startIso,
+          paymentType: booking.paymentType === 'QUOTA' ? 'QUOTA' : 'PAID',
+        });
+      } else {
+        await onSave({
+          specialistId: allowPickSpecialist ? form.specialistId : undefined,
+          serviceId: form.serviceId,
+          startAt: startIso,
+          clientId: booking.clientId,
+          guestName: form.guestName.trim() || undefined,
+          guestPhone: form.guestPhone.trim() || undefined,
+          paymentType: form.paymentType,
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось сохранить');
     }
@@ -159,12 +168,24 @@ export function SpaBookingEditDialog({
           <p className="text-sm text-amber-300">{booking.approvalLabel}</p>
         ) : null}
 
+        {crmLocked ? (
+          <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+            Проведено в 1С — можно менять только дату и время. Удаление
+            недоступно, пока документ есть в 1С.
+          </p>
+        ) : booking.consumedInCrm ? (
+          <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            Документа в 1С нет (удалён или не создан) — можно править и удалить.
+          </p>
+        ) : null}
+
         {allowPickSpecialist && specialists ? (
           <label className="block space-y-1 text-sm">
             <span className="text-slate-400">Специалист</span>
             <select
               className="input"
               value={form.specialistId}
+              disabled={crmLocked}
               onChange={(e) =>
                 setForm((f) => ({ ...f, specialistId: e.target.value }))
               }
@@ -184,6 +205,7 @@ export function SpaBookingEditDialog({
           <input
             className="input"
             value={form.guestName}
+            disabled={crmLocked}
             onChange={(e) =>
               setForm((f) => ({ ...f, guestName: e.target.value }))
             }
@@ -195,6 +217,7 @@ export function SpaBookingEditDialog({
           <input
             className="input"
             value={form.guestPhone}
+            disabled={crmLocked}
             onChange={(e) =>
               setForm((f) => ({ ...f, guestPhone: e.target.value }))
             }
@@ -207,6 +230,7 @@ export function SpaBookingEditDialog({
           <select
             className="input"
             value={form.serviceId}
+            disabled={crmLocked}
             onChange={(e) =>
               setForm((f) => ({ ...f, serviceId: e.target.value }))
             }
@@ -256,6 +280,7 @@ export function SpaBookingEditDialog({
           <select
             className="input"
             value={form.paymentType}
+            disabled={crmLocked}
             onChange={(e) =>
               setForm((f) => ({
                 ...f,
@@ -275,16 +300,18 @@ export function SpaBookingEditDialog({
         ) : null}
 
         <div className="flex flex-col gap-2 sm:flex-row">
-          <button
-            type="button"
-            className="btn-secondary flex-1"
-            disabled={busy}
-            onClick={() => {
-              void remove();
-            }}
-          >
-            Отменить запись
-          </button>
+          {!crmLocked ? (
+            <button
+              type="button"
+              className="btn-secondary flex-1"
+              disabled={busy}
+              onClick={() => {
+                void remove();
+              }}
+            >
+              Удалить запись
+            </button>
+          ) : null}
           <button
             type="button"
             className="btn-primary flex-1"

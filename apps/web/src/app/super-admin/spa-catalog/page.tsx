@@ -149,6 +149,33 @@ export default function SuperAdminSpaCatalogPage() {
     }
   };
 
+  const deleteRow = async (s: SpaService) => {
+    const token = getToken();
+    if (!token) return;
+    if (
+      !window.confirm(
+        `Удалить «${s.name}» из каталога? Если есть записи — услуга будет скрыта (неактивна).`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setMessage('');
+    try {
+      const res = await api.adminDeleteSpaService(token, s.id);
+      setMessage(
+        res.deleted
+          ? `Удалено: ${s.name}`
+          : `Скрыто (есть записи): ${s.name}`,
+      );
+      await reload();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка удаления');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -292,14 +319,24 @@ export default function SuperAdminSpaCatalogPage() {
                     </div>
                   </td>
                   <td className="px-2 py-2">
-                    <button
-                      type="button"
-                      className="btn-secondary text-xs"
-                      disabled={busy}
-                      onClick={() => saveRow(s)}
-                    >
-                      Сохранить
-                    </button>
+                    <div className="flex flex-col gap-1">
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs"
+                        disabled={busy}
+                        onClick={() => saveRow(s)}
+                      >
+                        Сохранить
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs text-rose-300"
+                        disabled={busy}
+                        onClick={() => void deleteRow(s)}
+                      >
+                        Удалить
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );

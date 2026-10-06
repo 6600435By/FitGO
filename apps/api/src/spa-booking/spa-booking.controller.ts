@@ -289,6 +289,15 @@ export class SpaBookingController {
     });
   }
 
+  @Delete('admin/spa/services/:id')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminDeleteService(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.spa.adminDeleteService(user, id);
+  }
+
   @Get('admin/spa/quota-rules')
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminQuotaRules(@CurrentUser() user: JwtPayload) {

@@ -2637,6 +2637,7 @@ export class BookingControlService {
       found: boolean;
       cancelled: boolean;
       posted?: boolean;
+      deletionMark?: boolean;
       num?: string;
     } | null = null;
     if (clientExt && bookingRef) {
@@ -2657,6 +2658,33 @@ export class BookingControlService {
       }
     }
 
+    // Документ удалён / помечен на удаление в 1С — снять CRM-блокировку и разрешить правку.
+    if (
+      booking?.id &&
+      booking.consumedInCrmAt &&
+      visit &&
+      (!visit.found || visit.deletionMark)
+    ) {
+      await this.prisma.spaBooking
+        .update({
+          where: { id: booking.id },
+          data: { consumedInCrmAt: null, crmDocRef: null },
+        })
+        .catch(() => undefined);
+      return {
+        settlement: {
+          status: 'DELETED_IN_1C',
+          label: spaSettlementLabelRu('DELETED_IN_1C'),
+          source: 'visit',
+          visitPosted: visit.posted,
+          visitNum: visit.num,
+          editableInApp: true,
+        },
+        payment: isQuota ? 'QUOTA' : 'UNKNOWN',
+        payTag: isQuota ? 'PACKAGE' : 'SALE',
+      };
+    }
+
     // «cancelled» без found — ложный сигнал (док не найден по комментарию).
     // Живая matched-сессия 1С (не CANCELLED) важнее статуса visit API.
     if (visit?.cancelled && visit.found) {
@@ -2670,6 +2698,7 @@ export class BookingControlService {
             source: 'visit',
             visitPosted: visit.posted,
             visitNum: visit.num,
+            editableInApp: true,
           },
           payment: isQuota ? 'QUOTA' : 'UNKNOWN',
           payTag: isQuota ? 'PACKAGE' : 'SALE',
@@ -2682,10 +2711,11 @@ export class BookingControlService {
         visit?.posted === true ||
         Boolean(booking?.consumedInCrmAt) ||
         onex?.status === OnexClassStatus.COMPLETED;
+      // consumedInCrmAt alone is not proof the doc still exists in 1C.
       const foundIn1c =
         visit?.found === true ||
         Boolean(onex) ||
-        Boolean(booking?.consumedInCrmAt);
+        (Boolean(booking?.consumedInCrmAt) && visit == null);
       if (posted && foundIn1c) {
         return {
           settlement: {
@@ -2694,6 +2724,7 @@ export class BookingControlService {
             source: visit?.found ? 'visit' : onex ? 'onex' : 'local',
             visitPosted: true,
             visitNum: visit?.num ?? onex?.number ?? undefined,
+            editableInApp: false,
           },
           payment: 'QUOTA',
           payTag: 'PACKAGE',
@@ -2705,6 +2736,7 @@ export class BookingControlService {
             status: 'NOT_IN_1C',
             label: spaSettlementLabelRu('NOT_IN_1C'),
             source: 'local',
+            editableInApp: true,
           },
           payment: 'QUOTA',
           payTag: 'PACKAGE',
@@ -2717,6 +2749,7 @@ export class BookingControlService {
           source: 'local',
           visitPosted: visit?.posted,
           visitNum: visit?.num,
+          editableInApp: !booking?.consumedInCrmAt,
         },
         payment: 'QUOTA',
         payTag: 'PACKAGE',
@@ -2795,6 +2828,7 @@ export class BookingControlService {
           source: 'debt',
           visitPosted: visit?.posted,
           visitNum: visit?.num ?? debtHit.docRef,
+          editableInApp: false,
         },
         payment: 'PAID',
         payTag: 'SALE',
@@ -2805,7 +2839,7 @@ export class BookingControlService {
       debtHit?.paymentStatus === 'DEBT' ||
       booking?.paymentStatus === ServicePaymentStatus.DEBT ||
       visit?.posted === true ||
-      Boolean(booking?.consumedInCrmAt) ||
+      (Boolean(booking?.consumedInCrmAt) && visit?.found !== false) ||
       Boolean(onex)
     ) {
       return {
@@ -2815,6 +2849,7 @@ export class BookingControlService {
           source: debtHit ? 'debt' : visit?.found ? 'visit' : onex ? 'onex' : 'local',
           visitPosted: visit?.posted ?? Boolean(onex),
           visitNum: visit?.num ?? onex?.number ?? debtHit?.docRef,
+          editableInApp: false,
         },
         payment: 'DEBT',
         payTag: 'SALE',
@@ -2827,6 +2862,7 @@ export class BookingControlService {
           status: 'PAID',
           label: spaSettlementLabelRu('PAID'),
           source: 'local',
+          editableInApp: false,
         },
         payment: 'PAID',
         payTag: 'SALE',
@@ -2838,6 +2874,7 @@ export class BookingControlService {
         status: 'NOT_IN_1C',
         label: spaSettlementLabelRu('NOT_IN_1C'),
         source: 'local',
+        editableInApp: true,
       },
       payment: 'UNKNOWN',
       payTag: 'SALE',

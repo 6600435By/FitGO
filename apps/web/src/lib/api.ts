@@ -888,6 +888,13 @@ export const api = {
       body: JSON.stringify(data),
     }, token),
 
+  adminDeleteSpaService: (token: string, serviceId: string) =>
+    request<{ deleted: boolean; hidden: boolean; service?: SpaService }>(
+      `/admin/spa/services/${serviceId}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
   adminSpaQuotaRules: (token: string) =>
     request<SpaQuotaRule[]>('/admin/spa/quota-rules', {}, token),
 
