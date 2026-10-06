@@ -1977,7 +1977,7 @@ export class PayrollService {
       throw new ForbiddenException('Нет доступа к расчёту ЗП');
     }
 
-    const [summary, staffDebt, allPayouts, unpaidItems, unpaidSales] =
+    const [summary, staffDebt, allPayouts, unpaidItems, unpaidSalesMinor] =
       await Promise.all([
         this.getPeriodSummary(clubId, user.sub, from, to),
         this.resolveStaffClientDebt(clubId, user.sub),
@@ -1990,15 +1990,13 @@ export class PayrollService {
             payment: 'DEBT',
           })
           .catch(() => []),
+        // Seller debt from ClubRevenue unpaid (1C «Неоплаченные»), not
+        // SaleTransaction+shiftShare which inflated the payroll hint.
         isAdmin
           ? this.adminSales
-              .mySales(clubId, user.sub, {
-                from,
-                to,
-                payment: 'unpaid',
-              })
-              .catch(() => null)
-          : Promise.resolve(null),
+              .sellerOpenUnpaidMinor(clubId, user.sub, to)
+              .catch(() => 0)
+          : Promise.resolve(undefined as number | undefined),
       ]);
 
     const fromT = new Date(`${from}T00:00:00`).getTime();
@@ -2028,7 +2026,10 @@ export class PayrollService {
       payoutsInPeriod,
       unconfirmedCount,
       unpaidCount,
-      unpaidSalesMinor: unpaidSales?.totals.unpaidMinor,
+      unpaidSalesMinor:
+        unpaidSalesMinor != null && unpaidSalesMinor > 0
+          ? unpaidSalesMinor
+          : undefined,
       links: {
         bookingControl,
         sales: isAdmin ? '/admin/sales' : undefined,

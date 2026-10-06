@@ -5,7 +5,6 @@ import type {
   TrainerDaySheetDto,
 } from '@fitgo/shared-types';
 import { clientIssueLabel } from '@fitgo/shared-types';
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -265,9 +264,6 @@ export default function AdminPtTimesheetPage() {
         </section>
       )}
 
-      <Link href="/admin/payroll" className="text-sm text-fitgo-400">
-        → Моя ЗП
-      </Link>
     </div>
   );
 }

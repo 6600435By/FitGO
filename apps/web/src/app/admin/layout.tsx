@@ -58,16 +58,9 @@ const ALL_NAV: Array<{
     label: 'Контроль записей',
     permission: AdminPermission.CLIENTS_VIEW,
   },
-  {
-    href: '/admin/payroll',
-    label: 'Расчёт ЗП',
-    permission: AdminPermission.REPORTS_VIEW,
-  },
-  {
-    href: '/admin/sales',
-    label: 'Мои продажи',
-    permission: AdminPermission.REPORTS_VIEW,
-  },
+  // Personal payroll / own sales — always for ADMIN (not gated by REPORTS_VIEW).
+  { href: '/admin/payroll', label: 'Расчёт ЗП' },
+  { href: '/admin/sales', label: 'Мои продажи' },
   { href: '/admin/at-risk', label: 'Риск', permission: AdminPermission.AT_RISK_VIEW },
   { href: '/admin/funnel', label: 'Воронка', permission: AdminPermission.FUNNEL_VIEW },
   { href: '/admin/reports', label: 'Отчёты', permission: AdminPermission.REPORTS_VIEW },

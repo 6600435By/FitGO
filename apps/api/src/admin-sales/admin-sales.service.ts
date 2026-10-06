@@ -346,11 +346,13 @@ export class AdminSalesService {
       periodField: 'paidAt',
     });
 
-    // Open debt through period end (carry from prior months)
+    // Open debt through period end — always by 1C author (кто продал).
+    // shiftShare applies only to paid accrual, not to unpaid hold / debt list.
     const openDebt = await this.buildLinesAndTotals({
       ...common,
       payment: 'unpaid',
       periodField: 'openDebt',
+      attribution: 'individual',
     });
 
     let totals: AdminSalesTotals = {
@@ -401,6 +403,38 @@ export class AdminSalesService {
       currency: 'BYN',
       hint,
     };
+  }
+
+  /**
+   * Open seller debt from ClubRevenue unpaid snapshot (1C «Неоплаченные продажи»).
+   * Prefer for payroll hints — SaleTransaction may still carry stale unpaid rows.
+   */
+  async sellerOpenUnpaidMinor(
+    clubId: string,
+    userId: string,
+    to: string,
+  ): Promise<number> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+      select: { employeeCode: true },
+    });
+    const code = user?.employeeCode?.trim();
+    if (!code) return 0;
+    const toDt = endOfDayUtc(to);
+    const rows = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        operationType: 'unpaid',
+        occurredAt: { lte: toDt },
+        employeeExternalId: code,
+      },
+      select: { amount: true, saleAmount: true },
+    });
+    return rows.reduce((s, r) => {
+      const major = Math.abs(Number(r.saleAmount || r.amount) || 0);
+      return s + majorToMinor(major);
+    }, 0);
   }
 
   async overview(

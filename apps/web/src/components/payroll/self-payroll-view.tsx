@@ -321,7 +321,7 @@ export function SelfPayrollView({ role }: Props) {
                   })}
                   className="block rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100"
                 >
-                  Продажи без оплаты:{' '}
+                  Неоплаченные продажи (как продавец):{' '}
                   {money(data.unpaidSalesMinor, currency)} →
                 </Link>
               ) : null}
