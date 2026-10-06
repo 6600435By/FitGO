@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { resolveFormaClubId } from './forma-club-id';
 import { addMoscowDays, moscowDayKey } from './moscow-time';
 
 const RESOURCE_KEY = 'schedule_slots';
@@ -48,11 +49,25 @@ export class ScheduleSlotsSyncService {
       where: { id: clubId },
       select: { externalId: true },
     });
-    const externalId =
-      club?.externalId?.trim() || process.env.FORMA_CLUB_ID?.trim() || '';
+    const resolved = resolveFormaClubId(club?.externalId);
+    const externalId = resolved.clubId;
     if (!externalId) {
-      await this.markState(clubId, 'skipped', 'no club externalId');
+      await this.markState(
+        clubId,
+        'skipped',
+        'no Forma club UUID — set Club.externalId or FORMA_CLUB_ID',
+      );
       return { from, to, upserted: 0, deactivated: 0 };
+    }
+    if (resolved.source === 'env' && club?.externalId?.trim() !== externalId) {
+      this.logger.warn(
+        `schedule_slots: Club.externalId=${club?.externalId ?? '(empty)'} is not a Forma UUID; using FORMA_CLUB_ID=${externalId}`,
+      );
+      // Heal seed/mock ids so next sync and live schedule use the same club.
+      await this.prisma.club.update({
+        where: { id: clubId },
+        data: { externalId },
+      });
     }
 
     try {
@@ -131,8 +146,12 @@ export class ScheduleSlotsSyncService {
       return { from, to, upserted, deactivated };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await this.markState(clubId, 'error', msg);
-      throw err;
+      const hint =
+        /1025|структурн/i.test(msg)
+          ? ` — проверьте Club.externalId / FORMA_CLUB_ID (Forma club_id), сейчас использован ${externalId}`
+          : '';
+      await this.markState(clubId, 'error', `${msg}${hint}`);
+      throw new Error(`${msg}${hint}`);
     }
   }
 

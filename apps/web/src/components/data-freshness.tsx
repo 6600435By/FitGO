@@ -22,7 +22,7 @@ export type ClubSyncStatus = {
 };
 
 type Props = {
-  /** Override: show refresh for ops (default: auto from roles). */
+  /** Override: show refresh (default: admin / manager / super-admin). */
   canRefresh?: boolean;
   onSynced?: () => void;
   className?: string;
@@ -60,20 +60,62 @@ function formatSyncError(raw: string): string {
   return raw;
 }
 
+const REFRESH_ROLES = [
+  UserRole.ADMIN,
+  UserRole.SUPER_ADMIN,
+  UserRole.MANAGER,
+] as const;
+
+/** Compact refresh control — same height as the «Данные на …» line. */
+function RefreshButton({
+  busy,
+  running,
+  inNightWindow,
+  cd,
+  hint,
+  onClick,
+}: {
+  busy: boolean;
+  running: boolean;
+  inNightWindow: boolean;
+  cd: string | null;
+  hint: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={hint}
+      disabled={busy || running || Boolean(cd) || inNightWindow}
+      onClick={onClick}
+      className="btn-secondary ml-auto inline-flex h-5 shrink-0 items-center !px-2 !py-0 text-[11px] leading-none"
+    >
+      {busy || running
+        ? 'Обновление…'
+        : inNightWindow
+          ? 'Ночная выгрузка'
+          : cd
+            ? cd
+            : 'Обновить из 1С'}
+    </button>
+  );
+}
+
 export function DataFreshness({
   canRefresh: canRefreshProp,
   onSynced,
   className = '',
 }: Props) {
   const user = getUser();
-  /** Full banner (hint / errors / refresh): only super-admin and manager. */
-  const isOps =
-    Boolean(
-      user?.roles?.some((r) =>
-        [UserRole.SUPER_ADMIN, UserRole.MANAGER].includes(r),
-      ),
-    );
-  const canRefresh = canRefreshProp ?? isOps;
+  /** Hint / lastError / sourceLabel: super-admin and manager only. */
+  const isOps = Boolean(
+    user?.roles?.some((r) =>
+      [UserRole.SUPER_ADMIN, UserRole.MANAGER].includes(r),
+    ),
+  );
+  const canRefresh =
+    canRefreshProp ??
+    Boolean(user?.roles?.some((r) => REFRESH_ROLES.includes(r)));
 
   const [status, setStatus] = useState<ClubSyncStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -88,19 +130,19 @@ export function DataFreshness({
       setErr(null);
       return s;
     } catch (e) {
-      if (isOps) {
+      if (isOps || canRefresh) {
         setErr(e instanceof Error ? e.message : 'Не удалось загрузить статус');
       }
       return null;
     }
-  }, [isOps]);
+  }, [isOps, canRefresh]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    if (!status?.running || !isOps) return;
+    if (!status?.running || !canRefresh) return;
     const id = setInterval(() => {
       void (async () => {
         const s = await load();
@@ -110,7 +152,7 @@ export function DataFreshness({
       })();
     }, 5000);
     return () => clearInterval(id);
-  }, [status?.running, load, onSynced, isOps]);
+  }, [status?.running, load, onSynced, canRefresh]);
 
   const refresh = async () => {
     const token = getToken();
@@ -147,20 +189,49 @@ export function DataFreshness({
   const dataLabel = status?.dataAsOf
     ? `Данные на ${status.dataAsOf}`
     : 'Данные ещё не загружены из 1С';
+  const hint = 'Только сегодня (±1 день). Прошлые дни — ночью 03–04.';
 
-  // Staff (admin / trainer / spa / …): one line only.
-  if (!isOps && !canRefreshProp) {
+  // Trainer / specialist / tech: date only.
+  if (!canRefresh && !isOps) {
     return (
-      <div
-        className={`card !px-2 !py-1 text-xs leading-tight ${className}`}
-      >
+      <div className={`card !px-2 !py-1 text-xs leading-tight ${className}`}>
         <span className={`font-medium ${freshnessColor}`}>{dataLabel}</span>
       </div>
     );
   }
 
-  const hint = 'Только сегодня (±1 день). Прошлые дни — ночью 03–04.';
+  // Desk admin: same compact date line + refresh button (no hint / no lastError).
+  if (canRefresh && !isOps) {
+    return (
+      <div
+        className={`card !px-2 !py-1 text-xs leading-tight ${className}`}
+      >
+        <div className="flex items-center gap-2">
+          <span className={`min-w-0 font-medium ${freshnessColor}`}>
+            {dataLabel}
+          </span>
+          {status?.running ? (
+            <span className="text-sky-700">Идёт обновление…</span>
+          ) : null}
+          <RefreshButton
+            busy={busy}
+            running={Boolean(status?.running)}
+            inNightWindow={Boolean(status?.inNightWindow)}
+            cd={cd}
+            hint={hint}
+            onClick={() => void refresh()}
+          />
+        </div>
+        {err ? (
+          <p className="mt-0.5 text-[11px] text-red-600">
+            {formatSyncError(err)}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
 
+  // Super-admin / manager: date + ops details + compact button.
   return (
     <div className={`card !px-2 !py-1.5 text-xs leading-tight ${className}`}>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -179,40 +250,26 @@ export function DataFreshness({
           </span>
         ) : null}
         {canRefresh ? (
-          <button
-            type="button"
-            title={hint}
-            disabled={
-              busy ||
-              Boolean(status?.running) ||
-              Boolean(cd) ||
-              Boolean(status?.inNightWindow)
-            }
+          <RefreshButton
+            busy={busy}
+            running={Boolean(status?.running)}
+            inNightWindow={Boolean(status?.inNightWindow)}
+            cd={cd}
+            hint={hint}
             onClick={() => void refresh()}
-            className="btn-secondary ml-auto !px-2 !py-0.5 text-[11px]"
-          >
-            {busy || status?.running
-              ? 'Обновление…'
-              : status?.inNightWindow
-                ? 'Ночная выгрузка'
-                : cd
-                  ? cd
-                  : 'Обновить из 1С'}
-          </button>
+          />
         ) : null}
       </div>
-      {canRefresh ? (
-        <p
-          className="mt-0.5 text-[10px] leading-snug text-[var(--fg-muted)]"
-          title="Нажимайте, если в 1С только что прошла оплата или запись, а здесь её нет."
-        >
-          {hint}
-        </p>
-      ) : null}
+      <p
+        className="mt-0.5 text-[10px] leading-snug text-[var(--fg-muted)]"
+        title="Нажимайте, если в 1С только что прошла оплата или запись, а здесь её нет."
+      >
+        {hint}
+      </p>
       {err ? (
         <p className="mt-0.5 text-[11px] text-red-600">{formatSyncError(err)}</p>
       ) : null}
-      {status?.lastError && canRefresh ? (
+      {status?.lastError ? (
         <p className="mt-0.5 break-words text-[11px] text-red-600">
           Ошибка: {formatSyncError(status.lastError)}
         </p>
