@@ -105,6 +105,43 @@ export interface PayrollPeriodSummary {
   anomalyHints: string[];
 }
 
+/** Staff personal debt as club client in 1C (ФИО + phone). */
+export interface PayrollStaffDebtLine {
+  occurredAt: string;
+  productName: string;
+  amountMinor: number;
+}
+
+export interface PayrollStaffDebt {
+  amountMinor: number;
+  currency: string;
+  lines: PayrollStaffDebtLine[];
+  source: '1c' | 'cache' | 'none';
+  clientName?: string;
+  clientExternalId?: string;
+}
+
+/**
+ * Self-service payroll overview for admin / trainer / SPA specialist.
+ * Debt is display-only (not deducted from totalMinor).
+ */
+export interface PayrollSelfOverview {
+  summary: PayrollPeriodSummary;
+  staffDebt: PayrollStaffDebt;
+  payoutsInPeriod: PayrollPayoutDto[];
+  /** Work units that are not payrollTrusted (need confirmation). */
+  unconfirmedCount: number;
+  /** PT/SPA sessions with payment DEBT in the period. */
+  unpaidCount: number;
+  /** Admin only: open sales debt attributed to this admin. */
+  unpaidSalesMinor?: number;
+  /** Deep-link bases for hints (role-specific). */
+  links: {
+    bookingControl: string;
+    sales?: string;
+  };
+}
+
 /** 25th: advance for days 1–15; 15th: settlement for previous month. */
 export type PayrollPayoutKind = 'ADVANCE_HALF' | 'MONTH_SETTLEMENT';
 

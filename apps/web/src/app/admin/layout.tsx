@@ -60,7 +60,7 @@ const ALL_NAV: Array<{
   },
   {
     href: '/admin/payroll',
-    label: 'ЗП',
+    label: 'Расчёт ЗП',
     permission: AdminPermission.REPORTS_VIEW,
   },
   {

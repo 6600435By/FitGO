@@ -2480,6 +2480,18 @@ export const api = {
     );
   },
 
+  selfPayrollOverview: (
+    token: string,
+    params: { from: string; to: string },
+  ) => {
+    const q = new URLSearchParams(params);
+    return request<import('@fitgo/shared-types').PayrollSelfOverview>(
+      `/me/payroll/overview?${q}`,
+      {},
+      token,
+    );
+  },
+
   adminMySales: (
     token: string,
     params: {

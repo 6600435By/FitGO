@@ -89,6 +89,9 @@ type Props = {
   /** Optional date range from deep-link (schedule → booking-control). */
   initialFrom?: string;
   initialTo?: string;
+  /** Deep-link from payroll hints. */
+  initialNeedsReview?: boolean;
+  initialPayment?: 'PAID' | 'DEBT' | 'ALL';
   /** Hide kind filter (specialist SPA-only) */
   fixedKind?: BookingControlKind;
   title?: string;
@@ -175,6 +178,8 @@ export function BookingControlPanel({
   initialSessionKey,
   initialFrom,
   initialTo,
+  initialNeedsReview = false,
+  initialPayment = 'ALL',
   fixedKind,
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
@@ -186,9 +191,9 @@ export function BookingControlPanel({
   const [to, setTo] = useState(initialTo?.trim() || todayIso());
   const [kind, setKind] = useState<string>(fixedKind ?? 'ALL');
   const [status, setStatus] = useState('ALL');
-  const [payment, setPayment] = useState('ALL');
+  const [payment, setPayment] = useState(initialPayment);
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'SALE' | '1C'>('ALL');
-  const [needsReview, setNeedsReview] = useState(false);
+  const [needsReview, setNeedsReview] = useState(Boolean(initialNeedsReview));
   const [items, setItems] = useState<BookingControlListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing1c, setSyncing1c] = useState(false);
@@ -688,7 +693,9 @@ export function BookingControlPanel({
               <select
                 className="input mt-0.5 block h-9 py-1 text-sm"
                 value={payment}
-                onChange={(e) => setPayment(e.target.value)}
+                onChange={(e) =>
+                  setPayment(e.target.value as 'PAID' | 'DEBT' | 'ALL')
+                }
               >
                 <option value="ALL">Все</option>
                 <option value="PAID">Оплачено</option>

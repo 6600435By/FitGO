@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app-shell';
 const NAV = [
   { href: '/specialist/schedule', label: 'Расписание' },
   { href: '/specialist/my-sessions', label: 'Контроль записей' },
+  { href: '/specialist/payroll', label: 'Расчёт ЗП' },
   { href: '/specialist/profile', label: 'Профиль' },
 ];
 

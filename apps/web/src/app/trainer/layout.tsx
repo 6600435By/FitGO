@@ -72,6 +72,9 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
             },
           ]
         : []),
+      ...((user?.groupPrograms || user?.trainerStaff)
+        ? [{ href: '/trainer/payroll', label: 'Расчёт ЗП', when: 'always' as const }]
+        : []),
       {
         href: '/trainer/messages',
         label: 'Сообщения',
@@ -82,7 +85,13 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     );
 
     return items.filter((item) => !item.module || isEnabled(item.module));
-  }, [isEnabled, showGp, showPt]);
+  }, [
+    isEnabled,
+    showGp,
+    showPt,
+    user?.groupPrograms,
+    user?.trainerStaff,
+  ]);
 
   return (
     <AuthGuard allowedRoles={[UserRole.TRAINER]}>

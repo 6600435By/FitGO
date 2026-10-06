@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState, Fragment } from 'react';
+import { useSearchParams } from 'next/navigation';
 import type {
   AdminMySalesResponse,
   AdminSaleLineDto,
@@ -166,11 +167,20 @@ function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
 }
 
 export function AdminMySalesPanel() {
+  const searchParams = useSearchParams();
   const bounds = useMemo(() => monthBounds(), []);
-  const [from, setFrom] = useState(bounds.from);
-  const [to, setTo] = useState(bounds.to);
+  const [from, setFrom] = useState(
+    () => searchParams.get('from')?.trim() || bounds.from,
+  );
+  const [to, setTo] = useState(
+    () => searchParams.get('to')?.trim() || bounds.to,
+  );
   const [saleType, setSaleType] = useState<AdminSaleType | 'all'>('all');
-  const [payment, setPayment] = useState<AdminSalePaymentFilter>('all');
+  const [payment, setPayment] = useState<AdminSalePaymentFilter>(() => {
+    const p = searchParams.get('payment')?.trim()?.toLowerCase();
+    if (p === 'unpaid' || p === 'paid' || p === 'all') return p;
+    return 'all';
+  });
   const [data, setData] = useState<AdminMySalesResponse | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);

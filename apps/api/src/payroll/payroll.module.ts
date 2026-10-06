@@ -11,6 +11,7 @@ import { BookingControlModule } from '../booking-control/booking-control.module'
 import {
   AdminPayrollController,
   PayrollController,
+  SelfPayrollController,
   SpecialistPayrollController,
 } from './payroll.controller';
 import { PayrollService } from './payroll.service';
@@ -31,6 +32,7 @@ import { PayrollService } from './payroll.service';
     PayrollController,
     AdminPayrollController,
     SpecialistPayrollController,
+    SelfPayrollController,
   ],
   providers: [PayrollService],
   exports: [PayrollService],

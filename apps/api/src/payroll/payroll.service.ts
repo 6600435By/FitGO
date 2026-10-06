@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -33,6 +34,8 @@ import {
   type PayrollPayoutDto,
   type PayrollPayoutKind,
   type PayrollPayoutPreview,
+  type PayrollSelfOverview,
+  type PayrollStaffDebt,
   type StaffCompensationDto,
   type StaffDepartment,
   type StaffEmploymentKind,
@@ -66,6 +69,8 @@ import { AdminSalesService } from '../admin-sales/admin-sales.service';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import { BookingControlService } from '../booking-control/booking-control.service';
 import { FitnessService } from '../fitness/fitness.service';
+import { normalizePhone } from '../common/phone.util';
+import { isCollectibleClientDebt } from '../admin-sales/club-revenue-debt';
 import {
   createAnalyticsProvider,
   fetchStaffSalesFromAnalytics,
@@ -1792,6 +1797,243 @@ export class PayrollService {
             : 'STAFF',
       },
     ];
+  }
+
+  /**
+   * Resolve staff → 1C client card (phone / FIO) and load personal debt.
+   * Display-only; does not affect payroll total.
+   */
+  async resolveStaffClientDebt(
+    clubId: string,
+    userId: string,
+  ): Promise<PayrollStaffDebt> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        phone: true,
+        phoneNormalized: true,
+        staffClientExternalId: true,
+        externalId: true,
+      },
+    });
+    if (!user) {
+      return { amountMinor: 0, currency: 'BYN', lines: [], source: 'none' };
+    }
+
+    const fio = `${user.lastName} ${user.firstName}`.trim();
+    let clientExt = user.staffClientExternalId?.trim() || null;
+
+    if (!clientExt) {
+      const phone =
+        user.phoneNormalized?.trim() ||
+        (user.phone ? normalizePhone(user.phone) : '');
+      const provider = this.fitness.getProvider();
+      if (phone && provider.findClientByPhone) {
+        try {
+          const hit = await Promise.race([
+            provider.findClientByPhone(phone),
+            new Promise<null>((resolve) =>
+              setTimeout(() => resolve(null), 5_000),
+            ),
+          ]);
+          if (hit?.externalId) {
+            clientExt = hit.externalId;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!clientExt) {
+        const nameHit = await this.prisma.clubRevenueEntry.findFirst({
+          where: {
+            clubId,
+            isActive: true,
+            operationType: 'unpaid',
+            clientExternalId: { not: null },
+            OR: [
+              { clientName: { equals: fio, mode: 'insensitive' } },
+              {
+                clientName: {
+                  equals: `${fio} (Сотрудник)`,
+                  mode: 'insensitive',
+                },
+              },
+              {
+                clientName: {
+                  contains: `${user.lastName} ${user.firstName}`,
+                  mode: 'insensitive',
+                },
+              },
+            ],
+          },
+          select: { clientExternalId: true, clientName: true },
+          orderBy: { occurredAt: 'desc' },
+        });
+        if (nameHit?.clientExternalId) {
+          clientExt = nameHit.clientExternalId;
+        }
+      }
+      if (clientExt) {
+        await this.prisma.user
+          .update({
+            where: { id: user.id },
+            data: { staffClientExternalId: clientExt },
+          })
+          .catch(() => undefined);
+      }
+    }
+
+    const unpaidRows = clientExt
+      ? await this.prisma.clubRevenueEntry.findMany({
+          where: {
+            clubId,
+            isActive: true,
+            operationType: 'unpaid',
+            clientExternalId: clientExt,
+          },
+          orderBy: { occurredAt: 'desc' },
+          take: 40,
+        })
+      : [];
+
+    const collectible = unpaidRows.filter((r) =>
+      isCollectibleClientDebt({
+        externalId: r.externalId,
+        productName: r.productName,
+      }),
+    );
+    const cacheMinor = Math.round(
+      collectible.reduce((s, r) => s + Math.abs(r.amount || r.saleAmount || 0), 0) *
+        100,
+    );
+    const lines = collectible.map((r) => ({
+      occurredAt: r.occurredAt.toISOString(),
+      productName: r.productName?.trim() || 'Долг',
+      amountMinor: Math.round(Math.abs(r.amount || r.saleAmount || 0) * 100),
+    }));
+
+    if (!clientExt) {
+      return {
+        amountMinor: cacheMinor,
+        currency: 'BYN',
+        lines,
+        source: cacheMinor > 0 ? 'cache' : 'none',
+        clientName: fio,
+      };
+    }
+
+    let amountMinor = cacheMinor;
+    let source: PayrollStaffDebt['source'] = cacheMinor > 0 ? 'cache' : 'none';
+    try {
+      const membership = await Promise.race([
+        this.fitness.getProvider().getMembership(clientExt),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5_000)),
+      ]);
+      if (membership && membership.debtAmount != null) {
+        amountMinor = Math.round(Math.abs(Number(membership.debtAmount)) * 100);
+        source = '1c';
+      }
+    } catch {
+      /* keep cache */
+    }
+
+    return {
+      amountMinor,
+      currency: 'BYN',
+      lines,
+      source,
+      clientName: fio,
+      clientExternalId: clientExt,
+    };
+  }
+
+  async getSelfOverview(
+    user: JwtPayload,
+    from: string,
+    to: string,
+  ): Promise<PayrollSelfOverview> {
+    const clubId = requireClubId(user);
+    this.assertPeriod(from, to);
+
+    const dbUser = await this.prisma.user.findFirst({
+      where: { id: user.sub, clubId },
+      include: { roles: true },
+    });
+    if (!dbUser) throw new NotFoundException('Сотрудник не найден');
+
+    const roles = new Set(dbUser.roles.map((r) => r.role));
+    const isAdmin = roles.has(Role.ADMIN);
+    const isSpecialist = roles.has(Role.SPECIALIST);
+    const isTrainer = roles.has(Role.TRAINER);
+    if (isTrainer && !dbUser.groupPrograms && !dbUser.trainerStaff) {
+      throw new ForbiddenException(
+        'Расчёт ЗП доступен тренерам ГП и штатным ПТ',
+      );
+    }
+    if (!isAdmin && !isSpecialist && !isTrainer) {
+      throw new ForbiddenException('Нет доступа к расчёту ЗП');
+    }
+
+    const [summary, staffDebt, allPayouts, unpaidItems, unpaidSales] =
+      await Promise.all([
+        this.getPeriodSummary(clubId, user.sub, from, to),
+        this.resolveStaffClientDebt(clubId, user.sub),
+        this.listPayouts(clubId, user.sub),
+        this.bookingControl
+          .list(clubId, {
+            from,
+            to,
+            restrictPerformerId: user.sub,
+            payment: 'DEBT',
+          })
+          .catch(() => []),
+        isAdmin
+          ? this.adminSales
+              .mySales(clubId, user.sub, {
+                from,
+                to,
+                payment: 'unpaid',
+              })
+              .catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+    const fromT = new Date(`${from}T00:00:00`).getTime();
+    const toT = new Date(`${to}T23:59:59.999`).getTime();
+    const payoutsInPeriod = allPayouts.filter((p) => {
+      const a = new Date(`${p.periodFrom}T00:00:00`).getTime();
+      const b = new Date(`${p.periodTo}T23:59:59.999`).getTime();
+      return a <= toT && b >= fromT;
+    });
+
+    const unconfirmedCount = summary.workUnits.filter(
+      (u) => !u.payrollTrusted,
+    ).length;
+    const unpaidCount = unpaidItems.filter(
+      (i) => i.kind === 'PT' || i.kind === 'SPA',
+    ).length;
+
+    const bookingControl = isAdmin
+      ? '/admin/booking-control'
+      : isSpecialist
+        ? '/specialist/my-sessions'
+        : '/trainer/my-sessions';
+
+    return {
+      summary,
+      staffDebt,
+      payoutsInPeriod,
+      unconfirmedCount,
+      unpaidCount,
+      unpaidSalesMinor: unpaidSales?.totals.unpaidMinor,
+      links: {
+        bookingControl,
+        sales: isAdmin ? '/admin/sales' : undefined,
+      },
+    };
   }
 
   private async countOpenExceptions(

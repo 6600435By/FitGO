@@ -395,4 +395,36 @@ export class SpecialistPayrollController {
       to,
     );
   }
+
+  @Get('overview')
+  overview(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    if (!from || !to) {
+      throw new BadRequestException('from and to are required (YYYY-MM-DD)');
+    }
+    return this.payroll.getSelfOverview(user, from, to);
+  }
+}
+
+/** Self payroll for admin / trainer (GP|staff) / specialist. */
+@Controller('me/payroll')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.TRAINER, UserRole.SPECIALIST)
+export class SelfPayrollController {
+  constructor(private readonly payroll: PayrollService) {}
+
+  @Get('overview')
+  overview(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    if (!from || !to) {
+      throw new BadRequestException('from and to are required (YYYY-MM-DD)');
+    }
+    return this.payroll.getSelfOverview(user, from, to);
+  }
 }

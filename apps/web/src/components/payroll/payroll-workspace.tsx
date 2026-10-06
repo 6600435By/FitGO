@@ -809,14 +809,16 @@ export function PayrollWorkspace({ mode }: Props) {
                 : `Печать (${batchIds.size})`}
             </button>
           )}
-          <button
-            type="button"
-            className="btn-secondary w-full lg:w-auto"
-            disabled={!summary}
-            onClick={openPrintDialog}
-          >
-            Печать листа
-          </button>
+          {canEdit && (
+            <button
+              type="button"
+              className="btn-secondary w-full lg:w-auto"
+              disabled={!summary}
+              onClick={openPrintDialog}
+            >
+              Печать листа
+            </button>
+          )}
           {canEdit && (
             <button
               type="button"

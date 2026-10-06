@@ -493,6 +493,8 @@ model User {
   firstName  String
   lastName   String
   externalId String?
+  /// 1C client card linked to this staff (same FIO/phone as «Как клиент»).
+  staffClientExternalId String?
   /// Код сотрудника в 1С (например 000000151). Для выборок по сотруднику.
   employeeCode String?
   /// true — тренер группы «Тренеры ГП» (ставки занятий).
