@@ -11,3 +11,4 @@ coverage
 var/hall-snapshots/
 hall-cameras.json
 **/hall-cameras.json
+.cursor/fresh-chat-state/

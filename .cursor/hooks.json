@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "command": ".cursor/hooks/fresh-chat-after-git.py",
+        "matcher": "Shell",
+        "timeout": 15
+      }
+    ],
+    "sessionStart": [
+      {
+        "command": ".cursor/hooks/fresh-chat-session-start.py",
+        "timeout": 10
+      }
+    ]
+  }
+}

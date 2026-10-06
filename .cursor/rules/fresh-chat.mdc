@@ -1,0 +1,16 @@
+---
+description: После успешного git commit/push — handoff в новый Agent-чат (токены)
+alwaysApply: true
+---
+
+# Fresh chat
+
+Если в контексте есть `FRESH_CHAT_REQUIRED`, или только что успешно прошли
+`git commit` / `git push` в этом чате:
+
+1. Прочитай skill [`.cursor/skills/fresh-chat/SKILL.md`](../skills/fresh-chat/SKILL.md)
+2. Закончи ответ блоком **«Новый чат»** по шаблону skill
+3. Не начинай следующую крупную задачу в этом же чате
+
+Hook сам пишет seed в `.cursor/fresh-chat-state/` и буфер; новый чат подхватит
+его на `sessionStart`.
