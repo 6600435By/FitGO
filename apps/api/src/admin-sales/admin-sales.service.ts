@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { FitgoAnalyticsHttpProvider } from '@fitgo/1c-adapter';
 import {
   allPaySlices,
   type AdminMySalesResponse,
@@ -36,7 +38,20 @@ function readPayProfile(raw: unknown): StaffPayProfile | undefined {
 
 @Injectable()
 export class AdminSalesService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(AdminSalesService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
+
+  private createAnalytics(): FitgoAnalyticsHttpProvider | null {
+    const baseUrl = this.config.get<string>('FORMA_ANALYTICS_URL')?.trim();
+    const apiKey = this.config.get<string>('FORMA_API_KEY')?.trim();
+    const basicAuth = this.config.get<string>('FORMA_BASIC_AUTH')?.trim();
+    if (!baseUrl || !apiKey || !basicAuth) return null;
+    return new FitgoAnalyticsHttpProvider({ baseUrl, apiKey, basicAuth });
+  }
 
   private async adminAttribution(
     clubId: string,
@@ -396,7 +411,7 @@ export class AdminSalesService {
 
     if (!hint) {
       hint =
-        'ЗП — только с оплат в периоде (продажа могла быть раньше). Долг — снимок неоплаченных из 1С (как продавец), переносится пока не закрыт.';
+        'ЗП — только с оплат в периоде. Долг продавца — из 1С «Неоплаченные продажи» (live Analytics или кэш).';
     }
 
     return {
@@ -412,8 +427,9 @@ export class AdminSalesService {
   }
 
   /**
-   * Open seller debt from ClubRevenue unpaid (1C «Неоплаченные продажи»).
-   * Staff on unpaid rows is often empty — fill from SaleTransaction sale-doc map.
+   * Open seller debt ≈ 1C «Неоплаченные продажи» for this employee.
+   * Prefer live Analytics scope=debt&employeeId (after BSL fills seller from
+   * ПродажиСебестоимость). Fallback: ClubRevenue unpaid + SaleTransaction map.
    */
   async sellerOpenUnpaid(
     clubId: string,
@@ -433,8 +449,122 @@ export class AdminSalesService {
       return { unpaidMinor: 0, lines: [] };
     }
 
+    const live = await this.sellerOpenUnpaidLive(code, to).catch((err) => {
+      this.logger.warn(
+        `Live seller debt failed: ${err instanceof Error ? err.message : err}`,
+      );
+      return null;
+    });
+    if (live) return live;
+
+    return this.sellerOpenUnpaidFromCache(clubId, code, user.lastName, to);
+  }
+
+  /** Live Analytics debt for one seller. Null → use cache. */
+  private async sellerOpenUnpaidLive(
+    employeeCode: string,
+    to: string,
+  ): Promise<{ unpaidMinor: number; lines: AdminSaleLineDto[] } | null> {
+    const provider = this.createAnalytics();
+    if (!provider) return null;
+
+    const page = await Promise.race([
+      provider.getSales({
+        from: '2010-01-01',
+        to,
+        scope: 'debt',
+        employeeId: employeeCode,
+        pageSize: 0,
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 12_000)),
+    ]);
+    if (!page?.items?.length) return null;
+
+    const items = page.items.filter(
+      (i) =>
+        (i.operationType ?? 'unpaid') === 'unpaid' &&
+        isCollectibleClientDebt({
+          externalId: i.saleDocumentId,
+          productName: i.productName,
+        }),
+    );
+    const withEmp = items.filter((i) =>
+      Boolean(i.employeeExternalId?.trim()),
+    );
+    const mineByCode = withEmp.filter(
+      (i) => i.employeeExternalId!.trim() === employeeCode,
+    );
+
+    // BSL filled employee → trust code filter.
+    let chosen = mineByCode;
+    if (!chosen.length && withEmp.length === 0 && items.length < 400) {
+      // Server filtered by employeeId but left emp fields empty.
+      chosen = items;
+    }
+    if (!chosen.length) return null;
+
+    const lines: AdminSaleLineDto[] = [];
+    let unpaidMinor = 0;
+    for (const item of chosen) {
+      const major = Math.abs(Number(item.saleAmount ?? item.amount) || 0);
+      const amountMinor = majorToMinor(major);
+      if (amountMinor <= 0) continue;
+      unpaidMinor += amountMinor;
+      const soldAt = item.soldAt?.includes('T')
+        ? item.soldAt
+        : `${(item.soldAt || to).slice(0, 10)}T12:00:00.000Z`;
+      lines.push({
+        id: `live:${item.saleDocumentId}`,
+        externalSaleId: item.saleDocumentId,
+        soldAt,
+        paidAt: null,
+        amountMinor,
+        attributedMinor: amountMinor,
+        saleType: normalizeSaleType(item.saleType, item.productName),
+        productName: item.productName ?? null,
+        clientName: item.clientName ?? null,
+        employeeExternalId: item.employeeExternalId?.trim() || employeeCode,
+        employeeName: item.employeeName ?? null,
+        paid: false,
+      });
+    }
+    if (!lines.length) return null;
+    this.logger.log(
+      `Live seller debt employee=${employeeCode} lines=${lines.length} unpaid=${(unpaidMinor / 100).toFixed(2)}`,
+    );
+    return { unpaidMinor, lines };
+  }
+
+  private async sellerOpenUnpaidFromCache(
+    clubId: string,
+    code: string,
+    lastName: string,
+    to: string,
+  ): Promise<{ unpaidMinor: number; lines: AdminSaleLineDto[] }> {
     const toDt = endOfDayUtc(to);
-    const lastName = user.lastName.trim().toLowerCase();
+    const last = lastName.trim().toLowerCase();
+
+    // Prefer rows already tagged with this seller (after Analytics re-sync).
+    const direct = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        operationType: 'unpaid',
+        occurredAt: { lte: toDt },
+        employeeExternalId: code,
+      },
+      orderBy: { occurredAt: 'desc' },
+    });
+    const directCollectible = direct.filter((r) =>
+      isCollectibleClientDebt({
+        externalId: r.externalId,
+        productName: r.productName,
+      }),
+    );
+    if (directCollectible.length > 0) {
+      return this.mapRevenueRowsToSellerLines(directCollectible, code);
+    }
+
     const debtRows = await this.prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
@@ -451,67 +581,58 @@ export class AdminSalesService {
       }),
     );
 
-    const saleDocs = new Set<string>();
-    for (const r of collectible) {
-      if (r.employeeExternalId?.trim()) continue;
-      for (const id of saleDocIdsForRevenueRow(r)) saleDocs.add(id);
-    }
-
-    const docList = [...saleDocs];
-    const staffChunks: {
-      externalSaleId: string;
-      employeeExternalId: string | null;
-      employeeName: string | null;
-    }[] = [];
-    const chunkSize = 40;
-    for (let i = 0; i < docList.length; i += chunkSize) {
-      const chunk = docList.slice(i, i + chunkSize);
-      if (!chunk.length) break;
-      const part = await this.prisma.saleTransaction.findMany({
-        where: {
-          clubId,
-          isActive: true,
-          OR: chunk.map((doc) => ({
-            externalSaleId: { startsWith: `${doc}:` },
-          })),
-        },
-        select: {
-          externalSaleId: true,
-          employeeExternalId: true,
-          employeeName: true,
-        },
-      });
-      staffChunks.push(...part);
-    }
-    // Also load rows authored by this seller (direct employee on ST).
-    const authored = await this.prisma.saleTransaction.findMany({
+    // Full ST staff map (chunked startsWith missed many docs).
+    const saleStaff = await this.prisma.saleTransaction.findMany({
       where: {
         clubId,
         isActive: true,
-        employeeExternalId: code,
+        employeeExternalId: { not: null },
+        NOT: { employeeExternalId: '' },
       },
       select: {
         externalSaleId: true,
         employeeExternalId: true,
         employeeName: true,
       },
-      take: 5000,
     });
-    staffChunks.push(...authored);
+    // Prefer this seller's docs when several ST rows share a sale doc.
+    const ordered = [
+      ...saleStaff.filter((s) => s.employeeExternalId === code),
+      ...saleStaff.filter((s) => s.employeeExternalId !== code),
+    ];
+    const staffBySaleDoc = buildStaffBySaleDoc(ordered);
 
-    const staffBySaleDoc = buildStaffBySaleDoc(staffChunks);
-    const lines: AdminSaleLineDto[] = [];
-    let unpaidMinor = 0;
-
+    const matched = [];
     for (const raw of collectible) {
       const row = attachEmployeeToRevenueRow(raw, staffBySaleDoc);
       const empId = row.employeeExternalId?.trim() || '';
       const empName = (row.employeeName ?? '').trim().toLowerCase();
       const isMine =
-        empId === code ||
-        (!!lastName && empName.includes(lastName));
+        empId === code || (!!last && empName.includes(last));
       if (!isMine) continue;
+      matched.push(row);
+    }
+    return this.mapRevenueRowsToSellerLines(matched, code);
+  }
 
+  private mapRevenueRowsToSellerLines(
+    rows: Array<{
+      id: string;
+      externalId: string;
+      occurredAt: Date;
+      amount: number;
+      saleAmount: number;
+      saleType: string | null;
+      productName: string | null;
+      clientName: string | null;
+      employeeExternalId: string | null;
+      employeeName: string | null;
+    }>,
+    code: string,
+  ): { unpaidMinor: number; lines: AdminSaleLineDto[] } {
+    const lines: AdminSaleLineDto[] = [];
+    let unpaidMinor = 0;
+    for (const row of rows) {
       const major = Math.abs(Number(row.saleAmount || row.amount) || 0);
       const amountMinor = majorToMinor(major);
       if (amountMinor <= 0) continue;
@@ -529,12 +650,11 @@ export class AdminSalesService {
         ),
         productName: row.productName,
         clientName: row.clientName,
-        employeeExternalId: empId || code,
+        employeeExternalId: row.employeeExternalId?.trim() || code,
         employeeName: row.employeeName,
         paid: false,
       });
     }
-
     return { unpaidMinor, lines };
   }
 
