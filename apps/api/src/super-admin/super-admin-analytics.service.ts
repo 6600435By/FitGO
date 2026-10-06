@@ -5,8 +5,12 @@ import { MembershipStatus, type GrowthInsight } from '@fitgo/shared-types';
 import {
   AdminTaskStatus,
   AvailabilityBlockStatus,
+  OnexClassKind,
+  OnexClassMemberAttendance,
+  OnexClassStatus,
   PersonalBookingStatus,
   Role,
+  SpaBookingStatus,
   StaffShiftTrack,
 } from '@prisma/client';
 import { ClubRevenueService } from '../admin-sales/club-revenue.service';
@@ -327,7 +331,7 @@ export class SuperAdminAnalyticsService {
       this.revenue.cashRevenueMinor(clubId, current.from, current.to),
       this.revenue.cashRevenueMinor(clubId, prevMonth.from, prevMonth.to),
       this.revenue.cashRevenueMinor(clubId, prevYear.from, prevYear.to),
-      this.visitCounts(current, prevMonth, prevYear),
+      this.visitCounts(clubId, current, prevMonth, prevYear),
       this.salesMix(clubId, current.from, current.to),
       this.onShiftToday(clubId, current.to),
       this.prisma.adminTask.count({
@@ -507,54 +511,249 @@ export class SuperAdminAnalyticsService {
     }));
   }
 
+  /**
+   * Unique (clientExternalId, calendar day) across hall entries + PT/SPA.
+   * Primary: Postgres after club sync. Analytics /stats/visits = hall fallback only.
+   */
   private async visitCounts(
+    clubId: string,
     current: { from: string; to: string },
     prevMonth: { from: string; to: string },
     prevYear: { from: string; to: string },
   ) {
+    const [currentCount, prevMonthCount, prevYearCount] = await Promise.all([
+      this.uniqueClientDays(clubId, current.from, current.to),
+      this.uniqueClientDays(clubId, prevMonth.from, prevMonth.to),
+      this.uniqueClientDays(clubId, prevYear.from, prevYear.to),
+    ]);
+
+    if (
+      currentCount.count == null &&
+      prevMonthCount.count == null &&
+      prevYearCount.count == null
+    ) {
+      return {
+        available: false,
+        current: null,
+        prevMonth: null,
+        prevYear: null,
+        hint:
+          currentCount.hint ??
+          prevMonthCount.hint ??
+          prevYearCount.hint ??
+          'Визиты ещё не в кэше FitGO — дождитесь «Обновить из 1С» / ночной выгрузки. Для fallback зала: шаблон GET /v1/stats/visits в FitGOAnalytics.',
+      };
+    }
+
+    return {
+      available: true,
+      current: currentCount.count,
+      prevMonth: prevMonthCount.count,
+      prevYear: prevYearCount.count,
+      hint: null as string | null,
+    };
+  }
+
+  private async uniqueClientDays(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<{ count: number | null; hint: string | null }> {
+    const keys = new Set<string>();
+    const rangeStart = new Date(`${from}T00:00:00+03:00`);
+    const rangeEnd = new Date(`${to}T23:59:59.999+03:00`);
+
+    const hallRows = await this.prisma.clubHallVisit.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        visitDate: { gte: from, lte: to },
+        clientExternalId: { not: null },
+      },
+      select: { clientExternalId: true, visitDate: true },
+    });
+    for (const row of hallRows) {
+      const id = row.clientExternalId?.trim();
+      if (!id) continue;
+      keys.add(`${id}|${row.visitDate.slice(0, 10)}`);
+    }
+    const hallFromCache = hallRows.length > 0;
+
+    const [onexSessions, ptSales, spaBookings, ptBookings] = await Promise.all([
+      this.prisma.onexClassSession.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          kind: { in: [OnexClassKind.PT, OnexClassKind.SPA] },
+          startAt: { gte: rangeStart, lte: rangeEnd },
+          status: { not: OnexClassStatus.CANCELLED },
+        },
+        select: {
+          startAt: true,
+          members: {
+            where: {
+              cancelled: false,
+              attendance: OnexClassMemberAttendance.ATTENDED,
+            },
+            select: { externalId: true },
+          },
+        },
+      }),
+      this.prisma.trainerPtSale.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          occurredAt: { gte: rangeStart, lte: rangeEnd },
+        },
+        select: {
+          externalId: true,
+          clientName: true,
+          bookingRef: true,
+          occurredAt: true,
+        },
+      }),
+      this.prisma.spaBooking.findMany({
+        where: {
+          clubId,
+          status: { not: SpaBookingStatus.CANCELLED },
+          startAt: { gte: rangeStart, lte: rangeEnd },
+          OR: [
+            { status: SpaBookingStatus.COMPLETED },
+            { consumedInCrmAt: { not: null } },
+          ],
+        },
+        select: {
+          clientExternalId: true,
+          clientId: true,
+          startAt: true,
+          client: { select: { externalId: true } },
+        },
+      }),
+      this.prisma.personalTrainingBooking.findMany({
+        where: {
+          status: PersonalBookingStatus.COMPLETED,
+          startAt: { gte: rangeStart, lte: rangeEnd },
+          trainer: { clubId },
+        },
+        select: {
+          startAt: true,
+          client: { select: { externalId: true } },
+        },
+      }),
+    ]);
+
+    for (const session of onexSessions) {
+      const day = moscowDayKey(session.startAt);
+      for (const m of session.members) {
+        const id = m.externalId?.trim();
+        if (!id) continue;
+        keys.add(`${id}|${day}`);
+      }
+    }
+
+    for (const sale of ptSales) {
+      const day = moscowDayKey(sale.occurredAt);
+      const name = (sale.clientName ?? '').trim().toLowerCase();
+      const id =
+        (sale.bookingRef?.trim() ? `bref:${sale.bookingRef.trim()}` : '') ||
+        (name ? `name:${name}` : '') ||
+        `ptsale:${sale.externalId}`;
+      keys.add(`${id}|${day}`);
+    }
+
+    for (const spa of spaBookings) {
+      const day = moscowDayKey(spa.startAt);
+      const id =
+        spa.clientExternalId?.trim() ||
+        spa.client?.externalId?.trim() ||
+        (spa.clientId ? `uid:${spa.clientId}` : '');
+      if (!id) continue;
+      keys.add(`${id}|${day}`);
+    }
+
+    for (const pt of ptBookings) {
+      const day = moscowDayKey(pt.startAt);
+      const id = pt.client?.externalId?.trim() || '';
+      if (!id) continue;
+      keys.add(`${id}|${day}`);
+    }
+
+    const serviceOnlySize = (() => {
+      // Approx PT/SPA contribution when hall cache empty (Analytics hall is a scalar).
+      const serviceKeys = new Set<string>();
+      for (const session of onexSessions) {
+        const day = moscowDayKey(session.startAt);
+        for (const m of session.members) {
+          const id = m.externalId?.trim();
+          if (id) serviceKeys.add(`${id}|${day}`);
+        }
+      }
+      for (const sale of ptSales) {
+        const day = moscowDayKey(sale.occurredAt);
+        const name = (sale.clientName ?? '').trim().toLowerCase();
+        const id =
+          (sale.bookingRef?.trim() ? `bref:${sale.bookingRef.trim()}` : '') ||
+          (name ? `name:${name}` : '') ||
+          `ptsale:${sale.externalId}`;
+        serviceKeys.add(`${id}|${day}`);
+      }
+      for (const spa of spaBookings) {
+        const day = moscowDayKey(spa.startAt);
+        const id =
+          spa.clientExternalId?.trim() ||
+          spa.client?.externalId?.trim() ||
+          (spa.clientId ? `uid:${spa.clientId}` : '');
+        if (id) serviceKeys.add(`${id}|${day}`);
+      }
+      for (const pt of ptBookings) {
+        const day = moscowDayKey(pt.startAt);
+        const id = pt.client?.externalId?.trim() || '';
+        if (id) serviceKeys.add(`${id}|${day}`);
+      }
+      return serviceKeys.size;
+    })();
+
+    if (hallFromCache || keys.size > 0) {
+      // Prefer full union from cache when hall rows exist.
+      if (hallFromCache) {
+        return { count: keys.size, hint: null };
+      }
+      // No hall rows but PT/SPA present — try Analytics hall add-on.
+      const provider = this.analyticsProvider();
+      if (provider) {
+        try {
+          const hall = await provider.getVisitCount({ from, to });
+          if (hall != null) {
+            return { count: hall + serviceOnlySize, hint: null };
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+      return { count: keys.size, hint: null };
+    }
+
+    // Empty cache: hall-only Analytics fallback.
     const provider = this.analyticsProvider();
     if (!provider) {
       return {
-        available: false,
-        current: null,
-        prevMonth: null,
-        prevYear: null,
-        hint: 'Нет доступа к FitGO Analytics — визиты клуба не посчитаны.',
+        count: null,
+        hint: 'Нет кэша визитов и нет FitGO Analytics (FORMA_ANALYTICS_URL).',
       };
     }
     try {
-      const [currentCount, prevMonthCount, prevYearCount] = await Promise.all([
-        provider.getVisitCount(current),
-        provider.getVisitCount(prevMonth),
-        provider.getVisitCount(prevYear),
-      ]);
-      if (
-        currentCount == null ||
-        prevMonthCount == null ||
-        prevYearCount == null
-      ) {
+      const hall = await provider.getVisitCount({ from, to });
+      if (hall == null) {
         return {
-          available: false,
-          current: null,
-          prevMonth: null,
-          prevYear: null,
-          hint: '1С не вернула число визитов.',
+          count: null,
+          hint: '1С не вернула число визитов зала.',
         };
       }
-      return {
-        available: true,
-        current: currentCount,
-        prevMonth: prevMonthCount,
-        prevYear: prevYearCount,
-        hint: null as string | null,
-      };
+      return { count: hall, hint: null };
     } catch {
       return {
-        available: false,
-        current: null,
-        prevMonth: null,
-        prevYear: null,
-        hint: 'В публикации analytics нет GET /v1/stats/visits (Документ.Посещение). Добавьте шаблон и обновите модули продаж.',
+        count: null,
+        hint: 'В публикации analytics нет GET /v1/stats/visits (Документ.Посещение). Добавьте шаблон StatsVisits и обновите модули продаж.',
       };
     }
   }
@@ -632,6 +831,16 @@ function minskParts(d = new Date()) {
   const get = (type: string) =>
     Number(parts.find((p) => p.type === type)?.value ?? '0');
   return { year: get('year'), month: get('month'), day: get('day') };
+}
+
+/** Calendar day YYYY-MM-DD in club TZ (Europe/Minsk). */
+function moscowDayKey(d: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: CLUB_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
 }
 
 function isoDate(year: number, month: number, day: number) {

@@ -184,7 +184,9 @@ export default function SuperAdminHomePage() {
         </Link>
 
         <div className="card">
-          <p className="text-xs text-slate-500">Визиты в клуб за месяц</p>
+          <p className="text-xs text-slate-500">
+            Уник. клиенты × дни (зал + ПТ/SPA)
+          </p>
           {data.visits.available && data.visits.current != null ? (
             <>
               <p className="mt-1 text-2xl font-semibold tabular-nums">
