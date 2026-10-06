@@ -64,6 +64,8 @@ type ListFilters = {
   status?: BookingControlStatus | 'ALL';
   needsReview?: boolean;
   payment?: 'PAID' | 'DEBT' | 'ALL';
+  /** Skip live 1C PT-sales fetch (dashboard KPI / counts). */
+  skipExternal?: boolean;
 };
 
 @Injectable()
@@ -163,7 +165,7 @@ export class BookingControlService {
           },
           include: { client: true, specialist: true, service: true },
         }),
-        wantPtSales
+        wantPtSales && !filters.skipExternal
           ? this.fetchTrainerPtSales(filters.from, filters.to)
           : Promise.resolve([] as SpecialistServiceDebt[]),
       ]);

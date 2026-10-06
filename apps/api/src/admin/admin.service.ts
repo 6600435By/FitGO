@@ -10,12 +10,16 @@ import {
   type AdminDashboard,
   type RenewalStage,
 } from '@fitgo/shared-types';
-import { AdminTaskStatus as PrismaAdminTaskStatus } from '@prisma/client';
+import {
+  AdminTaskStatus as PrismaAdminTaskStatus,
+  OnexClassStatus,
+  PersonalBookingStatus,
+  SpaBookingStatus,
+} from '@prisma/client';
 import { adminTaskTopic } from './task-topic';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { BookingControlService } from '../booking-control/booking-control.service';
-import { ClubScheduleService } from '../club-schedule/club-schedule.service';
 import { ClubRevenueService } from '../admin-sales/club-revenue.service';
 import { ClubRevenueSyncService } from '../admin-sales/club-revenue-sync.service';
 import { FitnessService } from '../fitness/fitness.service';
@@ -32,7 +36,6 @@ export class AdminService {
     private readonly fitness: FitnessService,
     private readonly notifications: NotificationsService,
     private readonly bookingControl: BookingControlService,
-    private readonly clubSchedule: ClubScheduleService,
     private readonly clubRevenue: ClubRevenueService,
     private readonly clubRevenueSync: ClubRevenueSyncService,
     private readonly tasksScheduler: AdminTasksSchedulerService,
@@ -51,10 +54,16 @@ export class AdminService {
     const in7 = new Date();
     in7.setDate(in7.getDate() + 7);
     const in7Str = localDayKey(in7);
+    const dayStart = new Date(`${today}T00:00:00`);
+    const dayEnd = new Date(`${today}T23:59:59.999`);
 
+    // DB-only path: never await Forma/Analytics on dashboard GET (was stacking
+    // WordpressUserAPI / Analytics sessions on every tab revisit).
     const [
       reviewItems,
-      scheduleEvents,
+      groupBooked,
+      spaCount,
+      ptCount,
       revenueBlock,
       pendingCrmCount,
       expiringSoon,
@@ -65,11 +74,40 @@ export class AdminService {
           from: from30Str,
           to: today,
           needsReview: true,
+          skipExternal: true,
         })
         .catch(() => []),
-      this.clubSchedule
-        .list(clubId, { from: today, to: today, types: ['GROUP', 'PT', 'SPA'] })
-        .catch(() => []),
+      this.prisma.onexClassSession
+        .findMany({
+          where: {
+            clubId,
+            kind: 'GROUP',
+            isActive: true,
+            status: { not: OnexClassStatus.CANCELLED },
+            startAt: { gte: dayStart, lte: dayEnd },
+          },
+          select: { bookedCount: true },
+        })
+        .then((rows) => rows.reduce((s, r) => s + (r.bookedCount ?? 0), 0))
+        .catch(() => 0),
+      this.prisma.spaBooking
+        .count({
+          where: {
+            clubId,
+            status: { not: SpaBookingStatus.CANCELLED },
+            startAt: { gte: dayStart, lte: dayEnd },
+          },
+        })
+        .catch(() => 0),
+      this.prisma.personalTrainingBooking
+        .count({
+          where: {
+            trainer: { clubId },
+            status: { not: PersonalBookingStatus.CANCELLED },
+            startAt: { gte: dayStart, lte: dayEnd },
+          },
+        })
+        .catch(() => 0),
       this.loadRevenueToday(clubId, today),
       this.prisma.userClubMembership.count({
         where: { clubId, leftAt: null, crmStatus: 'PENDING_CRM' },
@@ -125,15 +163,9 @@ export class AdminService {
       }),
     ]);
 
-    let group = 0;
-    let spa = 0;
-    let pt = 0;
-    for (const ev of scheduleEvents) {
-      if (ev.status === 'cancelled') continue;
-      if (ev.type === 'GROUP') group += ev.booked ?? 0;
-      else if (ev.type === 'SPA') spa += 1;
-      else if (ev.type === 'PT') pt += 1;
-    }
+    const group = groupBooked;
+    const spa = spaCount;
+    const pt = ptCount;
 
     const callToday = callTodayTasks.map((task) => {
       const meta = (task.meta ?? {}) as Record<string, unknown>;
@@ -199,7 +231,7 @@ export class AdminService {
       )?.currency ?? 'BYN';
 
     try {
-      let report = await this.clubRevenue.report(clubId, {
+      const report = await this.clubRevenue.report(clubId, {
         from: today,
         to: today,
       });
@@ -207,15 +239,10 @@ export class AdminService {
         ? new Date(report.lastSyncedAt).getTime()
         : 0;
       const stale = !syncedAt || Date.now() - syncedAt > 15 * 60 * 1000;
-      if (stale) {
-        await Promise.race([
-          this.clubRevenueSync.syncClub(clubId, 'incremental').catch(() => null),
-          new Promise((r) => setTimeout(r, 4000)),
-        ]);
-        report = await this.clubRevenue.report(clubId, {
-          from: today,
-          to: today,
-        });
+      // Fire-and-forget only — never await day-by-day Analytics on GET (was
+      // stacking parallel syncs via Promise.race timeout without cancel).
+      if (stale && !this.clubRevenueSync.isSyncing(clubId)) {
+        void this.clubRevenueSync.syncClubQuick(clubId).catch(() => null);
       }
       const cash = (report.summary.revenue.cashMinor ?? 0) / 100;
       const card = (report.summary.revenue.cardMinor ?? 0) / 100;

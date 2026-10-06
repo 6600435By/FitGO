@@ -14,6 +14,9 @@ import { api, type AdminDashboard } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDate } from '@/lib/utils';
 
+/** Keep last dashboard while remounting tabs — avoid full-page spinner. */
+let dashboardCache: AdminDashboard | null = null;
+
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -28,8 +31,15 @@ function money(n: number, currency: string) {
   return `${n.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ${currency}`;
 }
 
+function syncedLabel(iso?: string) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return `обновлено ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
 export default function AdminHomePage() {
-  const [data, setData] = useState<AdminDashboard | null>(null);
+  const [data, setData] = useState<AdminDashboard | null>(dashboardCache);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -38,8 +48,13 @@ export default function AdminHomePage() {
 
     api
       .adminDashboard(token)
-      .then(setData)
-      .catch((err) => setError(err.message));
+      .then((next) => {
+        dashboardCache = next;
+        setData(next);
+      })
+      .catch((err) => {
+        if (!dashboardCache) setError(err.message);
+      });
   }, []);
 
   if (error) return <p className="text-red-400">{error}</p>;
@@ -56,6 +71,7 @@ export default function AdminHomePage() {
   const from30 = daysAgoIso(30);
   const currency = data.stats.revenueToday.currency || 'BYN';
   const reviewHref = `/admin/booking-control?needsReview=1&from=${from30}&to=${today}`;
+  const revenueSynced = syncedLabel(data.stats.revenueToday.syncedAt);
 
   return (
     <div className="space-y-4">
@@ -143,6 +159,11 @@ export default function AdminHomePage() {
                 <span>{money(data.stats.revenueToday.other, currency)}</span>
               </div>
             ) : null}
+            {revenueSynced ? (
+              <p className="pt-1 text-xs text-slate-500">{revenueSynced}</p>
+            ) : (
+              <p className="pt-1 text-xs text-slate-500">синхронизация в фоне…</p>
+            )}
           </div>
         </div>
       </div>

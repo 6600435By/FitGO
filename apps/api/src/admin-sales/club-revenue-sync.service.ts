@@ -29,6 +29,8 @@ export type RevenueRangeOptions = {
 @Injectable()
 export class ClubRevenueSyncService {
   private readonly logger = new Logger(ClubRevenueSyncService.name);
+  /** Prevent stacked day-by-day 1C Analytics pulls when dashboard/UI re-triggers sync. */
+  private readonly inFlight = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -43,9 +45,110 @@ export class ClubRevenueSyncService {
     return new FitgoAnalyticsHttpProvider({ baseUrl, apiKey, basicAuth });
   }
 
+  isSyncing(clubId: string): boolean {
+    return this.inFlight.has(clubId);
+  }
+
+  /**
+   * Lightweight pull for dashboard / UI: today + 1 day overlap only.
+   * Never runs a 60-day lookback from a page load.
+   */
+  async syncClubQuick(clubId: string): Promise<{
+    upserted: number;
+    deactivated: number;
+    from: string;
+    to: string;
+  }> {
+    if (this.inFlight.has(clubId)) {
+      this.logger.warn(`Club revenue sync already running for ${clubId} — skip quick`);
+      return { upserted: 0, deactivated: 0, from: '', to: '' };
+    }
+    this.inFlight.add(clubId);
+    try {
+      const to = new Date();
+      const toStr = to.toISOString().slice(0, 10);
+      const from = new Date(to);
+      from.setUTCDate(from.getUTCDate() - 1);
+      const fromStr = from.toISOString().slice(0, 10);
+
+      const state = await this.prisma.salesSyncState.upsert({
+        where: {
+          clubId_resourceKey: { clubId, resourceKey: RESOURCE_KEY },
+        },
+        create: { clubId, resourceKey: RESOURCE_KEY, lastStatus: 'running' },
+        update: {
+          lastRunAt: new Date(),
+          lastStatus: 'running',
+          lastError: null,
+        },
+      });
+
+      if (!this.createProvider()) {
+        await this.prisma.salesSyncState.update({
+          where: { id: state.id },
+          data: {
+            lastStatus: 'skipped',
+            lastError: 'FORMA_ANALYTICS_URL not configured',
+            lastRunAt: new Date(),
+          },
+        });
+        return { upserted: 0, deactivated: 0, from: fromStr, to: toStr };
+      }
+
+      try {
+        const result = await this.syncClubRange(clubId, fromStr, toStr, {});
+        await this.prisma.salesSyncState.update({
+          where: { id: state.id },
+          data: {
+            cursor: toStr,
+            lastStatus: 'ok',
+            lastSuccessAt: new Date(),
+            lastRunAt: new Date(),
+            lastError: null,
+          },
+        });
+        return result;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await this.prisma.salesSyncState.update({
+          where: { id: state.id },
+          data: {
+            lastStatus: 'error',
+            lastError: message.slice(0, 500),
+            lastRunAt: new Date(),
+          },
+        });
+        throw err;
+      }
+    } finally {
+      this.inFlight.delete(clubId);
+    }
+  }
+
   async syncClub(
     clubId: string,
     mode: SalesSyncMode = 'incremental',
+  ): Promise<{
+    upserted: number;
+    deactivated: number;
+    from: string;
+    to: string;
+  }> {
+    if (this.inFlight.has(clubId)) {
+      this.logger.warn(`Club revenue sync already running for ${clubId} — skip`);
+      return { upserted: 0, deactivated: 0, from: '', to: '' };
+    }
+    this.inFlight.add(clubId);
+    try {
+      return await this.syncClubLocked(clubId, mode);
+    } finally {
+      this.inFlight.delete(clubId);
+    }
+  }
+
+  private async syncClubLocked(
+    clubId: string,
+    mode: SalesSyncMode,
   ): Promise<{
     upserted: number;
     deactivated: number;
