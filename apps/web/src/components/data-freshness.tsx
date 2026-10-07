@@ -60,11 +60,16 @@ function formatSyncError(raw: string): string {
   return raw;
 }
 
-const REFRESH_ROLES = [
+const REFRESH_ROLES: ReadonlySet<UserRole> = new Set([
   UserRole.ADMIN,
   UserRole.SUPER_ADMIN,
   UserRole.MANAGER,
-] as const;
+]);
+
+const OPS_ROLES: ReadonlySet<UserRole> = new Set([
+  UserRole.SUPER_ADMIN,
+  UserRole.MANAGER,
+]);
 
 /** Compact refresh control — same height as the «Данные на …» line. */
 function RefreshButton({
@@ -108,14 +113,10 @@ export function DataFreshness({
 }: Props) {
   const user = getUser();
   /** Hint / lastError / sourceLabel: super-admin and manager only. */
-  const isOps = Boolean(
-    user?.roles?.some((r) =>
-      [UserRole.SUPER_ADMIN, UserRole.MANAGER].includes(r),
-    ),
-  );
+  const isOps = Boolean(user?.roles?.some((r) => OPS_ROLES.has(r)));
   const canRefresh =
     canRefreshProp ??
-    Boolean(user?.roles?.some((r) => REFRESH_ROLES.includes(r)));
+    Boolean(user?.roles?.some((r) => REFRESH_ROLES.has(r)));
 
   const [status, setStatus] = useState<ClubSyncStatus | null>(null);
   const [busy, setBusy] = useState(false);
