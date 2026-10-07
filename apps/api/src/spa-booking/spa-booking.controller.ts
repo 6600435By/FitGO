@@ -26,11 +26,16 @@ import {
   UpsertSpaServiceDto,
 } from './dto/admin-spa.dto';
 import { BookSpaDto } from './dto/book-spa.dto';
+import { BulkSpaBookingDto } from './dto/bulk-spa-booking.dto';
 import { CheckSpecialistAvailabilityDto } from './dto/check-availability.dto';
 import { SetSpecialistDayHoursDto } from './dto/set-day-hours.dto';
 import { PublishSpecialistScheduleDto } from './dto/publish-schedule.dto';
 import { SetSpecialistAvailabilityBlocksDto } from './dto/set-availability-blocks.dto';
 import { SetSpecialistWorkScheduleDto } from './dto/set-work-schedule.dto';
+import {
+  BookFromSpaWaitlistDto,
+  CreateSpaWaitlistDto,
+} from './dto/spa-waitlist.dto';
 import { UpdateSpaBookingDto } from './dto/update-spa-booking.dto';
 import { SpaBookingService } from './spa-booking.service';
 
@@ -98,6 +103,41 @@ export class SpaBookingController {
     @Param('bookingId') bookingId: string,
   ) {
     return this.spa.cancelClientBooking(user, bookingId);
+  }
+
+  @Get('client/spa-waitlist')
+  @Roles(UserRole.CLIENT)
+  clientListWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.spa.listSpaWaitlist(user, from, to);
+  }
+
+  @Post('client/spa-waitlist')
+  @Roles(UserRole.CLIENT)
+  clientCreateWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateSpaWaitlistDto,
+  ) {
+    if (!dto.specialistId) {
+      throw new BadRequestException('Укажите специалиста');
+    }
+    return this.spa.createSpaWaitlist(user, {
+      specialistId: dto.specialistId,
+      serviceId: dto.serviceId,
+      desiredStartAt: dto.desiredStartAt,
+    });
+  }
+
+  @Delete('client/spa-waitlist/:id')
+  @Roles(UserRole.CLIENT)
+  clientCancelWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.spa.cancelSpaWaitlist(user, id);
   }
 
   // ─── Specialist ────────────────────────────────────────────────────────────
@@ -234,6 +274,74 @@ export class SpaBookingController {
       guestName: dto.guestName,
       guestPhone: dto.guestPhone,
       serviceId: dto.serviceId,
+      startAt: dto.startAt,
+      paymentType: dto.paymentType,
+      membershipServiceName: dto.membershipServiceName,
+    });
+  }
+
+  @Post('specialist/spa-bookings/bulk')
+  @Roles(UserRole.SPECIALIST)
+  specialistBulkAssign(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: BulkSpaBookingDto,
+  ) {
+    return this.spa.bulkAssignSpaBookings(user, {
+      clientId: dto.clientId,
+      guestName: dto.guestName,
+      guestPhone: dto.guestPhone,
+      specialistId: user.sub,
+      serviceId: dto.serviceId,
+      startAt: dto.startAt,
+      paymentType: dto.paymentType,
+      membershipServiceName: dto.membershipServiceName,
+      dates: dto.dates,
+    });
+  }
+
+  @Get('specialist/spa-waitlist')
+  @Roles(UserRole.SPECIALIST)
+  specialistListWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.spa.listSpaWaitlist(user, from, to);
+  }
+
+  @Post('specialist/spa-waitlist')
+  @Roles(UserRole.SPECIALIST)
+  specialistCreateWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateSpaWaitlistDto,
+  ) {
+    return this.spa.createSpaWaitlist(user, {
+      specialistId: user.sub,
+      serviceId: dto.serviceId,
+      desiredStartAt: dto.desiredStartAt,
+      clientId: dto.clientId,
+      guestName: dto.guestName,
+      guestPhone: dto.guestPhone,
+    });
+  }
+
+  @Delete('specialist/spa-waitlist/:id')
+  @Roles(UserRole.SPECIALIST)
+  specialistCancelWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.spa.cancelSpaWaitlist(user, id);
+  }
+
+  @Post('specialist/spa-waitlist/:id/book')
+  @Roles(UserRole.SPECIALIST)
+  specialistBookFromWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: BookFromSpaWaitlistDto,
+  ) {
+    return this.spa.bookFromSpaWaitlist(user, id, {
       startAt: dto.startAt,
       paymentType: dto.paymentType,
       membershipServiceName: dto.membershipServiceName,
@@ -389,6 +497,81 @@ export class SpaBookingController {
       guestPhone: dto.guestPhone,
       specialistId: dto.specialistId,
       serviceId: dto.serviceId,
+      startAt: dto.startAt,
+      paymentType: dto.paymentType,
+      membershipServiceName: dto.membershipServiceName,
+    });
+  }
+
+  @Post('admin/spa-bookings/bulk')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminBulkAssign(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: BulkSpaBookingDto,
+  ) {
+    if (!dto.specialistId) {
+      throw new BadRequestException('Укажите специалиста');
+    }
+    return this.spa.bulkAssignSpaBookings(user, {
+      clientId: dto.clientId,
+      guestName: dto.guestName,
+      guestPhone: dto.guestPhone,
+      specialistId: dto.specialistId,
+      serviceId: dto.serviceId,
+      startAt: dto.startAt,
+      paymentType: dto.paymentType,
+      membershipServiceName: dto.membershipServiceName,
+      dates: dto.dates,
+    });
+  }
+
+  @Get('admin/spa-waitlist')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminListWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('specialistId') specialistId?: string,
+  ) {
+    return this.spa.listSpaWaitlist(user, from, to, { specialistId });
+  }
+
+  @Post('admin/spa-waitlist')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminCreateWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateSpaWaitlistDto,
+  ) {
+    if (!dto.specialistId) {
+      throw new BadRequestException('Укажите специалиста');
+    }
+    return this.spa.createSpaWaitlist(user, {
+      specialistId: dto.specialistId,
+      serviceId: dto.serviceId,
+      desiredStartAt: dto.desiredStartAt,
+      clientId: dto.clientId,
+      guestName: dto.guestName,
+      guestPhone: dto.guestPhone,
+    });
+  }
+
+  @Delete('admin/spa-waitlist/:id')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminCancelWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.spa.cancelSpaWaitlist(user, id);
+  }
+
+  @Post('admin/spa-waitlist/:id/book')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminBookFromWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: BookFromSpaWaitlistDto,
+  ) {
+    return this.spa.bookFromSpaWaitlist(user, id, {
       startAt: dto.startAt,
       paymentType: dto.paymentType,
       membershipServiceName: dto.membershipServiceName,

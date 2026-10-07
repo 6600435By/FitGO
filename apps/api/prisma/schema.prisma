@@ -191,6 +191,13 @@ enum SpaBookingStatus {
   FAILED
 }
 
+enum SpaWaitlistStatus {
+  WAITING
+  FULFILLED
+  CANCELLED
+  EXPIRED
+}
+
 /// Atomic claim for SPA consume-to-1C (prevents double post).
 enum SpaConsumeState {
   IN_PROGRESS
@@ -457,6 +464,7 @@ model Club {
   spaServices          SpaService[]
   spaQuotaRules        SpaQuotaRule[]
   spaBookings          SpaBooking[]
+  spaWaitlistEntries   SpaWaitlistEntry[]
   groupClassSessions   GroupClassSession[]
   staffCompensations   StaffCompensation[]
   motivationRates      MotivationRate[]
@@ -592,6 +600,9 @@ model User {
   specialistSchedulePublications  SpecialistSchedulePublication[]
   specialistSpaBookings           SpaBooking[] @relation("SpecialistSpaBookings")
   clientSpaBookings               SpaBooking[] @relation("ClientSpaBookings")
+  specialistSpaWaitlist           SpaWaitlistEntry[] @relation("SpecialistSpaWaitlist")
+  clientSpaWaitlist               SpaWaitlistEntry[] @relation("ClientSpaWaitlist")
+  createdSpaWaitlist              SpaWaitlistEntry[] @relation("CreatedSpaWaitlist")
   specialistServices              SpecialistService[]
   spaQuotaRuleSpecialists         SpaQuotaRuleSpecialist[]
   groupClassBookings      GroupClassBooking[]
@@ -1502,6 +1513,7 @@ model SpaService {
   club               Club                   @relation(fields: [clubId], references: [id], onDelete: Cascade)
   specialistServices SpecialistService[]
   bookings           SpaBooking[]
+  waitlistEntries    SpaWaitlistEntry[]
   quotaRuleServices  SpaQuotaRuleService[]
 
   @@unique([clubId, externalId])
@@ -1663,6 +1675,34 @@ model SpaBooking {
   @@index([presenceStatus, startAt])
   @@index([trustBand, trustResolution])
   @@index([status])
+}
+
+/// Desired SPA slot when the time is busy — staff decides when to convert to SpaBooking.
+model SpaWaitlistEntry {
+  id                 String            @id @default(cuid())
+  clubId             String
+  specialistId       String
+  serviceId          String
+  clientId           String?
+  guestName          String?
+  guestPhone         String?
+  desiredStartAt     DateTime
+  desiredEndAt       DateTime
+  status             SpaWaitlistStatus @default(WAITING)
+  createdByUserId    String?
+  fulfilledBookingId String?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  club         Club       @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  specialist   User       @relation("SpecialistSpaWaitlist", fields: [specialistId], references: [id], onDelete: Cascade)
+  client       User?      @relation("ClientSpaWaitlist", fields: [clientId], references: [id], onDelete: Cascade)
+  createdBy    User?      @relation("CreatedSpaWaitlist", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  service      SpaService @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  @@index([clubId, desiredStartAt, status])
+  @@index([specialistId, desiredStartAt, status])
+  @@index([clientId, status])
 }
 
 /// Short-lived phone → 1C client lookup so manual SPA booking does not hit 1C every time.

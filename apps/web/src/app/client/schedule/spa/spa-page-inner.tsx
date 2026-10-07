@@ -94,6 +94,10 @@ export default function ClientSpaSchedulePage() {
   const [bookingKey, setBookingKey] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [membership, setMembership] = useState<Membership | null>(null);
+  const [waitlistOffer, setWaitlistOffer] = useState<CalendarSlot | null>(null);
+  const [waitlistBusy, setWaitlistBusy] = useState(false);
+  const [waitlistDesiredTime, setWaitlistDesiredTime] = useState('10:00');
+  const [joinedWaitlistIds, setJoinedWaitlistIds] = useState<string[]>([]);
 
   const selectedEligibility = useMemo(
     () => services.find((s) => s.service.id === selectedServiceId) ?? null,
@@ -350,10 +354,49 @@ export default function ClientSpaSchedulePage() {
         }
       }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Ошибка записи');
+      const msg = err instanceof Error ? err.message : 'Ошибка записи';
+      setMessage(msg);
+      if (/занят|недоступ|конфликт|уже есть/i.test(msg)) {
+        setWaitlistOffer(slot);
+      }
     } finally {
       setBookingKey(null);
     }
+  };
+
+  const joinWaitlist = async (args: {
+    specialistId: string;
+    startAt: string;
+  }) => {
+    const token = getToken();
+    if (!token || !selectedServiceId) return;
+    setWaitlistBusy(true);
+    setMessage('');
+    try {
+      const entry = await api.clientJoinSpaWaitlist(token, {
+        specialistId: args.specialistId,
+        serviceId: selectedServiceId,
+        desiredStartAt: args.startAt,
+      });
+      setJoinedWaitlistIds((prev) => [...prev, entry.id]);
+      setWaitlistOffer(null);
+      setMessage('Вы в листе ожидания. Администратор свяжется при освобождении.');
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Не удалось добавить в лист');
+    } finally {
+      setWaitlistBusy(false);
+    }
+  };
+
+  const joinWaitlistForDesiredTime = async () => {
+    if (!selectedDate || specialistFilter === 'ALL') {
+      setMessage('Выберите конкретного специалиста и время для листа ожидания');
+      return;
+    }
+    const startAt = new Date(
+      `${selectedDate}T${waitlistDesiredTime}:00`,
+    ).toISOString();
+    await joinWaitlist({ specialistId: specialistFilter, startAt });
   };
 
   if (loading) {
@@ -584,8 +627,53 @@ export default function ClientSpaSchedulePage() {
                   <div className="h-6 w-6 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
                 </div>
               ) : availableDays.length === 0 ? (
-                <div className="card text-center text-slate-400">
-                  Нет свободных слотов на ближайшие две недели
+                <div className="card space-y-3 text-center text-slate-400">
+                  <p>Нет свободных слотов на ближайшие две недели</p>
+                  {specialistFilter !== 'ALL' ? (
+                    <div className="space-y-2 text-left">
+                      <p className="text-sm text-slate-300">
+                        Можно встать в лист ожидания на нужное время
+                      </p>
+                      <div className="flex flex-wrap items-end gap-2">
+                        <label className="block space-y-1 text-sm">
+                          <span className="text-slate-500">Дата</span>
+                          <input
+                            type="date"
+                            className="input date-field"
+                            min={todayKey()}
+                            value={selectedDate ?? todayKey()}
+                            onChange={(e) => setSelectedDate(e.target.value)}
+                          />
+                        </label>
+                        <label className="block space-y-1 text-sm">
+                          <span className="text-slate-500">Время</span>
+                          <input
+                            type="time"
+                            className="input date-field"
+                            step={300}
+                            value={waitlistDesiredTime}
+                            onChange={(e) =>
+                              setWaitlistDesiredTime(e.target.value)
+                            }
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-secondary text-sm"
+                          disabled={waitlistBusy}
+                          onClick={() => {
+                            void joinWaitlistForDesiredTime();
+                          }}
+                        >
+                          В лист ожидания
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs">
+                      Выберите специалиста выше, чтобы встать в лист ожидания
+                    </p>
+                  )}
                 </div>
               ) : (
                 <>
@@ -642,8 +730,38 @@ export default function ClientSpaSchedulePage() {
                   )}
 
                   {daySlots.length === 0 ? (
-                    <div className="card text-center text-slate-400">
-                      На этот день нет свободного времени
+                    <div className="card space-y-3 text-center text-slate-400">
+                      <p>На этот день нет свободного времени</p>
+                      {specialistFilter !== 'ALL' ? (
+                        <div className="flex flex-wrap items-end justify-center gap-2 text-left">
+                          <label className="block space-y-1 text-sm">
+                            <span className="text-slate-500">Желаемое время</span>
+                            <input
+                              type="time"
+                              className="input date-field"
+                              step={300}
+                              value={waitlistDesiredTime}
+                              onChange={(e) =>
+                                setWaitlistDesiredTime(e.target.value)
+                              }
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="btn-secondary text-sm"
+                            disabled={waitlistBusy}
+                            onClick={() => {
+                              void joinWaitlistForDesiredTime();
+                            }}
+                          >
+                            В лист ожидания
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="text-xs">
+                          Выберите специалиста, чтобы встать в лист ожидания
+                        </p>
+                      )}
                     </div>
                   ) : (
                     <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
@@ -673,6 +791,47 @@ export default function ClientSpaSchedulePage() {
                       })}
                     </div>
                   )}
+
+                  {waitlistOffer ? (
+                    <div className="card space-y-2 border border-amber-500/30 bg-amber-500/10">
+                      <p className="text-sm text-amber-100">
+                        Слот занят (
+                        {timeFmt.format(new Date(waitlistOffer.startAt))}
+                        {waitlistOffer.specialistName
+                          ? ` · ${waitlistOffer.specialistName}`
+                          : ''}
+                        ). Встать в лист ожидания?
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="btn-primary text-sm"
+                          disabled={waitlistBusy}
+                          onClick={() => {
+                            void joinWaitlist({
+                              specialistId: waitlistOffer.specialistId,
+                              startAt: waitlistOffer.startAt,
+                            });
+                          }}
+                        >
+                          В лист ожидания
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary text-sm"
+                          onClick={() => setWaitlistOffer(null)}
+                        >
+                          Нет
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {joinedWaitlistIds.length > 0 ? (
+                    <p className="text-xs text-fitgo-300">
+                      Заявок в листе ожидания: {joinedWaitlistIds.length}
+                    </p>
+                  ) : null}
                 </>
               )}
             </div>

@@ -15,12 +15,14 @@ import {
   SpaCancelledBy,
   SpaOneCLinkStatus,
   SpaPaymentType,
+  SpaWaitlistStatus,
   type SpaService as PrismaSpaService,
 } from '@prisma/client';
 import {
   classifyVisitKind,
   MembershipStatus,
   SessionType,
+  UserRole,
   sessionApprovalLabelRu,
   toUsageControl,
   type Membership,
@@ -28,9 +30,11 @@ import {
   type SpaBoardBooking,
   type SpaBoardResponse,
   type SpaBooking,
+  type SpaBulkBookingResult,
   type SpaQuotaRule,
   type SpaService,
   type SpaServiceEligibility,
+  type SpaWaitlistEntry,
   type SpecialistCalendarResponse,
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
@@ -2798,4 +2802,369 @@ export class SpaBookingService {
       bookings: mappedBookings,
     };
   }
+
+  private isSpaStaff(user: JwtPayload) {
+    const roles = user.roles ?? [];
+    return (
+      roles.includes(UserRole.ADMIN) ||
+      roles.includes(UserRole.MANAGER) ||
+      roles.includes(UserRole.SUPER_ADMIN) ||
+      roles.includes(UserRole.SPECIALIST)
+    );
+  }
+
+  private mapWaitlistEntry(entry: {
+    id: string;
+    clubId: string;
+    specialistId: string;
+    serviceId: string;
+    clientId: string | null;
+    guestName: string | null;
+    guestPhone: string | null;
+    desiredStartAt: Date;
+    desiredEndAt: Date;
+    status: SpaWaitlistStatus;
+    createdAt: Date;
+    specialist: { firstName: string; lastName: string };
+    client: { firstName: string; lastName: string } | null;
+    service: { name: string };
+  }): SpaWaitlistEntry {
+    return {
+      id: entry.id,
+      clubId: entry.clubId,
+      specialistId: entry.specialistId,
+      specialistName:
+        `${entry.specialist.lastName} ${entry.specialist.firstName}`.trim(),
+      serviceId: entry.serviceId,
+      serviceName: entry.service.name,
+      clientId: entry.clientId ?? undefined,
+      clientName: this.spaClientName(entry.client, entry.guestName),
+      guestPhone: entry.guestPhone ?? undefined,
+      desiredStartAt: entry.desiredStartAt.toISOString(),
+      desiredEndAt: entry.desiredEndAt.toISOString(),
+      status: entry.status,
+      createdAt: entry.createdAt.toISOString(),
+    };
+  }
+
+  private waitlistInclude = {
+    specialist: { select: { firstName: true, lastName: true } },
+    client: { select: { firstName: true, lastName: true } },
+    service: { select: { name: true } },
+  } as const;
+
+  /** Expire past WAITING rows in the queried range, then return active list. */
+  async listSpaWaitlist(
+    user: JwtPayload,
+    from: string,
+    to: string,
+    opts?: { specialistId?: string },
+  ): Promise<SpaWaitlistEntry[]> {
+    const clubId = requireClubId(user);
+    const rangeStart = new Date(from);
+    const rangeEnd = new Date(to);
+    if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
+      throw new BadRequestException('Некорректный период');
+    }
+
+    const isClientOnly =
+      (user.roles ?? []).includes(UserRole.CLIENT) && !this.isSpaStaff(user);
+    const specialistScope = rolesIncludesSpecialistOnly(user)
+      ? user.sub
+      : opts?.specialistId;
+
+    const scopeWhere = {
+      clubId,
+      ...(isClientOnly ? { clientId: user.sub } : {}),
+      ...(specialistScope ? { specialistId: specialistScope } : {}),
+    };
+
+    await this.prisma.spaWaitlistEntry.updateMany({
+      where: {
+        ...scopeWhere,
+        status: SpaWaitlistStatus.WAITING,
+        desiredStartAt: { lt: new Date() },
+      },
+      data: { status: SpaWaitlistStatus.EXPIRED },
+    });
+
+    const entries = await this.prisma.spaWaitlistEntry.findMany({
+      where: {
+        ...scopeWhere,
+        status: SpaWaitlistStatus.WAITING,
+        desiredStartAt: { gte: rangeStart, lte: rangeEnd },
+      },
+      include: this.waitlistInclude,
+      orderBy: [{ desiredStartAt: 'asc' }, { createdAt: 'asc' }],
+    });
+    return entries.map((e) => this.mapWaitlistEntry(e));
+  }
+
+  async createSpaWaitlist(
+    user: JwtPayload,
+    input: {
+      specialistId: string;
+      serviceId: string;
+      desiredStartAt: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+    },
+  ): Promise<SpaWaitlistEntry> {
+    const clubId = requireClubId(user);
+    const start = new Date(input.desiredStartAt);
+    if (Number.isNaN(start.getTime())) {
+      throw new BadRequestException('Некорректная дата');
+    }
+    if (start.getTime() < Date.now() - 60_000) {
+      throw new BadRequestException('Нельзя добавить прошедшее время');
+    }
+
+    const isClientOnly =
+      (user.roles ?? []).includes(UserRole.CLIENT) && !this.isSpaStaff(user);
+
+    let clientId = input.clientId;
+    let guestName = input.guestName;
+    let guestPhone = input.guestPhone;
+
+    if (isClientOnly) {
+      clientId = user.sub;
+      guestName = undefined;
+      guestPhone = undefined;
+    } else if (rolesIncludesSpecialistOnly(user)) {
+      // specialist creates for their own column only
+      if (input.specialistId !== user.sub) {
+        throw new ForbiddenException('Можно добавить только к себе');
+      }
+    }
+
+    const service = await this.prisma.spaService.findFirst({
+      where: { id: input.serviceId, clubId, active: true },
+    });
+    if (!service) throw new NotFoundException('Услуга не найдена');
+
+    const specialist = await this.prisma.user.findFirst({
+      where: {
+        id: input.specialistId,
+        clubId,
+        roles: { some: { role: Role.SPECIALIST } },
+      },
+    });
+    if (!specialist) throw new NotFoundException('Специалист не найден');
+
+    const link = await this.prisma.specialistService.findUnique({
+      where: {
+        specialistId_serviceId: {
+          specialistId: input.specialistId,
+          serviceId: input.serviceId,
+        },
+      },
+    });
+    if (!link) {
+      throw new BadRequestException('Специалист не оказывает эту услугу');
+    }
+
+    const resolved = isClientOnly
+      ? {
+          clientId: user.sub,
+          guestName: undefined as string | undefined,
+          guestPhone: undefined as string | undefined,
+        }
+      : await this.resolveBookingClient(user, {
+          clientId,
+          guestName,
+          guestPhone,
+        });
+
+    const end = new Date(
+      start.getTime() + (service.durationMin + service.bufferMin) * 60_000,
+    );
+
+    const duplicate = await this.prisma.spaWaitlistEntry.findFirst({
+      where: {
+        clubId,
+        status: SpaWaitlistStatus.WAITING,
+        specialistId: input.specialistId,
+        serviceId: input.serviceId,
+        desiredStartAt: start,
+        ...(resolved.clientId
+          ? { clientId: resolved.clientId }
+          : { guestName: resolved.guestName ?? '' }),
+      },
+    });
+    if (duplicate) {
+      throw new ConflictException('Уже есть заявка в листе ожидания');
+    }
+
+    const entry = await this.prisma.spaWaitlistEntry.create({
+      data: {
+        clubId,
+        specialistId: input.specialistId,
+        serviceId: input.serviceId,
+        clientId: resolved.clientId,
+        guestName: resolved.guestName,
+        guestPhone: resolved.guestPhone,
+        desiredStartAt: start,
+        desiredEndAt: end,
+        status: SpaWaitlistStatus.WAITING,
+        createdByUserId: user.sub,
+      },
+      include: this.waitlistInclude,
+    });
+    return this.mapWaitlistEntry(entry);
+  }
+
+  async cancelSpaWaitlist(user: JwtPayload, entryId: string) {
+    const clubId = requireClubId(user);
+    const entry = await this.prisma.spaWaitlistEntry.findFirst({
+      where: { id: entryId, clubId },
+    });
+    if (!entry) throw new NotFoundException('Заявка не найдена');
+    if (entry.status !== SpaWaitlistStatus.WAITING) {
+      throw new BadRequestException('Заявка уже закрыта');
+    }
+
+    const isClientOnly =
+      (user.roles ?? []).includes(UserRole.CLIENT) && !this.isSpaStaff(user);
+    if (isClientOnly && entry.clientId !== user.sub) {
+      throw new ForbiddenException('Нельзя снять чужую заявку');
+    }
+    if (rolesIncludesSpecialistOnly(user) && entry.specialistId !== user.sub) {
+      throw new ForbiddenException('Нельзя снять заявку другого специалиста');
+    }
+
+    await this.prisma.spaWaitlistEntry.update({
+      where: { id: entryId },
+      data: { status: SpaWaitlistStatus.CANCELLED },
+    });
+    return { ok: true };
+  }
+
+  async bookFromSpaWaitlist(
+    user: JwtPayload,
+    entryId: string,
+    opts?: {
+      startAt?: string;
+      paymentType?: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+  ) {
+    if (!this.isSpaStaff(user)) {
+      throw new ForbiddenException('Только сотрудники могут записать из листа');
+    }
+    const clubId = requireClubId(user);
+    const entry = await this.prisma.spaWaitlistEntry.findFirst({
+      where: { id: entryId, clubId, status: SpaWaitlistStatus.WAITING },
+      include: { service: true },
+    });
+    if (!entry) throw new NotFoundException('Заявка не найдена');
+    if (rolesIncludesSpecialistOnly(user) && entry.specialistId !== user.sub) {
+      throw new ForbiddenException('Можно записать только к себе');
+    }
+
+    const startAt = opts?.startAt ?? entry.desiredStartAt.toISOString();
+    const paymentType = opts?.paymentType ?? SpaPaymentType.PAID;
+
+    const result = await this.bookSpa(user, {
+      clientId: entry.clientId ?? undefined,
+      guestName: entry.guestName ?? undefined,
+      guestPhone: entry.guestPhone ?? undefined,
+      specialistId: entry.specialistId,
+      serviceId: entry.serviceId,
+      startAt,
+      paymentType,
+      membershipServiceName: opts?.membershipServiceName,
+      origin: rolesIncludesSpecialistOnly(user)
+        ? SpaBookingOrigin.SPECIALIST_ASSIGNED
+        : SpaBookingOrigin.ADMIN_ASSIGNED,
+    });
+
+    await this.prisma.spaWaitlistEntry.update({
+      where: { id: entryId },
+      data: {
+        status: SpaWaitlistStatus.FULFILLED,
+        fulfilledBookingId: result.booking.id,
+      },
+    });
+
+    return result;
+  }
+
+  async bulkAssignSpaBookings(
+    user: JwtPayload,
+    input: {
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+      specialistId: string;
+      serviceId: string;
+      startAt: string;
+      paymentType: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+      dates: string[];
+    },
+  ): Promise<SpaBulkBookingResult> {
+    if (!this.isSpaStaff(user)) {
+      throw new ForbiddenException('Только сотрудники');
+    }
+    if (rolesIncludesSpecialistOnly(user) && input.specialistId !== user.sub) {
+      throw new ForbiddenException('Можно создавать записи только к себе');
+    }
+
+    const template = new Date(input.startAt);
+    if (Number.isNaN(template.getTime())) {
+      throw new BadRequestException('Некорректное время');
+    }
+    const hours = template.getHours();
+    const minutes = template.getMinutes();
+    const seconds = template.getSeconds();
+
+    const created: SpaBooking[] = [];
+    const skipped: Array<{ date: string; reason: string }> = [];
+    const origin = rolesIncludesSpecialistOnly(user)
+      ? SpaBookingOrigin.SPECIALIST_ASSIGNED
+      : SpaBookingOrigin.ADMIN_ASSIGNED;
+
+    const uniqueDates = [...new Set(input.dates)];
+    for (const raw of uniqueDates) {
+      const day = new Date(raw);
+      if (Number.isNaN(day.getTime())) {
+        skipped.push({ date: raw, reason: 'Некорректная дата' });
+        continue;
+      }
+      const start = new Date(day);
+      start.setHours(hours, minutes, seconds, 0);
+      try {
+        const result = await this.bookSpa(user, {
+          clientId: input.clientId,
+          guestName: input.guestName,
+          guestPhone: input.guestPhone,
+          specialistId: input.specialistId,
+          serviceId: input.serviceId,
+          startAt: start.toISOString(),
+          paymentType: input.paymentType,
+          membershipServiceName: input.membershipServiceName,
+          origin,
+        });
+        created.push(result.booking);
+      } catch (err) {
+        const reason =
+          err instanceof Error ? err.message : 'Не удалось создать запись';
+        skipped.push({ date: start.toISOString(), reason });
+      }
+    }
+
+    return { created, skipped };
+  }
+}
+
+function rolesIncludesSpecialistOnly(user: JwtPayload): boolean {
+  const roles = user.roles ?? [];
+  const isSpecialist = roles.includes(UserRole.SPECIALIST);
+  if (!isSpecialist) return false;
+  return !(
+    roles.includes(UserRole.ADMIN) ||
+    roles.includes(UserRole.MANAGER) ||
+    roles.includes(UserRole.SUPER_ADMIN)
+  );
 }

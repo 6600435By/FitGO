@@ -32,7 +32,9 @@ import {
   type SpaBoardResponse,
   type SpaBookingSlot,
   type SpaBooking,
+  type SpaBulkBookingResult,
   type SpaQuotaRule,
+  type SpaWaitlistEntry,
   type SpecialistCalendarResponse,
   type SpecialistWorkSlotInput,
   type ClientProfile,
@@ -774,6 +776,36 @@ export const api = {
       token,
     ),
 
+  clientSpaWaitlist: (token: string, from: string, to: string) => {
+    const q = new URLSearchParams({ from, to });
+    return request<SpaWaitlistEntry[]>(
+      `/client/spa-waitlist?${q}`,
+      {},
+      token,
+    );
+  },
+
+  clientJoinSpaWaitlist: (
+    token: string,
+    data: {
+      specialistId: string;
+      serviceId: string;
+      desiredStartAt: string;
+    },
+  ) =>
+    request<SpaWaitlistEntry>(
+      '/client/spa-waitlist',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  clientCancelSpaWaitlist: (token: string, id: string) =>
+    request<{ ok: boolean }>(
+      `/client/spa-waitlist/${id}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
   specialistOwnServices: (token: string) =>
     request<SpaService[]>('/specialist/spa/services', {}, token),
 
@@ -887,6 +919,72 @@ export const api = {
     request<{ booking: SpaBooking; membership: Membership | null }>(
       '/specialist/spa-bookings',
       { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  specialistBulkAssignSpaBooking: (
+    token: string,
+    data: {
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+      serviceId: string;
+      startAt: string;
+      paymentType: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+      dates: string[];
+    },
+  ) =>
+    request<SpaBulkBookingResult>(
+      '/specialist/spa-bookings/bulk',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  specialistSpaWaitlist: (token: string, from: string, to: string) => {
+    const q = new URLSearchParams({ from, to });
+    return request<SpaWaitlistEntry[]>(
+      `/specialist/spa-waitlist?${q}`,
+      {},
+      token,
+    );
+  },
+
+  specialistCreateSpaWaitlist: (
+    token: string,
+    data: {
+      serviceId: string;
+      desiredStartAt: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+    },
+  ) =>
+    request<SpaWaitlistEntry>(
+      '/specialist/spa-waitlist',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  specialistCancelSpaWaitlist: (token: string, id: string) =>
+    request<{ ok: boolean }>(
+      `/specialist/spa-waitlist/${id}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  specialistBookFromSpaWaitlist: (
+    token: string,
+    id: string,
+    data?: {
+      startAt?: string;
+      paymentType?: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+  ) =>
+    request<{ booking: SpaBooking; membership: Membership | null }>(
+      `/specialist/spa-waitlist/${id}/book`,
+      { method: 'POST', body: JSON.stringify(data ?? {}) },
       token,
     ),
 
@@ -1037,6 +1135,76 @@ export const api = {
     request<{ booking: SpaBooking; membership: Membership | null }>(
       '/admin/spa-bookings',
       { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  adminBulkAssignSpaBooking: (
+    token: string,
+    data: {
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+      specialistId: string;
+      serviceId: string;
+      startAt: string;
+      paymentType: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+      dates: string[];
+    },
+  ) =>
+    request<SpaBulkBookingResult>(
+      '/admin/spa-bookings/bulk',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  adminSpaWaitlist: (
+    token: string,
+    from: string,
+    to: string,
+    specialistId?: string,
+  ) => {
+    const q = new URLSearchParams({ from, to });
+    if (specialistId) q.set('specialistId', specialistId);
+    return request<SpaWaitlistEntry[]>(`/admin/spa-waitlist?${q}`, {}, token);
+  },
+
+  adminCreateSpaWaitlist: (
+    token: string,
+    data: {
+      specialistId: string;
+      serviceId: string;
+      desiredStartAt: string;
+      clientId?: string;
+      guestName?: string;
+      guestPhone?: string;
+    },
+  ) =>
+    request<SpaWaitlistEntry>(
+      '/admin/spa-waitlist',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  adminCancelSpaWaitlist: (token: string, id: string) =>
+    request<{ ok: boolean }>(
+      `/admin/spa-waitlist/${id}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  adminBookFromSpaWaitlist: (
+    token: string,
+    id: string,
+    data?: {
+      startAt?: string;
+      paymentType?: 'QUOTA' | 'PAID';
+      membershipServiceName?: string;
+    },
+  ) =>
+    request<{ booking: SpaBooking; membership: Membership | null }>(
+      `/admin/spa-waitlist/${id}/book`,
+      { method: 'POST', body: JSON.stringify(data ?? {}) },
       token,
     ),
 

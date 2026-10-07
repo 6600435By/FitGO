@@ -1180,6 +1180,8 @@ export type SpaBookingOrigin =
 
 export type SpaBookingStatus = 'PENDING_1C' | 'CONFIRMED' | 'CANCELLED' | 'COMPLETED' | 'FAILED';
 
+export type SpaWaitlistStatus = 'WAITING' | 'FULFILLED' | 'CANCELLED' | 'EXPIRED';
+
 export type SpaCancelledBy = 'CLIENT' | 'SPECIALIST' | 'ADMIN' | 'CRM_ADMIN';
 
 export interface SpaService {
@@ -1299,6 +1301,27 @@ export interface SpaBooking {
   usage?: ServiceUsageControl;
   specialistCompletedAt?: string;
   paidAt?: string;
+}
+
+export interface SpaWaitlistEntry {
+  id: string;
+  clubId: string;
+  specialistId: string;
+  specialistName: string;
+  serviceId: string;
+  serviceName: string;
+  clientId?: string;
+  clientName: string;
+  guestPhone?: string;
+  desiredStartAt: string;
+  desiredEndAt: string;
+  status: SpaWaitlistStatus;
+  createdAt: string;
+}
+
+export interface SpaBulkBookingResult {
+  created: SpaBooking[];
+  skipped: Array<{ date: string; reason: string }>;
 }
 
 /** Specialist-rendered service from 1C (period report: sales + sessions). */

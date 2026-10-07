@@ -1,12 +1,42 @@
 'use client';
 
 import type { SpaService } from '@fitgo/shared-types';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
 function formatPrice(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)} ${currency}`;
+}
+
+type BookingPayload = {
+  specialistId?: string;
+  clientId?: string;
+  guestName?: string;
+  guestPhone?: string;
+  serviceId: string;
+  startAt: string;
+  paymentType: 'QUOTA' | 'PAID';
+};
+
+function buildWeeklyDates(startLocal: string, weeks: number): string[] {
+  const base = new Date(startLocal);
+  if (Number.isNaN(base.getTime()) || weeks < 1) return [];
+  const out: string[] = [];
+  for (let i = 0; i < weeks; i++) {
+    const d = new Date(base);
+    d.setDate(d.getDate() + i * 7);
+    out.push(d.toISOString());
+  }
+  return out;
+}
+
+function formatDateShort(iso: string) {
+  return new Date(iso).toLocaleDateString('ru-RU', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
 }
 
 export function SpaBookingDialog({
@@ -19,6 +49,7 @@ export function SpaBookingDialog({
   defaultStartAt,
   allowPickSpecialist,
   onSubmit,
+  onBulkSubmit,
   busy,
 }: {
   open: boolean;
@@ -29,21 +60,20 @@ export function SpaBookingDialog({
   defaultSpecialistId?: string;
   defaultStartAt?: string;
   allowPickSpecialist?: boolean;
-  onSubmit: (payload: {
-    specialistId?: string;
-    clientId?: string;
-    guestName?: string;
-    guestPhone?: string;
-    serviceId: string;
-    startAt: string;
-    paymentType: 'QUOTA' | 'PAID';
-  }) => Promise<void>;
+  onSubmit: (payload: BookingPayload) => Promise<void>;
+  onBulkSubmit?: (
+    payload: BookingPayload & { dates: string[] },
+  ) => Promise<void>;
   busy?: boolean;
 }) {
   const bookable = services.filter((s) => s.active && (s.bookable ?? true));
   const [mode, setMode] = useState<'base' | 'phone'>('phone');
   const [phoneLookup, setPhoneLookup] = useState('');
   const [error, setError] = useState('');
+  const [periodMode, setPeriodMode] = useState(false);
+  const [periodWeeks, setPeriodWeeks] = useState(4);
+  const [periodDates, setPeriodDates] = useState<string[]>([]);
+  const [extraDate, setExtraDate] = useState('');
   const [form, setForm] = useState({
     specialistId: defaultSpecialistId ?? '',
     clientId: '',
@@ -59,6 +89,9 @@ export function SpaBookingDialog({
     setError('');
     setPhoneLookup('');
     setMode('phone');
+    setPeriodMode(false);
+    setPeriodWeeks(4);
+    setExtraDate('');
     setForm({
       specialistId: defaultSpecialistId ?? '',
       clientId: '',
@@ -70,6 +103,19 @@ export function SpaBookingDialog({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when dialog opens
   }, [open, defaultSpecialistId, defaultStartAt]);
+
+  const suggestedDates = useMemo(
+    () => (periodMode ? buildWeeklyDates(form.startAt, periodWeeks) : []),
+    [form.startAt, periodMode, periodWeeks],
+  );
+
+  useEffect(() => {
+    if (!periodMode) {
+      setPeriodDates([]);
+      return;
+    }
+    setPeriodDates(suggestedDates);
+  }, [periodMode, suggestedDates]);
 
   if (!open) return null;
 
@@ -134,6 +180,21 @@ export function SpaBookingDialog({
     }
   };
 
+  const buildPayload = (startIso: string): BookingPayload => ({
+    specialistId: allowPickSpecialist ? form.specialistId : undefined,
+    serviceId: form.serviceId,
+    startAt: startIso,
+    paymentType: form.paymentType,
+    ...(mode === 'base'
+      ? { clientId: form.clientId }
+      : form.clientId
+        ? { clientId: form.clientId, guestPhone: form.guestPhone }
+        : {
+            guestName: form.guestName,
+            guestPhone: form.guestPhone,
+          }),
+  });
+
   const submit = async () => {
     setError('');
     if (!form.serviceId) {
@@ -162,20 +223,16 @@ export function SpaBookingDialog({
       return;
     }
     try {
-      await onSubmit({
-        specialistId: allowPickSpecialist ? form.specialistId : undefined,
-        serviceId: form.serviceId,
-        startAt: startIso,
-        paymentType: form.paymentType,
-        ...(mode === 'base'
-          ? { clientId: form.clientId }
-          : form.clientId
-            ? { clientId: form.clientId, guestPhone: form.guestPhone }
-            : {
-                guestName: form.guestName,
-                guestPhone: form.guestPhone,
-              }),
-      });
+      const payload = buildPayload(startIso);
+      if (periodMode && onBulkSubmit) {
+        if (periodDates.length === 0) {
+          setError('Выберите хотя бы одну дату');
+          return;
+        }
+        await onBulkSubmit({ ...payload, dates: periodDates });
+      } else {
+        await onSubmit(payload);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось записать');
     }
@@ -357,6 +414,85 @@ export function SpaBookingDialog({
           </select>
         </label>
 
+        {onBulkSubmit ? (
+          <div className="space-y-2 rounded-xl border border-white/5 bg-slate-900/40 p-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={periodMode}
+                onChange={(e) => setPeriodMode(e.target.checked)}
+              />
+              <span>Запись на период</span>
+            </label>
+            {periodMode ? (
+              <div className="space-y-2">
+                <label className="block space-y-1 text-sm">
+                  <span className="text-slate-400">Недель (тот же день)</span>
+                  <input
+                    type="number"
+                    className="input"
+                    min={1}
+                    max={26}
+                    value={periodWeeks}
+                    onChange={(e) =>
+                      setPeriodWeeks(
+                        Math.max(1, Math.min(26, Number(e.target.value) || 1)),
+                      )
+                    }
+                  />
+                </label>
+                <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
+                  {periodDates.map((iso) => (
+                    <li key={iso}>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked
+                          onChange={() =>
+                            setPeriodDates((prev) =>
+                              prev.filter((d) => d !== iso),
+                            )
+                          }
+                        />
+                        <span>{formatDateShort(iso)}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="block space-y-1 text-sm">
+                    <span className="text-[11px] text-slate-500">
+                      Добавить дату
+                    </span>
+                    <input
+                      type="date"
+                      className="input date-field"
+                      value={extraDate}
+                      onChange={(e) => setExtraDate(e.target.value)}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-secondary text-xs"
+                    onClick={() => {
+                      if (!extraDate || !timePart) return;
+                      const local = `${extraDate}T${timePart}`;
+                      const iso = new Date(local).toISOString();
+                      if (Number.isNaN(new Date(iso).getTime())) return;
+                      setPeriodDates((prev) =>
+                        prev.includes(iso) ? prev : [...prev, iso].sort(),
+                      );
+                      setExtraDate('');
+                    }}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {error ? (
           <p className="rounded-xl bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
@@ -371,7 +507,11 @@ export function SpaBookingDialog({
             void submit();
           }}
         >
-          {busy ? 'Записываем…' : 'Записать'}
+          {busy
+            ? 'Записываем…'
+            : periodMode
+              ? `Создать ${periodDates.length || 0} записей`
+              : 'Записать'}
         </button>
       </div>
     </div>

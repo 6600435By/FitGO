@@ -5,6 +5,7 @@ import type {
   SpaBoardResponse,
   SpaBooking,
   SpaService,
+  SpaWaitlistEntry,
   SpecialistCalendarResponse,
   SpecialistWorkSlotInput,
 } from '@fitgo/shared-types';
@@ -20,6 +21,8 @@ import {
   normalizeHm,
   SpaHoursEditor,
 } from '@/components/spa-board/spa-hours-editor';
+import { SpaWaitlistPanel } from '@/components/spa-board/spa-waitlist-panel';
+import { SpaWaitlistPickDialog } from '@/components/spa-board/spa-waitlist-pick-dialog';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -66,6 +69,19 @@ export default function SpecialistSchedulePage() {
     null,
   );
   const [showDayHours, setShowDayHours] = useState(false);
+  const [waitlist, setWaitlist] = useState<SpaWaitlistEntry[]>([]);
+  const [waitlistPick, setWaitlistPick] = useState<{
+    specialistId?: string;
+    startAt?: string;
+    title?: string;
+    allowNew?: boolean;
+  } | null>(null);
+  const [freedBanner, setFreedBanner] = useState<{
+    specialistId: string;
+    startAt: string;
+    endAt: string;
+    count: number;
+  } | null>(null);
 
   const boardPeriod = useMemo(() => {
     const start = new Date(day);
@@ -87,13 +103,14 @@ export default function SpecialistSchedulePage() {
   const reload = useCallback(async () => {
     const token = getToken();
     if (!token) return;
-    const [brd, cal, slots, bks, svc, cls] = await Promise.all([
+    const [brd, cal, slots, bks, svc, cls, wl] = await Promise.all([
       api.specialistSpaBoard(token, boardPeriod.start, boardPeriod.end),
       api.specialistCalendar(token, publishPeriod.start, publishPeriod.end),
       api.specialistWorkSchedule(token),
       api.specialistSpaBookings(token),
       api.specialistOwnServices(token),
       api.adminSpaClients(token).catch(() => []),
+      api.specialistSpaWaitlist(token, boardPeriod.start, boardPeriod.end),
     ]);
     setBoard(brd);
     setCalendar(cal);
@@ -101,7 +118,47 @@ export default function SpecialistSchedulePage() {
     setBookings(bks);
     setServices(svc);
     setClients(cls);
+    setWaitlist(wl);
   }, [boardPeriod.end, boardPeriod.start, publishPeriod.end, publishPeriod.start]);
+
+  const matchingWaitlist = useCallback(
+    (specialistId: string, startAt: string, endAt?: string) => {
+      const start = new Date(startAt).getTime();
+      const end = endAt ? new Date(endAt).getTime() : start + 60 * 60 * 1000;
+      return waitlist.filter((e) => {
+        if (e.specialistId !== specialistId) return false;
+        const s = new Date(e.desiredStartAt).getTime();
+        const ee = new Date(e.desiredEndAt).getTime();
+        return s < end && ee > start;
+      });
+    },
+    [waitlist],
+  );
+
+  const bookFromWaitlist = async (
+    entry: SpaWaitlistEntry,
+    startAtOverride?: string,
+  ) => {
+    const token = getToken();
+    if (!token) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.specialistBookFromSpaWaitlist(token, entry.id, {
+        startAt: startAtOverride,
+        paymentType: 'PAID',
+      });
+      setWaitlistPick(null);
+      setFreedBanner(null);
+      setMessage(`Записан: ${entry.clientName}`);
+      await reload();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка записи');
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     reload().catch((err) =>
@@ -264,6 +321,36 @@ export default function SpecialistSchedulePage() {
     }
   };
 
+  const bulkAssignClient = async (payload: {
+    clientId?: string;
+    guestName?: string;
+    guestPhone?: string;
+    serviceId: string;
+    startAt: string;
+    paymentType: 'QUOTA' | 'PAID';
+    dates: string[];
+  }) => {
+    const token = getToken();
+    if (!token) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      const result = await api.specialistBulkAssignSpaBooking(token, payload);
+      setShowAssign(false);
+      const skipNote =
+        result.skipped.length > 0
+          ? ` · пропущено ${result.skipped.length}`
+          : '';
+      setMessage(`Создано записей: ${result.created.length}${skipNote}`);
+      await reload();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка записи');
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const completeBooking = async (bookingId: string) => {
     const token = getToken();
     if (!token) return;
@@ -340,6 +427,11 @@ export default function SpecialistSchedulePage() {
   const cancelBookingCard = async () => {
     const token = getToken();
     if (!token || !selectedBooking) return;
+    const freed = {
+      specialistId: selectedBooking.specialistId,
+      startAt: selectedBooking.startAt,
+      endAt: selectedBooking.endAt,
+    };
     setBusy(true);
     setMessage('');
     try {
@@ -347,6 +439,14 @@ export default function SpecialistSchedulePage() {
       setSelectedBooking(null);
       setMessage('Запись отменена');
       await reload();
+      const matches = matchingWaitlist(
+        freed.specialistId,
+        freed.startAt,
+        freed.endAt,
+      );
+      if (matches.length > 0) {
+        setFreedBanner({ ...freed, count: matches.length });
+      }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка отмены');
       throw err;
@@ -377,6 +477,49 @@ export default function SpecialistSchedulePage() {
         </p>
       )}
 
+      {freedBanner ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          <span>
+            Освободилось время — {freedBanner.count} в листе ожидания
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-primary text-xs"
+              onClick={() => {
+                setWaitlistPick({
+                  specialistId: freedBanner.specialistId,
+                  startAt: freedBanner.startAt,
+                  title: 'Освободилось время',
+                  allowNew: false,
+                });
+              }}
+            >
+              Выбрать
+            </button>
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              onClick={() => setFreedBanner(null)}
+            >
+              Скрыть
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <SpaWaitlistPanel
+        entries={waitlist}
+        services={services}
+        clients={clients}
+        busy={busy}
+        onReload={reload}
+        onMessage={setMessage}
+        onBook={(entry) => {
+          void bookFromWaitlist(entry);
+        }}
+      />
+
       {board ? (
         <SpaBoard
           board={board}
@@ -386,9 +529,19 @@ export default function SpecialistSchedulePage() {
           onDayChange={setDay}
           onEmptySlotClick={({ specialistId, startAt }) => {
             if (me?.id && specialistId !== me.id) return;
+            const iso = startAt.toISOString();
             setAssignDefaults({
               startAt: toDatetimeLocalValue(startAt),
             });
+            if (waitlist.length > 0) {
+              setWaitlistPick({
+                specialistId,
+                startAt: iso,
+                title: 'Свободный слот',
+                allowNew: true,
+              });
+              return;
+            }
             setShowAssign(true);
           }}
           onBookingDoubleClick={(b) => {
@@ -488,6 +641,28 @@ export default function SpecialistSchedulePage() {
         defaultStartAt={assignDefaults.startAt}
         busy={busy}
         onSubmit={assignClient}
+        onBulkSubmit={bulkAssignClient}
+      />
+
+      <SpaWaitlistPickDialog
+        open={Boolean(waitlistPick)}
+        title={waitlistPick?.title}
+        entries={waitlist}
+        specialistId={waitlistPick?.specialistId}
+        slotStartAt={waitlistPick?.startAt}
+        busy={busy}
+        onClose={() => setWaitlistPick(null)}
+        onBook={async (entry) => {
+          await bookFromWaitlist(entry, waitlistPick?.startAt);
+        }}
+        onNewBooking={
+          waitlistPick?.allowNew
+            ? () => {
+                setWaitlistPick(null);
+                setShowAssign(true);
+              }
+            : undefined
+        }
       />
 
       <SpaBookingEditDialog
