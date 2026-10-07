@@ -66,13 +66,6 @@ function overlapsDay(startIso: string, endIso: string, day: Date) {
   return s < dayEnd && e > dayStart;
 }
 
-function staffShort(s: SpaBoardStaff) {
-  const initial = s.firstName?.trim()?.[0];
-  return initial
-    ? `${s.lastName} ${initial}.`
-    : s.lastName || s.firstName || '—';
-}
-
 function staffFull(s: SpaBoardStaff) {
   return `${s.lastName} ${s.firstName}`.trim();
 }
@@ -109,6 +102,39 @@ function earliestShiftStartMin(
   const bands = hourBandsForStaff(hours, specialistId, day);
   if (bands.length === 0) return Number.POSITIVE_INFINITY;
   return Math.min(...bands.map((h) => minutesFromDayStart(h.startAt, day)));
+}
+
+/**
+ * Visible day window for one specialist: from first work/booking hour
+ * through last, snapped to hour edges (no empty rows outside the shift).
+ */
+function staffDayViewport(
+  hours: SpaBoardHourBlock[],
+  bookings: SpaBoardBooking[],
+  specialistId: string,
+  day: Date,
+  dayTotalMin: number,
+): { viewStartMin: number; viewEndMin: number } | null {
+  const bands = hourBandsForStaff(hours, specialistId, day);
+  const items = bookingsForStaff(bookings, specialistId, day);
+  if (bands.length === 0 && items.length === 0) return null;
+
+  let start = Number.POSITIVE_INFINITY;
+  let end = Number.NEGATIVE_INFINITY;
+  for (const h of bands) {
+    start = Math.min(start, minutesFromDayStart(h.startAt, day));
+    end = Math.max(end, minutesFromDayStart(h.endAt, day));
+  }
+  for (const b of items) {
+    start = Math.min(start, minutesFromDayStart(b.startAt, day));
+    end = Math.max(end, minutesFromDayStart(b.endAt, day));
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+
+  const viewStartMin = Math.max(0, Math.floor(start / 60) * 60);
+  const viewEndMin = Math.min(dayTotalMin, Math.ceil(end / 60) * 60);
+  if (viewEndMin <= viewStartMin) return null;
+  return { viewStartMin, viewEndMin };
 }
 
 /** Hour start, or end of a booking that finishes inside that hour. */
@@ -202,16 +228,7 @@ export function SpaBoard({
 }) {
   const dayStart = startOfDay(day);
   const totalMin = (DAY_END_HOUR - DAY_START_HOUR) * 60;
-  const height = totalMin * PX_PER_MIN;
   const isToday = sameCalendarDay(dayStart, new Date());
-  const hours = useMemo(
-    () =>
-      Array.from(
-        { length: DAY_END_HOUR - DAY_START_HOUR + 1 },
-        (_, i) => DAY_START_HOUR + i,
-      ),
-    [],
-  );
 
   const [nowMinutes, setNowMinutes] = useState(() => {
     const n = new Date();
@@ -286,6 +303,7 @@ export function SpaBoard({
     staffOrdered.find((s) => s.id === selectedStaffId) ?? staffOrdered[0];
 
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const viewStartByStaffRef = useRef<Map<string, number>>(new Map());
   const [drag, setDrag] = useState<DragState | null>(null);
   const [pointerStart, setPointerStart] = useState<PointerStart | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -365,14 +383,19 @@ export function SpaBoard({
         ) {
           continue;
         }
-        const relY = Math.max(0, Math.min(clientY - rect.top, height - 1));
-        const minsFromGrid =
+        const viewStart = viewStartByStaffRef.current.get(s.id) ?? 0;
+        const colHeight = Math.max(1, rect.height);
+        const relY = Math.max(0, Math.min(clientY - rect.top, colHeight - 1));
+        const minsFromView =
           Math.floor(relY / PX_PER_MIN / GRID_STEP_MIN) * GRID_STEP_MIN;
-        return { specialistId: s.id, minutes: minsFromGrid };
+        return {
+          specialistId: s.id,
+          minutes: viewStart + minsFromView,
+        };
       }
       return null;
     },
-    [height, staffOrdered],
+    [staffOrdered],
   );
 
   const commitMove = useCallback(
@@ -562,18 +585,13 @@ export function SpaBoard({
     }
   };
 
-  const nowTop =
-    isToday &&
-    nowMinutes >= DAY_START_HOUR * 60 &&
-    nowMinutes <= DAY_END_HOUR * 60
-      ? (nowMinutes - DAY_START_HOUR * 60) * PX_PER_MIN
-      : null;
+  const nowDayMin = nowMinutes - DAY_START_HOUR * 60;
 
-  const renderNowLine = () =>
-    nowTop == null ? null : (
+  const renderNowLine = (topPx: number | null) =>
+    topPx == null ? null : (
       <div
         className="pointer-events-none absolute inset-x-0 z-20"
-        style={{ top: nowTop }}
+        style={{ top: topPx }}
         aria-hidden
         title={`Сейчас ${minutesToTimeLabel(nowMinutes)}`}
       >
@@ -582,7 +600,7 @@ export function SpaBoard({
       </div>
     );
 
-  const renderDragPreview = (d: DragState) => (
+  const renderDragPreview = (d: DragState, viewStartMin: number) => (
     <div
       className={`pointer-events-none absolute left-1 right-1 z-30 overflow-hidden rounded-lg px-1.5 py-1 text-[11px] leading-tight shadow-lg ring-2 ${
         d.valid
@@ -590,7 +608,7 @@ export function SpaBoard({
           : 'bg-rose-950/90 text-rose-100 ring-rose-500/80'
       }`}
       style={{
-        top: d.startMinutes * PX_PER_MIN,
+        top: (d.startMinutes - viewStartMin) * PX_PER_MIN,
         height: d.height,
       }}
     >
@@ -604,22 +622,41 @@ export function SpaBoard({
     </div>
   );
 
-  const renderColumn = (staff: SpaBoardStaff) => {
+  const renderColumn = (
+    staff: SpaBoardStaff,
+    view: { viewStartMin: number; viewEndMin: number },
+  ) => {
     const own = mode === 'admin' || staff.id === viewerSpecialistId;
     const bands = hourBandsForStaff(board.hours, staff.id, dayStart);
     const items = bookingsForStaff(board.bookings, staff.id, dayStart);
     const isDropColumn = drag?.specialistId === staff.id;
+    const { viewStartMin, viewEndMin } = view;
+    const viewSpan = viewEndMin - viewStartMin;
+    const colHeight = viewSpan * PX_PER_MIN;
+    const hourMarks = Array.from(
+      { length: Math.floor(viewSpan / 60) + 1 },
+      (_, i) => viewStartMin + i * 60,
+    );
+    const nowTopInView =
+      isToday && nowDayMin >= viewStartMin && nowDayMin <= viewEndMin
+        ? (nowDayMin - viewStartMin) * PX_PER_MIN
+        : null;
+
+    viewStartByStaffRef.current.set(staff.id, viewStartMin);
 
     return (
       <div
         ref={(el) => {
           if (el) columnRefs.current.set(staff.id, el);
-          else columnRefs.current.delete(staff.id);
+          else {
+            columnRefs.current.delete(staff.id);
+            viewStartByStaffRef.current.delete(staff.id);
+          }
         }}
         className={`relative w-full ${
           isDropColumn && drag?.valid ? 'bg-fitgo-500/5' : ''
         }`}
-        style={{ height }}
+        style={{ height: colHeight }}
         onClick={(e) => {
           if (suppressClickRef.current || drag || pointerStart) return;
           if (!own || !onEmptySlotClick) return;
@@ -627,27 +664,27 @@ export function SpaBoard({
             e.currentTarget as HTMLDivElement
           ).getBoundingClientRect();
           const y = e.clientY - rect.top;
-          const mins = Math.floor(y / PX_PER_MIN);
-          if (mins < 0 || mins >= totalMin) return;
+          const minsFromView = Math.floor(y / PX_PER_MIN);
+          const mins = viewStartMin + minsFromView;
+          if (mins < viewStartMin || mins >= viewEndMin) return;
           const startAt = resolveEmptySlotStartAt(mins, items, dayStart);
           onEmptySlotClick({ specialistId: staff.id, startAt });
         }}
       >
-        {hours.map((h) => (
+        {hourMarks.map((m) => (
           <div
-            key={h}
+            key={m}
             className="pointer-events-none absolute inset-x-0 border-t border-slate-800/80"
-            style={{ top: (h - DAY_START_HOUR) * 60 * PX_PER_MIN }}
+            style={{ top: (m - viewStartMin) * PX_PER_MIN }}
           />
         ))}
 
         {bands.map((h) => {
-          const top = Math.max(0, minutesFromDayStart(h.startAt, dayStart));
-          const end = Math.min(
-            totalMin,
-            minutesFromDayStart(h.endAt, dayStart),
-          );
-          if (end <= 0 || top >= totalMin) return null;
+          const top = minutesFromDayStart(h.startAt, dayStart);
+          const end = minutesFromDayStart(h.endAt, dayStart);
+          if (end <= viewStartMin || top >= viewEndMin) return null;
+          const clippedTop = Math.max(viewStartMin, top);
+          const clippedEnd = Math.min(viewEndMin, end);
           return (
             <div
               key={h.id}
@@ -657,29 +694,25 @@ export function SpaBoard({
                   : 'pointer-events-none absolute inset-x-0 bg-fitgo-500/10'
               }
               style={{
-                top: top * PX_PER_MIN,
-                height: Math.max(4, (end - top) * PX_PER_MIN),
+                top: (clippedTop - viewStartMin) * PX_PER_MIN,
+                height: Math.max(4, (clippedEnd - clippedTop) * PX_PER_MIN),
               }}
             />
           );
         })}
 
-        {own && bands.length === 0 ? (
-          <p className="pointer-events-none absolute inset-x-2 top-3 text-center text-[11px] text-slate-500">
-            Нет рабочих часов · настройте шаблон ниже
-          </p>
-        ) : null}
-
-        {renderNowLine()}
+        {renderNowLine(nowTopInView)}
 
         {items.map((b) => {
-          const top = Math.max(0, minutesFromDayStart(b.startAt, dayStart));
-          const end = Math.min(
-            totalMin,
-            minutesFromDayStart(b.endAt, dayStart),
+          const top = minutesFromDayStart(b.startAt, dayStart);
+          const end = minutesFromDayStart(b.endAt, dayStart);
+          if (end <= viewStartMin || top >= viewEndMin) return null;
+          const clippedTop = Math.max(viewStartMin, top);
+          const clippedEnd = Math.min(viewEndMin, end);
+          const blockHeight = Math.max(
+            22,
+            (clippedEnd - clippedTop) * PX_PER_MIN,
           );
-          if (end <= 0 || top >= totalMin) return null;
-          const blockHeight = Math.max(22, (end - top) * PX_PER_MIN);
           const durationMin = Math.max(GRID_STEP_MIN, Math.round(end - top));
           const editable = canEditBooking(b);
           const isDragging = drag?.booking.id === b.id;
@@ -711,7 +744,7 @@ export function SpaBoard({
                     : 'border-l-2 border-amber-500 bg-amber-950/40 text-amber-100'
               } ${isDragging ? 'opacity-30' : ''}`}
               style={{
-                top: top * PX_PER_MIN,
+                top: (clippedTop - viewStartMin) * PX_PER_MIN,
                 height: blockHeight,
               }}
             >
@@ -734,38 +767,60 @@ export function SpaBoard({
           );
         })}
 
-        {drag && isDropColumn ? renderDragPreview(drag) : null}
+        {drag && isDropColumn
+          ? renderDragPreview(drag, viewStartMin)
+          : null}
       </div>
     );
   };
 
-  const renderTimeRail = () => (
-    <div className="w-12 shrink-0 border-r border-slate-800 bg-slate-950">
-      <div className="relative" style={{ height }}>
-        {hours.map((h) => (
-          <div
-            key={h}
-            className="absolute left-0 right-0 whitespace-nowrap px-1 text-[10px] tabular-nums leading-none text-slate-500"
-            style={{ top: (h - DAY_START_HOUR) * 60 * PX_PER_MIN + 2 }}
-          >
-            {String(h).padStart(2, '0')}:00
-          </div>
-        ))}
-        {nowTop != null ? (
-          <div
-            className="pointer-events-none absolute inset-x-0 z-20"
-            style={{ top: nowTop }}
-            aria-hidden
-          >
-            <div className="absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 bg-rose-500/80" />
-            <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[9px] font-medium text-rose-400">
-              {minutesToTimeLabel(nowMinutes)}
-            </span>
-          </div>
-        ) : null}
+  const renderTimeRail = (view: {
+    viewStartMin: number;
+    viewEndMin: number;
+  }) => {
+    const { viewStartMin, viewEndMin } = view;
+    const viewSpan = viewEndMin - viewStartMin;
+    const colHeight = viewSpan * PX_PER_MIN;
+    const hourMarks = Array.from(
+      { length: Math.floor(viewSpan / 60) + 1 },
+      (_, i) => viewStartMin + i * 60,
+    );
+    const nowTopInView =
+      isToday && nowDayMin >= viewStartMin && nowDayMin <= viewEndMin
+        ? (nowDayMin - viewStartMin) * PX_PER_MIN
+        : null;
+
+    return (
+      <div className="w-12 shrink-0 border-r border-slate-800 bg-slate-950">
+        <div className="relative" style={{ height: colHeight }}>
+          {hourMarks.map((m) => {
+            const clockHour = DAY_START_HOUR + m / 60;
+            return (
+              <div
+                key={m}
+                className="absolute left-0 right-0 whitespace-nowrap px-1 text-[10px] tabular-nums leading-none text-slate-500"
+                style={{ top: (m - viewStartMin) * PX_PER_MIN + 2 }}
+              >
+                {String(Math.floor(clockHour)).padStart(2, '0')}:00
+              </div>
+            );
+          })}
+          {nowTopInView != null ? (
+            <div
+              className="pointer-events-none absolute inset-x-0 z-20"
+              style={{ top: nowTopInView }}
+              aria-hidden
+            >
+              <div className="absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 bg-rose-500/80" />
+              <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[9px] font-medium text-rose-400">
+                {minutesToTimeLabel(nowMinutes)}
+              </span>
+            </div>
+          ) : null}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-3">
@@ -819,12 +874,20 @@ export function SpaBoard({
       ) : (
         <div className="space-y-3">
           {staffOrdered.map((s) => {
+            const view = staffDayViewport(
+              board.hours,
+              board.bookings,
+              s.id,
+              dayStart,
+              totalMin,
+            );
             const shiftMin = earliestShiftStartMin(board.hours, s.id, dayStart);
             const shiftLabel =
               Number.isFinite(shiftMin) && shiftMin < totalMin
                 ? minutesToTimeLabel(DAY_START_HOUR * 60 + Math.max(0, shiftMin))
                 : null;
             const selected = s.id === activeStaff?.id;
+            const own = mode === 'admin' || s.id === viewerSpecialistId;
             return (
               <div key={s.id} className="card overflow-hidden p-0">
                 <button
@@ -852,10 +915,20 @@ export function SpaBoard({
                     </span>
                   )}
                 </button>
-                <div className="flex min-w-0">
-                  {renderTimeRail()}
-                  <div className="min-w-0 flex-1">{renderColumn(s)}</div>
-                </div>
+                {view ? (
+                  <div className="flex min-w-0">
+                    {renderTimeRail(view)}
+                    <div className="min-w-0 flex-1">
+                      {renderColumn(s, view)}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="px-3 py-4 text-center text-[11px] text-slate-500">
+                    {own
+                      ? 'Нет рабочих часов · настройте шаблон ниже'
+                      : 'Сегодня не работает'}
+                  </p>
+                )}
               </div>
             );
           })}
