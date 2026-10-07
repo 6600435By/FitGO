@@ -101,6 +101,42 @@ function bookingsForStaff(
   );
 }
 
+function earliestShiftStartMin(
+  hours: SpaBoardHourBlock[],
+  specialistId: string,
+  day: Date,
+) {
+  const bands = hourBandsForStaff(hours, specialistId, day);
+  if (bands.length === 0) return Number.POSITIVE_INFINITY;
+  return Math.min(...bands.map((h) => minutesFromDayStart(h.startAt, day)));
+}
+
+/** Hour start, or end of a booking that finishes inside that hour. */
+function resolveEmptySlotStartAt(
+  clickMinsFromDayStart: number,
+  items: SpaBoardBooking[],
+  day: Date,
+) {
+  const hourStart =
+    Math.floor(Math.max(0, clickMinsFromDayStart) / 60) * 60;
+  const hourEnd = hourStart + 60;
+
+  let prevEndInHour: number | null = null;
+  for (const b of items) {
+    const end = minutesFromDayStart(b.endAt, day);
+    if (end > hourStart && end <= hourEnd) {
+      if (prevEndInHour == null || end > prevEndInHour) {
+        prevEndInHour = end;
+      }
+    }
+  }
+
+  const startMins = prevEndInHour ?? hourStart;
+  return new Date(
+    day.getTime() + (DAY_START_HOUR * 60 + startMins) * 60000,
+  );
+}
+
 function minutesToTimeLabel(total: number) {
   const h = Math.floor(total / 60);
   const m = total % 60;
@@ -207,11 +243,17 @@ export function SpaBoard({
   }, [board.hours, board.staff, dayStart, mode, viewerSpecialistId]);
 
   const staffOrdered = useMemo(() => {
-    if (!viewerSpecialistId) return staffWorkingToday;
-    const own = staffWorkingToday.filter((s) => s.id === viewerSpecialistId);
-    const rest = staffWorkingToday.filter((s) => s.id !== viewerSpecialistId);
+    const byShift = [...staffWorkingToday].sort((a, b) => {
+      const da = earliestShiftStartMin(board.hours, a.id, dayStart);
+      const db = earliestShiftStartMin(board.hours, b.id, dayStart);
+      if (da !== db) return da - db;
+      return staffFull(a).localeCompare(staffFull(b), 'ru');
+    });
+    if (!viewerSpecialistId) return byShift;
+    const own = byShift.filter((s) => s.id === viewerSpecialistId);
+    const rest = byShift.filter((s) => s.id !== viewerSpecialistId);
     return [...own, ...rest];
-  }, [staffWorkingToday, viewerSpecialistId]);
+  }, [board.hours, dayStart, staffWorkingToday, viewerSpecialistId]);
 
   const defaultStaffId =
     viewerSpecialistId &&
@@ -324,7 +366,8 @@ export function SpaBoard({
           continue;
         }
         const relY = Math.max(0, Math.min(clientY - rect.top, height - 1));
-        const minsFromGrid = Math.floor(relY / PX_PER_MIN / GRID_STEP_MIN) * GRID_STEP_MIN;
+        const minsFromGrid =
+          Math.floor(relY / PX_PER_MIN / GRID_STEP_MIN) * GRID_STEP_MIN;
         return { specialistId: s.id, minutes: minsFromGrid };
       }
       return null;
@@ -573,7 +616,7 @@ export function SpaBoard({
           if (el) columnRefs.current.set(staff.id, el);
           else columnRefs.current.delete(staff.id);
         }}
-        className={`relative w-full border-l border-slate-800 ${
+        className={`relative w-full ${
           isDropColumn && drag?.valid ? 'bg-fitgo-500/5' : ''
         }`}
         style={{ height }}
@@ -584,11 +627,9 @@ export function SpaBoard({
             e.currentTarget as HTMLDivElement
           ).getBoundingClientRect();
           const y = e.clientY - rect.top;
-          const mins = Math.floor(y / PX_PER_MIN / GRID_STEP_MIN) * GRID_STEP_MIN;
+          const mins = Math.floor(y / PX_PER_MIN);
           if (mins < 0 || mins >= totalMin) return;
-          const startAt = new Date(
-            dayStart.getTime() + (DAY_START_HOUR * 60 + mins) * 60000,
-          );
+          const startAt = resolveEmptySlotStartAt(mins, items, dayStart);
           onEmptySlotClick({ specialistId: staff.id, startAt });
         }}
       >
@@ -652,7 +693,6 @@ export function SpaBoard({
                 startBookingPointer(e, b, blockHeight, durationMin);
               }}
               onClick={(e) => {
-                // Prevent column empty-slot handler from opening «Новая запись».
                 e.stopPropagation();
                 if (suppressClickRef.current || dragRef.current) return;
                 if (!b.busy && onBookingDoubleClick) onBookingDoubleClick(b);
@@ -701,7 +741,6 @@ export function SpaBoard({
 
   const renderTimeRail = () => (
     <div className="w-12 shrink-0 border-r border-slate-800 bg-slate-950">
-      <div className="h-9 border-b border-slate-800" />
       <div className="relative" style={{ height }}>
         {hours.map((h) => (
           <div
@@ -773,85 +812,55 @@ export function SpaBoard({
         ) : null}
       </div>
 
-      {/* Phone: one column, own schedule first */}
-      <div className="space-y-1.5 md:hidden">
-        <p className="text-xs text-slate-500">Сотрудник</p>
-        <div className="flex gap-1.5 overflow-x-auto pb-1">
+      {staffOrdered.length === 0 ? (
+        <div className="card p-4 text-sm text-slate-400">
+          Сегодня никто не работает
+        </div>
+      ) : (
+        <div className="space-y-3">
           {staffOrdered.map((s) => {
-            const on = s.id === activeStaff?.id;
+            const shiftMin = earliestShiftStartMin(board.hours, s.id, dayStart);
+            const shiftLabel =
+              Number.isFinite(shiftMin) && shiftMin < totalMin
+                ? minutesToTimeLabel(DAY_START_HOUR * 60 + Math.max(0, shiftMin))
+                : null;
+            const selected = s.id === activeStaff?.id;
             return (
-              <button
-                key={s.id}
-                type="button"
-                className={`shrink-0 rounded-xl px-3 py-1.5 text-xs ${
-                  on
-                    ? 'bg-fitgo-500 text-white'
-                    : 'bg-slate-800 text-slate-300'
-                }`}
-                onClick={() => setStaff(s.id)}
-              >
-                {staffShort(s)}
-                {s.id === viewerSpecialistId ? ' · я' : ''}
-              </button>
+              <div key={s.id} className="card overflow-hidden p-0">
+                <button
+                  type="button"
+                  className={`flex w-full items-center justify-between gap-2 border-b border-slate-800 px-3 py-2 text-left ${
+                    selected ? 'bg-fitgo-500/10' : 'bg-slate-900/60'
+                  }`}
+                  onClick={() => setStaff(s.id)}
+                >
+                  <span
+                    className={`text-sm font-medium ${
+                      s.id === viewerSpecialistId ? 'text-fitgo-300' : ''
+                    }`}
+                  >
+                    {staffFull(s)}
+                    {s.id === viewerSpecialistId ? ' · я' : ''}
+                  </span>
+                  {shiftLabel ? (
+                    <span className="shrink-0 text-[11px] tabular-nums text-slate-500">
+                      смена с {shiftLabel}
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-[11px] text-slate-600">
+                      нет смены
+                    </span>
+                  )}
+                </button>
+                <div className="flex min-w-0">
+                  {renderTimeRail()}
+                  <div className="min-w-0 flex-1">{renderColumn(s)}</div>
+                </div>
+              </div>
             );
           })}
         </div>
-      </div>
-
-      <div className="card overflow-hidden p-0 md:hidden">
-        {activeStaff ? (
-          <div className="flex min-w-0">
-            {renderTimeRail()}
-            <div className="min-w-0 flex-1">
-              <div className="flex h-9 items-center truncate border-b border-slate-800 px-2 text-xs font-medium">
-                {staffFull(activeStaff)}
-                {activeStaff.id === viewerSpecialistId ? (
-                  <span className="ml-1 text-fitgo-400">(я)</span>
-                ) : (
-                  <span className="ml-1 text-slate-500">· коллега</span>
-                )}
-              </div>
-              {renderColumn(activeStaff)}
-            </div>
-          </div>
-        ) : (
-          <p className="p-4 text-sm text-slate-400">
-            Сегодня никто не работает
-          </p>
-        )}
-      </div>
-
-      {/* Computer: all columns, time stays in its own gutter */}
-      <div className="card hidden overflow-hidden p-0 md:flex">
-        {renderTimeRail()}
-        <div className="min-w-0 flex-1 overflow-x-auto">
-          <div className="flex min-w-full">
-            {staffOrdered.length === 0 ? (
-              <p className="p-4 text-sm text-slate-400">
-                Сегодня никто не работает
-              </p>
-            ) : (
-              staffOrdered.map((s) => (
-                <div
-                  key={s.id}
-                  className="flex min-w-[9rem] flex-1 flex-col"
-                >
-                  <div
-                    className={`flex h-9 items-center justify-center border-b border-l border-slate-800 px-1 text-center text-[11px] font-medium leading-tight ${
-                      s.id === viewerSpecialistId ? 'text-fitgo-300' : ''
-                    }`}
-                    title={staffFull(s)}
-                  >
-                    {staffShort(s)}
-                    {s.id === viewerSpecialistId ? ' · я' : ''}
-                  </div>
-                  {renderColumn(s)}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

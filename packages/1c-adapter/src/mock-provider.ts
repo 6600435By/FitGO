@@ -91,6 +91,21 @@ export class Mock1CProvider implements IFitnessClubProvider {
     return entry?.membership ?? null;
   }
 
+  async getClientPackages(externalId: string) {
+    const membership = await this.getMembership(externalId);
+    if (!membership) return [];
+    return [
+      {
+        id: membership.id,
+        name: membership.name,
+        status: membership.status,
+        validFrom: membership.validFrom,
+        validUntil: membership.validUntil,
+        serviceQuotas: membership.services ?? [],
+      },
+    ];
+  }
+
   async freezeMembership(externalId: string, days: number, fromDate?: string) {
     const entry = Object.values(MOCK_USERS).find(
       (u) => u.profile.externalId === externalId,

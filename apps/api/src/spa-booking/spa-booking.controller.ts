@@ -299,13 +299,13 @@ export class SpaBookingController {
   }
 
   @Get('admin/spa/quota-rules')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminQuotaRules(@CurrentUser() user: JwtPayload) {
     return this.spa.adminListQuotaRules(user);
   }
 
   @Put('admin/spa/quota-rules')
-  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminSetQuotaRules(
     @CurrentUser() user: JwtPayload,
     @Body() dto: SetSpaQuotaRulesDto,

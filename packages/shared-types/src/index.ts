@@ -70,6 +70,16 @@ export interface MembershipServiceQuota {
   unlimited?: boolean;
 }
 
+/** One ЧленствоПакетУслуг from GET /packages (абонемент or massage block). */
+export interface ClientMembershipPackage {
+  id: string;
+  name: string;
+  status: string;
+  validFrom?: string;
+  validUntil?: string;
+  serviceQuotas: MembershipServiceQuota[];
+}
+
 export interface Membership {
   id: string;
   name: string;

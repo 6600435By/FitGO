@@ -6,6 +6,7 @@
 //   GET  /v1/health
 //   GET  /v1/client
 //   GET  /v1/membership
+//   GET  /v1/packages                     → PackagesGET (все пакеты: абонемент + блок массажей)
 //   POST /v1/membership/freeze           → обработчик FreezePOST
 //   POST /v1/membership/consume-service  → обработчик ConsumeServicePOST
 //   POST /v1/spa/service-sale            → обработчик SpaSalePOST
@@ -28,15 +29,15 @@
 // В конфигураторе (пример freeze; consume/sale/debts — аналогично):
 //   Имя шаблона: freeze | consume-service | spa-service-sale | cleanup-broken-visits | SpecialistServiceDebts
 //                | group-session-roster | class-sessions | segments-config | segments-members
-//                | memberships-expiring
+//                | memberships-expiring | packages
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
 //                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
 //                | /v1/group-session-roster | /v1/class-sessions | /v1/class-sessions/attendance
 //                | /v1/trainer-pt-sales | /v1/segments/config | /v1/segments/members
-//                | /v1/memberships/expiring
+//                | /v1/memberships/expiring | /v1/packages
 //   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | ClassSessionsGET
 //                | TrainerPtSalesGET | SegmentsConfigGET | SegmentsMembersGET
-//                | MembershipsExpiringGET
+//                | MembershipsExpiringGET | PackagesGET
 //   Метод POST → ClassSessionAttendancePOST (шаблон /v1/class-sessions/attendance)
 //
 // У расширения снять флаг «Защита от опасных действий»: проведение документов
@@ -80,6 +81,22 @@
 
     Абонемент = FitGOIntegrationКлиенты.АктивныйАбонементJSON(Контрагент);
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Абонемент);
+КонецФункции
+
+// GET /v1/packages?externalId= | ?phone=
+Функция PackagesGET(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    Контрагент = РазрешитьКонтрагента(Запрос);
+    Если Контрагент = Неопределено Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(404, "Client not found");
+    КонецЕсли;
+
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(
+        200,
+        FitGOIntegrationКлиенты.ПакетыКлиентаJSON(Контрагент));
 КонецФункции
 
 Функция FreezePOST(Запрос)

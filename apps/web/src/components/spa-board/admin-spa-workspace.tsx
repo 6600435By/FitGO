@@ -9,6 +9,7 @@ import type {
   SpaSpecialistSummary,
   SpecialistWorkSlotInput,
 } from '@fitgo/shared-types';
+import { UserRole } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SpaBoard } from '@/components/spa-board/spa-board';
 import {
@@ -22,8 +23,11 @@ import {
   SpaHoursEditor,
 } from '@/components/spa-board/spa-hours-editor';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
+
+/** Internal key: catalog allowlist for any SPA membership / massage block line. */
+const SPA_QUOTA_RULE_KEY = 'SPA';
 
 function formatPrice(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)} ${currency}`;
@@ -78,10 +82,16 @@ export function AdminSpaWorkspace() {
     null,
   );
   const [ruleDraft, setRuleDraft] = useState({
-    membershipServiceName: 'Массаж классический общий',
     allowedServiceIds: [] as string[],
     allowedSpecialistIds: [] as string[],
   });
+
+  const canEditQuotaRules = useMemo(() => {
+    const roles = getUser()?.roles ?? [];
+    return (
+      roles.includes(UserRole.SUPER_ADMIN) || roles.includes(UserRole.MANAGER)
+    );
+  }, []);
 
   const period = useMemo(() => {
     const start = new Date();
@@ -116,7 +126,9 @@ export function AdminSpaWorkspace() {
     if (!token) return;
     const [svc, rls, sps, bks, cls, brd] = await Promise.all([
       api.adminSpaServices(token),
-      api.adminSpaQuotaRules(token),
+      canEditQuotaRules
+        ? api.adminSpaQuotaRules(token)
+        : Promise.resolve([] as SpaQuotaRule[]),
       api.adminSpaSpecialists(token),
       api.adminSpaCalendar(token, period.start, period.end),
       api.adminSpaClients(token),
@@ -133,9 +145,17 @@ export function AdminSpaWorkspace() {
     setBookings(bks);
     setClients(cls);
     setBoard(brd);
+    const allowedServiceIds = [
+      ...new Set(rls.flatMap((r) => r.allowedServiceIds)),
+    ];
+    const allowedSpecialistIds = [
+      ...new Set(rls.flatMap((r) => r.allowedSpecialistIds)),
+    ];
+    setRuleDraft({ allowedServiceIds, allowedSpecialistIds });
   }, [
     boardPeriod.end,
     boardPeriod.start,
+    canEditQuotaRules,
     filterApproval,
     filterSpecialistIds,
     period.end,
@@ -147,6 +167,10 @@ export function AdminSpaWorkspace() {
       setMessage(err instanceof Error ? err.message : 'Ошибка загрузки'),
     );
   }, [reload]);
+
+  useEffect(() => {
+    if (!canEditQuotaRules && tab === 'rules') setTab('calendar');
+  }, [canEditQuotaRules, tab]);
 
   useEffect(() => {
     if (!activeScheduleId) {
@@ -199,21 +223,26 @@ export function AdminSpaWorkspace() {
     return sp ? `${sp.lastName} ${sp.firstName}` : '';
   }, [activeScheduleId, dayHoursSpecialistId, specialists]);
 
+  const activeCatalogServices = useMemo(
+    () => services.filter((s) => s.active),
+    [services],
+  );
+
   const saveRules = async () => {
     const token = getToken();
-    if (!token) return;
+    if (!token || !canEditQuotaRules) return;
     setBusy(true);
     try {
-      const next = [
-        ...rules.filter(
-          (r) => r.membershipServiceName !== ruleDraft.membershipServiceName,
-        ),
-        {
-          membershipServiceName: ruleDraft.membershipServiceName.trim(),
-          allowedServiceIds: ruleDraft.allowedServiceIds,
-          allowedSpecialistIds: ruleDraft.allowedSpecialistIds,
-        },
-      ].filter((r) => r.membershipServiceName && r.allowedServiceIds.length > 0);
+      const next =
+        ruleDraft.allowedServiceIds.length === 0
+          ? []
+          : [
+              {
+                membershipServiceName: SPA_QUOTA_RULE_KEY,
+                allowedServiceIds: ruleDraft.allowedServiceIds,
+                allowedSpecialistIds: ruleDraft.allowedSpecialistIds,
+              },
+            ];
       const updated = await api.adminSetSpaQuotaRules(token, next);
       setRules(updated);
       setMessage('Правила квоты сохранены');
@@ -222,6 +251,16 @@ export function AdminSpaWorkspace() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const toggleAllCatalogServices = () => {
+    const ids = activeCatalogServices.map((s) => s.id);
+    const allOn =
+      ids.length > 0 && ids.every((id) => ruleDraft.allowedServiceIds.includes(id));
+    setRuleDraft((d) => ({
+      ...d,
+      allowedServiceIds: allOn ? [] : ids,
+    }));
   };
 
   const toggleSpecialistService = async (
@@ -515,9 +554,15 @@ export function AdminSpaWorkspace() {
           [
             ['calendar', 'Расписание'],
             ['services', 'Услуги'],
-            ['rules', 'Правила квоты'],
+            ...(canEditQuotaRules
+              ? ([['rules', 'Правила квоты']] as Array<
+                  ['rules', string]
+                >)
+              : []),
             ['specialists', 'Специалисты'],
-          ] as const
+          ] as Array<
+            ['calendar' | 'services' | 'rules' | 'specialists', string]
+          >
         ).map(([key, label]) => (
           <button
             key={key}
@@ -598,48 +643,36 @@ export function AdminSpaWorkspace() {
         </div>
       )}
 
-      {tab === 'rules' && (
+      {tab === 'rules' && canEditQuotaRules && (
         <div className="space-y-4">
           <div className="card space-y-3">
-            <h3 className="font-medium">Правило для услуги абонемента</h3>
+            <h3 className="font-medium">Списание с абонемента</h3>
             <p className="text-sm text-slate-400">
-              Укажите точное название услуги из абонемента 1С и явно отметьте,
-              какие услуги каталога можно списывать с этой квоты, когда она есть
-              у клиента.
+              Отметьте услуги каталога, которые можно списывать по квоте, если у
+              клиента есть остаток в абонементе или в блоке массажей (пакет SPA
+              в 1С).
             </p>
-            <label className="block text-sm">
-              <span className="text-slate-400">Название в абонементе (1С)</span>
-              <input
-                className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2"
-                list="spa-membership-service-names"
-                value={ruleDraft.membershipServiceName}
-                onChange={(e) =>
-                  setRuleDraft((d) => ({
-                    ...d,
-                    membershipServiceName: e.target.value,
-                  }))
-                }
-                placeholder="например: Массаж классический общий"
-              />
-              <datalist id="spa-membership-service-names">
-                {rules.map((r) => (
-                  <option key={r.id} value={r.membershipServiceName} />
-                ))}
-              </datalist>
-            </label>
             <div>
-              <p className="mb-1 text-sm text-slate-400">
-                Разрешённые услуги каталога ({ruleDraft.allowedServiceIds.length}{' '}
-                выбрано)
-              </p>
-              <p className="mb-2 text-xs text-slate-500">
-                Клиент сможет списать квоту только на отмеченные услуги и только
-                если эта строка есть в его абонементе.
-              </p>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm text-slate-400">
+                  Услуги каталога ({ruleDraft.allowedServiceIds.length} выбрано)
+                </p>
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-1 text-xs"
+                  onClick={toggleAllCatalogServices}
+                  disabled={activeCatalogServices.length === 0}
+                >
+                  {activeCatalogServices.length > 0 &&
+                  activeCatalogServices.every((s) =>
+                    ruleDraft.allowedServiceIds.includes(s.id),
+                  )
+                    ? 'Снять все'
+                    : 'Выбрать все'}
+                </button>
+              </div>
               <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-slate-800 p-2">
-                {services
-                  .filter((s) => s.active)
-                  .map((s) => {
+                {activeCatalogServices.map((s) => {
                   const on = ruleDraft.allowedServiceIds.includes(s.id);
                   return (
                     <label
@@ -667,7 +700,7 @@ export function AdminSpaWorkspace() {
                     </label>
                   );
                 })}
-                {services.filter((s) => s.active).length === 0 && (
+                {activeCatalogServices.length === 0 && (
                   <p className="px-2 py-3 text-sm text-slate-500">
                     Нет активных услуг каталога
                   </p>
@@ -708,36 +741,17 @@ export function AdminSpaWorkspace() {
             <button
               type="button"
               className="btn-primary"
-              disabled={busy || ruleDraft.allowedServiceIds.length === 0}
+              disabled={busy}
               onClick={saveRules}
             >
-              Сохранить правило
+              Сохранить
             </button>
+            {rules.length > 0 && ruleDraft.allowedServiceIds.length === 0 ? (
+              <p className="text-xs text-amber-400/90">
+                Пустой список снимет все правила списания с абонемента.
+              </p>
+            ) : null}
           </div>
-          <ul className="space-y-2 text-sm">
-            {rules.map((r) => (
-              <li key={r.id} className="card">
-                <button
-                  type="button"
-                  className="w-full text-left"
-                  onClick={() =>
-                    setRuleDraft({
-                      membershipServiceName: r.membershipServiceName,
-                      allowedServiceIds: [...r.allowedServiceIds],
-                      allowedSpecialistIds: [...r.allowedSpecialistIds],
-                    })
-                  }
-                >
-                  <p className="font-medium">{r.membershipServiceName}</p>
-                  <p className="text-slate-400">
-                    услуг: {r.allowedServiceIds.length}, специалистов:{' '}
-                    {r.allowedSpecialistIds.length}
-                    <span className="ml-2 text-fitgo-300">· изменить</span>
-                  </p>
-                </button>
-              </li>
-            ))}
-          </ul>
         </div>
       )}
 

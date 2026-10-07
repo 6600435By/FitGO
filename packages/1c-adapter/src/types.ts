@@ -3,6 +3,7 @@ import type {
   AuthCredentials,
   AuthResult,
   Booking,
+  ClientMembershipPackage,
   Membership,
   MembershipProduct,
   PaymentResult,
@@ -88,6 +89,11 @@ export interface IFitnessClubProvider {
   /** Resolve 1C client by phone (FitGO HTTP / composite). Returns null if unsupported or not found. */
   findClientByPhone?(phone: string): Promise<FitgoClientLookup | null>;
   getMembership(externalId: string): Promise<Membership | null>;
+  /**
+   * All active membership/service packages (gym + massage block).
+   * Optional — FitGO HTTP GET /packages; missing → empty / unsupported.
+   */
+  getClientPackages?(externalId: string): Promise<ClientMembershipPackage[]>;
   /** Freeze membership in 1C (FitGO HTTP). Optional — unsupported providers throw. */
   freezeMembership?(
     externalId: string,

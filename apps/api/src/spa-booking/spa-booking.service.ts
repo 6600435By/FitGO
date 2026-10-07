@@ -19,10 +19,12 @@ import {
 } from '@prisma/client';
 import {
   classifyVisitKind,
+  MembershipStatus,
   SessionType,
   sessionApprovalLabelRu,
   toUsageControl,
   type Membership,
+  type MembershipServiceQuota,
   type SpaBoardBooking,
   type SpaBoardResponse,
   type SpaBooking,
@@ -312,6 +314,95 @@ export class SpaBookingService {
     );
   }
 
+  /** Prefer higher remaining / unlimited when the same service name appears twice. */
+  private mergeServiceQuotas(
+    lists: Array<MembershipServiceQuota[] | undefined>,
+  ): MembershipServiceQuota[] {
+    const byName = new Map<string, MembershipServiceQuota>();
+    for (const list of lists) {
+      for (const svc of list ?? []) {
+        const key = svc.name.trim().toLowerCase();
+        if (!key) continue;
+        const prev = byName.get(key);
+        if (!prev) {
+          byName.set(key, svc);
+          continue;
+        }
+        if (svc.unlimited && !prev.unlimited) {
+          byName.set(key, svc);
+          continue;
+        }
+        if (!svc.unlimited && !prev.unlimited) {
+          if ((svc.remaining ?? 0) > (prev.remaining ?? 0)) {
+            byName.set(key, svc);
+          }
+        }
+      }
+    }
+    return [...byName.values()];
+  }
+
+  /**
+   * Membership + optional GET /packages (massage block as separate package).
+   * After 1C update, getMembership already merges; packages is belt-and-suspenders.
+   */
+  private async loadMembershipWithAllPackageQuotas(
+    externalId: string,
+  ): Promise<Membership | null> {
+    const provider = this.fitness.getProvider();
+    let membership: Membership | null = null;
+    try {
+      membership = await provider.getMembership(externalId);
+    } catch {
+      membership = null;
+    }
+
+    let packageQuotas: MembershipServiceQuota[] = [];
+    if (provider.getClientPackages) {
+      try {
+        const packages = await provider.getClientPackages(externalId);
+        packageQuotas = packages.flatMap((p) => p.serviceQuotas ?? []);
+      } catch {
+        packageQuotas = [];
+      }
+    }
+
+    const merged = this.mergeServiceQuotas([
+      membership?.services,
+      packageQuotas,
+    ]);
+    if (!membership && merged.length === 0) return null;
+    if (!membership) {
+      return {
+        id: `packages:${externalId}`,
+        name: 'Пакеты услуг',
+        status: MembershipStatus.ACTIVE,
+        validFrom: new Date().toISOString().slice(0, 10),
+        validUntil: new Date().toISOString().slice(0, 10),
+        services: merged,
+      };
+    }
+    return {
+      ...membership,
+      services: merged.length > 0 ? merged : membership.services,
+    };
+  }
+
+  /** Catalog services / specialists allowed to consume any SPA membership quota. */
+  private async loadQuotaAllowlist(clubId: string) {
+    const rules = await this.prisma.spaQuotaRule.findMany({
+      where: { clubId },
+      include: { services: true, specialists: true },
+    });
+    const serviceIds = new Set(
+      rules.flatMap((r) => r.services.map((s) => s.serviceId)),
+    );
+    const specialistIds = new Set(
+      rules.flatMap((r) => r.specialists.map((s) => s.specialistId)),
+    );
+    return { rules, serviceIds, specialistIds };
+  }
+
   // ─── Client: services / specialists / slots ────────────────────────────────
 
   async listClientSpaServices(
@@ -325,10 +416,8 @@ export class SpaBookingService {
     });
 
     const membership = await this.loadMembership(user);
-    const rules = await this.prisma.spaQuotaRule.findMany({
-      where: { clubId },
-      include: { services: true, specialists: true },
-    });
+    const { serviceIds: allowedServiceIds } =
+      await this.loadQuotaAllowlist(clubId);
 
     const membershipSpa = (membership?.services ?? []).filter((s) =>
       this.isSpaMembershipService(s.name),
@@ -340,25 +429,21 @@ export class SpaBookingService {
       let quotaRemaining: number | undefined;
       let matchedName: string | undefined;
 
-      for (const mSvc of membershipSpa) {
-        if (
-          opts?.membershipServiceName &&
-          mSvc.name !== opts.membershipServiceName
-        ) {
-          continue;
+      if (allowedServiceIds.has(service.id)) {
+        for (const mSvc of membershipSpa) {
+          if (
+            opts?.membershipServiceName &&
+            mSvc.name !== opts.membershipServiceName
+          ) {
+            continue;
+          }
+          const hasQuota = mSvc.unlimited || (mSvc.remaining ?? 0) > 0;
+          if (!hasQuota) continue;
+          quotaAvailable = true;
+          quotaRemaining = mSvc.unlimited ? undefined : mSvc.remaining;
+          matchedName = mSvc.name;
+          break;
         }
-        const rule = rules.find((r) => r.membershipServiceName === mSvc.name);
-        if (rule && !rule.services.some((s) => s.serviceId === service.id)) {
-          continue;
-        }
-        // If no rule exists for this membership service, do not allow quota booking
-        if (!rule) continue;
-        const hasQuota = mSvc.unlimited || (mSvc.remaining ?? 0) > 0;
-        if (!hasQuota) continue;
-        quotaAvailable = true;
-        quotaRemaining = mSvc.unlimited ? undefined : mSvc.remaining;
-        matchedName = mSvc.name;
-        break;
       }
 
       if (opts?.quotaOnly && !quotaAvailable) continue;
@@ -387,20 +472,14 @@ export class SpaBookingService {
     if (!service) throw new NotFoundException('Услуга не найдена');
 
     let specialistIds: string[] | null = null;
-    if (opts?.paymentType === 'QUOTA' && opts.membershipServiceName) {
-      const rule = await this.prisma.spaQuotaRule.findUnique({
-        where: {
-          clubId_membershipServiceName: {
-            clubId,
-            membershipServiceName: opts.membershipServiceName,
-          },
-        },
-        include: { specialists: true, services: true },
-      });
-      if (!rule || !rule.services.some((s) => s.serviceId === serviceId)) {
+    if (opts?.paymentType === 'QUOTA') {
+      const { serviceIds, specialistIds: allowedSpecialists } =
+        await this.loadQuotaAllowlist(clubId);
+      if (!serviceIds.has(serviceId)) {
         return [];
       }
-      specialistIds = rule.specialists.map((s) => s.specialistId);
+      specialistIds =
+        allowedSpecialists.size > 0 ? [...allowedSpecialists] : null;
     }
 
     const specialists = await this.prisma.user.findMany({
@@ -698,11 +777,7 @@ export class SpaBookingService {
         ? this.clubMembership.resolveExternalId(active, user.externalId)
         : user.externalId);
     if (!externalId) return null;
-    try {
-      return await this.fitness.getProvider().getMembership(externalId);
-    } catch {
-      return null;
-    }
+    return this.loadMembershipWithAllPackageQuotas(externalId);
   }
 
   private async resolveExternalId(userId: string, jwtExternalId?: string) {
@@ -915,14 +990,11 @@ export class SpaBookingService {
     const resolved = await this.resolveBookingClient(actor, input);
     const client = resolved.client;
 
-    const provider = this.fitness.getProvider();
     let membership: Membership | null = null;
     if (resolved.externalId) {
-      try {
-        membership = await provider.getMembership(resolved.externalId);
-      } catch {
-        membership = null;
-      }
+      membership = await this.loadMembershipWithAllPackageQuotas(
+        resolved.externalId,
+      );
     } else if (input.paymentType === 'QUOTA') {
       throw new BadRequestException(
         'Квоту можно списать только у клиента, найденного в 1С',
@@ -942,26 +1014,22 @@ export class SpaBookingService {
           'Нет подходящей услуги в абонементе для списания',
         );
       }
-      const rule = await this.prisma.spaQuotaRule.findUnique({
-        where: {
-          clubId_membershipServiceName: {
-            clubId,
-            membershipServiceName,
-          },
-        },
-        include: { services: true, specialists: true },
-      });
-      if (!rule) {
+      const { serviceIds, specialistIds } =
+        await this.loadQuotaAllowlist(clubId);
+      if (serviceIds.size === 0) {
         throw new BadRequestException(
-          'Для этой услуги абонемента не настроено правило записи',
+          'Не настроено правило списания с абонемента',
         );
       }
-      if (!rule.services.some((s) => s.serviceId === input.serviceId)) {
+      if (!serviceIds.has(input.serviceId)) {
         throw new BadRequestException(
           'Этот вид услуги нельзя списать по абонементу',
         );
       }
-      if (!rule.specialists.some((s) => s.specialistId === input.specialistId)) {
+      if (
+        specialistIds.size > 0 &&
+        !specialistIds.has(input.specialistId)
+      ) {
         throw new BadRequestException(
           'К этому специалисту нельзя записаться по абонементу',
         );

@@ -55,6 +55,10 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     return this.fitgo.getMembership(externalId);
   }
 
+  getClientPackages(externalId: string) {
+    return this.fitgo.getClientPackages(externalId);
+  }
+
   freezeMembership(externalId: string, days: number, fromDate?: string): Promise<Membership> {
     return this.fitgo.freezeMembership(externalId, days, fromDate);
   }

@@ -236,11 +236,13 @@ Bindings (scan Куделко VIP, 2026-09-08):
 - `freezeDaysRemaining` ← `РН.ЧленстваПакетыУслуг.Остатки.КоличествоДнейЗаморозокОстаток` (4) — **не** `ДнейДополнительноОстаток`
 - `freezeAllowed` ← `КоличествоДнейЗаморозок > 0`
 
-### GET `/packages` (фаза 1b)
+### GET `/packages`
 
-Несколько членств/пакетов на клиента (как на столе администратора).
+Несколько членств/пакетов на клиента (абонемент зала **и** отдельный блок массажей /
+`ЧленствоПакетУслуг`). Используется SPA-записью вместе с `GET /membership`
+(в membership.services квоты уже сводятся по всем пакетам после обновления BSL).
 
-Query: `phone` или `externalId`.
+Query: `phone` или `externalId`. Обработчик: `PackagesGET` → `ПакетыКлиентаJSON`.
 
 ```json
 {
@@ -318,7 +320,8 @@ Query: `phone` или `externalId`.
 Реализовано в `packages/1c-adapter/src/fitgo-http-provider.ts`:
 
 - `getClientByPhone(phone)` / provider `findClientByPhone` → `/client?phone=` (привязка CRM)
-- `getMembership(externalId)` → `/membership?externalId=`
+- `getMembership(externalId)` → `/membership?externalId=` (services = свод квот по пакетам)
+- `getClientPackages(externalId)` → `/packages?externalId=`
 - `freezeMembership(externalId, days, fromDate?)` → `POST /membership/freeze`
 - `getVisits(externalId)` → `/visits?externalId=`
 - `getAccessCard(externalId)` → `/card?externalId=`

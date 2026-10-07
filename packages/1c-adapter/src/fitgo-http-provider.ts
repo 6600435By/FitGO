@@ -2,6 +2,7 @@ import {
   MembershipStatus,
   classifyVisitKind,
   type AccessCard,
+  type ClientMembershipPackage,
   type Membership,
   type MembershipServiceQuota,
   type Visit,
@@ -28,6 +29,16 @@ interface FitgoServiceQuotaData {
   remaining?: number;
   total?: number;
   unlimited?: boolean;
+}
+
+interface FitgoPackageData {
+  id: string;
+  name: string;
+  status: string;
+  validFrom?: string;
+  validUntil?: string;
+  serviceQuotas?: FitgoServiceQuotaData[];
+  services?: FitgoServiceQuotaData[];
 }
 
 interface FitgoMembershipData {
@@ -159,6 +170,26 @@ export class FitgoHttpProvider {
     );
     if (!data) return null;
     return mapMembership(data);
+  }
+
+  /** All active packages (gym membership + massage block, etc.). */
+  async getClientPackages(
+    externalId: string,
+  ): Promise<ClientMembershipPackage[]> {
+    try {
+      const data = await this.request<FitgoPackageData[] | null>(
+        `/packages?externalId=${encodeURIComponent(externalId)}`,
+      );
+      if (!Array.isArray(data)) return [];
+      return data
+        .map(mapPackage)
+        .filter((p): p is ClientMembershipPackage => p !== null);
+    } catch (err) {
+      const status = (err as Error & { status?: number }).status;
+      // Template not published yet — Nest falls back to getMembership.
+      if (status === 404 || status === 405) return [];
+      throw err;
+    }
   }
 
   async freezeMembership(
@@ -729,6 +760,22 @@ function coerceOptionalNumber(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function mapPackage(data: FitgoPackageData): ClientMembershipPackage | null {
+  if (!data?.id || !data?.name) return null;
+  const rawServices = data.serviceQuotas ?? data.services ?? [];
+  const serviceQuotas = rawServices
+    .map(mapServiceQuota)
+    .filter((s): s is MembershipServiceQuota => s !== null);
+  return {
+    id: data.id,
+    name: data.name,
+    status: data.status,
+    validFrom: data.validFrom,
+    validUntil: data.validUntil,
+    serviceQuotas,
+  };
 }
 
 function mapMembership(data: FitgoMembershipData): Membership {
