@@ -14,6 +14,7 @@ import {
   type StaffPayProfile,
   type StaffSalesBreakdown,
 } from '@fitgo/shared-types';
+import { moscowDayKey } from '../club-sync/moscow-time';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   attributionLabel,
@@ -217,7 +218,9 @@ export class AdminSalesService {
         row.saleType === 'membership' && params.attribution === 'shiftShare';
 
       if (isMembershipShift) {
-        const dayKey = row.soldAt.toISOString().slice(0, 10);
+        // Club calendar day (Minsk), not UTC — else 00:00–02:59 local
+        // attaches to yesterday's roster.
+        const dayKey = moscowDayKey(row.soldAt);
         const onShift = await this.shiftAdminsForDay(
           params.clubId,
           dayKey,

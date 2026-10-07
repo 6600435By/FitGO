@@ -52,9 +52,12 @@ function paymentLabel(m: ClubRevenuePaymentMethod | string): string {
   }
 }
 
+const CLUB_TZ = 'Europe/Minsk';
+
 function fmtDate(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('ru-RU', {
+    timeZone: CLUB_TZ,
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',

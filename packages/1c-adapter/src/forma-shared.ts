@@ -29,20 +29,55 @@ export function normalizePhone(phone: string): string {
   return phone.replace(/\D/g, '');
 }
 
+/** Forma `club_id` — UUID справочника «Структурные единицы», не seed `1c-club-001`. */
+const FORMA_CLUB_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isFormaClubUuid(value: string | null | undefined): boolean {
+  return FORMA_CLUB_UUID.test(value?.trim() ?? '');
+}
+
+export interface FormaClubRef {
+  id: string;
+  title?: string;
+  current?: boolean | null;
+}
+
+/**
+ * Pick the structural unit Forma will accept as `club_id`.
+ * Prefer `preferredId` when it is one of the returned clubs; otherwise the
+ * club marked current, otherwise the only club. Several clubs and no match → ''.
+ */
+export function pickFormaClubId(
+  clubs: FormaClubRef[],
+  preferredId?: string | null,
+): string {
+  const rows = clubs.filter((c) => isFormaClubUuid(c.id));
+  const preferred = preferredId?.trim().toLowerCase() ?? '';
+  const match = preferred
+    ? rows.find((c) => c.id.toLowerCase() === preferred)
+    : undefined;
+  if (match) return match.id;
+  const current = rows.find((c) => c.current === true);
+  if (current) return current.id;
+  if (rows.length === 1 && rows[0]) return rows[0].id;
+  return '';
+}
+
 export function mapFormaClass(item: FormaClassItem): ScheduleSlot {
   const capacity = item.capacity ?? item.web_capacity ?? 0;
   const availableSlots = item.available_slots ?? 0;
   const booked = Math.max(0, capacity - availableSlots);
 
   return {
-    id: item.appointment_id,
-    title: item.service.title,
+    id: item.appointment_id ?? '',
+    title: item.service?.title ?? '',
     type: SessionType.GROUP,
-    serviceId: item.service.id,
-    trainerId: item.employee.id,
-    trainerName: item.employee.name,
-    startAt: toIsoDate(item.start_date),
-    endAt: toIsoDate(item.end_date),
+    serviceId: item.service?.id ?? '',
+    trainerId: item.employee?.id ?? '',
+    trainerName: item.employee?.name,
+    startAt: item.start_date ? toIsoDate(item.start_date) : '',
+    endAt: item.end_date ? toIsoDate(item.end_date) : '',
     capacity,
     booked,
     available: availableSlots > 0 && !item.canceled,

@@ -4,6 +4,11 @@ import {
   FitgoAnalyticsHttpProvider,
   type FitgoAnalyticsSalesItem,
 } from '@fitgo/1c-adapter';
+import {
+  moscowDayKey,
+  moscowParts,
+  parseClubWallClock,
+} from '../club-sync/moscow-time';
 import { isCollectibleClientDebt } from './club-revenue-debt';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -315,10 +320,8 @@ export class ClubRevenueSyncService {
       ) {
         continue;
       }
-      const paidDay = mapped.paidAt
-        ? mapped.paidAt.toISOString().slice(0, 10)
-        : null;
-      const occurredDay = mapped.occurredAt.toISOString().slice(0, 10);
+      const paidDay = mapped.paidAt ? moscowDayKey(mapped.paidAt) : null;
+      const occurredDay = moscowDayKey(mapped.occurredAt);
       const externalId = paidDay
         ? `${baseId}:p${paidDay}`
         : `${baseId}:u${occurredDay}`;
@@ -490,8 +493,7 @@ async function reconcileClubUnpaid(
 
   const template = payments[0]!;
   const occurredAt = template.occurredAt;
-  const occurredDay = occurredAt.toISOString().slice(0, 10);
-  const externalId = `${baseId}:u${occurredDay}`;
+  const externalId = `${baseId}:u${moscowDayKey(occurredAt)}`;
 
   await prisma.clubRevenueEntry.upsert({
     where: { clubId_externalId: { clubId, externalId } },
@@ -563,10 +565,10 @@ function mapItem(item: FitgoAnalyticsSalesItem) {
   // - deposit without нал/карта/безнал → начисление в абонементе;
   // - Документ.ЗакрытиеДня (23:59, только ЛС) → personal_burn;
   // - do NOT remap cashless→PA (безнал stays cashless).
-  const atSold = new Date(item.soldAt);
-  const endOfDay =
-    (atSold.getUTCHours() === 23 && atSold.getUTCMinutes() === 59) ||
-    (atSold.getHours() === 23 && atSold.getMinutes() === 59);
+  const atSold = parseClubWallClock(item.soldAt);
+  if (!atSold) return null;
+  const { hour, minute } = moscowParts(atSold);
+  const endOfDay = hour === 23 && minute === 59;
   if (
     operationType === 'payment' &&
     personalAccount > 0 &&
@@ -623,13 +625,11 @@ function mapItem(item: FitgoAnalyticsSalesItem) {
   return {
     documentId: item.documentId?.trim() || null,
     operationType,
-    occurredAt: new Date(item.soldAt),
+    occurredAt: atSold,
     paidAt:
       operationType === 'personal_burn'
         ? null
-        : item.paidAt
-          ? new Date(item.paidAt)
-          : null,
+        : parseClubWallClock(item.paidAt),
     saleAmount,
     paidAmount,
     refundAmount,

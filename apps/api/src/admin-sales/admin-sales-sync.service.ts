@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { FitgoAnalyticsHttpProvider } from '@fitgo/1c-adapter';
+import { moscowDayKey, parseClubWallClock } from '../club-sync/moscow-time';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeSaleType } from './admin-sales.util';
 import {
@@ -242,9 +243,10 @@ export class AdminSalesSyncService {
         if (!baseId) continue;
 
         const saleType = normalizeSaleType(item.saleType, item.productName);
-        const soldAt = new Date(item.soldAt);
-        const paidAt = item.paidAt ? new Date(item.paidAt) : null;
-        const paidDay = paidAt ? paidAt.toISOString().slice(0, 10) : null;
+        const soldAt = parseClubWallClock(item.soldAt);
+        if (!soldAt) continue;
+        const paidAt = parseClubWallClock(item.paidAt);
+        const paidDay = paidAt ? moscowDayKey(paidAt) : null;
         const amount = Number(item.amount) || 0;
         const cash = Number(item.cash) || 0;
         const card = Number(item.card) || 0;
@@ -259,7 +261,7 @@ export class AdminSalesSyncService {
         // One DB row per (line × payment-day); unpaid → sold-day key.
         const externalSaleId = paidDay
           ? `${baseId}:p${paidDay}`
-          : `${baseId}:u${soldAt.toISOString().slice(0, 10)}`;
+          : `${baseId}:u${moscowDayKey(soldAt)}`;
 
         seen.add(externalSaleId);
         pending.push({
@@ -406,7 +408,7 @@ async function reconcileAdminUnpaid(
       return min;
     }, null) ??
     meta.soldAt;
-  const externalSaleId = `${baseId}:u${soldAt.toISOString().slice(0, 10)}`;
+  const externalSaleId = `${baseId}:u${moscowDayKey(soldAt)}`;
 
   await prisma.saleTransaction.upsert({
     where: { clubId_externalSaleId: { clubId, externalSaleId } },

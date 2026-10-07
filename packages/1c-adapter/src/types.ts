@@ -266,6 +266,10 @@ export interface IFitnessClubProvider {
   } | null>;
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]>;
   getAccessCard(externalId: string): Promise<AccessCard | null>;
+  /** Forma `GET /clubs/` — structural units this API key can see. */
+  listClubs?(): Promise<
+    Array<{ id: string; title?: string; current?: boolean | null }>
+  >;
   getSchedule(clubExternalId: string, filters?: ScheduleFilters): Promise<ScheduleSlot[]>;
   bookSession(
     externalId: string,

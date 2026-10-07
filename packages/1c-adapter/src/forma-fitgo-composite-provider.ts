@@ -188,6 +188,10 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     return this.fitgo.getAccessCard(externalId);
   }
 
+  listClubs() {
+    return this.forma.listClubs();
+  }
+
   getSchedule(clubExternalId: string, filters?: ScheduleFilters): Promise<ScheduleSlot[]> {
     return this.forma.getSchedule(clubExternalId, filters);
   }

@@ -21,11 +21,14 @@ import type {
 import {
   buildScheduleRange,
   formatFormaProxyError,
+  isFormaClubUuid,
   mapFormaClass,
   normalizePhone,
+  pickFormaClubId,
   unwrapFormaData,
   type FormaAuthData,
   type FormaClassItem,
+  type FormaClubRef,
 } from './forma-shared';
 
 interface FormaResponse<T> {
@@ -130,7 +133,56 @@ export class FormaFitnessProvider implements IFitnessClubProvider {
     return null;
   }
 
+  /** Structural units visible to this API key (`GET /clubs/`). */
+  async listClubs(): Promise<FormaClubRef[]> {
+    const rows = await this.request<
+      Array<{ id?: string; title?: string; current?: boolean | null }>
+    >('/clubs/', { method: 'GET' });
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .filter((row) => typeof row?.id === 'string' && row.id.trim().length > 0)
+      .map((row) => ({
+        id: row.id!.trim(),
+        title: row.title ?? '',
+        current: row.current ?? null,
+      }));
+  }
+
   async getSchedule(
+    clubExternalId: string,
+    filters?: ScheduleFilters,
+  ): Promise<ScheduleSlot[]> {
+    const initial = await this.clubIdOrDiscovered(clubExternalId);
+    try {
+      return await this.loadSchedule(initial, filters);
+    } catch (err) {
+      if (!isMissingStructuralUnit(err)) throw err;
+      const picked = pickFormaClubId(await this.safeListClubs());
+      if (!picked || picked.toLowerCase() === initial.toLowerCase()) throw err;
+      return await this.loadSchedule(picked, filters);
+    }
+  }
+
+  /**
+   * Seed mock ids (`1c-club-001`) make Forma answer 400/1025
+   * «Не найдена структурная единица». Resolve via `/clubs/` before the call.
+   */
+  private async clubIdOrDiscovered(given: string): Promise<string> {
+    const id = given?.trim() ?? '';
+    if (isFormaClubUuid(id)) return id;
+    const picked = pickFormaClubId(await this.safeListClubs());
+    return picked || id;
+  }
+
+  private async safeListClubs(): Promise<FormaClubRef[]> {
+    try {
+      return await this.listClubs();
+    } catch {
+      return [];
+    }
+  }
+
+  private async loadSchedule(
     clubExternalId: string,
     filters?: ScheduleFilters,
   ): Promise<ScheduleSlot[]> {
@@ -154,7 +206,9 @@ export class FormaFitnessProvider implements IFitnessClubProvider {
       { method: 'GET' },
     );
 
-    let slots = (Array.isArray(items) ? items : []).map(mapFormaClass);
+    let slots = (Array.isArray(items) ? items : [])
+      .map(mapFormaClass)
+      .filter((slot) => slot.id.length > 0);
 
     if (filters?.type === SessionType.PERSONAL) {
       slots = [];
@@ -223,4 +277,9 @@ export class FormaFitnessProvider implements IFitnessClubProvider {
       currency: 'BYN',
     };
   }
+}
+
+function isMissingStructuralUnit(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /1025|структурн/i.test(msg);
 }

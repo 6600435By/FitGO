@@ -144,7 +144,9 @@ export class FormaWordPressProxyProvider implements IFitnessClubProvider {
     }
 
     const items = await this.wpRequest<FormaClassItem[]>(params);
-    let slots = (Array.isArray(items) ? items : []).map(mapFormaClass);
+    let slots = (Array.isArray(items) ? items : [])
+      .map(mapFormaClass)
+      .filter((slot) => slot.id.length > 0);
 
     if (filters?.type === SessionType.PERSONAL) {
       slots = [];

@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { pickFormaClubId } from '@fitgo/1c-adapter';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { resolveFormaClubId } from './forma-club-id';
+import { isFormaClubUuid, resolveFormaClubId } from './forma-club-id';
 import { addMoscowDays, moscowDayKey } from './moscow-time';
 
 const RESOURCE_KEY = 'schedule_slots';
@@ -49,8 +50,7 @@ export class ScheduleSlotsSyncService {
       where: { id: clubId },
       select: { externalId: true },
     });
-    const resolved = resolveFormaClubId(club?.externalId);
-    const externalId = resolved.clubId;
+    const externalId = await this.alignFormaClubId(clubId, club?.externalId);
     if (!externalId) {
       await this.markState(
         clubId,
@@ -58,16 +58,6 @@ export class ScheduleSlotsSyncService {
         'no Forma club UUID — set Club.externalId or FORMA_CLUB_ID',
       );
       return { from, to, upserted: 0, deactivated: 0 };
-    }
-    if (resolved.source === 'env' && club?.externalId?.trim() !== externalId) {
-      this.logger.warn(
-        `schedule_slots: Club.externalId=${club?.externalId ?? '(empty)'} is not a Forma UUID; using FORMA_CLUB_ID=${externalId}`,
-      );
-      // Heal seed/mock ids so next sync and live schedule use the same club.
-      await this.prisma.club.update({
-        where: { id: clubId },
-        data: { externalId },
-      });
     }
 
     try {
@@ -153,6 +143,39 @@ export class ScheduleSlotsSyncService {
       await this.markState(clubId, 'error', `${msg}${hint}`);
       throw new Error(`${msg}${hint}`);
     }
+  }
+
+  /**
+   * `1c-club-001` is not a Forma structural unit (API 400/1025).
+   * `GET /clubs/` returns the real UUID; persist it on Club.externalId.
+   */
+  private async alignFormaClubId(
+    clubId: string,
+    stored: string | null | undefined,
+  ): Promise<string> {
+    const resolved = resolveFormaClubId(stored);
+    let externalId = resolved.clubId;
+    const provider = this.fitness.getProvider();
+    if (provider.listClubs) {
+      try {
+        const clubs = await provider.listClubs();
+        const picked = pickFormaClubId(clubs, externalId);
+        if (picked) externalId = picked;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`schedule_slots: GET /clubs/ failed: ${msg}`);
+      }
+    }
+    if (isFormaClubUuid(externalId) && (stored?.trim() ?? '') !== externalId) {
+      await this.prisma.club.update({
+        where: { id: clubId },
+        data: { externalId },
+      });
+      this.logger.warn(
+        `schedule_slots: Club.externalId=${stored?.trim() || '(empty)'} replaced with Forma club ${externalId}`,
+      );
+    }
+    return externalId;
   }
 
   private async markState(

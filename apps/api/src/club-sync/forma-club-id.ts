@@ -1,10 +1,12 @@
-/** Forma `club_id` = UUID структурной единицы (не mock `1c-club-001`). */
-const FORMA_CLUB_UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { isFormaClubUuid } from '@fitgo/1c-adapter';
+
+export { isFormaClubUuid };
 
 /**
  * Prefer a real Forma club UUID from Club.externalId; otherwise FORMA_CLUB_ID.
- * Avoids sync 1025 «Не найдена структурная единица» when DB still has seed mock id.
+ * A non-UUID seed id (`1c-club-001`) is replaced from Forma `GET /clubs/`
+ * during schedule sync — that id is what triggers 1025
+ * «Не найдена структурная единица».
  */
 export function resolveFormaClubId(
   clubExternalId: string | null | undefined,
@@ -13,10 +15,10 @@ export function resolveFormaClubId(
   const fromClub = clubExternalId?.trim() ?? '';
   const fromEnv = envClubId?.trim() ?? '';
 
-  if (FORMA_CLUB_UUID.test(fromClub)) {
+  if (isFormaClubUuid(fromClub)) {
     return { clubId: fromClub, source: 'club' };
   }
-  if (FORMA_CLUB_UUID.test(fromEnv)) {
+  if (isFormaClubUuid(fromEnv)) {
     return { clubId: fromEnv, source: 'env' };
   }
   if (fromEnv) {
@@ -28,6 +30,3 @@ export function resolveFormaClubId(
   return { clubId: '', source: 'none' };
 }
 
-export function isFormaClubUuid(value: string | null | undefined): boolean {
-  return FORMA_CLUB_UUID.test(value?.trim() ?? '');
-}
