@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,7 +11,10 @@ import {
 } from '@prisma/client';
 import {
   DEFAULT_CLUB_WORKING_HOURS,
+  UserRole,
   clubHoursForDate,
+  isRosterDateLocked,
+  rosterLockMessage,
   sliceForTrack,
   trackDayCapMinutes,
   type ClubWorkingHours,
@@ -53,6 +57,19 @@ function asWorkingHours(raw: unknown): ClubWorkingHours {
 export class StaffRosterService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * After payroll (from the 5th of month M), month M−1 is locked for ADMIN.
+   * SUPER_ADMIN / MANAGER may still correct the roster.
+   */
+  private assertRosterDateWritable(actor: JwtPayload, ymd: string) {
+    if (!isRosterDateLocked(ymd)) return;
+    const canOverride =
+      actor.roles?.includes(UserRole.SUPER_ADMIN) ||
+      actor.roles?.includes(UserRole.MANAGER);
+    if (canOverride) return;
+    throw new ForbiddenException(rosterLockMessage(ymd));
+  }
+
   async getWorkingHours(clubId: string): Promise<ClubWorkingHours> {
     const club = await this.prisma.club.findUnique({ where: { id: clubId } });
     if (!club) throw new NotFoundException('Клуб не найден');
@@ -69,16 +86,18 @@ export class StaffRosterService {
 
   /** Holiday flag and/or one-day club hours. hours=null clears the day override. */
   async patchDaySchedule(
-    clubId: string,
+    actor: JwtPayload,
     input: {
       date: string;
       holiday?: boolean;
       hours?: { open: string; close: string; closed?: boolean } | null;
     },
   ) {
+    const clubId = requireClubId(actor);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) {
       throw new BadRequestException('Дата должна быть в формате ГГГГ-ММ-ДД');
     }
+    this.assertRosterDateWritable(actor, input.date);
     if (
       input.hours &&
       !input.hours.closed &&
@@ -195,6 +214,7 @@ export class StaffRosterService {
     },
   ): Promise<StaffShiftDto[]> {
     const clubId = requireClubId(actor);
+    this.assertRosterDateWritable(actor, input.date);
     const start = new Date(input.startAt);
     const end = new Date(input.endAt);
     if (!(start < end)) {
@@ -294,11 +314,13 @@ export class StaffRosterService {
     return out;
   }
 
-  async deleteShift(clubId: string, id: string) {
+  async deleteShift(actor: JwtPayload, id: string) {
+    const clubId = requireClubId(actor);
     const row = await this.prisma.staffShift.findFirst({
       where: { id, clubId },
     });
     if (!row) throw new NotFoundException('Смена не найдена');
+    this.assertRosterDateWritable(actor, utcDateKey(row.date));
     await this.prisma.staffShift.delete({ where: { id } });
     if (row.track === StaffShiftTrack.TRAINER) {
       await this.prisma.trainerShift.deleteMany({
@@ -365,6 +387,15 @@ export class StaffRosterService {
     const skipped: Array<{ date: string; reason: string }> = [];
 
     for (const dateStr of dates) {
+      if (isRosterDateLocked(dateStr)) {
+        const canOverride =
+          actor.roles?.includes(UserRole.SUPER_ADMIN) ||
+          actor.roles?.includes(UserRole.MANAGER);
+        if (!canOverride) {
+          skipped.push({ date: dateStr, reason: 'Месяц закрыт после ЗП' });
+          continue;
+        }
+      }
       const date = dateOnly(dateStr);
       const start = new Date(`${dateStr}T${input.startTime}:00`);
       const end = new Date(`${dateStr}T${input.endTime}:00`);

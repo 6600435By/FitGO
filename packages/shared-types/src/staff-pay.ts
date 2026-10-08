@@ -348,7 +348,8 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         track,
         hourlyRateMinor: 0,
         membershipSalesPercent: 0,
-        membershipSalesAttribution: 'individual',
+        // Club default: split membership by FitGO admin roster (1 → 100%, 2+ → equal).
+        membershipSalesAttribution: 'shiftShare',
         extraSalesPercent: 0,
         shopSalesPercent: 0,
         corporateSalesPercent: 0,

@@ -497,26 +497,26 @@ export function StaffPayProfileEditor({
               <span className="text-slate-400">Абонементы засчитывать</span>
               <select
                 className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
-                value={profile.membershipSalesAttribution ?? 'individual'}
+                value={profile.membershipSalesAttribution ?? 'shiftShare'}
                 onChange={(e) =>
                   setProfile({
                     ...profile,
                     membershipSalesAttribution:
-                      e.target.value === 'shiftShare'
-                        ? 'shiftShare'
-                        : 'individual',
+                      e.target.value === 'individual'
+                        ? 'individual'
+                        : 'shiftShare',
                   })
                 }
               >
-                <option value="individual">Тому, кто продал (автор 1С)</option>
                 <option value="shiftShare">
                   По графику смены в FitGO
                 </option>
+                <option value="individual">Тому, кто продал (автор 1С)</option>
               </select>
               <span className="block text-xs text-slate-500">
-                «По графику»: сумма абонемента делится на админов из графика в
-                день продажи (1 — целиком, 2+ — поровну). Автор из 1С только в
-                списке.
+                «По графику»: в день продажи (soldAt) база делится на админов из
+                графика FitGO (1 — целиком, 2 или 3+ — поровну). Массаж / солярий
+                / магазин всегда автору 1С. Тренировки/ПТ в абонементы не входят.
               </span>
             </label>
             <PercentField

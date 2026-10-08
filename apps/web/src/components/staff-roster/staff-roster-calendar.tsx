@@ -11,8 +11,11 @@ import type {
 import {
   DAY_OF_WEEK_KEYS,
   DEFAULT_CLUB_WORKING_HOURS,
+  ROSTER_LOCK_DAY,
   clubHoursForDate,
+  isRosterDateLocked,
   rosterDayKind,
+  rosterLockMessage,
   trackDayCapMinutes,
 } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -85,11 +88,21 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
   const [dayClosed, setDayClosed] = useState(false);
 
   const canEdit = mode === 'admin' || mode === 'super';
+  /** SUPER_ADMIN may correct locked months; ADMIN cannot. */
+  const canEditLockedMonths = mode === 'super';
+  const monthSampleDate = `${year}-${pad(month)}-01`;
+  const monthLocked = isRosterDateLocked(monthSampleDate);
   const firstWeekday = useMemo(() => {
     // Mon=0 … Sun=6 for grid
     const dow = new Date(year, month - 1, 1).getDay();
     return dow === 0 ? 6 : dow - 1;
   }, [year, month]);
+
+  const dayEditable = (dateStr: string) => {
+    if (!canEdit) return false;
+    if (!isRosterDateLocked(dateStr)) return true;
+    return canEditLockedMonths;
+  };
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -184,7 +197,10 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     hours?: { open: string; close: string; closed?: boolean } | null;
   }) => {
     const token = getToken();
-    if (!token || !canEdit) return;
+    if (!token || !dayEditable(body.date)) {
+      setMessage(rosterLockMessage(body.date));
+      return;
+    }
     setBusy(true);
     setMessage('');
     try {
@@ -215,7 +231,10 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
   };
 
   const removeShift = async (id: string) => {
-    if (!canEdit) return;
+    if (!selectedDate || !dayEditable(selectedDate)) {
+      if (selectedDate) setMessage(rosterLockMessage(selectedDate));
+      return;
+    }
     const token = getToken();
     if (!token) return;
     setBusy(true);
@@ -237,7 +256,10 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     end: string;
     overtimeMinutes?: number;
   }) => {
-    if (!canEdit || !selectedDate) return false;
+    if (!selectedDate || !dayEditable(selectedDate)) {
+      if (selectedDate) setMessage(rosterLockMessage(selectedDate));
+      return false;
+    }
     const token = getToken();
     if (!token) return false;
     setBusy(true);
@@ -273,6 +295,13 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     overtimeMinutes?: number;
   }) => {
     if (!canEdit) return false;
+    const editableDates = input.dates.filter((d) => dayEditable(d));
+    if (editableDates.length === 0) {
+      setMessage(
+        rosterLockMessage(input.dates[0] ?? monthSampleDate),
+      );
+      return false;
+    }
     const token = getToken();
     if (!token) return false;
     setBusy(true);
@@ -283,7 +312,7 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
         track,
         startTime: input.start,
         endTime: input.end,
-        dates: input.dates,
+        dates: editableDates,
         overtimeMinutes: input.overtimeMinutes,
         skipIfExists: true,
       };
@@ -395,6 +424,15 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
         <p className="text-sm text-amber-300">{message}</p>
       )}
 
+      {monthLocked && mode !== 'trainer' && (
+        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          {rosterLockMessage(monthSampleDate)}
+          {canEditLockedMonths
+            ? ' Супер-админ может править для корректировок.'
+            : ` Редактирование недоступно (закрытие с ${ROSTER_LOCK_DAY}-го).`}
+        </p>
+      )}
+
       <div className="overflow-x-auto rounded-xl border border-white/10 bg-slate-900/40 p-3">
         <div className="mb-2 grid grid-cols-7 gap-1 text-center text-xs uppercase tracking-wide text-slate-500">
           {DAY_OF_WEEK_KEYS.map((k) => (
@@ -410,6 +448,7 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
             const date = `${year}-${pad(month)}-${pad(day)}`;
             const shifts = shiftByDate.get(date) ?? [];
             const closed = clubDayHint(date) === 'закрыто';
+            const locked = isRosterDateLocked(date);
             const selected = selectedDate === date;
             return (
               <button
@@ -420,23 +459,31 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
                   setSelectedDate(date);
                   setMessage('');
                 }}
-                title="Двойной щелчок — кто работает"
+                title={
+                  locked && !canEditLockedMonths
+                    ? rosterLockMessage(date)
+                    : 'Двойной щелчок — кто работает'
+                }
                 className={`min-h-[7.5rem] rounded-lg border p-1.5 text-left align-top transition ${
                   selected
                     ? 'border-emerald-400/60 bg-emerald-500/10'
-                    : closed
-                      ? 'border-white/5 bg-slate-950/40 opacity-60'
-                      : 'border-white/10 bg-slate-950/30 hover:border-white/25'
+                    : locked
+                      ? 'border-amber-500/20 bg-slate-950/50 opacity-70'
+                      : closed
+                        ? 'border-white/5 bg-slate-950/40 opacity-60'
+                        : 'border-white/10 bg-slate-950/30 hover:border-white/25'
                 }`}
               >
                 <div className="flex items-center justify-between gap-1">
                   <span className="text-sm font-medium text-white">{day}</span>
                   <span className="text-[10px] text-slate-500">
-                    {shifts.length > 0
-                      ? shifts.length
-                      : (hours.holidayDates ?? []).includes(date)
-                        ? 'праздник'
-                        : ''}
+                    {locked
+                      ? 'закр.'
+                      : shifts.length > 0
+                        ? shifts.length
+                        : (hours.holidayDates ?? []).includes(date)
+                          ? 'праздник'
+                          : ''}
                   </span>
                 </div>
                 <div className="mt-1 max-h-28 space-y-0.5 overflow-y-auto">
@@ -470,15 +517,17 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
             date={selectedDate}
             shifts={shiftByDate.get(selectedDate) ?? []}
             staff={staff}
-            canEdit={canEdit}
+            canEdit={dayEditable(selectedDate)}
             busy={busy}
             message={message}
             usedMinutes={win.used}
             capMinutes={win.cap}
             intro={
-              track === 'TRAINER'
-                ? 'Дежурство. Эти часы оплачиваются по ставке, клиенты могут записаться. Время до и после тренер ставит сам.'
-                : undefined
+              isRosterDateLocked(selectedDate) && !dayEditable(selectedDate)
+                ? rosterLockMessage(selectedDate)
+                : track === 'TRAINER'
+                  ? 'Дежурство. Эти часы оплачиваются по ставке, клиенты могут записаться. Время до и после тренер ставит сам.'
+                  : undefined
             }
             defaultStart={win.start}
             defaultEnd={win.end}

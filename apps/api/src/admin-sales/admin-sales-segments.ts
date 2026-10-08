@@ -157,9 +157,27 @@ export async function loadPayrollSegmentSets(
   }
 }
 
+/** PT / trainer SKUs — never admin membership %, even if 1C tagged membership. */
+export function isLikelyTrainingProductName(
+  productName: string | null | undefined,
+): boolean {
+  const name = (productName ?? '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!name) return false;
+  if (name.includes('занятие с тренер')) return true;
+  if (name.includes('парное занятие')) return true;
+  if (/\d+\s*пт/.test(name)) return true;
+  if (name.includes('персональн') && name.includes('трен')) return true;
+  return false;
+}
+
 /**
- * Classify product. Segment membership wins over raw Analytics saleType.
- * `training` = сегмент «Тренировки» — дашборд / ПТ, не % админа.
+ * Classify product for admin payroll.
+ * Абонементы в % админа — только сегмент «Абонементы для приложения».
+ * «Тренировки» / ПТ — дашборд тренеров, не % админа.
  */
 export function classifySaleType(
   rawType: string | undefined,
@@ -175,6 +193,18 @@ export function classifySaleType(
     if (segments.membership.has(key)) return 'membership';
   }
   const t = (rawType ?? '').toLowerCase();
-  if (t === 'training') return 'training';
-  return normalizeSaleType(rawType, productName);
+  if (t === 'training' || isLikelyTrainingProductName(productName)) {
+    return 'training';
+  }
+  const bucket = normalizeSaleType(rawType, productName);
+  // Сегмент абонементов загружен → в membership только его состав, без fallback по rawType.
+  if (
+    bucket === 'membership' &&
+    segments &&
+    segments.membership.size > 0 &&
+    (!key || !segments.membership.has(key))
+  ) {
+    return 'training';
+  }
+  return bucket;
 }

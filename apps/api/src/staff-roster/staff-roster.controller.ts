@@ -43,7 +43,7 @@ export class AdminStaffRosterController {
       hours?: { open: string; close: string; closed?: boolean } | null;
     },
   ) {
-    return this.roster.patchDaySchedule(requireClubId(user), body);
+    return this.roster.patchDaySchedule(user, body);
   }
 
   @Get('staff')
@@ -107,7 +107,7 @@ export class AdminStaffRosterController {
 
   @Delete('shifts/:id')
   remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.roster.deleteShift(requireClubId(user), id);
+    return this.roster.deleteShift(user, id);
   }
 
   @Get('my-hours')
@@ -176,7 +176,7 @@ export class SuperAdminStaffRosterController {
       hours?: { open: string; close: string; closed?: boolean } | null;
     },
   ) {
-    return this.roster.patchDaySchedule(requireClubId(user), body);
+    return this.roster.patchDaySchedule(user, body);
   }
 
   @Get('staff')
@@ -240,7 +240,7 @@ export class SuperAdminStaffRosterController {
 
   @Delete('shifts/:id')
   remove(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.roster.deleteShift(requireClubId(user), id);
+    return this.roster.deleteShift(user, id);
   }
 
   @Get('summaries')

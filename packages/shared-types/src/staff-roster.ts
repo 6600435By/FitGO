@@ -2,6 +2,58 @@
 
 export type StaffShiftTrack = 'ADMIN' | 'TRAINER' | 'TECH';
 
+/**
+ * From this calendar day (Europe/Minsk) of month M, month M−1 is locked for
+ * staff-roster edits (after payroll). Older months stay locked; current/future open.
+ */
+export const ROSTER_LOCK_DAY = 5;
+export const ROSTER_LOCK_TZ = 'Europe/Minsk';
+
+/** Club-local Y/M/D parts (Europe/Minsk). */
+export function rosterClubDateParts(now: Date = new Date()): {
+  year: number;
+  month: number;
+  day: number;
+} {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: ROSTER_LOCK_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const get = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? '0');
+  return { year: get('year'), month: get('month'), day: get('day') };
+}
+
+/**
+ * Whether YYYY-MM-DD is closed for ordinary roster edits.
+ * Previous month locks on day {@link ROSTER_LOCK_DAY}; months before that always locked.
+ */
+export function isRosterDateLocked(
+  ymd: string,
+  now: Date = new Date(),
+): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return false;
+  const [yy, mm] = ymd.split('-').map(Number);
+  const { year, month, day } = rosterClubDateParts(now);
+  const dateYm = yy! * 12 + mm!;
+  const currentYm = year * 12 + month;
+  if (dateYm >= currentYm) return false;
+  if (dateYm < currentYm - 1) return true;
+  return day >= ROSTER_LOCK_DAY;
+}
+
+/** Human label for lock banner / API errors. */
+export function rosterLockMessage(ymd: string): string {
+  const [yy, mm] = ymd.split('-').map(Number);
+  const label = new Date(yy!, mm! - 1, 1).toLocaleDateString('ru-RU', {
+    month: 'long',
+    year: 'numeric',
+  });
+  return `График за ${label} закрыт с ${ROSTER_LOCK_DAY}-го числа следующего месяца (после выплаты ЗП).`;
+}
+
 export type DayOfWeekKey =
   | 'monday'
   | 'tuesday'

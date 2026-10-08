@@ -8,12 +8,9 @@ export function normalizeSaleType(
   const t = (rawType ?? '').toLowerCase();
   const name = (productName ?? '').toLowerCase();
 
-  // «Тренировки» — дашборд / ПТ тренеров, не % админа (см. classifySaleType).
-  // Without segment sets, leave as shop so it does not inflate membership %.
-  if (t === 'training') return 'shop';
-
   // Name wins over raw type: 1C used to tag solarium packages as membership
   // because ЧленствоПакетУслуг is filled on «Солярий 30/60».
+  // Training/PT → classifySaleType ('training' sink), not this helper.
   if (
     t.includes('solarium') ||
     t.includes('соляри') ||

@@ -230,7 +230,8 @@ export class AdminSalesService {
 
       if (isMembershipShift) {
         // Club calendar day (Minsk), not UTC — else 00:00–02:59 local
-        // attaches to yesterday's roster.
+        // attaches to yesterday's roster. Roster = FitGO StaffShift ADMIN,
+        // not 1C schedule (may differ → different bases vs FFS report).
         const dayKey = moscowDayKey(row.soldAt);
         const onShift = await this.shiftAdminsForDay(
           params.clubId,
@@ -239,7 +240,8 @@ export class AdminSalesService {
         );
         // Not on FitGO roster that day → no share (1C author ignored for money)
         if (!onShift.includes(params.userId)) continue;
-        const n = onShift.length; // ≥1 because we are included
+        // 1 admin → 100%; 2 or 3+ → equal split
+        const n = onShift.length;
         attributed = Math.round(motivationMinor / n);
       } else if (params.attribution === 'shiftShare') {
         // Massage / solarium / shop: only the 1C seller (no shift split).
