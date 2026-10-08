@@ -82,6 +82,24 @@ export interface PayrollAdjustmentDto {
   redirectedFrom?: string;
 }
 
+/** ADMIN/MANAGER: contribution to motivationMinor by sales category. */
+export interface MotivationCategoryBreakdown {
+  membershipMinor: number;
+  /** saleType massage (UI label: Спа). */
+  spaMinor: number;
+  solariumMinor: number;
+  shopMinor: number;
+  corporateMinor: number;
+}
+
+/** GROUP_TRAINER: trusted group classes in the period. */
+export interface GroupPayrollStats {
+  classCount: number;
+  attendeeTotal: number;
+  /** attendeeTotal / classCount, or 0 when no classes. */
+  avgPeople: number;
+}
+
 export interface PayrollPeriodSummary {
   from: string;
   to: string;
@@ -103,6 +121,12 @@ export interface PayrollPeriodSummary {
   canLock: boolean;
   locked: boolean;
   anomalyHints: string[];
+  /** ADMIN/MANAGER attributed sales bases (when sales % applies). */
+  sales?: StaffSalesBreakdown;
+  /** ADMIN/MANAGER: how motivationMinor splits across categories. */
+  motivationBreakdown?: MotivationCategoryBreakdown;
+  /** GROUP_TRAINER: trusted GROUP units summary. */
+  groupStats?: GroupPayrollStats;
 }
 
 /** Staff personal debt as club client in 1C (ФИО + phone). */
@@ -236,7 +260,11 @@ export interface TrustExceptionItem {
 /** Attributed sales used for ADMIN / manager motivation. */
 export interface StaffSalesBreakdown {
   membershipMinor: number;
+  /** Massage + solarium (kept for % calc; equals massageMinor + solariumMinor when split known). */
   extraServicesMinor: number;
+  /** saleType massage / spa products; optional when source has no split. */
+  massageMinor?: number;
+  solariumMinor?: number;
   shopMinor: number;
   corporateMinor: number;
   /** True when membership/extra/shop came from cached SaleTransaction (or live fallback). */

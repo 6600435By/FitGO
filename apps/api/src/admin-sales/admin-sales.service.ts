@@ -797,6 +797,8 @@ export class AdminSalesService {
       return {
         membershipMinor: 0,
         extraServicesMinor: 0,
+        massageMinor: 0,
+        solariumMinor: 0,
         shopMinor: 0,
         fromAnalytics: false,
         source: 'none',
@@ -811,6 +813,8 @@ export class AdminSalesService {
       return {
         membershipMinor: 0,
         extraServicesMinor: 0,
+        massageMinor: 0,
+        solariumMinor: 0,
         shopMinor: 0,
         fromAnalytics: false,
         source: 'none',
@@ -832,6 +836,8 @@ export class AdminSalesService {
       return {
         membershipMinor: 0,
         extraServicesMinor: 0,
+        massageMinor: 0,
+        solariumMinor: 0,
         shopMinor: 0,
         fromAnalytics: false,
         source: 'none',
@@ -854,6 +860,8 @@ export class AdminSalesService {
     return {
       membershipMinor: totals.membershipPaidMinor,
       extraServicesMinor: totals.massagePaidMinor + totals.solariumPaidMinor,
+      massageMinor: totals.massagePaidMinor,
+      solariumMinor: totals.solariumPaidMinor,
       shopMinor: totals.shopPaidMinor,
       fromAnalytics: true,
       source: 'cache',
@@ -895,6 +903,8 @@ export class AdminSalesService {
     return {
       membershipMinor,
       extraServicesMinor: massagePaidMinor + solariumPaidMinor,
+      massageMinor: massagePaidMinor,
+      solariumMinor: solariumPaidMinor,
       shopMinor,
       fromAnalytics: true,
       source: 'cache',

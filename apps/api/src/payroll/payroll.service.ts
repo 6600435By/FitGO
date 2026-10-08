@@ -42,6 +42,8 @@ import {
   type StaffPayProfile,
   type StaffPaySummary,
   type StaffPayTrack,
+  type MotivationCategoryBreakdown,
+  type StaffPayTrackSlice,
   type StaffSalesBreakdown,
   type WorkUnit,
 } from '@fitgo/shared-types';
@@ -623,6 +625,29 @@ export class PayrollService {
       from,
       sales,
     );
+    const motivationBreakdown = profile
+      ? this.calcMotivationBreakdownFromProfile(profile, sales)
+      : undefined;
+    const groupTrusted = trusted.filter((u) => u.kind === 'GROUP');
+    const groupStats =
+      groupTrusted.length > 0 ||
+      allPaySlices(profile).some((s) => s.track === 'GROUP_TRAINER')
+        ? (() => {
+            const classCount = groupTrusted.length;
+            const attendeeTotal = groupTrusted.reduce(
+              (s, u) => s + u.quantity,
+              0,
+            );
+            return {
+              classCount,
+              attendeeTotal,
+              avgPeople:
+                classCount > 0
+                  ? Math.round((attendeeTotal / classCount) * 10) / 10
+                  : 0,
+            };
+          })()
+        : undefined;
     const adjustments = await this.listAdjustments(clubId, performerId, from, to);
     const adjustmentsMinor = adjustments.reduce((s, a) => s + a.amountMinor, 0);
 
@@ -772,6 +797,12 @@ export class PayrollService {
       canLock: openTotal === 0 && !locked,
       locked: Boolean(locked),
       anomalyHints,
+      ...(allPaySlices(profile).some(
+        (s) => s.track === 'ADMIN' || s.track === 'MANAGER',
+      )
+        ? { sales, motivationBreakdown }
+        : {}),
+      ...(groupStats ? { groupStats } : {}),
     };
   }
 
@@ -2186,24 +2217,13 @@ export class PayrollService {
         (slice.track === 'ADMIN' || slice.track === 'MANAGER') &&
         sales
       ) {
-        if (slice.membershipSalesPercent) {
-          total += Math.round(
-            (sales.membershipMinor * slice.membershipSalesPercent) / 100,
-          );
-        }
-        if (slice.extraSalesPercent) {
-          total += Math.round(
-            (sales.extraServicesMinor * slice.extraSalesPercent) / 100,
-          );
-        }
-        if (slice.track === 'ADMIN' && slice.shopSalesPercent) {
-          total += Math.round((sales.shopMinor * slice.shopSalesPercent) / 100);
-        }
-        if (slice.corporateSalesPercent) {
-          total += Math.round(
-            (sales.corporateMinor * slice.corporateSalesPercent) / 100,
-          );
-        }
+        const cat = this.adminManagerCategoryContributions(slice, sales);
+        total +=
+          cat.membershipMinor +
+          cat.spaMinor +
+          cat.solariumMinor +
+          cat.shopMinor +
+          cat.corporateMinor;
       }
 
       if (slice.track === 'GROUP_TRAINER') {
@@ -2277,6 +2297,83 @@ export class PayrollService {
     return total;
   }
 
+  /**
+   * Split ADMIN/MANAGER motivation into category contributions.
+   * Massage+solarium share one %; split proportionally by sales bases.
+   */
+  private adminManagerCategoryContributions(
+    slice: StaffPayTrackSlice,
+    sales: StaffSalesBreakdown,
+  ): MotivationCategoryBreakdown {
+    const membershipMinor = slice.membershipSalesPercent
+      ? Math.round((sales.membershipMinor * slice.membershipSalesPercent) / 100)
+      : 0;
+    const shopMinor =
+      slice.track === 'ADMIN' && slice.shopSalesPercent
+        ? Math.round((sales.shopMinor * slice.shopSalesPercent) / 100)
+        : 0;
+    const corporateMinor = slice.corporateSalesPercent
+      ? Math.round((sales.corporateMinor * slice.corporateSalesPercent) / 100)
+      : 0;
+
+    const extraTotal = slice.extraSalesPercent
+      ? Math.round(
+          (sales.extraServicesMinor * slice.extraSalesPercent) / 100,
+        )
+      : 0;
+    const massageBase = sales.massageMinor ?? 0;
+    const solariumBase = sales.solariumMinor ?? 0;
+    const splitKnown =
+      sales.massageMinor != null || sales.solariumMinor != null;
+    const splitBase = massageBase + solariumBase;
+    let spaMinor = 0;
+    let solariumMinor = 0;
+    if (extraTotal > 0) {
+      if (splitKnown && splitBase > 0) {
+        spaMinor = Math.round((extraTotal * massageBase) / splitBase);
+        solariumMinor = extraTotal - spaMinor;
+      } else {
+        // Analytics fallback has no massage/solarium split — attribute to Спа.
+        spaMinor = extraTotal;
+      }
+    }
+
+    return {
+      membershipMinor,
+      spaMinor,
+      solariumMinor,
+      shopMinor,
+      corporateMinor,
+    };
+  }
+
+  private calcMotivationBreakdownFromProfile(
+    profile: StaffPayProfile,
+    sales: StaffSalesBreakdown,
+  ): MotivationCategoryBreakdown | undefined {
+    const deskSlices = allPaySlices(profile).filter(
+      (s) => s.track === 'ADMIN' || s.track === 'MANAGER',
+    );
+    if (deskSlices.length === 0) return undefined;
+
+    const out: MotivationCategoryBreakdown = {
+      membershipMinor: 0,
+      spaMinor: 0,
+      solariumMinor: 0,
+      shopMinor: 0,
+      corporateMinor: 0,
+    };
+    for (const slice of deskSlices) {
+      const cat = this.adminManagerCategoryContributions(slice, sales);
+      out.membershipMinor += cat.membershipMinor;
+      out.spaMinor += cat.spaMinor;
+      out.solariumMinor += cat.solariumMinor;
+      out.shopMinor += cat.shopMinor;
+      out.corporateMinor += cat.corporateMinor;
+    }
+    return out;
+  }
+
   private async countOverdueSellerDebts(
     clubId: string,
     userId: string,
@@ -2347,6 +2444,8 @@ export class PayrollService {
       return {
         membershipMinor: 0,
         extraServicesMinor: 0,
+        massageMinor: 0,
+        solariumMinor: 0,
         shopMinor: 0,
         corporateMinor,
         fromAnalytics: false,
@@ -2368,6 +2467,8 @@ export class PayrollService {
       return {
         membershipMinor: cached.membershipMinor,
         extraServicesMinor: cached.extraServicesMinor,
+        massageMinor: cached.massageMinor ?? 0,
+        solariumMinor: cached.solariumMinor ?? 0,
         shopMinor: cached.shopMinor,
         corporateMinor,
         fromAnalytics: true,
@@ -2386,6 +2487,8 @@ export class PayrollService {
       return {
         membershipMinor: 0,
         extraServicesMinor: 0,
+        massageMinor: 0,
+        solariumMinor: 0,
         shopMinor: 0,
         corporateMinor,
         fromAnalytics: false,
@@ -2405,6 +2508,8 @@ export class PayrollService {
     return {
       membershipMinor: remote?.membershipMinor ?? 0,
       extraServicesMinor: remote?.extraServicesMinor ?? 0,
+      massageMinor: remote?.massageMinor,
+      solariumMinor: remote?.solariumMinor,
       shopMinor: remote?.shopMinor ?? 0,
       corporateMinor,
       fromAnalytics: remote?.fromAnalytics ?? false,

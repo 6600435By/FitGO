@@ -1,6 +1,7 @@
 'use client';
 
 import { ClubPayrollReportPanel } from '@/components/payroll/club-payroll-report';
+import { MotivationBreakdownList } from '@/components/payroll/motivation-breakdown-list';
 import { PayrollPayoutsPanel } from '@/components/payroll/payroll-payouts-panel';
 import type {
   PayrollAdjustmentDto,
@@ -284,6 +285,41 @@ export function PayrollWorkspace({ mode }: Props) {
 
   const selected = filteredStaff.find((s) => s.userId === userId)
     ?? staff.find((s) => s.userId === userId);
+
+  const motivationBreakdownVisible =
+    summary?.motivationBreakdown != null &&
+    (summary.motivationBreakdown.membershipMinor > 0 ||
+      summary.motivationBreakdown.spaMinor > 0 ||
+      summary.motivationBreakdown.solariumMinor > 0 ||
+      summary.motivationBreakdown.shopMinor > 0 ||
+      summary.motivationBreakdown.corporateMinor > 0);
+
+  const trustedGroupUnits = useMemo(
+    () =>
+      (summary?.workUnits ?? []).filter(
+        (u) => u.kind === 'GROUP' && u.payrollTrusted,
+      ),
+    [summary?.workUnits],
+  );
+
+  const unconfirmedUnits = useMemo(
+    () => (summary?.workUnits ?? []).filter((u) => !u.payrollTrusted).length,
+    [summary?.workUnits],
+  );
+
+  const bookingControlHref = useMemo(() => {
+    const base =
+      mode === 'super'
+        ? '/super-admin/review-queue'
+        : '/admin/booking-control';
+    const q = new URLSearchParams({
+      from,
+      to,
+      needsReview: '1',
+    });
+    if (userId) q.set('performerId', userId);
+    return `${base}?${q.toString()}`;
+  }, [mode, from, to, userId]);
 
   useEffect(() => {
     const token = getToken();
@@ -940,6 +976,44 @@ export function PayrollWorkspace({ mode }: Props) {
             />
           </section>
 
+          {motivationBreakdownVisible && summary.motivationBreakdown ? (
+            <section className="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-3">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+                Из чего мотивация
+              </p>
+              <MotivationBreakdownList
+                breakdown={summary.motivationBreakdown}
+                sales={summary.sales}
+                currency={summary.currency}
+              />
+            </section>
+          ) : null}
+
+          {summary.groupStats ? (
+            <section className="grid grid-cols-2 gap-2.5 md:grid-cols-2">
+              <Stat
+                label="Занятий в ЗП"
+                value={String(summary.groupStats.classCount)}
+              />
+              <Stat
+                label="Среднее людей"
+                value={summary.groupStats.avgPeople.toLocaleString('ru-RU', {
+                  maximumFractionDigits: 1,
+                })}
+              />
+            </section>
+          ) : null}
+
+          {unconfirmedUnits > 0 ? (
+            <Link
+              href={bookingControlHref}
+              className="block rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100"
+            >
+              Не подтверждено: {unconfirmedUnits} занятий/услуг → контроль
+              записей
+            </Link>
+          ) : null}
+
           <section className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-3 text-sm">
             <span className="font-medium text-white">{summary.performerName}</span>
             <span
@@ -1056,6 +1130,44 @@ export function PayrollWorkspace({ mode }: Props) {
               </ul>
             </section>
           )}
+
+          {summary.groupStats ? (
+            <section className="space-y-2 rounded-2xl border border-slate-800 p-4">
+              <h2 className="text-sm font-medium text-slate-300">
+                Занятия в расчёте ЗП ({trustedGroupUnits.length})
+              </h2>
+              {trustedGroupUnits.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  Нет подтверждённых групповых занятий
+                </p>
+              ) : (
+                <ul className="max-h-64 space-y-1 overflow-y-auto text-sm">
+                  {trustedGroupUnits.map((u) => (
+                    <li
+                      key={u.id}
+                      className="flex justify-between gap-2 border-b border-slate-900/80 py-1.5 text-slate-300"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="text-slate-500">
+                          {formatDateTime(u.occurredAt).slice(0, 10)}
+                        </span>{' '}
+                        · {u.title}
+                        {u.roomTitle ? (
+                          <span className="text-slate-500">
+                            {' '}
+                            · {u.roomTitle}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="shrink-0 tabular-nums">
+                        {u.quantity} чел.
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ) : null}
 
           <section className="space-y-2">
             <h2 className="text-sm font-medium text-slate-300">

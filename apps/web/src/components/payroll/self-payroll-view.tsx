@@ -1,8 +1,9 @@
 'use client';
 
-import type { PayrollSelfOverview } from '@fitgo/shared-types';
+import type { PayrollSelfOverview, WorkUnit } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
+import { MotivationBreakdownList } from '@/components/payroll/motivation-breakdown-list';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -54,6 +55,7 @@ export function SelfPayrollView({ role }: Props) {
   const [debtOpen, setDebtOpen] = useState(false);
   const [payoutsOpen, setPayoutsOpen] = useState(false);
   const [unitsOpen, setUnitsOpen] = useState(false);
+  const [groupOpen, setGroupOpen] = useState(false);
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -100,6 +102,21 @@ export function SelfPayrollView({ role }: Props) {
   const summary = data?.summary;
   const debt = data?.staffDebt;
   const currency = summary?.currency ?? 'BYN';
+  const groupStats = summary?.groupStats;
+  const trustedGroupUnits: WorkUnit[] = useMemo(
+    () =>
+      (summary?.workUnits ?? []).filter(
+        (u) => u.kind === 'GROUP' && u.payrollTrusted,
+      ),
+    [summary?.workUnits],
+  );
+  const hasMotivationBreakdown =
+    summary?.motivationBreakdown != null &&
+    (summary.motivationBreakdown.membershipMinor > 0 ||
+      summary.motivationBreakdown.spaMinor > 0 ||
+      summary.motivationBreakdown.solariumMinor > 0 ||
+      summary.motivationBreakdown.shopMinor > 0 ||
+      summary.motivationBreakdown.corporateMinor > 0);
 
   return (
     <div className="mx-auto w-full max-w-lg space-y-3 pb-8 md:max-w-2xl">
@@ -210,6 +227,36 @@ export function SelfPayrollView({ role }: Props) {
                 </p>
               </li>
             </ul>
+            {hasMotivationBreakdown && summary.motivationBreakdown ? (
+              <div className="border-t border-slate-800 pt-2">
+                <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                  Из чего мотивация
+                </p>
+                <MotivationBreakdownList
+                  breakdown={summary.motivationBreakdown}
+                  sales={summary.sales}
+                  currency={currency}
+                />
+              </div>
+            ) : null}
+            {groupStats ? (
+              <ul className="grid grid-cols-2 gap-2 border-t border-slate-800 pt-2 text-sm">
+                <li className="rounded-lg bg-slate-900/70 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">Занятий в ЗП</p>
+                  <p className="tabular-nums text-slate-200">
+                    {groupStats.classCount}
+                  </p>
+                </li>
+                <li className="rounded-lg bg-slate-900/70 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">Среднее людей</p>
+                  <p className="tabular-nums text-slate-200">
+                    {groupStats.avgPeople.toLocaleString('ru-RU', {
+                      maximumFractionDigits: 1,
+                    })}
+                  </p>
+                </li>
+              </ul>
+            ) : null}
             {summary.payChips.length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
                 {summary.payChips.map((c) => (
@@ -295,7 +342,13 @@ export function SelfPayrollView({ role }: Props) {
                   })}
                   className="block rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100"
                 >
-                  Не подтверждено: {data.unconfirmedCount} занятий/услуг →
+                  Не подтверждено: {data.unconfirmedCount}{' '}
+                  {role === 'trainer'
+                    ? 'занятий'
+                    : role === 'specialist'
+                      ? 'услуг'
+                      : 'занятий/услуг'}{' '}
+                  →
                 </Link>
               ) : null}
               {data.unpaidCount > 0 ? (
@@ -375,6 +428,64 @@ export function SelfPayrollView({ role }: Props) {
                       </span>
                     </li>
                   ))}
+                </ul>
+              ) : null}
+            </section>
+          ) : null}
+
+          {groupStats ? (
+            <section className="card space-y-2">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between text-left"
+                onClick={() => setGroupOpen((v) => !v)}
+              >
+                <div>
+                  <p className="font-medium text-slate-200">
+                    Занятия в расчёте ЗП
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {trustedGroupUnits.length} групповых · ср.{' '}
+                    {groupStats.avgPeople.toLocaleString('ru-RU', {
+                      maximumFractionDigits: 1,
+                    })}{' '}
+                    чел.
+                  </p>
+                </div>
+                <span className="text-slate-400">
+                  {groupOpen ? '▾' : '▸'}
+                </span>
+              </button>
+              {groupOpen ? (
+                <ul className="max-h-72 space-y-1.5 overflow-y-auto border-t border-slate-800 pt-2 text-sm">
+                  {trustedGroupUnits.length === 0 ? (
+                    <li className="text-slate-500">
+                      Нет подтверждённых занятий за период
+                    </li>
+                  ) : (
+                    trustedGroupUnits.map((u) => (
+                      <li
+                        key={u.id}
+                        className="flex justify-between gap-2 border-b border-slate-900/80 py-1.5"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="text-slate-500">
+                            {formatDateTime(u.occurredAt).slice(0, 10)}
+                          </span>{' '}
+                          · {u.title}
+                          {u.roomTitle ? (
+                            <span className="text-slate-500">
+                              {' '}
+                              · {u.roomTitle}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="shrink-0 tabular-nums text-slate-300">
+                          {u.quantity} чел.
+                        </span>
+                      </li>
+                    ))
+                  )}
                 </ul>
               ) : null}
             </section>
