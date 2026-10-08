@@ -2379,39 +2379,32 @@ export class PayrollService {
     userId: string,
     asOfYmd: string,
   ): Promise<{ count: number; amountMinor: number }> {
-    const user = await this.prisma.user.findFirst({
-      where: { id: userId, clubId },
-      select: { employeeCode: true },
-    });
-    if (!user?.employeeCode) return { count: 0, amountMinor: 0 };
-    const cutoff = new Date(`${asOfYmd}T23:59:59`);
-    cutoff.setDate(cutoff.getDate() - 7);
-    const rows = await this.prisma.saleTransaction.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        paidAt: null,
-        employeeExternalId: user.employeeCode,
-        soldAt: { lte: cutoff },
-      },
-      select: { amount: true },
-    });
-    // Also match by UUID-style employeeExternalId if stored that way
-    const byUuid = await this.prisma.saleTransaction.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        paidAt: null,
-        employeeExternalId: userId,
-        soldAt: { lte: cutoff },
-      },
-      select: { amount: true },
-    });
-    const all = [...rows, ...byUuid];
-    const amountMinor = Math.round(
-      all.reduce((s, r) => s + Number(r.amount || 0), 0) * 100,
+    // Same source as admin «Неоплаченные» / self-payroll (~9k), not stale
+    // SaleTransaction unpaid (~40k).
+    const debt = await this.adminSales.sellerOpenUnpaid(
+      clubId,
+      userId,
+      asOfYmd,
     );
-    return { count: all.length, amountMinor };
+    const cutoffKey = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Minsk',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(
+      new Date(
+        new Date(`${asOfYmd}T12:00:00+03:00`).getTime() - 7 * 86400000,
+      ),
+    );
+    let count = 0;
+    let amountMinor = 0;
+    for (const line of debt.lines) {
+      const sold = (line.soldAt || '').slice(0, 10);
+      if (!sold || sold > cutoffKey) continue;
+      count += 1;
+      amountMinor += line.amountMinor;
+    }
+    return { count, amountMinor };
   }
 
   private async resolveStaffSales(

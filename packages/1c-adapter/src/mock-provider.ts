@@ -373,6 +373,38 @@ export class Mock1CProvider implements IFitnessClubProvider {
           found: true,
           count: 2,
         },
+        {
+          key: 'nom.membershipApp',
+          type: 'nomenclature' as const,
+          uuid: '8deca45d-36c3-2cf1-11f1-b9b9443ea0e2',
+          name: 'Абонементы для приложения',
+          found: true,
+          count: 3,
+        },
+        {
+          key: 'nom.shop',
+          type: 'nomenclature' as const,
+          uuid: '8deca45d-36c3-2cf1-11f1-b9bc96765cb9',
+          name: 'Магазин приложение',
+          found: true,
+          count: 4,
+        },
+        {
+          key: 'nom.training',
+          type: 'nomenclature' as const,
+          uuid: 'bebe7aeb-0959-11eb-8116-7085c20c362e',
+          name: 'Тренировки',
+          found: true,
+          count: 2,
+        },
+        {
+          key: 'nom.solarium',
+          type: 'nomenclature' as const,
+          uuid: '69a8b477-2279-11eb-8119-7085c20c362e',
+          name: 'Солярий',
+          found: true,
+          count: 1,
+        },
       ],
     };
   }

@@ -21,9 +21,12 @@ import {
   endOfDayUtc,
   majorToMinor,
   motivationAmountMajor,
-  normalizeSaleType,
   startOfDayUtc,
 } from './admin-sales.util';
+import {
+  classifySaleType,
+  loadPayrollSegmentSets,
+} from './admin-sales-segments';
 import { isCollectibleClientDebt } from './club-revenue-debt';
 import {
   attachEmployeeToRevenueRow,
@@ -155,14 +158,11 @@ export class AdminSalesService {
     const fromDt = startOfDayUtc(params.from);
     const toDt = endOfDayUtc(params.to);
     const shiftCache = new Map<string, string[]>();
-    const wantsMembership =
-      !params.saleTypes?.length || params.saleTypes.includes('membership');
-    const individualTypes = (params.saleTypes ?? [
-      'membership',
-      'massage',
-      'solarium',
-      'shop',
-    ]).filter((t) => t !== 'membership' || params.attribution === 'individual');
+    const allowedTypes = new Set<AdminSaleType>(
+      params.saleTypes?.length
+        ? params.saleTypes
+        : ['membership', 'massage', 'solarium', 'shop'],
+    );
 
     const dateFilter =
       params.periodField === 'paidAt'
@@ -171,51 +171,62 @@ export class AdminSalesService {
           ? { soldAt: { lte: toDt }, paidAt: null }
           : { soldAt: { gte: fromDt, lte: toDt } };
 
-    const orBranches: object[] = [];
+    // shiftShare: load all club rows in period (saleType in DB may be stale vs
+    // app segments). individual: only this seller's rows.
+    const where =
+      params.attribution === 'shiftShare'
+        ? {
+            clubId: params.clubId,
+            isActive: true,
+            ...dateFilter,
+          }
+        : params.employeeCodes.length
+          ? {
+              clubId: params.clubId,
+              isActive: true,
+              employeeExternalId: { in: params.employeeCodes },
+              ...dateFilter,
+            }
+          : null;
 
-    // Individual types (and membership in individual mode): by 1C author
-    if (individualTypes.length && params.employeeCodes.length) {
-      orBranches.push({
-        saleType: { in: individualTypes },
-        employeeExternalId: { in: params.employeeCodes },
-      });
-    }
-
-    // shiftShare membership: all authors; filter to days this admin is on roster
-    if (params.attribution === 'shiftShare' && wantsMembership) {
-      orBranches.push({ saleType: 'membership' });
-    }
-
-    if (!orBranches.length) {
+    if (!where) {
       return {
         lines: [],
         totals: this.applyAccrual(this.emptyTotals(), params.profile),
       };
     }
 
-    const rows = await this.prisma.saleTransaction.findMany({
-      where: {
-        clubId: params.clubId,
-        isActive: true,
-        OR: orBranches,
-        ...dateFilter,
-      },
-      orderBy: [{ soldAt: 'desc' }, { externalSaleId: 'desc' }],
-    });
+    const [rows, segments] = await Promise.all([
+      this.prisma.saleTransaction.findMany({
+        where,
+        orderBy: [{ soldAt: 'desc' }, { externalSaleId: 'desc' }],
+      }),
+      loadPayrollSegmentSets(this.config),
+    ]);
 
     const totals = this.emptyTotals();
     const lines: AdminSaleLineDto[] = [];
+    const codeSet = new Set(params.employeeCodes);
 
     for (const row of rows) {
       const paid = row.paidAt != null;
       if (params.payment === 'paid' && !paid) continue;
       if (params.payment === 'unpaid' && paid) continue;
 
+      const bucket = classifySaleType(
+        row.saleType,
+        row.productName,
+        segments,
+      );
+      // «Тренировки» — дашборд / ПТ, не мотивация админа
+      if (bucket === 'training' || !allowedTypes.has(bucket)) continue;
+      const saleType = bucket;
+
       const amountMinor = majorToMinor(row.amount);
       const motivationMinor = majorToMinor(motivationAmountMajor(row));
       let attributed = motivationMinor;
       const isMembershipShift =
-        row.saleType === 'membership' && params.attribution === 'shiftShare';
+        saleType === 'membership' && params.attribution === 'shiftShare';
 
       if (isMembershipShift) {
         // Club calendar day (Minsk), not UTC — else 00:00–02:59 local
@@ -230,6 +241,10 @@ export class AdminSalesService {
         if (!onShift.includes(params.userId)) continue;
         const n = onShift.length; // ≥1 because we are included
         attributed = Math.round(motivationMinor / n);
+      } else if (params.attribution === 'shiftShare') {
+        // Massage / solarium / shop: only the 1C seller (no shift split).
+        const emp = row.employeeExternalId?.trim() || '';
+        if (!emp || !codeSet.has(emp)) continue;
       }
 
       const paidInPeriod =
@@ -238,13 +253,11 @@ export class AdminSalesService {
       if (!paid) {
         totals.unpaidMinor += attributed;
       } else if (paidInPeriod) {
-        if (row.saleType === 'membership')
-          totals.membershipPaidMinor += attributed;
-        else if (row.saleType === 'massage')
-          totals.massagePaidMinor += attributed;
-        else if (row.saleType === 'solarium')
+        if (saleType === 'membership') totals.membershipPaidMinor += attributed;
+        else if (saleType === 'massage') totals.massagePaidMinor += attributed;
+        else if (saleType === 'solarium')
           totals.solariumPaidMinor += attributed;
-        else if (row.saleType === 'shop') totals.shopPaidMinor += attributed;
+        else if (saleType === 'shop') totals.shopPaidMinor += attributed;
       }
 
       const pushLine =
@@ -260,7 +273,7 @@ export class AdminSalesService {
           paidAt: row.paidAt?.toISOString() ?? null,
           amountMinor,
           attributedMinor: attributed,
-          saleType: row.saleType as AdminSaleType,
+          saleType,
           productName: row.productName,
           clientName: row.clientName,
           employeeExternalId: row.employeeExternalId,
@@ -523,7 +536,10 @@ export class AdminSalesService {
         paidAt: null,
         amountMinor,
         attributedMinor: amountMinor,
-        saleType: normalizeSaleType(item.saleType, item.productName),
+        saleType: (() => {
+          const b = classifySaleType(item.saleType, item.productName, null);
+          return b === 'training' ? 'shop' : b;
+        })(),
         productName: item.productName ?? null,
         clientName: item.clientName ?? null,
         employeeExternalId: item.employeeExternalId?.trim() || employeeCode,
@@ -647,10 +663,14 @@ export class AdminSalesService {
         paidAt: null,
         amountMinor,
         attributedMinor: amountMinor,
-        saleType: normalizeSaleType(
-          row.saleType ?? undefined,
-          row.productName,
-        ),
+        saleType: (() => {
+          const b = classifySaleType(
+            row.saleType ?? undefined,
+            row.productName,
+            null,
+          );
+          return b === 'training' ? 'shop' : b;
+        })(),
         productName: row.productName,
         clientName: row.clientName,
         employeeExternalId: row.employeeExternalId?.trim() || code,
@@ -878,26 +898,42 @@ export class AdminSalesService {
   ): Promise<Omit<StaffSalesBreakdown, 'corporateMinor'>> {
     const fromDt = startOfDayUtc(from);
     const toDt = endOfDayUtc(to);
-    const rows = await this.prisma.saleTransaction.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        paidAt: { gte: fromDt, lte: toDt },
-        saleType: { in: ['membership', 'massage', 'solarium', 'shop'] },
-      },
-    });
+    const [rows, segments] = await Promise.all([
+      this.prisma.saleTransaction.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          paidAt: { gte: fromDt, lte: toDt },
+        },
+      }),
+      loadPayrollSegmentSets(this.config),
+    ]);
 
     let membershipMinor = 0;
     let massagePaidMinor = 0;
     let solariumPaidMinor = 0;
     let shopMinor = 0;
     for (const row of rows) {
+      const saleType = classifySaleType(
+        row.saleType,
+        row.productName,
+        segments,
+      );
+      if (saleType === 'training') continue;
+      if (
+        saleType !== 'membership' &&
+        saleType !== 'massage' &&
+        saleType !== 'solarium' &&
+        saleType !== 'shop'
+      ) {
+        continue;
+      }
       const minor = majorToMinor(motivationAmountMajor(row));
       if (minor <= 0) continue;
-      if (row.saleType === 'membership') membershipMinor += minor;
-      else if (row.saleType === 'massage') massagePaidMinor += minor;
-      else if (row.saleType === 'solarium') solariumPaidMinor += minor;
-      else if (row.saleType === 'shop') shopMinor += minor;
+      if (saleType === 'membership') membershipMinor += minor;
+      else if (saleType === 'massage') massagePaidMinor += minor;
+      else if (saleType === 'solarium') solariumPaidMinor += minor;
+      else if (saleType === 'shop') shopMinor += minor;
     }
 
     return {

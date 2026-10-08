@@ -8,9 +8,9 @@ export function normalizeSaleType(
   const t = (rawType ?? '').toLowerCase();
   const name = (productName ?? '').toLowerCase();
 
-  // Segment «Тренировки» is its own saleType after analytics is republished.
-  // Payroll still books it with memberships (packages have no separate bucket).
-  if (t === 'training') return 'membership';
+  // «Тренировки» — дашборд / ПТ тренеров, не % админа (см. classifySaleType).
+  // Without segment sets, leave as shop so it does not inflate membership %.
+  if (t === 'training') return 'shop';
 
   // Name wins over raw type: 1C used to tag solarium packages as membership
   // because ЧленствоПакетУслуг is filled on «Солярий 30/60».

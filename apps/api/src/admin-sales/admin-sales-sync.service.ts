@@ -3,7 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { FitgoAnalyticsHttpProvider } from '@fitgo/1c-adapter';
 import { moscowDayKey, parseClubWallClock } from '../club-sync/moscow-time';
 import { PrismaService } from '../prisma/prisma.service';
-import { normalizeSaleType } from './admin-sales.util';
+import {
+  classifySaleType,
+  loadPayrollSegmentSets,
+} from './admin-sales-segments';
 import {
   applyChangeLog,
   eachUtcDay,
@@ -233,6 +236,7 @@ export class AdminSalesSyncService {
       ...new Set([...eachUtcDay(fromStr, toStr), ...refreshDays]),
     ].sort();
     const delay = Math.max(0, options.delayMsBetweenDays ?? 0);
+    const segments = await loadPayrollSegmentSets(this.config);
 
     for (let i = 0; i < days.length; i++) {
       const day = days[i]!;
@@ -242,7 +246,11 @@ export class AdminSalesSyncService {
         const baseId = item.saleDocumentId?.trim();
         if (!baseId) continue;
 
-        const saleType = normalizeSaleType(item.saleType, item.productName);
+        const saleType = classifySaleType(
+          item.saleType,
+          item.productName,
+          segments,
+        );
         const soldAt = parseClubWallClock(item.soldAt);
         if (!soldAt) continue;
         const paidAt = parseClubWallClock(item.paidAt);

@@ -13,6 +13,10 @@ import {
   SpaBookingStatus,
   StaffShiftTrack,
 } from '@prisma/client';
+import {
+  classifySaleType,
+  loadPayrollSegmentSets,
+} from '../admin-sales/admin-sales-segments';
 import { ClubRevenueService } from '../admin-sales/club-revenue.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
@@ -21,16 +25,13 @@ import { PrismaService } from '../prisma/prisma.service';
 
 const CLUB_TZ = 'Europe/Minsk';
 
-/**
- * e1cib ref → УникальныйИдентификатор (not dash-insertion).
- * Массаж ref 80ea7085c20c362e11e8c2f14d1a30a2
- * Тренировки ref 81167085c20c362e11eb0959bebe7aeb
- */
-const MASSAGE_SEGMENT_UUID = '4d1a30a2-c2f1-11e8-80ea-7085c20c362e';
-const TRAINING_SEGMENT_UUID = 'bebe7aeb-0959-11eb-8116-7085c20c362e';
-
-type SegmentSets = { massage: Set<string>; training: Set<string> };
-let segmentCache: { at: number; sets: SegmentSets } | null = null;
+type SegmentSets = {
+  massage: Set<string>;
+  training: Set<string>;
+  membership: Set<string>;
+  shop: Set<string>;
+  solarium: Set<string>;
+};
 
 type SalesMixKey =
   | 'membership'
@@ -318,6 +319,35 @@ export class SuperAdminAnalyticsService {
     );
     const prevYear = periodToDay(today.year - 1, today.month, today.day);
 
+    const safe = async <T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
+      try {
+        return await fn();
+      } catch (err) {
+        // One broken subquery must not blank the whole home page.
+        console.error(
+          `[overview] ${label}:`,
+          err instanceof Error ? err.message : err,
+        );
+        return fallback;
+      }
+    };
+
+    const emptyVisits = {
+      available: false as const,
+      current: null,
+      prevMonth: null,
+      prevYear: null,
+      hint: 'Не удалось загрузить визиты',
+    };
+    const emptyMix = (
+      ['membership', 'training', 'spa', 'solarium', 'shop', 'corporate'] as const
+    ).map((key) => ({
+      key,
+      label: SALES_MIX_LABEL[key],
+      amountMinor: 0,
+      share: 0,
+    }));
+
     const [
       revenueCurrent,
       revenuePrevMonth,
@@ -328,22 +358,32 @@ export class SuperAdminAnalyticsService {
       openTasks,
       club,
     ] = await Promise.all([
-      this.revenue.cashRevenueMinor(clubId, current.from, current.to),
-      this.revenue.cashRevenueMinor(clubId, prevMonth.from, prevMonth.to),
-      this.revenue.cashRevenueMinor(clubId, prevYear.from, prevYear.to),
-      this.visitCounts(clubId, current, prevMonth, prevYear),
-      this.salesMix(clubId, current.from, current.to),
-      this.onShiftToday(clubId, current.to),
-      this.prisma.adminTask.count({
-        where: {
-          clubId,
-          status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
-        },
-      }),
-      this.prisma.club.findUnique({
-        where: { id: clubId },
-        select: { currency: true },
-      }),
+      safe('revenueCurrent', () => this.revenue.cashRevenueMinor(clubId, current.from, current.to), 0),
+      safe('revenuePrevMonth', () => this.revenue.cashRevenueMinor(clubId, prevMonth.from, prevMonth.to), 0),
+      safe('revenuePrevYear', () => this.revenue.cashRevenueMinor(clubId, prevYear.from, prevYear.to), 0),
+      safe('visits', () => this.visitCounts(clubId, current, prevMonth, prevYear), emptyVisits),
+      safe('salesMix', () => this.salesMix(clubId, current.from, current.to), emptyMix),
+      safe('onShift', () => this.onShiftToday(clubId, current.to), []),
+      safe(
+        'openTasks',
+        () =>
+          this.prisma.adminTask.count({
+            where: {
+              clubId,
+              status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
+            },
+          }),
+        0,
+      ),
+      safe(
+        'club',
+        () =>
+          this.prisma.club.findUnique({
+            where: { id: clubId },
+            select: { currency: true },
+          }),
+        null,
+      ),
     ]);
 
     return {
@@ -466,10 +506,24 @@ export class SuperAdminAnalyticsService {
   private async salesMix(clubId: string, fromIso: string, toIso: string) {
     const from = new Date(`${fromIso}T00:00:00.000Z`);
     const to = new Date(`${toIso}T23:59:59.999Z`);
-    const [sales, corpo] = await Promise.all([
+    // paidAt — same cash/card window as club revenue / payroll motivation.
+    const [sales, corpo, payrollSegs] = await Promise.all([
       this.prisma.saleTransaction.findMany({
-        where: { clubId, isActive: true, soldAt: { gte: from, lte: to } },
-        select: { amount: true, saleType: true, productName: true },
+        where: {
+          clubId,
+          isActive: true,
+          paidAt: { gte: from, lte: to },
+        },
+        select: {
+          amount: true,
+          cash: true,
+          card: true,
+          cashless: true,
+          personalAccount: true,
+          paymentMethod: true,
+          saleType: true,
+          productName: true,
+        },
       }),
       this.prisma.clubRevenueManualEntry.aggregate({
         where: {
@@ -479,8 +533,17 @@ export class SuperAdminAnalyticsService {
         },
         _sum: { amountMinor: true },
       }),
+      loadPayrollSegmentSets(this.config),
     ]);
-    const segments = await this.nomenclatureSegments();
+    const segments: SegmentSets | null = payrollSegs
+      ? {
+          massage: payrollSegs.spa,
+          membership: payrollSegs.membership,
+          shop: payrollSegs.shop,
+          solarium: payrollSegs.solarium,
+          training: payrollSegs.training,
+        }
+      : null;
     const minor: Record<SalesMixKey, number> = {
       membership: 0,
       training: 0,
@@ -492,7 +555,15 @@ export class SuperAdminAnalyticsService {
     for (const row of sales) {
       const key = salesMixKey(row.saleType, row.productName, segments);
       if (!key) continue;
-      minor[key] += Math.round((Number(row.amount) || 0) * 100);
+      const cash = Number(row.cash) || 0;
+      const card = Number(row.card) || 0;
+      const cashless = Number(row.cashless) || 0;
+      const pa = Number(row.personalAccount) || 0;
+      const split = cash + card + cashless + pa;
+      const major =
+        split > 0.009 ? cash + card + pa : Number(row.amount) || 0;
+      if (major <= 0) continue;
+      minor[key] += Math.round(major * 100);
     }
     const total = Object.values(minor).reduce((s, n) => s + n, 0);
     const keys: SalesMixKey[] = [
@@ -758,54 +829,6 @@ export class SuperAdminAnalyticsService {
     }
   }
 
-  /** Composition of 1C segments Массаж and Тренировки. Cached 15 min. */
-  private async nomenclatureSegments(): Promise<SegmentSets | null> {
-    if (segmentCache && Date.now() - segmentCache.at < 15 * 60 * 1000) {
-      return segmentCache.sets;
-    }
-    const base = this.fitgoBaseUrl();
-    const apiKey = this.config.get<string>('FORMA_API_KEY')?.trim();
-    const basicAuth = this.config.get<string>('FORMA_BASIC_AUTH')?.trim();
-    if (!base || !apiKey || !basicAuth) return segmentCache?.sets ?? null;
-    try {
-      const [massage, training] = await Promise.all([
-        this.segmentNames(base, apiKey, basicAuth, MASSAGE_SEGMENT_UUID),
-        this.segmentNames(base, apiKey, basicAuth, TRAINING_SEGMENT_UUID),
-      ]);
-      if (!massage.size && !training.size) return segmentCache?.sets ?? null;
-      const sets = { massage, training };
-      segmentCache = { at: Date.now(), sets };
-      return sets;
-    } catch {
-      return segmentCache?.sets ?? null;
-    }
-  }
-
-  private fitgoBaseUrl(): string | null {
-    const explicit = this.config.get<string>('FORMA_FITGO_URL')?.trim();
-    if (explicit) return explicit.replace(/\/$/, '');
-    const analytics = this.config.get<string>('FORMA_ANALYTICS_URL')?.trim();
-    if (!analytics) return null;
-    return analytics.replace(/\/analytics\/v1\/?$/, '/fitgo/v1');
-  }
-
-  private async segmentNames(
-    base: string,
-    apiKey: string,
-    basicAuth: string,
-    uuid: string,
-  ): Promise<Set<string>> {
-    const res = await fetch(`${base}/segments/members?uuid=${uuid}`, {
-      headers: { apikey: apiKey, Authorization: `Basic ${basicAuth}` },
-    });
-    if (!res.ok) return new Set();
-    const body = (await res.json()) as {
-      data?: { found?: boolean; data?: Array<{ name?: string }> };
-    };
-    const rows = body.data?.data ?? [];
-    return new Set(rows.map((row) => normNom(row.name ?? '')).filter(Boolean));
-  }
-
   private analyticsProvider(): FitgoAnalyticsHttpProvider | null {
     const baseUrl = this.config.get<string>('FORMA_ANALYTICS_URL')?.trim();
     const apiKey = this.config.get<string>('FORMA_API_KEY')?.trim();
@@ -887,9 +910,8 @@ function excludedFromSalesMix(name: string) {
 }
 
 /**
- * Shop segment wins first (same order as 1C). Then the live member lists of
- * «Тренировки» and «Массаж». Name guesses (реформер, «Делай тело») are not used:
- * reformer packages sit in «Абонементы + КП», not in «Тренировки».
+ * App segments win (Магазин / Спа / Солярий / Абонементы / Тренировки).
+ * Aligns with payroll classifySaleType + club cash revenue period.
  */
 function salesMixKey(
   saleType: string,
@@ -898,18 +920,31 @@ function salesMixKey(
 ): SalesMixKey | null {
   const name = productName ?? '';
   if (excludedFromSalesMix(name)) return null;
-  const type = saleType.toLowerCase();
-  if (type === 'shop' || type === 'product') return 'shop';
   const key = normNom(name);
-  if (segments && key && segments.training.has(key)) return 'training';
-  if (segments && key && segments.massage.has(key)) return 'spa';
-  if (/корпор/.test(name.toLowerCase())) return 'corporate';
-  if (type === 'solarium' || (/соляри/.test(name) && type !== 'shop')) {
-    return 'solarium';
+  if (segments && key) {
+    if (segments.shop.has(key)) return 'shop';
+    if (segments.massage.has(key)) return 'spa';
+    if (segments.solarium.has(key)) return 'solarium';
+    if (segments.training.has(key)) return 'training';
+    if (segments.membership.has(key)) return 'membership';
   }
-  if (type === 'membership') return 'membership';
-  if (!segments && type === 'massage') return 'spa';
-  if (!segments && type === 'training') return 'training';
+  if (/корпор/.test(name.toLowerCase())) return 'corporate';
+  const payroll = segments
+    ? {
+        membership: segments.membership,
+        spa: segments.massage,
+        shop: segments.shop,
+        solarium: segments.solarium,
+        training: segments.training,
+      }
+    : null;
+  const bucket = classifySaleType(saleType, productName, payroll);
+  if (bucket === 'shop') return 'shop';
+  if (bucket === 'massage') return 'spa';
+  if (bucket === 'solarium') return 'solarium';
+  if (bucket === 'training') return 'training';
+  if (bucket === 'membership') return 'membership';
+  if (saleType.toLowerCase() === 'training') return 'training';
   return null;
 }
 
