@@ -577,8 +577,9 @@ export class BookingControlService {
         where: { clubId, externalId: parsed.id, isActive: true },
         include: { members: true },
       });
-      if (!s) {
+      if (!s && !viewer?.ownOnly) {
         // Future / freshly published class may not be in Onex yet — pull ± window once.
+        // Trainers (ownOnly) must not trigger a 38-day 1C pull on a miss.
         try {
           await this.classSessions.syncRange(
             clubId,

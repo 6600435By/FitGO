@@ -118,11 +118,24 @@ export function SelfPayrollView({ role }: Props) {
       summary.motivationBreakdown.shopMinor > 0 ||
       summary.motivationBreakdown.corporateMinor > 0);
 
+  const applyHalfMonth = (half: 'first' | 'second') => {
+    const base = new Date(today);
+    const y = base.getFullYear();
+    const m = base.getMonth();
+    if (half === 'first') {
+      setFrom(isoDate(new Date(y, m, 1)));
+      setTo(isoDate(new Date(y, m, 15)));
+    } else {
+      setFrom(isoDate(new Date(y, m, 16)));
+      setTo(isoDate(new Date(y, m + 1, 0)));
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-lg space-y-3 pb-8 md:max-w-2xl">
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight text-white">
-          Расчёт ЗП
+          {role === 'trainer' ? 'Моя ЗП' : 'Расчёт ЗП'}
         </h1>
         <p className="text-sm leading-relaxed text-slate-400">
           Ваш расчёт за период по проверенным работам. Ставки настраивает
@@ -131,6 +144,24 @@ export function SelfPayrollView({ role }: Props) {
       </header>
 
       <section className="card space-y-3">
+        {role === 'trainer' ? (
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              onClick={() => applyHalfMonth('first')}
+            >
+              1–15
+            </button>
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              onClick={() => applyHalfMonth('second')}
+            >
+              16–конец месяца
+            </button>
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-2">
           <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
             С
@@ -441,9 +472,7 @@ export function SelfPayrollView({ role }: Props) {
                 onClick={() => setGroupOpen((v) => !v)}
               >
                 <div>
-                  <p className="font-medium text-slate-200">
-                    Занятия в расчёте ЗП
-                  </p>
+                  <p className="font-medium text-slate-200">Занятия в ЗП</p>
                   <p className="text-xs text-slate-500">
                     {trustedGroupUnits.length} групповых · ср.{' '}
                     {groupStats.avgPeople.toLocaleString('ru-RU', {
@@ -481,7 +510,7 @@ export function SelfPayrollView({ role }: Props) {
                           ) : null}
                         </span>
                         <span className="shrink-0 tabular-nums text-slate-300">
-                          {u.quantity} чел.
+                          пришло {u.quantity}
                         </span>
                       </li>
                     ))

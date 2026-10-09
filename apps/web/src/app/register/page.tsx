@@ -40,7 +40,13 @@ export default function RegisterPage() {
         setPendingTrainers(result.pendingTrainers);
         setStep('trainers');
       } else {
-        router.push(getHomePath(result.user.roles));
+        router.push(
+          getHomePath(result.user.roles, {
+            groupPrograms: result.user.groupPrograms,
+            trainerStaff: result.user.trainerStaff,
+            trainerClub: result.user.trainerClub,
+          }),
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка регистрации');

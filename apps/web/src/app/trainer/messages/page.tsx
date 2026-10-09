@@ -3,7 +3,7 @@
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { api, type NotificationItem } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
 import { ChatInbox } from '@/components/chat/chat-inbox';
 
@@ -25,8 +25,13 @@ function isPersonalCancellation(n: NotificationItem) {
 export default function TrainerMessagesPage() {
   const searchParams = useSearchParams();
   const initialClientId = searchParams.get('clientId') ?? undefined;
+  const user = getUser();
+  const isGp = Boolean(user?.groupPrograms);
+  const isPt = Boolean(user?.trainerStaff || user?.trainerClub);
+  const gpOnly = isGp && !isPt;
+
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [tab, setTab] = useState<MessagesTab>('clients');
+  const [tab, setTab] = useState<MessagesTab>(gpOnly ? 'admin' : 'clients');
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
@@ -63,28 +68,19 @@ export default function TrainerMessagesPage() {
       <h2 className="text-xl font-semibold">Сообщения</h2>
 
       <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={() => setTab('clients')}
-          className={`flex-1 rounded-full px-2 py-2 text-sm ${
-            tab === 'clients'
-              ? 'bg-fitgo-500 text-white'
-              : 'bg-slate-800 text-slate-400'
-          }`}
-        >
-          Чат с клиентами
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab('alerts')}
-          className={`flex-1 rounded-full px-2 py-2 text-sm ${
-            tab === 'alerts'
-              ? 'bg-fitgo-500 text-white'
-              : 'bg-slate-800 text-slate-400'
-          }`}
-        >
-          Отмены
-        </button>
+        {!gpOnly ? (
+          <button
+            type="button"
+            onClick={() => setTab('clients')}
+            className={`flex-1 rounded-full px-2 py-2 text-sm ${
+              tab === 'clients'
+                ? 'bg-fitgo-500 text-white'
+                : 'bg-slate-800 text-slate-400'
+            }`}
+          >
+            Чат с клиентами
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => setTab('admin')}
@@ -96,9 +92,20 @@ export default function TrainerMessagesPage() {
         >
           Чат с админом
         </button>
+        <button
+          type="button"
+          onClick={() => setTab('alerts')}
+          className={`flex-1 rounded-full px-2 py-2 text-sm ${
+            tab === 'alerts'
+              ? 'bg-fitgo-500 text-white'
+              : 'bg-slate-800 text-slate-400'
+          }`}
+        >
+          {gpOnly ? 'Уведомления' : 'Отмены'}
+        </button>
       </div>
 
-      {tab === 'clients' ? (
+      {tab === 'clients' && !gpOnly ? (
         <ChatInbox
           key="clients"
           role="trainer"

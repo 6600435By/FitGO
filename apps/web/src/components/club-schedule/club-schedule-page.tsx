@@ -9,6 +9,7 @@ import { BookingControlPanel } from '@/components/booking-control/booking-contro
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { createBookingControlApi } from '@/lib/booking-control-api';
+import { createTrainerBookingControlApi } from '@/lib/trainer-booking-control-api';
 
 const TYPE_LABEL: Record<string, string> = {
   GROUP: 'ГП',
@@ -47,20 +48,21 @@ function normalizeTypes(raw: string | null): string {
 export function ClubSchedulePage({
   apiBase,
 }: {
-  apiBase: 'admin' | 'super-admin';
+  apiBase: 'admin' | 'super-admin' | 'trainer';
 }) {
+  const isTrainer = apiBase === 'trainer';
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const [day, setDay] = useState(() => {
     const d = searchParams.get('date');
-    return d && /^\\d{4}-\\d{2}-\\d{2}$/.test(d)
+    return d && /^\d{4}-\d{2}-\d{2}$/.test(d)
       ? d
       : format(new Date(), 'yyyy-MM-dd');
   });
   const [types, setTypes] = useState(() =>
-    normalizeTypes(searchParams.get('types')),
+    isTrainer ? 'GROUP' : normalizeTypes(searchParams.get('types')),
   );
   const [events, setEvents] = useState<ClubScheduleEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +74,13 @@ export function ClubSchedulePage({
     to: string;
   } | null>(null);
 
-  const panelApi = useMemo(() => createBookingControlApi(apiBase), [apiBase]);
+  const panelApi = useMemo(
+    () =>
+      isTrainer
+        ? createTrainerBookingControlApi()
+        : createBookingControlApi(apiBase),
+    [apiBase, isTrainer],
+  );
 
   const maxDay = useMemo(
     () => format(addDays(new Date(), 31), 'yyyy-MM-dd'),
@@ -87,10 +95,11 @@ export function ClubSchedulePage({
     (nextDay: string, nextTypes: string) => {
       const params = new URLSearchParams(searchParams.toString());
       params.set('date', nextDay);
-      params.set('types', nextTypes);
+      if (!isTrainer) params.set('types', nextTypes);
+      else params.delete('types');
       router.replace(`${pathname}?${params.toString()}`, { scroll: false });
     },
-    [pathname, router, searchParams],
+    [pathname, router, searchParams, isTrainer],
   );
 
   const updateDay = (next: string) => {
@@ -99,6 +108,7 @@ export function ClubSchedulePage({
   };
 
   const updateTypes = (next: string) => {
+    if (isTrainer) return;
     setTypes(next);
     writeUrl(day, next);
   };
@@ -112,7 +122,7 @@ export function ClubSchedulePage({
       const list = await api.adminClubSchedule(token, apiBase, {
         from: day,
         to: day,
-        types,
+        types: isTrainer ? 'GROUP' : types,
       });
       setEvents(list);
     } catch (e) {
@@ -120,7 +130,7 @@ export function ClubSchedulePage({
     } finally {
       setLoading(false);
     }
-  }, [apiBase, day, types]);
+  }, [apiBase, day, types, isTrainer]);
 
   useEffect(() => {
     void load();
@@ -198,27 +208,29 @@ export function ClubSchedulePage({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {(
-          [
-            ['GROUP,PT,SPA', 'Все'],
-            ['GROUP', 'ГП'],
-            ['PT', 'ПТ'],
-            ['SPA', 'SPA'],
-          ] as const
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            className={
-              types === value
-                ? 'btn-primary text-xs'
-                : 'btn-secondary text-xs'
-            }
-            onClick={() => updateTypes(value)}
-          >
-            {label}
-          </button>
-        ))}
+        {!isTrainer
+          ? (
+              [
+                ['GROUP,PT,SPA', 'Все'],
+                ['GROUP', 'ГП'],
+                ['PT', 'ПТ'],
+                ['SPA', 'SPA'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={
+                  types === value
+                    ? 'btn-primary text-xs'
+                    : 'btn-secondary text-xs'
+                }
+                onClick={() => updateTypes(value)}
+              >
+                {label}
+              </button>
+            ))
+          : null}
         <button
           type="button"
           className={
@@ -235,7 +247,8 @@ export function ClubSchedulePage({
           locale: ru,
         })}
         <span className="ml-2 text-slate-600">
-          · можно листать до {format(parseISO(`${maxDay}T12:00:00`), 'd MMM', { locale: ru })}
+          · можно листать до{' '}
+          {format(parseISO(`${maxDay}T12:00:00`), 'd MMM', { locale: ru })}
         </span>
       </p>
 
@@ -270,7 +283,7 @@ export function ClubSchedulePage({
                   <div>
                     <p className="text-xs text-slate-500">
                       {TYPE_LABEL[ev.type] ?? ev.type}
-                      {ev.staffName ? ` · ${ev.staffName}` : ''}
+                      {!isTrainer && ev.staffName ? ` · ${ev.staffName}` : ''}
                     </p>
                     <p className="font-medium text-slate-100 mt-0.5">
                       {format(parseISO(ev.startAt), 'HH:mm')}–
@@ -297,21 +310,26 @@ export function ClubSchedulePage({
         <BookingControlPanel
           key={openSession.sessionKey}
           api={panelApi}
-          canResolve
-          canMarkAttendance
+          canResolve={!isTrainer}
+          canMarkAttendance={!isTrainer}
+          canTrainerSeen={isTrainer}
           canApproveGroup
           canBulkApprove={apiBase === 'super-admin'}
-          canReturnApproval
+          canReturnApproval={!isTrainer}
           canViewHallPhotos
           detailOnly
           initialSessionKey={openSession.sessionKey}
           initialFrom={openSession.from}
           initialTo={openSession.to}
-          cancelSpaBooking={async (bookingId) => {
-            const token = getToken();
-            if (!token) throw new Error('Нет сессии');
-            await api.adminCancelSpaBooking(token, bookingId);
-          }}
+          cancelSpaBooking={
+            isTrainer
+              ? undefined
+              : async (bookingId) => {
+                  const token = getToken();
+                  if (!token) throw new Error('Нет сессии');
+                  await api.adminCancelSpaBooking(token, bookingId);
+                }
+          }
           onDetailClose={() => {
             setOpenSession(null);
             void load();

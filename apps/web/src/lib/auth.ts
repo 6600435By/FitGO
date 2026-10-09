@@ -32,11 +32,24 @@ export function getUser(): AuthUser | null {
   }
 }
 
-export function getHomePath(roles: UserRole[]): string {
+export function getHomePath(
+  roles: UserRole[],
+  flags?: {
+    groupPrograms?: boolean;
+    trainerStaff?: boolean;
+    trainerClub?: boolean;
+  },
+): string {
   if (roles.includes(UserRole.SUPER_ADMIN)) return '/super-admin';
   if (roles.includes(UserRole.MANAGER)) return '/super-admin';
   if (roles.includes(UserRole.ADMIN)) return '/admin';
-  if (roles.includes(UserRole.TRAINER)) return '/trainer';
+  if (roles.includes(UserRole.TRAINER)) {
+    const gpOnly =
+      Boolean(flags?.groupPrograms) &&
+      !flags?.trainerStaff &&
+      !flags?.trainerClub;
+    return gpOnly ? '/trainer/gp-schedule' : '/trainer';
+  }
   if (roles.includes(UserRole.SPECIALIST)) return '/specialist/schedule';
   if (roles.includes(UserRole.TECH)) return '/tech';
   return '/client';

@@ -10,15 +10,16 @@ Staff screens read **only FitGO Postgres**. Live 1C reads happen in:
 
 ## Profiles
 
-| | Manual LIGHT (кнопка) | Nightly FULL (03:00–04:00 MSK) |
-|--|------------------------|--------------------------------|
-| Sales / revenue | yesterday–today, no change-log | incremental window + `scope=changes` |
-| Classes / visits | today ±1 day | provider default (wider) |
-| Schedule slots | today + 2 days | today + 14 days |
-| PT sales | today ±1 day | 14 days |
-| Specialist debts / memberships | **skipped** | full (rate-limited membership walk) |
-| Run budget | 3 min → PARTIAL | 40 min → PARTIAL |
-| Analytics HTTP timeout | 90 s per `/sales` call | same |
+| | Manual LIGHT (кнопка) | AUTO TODAY (trainer screens) | Nightly FULL (03:00–04:00 MSK) |
+|--|------------------------|--------------------------------|--------------------------------|
+| Sales / revenue | yesterday–today, no change-log | **skipped** | incremental window + `scope=changes` |
+| Classes / visits | today ±1 day | **today only** | provider default (wider) |
+| Schedule slots | today + 2 days | **today only** | today + 14 days |
+| PT sales | today ±1 day | **skipped** | 14 days |
+| Specialist debts / memberships | **skipped** | **skipped** | full (rate-limited membership walk) |
+| Run budget | 3 min → PARTIAL | 60 s → PARTIAL | 40 min → PARTIAL |
+| Cooldown | 10 min (manual) | 10 min (per club, fire-and-forget) | once per night |
+| Analytics HTTP timeout | 90 s per `/sales` call | n/a | same |
 
 Old-date edits (класс 25.09, оплата за июнь) → night FULL or admin date-range backfill, not the button.
 

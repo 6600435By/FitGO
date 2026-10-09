@@ -111,6 +111,11 @@ type Props = {
   onDetailClose?: () => void;
   /** Cancel FitGO SPA booking that is not locked in 1C. */
   cancelSpaBooking?: (bookingId: string) => Promise<void>;
+  /**
+   * GP trainer: «На контроле» / «Прошли контроль» segments.
+   * Past sessions only; default period last 14 days.
+   */
+  approvalSegments?: boolean;
 };
 
 function todayIso() {
@@ -193,8 +198,11 @@ export function BookingControlPanel({
   detailOnly = false,
   onDetailClose,
   cancelSpaBooking,
+  approvalSegments = false,
 }: Props) {
-  const [from, setFrom] = useState(initialFrom?.trim() || daysAgoIso(7));
+  const [from, setFrom] = useState(
+    initialFrom?.trim() || daysAgoIso(approvalSegments ? 14 : 7),
+  );
   const [to, setTo] = useState(initialTo?.trim() || todayIso());
   const [kind, setKind] = useState<string>(fixedKind ?? 'ALL');
   const [status, setStatus] = useState('ALL');
@@ -204,6 +212,9 @@ export function BookingControlPanel({
   const [performers, setPerformers] = useState<BookingControlPerformerOption[]>(
     [],
   );
+  const [approvalSegment, setApprovalSegment] = useState<
+    'pending' | 'done'
+  >('pending');
   const [needsReview, setNeedsReview] = useState(Boolean(initialNeedsReview));
   const [items, setItems] = useState<BookingControlListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -306,6 +317,31 @@ export function BookingControlPanel({
       .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   }, [performers, items]);
 
+  const nowMs = Date.now();
+
+  const onControlCount = useMemo(() => {
+    if (!approvalSegments) return 0;
+    return items.filter((i) => {
+      if (new Date(i.startAt).getTime() > nowMs) return false;
+      if (i.status === 'CANCELLED') return false;
+      return (
+        i.approvalPhase === 'PENDING_TRAINER' ||
+        i.approvalPhase === 'PENDING_ADMIN' ||
+        i.needsReview
+      );
+    }).length;
+  }, [items, approvalSegments, nowMs]);
+
+  const awaitingTrainerCount = useMemo(() => {
+    if (!approvalSegments) return 0;
+    return items.filter(
+      (i) =>
+        new Date(i.startAt).getTime() <= nowMs &&
+        i.status !== 'CANCELLED' &&
+        i.approvalPhase === 'PENDING_TRAINER',
+    ).length;
+  }, [items, approvalSegments, nowMs]);
+
   const visible = useMemo(() => {
     let rows = items;
     if (sourceFilter === 'SALE') {
@@ -316,8 +352,29 @@ export function BookingControlPanel({
     if (performerId) {
       rows = rows.filter((i) => i.performerId === performerId);
     }
+    if (approvalSegments) {
+      rows = rows.filter((i) => {
+        if (new Date(i.startAt).getTime() > nowMs) return false;
+        if (i.status === 'CANCELLED') return false;
+        if (approvalSegment === 'done') {
+          return i.approvalPhase === 'APPROVED';
+        }
+        return (
+          i.approvalPhase === 'PENDING_TRAINER' ||
+          i.approvalPhase === 'PENDING_ADMIN' ||
+          i.needsReview
+        );
+      });
+    }
     return rows;
-  }, [items, sourceFilter, performerId]);
+  }, [
+    items,
+    sourceFilter,
+    performerId,
+    approvalSegments,
+    approvalSegment,
+    nowMs,
+  ]);
 
   const saleCount = useMemo(
     () => items.filter((i) => i.source === 'SALE').length,
@@ -674,6 +731,37 @@ export function BookingControlPanel({
         <p className="text-sm text-slate-400">{subtitle}</p>
       </div>
 
+      {approvalSegments ? (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setApprovalSegment('pending')}
+            className={`flex-1 rounded-full px-3 py-2 text-sm ${
+              approvalSegment === 'pending'
+                ? 'bg-fitgo-500 text-white'
+                : 'bg-slate-800 text-slate-400'
+            }`}
+          >
+            На контроле
+            {onControlCount ? ` · ${onControlCount}` : ''}
+            {awaitingTrainerCount
+              ? ` (ждёт вас ${awaitingTrainerCount})`
+              : ''}
+          </button>
+          <button
+            type="button"
+            onClick={() => setApprovalSegment('done')}
+            className={`flex-1 rounded-full px-3 py-2 text-sm ${
+              approvalSegment === 'done'
+                ? 'bg-fitgo-500 text-white'
+                : 'bg-slate-800 text-slate-400'
+            }`}
+          >
+            Прошли контроль
+          </button>
+        </div>
+      ) : null}
+
       <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
         <div className="flex flex-wrap items-end gap-2">
           <button
@@ -928,9 +1016,8 @@ export function BookingControlPanel({
       {message && <p className="text-sm text-fitgo-300">{message}</p>}
       {!loading && !fixedKind && saleCount === 0 && (kind === 'ALL' || kind === 'PT') ? (
         <p className="text-xs text-slate-500">
-          Разовых ПТ из продаж за период нет (или 1С не успела ответить). Шаблон
-          `/v1/trainer-pt-sales` уже в метаданных — нужна быстрая{' '}
-          `ПродажиПтИсполнителейJSON` в модуле Клиенты и перезапуск API.
+          Разовых ПТ из продаж за период нет. Нажмите «Обновить из 1С» (ждёт до
+          ~45 с) или проверьте на API: FITNESS_PROVIDER=forma и FORMA_FITGO_URL.
         </p>
       ) : null}
 

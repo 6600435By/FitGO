@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { ClubSyncOrchestrator } from '../club-sync/club-sync-orchestrator.service';
 import { ClubScheduleService } from './club-schedule.service';
 
 type ListQuery = {
@@ -21,7 +22,10 @@ type ListQuery = {
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class ClubScheduleController {
-  constructor(private readonly clubSchedule: ClubScheduleService) {}
+  constructor(
+    private readonly clubSchedule: ClubScheduleService,
+    private readonly clubSync: ClubSyncOrchestrator,
+  ) {}
 
   @Get('admin/club-schedule')
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
@@ -39,6 +43,25 @@ export class ClubScheduleController {
     return this.clubSchedule.list(
       clubId,
       this.clubSchedule.parseListQuery(query),
+    );
+  }
+
+  /** Trainer GP: same schedule surface as admin, forced to own GROUP slots. */
+  @Get('trainer/club-schedule')
+  @Roles(UserRole.TRAINER)
+  listTrainer(@CurrentUser() user: JwtPayload, @Query() query: ListQuery) {
+    const clubId = requireClubId(user);
+    this.clubSync.ensureFreshToday(clubId);
+    return this.clubSchedule.list(
+      clubId,
+      this.clubSchedule.parseListQuery({
+        from: query.from,
+        to: query.to,
+        status: query.status,
+        approval: query.approval,
+        types: 'GROUP',
+        staffIds: user.sub,
+      }),
     );
   }
 

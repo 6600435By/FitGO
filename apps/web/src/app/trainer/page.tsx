@@ -1,12 +1,13 @@
 'use client';
 
-import { SessionType, type Booking } from '@fitgo/shared-types';
+import { SessionType } from '@fitgo/shared-types';
 import { Users, Calendar, Target, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { MessagesHomeLink } from '@/components/messages-home-link';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
 
 interface TrainerDashboard {
@@ -34,10 +35,21 @@ function trainerSessionHref(slot: TrainerDashboard['schedule'][number]): string 
 }
 
 export default function TrainerHomePage() {
+  const router = useRouter();
+  const user = getUser();
+  const isGpOnly =
+    Boolean(user?.groupPrograms) &&
+    !user?.trainerStaff &&
+    !user?.trainerClub;
+
   const [data, setData] = useState<TrainerDashboard | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (isGpOnly) {
+      router.replace('/trainer/gp-schedule');
+      return;
+    }
     const token = getToken();
     if (!token) return;
 
@@ -45,7 +57,15 @@ export default function TrainerHomePage() {
       .trainerDashboard(token)
       .then(setData)
       .catch((err) => setError(err.message));
-  }, []);
+  }, [isGpOnly, router]);
+
+  if (isGpOnly) {
+    return (
+      <div className="flex justify-center py-12">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+      </div>
+    );
+  }
 
   if (error) return <p className="text-red-400">{error}</p>;
 

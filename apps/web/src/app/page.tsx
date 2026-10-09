@@ -11,7 +11,13 @@ export default function HomePage() {
     const token = getToken();
     const user = getUser();
     if (token && user) {
-      router.replace(getHomePath(user.roles));
+      router.replace(
+        getHomePath(user.roles, {
+          groupPrograms: user.groupPrograms,
+          trainerStaff: user.trainerStaff,
+          trainerClub: user.trainerClub,
+        }),
+      );
     } else {
       router.replace('/login');
     }

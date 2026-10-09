@@ -20,7 +20,13 @@ export default function LoginPage() {
     try {
       const result = await api.login(email, password);
       saveAuth(result.accessToken, result.user);
-      router.push(getHomePath(result.user.roles));
+      router.push(
+        getHomePath(result.user.roles, {
+          groupPrograms: result.user.groupPrograms,
+          trainerStaff: result.user.trainerStaff,
+          trainerClub: result.user.trainerClub,
+        }),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка входа');
     } finally {

@@ -284,14 +284,15 @@ export class BookingControlController {
   @Get('trainer/booking-control')
   @Roles(UserRole.TRAINER)
   listTrainer(@CurrentUser() user: JwtPayload, @Query() query: ListQuery) {
+    const clubId = requireClubId(user);
     if (query.sessionKey?.trim()) {
-      return this.bookingControl.detail(
-        requireClubId(user),
-        query.sessionKey.trim(),
-        { userId: user.sub, ownOnly: true },
-      );
+      return this.bookingControl.detail(clubId, query.sessionKey.trim(), {
+        userId: user.sub,
+        ownOnly: true,
+      });
     }
-    return this.list(requireClubId(user), {
+    this.clubSync.ensureFreshToday(clubId);
+    return this.list(clubId, {
       ...query,
       performerId: user.sub,
       _own: true,

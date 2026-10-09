@@ -25,7 +25,13 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
 
     const hasRole = allowedRoles.some((role) => user.roles.includes(role));
     if (!hasRole) {
-      router.replace(getHomePath(user.roles));
+      router.replace(
+        getHomePath(user.roles, {
+          groupPrograms: user.groupPrograms,
+          trainerStaff: user.trainerStaff,
+          trainerClub: user.trainerClub,
+        }),
+      );
       return;
     }
 

@@ -32,6 +32,10 @@ const MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
 const LIGHT_RUN_BUDGET_MS = 3 * 60 * 1000;
 /** Nightly FULL has the whole night window; hard cap avoids orphan forever. */
 const FULL_RUN_BUDGET_MS = 40 * 60 * 1000;
+/** TODAY profile: classes + visits + slots for one day. */
+const TODAY_RUN_BUDGET_MS = 60 * 1000;
+/** Min gap between AUTO TODAY syncs per club. */
+const TODAY_COOLDOWN_MS = 10 * 60 * 1000;
 
 export type SyncStepResult = {
   resource: string;
@@ -113,6 +117,51 @@ export class ClubSyncOrchestrator {
         },
       },
       orderBy: { finishedAt: 'desc' },
+    });
+  }
+
+  async lastSuccessfulToday(clubId: string) {
+    return this.prisma.clubSyncRun.findFirst({
+      where: {
+        clubId,
+        profile: ClubSyncProfile.TODAY,
+        status: {
+          in: [ClubSyncRunStatus.SUCCESS, ClubSyncRunStatus.PARTIAL],
+        },
+      },
+      orderBy: { finishedAt: 'desc' },
+    });
+  }
+
+  /**
+   * Fire-and-forget today-only sync for staff screens.
+   * At most one run per club every TODAY_COOLDOWN_MS; skips night window
+   * and when another sync is already RUNNING.
+   */
+  ensureFreshToday(clubId: string): void {
+    void this.ensureFreshTodayAsync(clubId).catch((err) => {
+      this.logger.warn(
+        `ensureFreshToday ${clubId}: ${err instanceof Error ? err.message : err}`,
+      );
+    });
+  }
+
+  private async ensureFreshTodayAsync(clubId: string): Promise<void> {
+    if (isMoscowNightWindow()) return;
+
+    await this.reclaimOrphan(clubId);
+    const running = await this.getRunning(clubId);
+    if (running) return;
+
+    const last = await this.lastSuccessfulToday(clubId);
+    if (last?.finishedAt) {
+      const until = last.finishedAt.getTime() + TODAY_COOLDOWN_MS;
+      if (Date.now() < until) return;
+    }
+
+    await this.start(clubId, {
+      trigger: ClubSyncTrigger.AUTO,
+      profile: ClubSyncProfile.TODAY,
     });
   }
 
@@ -239,13 +288,29 @@ export class ClubSyncOrchestrator {
     try {
       const today = moscowDayKey();
       const isFull = profile === ClubSyncProfile.FULL;
+      const isToday = profile === ClubSyncProfile.TODAY;
       const deadline =
-        Date.now() + (isFull ? FULL_RUN_BUDGET_MS : LIGHT_RUN_BUDGET_MS);
+        Date.now() +
+        (isFull
+          ? FULL_RUN_BUDGET_MS
+          : isToday
+            ? TODAY_RUN_BUDGET_MS
+            : LIGHT_RUN_BUDGET_MS);
 
       const schedFrom = today;
-      const schedTo = addMoscowDays(today, isFull ? 14 : 2);
-      const classFrom = isFull ? undefined : addMoscowDays(today, -1);
-      const classTo = isFull ? undefined : addMoscowDays(today, 1);
+      const schedTo = isToday
+        ? today
+        : addMoscowDays(today, isFull ? 14 : 2);
+      const classFrom = isToday
+        ? today
+        : isFull
+          ? undefined
+          : addMoscowDays(today, -1);
+      const classTo = isToday
+        ? today
+        : isFull
+          ? undefined
+          : addMoscowDays(today, 1);
 
       const runStep = async (
         resource: string,
@@ -317,96 +382,126 @@ export class ClubSyncOrchestrator {
         }
       };
 
-      await runStep('admin_sales', async () => {
-        if (isFull) {
-          const r = await this.salesSync.syncClub(clubId, 'incremental');
+      if (isToday) {
+        await runStep('class_sessions', async () => {
+          const r = await this.classSessions.syncClub(clubId, {
+            from: today,
+            to: today,
+          });
+          return {
+            rows: r.sessionsUpserted,
+            from: r.from,
+            to: r.to,
+          };
+        });
+
+        await runStep('hall_visits', async () => {
+          const r = await this.hallVisits.syncClub(clubId, {
+            from: today,
+            to: today,
+          });
           return { rows: r.upserted, from: r.from, to: r.to };
-        }
-        const r = await this.salesSync.syncClubQuick(clubId);
-        return { rows: r.upserted, from: r.from, to: r.to };
-      });
+        });
 
-      await runStep('club_revenue', async () => {
-        if (isFull) {
-          const r = await this.revenueSync.syncClub(clubId, 'incremental');
+        await runStep('schedule_slots', async () => {
+          const r = await this.scheduleSlots.syncClub(clubId, {
+            from: today,
+            to: today,
+          });
           return { rows: r.upserted, from: r.from, to: r.to };
-        }
-        const r = await this.revenueSync.syncClubQuick(clubId);
-        return { rows: r.upserted, from: r.from, to: r.to };
-      });
-
-      await runStep('class_sessions', async () => {
-        const r = await this.classSessions.syncClub(clubId, {
-          from: classFrom,
-          to: classTo,
         });
-        return {
-          rows: r.sessionsUpserted,
-          from: r.from,
-          to: r.to,
-        };
-      });
-
-      await runStep('hall_visits', async () => {
-        const r = await this.hallVisits.syncClub(clubId, {
-          from: classFrom,
-          to: classTo,
+      } else {
+        await runStep('admin_sales', async () => {
+          if (isFull) {
+            const r = await this.salesSync.syncClub(clubId, 'incremental');
+            return { rows: r.upserted, from: r.from, to: r.to };
+          }
+          const r = await this.salesSync.syncClubQuick(clubId);
+          return { rows: r.upserted, from: r.from, to: r.to };
         });
-        return { rows: r.upserted, from: r.from, to: r.to };
-      });
 
-      await runStep('schedule_slots', async () => {
-        const r = await this.scheduleSlots.syncClub(clubId, {
-          from: schedFrom,
-          to: schedTo,
+        await runStep('club_revenue', async () => {
+          if (isFull) {
+            const r = await this.revenueSync.syncClub(clubId, 'incremental');
+            return { rows: r.upserted, from: r.from, to: r.to };
+          }
+          const r = await this.revenueSync.syncClubQuick(clubId);
+          return { rows: r.upserted, from: r.from, to: r.to };
         });
-        return { rows: r.upserted, from: r.from, to: r.to };
-      });
 
-      const ptFrom = isFull
-        ? addMoscowDays(today, -14)
-        : addMoscowDays(today, -1);
-      const ptTo = today;
-
-      await runStep('trainer_pt_sales', async () => {
-        const r = await this.ptSales.syncClub(clubId, {
-          from: ptFrom,
-          to: ptTo,
+        await runStep('class_sessions', async () => {
+          const r = await this.classSessions.syncClub(clubId, {
+            from: classFrom,
+            to: classTo,
+          });
+          return {
+            rows: r.sessionsUpserted,
+            from: r.from,
+            to: r.to,
+          };
         });
-        return { rows: r.upserted, from: r.from, to: r.to };
-      });
 
-      if (isFull) {
-        await runStep('specialist_debts', async () => {
-          const r = await this.specialistDebts.syncClub(clubId, {
+        await runStep('hall_visits', async () => {
+          const r = await this.hallVisits.syncClub(clubId, {
+            from: classFrom,
+            to: classTo,
+          });
+          return { rows: r.upserted, from: r.from, to: r.to };
+        });
+
+        await runStep('schedule_slots', async () => {
+          const r = await this.scheduleSlots.syncClub(clubId, {
+            from: schedFrom,
+            to: schedTo,
+          });
+          return { rows: r.upserted, from: r.from, to: r.to };
+        });
+
+        const ptFrom = isFull
+          ? addMoscowDays(today, -14)
+          : addMoscowDays(today, -1);
+        const ptTo = today;
+
+        await runStep('trainer_pt_sales', async () => {
+          const r = await this.ptSales.syncClub(clubId, {
             from: ptFrom,
             to: ptTo,
           });
           return { rows: r.upserted, from: r.from, to: r.to };
         });
 
-        await runStep('membership_snapshots', async () => {
-          const r = await this.memberships.syncClub(clubId, {
-            limit: MEMBERSHIP_LIMITS.FULL,
+        if (isFull) {
+          await runStep('specialist_debts', async () => {
+            const r = await this.specialistDebts.syncClub(clubId, {
+              from: ptFrom,
+              to: ptTo,
+            });
+            return { rows: r.upserted, from: r.from, to: r.to };
           });
-          return { rows: r.upserted };
-        });
 
-        await runStep('admin_tasks', async () => {
-          const adminTasks = this.moduleRef.get(AdminTasksSchedulerService, {
-            strict: false,
+          await runStep('membership_snapshots', async () => {
+            const r = await this.memberships.syncClub(clubId, {
+              limit: MEMBERSHIP_LIMITS.FULL,
+            });
+            return { rows: r.upserted };
           });
-          const club = await this.prisma.club.findUnique({
-            where: { id: clubId },
-            select: { externalId: true },
+
+          await runStep('admin_tasks', async () => {
+            const adminTasks = this.moduleRef.get(AdminTasksSchedulerService, {
+              strict: false,
+            });
+            const club = await this.prisma.club.findUnique({
+              where: { id: clubId },
+              select: { externalId: true },
+            });
+            const r = await adminTasks.generateForClub(
+              clubId,
+              club?.externalId ?? null,
+              today,
+            );
+            return { rows: (r?.debt ?? 0) + (r?.membership ?? 0) };
           });
-          const r = await adminTasks.generateForClub(
-            clubId,
-            club?.externalId ?? null,
-            today,
-          );
-          return { rows: (r?.debt ?? 0) + (r?.membership ?? 0) };
-        });
+        }
       }
 
       const failed = steps.filter((s) => s.error && !s.skipped);

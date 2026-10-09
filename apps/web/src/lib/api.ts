@@ -3387,7 +3387,7 @@ export const api = {
 
   adminClubSchedule: (
     token: string,
-    base: 'admin' | 'super-admin',
+    base: 'admin' | 'super-admin' | 'trainer',
     params: {
       from: string;
       to: string;

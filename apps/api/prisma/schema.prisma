@@ -256,11 +256,15 @@ enum GroupBookingOrigin {
 enum ClubSyncTrigger {
   NIGHTLY
   MANUAL
+  /// On-demand background refresh (trainer screens, etc.).
+  AUTO
 }
 
 enum ClubSyncProfile {
   FULL
   LIGHT
+  /// Today-only: classes, visits, schedule slots (no sales/debts).
+  TODAY
 }
 
 enum ClubSyncRunStatus {
