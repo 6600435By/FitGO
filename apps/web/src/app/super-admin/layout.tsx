@@ -15,7 +15,7 @@ const ALL_NAV = [
   { href: '/super-admin/analytics', label: 'Аналитика' },
   { href: '/super-admin/modules', label: 'Модули' },
   { href: '/super-admin/club-settings', label: 'Настройки клуба' },
-  { href: '/super-admin/staff', label: 'Staff' },
+  { href: '/super-admin/staff', label: 'Персонал' },
   { href: '/super-admin/schedule', label: 'Расписание' },
   { href: '/super-admin/staff-roster', label: 'График смен' },
   { href: '/super-admin/tasks', label: 'Задачи' },

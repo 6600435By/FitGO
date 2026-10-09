@@ -50,6 +50,8 @@ export interface FitgoClassSessionRow {
   employeeExternalId?: string;
   employeeName?: string;
   roomTitle?: string;
+  /** 1C nomenclature UUID (Справочник.Номенклатура). */
+  serviceExternalId?: string;
   bookedCount?: number;
   headerAttendedCount?: number;
   attendedCount?: number;

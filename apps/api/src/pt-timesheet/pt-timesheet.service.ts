@@ -17,6 +17,7 @@ import {
   TrustBand,
 } from '@prisma/client';
 import {
+  resolveGroupRoomKey,
   resolvePtPercent,
   type StaffPayProfile,
   type TrainerDaySheetDto,
@@ -887,7 +888,39 @@ export class PtTimesheetService {
     const profile = asPayProfile(compensation?.payProfile);
     const hourlyMinor = profile?.hourlyRateMinor ?? 0;
     const catalog = profile?.ptSessionPriceMinor ?? 0;
-    const monthCount = bookings.length;
+    // Individual reformer PT (Onex room) is paid via GP reformerPersonalPercent — exclude from ladder.
+    const monthStart = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+    const monthEnd = new Date(
+      Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + 1, 0, 23, 59, 59, 999),
+    );
+    const trainer = await this.prisma.user.findUnique({
+      where: { id: trainerId },
+      select: { externalId: true },
+    });
+    const reformerRefs = new Set<string>();
+    if (trainer?.externalId) {
+      const onexPt = await this.prisma.onexClassSession.findMany({
+        where: {
+          clubId,
+          kind: 'PT',
+          isActive: true,
+          startAt: { gte: monthStart, lte: monthEnd },
+          employeeExternalId: trainer.externalId,
+        },
+        select: { externalId: true, number: true, roomTitle: true },
+      });
+      for (const o of onexPt) {
+        if (resolveGroupRoomKey(o.roomTitle) !== 'REFORMER') continue;
+        reformerRefs.add(o.externalId);
+        if (o.number) reformerRefs.add(o.number);
+      }
+    }
+    const isReformerBooking = (crmDocRef: string | null | undefined) =>
+      !!crmDocRef && reformerRefs.has(crmDocRef);
+    const ladderBookings = bookings.filter(
+      (b) => !isReformerBooking(b.crmDocRef),
+    );
+    const monthCount = ladderBookings.length;
     const pct = resolvePtPercent(monthCount, profile?.ptPercentTiers);
 
     if (!sheet) {
@@ -952,9 +985,11 @@ export class PtTimesheetService {
       const verified1c =
         b.paymentStatus === ServicePaymentStatus.PAID &&
         issue === PtClientIssue.NONE;
+      const reformerPersonal = isReformerBooking(b.crmDocRef);
       const payable =
         issue === PtClientIssue.NONE &&
         !b.isComplimentary &&
+        !reformerPersonal &&
         (b.forceIncludeInPayroll ||
           b.paymentStatus === ServicePaymentStatus.PAID);
       const motivationMinor =
@@ -977,7 +1012,7 @@ export class PtTimesheetService {
         paymentStatus: b.paymentStatus,
         verified1c,
         payable,
-        countsForVolume: true,
+        countsForVolume: !reformerPersonal,
         isLateAdd: b.isLateAdd,
         clientIssue: issue,
         clientIssueEscalated: b.clientIssueEscalated,

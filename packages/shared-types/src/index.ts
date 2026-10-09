@@ -1004,6 +1004,8 @@ export interface StaffMember {
   trainerClub?: boolean;
   roles: UserRole[];
   isActive: boolean;
+  /** When set, employee is archived (hidden from active lists). */
+  archivedAt?: string | null;
   /** STAFF (default) or EXTERNAL (сторонние в отчёте ЗП). */
   employmentKind?: 'STAFF' | 'EXTERNAL';
   createdAt: string;

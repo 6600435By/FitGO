@@ -135,6 +135,7 @@ export class StaffRosterService {
       where: {
         clubId,
         isActive: true,
+        archivedAt: null,
         roles: { some: { role: { in: roleMap[track] } } },
       },
       include: { roles: true },

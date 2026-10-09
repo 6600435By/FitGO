@@ -564,6 +564,8 @@ model User {
   useRealNameInPublic  Boolean @default(true)
   gamificationStartedAt DateTime?
   isActive              Boolean  @default(true)
+  /// When set, employee is archived (hidden from active staff lists; sync will not re-add).
+  archivedAt            DateTime?
   /// STAFF = штат; EXTERNAL = сторонние специалисты (отдельная секция ЗП).
   employmentKind        StaffEmploymentKind @default(STAFF)
   createdById           String?
@@ -1735,6 +1737,8 @@ model GroupClassSession {
   endAt                 DateTime
   /// Forma / 1C room.title (e.g. Групповой зал малый).
   roomTitle             String?
+  /// 1C nomenclature UUID (Справочник.Номенклатура).
+  serviceExternalId     String?
   status                GroupClassSessionStatus    @default(OPEN)
   baselineQuality       GroupSessionBaselineQuality @default(PARTIAL)
   baselineCount         Int                        @default(0)
@@ -2213,6 +2217,8 @@ model OnexClassSession {
   employeeExternalId   String?
   employeeName         String?
   roomTitle            String?
+  /// 1C nomenclature UUID (Справочник.Номенклатура).
+  serviceExternalId    String?
   /// FitGO SpaBooking / PT booking id from 1C comment bookingRef=
   fitgoBookingRef      String?
   bookedCount          Int             @default(0)

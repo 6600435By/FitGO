@@ -129,13 +129,16 @@ export class SuperAdminService implements OnModuleInit {
     }
   }
 
-  async listStaff(user: JwtPayload) {
+  async listStaff(user: JwtPayload, opts: { archived?: boolean } = {}) {
     const clubId = requireClubId(user);
     await this.normalizeCodeLogins(clubId);
     const staff = await this.prisma.user.findMany({
       where: {
         clubId,
         roles: { some: { role: { in: STAFF_ROLES } } },
+        ...(opts.archived
+          ? { archivedAt: { not: null } }
+          : { archivedAt: null }),
       },
       include: { roles: true },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
@@ -172,6 +175,53 @@ export class SuperAdminService implements OnModuleInit {
     }
 
     return staff.map((member) => this.mapStaff(member));
+  }
+
+  async archiveStaff(user: JwtPayload, staffId: string) {
+    const clubId = requireClubId(user);
+    const member = await this.getStaffMember(clubId, staffId);
+    if (member.archivedAt) {
+      return this.mapStaff(member);
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: staffId },
+        data: {
+          archivedAt: new Date(),
+          isActive: false,
+          loginEnabled: false,
+        },
+      }),
+      this.prisma.staffShift.deleteMany({
+        where: { userId: staffId, clubId, date: { gte: today } },
+      }),
+      this.prisma.trainerShift.deleteMany({
+        where: { trainerId: staffId, clubId, date: { gte: today } },
+      }),
+    ]);
+    await this.logAudit(user, 'STAFF_ARCHIVED', staffId, {});
+    const updated = await this.getStaffMember(clubId, staffId);
+    return this.mapStaff(updated);
+  }
+
+  async restoreStaff(user: JwtPayload, staffId: string) {
+    const clubId = requireClubId(user);
+    const member = await this.getStaffMember(clubId, staffId);
+    if (!member.archivedAt) {
+      return this.mapStaff(member);
+    }
+    await this.prisma.user.update({
+      where: { id: staffId },
+      data: {
+        archivedAt: null,
+        isActive: true,
+      },
+    });
+    await this.logAudit(user, 'STAFF_RESTORED', staffId, {});
+    const updated = await this.getStaffMember(clubId, staffId);
+    return this.mapStaff(updated);
   }
 
   async createStaff(user: JwtPayload, dto: CreateStaffDto) {
@@ -606,6 +656,7 @@ export class SuperAdminService implements OnModuleInit {
     trainerStaff?: boolean;
     trainerClub?: boolean;
     isActive: boolean;
+    archivedAt?: Date | null;
     employmentKind?: 'STAFF' | 'EXTERNAL' | string;
     createdAt: Date;
     roles: Array<{ role: Role }>;
@@ -634,6 +685,7 @@ export class SuperAdminService implements OnModuleInit {
       trainerClub: member.trainerClub ?? false,
       roles: member.roles.map((r) => roleMap[r.role]),
       isActive: member.isActive,
+      archivedAt: member.archivedAt?.toISOString() ?? null,
       employmentKind:
         member.employmentKind === 'EXTERNAL' ? 'EXTERNAL' : 'STAFF',
       createdAt: member.createdAt.toISOString(),

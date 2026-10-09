@@ -1805,27 +1805,42 @@ export const api = {
       body: JSON.stringify(body),
     }, token),
 
-  superAdminStaff: (token: string) =>
-    request<StaffMember[]>('/super-admin/staff', {}, token),
+  superAdminStaff: (token: string, opts?: { archived?: boolean }) =>
+    request<StaffMember[]>(
+      `/super-admin/staff${opts?.archived ? '?archived=1' : ''}`,
+      {},
+      token,
+    ),
 
-  superAdminSyncStaffFrom1C: (token: string, replace = true) =>
+  superAdminArchiveStaff: (token: string, id: string) =>
+    request<StaffMember>(
+      `/super-admin/staff/${id}/archive`,
+      { method: 'POST' },
+      token,
+    ),
+
+  superAdminRestoreStaff: (token: string, id: string) =>
+    request<StaffMember>(
+      `/super-admin/staff/${id}/restore`,
+      { method: 'POST' },
+      token,
+    ),
+
+  superAdminSyncStaffFrom1C: (token: string, _replace = false) =>
     request<{
       results: Array<{
         key: string;
         added: number;
         updated: number;
         unchanged: number;
+        skipped?: number;
         fetched?: number;
         pruned?: number;
         error?: string;
       }>;
       credentials: Array<{ email: string; password: string; name: string }>;
       removed?: number;
-    }>(
-      `/super-admin/segments/sync-staff${replace ? '?replace=1' : ''}`,
-      { method: 'POST' },
-      token,
-    ),
+    }>(`/super-admin/segments/sync-staff`, { method: 'POST' }, token),
 
   superAdminSyncNomenclatureFrom1C: (
     token: string,

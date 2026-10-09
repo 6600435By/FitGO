@@ -3,6 +3,7 @@
 import {
   DEFAULT_GROUP_RATE_TIERS,
   DEFAULT_PT_TIERS,
+  DEFAULT_REFORMER_GROUP_RATE_MINOR,
   DEFAULT_SPA_QUOTA_RATES,
   defaultPayProfile,
   departmentsForPayTrack,
@@ -28,7 +29,6 @@ const GROUP_ROOM_SECTIONS: { key: GroupRoomKey; label: string }[] = [
   { key: 'GROUP_SMALL', label: 'Малый зал' },
   { key: 'GROUP_LARGE', label: 'Большой зал' },
   { key: 'GYM', label: 'Тренажёрный зал' },
-  { key: 'REFORMER', label: 'Зал реформеров' },
 ];
 
 const TRACKS: { id: StaffPayTrack; label: string }[] = [
@@ -197,6 +197,20 @@ export function StaffPayProfileEditor({
       }
       for (const track of TRAINER_PAY_TRACKS) {
         if (!active.includes(track)) delete map[track];
+      }
+      // «АСД группа» — одно поле на сотрудника, пишем в ГП и штат одинаково.
+      const asdSource =
+        map.GROUP_TRAINER?.asdGroupRateMinor ??
+        map.PT?.asdGroupRateMinor ??
+        0;
+      if (map.GROUP_TRAINER) {
+        map.GROUP_TRAINER = {
+          ...map.GROUP_TRAINER,
+          asdGroupRateMinor: asdSource,
+        };
+      }
+      if (map.PT) {
+        map.PT = { ...map.PT, asdGroupRateMinor: asdSource };
       }
     }
     let primary = { ...current, track: current.track };
@@ -450,6 +464,56 @@ export function StaffPayProfileEditor({
             profile={readSlice('PT')}
             onChange={(next) => writeSlice('PT', next)}
             showShift
+          />
+        </div>
+      ) : null}
+
+      {stacked && (trainerGroups?.gp || trainerGroups?.staff) ? (
+        <div className="space-y-3 rounded-xl border border-slate-800 p-3">
+          <p className="text-sm font-medium text-white">АСД группа</p>
+          <p className="text-xs leading-relaxed text-slate-500">
+            Ставка за каждое проведённое занятие «АСД Лабс», где пришёл хотя бы
+            1 человек. Одна на сотрудника — платится и тренерам ГП, и штату.
+          </p>
+          <MoneyField
+            label="Ставка за занятие АСД группа, BYN"
+            value={formatMinor(
+              readSlice(
+                trainerGroups?.gp ? 'GROUP_TRAINER' : 'PT',
+              ).asdGroupRateMinor,
+            )}
+            onChange={(v) => {
+              const minor = parseMoneyToMinor(v);
+              const gpNext = trainerGroups?.gp
+                ? {
+                    ...readSlice('GROUP_TRAINER'),
+                    asdGroupRateMinor: minor,
+                    track: 'GROUP_TRAINER' as const,
+                  }
+                : null;
+              const ptNext = trainerGroups?.staff
+                ? {
+                    ...readSlice('PT'),
+                    asdGroupRateMinor: minor,
+                    track: 'PT' as const,
+                  }
+                : null;
+              setByTrack((prev) => {
+                const next = { ...prev };
+                if (gpNext && profile.track !== 'GROUP_TRAINER') {
+                  next.GROUP_TRAINER = gpNext;
+                }
+                if (ptNext && profile.track !== 'PT') {
+                  next.PT = ptNext;
+                }
+                return next;
+              });
+              if (gpNext && profile.track === 'GROUP_TRAINER') {
+                setProfile(gpNext);
+              } else if (ptNext && profile.track === 'PT') {
+                setProfile(ptNext);
+              }
+            }}
           />
         </div>
       ) : null}
@@ -949,6 +1013,40 @@ function GroupTrainerRates({
           </div>
         );
       })}
+      <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+          Зал реформеров
+        </p>
+        <p className="text-xs leading-relaxed text-slate-500">
+          Групповое — фикс за занятие при 1+ пришедших. Индивидуальное — % от
+          оплаченной цены; в счёт ступеней ПТ не входит.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <MoneyField
+            label="Групповое, BYN за занятие"
+            value={formatMinor(
+              profile.reformerGroupRateMinor ??
+                DEFAULT_REFORMER_GROUP_RATE_MINOR,
+            )}
+            onChange={(v) =>
+              onChange({
+                ...profile,
+                reformerGroupRateMinor: parseMoneyToMinor(v),
+              })
+            }
+          />
+          <PercentField
+            label="Индивидуальное, % от оплаченного"
+            value={formatPercent(profile.reformerPersonalPercent)}
+            onChange={(v) =>
+              onChange({
+                ...profile,
+                reformerPersonalPercent: parseDecimal(v),
+              })
+            }
+          />
+        </div>
+      </div>
       <button
         type="button"
         className="btn-secondary text-sm"
@@ -956,6 +1054,8 @@ function GroupTrainerRates({
           onChange({
             ...profile,
             groupRateTiers: DEFAULT_GROUP_RATE_TIERS.map((t) => ({ ...t })),
+            reformerGroupRateMinor: DEFAULT_REFORMER_GROUP_RATE_MINOR,
+            reformerPersonalPercent: 0,
           })
         }
       >
@@ -993,6 +1093,16 @@ function GroupTrainerRates({
           }
         />
       </div>
+      <MoneyField
+        label="АСД группа, BYN за занятие"
+        value={formatMinor(profile.asdGroupRateMinor)}
+        onChange={(v) =>
+          onChange({
+            ...profile,
+            asdGroupRateMinor: parseMoneyToMinor(v),
+          })
+        }
+      />
     </div>
   );
 }

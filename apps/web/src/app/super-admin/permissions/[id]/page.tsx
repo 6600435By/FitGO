@@ -47,7 +47,7 @@ export default function SuperAdminPermissionsPage() {
 
   return (
     <div className="space-y-4">
-      <Link href="/super-admin/staff" className="text-sm text-fitgo-400">← Staff</Link>
+      <Link href="/super-admin/staff" className="text-sm text-fitgo-400">← Персонал</Link>
       <h2 className="text-xl font-semibold">Права администратора</h2>
 
       <div className="flex flex-wrap gap-2">

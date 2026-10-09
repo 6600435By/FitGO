@@ -10,11 +10,7 @@ import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
-import {
-  allocateStaffLogin,
-  isCodeStubEmail,
-  isDisposableStaffLogin,
-} from '../auth/staff-login';
+import { allocateStaffLogin } from '../auth/staff-login';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -39,6 +35,8 @@ export type SegmentSyncResult = {
   added: number;
   updated: number;
   unchanged: number;
+  /** Existing (or archived) — left untouched; sync only adds new. */
+  skipped: number;
   deactivated: number;
   pruned: number;
   /** Сколько членов вернула 1С */
@@ -103,7 +101,7 @@ export class SegmentsService {
 
   async syncStaffFrom1C(
     user: JwtPayload,
-    opts: { replace?: boolean } = {},
+    _opts: { replace?: boolean } = {},
   ): Promise<{
     results: SegmentSyncResult[];
     credentials: Array<{ email: string; password: string; name: string }>;
@@ -118,7 +116,6 @@ export class SegmentsService {
       );
     }
 
-    // Сначала читаем все сегменты — не удаляем stub, если 1С вернула пустоту (битый UUID/не опубликован BSL)
     const prefetched = new Map<
       string,
       {
@@ -148,10 +145,7 @@ export class SegmentsService {
       );
     }
 
-    let removed = 0;
-    if (opts.replace) {
-      removed = await this.removeSyncedStaffStubs(clubId);
-    }
+    // Add-only: never prune, never wipe stubs, never overwrite existing cards.
     const results: SegmentSyncResult[] = [];
     const credentials: Array<{ email: string; password: string; name: string }> =
       [];
@@ -160,38 +154,7 @@ export class SegmentsService {
       results.push(r);
       credentials.push(...r.credentials);
     }
-    return { results, credentials, removed };
-  }
-
-  /** Удаляет учётки, созданные sync из 1С (stub email), не трогая ручных сотрудников. */
-  private async removeSyncedStaffStubs(clubId: string): Promise<number> {
-    const stubs = await this.prisma.user.findMany({
-      where: {
-        clubId,
-        loginEnabled: false,
-        OR: [
-          { email: { startsWith: '1c-', endsWith: '@fitgo.local' } },
-          {
-            AND: [
-              { email: { endsWith: '@staff.fitgo.local' } },
-              { NOT: { email: { startsWith: 'tech.' } } },
-            ],
-          },
-          {
-            AND: [
-              { externalId: { not: null } },
-              { NOT: { email: { contains: '@' } } },
-            ],
-          },
-        ],
-      },
-      select: { id: true },
-    });
-    if (stubs.length === 0) return 0;
-    const ids = stubs.map((s) => s.id);
-    await this.prisma.user.deleteMany({ where: { id: { in: ids } } });
-    this.logger.log(`Removed ${ids.length} 1C staff stubs for club ${clubId}`);
-    return ids.length;
+    return { results, credentials, removed: 0 };
   }
 
   async syncNomenclature(
@@ -271,6 +234,7 @@ export class SegmentsService {
         added: 0,
         updated: 0,
         unchanged: 0,
+        skipped: 0,
         deactivated: 0,
         fetched: 0,
         pruned: 0,
@@ -306,6 +270,7 @@ export class SegmentsService {
     let added = 0;
     let updated = 0;
     let unchanged = 0;
+    let skipped = 0;
     let failed = 0;
     const failNotes: string[] = [];
     const credentials: SegmentSyncResult['credentials'] = [];
@@ -332,64 +297,16 @@ export class SegmentsService {
               ...(code ? [{ employeeCode: code }] : []),
             ],
           },
-          include: { roles: true },
+          select: {
+            id: true,
+            archivedAt: true,
+          },
         })) ?? null;
 
+      // Already in FitGO (including archived) — never overwrite; never re-create.
       if (existing) {
-        const hasRole = existing.roles.some((r) => r.role === role);
-        const renameLogin = isCodeStubEmail(existing.email);
-        const nextLogin = renameLogin
-          ? await allocateStaffLogin(this.prisma, lastName, existing.id)
-          : existing.email;
-        const needUpdate =
-          existing.firstName !== firstName ||
-          existing.lastName !== lastName ||
-          (code && existing.employeeCode !== code) ||
-          existing.externalId !== externalId ||
-          (groupPrograms && !existing.groupPrograms) ||
-          (role === Role.TRAINER &&
-            !groupPrograms &&
-            !existing.trainerGroupsSet &&
-            !existing.groupPrograms &&
-            !existing.trainerStaff &&
-            !existing.trainerClub) ||
-          !hasRole ||
-          nextLogin !== existing.email;
-        if (!needUpdate) {
-          unchanged += 1;
-          continue;
-        }
-        try {
-          await this.prisma.user.update({
-            where: { id: existing.id },
-            data: {
-              firstName,
-              lastName,
-              externalId,
-              ...(renameLogin ? { email: nextLogin } : {}),
-              ...(code ? { employeeCode: code } : {}),
-              ...(m.phone ? { phone: m.phone } : {}),
-              ...(groupPrograms
-                ? { groupPrograms: true, trainerGroupsSet: true }
-                : {}),
-              ...(role === Role.TRAINER &&
-              !groupPrograms &&
-              !existing.trainerGroupsSet &&
-              !existing.groupPrograms &&
-              !existing.trainerStaff &&
-              !existing.trainerClub
-                ? { trainerStaff: true, trainerGroupsSet: true }
-                : {}),
-              ...(!hasRole ? { roles: { create: { role } } } : {}),
-            },
-          });
-          updated += 1;
-        } catch (err) {
-          failed += 1;
-          failNotes.push(
-            `${m.name}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
+        skipped += 1;
+        unchanged += 1;
         continue;
       }
 
@@ -434,28 +351,11 @@ export class SegmentsService {
         ? `Не удалось записать ${failed} из ${fetched}. ${failNotes.join('; ')}`
         : undefined;
 
-    // Убрать лишних из сегмента:
-    // - обычные роли: снять роль / деактивировать stub
-    // - ГП: только сбросить groupPrograms (роль TRAINER может остаться из «Тренера все»)
-    const memberIds = new Set(
-      members.data.map((m) => m.externalId?.trim()).filter(Boolean) as string[],
-    );
-    // Не prune-ить весь клуб, если сегмент пустой из-за ошибки резолва
-    // Пустой состав — не prune (иначе снесём всех при ошибке/до «Сформировать сегмент»)
-    const pruned =
-      members.data.length === 0
-        ? 0
-        : key === 'staff.groupTrainers'
-          ? await this.pruneGroupProgramsNotInSegment(clubId, memberIds)
-          : await this.pruneRoleNotInSegment(clubId, role, memberIds, {
-              keepIfGroupPrograms: key === 'staff.trainers',
-            });
-
     await this.saveState(clubId, key, {
       lastStatus: failed > 0 && added === 0 ? 'error' : 'ok',
       lastError: error ?? null,
       lastAdded: added,
-      lastUnchanged: unchanged + updated,
+      lastUnchanged: unchanged,
     });
 
     return {
@@ -463,88 +363,14 @@ export class SegmentsService {
       added,
       updated,
       unchanged,
+      skipped,
       deactivated: 0,
-      pruned,
+      pruned: 0,
       fetched,
       credentials,
       lastSyncedAt: new Date().toISOString(),
       error,
     };
-  }
-
-  /**
-   * Снимает роль сегмента с сотрудников, чьего externalId нет в актуальном составе.
-   * Если staff-ролей не осталось — isActive=false. Stub 1c-* без других ролей — удаляем.
-   * keepIfGroupPrograms: для «Тренера все» не снимать TRAINER у тех, кто ещё в сегменте ГП.
-   */
-  private async pruneRoleNotInSegment(
-    clubId: string,
-    role: Role,
-    memberExternalIds: Set<string>,
-    opts: { keepIfGroupPrograms?: boolean } = {},
-  ): Promise<number> {
-    const candidates = await this.prisma.user.findMany({
-      where: {
-        clubId,
-        externalId: { not: null },
-        roles: { some: { role } },
-      },
-      include: { roles: true },
-    });
-    let pruned = 0;
-    const staffRoles: Role[] = [
-      Role.ADMIN,
-      Role.TRAINER,
-      Role.SPECIALIST,
-      Role.TECH,
-    ];
-    for (const u of candidates) {
-      const ext = u.externalId?.trim();
-      if (!ext || memberExternalIds.has(ext)) continue;
-      if (opts.keepIfGroupPrograms && u.groupPrograms) continue;
-      await this.prisma.userRole.deleteMany({
-        where: { userId: u.id, role },
-      });
-      const remaining = u.roles.filter((r) => r.role !== role);
-      const stillStaff = remaining.some((r) => staffRoles.includes(r.role));
-      const isStub = isDisposableStaffLogin(u.email);
-      if (!stillStaff && isStub && !u.loginEnabled) {
-        await this.prisma.user.delete({ where: { id: u.id } });
-      } else if (!stillStaff) {
-        await this.prisma.user.update({
-          where: { id: u.id },
-          data: { isActive: false },
-        });
-      }
-      pruned += 1;
-    }
-    return pruned;
-  }
-
-  /** Сбрасывает флаг ГП у тех, кого нет в сегменте «Тренера ГП приложение». */
-  private async pruneGroupProgramsNotInSegment(
-    clubId: string,
-    memberExternalIds: Set<string>,
-  ): Promise<number> {
-    const candidates = await this.prisma.user.findMany({
-      where: {
-        clubId,
-        groupPrograms: true,
-        externalId: { not: null },
-      },
-      select: { id: true, externalId: true },
-    });
-    let pruned = 0;
-    for (const u of candidates) {
-      const ext = u.externalId?.trim();
-      if (!ext || memberExternalIds.has(ext)) continue;
-      await this.prisma.user.update({
-        where: { id: u.id },
-        data: { groupPrograms: false },
-      });
-      pruned += 1;
-    }
-    return pruned;
   }
 
   private async syncNomSegment(
@@ -724,6 +550,7 @@ export class SegmentsService {
       added,
       updated,
       unchanged,
+      skipped: 0,
       deactivated,
       pruned: 0,
       fetched,
@@ -748,6 +575,7 @@ export class SegmentsService {
       added: 0,
       updated: 0,
       unchanged: 0,
+      skipped: 0,
       deactivated: 0,
       pruned: 0,
       fetched: 0,

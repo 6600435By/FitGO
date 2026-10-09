@@ -240,6 +240,7 @@ export class ClassSessionsSyncService {
       employeeExternalId: row.employeeExternalId?.trim() || null,
       employeeName: row.employeeName?.trim() || null,
       roomTitle: row.roomTitle?.trim() || null,
+      serviceExternalId: row.serviceExternalId?.trim() || null,
       fitgoBookingRef: row.fitgoBookingRef?.trim() || null,
       bookedCount: row.bookedCount ?? 0,
       headerAttendedCount: row.headerAttendedCount ?? 0,
@@ -426,6 +427,7 @@ export class ClassSessionsSyncService {
       employeeExternalId: string | null;
       employeeName: string | null;
       roomTitle: string | null;
+      serviceExternalId: string | null;
       attendedCount: number;
     },
     members: FitgoClassSessionRow['members'],
@@ -472,6 +474,7 @@ export class ClassSessionsSyncService {
           startAt: session.startAt,
           endAt,
           roomTitle: session.roomTitle,
+          serviceExternalId: session.serviceExternalId,
           trainerId: trainer.id,
           approvedAttendedCount: cancelled ? 0 : qty,
           baselineQuality: GroupSessionBaselineQuality.FULL,
@@ -504,6 +507,7 @@ export class ClassSessionsSyncService {
         startAt: session.startAt,
         endAt,
         roomTitle: session.roomTitle,
+        serviceExternalId: session.serviceExternalId,
         status: GroupClassSessionStatus.AUTO_READY,
         baselineQuality: GroupSessionBaselineQuality.FULL,
         baselineCount: members?.length ?? 0,

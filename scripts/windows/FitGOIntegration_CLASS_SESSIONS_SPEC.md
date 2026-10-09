@@ -21,6 +21,7 @@ Response `200`:
       "employeeExternalId": "",
       "employeeName": "",
       "roomTitle": "Групповой зал большой",
+      "serviceExternalId": "8deca45d-36c3-2cf1-11f1-c24239bba6e9",
       "bookedCount": 7,
       "headerAttendedCount": 6,
       "attendedCount": 6,

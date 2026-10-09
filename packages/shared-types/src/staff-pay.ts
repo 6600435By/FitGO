@@ -138,6 +138,21 @@ export interface StaffPayProfile {
   groupPerAttendeeMinor?: number;
   /** GROUP: attendee × room matrix (preferred). */
   groupRateTiers?: GroupRateTier[];
+  /**
+   * GROUP_TRAINER: fixed rate per reformer room group class when ≥1 attended (minor).
+   * Default club rate: 35 BYN.
+   */
+  reformerGroupRateMinor?: number;
+  /**
+   * GROUP_TRAINER: % of paid price for individual (PT) sessions in the reformer room.
+   * These sessions do not count toward PT volume tiers.
+   */
+  reformerPersonalPercent?: number;
+  /**
+   * Fixed rate per conducted «АСД группа» class when ≥1 attended (minor).
+   * Shared across GP and staff schemes — pay once per session.
+   */
+  asdGroupRateMinor?: number;
   /** SPA: % of sold/rendered paid services. */
   spaSoldPercent?: number;
   /** SPA: fixed rates for membership-package services. */
@@ -196,6 +211,36 @@ export function resolveGroupRoomKey(
   if (lower.includes('реформ')) return 'REFORMER';
   if (lower.includes('тренаж')) return 'GYM';
   return undefined;
+}
+
+/**
+ * 1C «АСД Лабс Групповое занятие» nomenclature UUID
+ * (e1cib ref 8deca45d36c32cf111f1c24239bba6e9 → dash form used in FitGO).
+ * Also accept platform GUID byte-order if 1C emits УникальныйИдентификатор that way.
+ */
+export const ASD_GROUP_SERVICE_IDS = [
+  '8deca45d-36c3-2cf1-11f1-c24239bba6e9',
+  '39bba6e9-c242-11f1-8dec-a45d36c32cf1',
+] as const;
+
+/** Default club rate for reformer group classes: 35 BYN. */
+export const DEFAULT_REFORMER_GROUP_RATE_MINOR = 3500;
+
+export function normalizeServiceExternalId(
+  raw: string | null | undefined,
+): string {
+  return (raw ?? '').trim().toLowerCase().replace(/[{}]/g, '');
+}
+
+/** Match «АСД группа» by nomenclature UUID or title fallback. */
+export function isAsdGroupSession(input: {
+  serviceExternalId?: string | null;
+  title?: string | null;
+}): boolean {
+  const id = normalizeServiceExternalId(input.serviceExternalId);
+  if (id && ASD_GROUP_SERVICE_IDS.some((x) => x === id)) return true;
+  const title = (input.title ?? '').toLowerCase();
+  return /асд/i.test(title);
 }
 
 /** Club default GP rates (BYN → minor). */
@@ -370,6 +415,9 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         groupMinAttendees: 1,
         groupPerAttendeeMinor: 0,
         groupRateTiers: DEFAULT_GROUP_RATE_TIERS.map((t) => ({ ...t })),
+        reformerGroupRateMinor: DEFAULT_REFORMER_GROUP_RATE_MINOR,
+        reformerPersonalPercent: 0,
+        asdGroupRateMinor: 0,
       };
     case 'SPA':
       return {
@@ -391,6 +439,7 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         ptSessionPriceMinor: 0,
         hourlyRateMinor: 0,
         fixedAdvanceMinor: 0,
+        asdGroupRateMinor: 0,
       };
     case 'CLUB':
       return {
@@ -477,7 +526,6 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
             'GROUP_SMALL',
             'GROUP_LARGE',
             'GYM',
-            'REFORMER',
           ];
           for (const room of order) {
             const rows = slice.groupRateTiers.filter((t) => t.roomKey === room);
@@ -497,6 +545,16 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           chips.push(`${tag}от ${slice.groupMinAttendees} чел.`);
         if (slice.groupPerAttendeeMinor)
           chips.push(`${tag}+${money(slice.groupPerAttendeeMinor)}/чел`);
+        if (slice.reformerGroupRateMinor)
+          chips.push(
+            `${tag}реформер гр. ${money(slice.reformerGroupRateMinor)}`,
+          );
+        if (slice.reformerPersonalPercent)
+          chips.push(
+            `${tag}реформер инд. ${formatPercent(slice.reformerPersonalPercent)}%`,
+          );
+        if (slice.asdGroupRateMinor)
+          chips.push(`${tag}АСД ${money(slice.asdGroupRateMinor)}`);
         break;
       case 'SPA':
         if (slice.spaSoldPercent)
@@ -526,6 +584,8 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
         for (const t of slice.ptPercentTiers ?? []) {
           chips.push(`${tag}≥${t.minSessions}: ${formatPercent(t.percent)}%`);
         }
+        if (slice.asdGroupRateMinor)
+          chips.push(`${tag}АСД ${money(slice.asdGroupRateMinor)}`);
         break;
       case 'CLUB':
         if (slice.ptSessionPriceMinor)

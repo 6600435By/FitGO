@@ -43,8 +43,13 @@ export class SuperAdminController {
   ) {}
 
   @Get('staff')
-  listStaff(@CurrentUser() user: JwtPayload) {
-    return this.superAdmin.listStaff(user);
+  listStaff(
+    @CurrentUser() user: JwtPayload,
+    @Query('archived') archived?: string,
+  ) {
+    return this.superAdmin.listStaff(user, {
+      archived: archived === '1' || archived === 'true',
+    });
   }
 
   @Post('staff')
@@ -59,6 +64,16 @@ export class SuperAdminController {
     @Body() dto: UpdateStaffDto,
   ) {
     return this.superAdmin.updateStaff(user, id, dto);
+  }
+
+  @Post('staff/:id/archive')
+  archiveStaff(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.superAdmin.archiveStaff(user, id);
+  }
+
+  @Post('staff/:id/restore')
+  restoreStaff(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.superAdmin.restoreStaff(user, id);
   }
 
   @Get('staff/export.csv')

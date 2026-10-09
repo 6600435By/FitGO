@@ -34,6 +34,10 @@ export interface WorkUnit {
   /** Forma / 1C room title for GROUP units. */
   roomTitle?: string;
   roomKey?: import('./staff-pay').GroupRoomKey;
+  /** 1C nomenclature UUID for the class service (АСД matching). */
+  serviceExternalId?: string;
+  /** True when session is «АСД группа» (nomenclature or title). */
+  isAsd?: boolean;
   /** SPA partner channel, e.g. ALLSPORTS. */
   partnerSource?: string;
 }

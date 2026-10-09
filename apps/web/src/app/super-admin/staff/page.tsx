@@ -19,7 +19,8 @@ type DeptFilter =
   | 'TRAINER_STAFF'
   | 'TRAINER_CLUB'
   | 'SPECIALIST'
-  | 'TECH';
+  | 'TECH'
+  | 'ARCHIVED';
 
 const DEPT_FILTERS: { id: DeptFilter; label: string }[] = [
   { id: 'ALL', label: 'Все' },
@@ -30,6 +31,7 @@ const DEPT_FILTERS: { id: DeptFilter; label: string }[] = [
   { id: 'TRAINER_CLUB', label: 'Тренеры клуб' },
   { id: 'SPECIALIST', label: 'SPA' },
   { id: 'TECH', label: 'Техперсонал' },
+  { id: 'ARCHIVED', label: 'Архив' },
 ];
 
 type StaffRoleId = 'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH';
@@ -109,12 +111,14 @@ export default function SuperAdminStaffPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
 
-  const load = () => {
+  const load = (archived = filter === 'ARCHIVED') => {
     const token = getToken();
     if (!token) return;
     Promise.all([
-      api.superAdminStaff(token),
-      api.payrollStaff(token).catch(() => [] as StaffPaySummary[]),
+      api.superAdminStaff(token, { archived }),
+      archived
+        ? Promise.resolve([] as StaffPaySummary[])
+        : api.payrollStaff(token).catch(() => [] as StaffPaySummary[]),
     ])
       .then(([members, payList]) => {
         setStaff(members);
@@ -124,24 +128,31 @@ export default function SuperAdminStaffPage() {
   };
 
   useEffect(() => {
-    load();
-  }, []);
+    load(filter === 'ARCHIVED');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when archive filter toggles
+  }, [filter === 'ARCHIVED']);
 
   const payById = new Map(pay.map((p) => [p.userId, p]));
 
   const visible = useMemo(() => {
-    if (filter === 'ALL') return staff;
+    if (filter === 'ARCHIVED' || filter === 'ALL') return staff;
     if (filter === 'MANAGER') {
       return staff.filter((m) => m.roles.includes(UserRole.MANAGER));
     }
     if (filter === 'TRAINER_GP') {
-      return staff.filter((m) => m.groupPrograms);
+      return staff.filter(
+        (m) => m.groupPrograms && m.roles.includes(UserRole.TRAINER),
+      );
     }
     if (filter === 'TRAINER_STAFF') {
-      return staff.filter((m) => m.trainerStaff);
+      return staff.filter(
+        (m) => m.trainerStaff && m.roles.includes(UserRole.TRAINER),
+      );
     }
     if (filter === 'TRAINER_CLUB') {
-      return staff.filter((m) => m.trainerClub);
+      return staff.filter(
+        (m) => m.trainerClub && m.roles.includes(UserRole.TRAINER),
+      );
     }
     if (filter === 'ADMIN') {
       return staff.filter((m) => m.roles.includes(UserRole.ADMIN));
@@ -243,7 +254,7 @@ export default function SuperAdminStaffPage() {
     <div className="mx-auto max-w-5xl space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-semibold md:text-2xl">Сотрудники</h2>
+          <h2 className="text-xl font-semibold md:text-2xl">Персонал</h2>
           <p className="text-sm text-slate-400">
             Тренеры делятся на ГП, штат и клуб. Группы и ставки — на карточке,
             оттуда схема копируется на выбранные группы.
@@ -261,24 +272,22 @@ export default function SuperAdminStaffPage() {
               setError('');
               setSyncMsg('');
               try {
-                const res = await api.superAdminSyncStaffFrom1C(token, true);
+                const res = await api.superAdminSyncStaffFrom1C(token);
                 const added = res.results.reduce((s, r) => s + r.added, 0);
-                const updated = res.results.reduce((s, r) => s + r.updated, 0);
+                const skipped = res.results.reduce(
+                  (s, r) => s + (r.skipped ?? r.unchanged ?? 0),
+                  0,
+                );
                 const fetched = res.results.reduce(
                   (s, r) => s + (r.fetched ?? 0),
                   0,
                 );
-                const pruned = res.results.reduce(
-                  (s, r) => s + (r.pruned ?? 0),
-                  0,
-                );
-                const removed = res.removed ?? 0;
                 const errs = res.results
                   .filter((r) => r.error)
                   .map((r) => `${r.key}: ${r.error}`)
                   .join('; ');
                 setSyncMsg(
-                  `Из 1С: удалено stub ${removed}, получено ${fetched}, +${added} новых, ${updated} обновлено, снято лишних ${pruned}` +
+                  `Из 1С: получено ${fetched}, добавлено ${added} новых, пропущено ${skipped} (уже есть или в архиве)` +
                     (errs ? `. ${errs}` : ''),
                 );
                 if (res.credentials[0]) {

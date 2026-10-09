@@ -56,8 +56,14 @@ export default function SuperAdminStaffDetailPage() {
   const load = () => {
     const token = getToken();
     if (!token) return;
-    api.superAdminStaff(token).then((list) => {
-      const next = list.find((s) => s.id === id) ?? null;
+    Promise.all([
+      api.superAdminStaff(token),
+      api.superAdminStaff(token, { archived: true }),
+    ]).then(([active, archived]) => {
+      const next =
+        active.find((s) => s.id === id) ??
+        archived.find((s) => s.id === id) ??
+        null;
       setMember(next);
       if (next) setLogin(next.email);
     });
@@ -220,7 +226,7 @@ export default function SuperAdminStaffDetailPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <Link href="/super-admin/staff" className="text-sm text-fitgo-400">
-        ← Staff
+        ← Персонал
       </Link>
 
       <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
@@ -481,9 +487,58 @@ export default function SuperAdminStaffDetailPage() {
         </div>
       )}
 
-      <button onClick={toggleActive} className="btn-secondary w-full">
-        {member.isActive ? 'Деактивировать' : 'Активировать'}
-      </button>
+      {!member.archivedAt ? (
+        <>
+          <button onClick={toggleActive} className="btn-secondary w-full">
+            {member.isActive ? 'Деактивировать' : 'Активировать'}
+          </button>
+          <button
+            type="button"
+            className="btn-secondary w-full text-red-300"
+            onClick={async () => {
+              const token = getToken();
+              if (!token) return;
+              if (
+                !window.confirm(
+                  `Удалить «${member.lastName} ${member.firstName}» из приложения?\n\nСотрудник уйдёт в архив: вход закроется, будущие смены снимутся, история ЗП сохранится. Синхронизация с 1С его не вернёт.`,
+                )
+              ) {
+                return;
+              }
+              try {
+                await api.superAdminArchiveStaff(token, id);
+                setMessage('Сотрудник в архиве');
+                load();
+              } catch (e) {
+                setMessage(e instanceof Error ? e.message : 'Ошибка');
+              }
+            }}
+          >
+            Удалить из приложения (в архив)
+          </button>
+        </>
+      ) : (
+        <div className="space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+          <p className="text-sm text-amber-200">Сотрудник в архиве</p>
+          <button
+            type="button"
+            className="btn-primary w-full"
+            onClick={async () => {
+              const token = getToken();
+              if (!token) return;
+              try {
+                await api.superAdminRestoreStaff(token, id);
+                setMessage('Сотрудник возвращён');
+                load();
+              } catch (e) {
+                setMessage(e instanceof Error ? e.message : 'Ошибка');
+              }
+            }}
+          >
+            Вернуть из архива
+          </button>
+        </div>
+      )}
 
       {message && <p className="text-fitgo-400 text-sm">{message}</p>}
     </div>
