@@ -599,11 +599,19 @@ export class ClassSessionsSyncService {
     fallbackId?: string,
   ) {
     if (employeeExternalId) {
+      const code = employeeExternalId.trim();
+      const stripped = code.replace(/^0+/, '');
       const byExt = await this.prisma.user.findFirst({
         where: {
           clubId,
-          externalId: employeeExternalId,
           roles: { some: { role: { in: [Role.TRAINER, Role.MANAGER] } } },
+          OR: [
+            { externalId: code },
+            { employeeCode: code },
+            ...(stripped && stripped !== code
+              ? [{ externalId: stripped }, { employeeCode: stripped }]
+              : []),
+          ],
         },
       });
       if (byExt) return byExt;
@@ -652,8 +660,14 @@ export class ClassSessionsSyncService {
     const toD = new Date(`${to}T23:59:59.999Z`);
     const or: Array<{ employeeExternalId?: string; employeeName?: string }> =
       [];
-    if (trainer.externalId) {
-      or.push({ employeeExternalId: trainer.externalId });
+    for (const raw of [trainer.externalId, trainer.employeeCode]) {
+      const code = raw?.trim();
+      if (!code) continue;
+      or.push({ employeeExternalId: code });
+      const stripped = code.replace(/^0+/, '');
+      if (stripped && stripped !== code) {
+        or.push({ employeeExternalId: stripped });
+      }
     }
     const name = `${trainer.lastName} ${trainer.firstName}`.trim();
     if (name) or.push({ employeeName: name });

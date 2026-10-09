@@ -96,13 +96,23 @@ export class BookingControlService {
       filters.restrictPerformerId ?? filters.performerId;
 
     let performerExt: string | undefined;
+    let performerCodes: string[] = [];
     let performerName: string | undefined;
     if (performerFilterId) {
       const u = await this.prisma.user.findFirst({
         where: { id: performerFilterId, clubId },
       });
       if (!u) return [];
-      performerExt = u.externalId ?? undefined;
+      performerExt = u.externalId ?? u.employeeCode ?? undefined;
+      const codeSet = new Set<string>();
+      for (const raw of [u.externalId, u.employeeCode]) {
+        const t = raw?.trim();
+        if (!t) continue;
+        codeSet.add(t);
+        const stripped = t.replace(/^0+/, '');
+        if (stripped) codeSet.add(stripped);
+      }
+      performerCodes = [...codeSet];
       performerName = `${u.lastName} ${u.firstName}`.trim();
     }
 
@@ -122,12 +132,12 @@ export class BookingControlService {
             startAt: { gte: fromD, lte: toD },
             ...(kindFilter ? { kind: kindFilter } : {}),
             ...(performerFilterId
-              ? performerExt || performerName
+              ? performerCodes.length > 0 || performerName
                 ? {
                     OR: [
-                      ...(performerExt
-                        ? [{ employeeExternalId: performerExt }]
-                        : []),
+                      ...performerCodes.map((c) => ({
+                        employeeExternalId: c,
+                      })),
                       ...(performerName
                         ? [{ employeeName: performerName }]
                         : []),
@@ -166,7 +176,7 @@ export class BookingControlService {
           include: { client: true, specialist: true, service: true },
         }),
         wantPtSales && !filters.skipExternal
-          ? this.fetchTrainerPtSales(filters.from, filters.to)
+          ? this.fetchTrainerPtSales(clubId, filters.from, filters.to)
           : Promise.resolve([] as SpecialistServiceDebt[]),
       ]);
     const openKeys = new Set(openRemarks.map((r) => r.sessionKey));
@@ -810,7 +820,7 @@ export class BookingControlService {
 
     if (parsed.source === 'SALE') {
       // Prefer list cache (no 1C round-trip). Fallback: one ≤30d fetch, never multi-window loops.
-      const sale = await this.findTrainerPtSale(parsed.id);
+      const sale = await this.findTrainerPtSale(clubId, parsed.id);
       if (!sale) throw new NotFoundException('Продажа не найдена');
       if (viewer?.ownOnly) {
         await this.assertOwnSale(clubId, viewer.userId, sale);
@@ -968,7 +978,7 @@ export class BookingControlService {
     throw new BadRequestException('Групповые FitGO-only строки не поддерживаются');
   }
 
-  /** Re-pull Документ.Занятие from 1C for the selected period. */
+  /** Re-pull Документ.Занятие + разовые ПТ из продаж for the selected period. */
   async refreshFrom1c(clubId: string, from: string, to: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
       throw new BadRequestException('Некорректные даты from/to');
@@ -977,11 +987,74 @@ export class BookingControlService {
       throw new BadRequestException('from must be ≤ to');
     }
     const sync = await this.classSessions.syncClub(clubId, { from, to });
+    let ptUpserted = 0;
+    let ptError: string | undefined;
+    try {
+      const live = await this.fetchTrainerPtSalesLive(from, to);
+      if (live.length) {
+        const now = new Date();
+        for (const row of live) {
+          const externalId = row.externalId || row.docRef;
+          if (!externalId) continue;
+          const occurredAt = new Date(row.occurredAt);
+          if (Number.isNaN(occurredAt.getTime())) continue;
+          await this.prisma.trainerPtSale.upsert({
+            where: { clubId_externalId: { clubId, externalId } },
+            create: {
+              clubId,
+              externalId,
+              clientName: row.clientName ?? null,
+              serviceName: row.serviceName ?? null,
+              occurredAt,
+              amount: row.amount ?? 0,
+              currency: row.currency ?? null,
+              employeeCode: row.employeeCode ?? null,
+              employeeName: row.employeeName ?? null,
+              docRef: row.docRef ?? null,
+              paymentStatus: row.paymentStatus ?? null,
+              bookingRef: row.bookingRef ?? null,
+              isActive: true,
+              syncedAt: now,
+            },
+            update: {
+              clientName: row.clientName ?? null,
+              serviceName: row.serviceName ?? null,
+              occurredAt,
+              amount: row.amount ?? 0,
+              currency: row.currency ?? null,
+              employeeCode: row.employeeCode ?? null,
+              employeeName: row.employeeName ?? null,
+              docRef: row.docRef ?? null,
+              paymentStatus: row.paymentStatus ?? null,
+              bookingRef: row.bookingRef ?? null,
+              isActive: true,
+              syncedAt: now,
+            },
+          });
+          ptUpserted += 1;
+        }
+        const cacheKey = `${clubId}|${from}|${to}`;
+        this.ptSalesCache.set(cacheKey, { at: Date.now(), rows: live });
+        this.indexTrainerPtSales(live);
+      }
+    } catch (e) {
+      ptError = e instanceof Error ? e.message : String(e);
+    }
+    const parts: string[] = [];
+    if (sync.endpointMissing) {
+      parts.push('Шаблон GET /v1/class-sessions ещё не опубликован в 1С.');
+    } else {
+      parts.push(`Обновлено занятий: ${sync.sessionsUpserted}.`);
+    }
+    if (ptError) {
+      parts.push(`ПТ из продаж: ошибка (${ptError}).`);
+    } else {
+      parts.push(`ПТ из продаж: ${ptUpserted}.`);
+    }
     return {
       ...sync,
-      message: sync.endpointMissing
-        ? 'Шаблон GET /v1/class-sessions ещё не опубликован в 1С.'
-        : `Обновлено занятий: ${sync.sessionsUpserted}.`,
+      ptSalesUpserted: ptUpserted,
+      message: parts.join(' '),
     };
   }
 
@@ -2043,6 +2116,7 @@ export class BookingControlService {
       select: {
         id: true,
         externalId: true,
+        employeeCode: true,
         firstName: true,
         lastName: true,
       },
@@ -2050,6 +2124,11 @@ export class BookingControlService {
     const map = new Map<string, (typeof staff)[0]>();
     for (const u of staff) {
       if (u.externalId) map.set(u.externalId, u);
+      if (u.employeeCode) {
+        map.set(u.employeeCode, u);
+        const stripped = u.employeeCode.replace(/^0+/, '');
+        if (stripped && stripped !== u.employeeCode) map.set(stripped, u);
+      }
     }
     return map;
   }
@@ -2089,33 +2168,99 @@ export class BookingControlService {
     return undefined;
   }
 
-  private async fetchTrainerPtSales(
+  private async loadTrainerPtSalesFromDb(
+    clubId: string,
     from: string,
     to: string,
   ): Promise<SpecialistServiceDebt[]> {
-    const key = `${from}|${to}`;
-    const hit = this.ptSalesCache.get(key);
-    if (hit && Date.now() - hit.at < 60_000) return hit.rows;
+    const fromD = new Date(`${from}T00:00:00.000`);
+    const toD = new Date(`${to}T23:59:59.999`);
+    if (Number.isNaN(fromD.getTime()) || Number.isNaN(toD.getTime())) {
+      return [];
+    }
+    const rows = await this.prisma.trainerPtSale.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        occurredAt: { gte: fromD, lte: toD },
+      },
+      orderBy: { occurredAt: 'desc' },
+    });
+    return rows.map((r) => ({
+      externalId: r.externalId,
+      clientName: r.clientName ?? '—',
+      serviceName: r.serviceName ?? 'Разовая ПТ (продажа)',
+      occurredAt: r.occurredAt.toISOString(),
+      amount: r.amount,
+      currency: r.currency ?? 'BYN',
+      employeeCode: r.employeeCode ?? '',
+      employeeName: r.employeeName ?? '—',
+      docRef: r.docRef ?? r.externalId,
+      paymentStatus: r.paymentStatus === 'DEBT' ? 'DEBT' : 'PAID',
+      bookingRef: r.bookingRef ?? undefined,
+    }));
+  }
 
+  private async fetchTrainerPtSalesLive(
+    from: string,
+    to: string,
+  ): Promise<SpecialistServiceDebt[]> {
     const provider = this.fitness.getProvider();
     const fn = provider.getTrainerPtSales;
     if (!fn) return [];
-    try {
-      // Hard cap so a hung / missing 1C template cannot block list/detail.
-      const rows = await Promise.race([
-        fn.call(provider, { from, to }),
-        new Promise<SpecialistServiceDebt[]>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('trainer-pt-sales timeout')),
-            45_000,
-          ),
+    const rows = await Promise.race([
+      fn.call(provider, { from, to }),
+      new Promise<SpecialistServiceDebt[]>((_, reject) =>
+        setTimeout(
+          () => reject(new Error('trainer-pt-sales timeout')),
+          45_000,
         ),
-      ]);
-      const list = Array.isArray(rows) ? rows : [];
+      ),
+    ]);
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  private async fetchTrainerPtSales(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<SpecialistServiceDebt[]> {
+    const key = `${clubId}|${from}|${to}`;
+    const hit = this.ptSalesCache.get(key);
+    if (hit && Date.now() - hit.at < 60_000) return hit.rows;
+
+    const dbRows = await this.loadTrainerPtSalesFromDb(clubId, from, to);
+    const provider = this.fitness.getProvider();
+    const hasLive = Boolean(provider.getTrainerPtSales);
+
+    // Prefer synced DB so list stays fast (~30s live 1C otherwise).
+    if (dbRows.length > 0) {
+      this.ptSalesCache.set(key, { at: Date.now(), rows: dbRows });
+      this.indexTrainerPtSales(dbRows);
+      if (hasLive) {
+        void this.fetchTrainerPtSalesLive(from, to)
+          .then((live) => {
+            if (!live.length) return;
+            this.ptSalesCache.set(key, { at: Date.now(), rows: live });
+            this.indexTrainerPtSales(live);
+          })
+          .catch(() => undefined);
+      }
+      return dbRows;
+    }
+
+    if (!hasLive) {
+      this.ptSalesCache.set(key, { at: Date.now(), rows: [] });
+      return [];
+    }
+
+    try {
+      const list = await this.fetchTrainerPtSalesLive(from, to);
       this.ptSalesCache.set(key, { at: Date.now(), rows: list });
       this.indexTrainerPtSales(list);
       return list;
     } catch {
+      // Never poison with a long-lived empty on timeout when DB was empty.
       this.ptSalesCache.set(key, { at: Date.now(), rows: [] });
       return [];
     }
@@ -2123,11 +2268,13 @@ export class BookingControlService {
 
   /** Prefer in-memory index from list; at most one ≤30d 1C fetch. */
   private async findTrainerPtSale(
+    clubId: string,
     docOrExt: string,
   ): Promise<SpecialistServiceDebt | undefined> {
     const cached = this.lookupTrainerPtSale(docOrExt);
     if (cached) return cached;
     const sales = await this.fetchTrainerPtSales(
+      clubId,
       this.ymdDaysAgo(30),
       this.ymdToday(),
     );
@@ -2411,12 +2558,17 @@ export class BookingControlService {
     });
     if (!u) throw new ForbiddenException('Чужая продажа');
     const name = `${u.lastName} ${u.firstName}`.trim().toLowerCase();
+    const saleCode = (sale.employeeCode ?? '').trim();
+    const codes = [u.externalId, u.employeeCode]
+      .map((c) => c?.trim())
+      .filter((c): c is string => Boolean(c));
     const codeOk =
-      u.externalId &&
-      sale.employeeCode &&
-      (u.externalId === sale.employeeCode ||
-        u.externalId.replace(/^0+/, '') ===
-          sale.employeeCode.replace(/^0+/, ''));
+      Boolean(saleCode) &&
+      codes.some(
+        (c) =>
+          c === saleCode ||
+          c.replace(/^0+/, '') === saleCode.replace(/^0+/, ''),
+      );
     const nameOk =
       sale.employeeName &&
       sale.employeeName.trim().toLowerCase() === name;

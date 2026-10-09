@@ -147,12 +147,17 @@ export function ClubPayrollReportPanel({
     const rows = report.sections
       .map((s) => {
         const body = s.rows
-          .map(
-            (r) =>
-              `<tr><td>${escape(r.name)}</td><td>${money(r.totalEarnedMinor, r.currency)}</td><td>${money(r.advancePaidMinor, r.currency)}</td><td>${money(r.cardPaidMinor, r.currency)}</td><td>${money(r.settlementPaidMinor, r.currency)}</td><td>${money(r.periodPaidTotalMinor, r.currency)}</td></tr>`,
-          )
+          .map((r) => {
+            const pt =
+              r.ptStats != null
+                ? `${r.ptStats.sessionCount} / ${r.ptStats.percent}%`
+                : r.workUnitCounts.pt > 0
+                  ? String(r.workUnitCounts.pt)
+                  : '—';
+            return `<tr><td>${escape(r.name)}</td><td>${escape(pt)}</td><td>${money(r.totalEarnedMinor, r.currency)}</td><td>${money(r.advancePaidMinor, r.currency)}</td><td>${money(r.cardPaidMinor, r.currency)}</td><td>${money(r.settlementPaidMinor, r.currency)}</td><td>${money(r.periodPaidTotalMinor, r.currency)}</td></tr>`;
+          })
           .join('');
-        return `<h2>${escape(s.label)}</h2><table><thead><tr><th>ФИО</th><th>Начислено</th><th>Аванс</th><th>Карта</th><th>ЗП 15</th><th>Итого</th></tr></thead><tbody>${body}</tbody></table>`;
+        return `<h2>${escape(s.label)}</h2><table><thead><tr><th>ФИО</th><th>ПТ / %</th><th>Начислено</th><th>Аванс</th><th>Карта</th><th>ЗП 15</th><th>Итого</th></tr></thead><tbody>${body}</tbody></table>`;
       })
       .join('');
     w.document.write(
@@ -195,7 +200,8 @@ export function ClubPayrollReportPanel({
         <div>
           <h2 className="text-base font-semibold text-white">Сводный отчёт</h2>
           <p className="text-[11px] text-slate-500">
-            Аванс · карта · ЗП 15 · итого; ФИО открывает отчёт по сотруднику
+            ПТ/% · аванс · карта · ЗП 15 · итого; ФИО открывает отчёт по
+            сотруднику
           </p>
         </div>
         <span className="text-slate-400">{open ? '▾' : '▸'}</span>
@@ -317,6 +323,7 @@ export function ClubPayrollReportPanel({
                       <thead className="bg-slate-900/90 text-[10px] uppercase text-slate-500">
                         <tr>
                           <th className="px-2 py-1.5">ФИО</th>
+                          <th className="px-2 py-1.5">ПТ / %</th>
                           <th className="px-2 py-1.5">Начисл.</th>
                           <th className="px-2 py-1.5">Аванс</th>
                           <th className="px-2 py-1.5">Карта</th>
@@ -345,6 +352,13 @@ export function ClubPayrollReportPanel({
                               ) : (
                                 r.name
                               )}
+                            </td>
+                            <td className="px-2 py-1 tabular-nums text-slate-400">
+                              {r.ptStats
+                                ? `${r.ptStats.sessionCount} · ${r.ptStats.percent}%`
+                                : r.workUnitCounts.pt > 0
+                                  ? String(r.workUnitCounts.pt)
+                                  : '—'}
                             </td>
                             <td className="px-2 py-1 tabular-nums">
                               {money(r.totalEarnedMinor, r.currency)}

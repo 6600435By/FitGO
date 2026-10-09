@@ -288,6 +288,22 @@ export function SelfPayrollView({ role }: Props) {
                 </li>
               </ul>
             ) : null}
+            {summary.ptStats ? (
+              <ul className="grid grid-cols-2 gap-2 border-t border-slate-800 pt-2 text-sm">
+                <li className="rounded-lg bg-slate-900/70 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">ПТ за период</p>
+                  <p className="tabular-nums text-slate-200">
+                    {summary.ptStats.sessionCount}
+                  </p>
+                </li>
+                <li className="rounded-lg bg-slate-900/70 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">% по шкале</p>
+                  <p className="tabular-nums text-slate-200">
+                    {summary.ptStats.percent}%
+                  </p>
+                </li>
+              </ul>
+            ) : null}
             {summary.payChips.length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
                 {summary.payChips.map((c) => (

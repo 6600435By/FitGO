@@ -457,8 +457,9 @@ export class ClubSyncOrchestrator {
           return { rows: r.upserted, from: r.from, to: r.to };
         });
 
+        // Full: ~1.5 months so «ЗП по тренерам» can fall back to DB when live 1C is slow.
         const ptFrom = isFull
-          ? addMoscowDays(today, -14)
+          ? addMoscowDays(today, -45)
           : addMoscowDays(today, -1);
         const ptTo = today;
 

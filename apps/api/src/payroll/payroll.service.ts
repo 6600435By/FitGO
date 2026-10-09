@@ -86,6 +86,57 @@ function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   return p;
 }
 
+/** 1C employee codes as stored on User (externalId and/or employeeCode). */
+function staffEmployeeCodes(user: {
+  externalId?: string | null;
+  employeeCode?: string | null;
+}): string[] {
+  const out = new Set<string>();
+  for (const raw of [user.externalId, user.employeeCode]) {
+    const t = raw?.trim();
+    if (!t) continue;
+    out.add(t);
+    const stripped = t.replace(/^0+/, '');
+    if (stripped) out.add(stripped);
+  }
+  return [...out];
+}
+
+function codesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = (a ?? '').trim();
+  const y = (b ?? '').trim();
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const xs = x.replace(/^0+/, '');
+  const ys = y.replace(/^0+/, '');
+  return Boolean(xs && ys && xs === ys);
+}
+
+type TrainerPtSaleRow = {
+  externalId?: string;
+  clientName?: string;
+  serviceName?: string;
+  occurredAt: string;
+  amount: number;
+  employeeCode?: string;
+  employeeName?: string;
+  docRef?: string;
+  paymentStatus?: string;
+};
+
+function saleMatchesTrainer(
+  sale: TrainerPtSaleRow,
+  codes: string[],
+  performerName: string,
+): boolean {
+  if (sale.employeeCode && codes.some((c) => codesMatch(c, sale.employeeCode))) {
+    return true;
+  }
+  const saleName = (sale.employeeName ?? '').trim().toLowerCase();
+  const name = performerName.trim().toLowerCase();
+  return Boolean(name && saleName && name === saleName);
+}
+
 const SECTION_LABELS: Record<ClubPayrollSectionId, string> = {
   MANAGER: 'Управляющий',
   ADMIN: 'Администраторы',
@@ -123,6 +174,12 @@ function mergePayTracks(
 
 @Injectable()
 export class PayrollService {
+  /** One live/DB pull per club+period while club summary loops trainers. */
+  private readonly ptSalesPeriodCache = new Map<
+    string,
+    Promise<TrainerPtSaleRow[]>
+  >();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly serviceUsage: ServiceUsageService,
@@ -151,7 +208,7 @@ export class PayrollService {
       where: { id: performerId, clubId },
       include: { roles: true },
     });
-    const performerExt = performer?.externalId ?? undefined;
+    const performerCodes = performer ? staffEmployeeCodes(performer) : [];
     const performerName = performer
       ? `${performer.lastName} ${performer.firstName}`.trim()
       : '';
@@ -164,16 +221,14 @@ export class PayrollService {
           trainerGroupsSet: performer.trainerGroupsSet,
         })
       : null;
-    const needsLivePtSales =
+    const needsPtSales =
       !!payFlags?.isTrainer && (!!payFlags.staff || !!payFlags.club);
 
     const performerOr =
-      performerExt || performerName
+      performerCodes.length > 0 || performerName
         ? {
             OR: [
-              ...(performerExt
-                ? [{ employeeExternalId: performerExt }]
-                : []),
+              ...performerCodes.map((c) => ({ employeeExternalId: c })),
               ...(performerName ? [{ employeeName: performerName }] : []),
             ],
           }
@@ -335,58 +390,41 @@ export class PayrollService {
     }
 
     // ── One-time PT from 1C sale lines (Исполнитель + сумма) × PT% ───────────
-    // Skip live 1C for desk-only admins — was making «Рассчитать» wait on PT API.
+    // Prefer live for the exact period; fall back to TrainerPtSale cache.
+    // Match by employeeCode (1C) — User.externalId is often empty for trainers.
     const ptSaleUnitKeys = new Map<string, string>();
-    const ptSalesFn = this.fitness.getProvider().getTrainerPtSales;
-    if (ptSalesFn && performer && needsLivePtSales) {
-      try {
-        const sales = await ptSalesFn.call(this.fitness.getProvider(), {
-          from,
-          to,
+    if (performer && needsPtSales) {
+      const sales = await this.loadTrainerPtSalesForPeriod(clubId, from, to);
+      for (const sale of sales) {
+        if (!saleMatchesTrainer(sale, performerCodes, performerName)) continue;
+        if (sale.paymentStatus !== 'PAID') continue;
+        const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
+        if (amountMinor <= 0) continue;
+        const day = (sale.occurredAt || '').slice(0, 10);
+        const clientKey = `${day}|${(sale.clientName ?? '').trim().toLowerCase()}`;
+        if (coveredSaleDays.has(clientKey)) continue;
+        const sk = saleSessionKey(
+          'PT',
+          sale.docRef || sale.externalId || `${day}-${sale.clientName}`,
+        );
+        remarkKeys.push(sk);
+        const unitId = `ptsale:${sale.docRef || sale.externalId}`;
+        units.push({
+          id: unitId,
+          kind: 'PT',
+          performerId,
+          title: `${sale.serviceName || 'Разовая ПТ'} (продажа)`,
+          occurredAt: sale.occurredAt?.includes('T')
+            ? sale.occurredAt
+            : `${day}T12:00:00.000Z`,
+          quantity: 1,
+          priceMinor: amountMinor,
+          trustBand: 'GREEN',
+          trustResolution: 'NONE',
+          payrollTrusted: true,
+          clientName: sale.clientName,
         });
-        const ext = performer.externalId?.replace(/^0+/, '') ?? '';
-        const name = performerName.toLowerCase();
-        for (const sale of sales) {
-          const code = (sale.employeeCode ?? '').replace(/^0+/, '');
-          const saleName = (sale.employeeName ?? '').trim().toLowerCase();
-          const matchCode =
-            (performer.externalId &&
-              (sale.employeeCode === performer.externalId ||
-                (ext && code && ext === code))) ||
-            false;
-          const matchName = name && saleName && name === saleName;
-          if (!matchCode && !matchName) continue;
-          if (sale.paymentStatus !== 'PAID') continue;
-          const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
-          if (amountMinor <= 0) continue;
-          const day = (sale.occurredAt || '').slice(0, 10);
-          const clientKey = `${day}|${(sale.clientName ?? '').trim().toLowerCase()}`;
-          if (coveredSaleDays.has(clientKey)) continue;
-          const sk = saleSessionKey(
-            'PT',
-            sale.docRef || sale.externalId || `${day}-${sale.clientName}`,
-          );
-          remarkKeys.push(sk);
-          const unitId = `ptsale:${sale.docRef || sale.externalId}`;
-          units.push({
-            id: unitId,
-            kind: 'PT',
-            performerId,
-            title: `${sale.serviceName || 'Разовая ПТ'} (продажа)`,
-            occurredAt: sale.occurredAt?.includes('T')
-              ? sale.occurredAt
-              : `${day}T12:00:00.000Z`,
-            quantity: 1,
-            priceMinor: amountMinor,
-            trustBand: 'GREEN',
-            trustResolution: 'NONE',
-            payrollTrusted: true,
-            clientName: sale.clientName,
-          });
-          ptSaleUnitKeys.set(unitId, sk);
-        }
-      } catch {
-        // Endpoint may be unpublished
+        ptSaleUnitKeys.set(unitId, sk);
       }
     }
 
@@ -671,6 +709,25 @@ export class PayrollService {
             };
           })()
         : undefined;
+    const hasGroupScheme = allPaySlices(profile).some(
+      (s) => s.track === 'GROUP_TRAINER',
+    );
+    const ptSlice = allPaySlices(profile).find(
+      (s) => s.track === 'PT' || s.track === 'CLUB',
+    );
+    const ptStats = ptSlice
+      ? (() => {
+          const ptUnits = trusted.filter(
+            (x) =>
+              x.kind === 'PT' &&
+              !(hasGroupScheme && x.roomKey === 'REFORMER'),
+          );
+          return {
+            sessionCount: ptUnits.length,
+            percent: resolvePtPercent(ptUnits.length, ptSlice.ptPercentTiers),
+          };
+        })()
+      : undefined;
     const adjustments = await this.listAdjustments(clubId, performerId, from, to);
     const adjustmentsMinor = adjustments.reduce((s, a) => s + a.amountMinor, 0);
 
@@ -826,6 +883,7 @@ export class PayrollService {
         ? { sales, motivationBreakdown }
         : {}),
       ...(groupStats ? { groupStats } : {}),
+      ...(ptStats ? { ptStats } : {}),
     };
   }
 
@@ -2197,6 +2255,104 @@ export class PayrollService {
     });
   }
 
+  /**
+   * Paid one-time PT sales for the payroll period.
+   * Live 1C first (exact from–to); TrainerPtSale cache if live empty/fails.
+   * Memoized so club summary does not re-hit 1C per trainer.
+   */
+  private loadTrainerPtSalesForPeriod(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<TrainerPtSaleRow[]> {
+    const key = `${clubId}|${from}|${to}`;
+    let pending = this.ptSalesPeriodCache.get(key);
+    if (!pending) {
+      pending = this.fetchTrainerPtSalesForPeriod(clubId, from, to).finally(
+        () => {
+          setTimeout(() => this.ptSalesPeriodCache.delete(key), 120_000);
+        },
+      );
+      this.ptSalesPeriodCache.set(key, pending);
+    }
+    return pending;
+  }
+
+  private async fetchTrainerPtSalesForPeriod(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<TrainerPtSaleRow[]> {
+    const live = await this.fetchTrainerPtSalesLive(from, to);
+    if (live.length > 0) return live;
+    return this.loadTrainerPtSalesFromDb(clubId, from, to);
+  }
+
+  private async fetchTrainerPtSalesLive(
+    from: string,
+    to: string,
+  ): Promise<TrainerPtSaleRow[]> {
+    const provider = this.fitness.getProvider();
+    const fn = provider.getTrainerPtSales;
+    if (!fn) return [];
+    try {
+      const rows = await Promise.race([
+        fn.call(provider, { from, to }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('trainer-pt-sales timeout')),
+            45_000,
+          ),
+        ),
+      ]);
+      if (!Array.isArray(rows)) return [];
+      return rows.map((r) => ({
+        externalId: r.externalId,
+        clientName: r.clientName,
+        serviceName: r.serviceName,
+        occurredAt: r.occurredAt,
+        amount: r.amount,
+        employeeCode: r.employeeCode,
+        employeeName: r.employeeName,
+        docRef: r.docRef,
+        paymentStatus: r.paymentStatus,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  private async loadTrainerPtSalesFromDb(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<TrainerPtSaleRow[]> {
+    const fromD = new Date(`${from}T00:00:00.000`);
+    const toD = new Date(`${to}T23:59:59.999`);
+    if (Number.isNaN(fromD.getTime()) || Number.isNaN(toD.getTime())) {
+      return [];
+    }
+    const rows = await this.prisma.trainerPtSale.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        occurredAt: { gte: fromD, lte: toD },
+      },
+      orderBy: { occurredAt: 'asc' },
+    });
+    return rows.map((r) => ({
+      externalId: r.externalId,
+      clientName: r.clientName ?? undefined,
+      serviceName: r.serviceName ?? undefined,
+      occurredAt: r.occurredAt.toISOString(),
+      amount: r.amount,
+      employeeCode: r.employeeCode ?? undefined,
+      employeeName: r.employeeName ?? undefined,
+      docRef: r.docRef ?? undefined,
+      paymentStatus: r.paymentStatus ?? undefined,
+    }));
+  }
+
   private calcMotivation(
     units: WorkUnit[],
     rates: MotivationRateDto[],
@@ -2739,6 +2895,7 @@ export class PayrollService {
             .filter((u) => u.kind === 'SHIFT')
             .reduce((a, u) => a + u.quantity, 0),
         },
+        ...(summary.ptStats ? { ptStats: summary.ptStats } : {}),
       });
     }
 
@@ -2800,6 +2957,8 @@ export class PayrollService {
     ws.addRow([
       'Подразделение',
       'ФИО',
+      'ПТ шт',
+      'ПТ %',
       'База',
       'Мотивация',
       'Премии',
@@ -2818,6 +2977,8 @@ export class PayrollService {
         ws.addRow([
           section.label,
           r.name,
+          r.ptStats?.sessionCount ?? r.workUnitCounts.pt,
+          r.ptStats?.percent ?? '',
           r.baseSalaryMinor / 100,
           r.motivationMinor / 100,
           r.bonusMinor / 100,
@@ -2834,6 +2995,8 @@ export class PayrollService {
       }
       ws.addRow([
         `${section.label} итого`,
+        '',
+        '',
         '',
         section.totals.baseSalaryMinor / 100,
         section.totals.motivationMinor / 100,

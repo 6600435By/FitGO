@@ -104,6 +104,14 @@ export interface GroupPayrollStats {
   avgPeople: number;
 }
 
+/** PT / CLUB: conducted sessions and ladder % used for motivation. */
+export interface PtPayrollStats {
+  /** Trusted PT units in period (gifts count toward the ladder). */
+  sessionCount: number;
+  /** resolvePtPercent(sessionCount) from the trainer's PT/CLUB tiers. */
+  percent: number;
+}
+
 export interface PayrollPeriodSummary {
   from: string;
   to: string;
@@ -131,6 +139,8 @@ export interface PayrollPeriodSummary {
   motivationBreakdown?: MotivationCategoryBreakdown;
   /** GROUP_TRAINER: trusted GROUP units summary. */
   groupStats?: GroupPayrollStats;
+  /** PT / CLUB: sessions conducted and % of paid PT. */
+  ptStats?: PtPayrollStats;
 }
 
 /** Staff personal debt as club client in 1C (ФИО + phone). */
@@ -334,6 +344,8 @@ export interface ClubPayrollRow {
     group: number;
     shiftHours: number;
   };
+  /** PT / CLUB ladder used for this row (when applicable). */
+  ptStats?: PtPayrollStats;
 }
 
 export interface ClubPayrollReport {

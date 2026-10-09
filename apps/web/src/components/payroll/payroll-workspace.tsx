@@ -1004,6 +1004,19 @@ export function PayrollWorkspace({ mode }: Props) {
             </section>
           ) : null}
 
+          {summary.ptStats ? (
+            <section className="grid grid-cols-2 gap-2.5 md:grid-cols-2">
+              <Stat
+                label="ПТ за период"
+                value={String(summary.ptStats.sessionCount)}
+              />
+              <Stat
+                label="% по шкале"
+                value={`${summary.ptStats.percent}%`}
+              />
+            </section>
+          ) : null}
+
           {unconfirmedUnits > 0 ? (
             <Link
               href={bookingControlHref}
