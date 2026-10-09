@@ -29,6 +29,18 @@ export function createBookingControlApi(
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlResolve(token, base, sessionKey, adminComment);
     },
+    listPerformers: async () => {
+      const token = getToken();
+      if (!token) return [];
+      const staff =
+        base === 'super-admin'
+          ? await api.payrollStaff(token)
+          : await api.adminPayrollStaff(token);
+      return staff
+        .map((s) => ({ id: s.userId, name: s.name }))
+        .filter((s) => s.id && s.name)
+        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    },
     refreshFrom1c: async (from, to) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');

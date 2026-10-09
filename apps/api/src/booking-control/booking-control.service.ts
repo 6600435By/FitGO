@@ -2104,7 +2104,10 @@ export class BookingControlService {
       const rows = await Promise.race([
         fn.call(provider, { from, to }),
         new Promise<SpecialistServiceDebt[]>((_, reject) =>
-          setTimeout(() => reject(new Error('trainer-pt-sales timeout')), 5_000),
+          setTimeout(
+            () => reject(new Error('trainer-pt-sales timeout')),
+            45_000,
+          ),
         ),
       ]);
       const list = Array.isArray(rows) ? rows : [];

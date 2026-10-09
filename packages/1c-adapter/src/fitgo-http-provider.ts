@@ -484,10 +484,10 @@ export class FitgoHttpProvider {
     try {
       const data = await this.request<
         import('@fitgo/shared-types').SpecialistServiceDebt[]
-      >(`/trainer-pt-sales?${q.toString()}`, { timeoutMs: 12_000 });
+      >(`/trainer-pt-sales?${q.toString()}`, { timeoutMs: 45_000 });
       return Array.isArray(data) ? data : [];
     } catch {
-      // Endpoint may not be published yet on club 1C / slow publication
+      // Missing template, hang, or 1C error — caller treats as empty sales
       return [];
     }
   }

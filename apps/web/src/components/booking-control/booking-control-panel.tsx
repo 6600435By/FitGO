@@ -11,6 +11,11 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatDateTime } from '@/lib/utils';
 
+export type BookingControlPerformerOption = {
+  id: string;
+  name: string;
+};
+
 export type BookingControlApi = {
   list: (params: {
     from: string;
@@ -30,6 +35,8 @@ export type BookingControlApi = {
     sessionKey: string,
     adminComment: string,
   ) => Promise<unknown>;
+  /** Staff for «Сотрудник» filter (admin / SA). */
+  listPerformers?: () => Promise<BookingControlPerformerOption[]>;
   /** Pull Документ.Занятие for selected period from 1C. */
   refreshFrom1c?: (from: string, to: string) => Promise<{ message: string }>;
   /** Mark GROUP member arrived / no-show in 1C. */
@@ -193,6 +200,10 @@ export function BookingControlPanel({
   const [status, setStatus] = useState('ALL');
   const [payment, setPayment] = useState(initialPayment);
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'SALE' | '1C'>('ALL');
+  const [performerId, setPerformerId] = useState('');
+  const [performers, setPerformers] = useState<BookingControlPerformerOption[]>(
+    [],
+  );
   const [needsReview, setNeedsReview] = useState(Boolean(initialNeedsReview));
   const [items, setItems] = useState<BookingControlListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -234,6 +245,7 @@ export function BookingControlPanel({
         status,
         payment,
         needsReview,
+        ...(performerId ? { performerId } : {}),
       })
       .then(setItems)
       .catch((e) =>
@@ -248,6 +260,7 @@ export function BookingControlPanel({
     status,
     payment,
     needsReview,
+    performerId,
     fixedKind,
     detailOnly,
   ]);
@@ -257,20 +270,54 @@ export function BookingControlPanel({
   }, [load]);
 
   useEffect(() => {
+    if (detailOnly || !api.listPerformers) return;
+    let cancelled = false;
+    api
+      .listPerformers()
+      .then((rows) => {
+        if (!cancelled) setPerformers(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setPerformers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, detailOnly]);
+
+  useEffect(() => {
     if (!initialSessionKey) return;
     void openDetail(initialSessionKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- open once from URL
   }, [initialSessionKey]);
 
-  const visible = useMemo(() => {
-    if (sourceFilter === 'ALL') return items;
-    if (sourceFilter === 'SALE') {
-      return items.filter(
-        (i) => i.source === 'SALE' || i.payTag === 'SALE',
-      );
+  const performerOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of performers) {
+      if (p.id) map.set(p.id, p.name);
     }
-    return items.filter((i) => i.source !== 'SALE');
-  }, [items, sourceFilter]);
+    for (const i of items) {
+      if (i.performerId && i.performerName && i.performerName !== '—') {
+        map.set(i.performerId, i.performerName);
+      }
+    }
+    return [...map.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  }, [performers, items]);
+
+  const visible = useMemo(() => {
+    let rows = items;
+    if (sourceFilter === 'SALE') {
+      rows = rows.filter((i) => i.source === 'SALE' || i.payTag === 'SALE');
+    } else if (sourceFilter === '1C') {
+      rows = rows.filter((i) => i.source !== 'SALE');
+    }
+    if (performerId) {
+      rows = rows.filter((i) => i.performerId === performerId);
+    }
+    return rows;
+  }, [items, sourceFilter, performerId]);
 
   const saleCount = useMemo(
     () => items.filter((i) => i.source === 'SALE').length,
@@ -721,6 +768,23 @@ export function BookingControlPanel({
               </select>
             </label>
           )}
+          {!detailOnly && (performerOptions.length > 0 || api.listPerformers) ? (
+            <label className="text-[11px] text-slate-500">
+              Сотрудник
+              <select
+                className="input mt-0.5 block h-9 max-w-[14rem] py-1 text-sm"
+                value={performerId}
+                onChange={(e) => setPerformerId(e.target.value)}
+              >
+                <option value="">Все</option>
+                {performerOptions.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <label className="mb-1 flex h-9 items-center gap-2 text-xs text-slate-300">
             <input
               type="checkbox"
@@ -864,8 +928,9 @@ export function BookingControlPanel({
       {message && <p className="text-sm text-fitgo-300">{message}</p>}
       {!loading && !fixedKind && saleCount === 0 && (kind === 'ALL' || kind === 'PT') ? (
         <p className="text-xs text-slate-500">
-          Разовых ПТ из продаж за период нет. Нужен опубликованный шаблон
-          `/v1/trainer-pt-sales` в FitGOIntegration.
+          Разовых ПТ из продаж за период нет (или 1С не успела ответить). Шаблон
+          `/v1/trainer-pt-sales` уже в метаданных — нужна быстрая{' '}
+          `ПродажиПтИсполнителейJSON` в модуле Клиенты и перезапуск API.
         </p>
       ) : null}
 
