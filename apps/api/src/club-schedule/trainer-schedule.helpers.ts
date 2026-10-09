@@ -149,3 +149,100 @@ export function inferSlotStatus(
   }
   return mapOnexToClubStatus(undefined, slot.endAt);
 }
+
+export type ScheduleSlotIdentity = {
+  id: string;
+  title: string;
+  startAt: string;
+  trainerName?: string;
+  roomTitle?: string;
+};
+
+export type OnexSlotIdentity = {
+  externalId: string;
+  title: string;
+  startAt: Date;
+  employeeName?: string | null;
+  roomTitle?: string | null;
+};
+
+/** Epoch minute. Forma ISO and Onex Date must be the same instant to match. */
+export function classStartMinute(value: string | Date): number | null {
+  const d =
+    value instanceof Date
+      ? value
+      : new Date(value.includes('T') ? value : value.replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.floor(d.getTime() / 60_000);
+}
+
+export function normClassTitle(title: string): string {
+  return title.toLowerCase().replace(/[^a-zа-яё0-9]+/gi, '');
+}
+
+function trainersMatch(a?: string | null, b?: string | null): boolean {
+  const na = (a ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const nb = (b ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!na || !nb) return false;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const tokens = (s: string) => s.split(' ').filter((t) => t.length >= 3);
+  const tb = new Set(tokens(nb));
+  return tokens(na).some((t) => tb.has(t));
+}
+
+function roomsConflict(a?: string | null, b?: string | null): boolean {
+  const na = normClassTitle(a ?? '');
+  const nb = normClassTitle(b ?? '');
+  if (!na || !nb) return false;
+  return na !== nb;
+}
+
+/**
+ * Forma appointment id and 1C document id differ, so one class is listed twice.
+ * The Forma row is the one that cannot be opened (detail looks up Onex).
+ * Link them by start + title (+ trainer / room when both are known).
+ */
+export function matchOnexToScheduleSlots(
+  slots: ScheduleSlotIdentity[],
+  onexRows: OnexSlotIdentity[],
+): { slotOnexId: Map<string, string>; consumedOnexIds: Set<string> } {
+  const slotOnexId = new Map<string, string>();
+  const consumedOnexIds = new Set<string>();
+  const slotIds = new Set(slots.map((s) => s.id));
+
+  for (const onex of onexRows) {
+    if (!slotIds.has(onex.externalId)) continue;
+    consumedOnexIds.add(onex.externalId);
+    slotOnexId.set(onex.externalId, onex.externalId);
+  }
+
+  for (const onex of onexRows) {
+    if (consumedOnexIds.has(onex.externalId)) continue;
+    const minute = classStartMinute(onex.startAt);
+    const title = normClassTitle(onex.title);
+    if (minute == null || !title) continue;
+
+    const candidates = slots.filter((slot) => {
+      if (slotOnexId.has(slot.id)) return false;
+      const slotMinute = classStartMinute(slot.startAt);
+      if (slotMinute == null || Math.abs(slotMinute - minute) > 1) return false;
+      if (normClassTitle(slot.title) !== title) return false;
+      if (roomsConflict(slot.roomTitle, onex.roomTitle)) return false;
+      return true;
+    });
+
+    let chosen = candidates;
+    if (candidates.length > 1) {
+      const named = candidates.filter((slot) =>
+        trainersMatch(slot.trainerName, onex.employeeName),
+      );
+      chosen = named.length === 1 ? named : [];
+    }
+    if (chosen.length !== 1) continue;
+
+    slotOnexId.set(chosen[0].id, onex.externalId);
+    consumedOnexIds.add(onex.externalId);
+  }
+
+  return { slotOnexId, consumedOnexIds };
+}

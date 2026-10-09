@@ -231,6 +231,7 @@ export function BookingControlPanel({
   const [comment, setComment] = useState('');
   const [adminComment, setAdminComment] = useState('');
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
   const [photosOpen, setPhotosOpen] = useState(false);
   const [photosLoading, setPhotosLoading] = useState(false);
   const [photos, setPhotos] = useState<
@@ -403,6 +404,7 @@ export function BookingControlPanel({
     setComment('');
     setAdminComment('');
     setHistoryOpen(false);
+    setDetailError('');
     closePhotos();
     const listItem = items.find((i) => i.sessionKey === sessionKey);
 
@@ -449,9 +451,10 @@ export function BookingControlPanel({
       );
       setLocalSeen(seen);
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Ошибка');
+      const text = e instanceof Error ? e.message : 'Ошибка';
       setSelected(null);
-      if (detailOnly) onDetailClose?.();
+      if (detailOnly) setDetailError(text);
+      else setMessage(text);
     } finally {
       setDetailLoading(false);
     }
@@ -472,6 +475,7 @@ export function BookingControlPanel({
   const closeDetail = () => {
     closePhotos();
     setHistoryOpen(false);
+    setDetailError('');
     setSelected(null);
     onDetailClose?.();
   };
@@ -732,68 +736,65 @@ export function BookingControlPanel({
       </div>
 
       {approvalSegments ? (
-        <div className="flex gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
             onClick={() => setApprovalSegment('pending')}
-            className={`flex-1 rounded-full px-3 py-2 text-sm ${
+            className={`min-w-0 rounded-2xl px-3 py-2 text-center text-sm leading-tight ${
               approvalSegment === 'pending'
                 ? 'bg-fitgo-500 text-white'
                 : 'bg-slate-800 text-slate-400'
             }`}
           >
-            На контроле
-            {onControlCount ? ` · ${onControlCount}` : ''}
-            {awaitingTrainerCount
-              ? ` (ждёт вас ${awaitingTrainerCount})`
-              : ''}
+            <span className="block font-medium">На контроле</span>
+            {onControlCount ? (
+              <span className="mt-0.5 block text-xs opacity-90">
+                {onControlCount}
+                {awaitingTrainerCount
+                  ? ` · ждёт вас ${awaitingTrainerCount}`
+                  : ''}
+              </span>
+            ) : null}
           </button>
           <button
             type="button"
             onClick={() => setApprovalSegment('done')}
-            className={`flex-1 rounded-full px-3 py-2 text-sm ${
+            className={`min-w-0 rounded-2xl px-3 py-2 text-center text-sm leading-tight ${
               approvalSegment === 'done'
                 ? 'bg-fitgo-500 text-white'
                 : 'bg-slate-800 text-slate-400'
             }`}
           >
-            Прошли контроль
+            <span className="block font-medium">Прошли контроль</span>
           </button>
         </div>
       ) : null}
 
       <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-        <div className="flex flex-wrap items-end gap-2">
-          <button
-            type="button"
-            className="btn-primary px-3 py-2 text-sm"
-            onClick={setToday}
-          >
-            Сегодня
-          </button>
-          <label className="text-[11px] text-slate-500">
+        <div className="grid grid-cols-2 items-end gap-2 md:grid-cols-4">
+          <label className="min-w-0 text-[11px] text-slate-500">
             С
             <input
               type="date"
-              className="input mt-0.5 block h-9 py-1 text-sm"
+              className="input date-field mt-1 block w-full min-w-0 text-sm"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
             />
           </label>
-          <label className="text-[11px] text-slate-500">
+          <label className="min-w-0 text-[11px] text-slate-500">
             По
             <input
               type="date"
-              className="input mt-0.5 block h-9 py-1 text-sm"
+              className="input date-field mt-1 block w-full min-w-0 text-sm"
               value={to}
               onChange={(e) => setTo(e.target.value)}
             />
           </label>
           {!fixedKind && (
-            <label className="text-[11px] text-slate-500">
+            <label className="min-w-0 text-[11px] text-slate-500">
               Вид
               <select
-                className="input mt-0.5 block h-9 py-1 text-sm"
+                className="input mt-1 block w-full min-w-0 text-sm"
                 value={kind}
                 onChange={(e) => setKind(e.target.value)}
               >
@@ -805,10 +806,10 @@ export function BookingControlPanel({
               </select>
             </label>
           )}
-          <label className="text-[11px] text-slate-500">
+          <label className="min-w-0 text-[11px] text-slate-500">
             Статус
             <select
-              className="input mt-0.5 block h-9 py-1 text-sm"
+              className="input mt-1 block w-full min-w-0 text-sm"
               value={status}
               onChange={(e) => setStatus(e.target.value)}
             >
@@ -823,10 +824,10 @@ export function BookingControlPanel({
             kind === 'SOLARIUM' ||
             kind === 'ALL' ||
             fixedKind) && (
-            <label className="text-[11px] text-slate-500">
+            <label className="min-w-0 text-[11px] text-slate-500">
               Оплата
               <select
-                className="input mt-0.5 block h-9 py-1 text-sm"
+                className="input mt-1 block w-full min-w-0 text-sm"
                 value={payment}
                 onChange={(e) =>
                   setPayment(e.target.value as 'PAID' | 'DEBT' | 'ALL')
@@ -839,10 +840,10 @@ export function BookingControlPanel({
             </label>
           )}
           {!fixedKind && (
-            <label className="text-[11px] text-slate-500">
+            <label className="min-w-0 text-[11px] text-slate-500">
               Источник
               <select
-                className="input mt-0.5 block h-9 py-1 text-sm"
+                className="input mt-1 block w-full min-w-0 text-sm"
                 value={sourceFilter}
                 onChange={(e) =>
                   setSourceFilter(e.target.value as 'ALL' | 'SALE' | '1C')
@@ -857,10 +858,10 @@ export function BookingControlPanel({
             </label>
           )}
           {!detailOnly && (performerOptions.length > 0 || api.listPerformers) ? (
-            <label className="text-[11px] text-slate-500">
+            <label className="col-span-2 min-w-0 text-[11px] text-slate-500 md:col-span-1">
               Сотрудник
               <select
-                className="input mt-0.5 block h-9 max-w-[14rem] py-1 text-sm"
+                className="input mt-1 block w-full min-w-0 text-sm"
                 value={performerId}
                 onChange={(e) => setPerformerId(e.target.value)}
               >
@@ -873,31 +874,41 @@ export function BookingControlPanel({
               </select>
             </label>
           ) : null}
-          <label className="mb-1 flex h-9 items-center gap-2 text-xs text-slate-300">
+          <label className="col-span-2 flex h-11 items-center gap-2 text-sm text-slate-300 md:col-span-1">
             <input
               type="checkbox"
+              className="h-4 w-4 shrink-0"
               checked={needsReview}
               onChange={(e) => setNeedsReview(e.target.checked)}
             />
             На проверке
           </label>
-          <button
-            type="button"
-            className="btn-secondary h-9 px-3 text-sm"
-            onClick={load}
-          >
-            Обновить
-          </button>
-          {canMarkAttendance && api.refreshFrom1c ? (
+          <div className="col-span-2 flex flex-wrap gap-2 md:col-span-4">
             <button
               type="button"
-              className="btn-primary h-9 px-3 text-sm"
-              onClick={refreshFrom1c}
-              disabled={syncing1c || loading}
+              className="btn-primary px-3 py-2 text-sm"
+              onClick={setToday}
             >
-              {syncing1c ? 'Обновляем 1С…' : 'Обновить из 1С'}
+              Сегодня
             </button>
-          ) : null}
+            <button
+              type="button"
+              className="btn-secondary px-3 py-2 text-sm"
+              onClick={load}
+            >
+              Обновить
+            </button>
+            {canMarkAttendance && api.refreshFrom1c ? (
+              <button
+                type="button"
+                className="btn-primary px-3 py-2 text-sm"
+                onClick={refreshFrom1c}
+                disabled={syncing1c || loading}
+              >
+                {syncing1c ? 'Обновляем 1С…' : 'Обновить из 1С'}
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -1026,144 +1037,195 @@ export function BookingControlPanel({
       ) : visible.length === 0 ? (
         <p className="text-slate-400">Нет записей за период</p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-800">
-          <table className="w-full table-fixed text-left text-[10px] md:min-w-full md:table-auto md:text-sm">
-            <thead className="bg-slate-900/80 text-slate-400">
-              <tr>
-                <th className="w-[3.4rem] whitespace-nowrap px-1 py-2 font-medium md:hidden">
-                  Дата
-                </th>
-                <th className="w-10 whitespace-nowrap px-1 py-2 font-medium md:hidden">
-                  Время
-                </th>
-                <th className="hidden whitespace-nowrap px-3 py-2 font-medium md:table-cell">
-                  Дата время
-                </th>
-                <th className="hidden px-3 py-2 font-medium md:table-cell">
-                  Вид
-                </th>
-                <th className="overflow-hidden whitespace-nowrap px-1 py-2 font-medium md:px-3">
-                  Наименование
-                </th>
-                <th className="hidden px-3 py-2 font-medium md:table-cell">
-                  Сотрудник
-                </th>
-                <th className="hidden px-3 py-2 text-right font-medium md:table-cell">
-                  Записано
-                </th>
-                <th className="hidden px-3 py-2 text-right font-medium md:table-cell">
-                  Прибыло
-                </th>
-                <th className="hidden px-3 py-2 text-right font-medium md:table-cell">
-                  Не прибыло
-                </th>
-                <th className="w-[5.6rem] overflow-hidden whitespace-nowrap px-1 py-2 font-medium md:w-auto md:px-3">
-                  Статус
-                </th>
-                <th className="w-[4.3rem] overflow-hidden whitespace-nowrap px-1 py-2 font-medium md:w-auto md:px-3">
-                  Оплата
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((item) => {
-                const a = attendanceOf(item);
-                const pay = paymentCell(item);
-                const title = [
-                  item.title,
-                  item.clientName && item.kind !== 'GROUP'
-                    ? item.clientName
-                    : '',
-                ]
-                  .filter(Boolean)
-                  .join(' · ');
-                return (
-                  <tr
-                    key={item.sessionKey}
-                    className="cursor-pointer border-t border-slate-800/80 hover:bg-slate-900/60"
+        <>
+          <ul className="space-y-2 md:hidden">
+            {visible.map((item) => {
+              const a = attendanceOf(item);
+              const pay = paymentCell(item);
+              return (
+                <li key={item.sessionKey}>
+                  <button
+                    type="button"
                     onClick={() => openDetail(item.sessionKey)}
+                    className="card w-full text-left"
                   >
-                    <td className="whitespace-nowrap px-1 py-2 text-slate-400 md:hidden">
-                      {formatDay(item.startAt)}
-                    </td>
-                    <td className="whitespace-nowrap px-1 py-2 tabular-nums text-slate-400 md:hidden">
-                      {formatClock(item.startAt)}
-                    </td>
-                    <td className="hidden whitespace-nowrap px-3 py-2 text-slate-400 md:table-cell">
-                      {formatDateTime(item.startAt)}
-                    </td>
-                    <td className="hidden px-3 py-2 text-slate-300 md:table-cell">
-                      {kindRu(item.kind)}
-                      {item.source === 'SALE' ? (
-                        <span className="ml-1 rounded bg-emerald-500/20 px-1 py-0.5 text-[10px] text-emerald-300">
-                          продажа
-                        </span>
-                      ) : null}
-                      {item.source === 'FITGO' ? (
-                        <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[10px] text-amber-300">
-                          нет в 1С
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="overflow-hidden px-1 py-2 text-white md:px-3">
-                      <span className="block max-w-full truncate md:max-w-[16rem]" title={title}>
-                        {item.title}
-                        {item.clientName && item.kind !== 'GROUP' ? (
-                          <span className="text-slate-500">
-                            {' '}
-                            · {item.clientName}
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-xs text-slate-400">
+                        {formatDay(item.startAt)} · {formatClock(item.startAt)}
+                        {!fixedKind ? ` · ${kindRu(item.kind)}` : ''}
+                      </p>
+                      <p className="shrink-0 text-xs text-slate-300">
+                        {statusRu(item.status)}
+                      </p>
+                    </div>
+                    <p className="mt-1 text-sm font-medium leading-snug text-slate-100">
+                      {item.title}
+                    </p>
+                    {item.clientName && item.kind !== 'GROUP' ? (
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        {item.clientName}
+                      </p>
+                    ) : null}
+                    <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                      записано {a.booked} · пришло {a.arrived}
+                      {a.noShow > 0 ? ` · не пришло ${a.noShow}` : ''}
+                      {item.performerName && item.performerName !== '—'
+                        ? ` · ${item.performerName}`
+                        : ''}
+                    </p>
+                    {pay !== '—' || item.needsReview || item.approvalLabel || item.source === 'SALE' || item.source === 'FITGO' ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {pay !== '—' ? (
+                          <span
+                            className={
+                              item.payment === 'DEBT'
+                                ? 'text-xs text-rose-300'
+                                : 'text-xs text-slate-300'
+                            }
+                          >
+                            {pay}
                           </span>
                         ) : null}
-                      </span>
-                      {item.needsReview ? (
-                        <span className="ml-1 hidden rounded bg-rose-500/20 px-1 py-0.5 text-[10px] text-rose-300 md:inline">
-                          проверка
-                        </span>
-                      ) : null}
-                      {item.approvalLabel ? (
-                        <span className="ml-1 hidden rounded bg-amber-500/20 px-1 py-0.5 text-[10px] text-amber-300 md:inline">
-                          {item.approvalLabel}
-                        </span>
-                      ) : null}
-                    </td>
-                    <td className="hidden max-w-[12rem] truncate px-3 py-2 text-slate-300 md:table-cell">
-                      {item.performerName}
-                    </td>
-                    <td className="hidden px-3 py-2 text-right tabular-nums text-slate-300 md:table-cell">
-                      {a.booked}
-                    </td>
-                    <td className="hidden px-3 py-2 text-right tabular-nums text-emerald-300 md:table-cell">
-                      {a.arrived}
-                    </td>
-                    <td
-                      className={
-                        a.noShow > 0
-                          ? 'hidden px-3 py-2 text-right tabular-nums text-amber-300 md:table-cell'
-                          : 'hidden px-3 py-2 text-right tabular-nums text-slate-500 md:table-cell'
-                      }
+                        {item.source === 'SALE' ? (
+                          <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                            продажа
+                          </span>
+                        ) : null}
+                        {item.source === 'FITGO' ? (
+                          <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">
+                            нет в 1С
+                          </span>
+                        ) : null}
+                        {item.needsReview ? (
+                          <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] text-rose-300">
+                            проверка
+                          </span>
+                        ) : null}
+                        {item.approvalLabel ? (
+                          <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">
+                            {item.approvalLabel}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="hidden overflow-x-auto rounded-xl border border-slate-800 md:block">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-900/80 text-slate-400">
+                <tr>
+                  <th className="whitespace-nowrap px-3 py-2 font-medium">
+                    Дата время
+                  </th>
+                  <th className="px-3 py-2 font-medium">Вид</th>
+                  <th className="px-3 py-2 font-medium">Наименование</th>
+                  <th className="px-3 py-2 font-medium">Сотрудник</th>
+                  <th className="px-3 py-2 text-right font-medium">Записано</th>
+                  <th className="px-3 py-2 text-right font-medium">Прибыло</th>
+                  <th className="px-3 py-2 text-right font-medium">
+                    Не прибыло
+                  </th>
+                  <th className="px-3 py-2 font-medium">Статус</th>
+                  <th className="px-3 py-2 font-medium">Оплата</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((item) => {
+                  const a = attendanceOf(item);
+                  const pay = paymentCell(item);
+                  const title = [
+                    item.title,
+                    item.clientName && item.kind !== 'GROUP'
+                      ? item.clientName
+                      : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
+                  return (
+                    <tr
+                      key={item.sessionKey}
+                      className="cursor-pointer border-t border-slate-800/80 hover:bg-slate-900/60"
+                      onClick={() => openDetail(item.sessionKey)}
                     >
-                      {a.noShow}
-                    </td>
-                    <td className="overflow-hidden whitespace-nowrap px-1 py-2 text-slate-300 md:px-3">
-                      {statusRu(item.status)}
-                    </td>
-                    <td
-                      className={
-                        item.payment === 'DEBT'
-                          ? 'overflow-hidden px-1 py-2 text-rose-300 md:px-3'
-                          : 'overflow-hidden px-1 py-2 text-slate-300 md:px-3'
-                      }
-                    >
-                      <span className="block truncate" title={pay}>
-                        {pay}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                      <td className="whitespace-nowrap px-3 py-2 text-slate-400">
+                        {formatDateTime(item.startAt)}
+                      </td>
+                      <td className="px-3 py-2 text-slate-300">
+                        {kindRu(item.kind)}
+                        {item.source === 'SALE' ? (
+                          <span className="ml-1 rounded bg-emerald-500/20 px-1 py-0.5 text-[10px] text-emerald-300">
+                            продажа
+                          </span>
+                        ) : null}
+                        {item.source === 'FITGO' ? (
+                          <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[10px] text-amber-300">
+                            нет в 1С
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-3 py-2 text-white">
+                        <span className="block max-w-[16rem] truncate" title={title}>
+                          {item.title}
+                          {item.clientName && item.kind !== 'GROUP' ? (
+                            <span className="text-slate-500">
+                              {' '}
+                              · {item.clientName}
+                            </span>
+                          ) : null}
+                        </span>
+                        {item.needsReview ? (
+                          <span className="ml-1 rounded bg-rose-500/20 px-1 py-0.5 text-[10px] text-rose-300">
+                            проверка
+                          </span>
+                        ) : null}
+                        {item.approvalLabel ? (
+                          <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[10px] text-amber-300">
+                            {item.approvalLabel}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="max-w-[12rem] truncate px-3 py-2 text-slate-300">
+                        {item.performerName}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-slate-300">
+                        {a.booked}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-emerald-300">
+                        {a.arrived}
+                      </td>
+                      <td
+                        className={
+                          a.noShow > 0
+                            ? 'px-3 py-2 text-right tabular-nums text-amber-300'
+                            : 'px-3 py-2 text-right tabular-nums text-slate-500'
+                        }
+                      >
+                        {a.noShow}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-slate-300">
+                        {statusRu(item.status)}
+                      </td>
+                      <td
+                        className={
+                          item.payment === 'DEBT'
+                            ? 'px-3 py-2 text-rose-300'
+                            : 'px-3 py-2 text-slate-300'
+                        }
+                      >
+                        <span className="block max-w-[10rem] truncate" title={pay}>
+                          {pay}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
       </>
       )}
@@ -1174,13 +1236,17 @@ export function BookingControlPanel({
         </p>
       ) : null}
 
-      {(selected || detailLoading) && (
-        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 p-4 sm:items-center">
+      {(selected || detailLoading || detailError) && (
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 p-4 pb-8 sm:items-center">
           <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl">
             {detailLoading || !selected ? (
               <div className="space-y-3">
-                <p className="text-slate-400">Загрузка…</p>
-                {detailOnly ? (
+                {detailError && !detailLoading ? (
+                  <p className="text-sm text-rose-300">{detailError}</p>
+                ) : (
+                  <p className="text-slate-400">Загрузка…</p>
+                )}
+                {detailOnly || detailError ? (
                   <button
                     type="button"
                     className="btn-secondary text-sm"

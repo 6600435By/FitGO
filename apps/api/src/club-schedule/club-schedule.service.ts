@@ -27,6 +27,7 @@ import {
   isFormaEmployeeId,
   localDayKey,
   mapOnexToClubStatus,
+  matchOnexToScheduleSlots,
   slotOverlapsDayRange,
 } from './trainer-schedule.helpers';
 
@@ -160,9 +161,44 @@ export class ClubScheduleService {
       }
     }
 
+    const link = matchOnexToScheduleSlots(
+      slots.map((slot) => ({
+        id: slot.id,
+        title: slot.title,
+        startAt: slot.startAt,
+        trainerName: slot.trainerName,
+        roomTitle: slot.roomTitle,
+      })),
+      onexInRange.map((row) => ({
+        externalId: row.externalId,
+        title: row.title,
+        startAt: row.startAt,
+        employeeName: row.employeeName,
+        roomTitle: row.roomTitle,
+      })),
+    );
+    for (const slot of slots) {
+      const onexId = link.slotOnexId.get(slot.id);
+      if (!onexId || onexId === slot.id) continue;
+      const onex = onexInRange.find((row) => row.externalId === onexId);
+      if (!onex) continue;
+      if (!slot.trainerName && onex.employeeName) {
+        slot.trainerName = onex.employeeName;
+      }
+      if (!slot.trainerId && onex.employeeExternalId) {
+        slot.trainerId = onex.employeeExternalId;
+      }
+      if (!slot.roomTitle && onex.roomTitle) slot.roomTitle = onex.roomTitle;
+    }
+
     const slotIds = new Set(slots.map((s) => s.id));
     for (const onex of onexInRange) {
-      if (slotIds.has(onex.externalId)) continue;
+      if (
+        slotIds.has(onex.externalId) ||
+        link.consumedOnexIds.has(onex.externalId)
+      ) {
+        continue;
+      }
       const startAt = onex.startAt.toISOString();
       const endAt = (onex.endAt ?? onex.startAt).toISOString();
       if (
@@ -205,10 +241,11 @@ export class ClubScheduleService {
       );
     }
 
-    const appointmentIds = slots.map((s) => s.id);
     const onexById = new Map(onexInRange.map((s) => [s.externalId, s]));
 
-    const sessionKeys = appointmentIds.map((id) => onexSessionKey(id));
+    const sessionKeys = slots.map((slot) =>
+      onexSessionKey(link.slotOnexId.get(slot.id) ?? slot.id),
+    );
     const approvals = sessionKeys.length
       ? await this.prisma.groupClassApproval.findMany({
           where: { clubId, sessionKey: { in: sessionKeys } },
@@ -217,8 +254,8 @@ export class ClubScheduleService {
     const approvalByKey = new Map(approvals.map((a) => [a.sessionKey, a]));
 
     return slots.map((slot) => {
-      const onex = onexById.get(slot.id);
-      const sessionKey = onexSessionKey(slot.id);
+      const onex = onexById.get(link.slotOnexId.get(slot.id) ?? slot.id);
+      const sessionKey = onexSessionKey(onex?.externalId ?? slot.id);
       const approval = approvalByKey.get(sessionKey);
       const status = inferSlotStatus(slot, onex);
       const endMs = Date.parse(
@@ -255,7 +292,10 @@ export class ClubScheduleService {
         sessionKey,
         bookingId: undefined,
         booked: onex?.bookedCount ?? slot.booked,
-        capacity: slot.capacity,
+        capacity:
+          slot.capacity > 0
+            ? slot.capacity
+            : Math.max(onex?.bookedCount ?? 0, 1),
         attended: onex?.attendedCount ?? 0,
         approvalPhase: phase,
         approvalLabel: groupApprovalLabelRu(phase),
