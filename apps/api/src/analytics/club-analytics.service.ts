@@ -284,7 +284,13 @@ export class ClubAnalyticsService {
     const provider = this.analyticsProvider();
     if (!provider?.getInstallments) return null;
     try {
-      const rows = (await provider.getInstallments()) ?? [];
+      const rows = await provider.getInstallments();
+      if (rows == null) {
+        this.logger.warn(
+          'Installments snapshot unavailable (1C scope=installments / ПолучитьРассрочки)',
+        );
+        return null;
+      }
       return aggregateInstallments(rows);
     } catch (err) {
       this.logger.warn(

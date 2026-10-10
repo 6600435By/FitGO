@@ -22,6 +22,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { AdminPermissionsService } from '../auth/admin-permissions.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { AdminTasksSchedulerService } from './admin-tasks-scheduler.service';
 import type { CreateAdminTaskDto } from './dto/task.dto';
 import type { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 import { randomBytes } from 'crypto';
@@ -88,6 +89,7 @@ export class SuperAdminService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly adminPermissions: AdminPermissionsService,
+    private readonly tasksScheduler: AdminTasksSchedulerService,
   ) {}
 
   async onModuleInit() {
@@ -499,16 +501,43 @@ export class SuperAdminService implements OnModuleInit {
 
   async listTasks(user: JwtPayload, status?: AdminTaskStatus) {
     const clubId = requireClubId(user);
+    // Same merge path as admin queue: cancel legacy per-sale debt:* rows.
+    try {
+      await this.tasksScheduler.refreshDebtors(clubId);
+    } catch {
+      // non-fatal
+    }
+
+    // Default: active queue only (otherwise CANCELLED legacy floods the UI).
+    const statusFilter = status
+      ? { status: status as PrismaAdminTaskStatus }
+      : {
+          status: {
+            in: [PrismaAdminTaskStatus.OPEN, PrismaAdminTaskStatus.IN_PROGRESS],
+          },
+        };
+
     const tasks = await this.prisma.adminTask.findMany({
       where: {
         clubId,
-        ...(status ? { status: status as PrismaAdminTaskStatus } : {}),
+        ...statusFilter,
+        // Hide legacy per-sale debt tasks; keep aggregated debtor:* only.
+        NOT: {
+          OR: [
+            { source: 'DEBT_OVERDUE' },
+            {
+              source: { in: ['STAFF_DEBT', 'CLIENT_DEBT'] },
+              dedupeKey: { startsWith: 'debt:' },
+            },
+          ],
+        },
       },
       include: {
         assignee: true,
         createdBy: { select: { id: true, firstName: true, lastName: true } },
       },
       orderBy: [{ status: 'asc' }, { dueAt: 'asc' }, { createdAt: 'desc' }],
+      take: 500,
     });
 
     const saleIds = tasks

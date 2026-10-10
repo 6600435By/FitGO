@@ -182,6 +182,11 @@ export class FitgoAnalyticsHttpProvider {
    * Open installment schedules (sale + plan/fact payments).
    * Requires published Analytics `scope=installments`.
    */
+  /**
+   * Open installment schedules. Returns null when Analytics is down or
+   * `ПолучитьРассрочки` is not published yet (never throws).
+   * Short timeout so club analytics is not blocked by a hanging 1C call.
+   */
   async getInstallments(): Promise<FitgoInstallmentSale[] | null> {
     const today = new Date().toISOString().slice(0, 10);
     const q = new URLSearchParams({
@@ -189,15 +194,17 @@ export class FitgoAnalyticsHttpProvider {
       to: today,
       scope: 'installments',
     });
-    const data = await this.request<{
-      items?: FitgoInstallmentSale[];
-      error?: string;
-    }>(`/sales?${q.toString()}`);
-    if (!data) return null;
-    if (data.error && !data.items?.length) {
-      throw new Error(`FitGO installments: ${data.error}`);
+    try {
+      const data = await this.request<{
+        items?: FitgoInstallmentSale[];
+        error?: string | { message?: string };
+      }>(`/sales?${q.toString()}`, 12_000);
+      if (!data) return null;
+      if (data.error && !data.items?.length) return null;
+      return data.items ?? [];
+    } catch {
+      return null;
     }
-    return data.items ?? [];
   }
 }
 

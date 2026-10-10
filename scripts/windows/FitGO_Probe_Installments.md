@@ -18,10 +18,11 @@
 
 ## После подтверждения
 
-1. Скопируй обновлённые модули из fitgo-probe:
-   - [FitGOAnalytics_Продажи.bsl](/Users/machome/projects/fitgo-probe/1c-extension/FitGOAnalytics_Продажи.bsl) (`ПолучитьРассрочки`)
-   - [FitGOAnalytics_HTTPService.bsl](/Users/machome/projects/fitgo-probe/1c-extension/FitGOAnalytics_HTTPService.bsl) (`scope=installments`)
-2. Опубликуй HTTP-сервис Analytics.
+1. Скопируй в расширение FitGOAnalytics оба модуля (зеркало в FitGO):
+   - [FitGOAnalytics_Продажи.bsl](/Users/machome/Projects/FitGO/scripts/windows/FitGOAnalytics_Продажи.bsl) — обязательно `ПолучитьРассрочки` (без него HTTP падает: «Метод объекта не обнаружен»)
+   - [FitGOAnalytics_HTTPService.bsl](/Users/machome/Projects/FitGO/scripts/windows/FitGOAnalytics_HTTPService.bsl) (`scope=installments`)
+   Probe-копия: `/Users/machome/projects/fitgo-probe/1c-extension/`
+2. Опубликуй HTTP-сервис Analytics (не только HTTP-модуль — сам общий модуль Продажи тоже должен быть обновлён в ИБ).
 3. Проверка с Mac:
 
 ```bash
