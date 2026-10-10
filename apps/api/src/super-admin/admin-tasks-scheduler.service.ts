@@ -6,6 +6,7 @@ import {
   type FitgoExpiringMembershipRow,
   type FitgoInstallmentSale,
 } from '@fitgo/1c-adapter';
+import { isCollectibleClientDebt } from '../admin-sales/club-revenue-debt';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -264,18 +265,21 @@ export class AdminTasksSchedulerService implements OnModuleInit {
 
   /**
    * One AdminTask per debtor (client or staff), shared club queue.
-   * Groups unpaid SaleTransaction by clientExternalId (fallback: clientName).
+   * Source = ClubRevenue unpaid snapshot (`scope=debt` from Analytics) —
+   * same register as 1C «Неоплаченные» / карточка «Оплатить».
+   * Do not use SaleTransaction unpaid: that cache is not cleared when debt
+   * leaves the register outside the sales sync window.
    */
   private async syncDebtors(clubId: string, systemUserId: string) {
     let created = 0;
-    const unpaid = await this.prisma.saleTransaction.findMany({
+    const unpaid = await this.prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
         isActive: true,
-        paidAt: null,
+        operationType: 'unpaid',
       },
-      take: 2000,
-      orderBy: { soldAt: 'asc' },
+      take: 5000,
+      orderBy: { occurredAt: 'asc' },
     });
 
     type Bucket = {
@@ -287,18 +291,26 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       count: number;
       oldestSoldAt: Date;
       sellers: Set<string>;
-      saleIds: string[];
+      entryIds: string[];
     };
     const buckets = new Map<string, Bucket>();
 
-    for (const sale of unpaid) {
-      const amount = Number(sale.amount || 0);
+    for (const row of unpaid) {
+      if (
+        !isCollectibleClientDebt({
+          externalId: row.externalId,
+          productName: row.productName,
+        })
+      ) {
+        continue;
+      }
+      const amount = Number(row.amount || row.saleAmount || 0);
       if (!(amount > 0)) continue;
-      const staffDebt = /\(\s*сотрудник\s*\)/i.test(sale.clientName ?? '');
+      const staffDebt = /\(\s*сотрудник\s*\)/i.test(row.clientName ?? '');
       const kind = staffDebt ? 'staff' : 'client';
-      const ext = sale.clientExternalId?.trim() || null;
+      const ext = row.clientExternalId?.trim() || null;
       const name =
-        (sale.clientName ?? '').trim() ||
+        (row.clientName ?? '').trim() ||
         (staffDebt ? 'сотрудник' : 'клиент');
       const key = ext ? `${kind}:id:${ext}` : `${kind}:name:${name.toLowerCase()}`;
       let bucket = buckets.get(key);
@@ -310,20 +322,22 @@ export class AdminTasksSchedulerService implements OnModuleInit {
           clientExternalId: ext,
           total: 0,
           count: 0,
-          oldestSoldAt: sale.soldAt,
+          oldestSoldAt: row.occurredAt,
           sellers: new Set(),
-          saleIds: [],
+          entryIds: [],
         };
         buckets.set(key, bucket);
       }
       bucket.total += amount;
       bucket.count += 1;
-      if (sale.soldAt < bucket.oldestSoldAt) bucket.oldestSoldAt = sale.soldAt;
+      if (row.occurredAt < bucket.oldestSoldAt) {
+        bucket.oldestSoldAt = row.occurredAt;
+      }
       const seller =
-        (sale.employeeName ?? '').trim() ||
-        (sale.employeeExternalId ?? '').trim();
+        (row.employeeName ?? '').trim() ||
+        (row.employeeExternalId ?? '').trim();
       if (seller) bucket.sellers.add(seller);
-      bucket.saleIds.push(sale.id);
+      bucket.entryIds.push(row.id);
     }
 
     const openSources = ['CLIENT_DEBT', 'STAFF_DEBT'] as const;
@@ -374,7 +388,8 @@ export class AdminTasksSchedulerService implements OnModuleInit {
             meta,
             clientExternalId: bucket.clientExternalId,
             dueAt: bucket.oldestSoldAt,
-            relatedSaleId: bucket.saleIds[0] ?? null,
+            // Not a SaleTransaction id — debt lines come from ClubRevenue.
+            relatedSaleId: null,
           },
         });
         continue;
@@ -389,7 +404,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         status: AdminTaskStatus.OPEN,
         source,
         dedupeKey,
-        relatedSaleId: bucket.saleIds[0] ?? null,
+        relatedSaleId: null,
         clientExternalId: bucket.clientExternalId,
         meta,
         nextActionAt: now,

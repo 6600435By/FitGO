@@ -510,6 +510,7 @@ export class ClubAnalyticsService {
       where: {
         clubId,
         isActive: true,
+        paidAt: { not: null },
         soldAt: { gte: start, lte: end },
         OR: [
           { saleType: { contains: 'abon', mode: 'insensitive' } },
@@ -536,6 +537,7 @@ export class ClubAnalyticsService {
       where: {
         clubId,
         isActive: true,
+        paidAt: { not: null },
         soldAt: { lt: start },
         clientExternalId: {
           in: [
@@ -611,7 +613,12 @@ export class ClubAnalyticsService {
     payrollSegs: Awaited<ReturnType<typeof loadPayrollSegmentSets>>,
   ) {
     const all = await this.prisma.saleTransaction.findMany({
-      where: { clubId, isActive: true, soldAt: { gte: start, lte: end } },
+      where: {
+        clubId,
+        isActive: true,
+        paidAt: { not: null },
+        soldAt: { gte: start, lte: end },
+      },
       select: {
         clientExternalId: true,
         soldAt: true,

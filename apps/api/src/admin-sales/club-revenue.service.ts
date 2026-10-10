@@ -344,6 +344,7 @@ export class ClubRevenueService {
         where: {
           clubId,
           isActive: true,
+          paidAt: { not: null },
           soldAt: { gte: from, lte: to },
         },
         _sum: { amount: true },

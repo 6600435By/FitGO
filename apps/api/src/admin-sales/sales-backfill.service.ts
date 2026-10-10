@@ -313,7 +313,11 @@ export class SalesBackfillService {
           clubId,
           chunk.from,
           chunk.to,
-          rangeOpts,
+          {
+            ...rangeOpts,
+            // Ghost unpaid cleared once by operational sync (scope=debt), not per chunk.
+            skipDebtCleanup: true,
+          },
         );
         const revenue = await this.revenueSync.syncClubRange(
           clubId,

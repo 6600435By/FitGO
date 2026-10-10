@@ -20,6 +20,7 @@ import { adminTaskTopic } from './task-topic';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { BookingControlService } from '../booking-control/booking-control.service';
+import { isCollectibleClientDebt } from '../admin-sales/club-revenue-debt';
 import { ClubRevenueService } from '../admin-sales/club-revenue.service';
 import { ClubRevenueSyncService } from '../admin-sales/club-revenue-sync.service';
 import { FitnessService } from '../fitness/fitness.service';
@@ -600,50 +601,50 @@ export class AdminService {
       .trim()
       .replace(/\s+/g, ' ');
 
-    let clientExternalId = task.clientExternalId?.trim() || null;
-    if (!clientExternalId && task.relatedSaleId) {
-      const related = await this.prisma.saleTransaction.findUnique({
-        where: { id: task.relatedSaleId },
-        select: { clientExternalId: true, clientName: true },
-      });
-      clientExternalId = related?.clientExternalId?.trim() || null;
-    }
+    const clientExternalId = task.clientExternalId?.trim() || null;
 
     const staffDebt =
       task.source === 'STAFF_DEBT' ||
       /\(\s*сотрудник\s*\)/i.test(rawName) ||
       /\(\s*сотрудник\s*\)/i.test(task.title);
 
-    const lines = await this.prisma.saleTransaction.findMany({
+    // Same source as syncDebtors: ClubRevenue unpaid (1C debt register).
+    const lines = await this.prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
         isActive: true,
-        paidAt: null,
+        operationType: 'unpaid',
         ...(clientExternalId
           ? { clientExternalId }
           : baseName
             ? { clientName: { contains: baseName, mode: 'insensitive' } }
-            : task.relatedSaleId
-              ? { id: task.relatedSaleId }
-              : { id: '__none__' }),
+            : { id: '__none__' }),
       },
-      orderBy: { soldAt: 'asc' },
+      orderBy: { occurredAt: 'asc' },
       take: 200,
     });
 
     const filtered = lines.filter((l) => {
+      if (
+        !isCollectibleClientDebt({
+          externalId: l.externalId,
+          productName: l.productName,
+        })
+      ) {
+        return false;
+      }
       const isStaff = /\(\s*сотрудник\s*\)/i.test(l.clientName ?? '');
       return staffDebt ? isStaff : !isStaff;
     });
 
     return filtered.map((l) => ({
       id: l.id,
-      soldAt: l.soldAt.toISOString(),
+      soldAt: l.occurredAt.toISOString(),
       productName: l.productName ?? l.saleType,
-      amount: Number(l.amount || 0),
+      amount: Number(l.amount || l.saleAmount || 0),
       employeeName: l.employeeName ?? undefined,
       employeeExternalId: l.employeeExternalId ?? undefined,
-      externalSaleId: l.externalSaleId,
+      externalSaleId: l.externalId,
     }));
   }
 

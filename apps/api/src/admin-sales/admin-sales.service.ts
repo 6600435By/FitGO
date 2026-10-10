@@ -152,8 +152,8 @@ export class AdminSalesService {
     payment?: AdminSalePaymentFilter;
     attribution: MembershipSalesAttribution;
     profile?: StaffPayProfile;
-    /** soldAt = list by sale date; paidAt = accrual; openDebt = unpaid sold ≤ period end */
-    periodField: 'soldAt' | 'paidAt' | 'openDebt';
+    /** soldAt = paid sales by sale date; paidAt = accrual. Unpaid → ClubRevenue. */
+    periodField: 'soldAt' | 'paidAt';
   }): Promise<{ lines: AdminSaleLineDto[]; totals: AdminSalesTotals }> {
     const fromDt = startOfDayUtc(params.from);
     const toDt = endOfDayUtc(params.to);
@@ -164,12 +164,11 @@ export class AdminSalesService {
         : ['membership', 'massage', 'solarium', 'shop'],
     );
 
+    // Never read SaleTransaction unpaid — cache drifts vs 1C debt register.
     const dateFilter =
       params.periodField === 'paidAt'
         ? { paidAt: { gte: fromDt, lte: toDt } }
-        : params.periodField === 'openDebt'
-          ? { soldAt: { lte: toDt }, paidAt: null }
-          : { soldAt: { gte: fromDt, lte: toDt } };
+        : { soldAt: { gte: fromDt, lte: toDt }, paidAt: { not: null } };
 
     // shiftShare: load all club rows in period (saleType in DB may be stale vs
     // app segments). individual: only this seller's rows.
@@ -264,7 +263,6 @@ export class AdminSalesService {
 
       const pushLine =
         params.periodField === 'soldAt' ||
-        params.periodField === 'openDebt' ||
         (paidInPeriod && params.periodField === 'paidAt');
 
       if (pushLine) {

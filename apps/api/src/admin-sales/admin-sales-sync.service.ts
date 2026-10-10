@@ -1,12 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { FitgoAnalyticsHttpProvider } from '@fitgo/1c-adapter';
+import {
+  FitgoAnalyticsHttpProvider,
+  type FitgoAnalyticsSalesItem,
+} from '@fitgo/1c-adapter';
 import { moscowDayKey, parseClubWallClock } from '../club-sync/moscow-time';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   classifySaleType,
   loadPayrollSegmentSets,
 } from './admin-sales-segments';
+import { isCollectibleClientDebt } from './club-revenue-debt';
 import {
   applyChangeLog,
   eachUtcDay,
@@ -23,6 +27,11 @@ export type SalesRangeOptions = {
   skipChangeLog?: boolean;
   /** Pause between day fetches to ease 1C load (ms). */
   delayMsBetweenDays?: number;
+  /**
+   * Skip register debt cleanup of SaleTransaction unpaid.
+   * Default false — drop ghost unpaid not in Analytics scope=debt.
+   */
+  skipDebtCleanup?: boolean;
 };
 
 @Injectable()
@@ -206,21 +215,6 @@ export class AdminSalesSyncService {
      * stays a single day — breaking «Оплата с учетом возврата» per day.
      */
     const seen = new Set<string>();
-    /** Bases with a payment this sync — refresh residual unpaid for debt carry. */
-    const paidBases = new Map<
-      string,
-      {
-        soldAt: Date;
-        saleAmount: number;
-        saleType: string;
-        productName: string | null;
-        clientExternalId: string | null;
-        clientName: string | null;
-        employeeExternalId: string | null;
-        employeeName: string | null;
-        paymentMethod: string | null;
-      }
-    >();
     const pending: Parameters<typeof upsertSaleRows>[2] = [];
     const refreshDays = options.skipChangeLog
       ? []
@@ -246,30 +240,26 @@ export class AdminSalesSyncService {
         const baseId = item.saleDocumentId?.trim();
         if (!baseId) continue;
 
+        const soldAt = parseClubWallClock(item.soldAt);
+        if (!soldAt) continue;
+        const paidAt = parseClubWallClock(item.paidAt);
+        // Paid rows only. Open debt lives in ClubRevenue (scope=debt);
+        // writing unpaid here left ghosts outside the sync window.
+        if (!paidAt) continue;
+
         const saleType = classifySaleType(
           item.saleType,
           item.productName,
           segments,
         );
-        const soldAt = parseClubWallClock(item.soldAt);
-        if (!soldAt) continue;
-        const paidAt = parseClubWallClock(item.paidAt);
-        const paidDay = paidAt ? moscowDayKey(paidAt) : null;
+        const paidDay = moscowDayKey(paidAt);
         const amount = Number(item.amount) || 0;
         const cash = Number(item.cash) || 0;
         const card = Number(item.card) || 0;
         const cashless = Number(item.cashless) || 0;
         const personalAccount = Number(item.personalAccount) || 0;
-        const saleAmount =
-          Number(item.saleAmount) ||
-          (paidDay ? 0 : amount) ||
-          Number(item.paidAmount) ||
-          0;
 
-        // One DB row per (line × payment-day); unpaid → sold-day key.
-        const externalSaleId = paidDay
-          ? `${baseId}:p${paidDay}`
-          : `${baseId}:u${moscowDayKey(soldAt)}`;
+        const externalSaleId = `${baseId}:p${paidDay}`;
 
         seen.add(externalSaleId);
         pending.push({
@@ -289,36 +279,11 @@ export class AdminSalesSyncService {
           employeeName: item.employeeName ?? null,
           paymentMethod: item.paymentMethod ?? null,
         });
-
-        if (paidDay) {
-          const prev = paidBases.get(baseId);
-          paidBases.set(baseId, {
-            soldAt,
-            saleAmount: Math.max(saleAmount, prev?.saleAmount ?? 0),
-            saleType,
-            productName: item.productName ?? null,
-            clientExternalId: item.clientExternalId ?? null,
-            clientName: item.clientName ?? null,
-            employeeExternalId: item.employeeExternalId ?? null,
-            employeeName: item.employeeName ?? null,
-            paymentMethod: item.paymentMethod ?? null,
-          });
-        }
       }
     }
 
     await upsertSaleRows(this.prisma, clubId, pending);
     const upserted = pending.length;
-
-    for (const [baseId, meta] of paidBases) {
-      const residualId = await reconcileAdminUnpaid(
-        this.prisma,
-        clubId,
-        baseId,
-        meta,
-      );
-      if (residualId) seen.add(residualId);
-    }
 
     const windowStart = new Date(`${fromStr}T00:00:00.000Z`);
     const windowEnd = new Date(`${toStr}T23:59:59.999Z`);
@@ -326,6 +291,7 @@ export class AdminSalesSyncService {
       where: {
         clubId,
         isActive: true,
+        paidAt: { not: null },
         OR: [
           { soldAt: { gte: windowStart, lte: windowEnd } },
           { paidAt: { gte: windowStart, lte: windowEnd } },
@@ -345,112 +311,109 @@ export class AdminSalesSyncService {
       deactivated = res.count;
     }
 
+    let debtDropped = 0;
+    if (!options.skipDebtCleanup) {
+      debtDropped = await deactivateStaleSaleUnpaid(
+        this.prisma,
+        provider,
+        clubId,
+        toStr,
+      );
+      deactivated += debtDropped;
+    }
+
     this.logger.log(
-      `Sales range club=${clubId} upserted=${upserted} deactivated=${deactivated} window=${fromStr}..${toStr} days=${days.length}`,
+      `Sales range club=${clubId} upserted=${upserted} deactivated=${deactivated} debtDropped=${debtDropped} window=${fromStr}..${toStr} days=${days.length}`,
     );
     return { upserted, deactivated, from: fromStr, to: toStr };
   }
 }
 
+/** UUID of the sale document from Analytics debt / sale keys. */
+function saleDocumentUuid(
+  item: Pick<FitgoAnalyticsSalesItem, 'saleDocumentId' | 'documentId'>,
+): string | null {
+  const doc = item.documentId?.trim();
+  if (doc && /^[0-9a-f-]{36}$/i.test(doc)) return doc.toLowerCase();
+  const first = (item.saleDocumentId ?? '').trim().split(':')[0];
+  if (first && /^[0-9a-f-]{36}$/i.test(first)) return first.toLowerCase();
+  return null;
+}
+
+function externalSaleDocUuid(externalSaleId: string): string | null {
+  const first = externalSaleId.trim().split(':')[0];
+  if (first && /^[0-9a-f-]{36}$/i.test(first)) return first.toLowerCase();
+  return null;
+}
+
 /**
- * Payment for a sale line → clear stale unpaid; keep residual until fully paid.
- * Payroll uses only paid rows (paidAt in period).
+ * Drop SaleTransaction unpaid not present in Analytics scope=debt.
+ * Same register as ClubRevenue unpaid / 1C «Неоплаченные».
  */
-async function reconcileAdminUnpaid(
+async function deactivateStaleSaleUnpaid(
   prisma: PrismaService,
+  provider: FitgoAnalyticsHttpProvider,
   clubId: string,
-  baseId: string,
-  meta: {
-    soldAt: Date;
-    saleAmount: number;
-    saleType: string;
-    productName: string | null;
-    clientExternalId: string | null;
-    clientName: string | null;
-    employeeExternalId: string | null;
-    employeeName: string | null;
-    paymentMethod: string | null;
-  },
-): Promise<string | null> {
-  const priorUnpaid = await prisma.saleTransaction.findMany({
-    where: {
-      clubId,
-      isActive: true,
-      externalSaleId: { startsWith: `${baseId}:u` },
-    },
-    select: { amount: true, soldAt: true },
-  });
-
-  await prisma.saleTransaction.updateMany({
-    where: {
-      clubId,
-      isActive: true,
-      externalSaleId: { startsWith: `${baseId}:u` },
-    },
-    data: { isActive: false, syncedAt: new Date() },
-  });
-
-  const payments = await prisma.saleTransaction.findMany({
-    where: {
-      clubId,
-      isActive: true,
-      externalSaleId: { startsWith: `${baseId}:p` },
-    },
-    select: { amount: true, soldAt: true },
-  });
-  if (!payments.length) return null;
-
-  const paidSum = payments.reduce((s, r) => s + (r.amount || 0), 0);
-  const saleAmt = Math.max(
-    meta.saleAmount,
-    ...priorUnpaid.map((r) => r.amount || 0),
-    paidSum,
+  asOf: string,
+): Promise<number> {
+  let debtItems: FitgoAnalyticsSalesItem[];
+  try {
+    debtItems = await fetchSalesOnce(provider, {
+      from: asOf,
+      to: asOf,
+      scope: 'debt',
+    });
+  } catch {
+    return 0;
+  }
+  const debtSnapshot = debtItems.some((i) =>
+    (i.saleDocumentId ?? '').includes(':debt:'),
   );
-  const residual = Math.round((saleAmt - paidSum) * 100) / 100;
-  if (residual <= 0.009) return null;
+  if (!debtSnapshot) return 0;
 
-  const soldAt =
-    priorUnpaid[0]?.soldAt ??
-    payments.reduce<Date | null>((min, r) => {
-      if (!min || r.soldAt < min) return r.soldAt;
-      return min;
-    }, null) ??
-    meta.soldAt;
-  const externalSaleId = `${baseId}:u${moscowDayKey(soldAt)}`;
+  const liveDocs = new Set<string>();
+  for (const item of debtItems) {
+    if ((item.operationType ?? 'unpaid') !== 'unpaid') continue;
+    const id = item.saleDocumentId ?? '';
+    if (
+      !isCollectibleClientDebt({
+        externalId: id,
+        productName: item.productName,
+      })
+    ) {
+      continue;
+    }
+    const doc = saleDocumentUuid(item);
+    if (doc) liveDocs.add(doc);
+  }
 
-  await prisma.saleTransaction.upsert({
-    where: { clubId_externalSaleId: { clubId, externalSaleId } },
-    create: {
+  const unpaid = await prisma.saleTransaction.findMany({
+    where: {
       clubId,
-      externalSaleId,
-      soldAt,
-      paidAt: null,
-      amount: residual,
-      saleType: meta.saleType,
-      productName: meta.productName,
-      clientExternalId: meta.clientExternalId,
-      clientName: meta.clientName,
-      employeeExternalId: meta.employeeExternalId,
-      employeeName: meta.employeeName,
-      paymentMethod: meta.paymentMethod,
       isActive: true,
-      syncedAt: new Date(),
-    },
-    update: {
-      soldAt,
       paidAt: null,
-      amount: residual,
-      saleType: meta.saleType,
-      productName: meta.productName,
-      clientExternalId: meta.clientExternalId,
-      clientName: meta.clientName,
-      employeeExternalId: meta.employeeExternalId,
-      employeeName: meta.employeeName,
-      isActive: true,
-      syncedAt: new Date(),
     },
+    select: { id: true, externalSaleId: true },
   });
-  return externalSaleId;
+  const dropIds = unpaid
+    .filter((r) => {
+      const doc = externalSaleDocUuid(r.externalSaleId);
+      return !doc || !liveDocs.has(doc);
+    })
+    .map((r) => r.id);
+  if (!dropIds.length) return 0;
+
+  let dropped = 0;
+  const chunk = 500;
+  for (let i = 0; i < dropIds.length; i += chunk) {
+    const slice = dropIds.slice(i, i + chunk);
+    const res = await prisma.saleTransaction.updateMany({
+      where: { id: { in: slice } },
+      data: { isActive: false, syncedAt: new Date() },
+    });
+    dropped += res.count;
+  }
+  return dropped;
 }
 
 function sleep(ms: number) {
