@@ -19,19 +19,41 @@ import {
   normalizePhone,
   shadowEmailForPhone,
 } from '../common/phone.util';
-import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 export const INVITE_GENERIC_MESSAGE =
   'Приглашение отправлено. Клиент должен подтвердить в приложении.';
 
+function parseMembershipStatus(
+  raw: string | null | undefined,
+): MembershipStatus | undefined {
+  if (!raw) return undefined;
+  const u = raw.trim().toUpperCase();
+  if (u === 'ACTIVE' || u === 'АКТИВНЫЙ' || u === 'ДЕЙСТВУЕТ') {
+    return MembershipStatus.ACTIVE;
+  }
+  if (u === 'EXPIRED' || u === 'ИСТЁК' || u === 'ИСТЕК' || u === 'ЗАВЕРШЕН') {
+    return MembershipStatus.EXPIRED;
+  }
+  if (u === 'FROZEN' || u === 'ЗАМОРОЖЕН' || u === 'ЗАМОРОЗКА') {
+    return MembershipStatus.FROZEN;
+  }
+  if (u === 'PENDING' || u === 'ОЖИДАНИЕ') {
+    return MembershipStatus.PENDING;
+  }
+  // Snapshots often store English enum already
+  if ((Object.values(MembershipStatus) as string[]).includes(u)) {
+    return u as MembershipStatus;
+  }
+  return undefined;
+}
+
 @Injectable()
 export class TrainerRosterService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
-    private readonly fitness: FitnessService,
   ) {}
 
   async getMessagableClientIds(trainerId: string): Promise<string[]> {
@@ -86,51 +108,111 @@ export class TrainerRosterService {
       orderBy: { createdAt: 'desc' },
     });
 
-    const provider = this.fitness.getProvider();
-
-    return Promise.all(
-      links.map(async (link) => {
-        const client = link.client;
-        let membershipName: string | undefined;
-        let membershipStatus: MembershipStatus | undefined;
-        let lastVisit: string | undefined;
-
-        if (clubId) {
-          const clientMembership = await this.prisma.userClubMembership.findFirst({
-            where: {
-              userId: client.id,
-              clubId,
-              leftAt: null,
-            },
-          });
-          const externalId =
-            clientMembership?.externalId ?? client.externalId ?? undefined;
-          if (externalId) {
-            const membership = await provider.getMembership(externalId);
-            const visits = await provider.getVisits(externalId);
-            membershipName = membership?.name;
-            membershipStatus = membership?.status;
-            lastVisit = visits[0]?.date;
-          }
-        }
-
-        return {
-          id: client.id,
-          externalId: client.externalId ?? undefined,
-          firstName: client.firstName,
-          lastName: client.lastName,
-          phone: client.phone ?? undefined,
-          membershipName,
-          membershipStatus,
-          lastVisit,
-          rosterStatus: link.status,
-          hasApp: client.accountStatus === AccountStatus.ACTIVE,
-          clientAccepted: link.clientAcceptedAt != null,
-          inRosterSince: link.createdAt.toISOString(),
-          source: link.source,
-        };
-      }),
+    // Membership + last visit from Postgres snapshots (club-sync), not live 1C.
+    const memberships = clubId
+      ? await this.prisma.userClubMembership.findMany({
+          where: {
+            clubId,
+            leftAt: null,
+            userId: { in: links.map((l) => l.clientId) },
+          },
+          select: { userId: true, externalId: true },
+        })
+      : [];
+    const extByUser = new Map(
+      memberships.map((m) => [m.userId, m.externalId ?? null]),
     );
+    const externalIds = [
+      ...new Set(
+        links
+          .map(
+            (l) =>
+              extByUser.get(l.clientId) ?? l.client.externalId ?? null,
+          )
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+
+    const snapshots =
+      clubId && externalIds.length
+        ? await this.prisma.clubMembershipSnapshot.findMany({
+            where: { clubId, clientExternalId: { in: externalIds } },
+            select: {
+              clientExternalId: true,
+              packageName: true,
+              status: true,
+            },
+          })
+        : [];
+    const snapByExt = new Map(
+      snapshots.map((s) => [s.clientExternalId, s]),
+    );
+
+    const lastVisits =
+      clubId && externalIds.length
+        ? await this.prisma.clubHallVisit.findMany({
+            where: {
+              clubId,
+              isActive: true,
+              clientExternalId: { in: externalIds },
+            },
+            orderBy: { visitDate: 'desc' },
+            distinct: ['clientExternalId'],
+            select: { clientExternalId: true, visitDate: true },
+          })
+        : [];
+    const visitByExt = new Map(
+      lastVisits
+        .filter((v) => v.clientExternalId)
+        .map((v) => [v.clientExternalId!, v.visitDate]),
+    );
+
+    const userIdsNeedingVisit = links
+      .filter((l) => {
+        const ext =
+          extByUser.get(l.clientId) ?? l.client.externalId ?? null;
+        return !ext || !visitByExt.has(ext);
+      })
+      .map((l) => l.clientId);
+    const clubVisits =
+      clubId && userIdsNeedingVisit.length
+        ? await this.prisma.clubVisit.findMany({
+            where: {
+              clubId,
+              userId: { in: userIdsNeedingVisit },
+            },
+            orderBy: { visitedAt: 'desc' },
+            distinct: ['userId'],
+            select: { userId: true, visitDate: true },
+          })
+        : [];
+    const visitByUser = new Map(clubVisits.map((v) => [v.userId, v.visitDate]));
+
+    return links.map((link) => {
+      const client = link.client;
+      const externalId =
+        extByUser.get(client.id) ?? client.externalId ?? undefined;
+      const snap = externalId ? snapByExt.get(externalId) : undefined;
+      const lastVisit =
+        (externalId ? visitByExt.get(externalId) : undefined) ??
+        visitByUser.get(client.id);
+
+      return {
+        id: client.id,
+        externalId: client.externalId ?? undefined,
+        firstName: client.firstName,
+        lastName: client.lastName,
+        phone: client.phone ?? undefined,
+        membershipName: snap?.packageName ?? undefined,
+        membershipStatus: parseMembershipStatus(snap?.status),
+        lastVisit,
+        rosterStatus: link.status,
+        hasApp: client.accountStatus === AccountStatus.ACTIVE,
+        clientAccepted: link.clientAcceptedAt != null,
+        inRosterSince: link.createdAt.toISOString(),
+        source: link.source,
+      };
+    });
   }
 
   async getConfirmedClientIds(trainerId: string): Promise<string[]> {

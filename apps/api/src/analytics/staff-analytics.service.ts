@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import type {
   AnalyticsDepartment,
   ManagerEfficiencyBlock,
@@ -90,6 +90,12 @@ export class StaffAnalyticsService {
       new Map<string, StaffPayColumns & { openExceptions: number }>(),
     );
 
+    // One club payroll summary for pay columns + admin sales KPIs (cached in PayrollService).
+    const paySummary =
+      includePay || needAdmin
+        ? await this.payroll.getClubSummary(clubId, params.from, params.to)
+        : null;
+
     const [
       hoursByUser,
       remarksByUser,
@@ -103,7 +109,7 @@ export class StaffAnalyticsService {
       this.collectHours(clubId, start, end),
       this.collectRemarks(clubId, start, end),
       needAdmin
-        ? this.collectAdminKpis(clubId, staff, start, end, params.from, params.to)
+        ? this.collectAdminKpis(clubId, staff, start, end, paySummary)
         : emptyKpi,
       needGroup
         ? this.collectGroupTrainerKpis(clubId, staff, start, end)
@@ -122,8 +128,8 @@ export class StaffAnalyticsService {
         ? this.collectSpaKpis(clubId, staff, start, end, params.from, params.to)
         : emptyKpi,
       needTech ? this.collectTechKpis(clubId, staff, start, end) : emptyKpi,
-      includePay
-        ? this.collectPay(clubId, params.from, params.to)
+      includePay && paySummary
+        ? Promise.resolve(this.payMapFromSummary(paySummary))
         : emptyPay,
     ]);
 
@@ -224,17 +230,6 @@ export class StaffAnalyticsService {
       0,
     );
 
-    let managerEfficiency: ManagerEfficiencyBlock | null = null;
-    if (isSuperAdmin) {
-      managerEfficiency = await this.buildManagerEfficiency(
-        user,
-        clubId,
-        params.from,
-        params.to,
-        flagged,
-      );
-    }
-
     const totals = {
       staffCount: new Set(flagged.map((r) => r.userId)).size,
       hours: flagged.reduce((a, r) => a + r.hours, 0),
@@ -258,9 +253,59 @@ export class StaffAnalyticsService {
       rows: flagged,
       problemCount,
       achievementCount,
-      managerEfficiency,
+      managerEfficiency: null,
       totals,
     };
+  }
+
+  /**
+   * SUPER_ADMIN only — loaded separately when department is ALL or MANAGER.
+   * Avoids hitting 1C installments + club FOT on every staff report open.
+   */
+  async getManagerEfficiency(
+    user: JwtPayload,
+    params: { from: string; to: string },
+  ): Promise<ManagerEfficiencyBlock> {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException('Manager efficiency is SUPER_ADMIN only');
+    }
+    const clubId = requireClubId(user);
+    assertPeriod(params.from, params.to);
+    const { start, end } = rangeBounds(params.from, params.to);
+    const [paySummary, adminTasks] = await Promise.all([
+      this.payroll.getClubSummary(clubId, params.from, params.to),
+      this.prisma.adminTask.findMany({
+        where: {
+          clubId,
+          OR: [
+            { createdAt: { gte: start, lte: end } },
+            { completedAt: { gte: start, lte: end } },
+            {
+              status: {
+                in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS],
+              },
+            },
+          ],
+        },
+        select: { status: true, assigneeId: true },
+      }),
+    ]);
+    const payrollExceptions = paySummary.sections
+      .flatMap((s) => s.rows)
+      .reduce((a, r) => a + r.openExceptions, 0);
+    const tasksAssigned = adminTasks.length;
+    const tasksDone = adminTasks.filter(
+      (t) => t.status === AdminTaskStatus.DONE,
+    ).length;
+    const adminTasksDonePct =
+      tasksAssigned > 0
+        ? Math.round((tasksDone / tasksAssigned) * 100)
+        : null;
+
+    return this.buildManagerEfficiency(user, clubId, params.from, params.to, {
+      payrollExceptions,
+      adminTasksDonePct,
+    });
   }
 
   async exportStaffXlsx(
@@ -661,8 +706,9 @@ export class StaffAnalyticsService {
     return map;
   }
 
-  private async collectPay(clubId: string, from: string, to: string) {
-    const summary = await this.payroll.getClubSummary(clubId, from, to);
+  private payMapFromSummary(
+    summary: Awaited<ReturnType<PayrollService['getClubSummary']>>,
+  ) {
     const map = new Map<
       string,
       StaffPayColumns & { openExceptions: number; motivationMinor: number }
@@ -691,8 +737,7 @@ export class StaffAnalyticsService {
     staff: StaffUser[],
     start: Date,
     end: Date,
-    from: string,
-    to: string,
+    paySummary: Awaited<ReturnType<PayrollService['getClubSummary']>> | null,
   ) {
     const admins = staff.filter((s) =>
       s.roles.some((r) => r.role === Role.ADMIN || r.role === Role.MANAGER),
@@ -740,14 +785,7 @@ export class StaffAnalyticsService {
       }),
     ]);
 
-    // Sales from payroll summary (cheap reuse)
-    let paySummary: Awaited<ReturnType<PayrollService['getClubSummary']>> | null =
-      null;
-    try {
-      paySummary = await this.payroll.getClubSummary(clubId, from, to);
-    } catch {
-      paySummary = null;
-    }
+    // Sales from shared payroll summary (already loaded once for the report)
     const salesByUser = new Map<
       string,
       {
@@ -1311,7 +1349,7 @@ export class StaffAnalyticsService {
     clubId: string,
     from: string,
     to: string,
-    rows: StaffKpiRow[],
+    extras: { payrollExceptions: number; adminTasksDonePct: number | null },
   ): Promise<ManagerEfficiencyBlock> {
     const clubReport = await this.clubAnalytics.getClubReport(user, {
       from,
@@ -1348,21 +1386,7 @@ export class StaffAnalyticsService {
     const openRemarks = await this.prisma.sessionRemark.count({
       where: { clubId, status: SessionRemarkStatus.OPEN },
     });
-    const payrollExceptions = rows.reduce((a, r) => a + r.openExceptions, 0);
-
-    const adminRows = rows.filter((r) => r.kpi.kind === 'ADMIN');
-    const tasksDone = adminRows.reduce(
-      (a, r) => a + (r.kpi.kind === 'ADMIN' ? r.kpi.tasksDone : 0),
-      0,
-    );
-    const tasksAssigned = adminRows.reduce(
-      (a, r) => a + (r.kpi.kind === 'ADMIN' ? r.kpi.tasksAssigned : 0),
-      0,
-    );
-    const adminTasksDonePct =
-      tasksAssigned > 0
-        ? Math.round((tasksDone / tasksAssigned) * 100)
-        : null;
+    const { payrollExceptions, adminTasksDonePct } = extras;
 
     const revDelta = clubReport.money.revenue.deltaPct;
     const renewal = clubReport.members.renewalRate.value;

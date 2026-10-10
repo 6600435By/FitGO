@@ -306,14 +306,21 @@ export class AdminService {
   }
 
   async getAtRiskClients(user: JwtPayload) {
+    const clubId = requireClubId(user);
     const clients = await this.prisma.user.findMany({
       where: {
-        clubId: requireClubId(user),
+        clubId,
         roles: { some: { role: 'CLIENT' } },
+      },
+      select: {
+        id: true,
+        externalId: true,
+        firstName: true,
+        lastName: true,
+        email: true,
       },
     });
 
-    const provider = this.fitness.getProvider();
     const atRisk: Array<{
       id: string;
       userId: string;
@@ -326,17 +333,63 @@ export class AdminService {
     }> = [];
 
     const today = new Date();
+    const externalIds = clients
+      .map((c) => c.externalId)
+      .filter((id): id is string => Boolean(id));
+    if (!externalIds.length) return atRisk;
+
+    const [snapshots, hallVisits] = await Promise.all([
+      this.prisma.clubMembershipSnapshot.findMany({
+        where: { clubId, clientExternalId: { in: externalIds } },
+        select: {
+          clientExternalId: true,
+          packageName: true,
+          status: true,
+          endDate: true,
+        },
+      }),
+      this.prisma.clubHallVisit.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          clientExternalId: { in: externalIds },
+        },
+        orderBy: { visitDate: 'desc' },
+        distinct: ['clientExternalId'],
+        select: { clientExternalId: true, visitDate: true },
+      }),
+    ]);
+    const snapByExt = new Map(
+      snapshots.map((s) => [s.clientExternalId, s]),
+    );
+    const visitByExt = new Map(
+      hallVisits
+        .filter((v) => v.clientExternalId)
+        .map((v) => [v.clientExternalId!, v.visitDate]),
+    );
+
+    // Fallback last visit from ClubVisit for users without hall rows
+    const needVisitUserIds = clients
+      .filter((c) => c.externalId && !visitByExt.has(c.externalId))
+      .map((c) => c.id);
+    const clubVisits = needVisitUserIds.length
+      ? await this.prisma.clubVisit.findMany({
+          where: { clubId, userId: { in: needVisitUserIds } },
+          orderBy: { visitedAt: 'desc' },
+          distinct: ['userId'],
+          select: { userId: true, visitDate: true },
+        })
+      : [];
+    const visitByUser = new Map(clubVisits.map((v) => [v.userId, v.visitDate]));
 
     for (const client of clients) {
       if (!client.externalId) continue;
+      const snap = snapByExt.get(client.externalId);
+      const lastVisitDate =
+        visitByExt.get(client.externalId) ?? visitByUser.get(client.id) ?? null;
 
-      const [membership, visits] = await Promise.all([
-        provider.getMembership(client.externalId),
-        provider.getVisits(client.externalId),
-      ]);
-
-      const lastVisit = visits[0]?.date ? new Date(visits[0].date) : null;
-      if (lastVisit) {
+      if (lastVisitDate) {
+        const lastVisit = new Date(`${lastVisitDate}T00:00:00`);
         const daysInactive = Math.floor(
           (today.getTime() - lastVisit.getTime()) / 86400000,
         );
@@ -348,15 +401,23 @@ export class AdminService {
             email: client.email,
             reason: 'Давно не был',
             daysInactive,
-            membership: membership?.name,
+            membership: snap?.packageName ?? undefined,
           });
           continue;
         }
       }
 
-      if (membership?.status === MembershipStatus.ACTIVE) {
+      const status = (snap?.status ?? '').toUpperCase();
+      const endDate = snap?.endDate;
+      if (
+        endDate &&
+        (status === 'ACTIVE' ||
+          status === MembershipStatus.ACTIVE ||
+          status === 'АКТИВНЫЙ' ||
+          status === 'ДЕЙСТВУЕТ')
+      ) {
         const daysUntilExpiry = Math.floor(
-          (new Date(membership.validUntil).getTime() - today.getTime()) /
+          (new Date(`${endDate}T00:00:00`).getTime() - today.getTime()) /
             86400000,
         );
         if (daysUntilExpiry <= 14 && daysUntilExpiry >= 0) {
@@ -367,7 +428,7 @@ export class AdminService {
             email: client.email,
             reason: 'Абонемент истекает',
             daysUntilExpiry,
-            membership: membership.name,
+            membership: snap?.packageName ?? undefined,
           });
         }
       }

@@ -1,4 +1,8 @@
+import { RequestGate } from './request-gate';
 import type { FitgoHttpConfig } from './types';
+
+/** Analytics reports are heavy — keep at most 2 concurrent to 1C. */
+const analyticsGate = new RequestGate(2);
 
 interface FitgoAnalyticsSalesItem {
   saleDocumentId: string;
@@ -76,6 +80,16 @@ export class FitgoAnalyticsHttpProvider {
   }
 
   private async request<T>(
+    path: string,
+    timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  ): Promise<T | null> {
+    const flightKey = `${this.config.baseUrl}|GET|${path}`;
+    return analyticsGate.run(flightKey, () =>
+      this.requestRaw<T>(path, timeoutMs),
+    );
+  }
+
+  private async requestRaw<T>(
     path: string,
     timeoutMs: number = DEFAULT_TIMEOUT_MS,
   ): Promise<T | null> {

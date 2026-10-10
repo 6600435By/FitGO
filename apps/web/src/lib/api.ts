@@ -54,6 +54,7 @@ import {
   type SuperAdminAnalytics,
   type StaffAuditLogItem,
   type ClubAnalyticsReport,
+  type ManagerEfficiencyBlock,
   type StaffAnalyticsReport,
   type AnalyticsCompareMode,
   type AnalyticsDepartment,
@@ -2055,6 +2056,21 @@ export const api = {
     if (params.includePay) q.set('includePay', '1');
     return request<StaffAnalyticsReport>(
       `/super-admin/analytics/staff?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsStaffManagerEfficiency: (
+    token: string,
+    params: { from: string; to: string },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    return request<ManagerEfficiencyBlock>(
+      `/super-admin/analytics/staff/manager-efficiency?${q}`,
       {},
       token,
     );

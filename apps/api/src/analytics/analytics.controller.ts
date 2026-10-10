@@ -1,5 +1,6 @@
 import {
   Controller,
+  ForbiddenException,
   Get,
   Query,
   Res,
@@ -61,6 +62,19 @@ export class AnalyticsController {
       userId,
       includePay: includePay === '1' || includePay === 'true',
     });
+  }
+
+  @Get('staff/manager-efficiency')
+  @Roles(UserRole.SUPER_ADMIN)
+  managerEfficiency(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    return this.staff.getManagerEfficiency(user, { from, to });
   }
 
   @Get('staff.xlsx')

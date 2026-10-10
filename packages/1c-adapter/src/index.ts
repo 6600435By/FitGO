@@ -10,3 +10,4 @@ export * from './forma-fitgo-composite-provider';
 export * from './forma-shared';
 export * from './membership-from-visits';
 export * from './factory';
+export * from './request-gate';

@@ -34,8 +34,10 @@ const LIGHT_RUN_BUDGET_MS = 3 * 60 * 1000;
 const FULL_RUN_BUDGET_MS = 40 * 60 * 1000;
 /** TODAY profile: classes + visits + slots for one day. */
 const TODAY_RUN_BUDGET_MS = 60 * 1000;
-/** Min gap between AUTO TODAY syncs per club. */
+/** Min gap between AUTO TODAY syncs per club (success or failure). */
 const TODAY_COOLDOWN_MS = 10 * 60 * 1000;
+/** Extra backoff after a FAILED/PARTIAL TODAY run. */
+const TODAY_FAILURE_BACKOFF_MS = 15 * 60 * 1000;
 
 export type SyncStepResult = {
   resource: string;
@@ -153,10 +155,31 @@ export class ClubSyncOrchestrator {
     const running = await this.getRunning(clubId);
     if (running) return;
 
-    const last = await this.lastSuccessfulToday(clubId);
+    // Cooldown from any finished TODAY run (SUCCESS / PARTIAL / FAILED),
+    // so a failing sync does not re-hit 1C on every staff screen open.
+    const last = await this.prisma.clubSyncRun.findFirst({
+      where: {
+        clubId,
+        profile: ClubSyncProfile.TODAY,
+        status: {
+          in: [
+            ClubSyncRunStatus.SUCCESS,
+            ClubSyncRunStatus.PARTIAL,
+            ClubSyncRunStatus.FAILED,
+          ],
+        },
+        finishedAt: { not: null },
+      },
+      orderBy: { finishedAt: 'desc' },
+    });
     if (last?.finishedAt) {
-      const until = last.finishedAt.getTime() + TODAY_COOLDOWN_MS;
-      if (Date.now() < until) return;
+      const failed =
+        last.status === ClubSyncRunStatus.FAILED ||
+        last.status === ClubSyncRunStatus.PARTIAL;
+      const cooldown = failed
+        ? TODAY_COOLDOWN_MS + TODAY_FAILURE_BACKOFF_MS
+        : TODAY_COOLDOWN_MS;
+      if (Date.now() < last.finishedAt.getTime() + cooldown) return;
     }
 
     await this.start(clubId, {
@@ -507,6 +530,19 @@ export class ClubSyncOrchestrator {
                 (r?.installment ?? 0),
             };
           });
+        }
+
+        // Warm installments cache so analytics does not cold-hit 1C.
+        try {
+          const { ClubAnalyticsService } = await import(
+            '../analytics/club-analytics.service'
+          );
+          const clubAnalytics = this.moduleRef.get(ClubAnalyticsService, {
+            strict: false,
+          });
+          clubAnalytics?.warmInstallmentsCache?.(clubId);
+        } catch {
+          /* analytics module may be unavailable in tests */
         }
       }
 

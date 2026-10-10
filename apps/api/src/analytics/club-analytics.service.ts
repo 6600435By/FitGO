@@ -46,9 +46,20 @@ const SEG_LABEL: Record<string, string> = {
   other: 'Прочее',
 };
 
+const INSTALLMENTS_CACHE_TTL_MS = 15 * 60 * 1000;
+
 @Injectable()
 export class ClubAnalyticsService {
   private readonly logger = new Logger(ClubAnalyticsService.name);
+
+  /** clubId → cached installments snapshot (15 min, single-flight). */
+  private readonly installmentsCache = new Map<
+    string,
+    {
+      at: number;
+      value: Promise<ClubAnalyticsMoney['installments']>;
+    }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -111,7 +122,7 @@ export class ClubAnalyticsService {
       params.includePay
         ? this.fotBlock(clubId, params.from, params.to, compareFrom, compareTo)
         : Promise.resolve(null),
-      this.installmentsSnapshot(),
+      this.installmentsSnapshot(clubId),
     ]);
 
     const money: ClubAnalyticsMoney = {
@@ -276,9 +287,35 @@ export class ClubAnalyticsService {
 
   /**
    * Snapshot of open installment schedules from 1C (Minsk calendar).
-   * Failures return null so club analytics still loads.
+   * Cached 15 min per club with single-flight; failures return null.
    */
-  private async installmentsSnapshot(): Promise<
+  private async installmentsSnapshot(
+    clubId: string,
+  ): Promise<ClubAnalyticsMoney['installments']> {
+    const cached = this.installmentsCache.get(clubId);
+    if (cached && Date.now() - cached.at < INSTALLMENTS_CACHE_TTL_MS) {
+      return cached.value;
+    }
+    const value = this.fetchInstallmentsSnapshot().finally(() => {
+      setTimeout(() => {
+        const cur = this.installmentsCache.get(clubId);
+        if (cur?.value === value) this.installmentsCache.delete(clubId);
+      }, INSTALLMENTS_CACHE_TTL_MS);
+    });
+    this.installmentsCache.set(clubId, { at: Date.now(), value });
+    return value;
+  }
+
+  /** Warm cache during club sync so analytics UI hits 1C less often. */
+  warmInstallmentsCache(clubId: string): void {
+    void this.installmentsSnapshot(clubId).catch((err) => {
+      this.logger.warn(
+        `warmInstallmentsCache ${clubId}: ${err instanceof Error ? err.message : err}`,
+      );
+    });
+  }
+
+  private async fetchInstallmentsSnapshot(): Promise<
     ClubAnalyticsMoney['installments']
   > {
     const provider = this.analyticsProvider();

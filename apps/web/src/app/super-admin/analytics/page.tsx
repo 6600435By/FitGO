@@ -4,9 +4,10 @@ import type {
   AnalyticsCompareMode,
   AnalyticsDepartment,
   ClubAnalyticsReport,
+  ManagerEfficiencyBlock,
   StaffAnalyticsReport,
 } from '@fitgo/shared-types';
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ClubAnalyticsPanel } from '@/components/analytics/club-analytics-panel';
 import {
@@ -32,6 +33,58 @@ function monthBounds(ref = new Date()) {
   return { from: isoDate(from), to: isoDate(to) };
 }
 
+function staffCacheKey(from: string, to: string, includePay: boolean) {
+  return `${from}|${to}|pay:${includePay ? 1 : 0}`;
+}
+
+function clubCacheKey(
+  from: string,
+  to: string,
+  compare: string,
+  includePay: boolean,
+) {
+  return `${from}|${to}|${compare}|pay:${includePay ? 1 : 0}`;
+}
+
+function filterStaffReport(
+  report: StaffAnalyticsReport,
+  department: AnalyticsDepartment,
+): StaffAnalyticsReport {
+  const rows =
+    department === 'ALL'
+      ? report.rows
+      : report.rows.filter((r) => r.department === department);
+  const problemCount = rows.reduce(
+    (a, r) => a + r.flags.filter((f) => f.severity === 'problem').length,
+    0,
+  );
+  const achievementCount = rows.reduce(
+    (a, r) => a + r.flags.filter((f) => f.severity === 'achievement').length,
+    0,
+  );
+  const totals = {
+    staffCount: new Set(rows.map((r) => r.userId)).size,
+    hours: rows.reduce((a, r) => a + r.hours, 0),
+    ...(report.includePay
+      ? {
+          totalEarnedMinor: rows.reduce(
+            (a, r) => a + (r.pay?.totalEarnedMinor ?? 0),
+            0,
+          ),
+          toPayMinor: rows.reduce((a, r) => a + (r.pay?.toPayMinor ?? 0), 0),
+        }
+      : {}),
+  };
+  return {
+    ...report,
+    department,
+    rows,
+    problemCount,
+    achievementCount,
+    totals,
+  };
+}
+
 function AnalyticsInner() {
   const router = useRouter();
   const pathname = usePathname();
@@ -47,10 +100,18 @@ function AnalyticsInner() {
 
   const [showPay, setShowPay] = useState(false);
   const [club, setClub] = useState<ClubAnalyticsReport | null>(null);
-  const [staff, setStaff] = useState<StaffAnalyticsReport | null>(null);
+  const [staffAll, setStaffAll] = useState<StaffAnalyticsReport | null>(null);
+  const [managerEff, setManagerEff] = useState<ManagerEfficiencyBlock | null>(
+    null,
+  );
+  const [managerLoading, setManagerLoading] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+
+  const clubCache = useRef(new Map<string, ClubAnalyticsReport>());
+  const staffCache = useRef(new Map<string, StaffAnalyticsReport>());
+  const managerCache = useRef(new Map<string, ManagerEfficiencyBlock>());
 
   useEffect(() => {
     setShowPay(readPayVisibility());
@@ -68,15 +129,26 @@ function AnalyticsInner() {
     [pathname, router, searchParams],
   );
 
+  // Club / staff report: reload on period / pay / tab — NOT on department.
   useEffect(() => {
     const token = getToken();
     if (!token) return;
     let cancelled = false;
-    setLoading(true);
     setError('');
+
     const run = async () => {
       try {
         if (tab === 'club') {
+          const key = clubCacheKey(from, to, compare, showPay);
+          const hit = clubCache.current.get(key);
+          if (hit) {
+            if (!cancelled) {
+              setClub(hit);
+              setLoading(false);
+            }
+            return;
+          }
+          setLoading(true);
           const data = await api.analyticsClub(token, {
             from,
             to,
@@ -84,19 +156,29 @@ function AnalyticsInner() {
             includePay: showPay,
           });
           if (!cancelled) {
+            clubCache.current.set(key, data);
             setClub(data);
-            setStaff(null);
           }
         } else {
+          const key = staffCacheKey(from, to, showPay);
+          const hit = staffCache.current.get(key);
+          if (hit) {
+            if (!cancelled) {
+              setStaffAll(hit);
+              setLoading(false);
+            }
+            return;
+          }
+          setLoading(true);
+          // Always fetch ALL — department is filtered client-side.
           const data = await api.analyticsStaff(token, {
             from,
             to,
-            department: department === 'ALL' ? undefined : department,
             includePay: showPay,
           });
           if (!cancelled) {
-            setStaff(data);
-            setClub(null);
+            staffCache.current.set(key, data);
+            setStaffAll(data);
           }
         }
       } catch (e) {
@@ -111,7 +193,49 @@ function AnalyticsInner() {
     return () => {
       cancelled = true;
     };
-  }, [tab, from, to, compare, department, showPay]);
+  }, [tab, from, to, compare, showPay]);
+
+  // Manager efficiency: only when staff tab + ALL or MANAGER.
+  useEffect(() => {
+    if (tab !== 'staff') return;
+    if (department !== 'ALL' && department !== 'MANAGER') {
+      setManagerEff(null);
+      setManagerLoading(false);
+      return;
+    }
+    const token = getToken();
+    if (!token) return;
+    const key = `${from}|${to}`;
+    const hit = managerCache.current.get(key);
+    if (hit) {
+      setManagerEff(hit);
+      setManagerLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setManagerLoading(true);
+    void api
+      .analyticsStaffManagerEfficiency(token, { from, to })
+      .then((data) => {
+        if (cancelled) return;
+        managerCache.current.set(key, data);
+        setManagerEff(data);
+      })
+      .catch(() => {
+        if (!cancelled) setManagerEff(null);
+      })
+      .finally(() => {
+        if (!cancelled) setManagerLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, department, from, to]);
+
+  const staffView = useMemo(() => {
+    if (!staffAll) return null;
+    return filterStaffReport(staffAll, department);
+  }, [staffAll, department]);
 
   const setPreset = (days: number) => {
     const end = new Date();
@@ -245,14 +369,23 @@ function AnalyticsInner() {
         <ClubAnalyticsPanel report={club} showPay={showPay} />
       )}
 
-      {!loading && tab === 'staff' && staff && (
+      {!loading && tab === 'staff' && staffView && (
         <StaffAnalyticsTable
-          report={staff}
+          report={staffView}
           department={department}
           onDepartmentChange={(d) => setParams({ department: d })}
           onExport={onExport}
           exporting={exporting}
           showPay={showPay}
+          managerEfficiency={
+            department === 'ALL' || department === 'MANAGER'
+              ? managerEff
+              : null
+          }
+          managerLoading={
+            (department === 'ALL' || department === 'MANAGER') &&
+            managerLoading
+          }
         />
       )}
     </div>

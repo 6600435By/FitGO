@@ -18,7 +18,7 @@ Staff screens read **only FitGO Postgres**. Live 1C reads happen in:
 | PT sales | today ±1 day | **skipped** | 14 days |
 | Specialist debts / memberships | **skipped** | **skipped** | full (rate-limited membership walk) |
 | Run budget | 3 min → PARTIAL | 60 s → PARTIAL | 40 min → PARTIAL |
-| Cooldown | 10 min (manual) | 10 min (per club, fire-and-forget) | once per night |
+| Cooldown | 10 min (manual) | 10 min from any finished TODAY (SUCCESS/PARTIAL/FAILED); +15 min backoff after failure | once per night |
 | Analytics HTTP timeout | 90 s per `/sales` call | n/a | same |
 
 Old-date edits (класс 25.09, оплата за июнь) → night FULL or admin date-range backfill, not the button.
@@ -48,6 +48,30 @@ Creates:
 
 - partial unique index: one `RUNNING` `ClubSyncRun` per club
 - `btree_gist` exclusion constraints for overlapping PT/SPA bookings
+
+## Load / capacity (staff launch)
+
+Analytics «Персонал» and payroll club summary must **not** call live 1C per page open:
+
+- PT sales → `TrainerPtSale` (sync); live only via explicit refresh
+- Installments → 15 min in-memory cache (warmed on LIGHT/FULL)
+- Staff department tabs → filter client-side; one `GET …/staff` per period
+- Manager block → `GET …/staff/manager-efficiency` only for ALL / MANAGER
+- Integration HTTP gate: max 3 concurrent; Analytics: max 2; identical GETs single-flight
+- Trainer roster / admin at-risk → `ClubMembershipSnapshot` + visits in Postgres
+
+`DATABASE_URL` should include `connection_limit=10` on the shared Windows box (see `fitgo-api.env.example`).
+
+### Smoke capacity check (off-hours)
+
+```bash
+# From a machine that can reach Nest :3001 with a staff JWT
+# Simulate N trainers opening schedule + 2 admins opening staff analytics
+npx autocannon -c 10 -d 30 -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:3001/api/staff/sync/status
+```
+
+If `rphost` still spikes while FitGO screens only hit Postgres, consider moving Nest/Next/Postgres off the 1C host.
 
 ## Planned 1C: bulk memberships
 

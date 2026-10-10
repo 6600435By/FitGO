@@ -195,6 +195,8 @@ export function StaffAnalyticsTable({
   onExport,
   exporting,
   showPay,
+  managerEfficiency,
+  managerLoading,
 }: {
   report: StaffAnalyticsReport;
   department: AnalyticsDepartment;
@@ -202,6 +204,9 @@ export function StaffAnalyticsTable({
   onExport: () => void;
   exporting: boolean;
   showPay: boolean;
+  /** Loaded separately — only for ALL / MANAGER. */
+  managerEfficiency?: ManagerEfficiencyBlock | null;
+  managerLoading?: boolean;
 }) {
   const [q, setQ] = useState('');
   const [sortKey, setSortKey] = useState<'name' | 'hours'>('name');
@@ -245,8 +250,17 @@ export function StaffAnalyticsTable({
         </button>
       </div>
 
-      {report.managerEfficiency && (
-        <ManagerEfficiencyPanel block={report.managerEfficiency} />
+      {(department === 'ALL' || department === 'MANAGER') && (
+        <>
+          {managerLoading && !managerEfficiency && (
+            <div className="card py-6 text-center text-sm text-slate-400">
+              Загрузка блока управляющего…
+            </div>
+          )}
+          {managerEfficiency && (
+            <ManagerEfficiencyPanel block={managerEfficiency} />
+          )}
+        </>
       )}
 
       <div className="flex flex-wrap gap-2">

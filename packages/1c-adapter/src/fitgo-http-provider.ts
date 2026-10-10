@@ -8,7 +8,11 @@ import {
   type Visit,
 } from '@fitgo/shared-types';
 import { unwrapFormaData } from './forma-shared';
+import { RequestGate } from './request-gate';
 import type { FitgoClientLookup, FitgoHttpConfig, VisitPeriod } from './types';
+
+/** Cap concurrent FitGOIntegration calls so rphost is not saturated. */
+const integrationGate = new RequestGate(3);
 
 interface FitgoApiError {
   error?: { code?: number; message?: string };
@@ -95,6 +99,21 @@ export class FitgoHttpProvider {
   }
 
   private async request<T>(
+    path: string,
+    init?: { method?: string; body?: unknown; timeoutMs?: number },
+  ): Promise<T | null> {
+    const method = init?.method ?? 'GET';
+    // Coalesce identical GETs; mutations always get their own slot.
+    const flightKey =
+      method === 'GET' && init?.body === undefined
+        ? `${this.config.baseUrl}|${method}|${path}`
+        : null;
+    return integrationGate.run(flightKey, () =>
+      this.requestRaw<T>(path, init),
+    );
+  }
+
+  private async requestRaw<T>(
     path: string,
     init?: { method?: string; body?: unknown; timeoutMs?: number },
   ): Promise<T | null> {

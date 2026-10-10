@@ -172,12 +172,42 @@ function mergePayTracks(
   };
 }
 
+const CLUB_SUMMARY_CACHE_TTL_MS = 60_000;
+const CLUB_SUMMARY_CONCURRENCY = 5;
+
+async function mapPool<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (next < items.length) {
+        const i = next++;
+        results[i] = await fn(items[i]!);
+      }
+    },
+  );
+  await Promise.all(workers);
+  return results;
+}
+
 @Injectable()
 export class PayrollService {
-  /** One live/DB pull per club+period while club summary loops trainers. */
+  /** One DB pull per club+period while club summary loops trainers. */
   private readonly ptSalesPeriodCache = new Map<
     string,
     Promise<TrainerPtSaleRow[]>
+  >();
+
+  /** Club payroll summary cache — avoids 4× recompute from analytics. */
+  private readonly clubSummaryCache = new Map<
+    string,
+    { at: number; value: Promise<ClubPayrollReport> }
   >();
 
   constructor(
@@ -930,6 +960,7 @@ export class PayrollService {
     await this.classSessionsSync
       .markPayrollLocked(clubId, performerId, from, to)
       .catch(() => undefined);
+    this.invalidateClubSummaryCache(clubId);
     return this.getPeriodSummary(clubId, performerId, from, to);
   }
 
@@ -1287,6 +1318,7 @@ export class PayrollService {
       return payout;
     });
 
+    this.invalidateClubSummaryCache(clubId);
     return this.mapPayout(row);
   }
 
@@ -1836,6 +1868,7 @@ export class PayrollService {
         createdById: actor.sub,
       },
     });
+    this.invalidateClubSummaryCache(clubId);
     return {
       id: row.id,
       userId: row.userId,
@@ -1872,6 +1905,7 @@ export class PayrollService {
           : {}),
       },
     });
+    this.invalidateClubSummaryCache(clubId);
     return {
       id: row.id,
       userId: row.userId,
@@ -1890,6 +1924,7 @@ export class PayrollService {
     });
     if (!existing) throw new NotFoundException('Корректировка не найдена');
     await this.prisma.payrollAdjustment.delete({ where: { id } });
+    this.invalidateClubSummaryCache(clubId);
     return { success: true };
   }
 
@@ -2257,8 +2292,8 @@ export class PayrollService {
 
   /**
    * Paid one-time PT sales for the payroll period.
-   * Live 1C first (exact from–to); TrainerPtSale cache if live empty/fails.
-   * Memoized so club summary does not re-hit 1C per trainer.
+   * Prefer TrainerPtSale (club-sync); live 1C only via refreshTrainerPtSalesLive.
+   * Memoized so club summary does not re-query DB per trainer.
    */
   private loadTrainerPtSalesForPeriod(
     clubId: string,
@@ -2268,24 +2303,32 @@ export class PayrollService {
     const key = `${clubId}|${from}|${to}`;
     let pending = this.ptSalesPeriodCache.get(key);
     if (!pending) {
-      pending = this.fetchTrainerPtSalesForPeriod(clubId, from, to).finally(
-        () => {
-          setTimeout(() => this.ptSalesPeriodCache.delete(key), 120_000);
-        },
-      );
+      pending = this.loadTrainerPtSalesFromDb(clubId, from, to).finally(() => {
+        setTimeout(() => this.ptSalesPeriodCache.delete(key), 120_000);
+      });
       this.ptSalesPeriodCache.set(key, pending);
     }
     return pending;
   }
 
-  private async fetchTrainerPtSalesForPeriod(
+  /** Explicit refresh path (sync button / payroll 1C refresh). */
+  async refreshTrainerPtSalesLive(
     clubId: string,
     from: string,
     to: string,
   ): Promise<TrainerPtSaleRow[]> {
-    const live = await this.fetchTrainerPtSalesLive(from, to);
-    if (live.length > 0) return live;
-    return this.loadTrainerPtSalesFromDb(clubId, from, to);
+    const key = `${clubId}|${from}|${to}`;
+    const pending = this.fetchTrainerPtSalesLive(from, to)
+      .then(async (live) => {
+        if (live.length > 0) return live;
+        return this.loadTrainerPtSalesFromDb(clubId, from, to);
+      })
+      .finally(() => {
+        setTimeout(() => this.ptSalesPeriodCache.delete(key), 120_000);
+      });
+    this.ptSalesPeriodCache.set(key, pending);
+    this.invalidateClubSummaryCache(clubId);
+    return pending;
   }
 
   private async fetchTrainerPtSalesLive(
@@ -2787,6 +2830,17 @@ export class PayrollService {
     return 'TRAINER';
   }
 
+  invalidateClubSummaryCache(clubId?: string) {
+    if (!clubId) {
+      this.clubSummaryCache.clear();
+      return;
+    }
+    const prefix = `${clubId}|`;
+    for (const key of this.clubSummaryCache.keys()) {
+      if (key.startsWith(prefix)) this.clubSummaryCache.delete(key);
+    }
+  }
+
   async getClubSummary(
     clubId: string,
     from: string,
@@ -2794,26 +2848,77 @@ export class PayrollService {
     department?: ClubPayrollSectionId | 'ALL' | 'MANAGER',
   ): Promise<ClubPayrollReport> {
     this.assertPeriod(from, to);
-    const staff = await this.listStaffPaySummaries(clubId);
-    const isManager = (s: (typeof staff)[0]) => s.roles.includes('MANAGER');
-    const filtered = staff.filter((s) => {
-      const section = this.sectionForStaff(
-        s.employmentKind ?? 'STAFF',
-        s.roles,
-        s.track,
-      );
-      if (!department || department === 'ALL') return true;
-      if (department === 'MANAGER') return isManager(s);
-      if (department === 'ADMIN') {
-        return section === 'ADMIN' && !isManager(s);
-      }
-      return section === department;
-    });
+    // Cache only the full club report; department filters slice in memory.
+    const cacheKey = `${clubId}|${from}|${to}`;
+    const cached = this.clubSummaryCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < CLUB_SUMMARY_CACHE_TTL_MS) {
+      const full = await cached.value;
+      return this.filterClubSummaryByDepartment(full, department);
+    }
 
+    const value = this.computeClubSummary(clubId, from, to).finally(() => {
+      setTimeout(() => {
+        const cur = this.clubSummaryCache.get(cacheKey);
+        if (cur?.value === value) this.clubSummaryCache.delete(cacheKey);
+      }, CLUB_SUMMARY_CACHE_TTL_MS);
+    });
+    this.clubSummaryCache.set(cacheKey, { at: Date.now(), value });
+    const full = await value;
+    return this.filterClubSummaryByDepartment(full, department);
+  }
+
+  private filterClubSummaryByDepartment(
+    report: ClubPayrollReport,
+    department?: ClubPayrollSectionId | 'ALL' | 'MANAGER',
+  ): ClubPayrollReport {
+    if (!department || department === 'ALL') return report;
+    const retotal = (
+      rows: ClubPayrollRow[],
+    ): ClubPayrollReport['sections'][number]['totals'] => ({
+      baseSalaryMinor: rows.reduce((a, r) => a + r.baseSalaryMinor, 0),
+      motivationMinor: rows.reduce((a, r) => a + r.motivationMinor, 0),
+      bonusMinor: rows.reduce((a, r) => a + r.bonusMinor, 0),
+      fineMinor: rows.reduce((a, r) => a + r.fineMinor, 0),
+      totalEarnedMinor: rows.reduce((a, r) => a + r.totalEarnedMinor, 0),
+      toPayMinor: rows.reduce((a, r) => a + r.toPayMinor, 0),
+    });
+    const sections =
+      department === 'MANAGER'
+        ? report.sections
+            .map((s) => {
+              const rows = s.rows.filter((r) => r.roles.includes('MANAGER'));
+              return { ...s, rows, totals: retotal(rows) };
+            })
+            .filter((s) => s.rows.length > 0)
+        : department === 'ADMIN'
+          ? report.sections
+              .filter((s) => s.id === 'ADMIN')
+              .map((s) => {
+                const rows = s.rows.filter((r) => !r.roles.includes('MANAGER'));
+                return { ...s, rows, totals: retotal(rows) };
+              })
+              .filter((s) => s.rows.length > 0)
+          : report.sections.filter((s) => s.id === department);
+    const rows = sections.flatMap((s) => s.rows);
+    return {
+      ...report,
+      sections,
+      grandTotalMinor: rows.reduce((a, r) => a + r.totalEarnedMinor, 0),
+    };
+  }
+
+  private async computeClubSummary(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<ClubPayrollReport> {
+    const staff = await this.listStaffPaySummaries(clubId);
     const periodFrom = new Date(`${from}T00:00:00`);
     const periodTo = new Date(`${to}T23:59:59`);
-    const rows: ClubPayrollRow[] = await Promise.all(
-      filtered.map(async (s) => {
+    const rows: ClubPayrollRow[] = await mapPool(
+      staff,
+      CLUB_SUMMARY_CONCURRENCY,
+      async (s) => {
       const [summary, payouts] = await Promise.all([
         this.getPeriodSummary(clubId, s.userId, from, to),
         this.prisma.payrollPayout.findMany({
@@ -2901,7 +3006,7 @@ export class PayrollService {
         },
         ...(summary.ptStats ? { ptStats: summary.ptStats } : {}),
       };
-      }),
+      },
     );
 
     const sectionIds: ClubPayrollSectionId[] = [
