@@ -1,8 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import {
+  FitgoAnalyticsHttpProvider,
+  type FitgoInstallmentSale,
+} from '@fitgo/1c-adapter';
 import type {
   AnalyticInsight,
   AnalyticsCompareMode,
+  ClubAnalyticsMoney,
   ClubAnalyticsReport,
 } from '@fitgo/shared-types';
 import {
@@ -25,6 +30,7 @@ import { PayrollService } from '../payroll/payroll.service';
 import {
   assertPeriod,
   metric,
+  minskParts,
   rangeBounds,
   resolveCompareRange,
   weekBuckets,
@@ -42,6 +48,8 @@ const SEG_LABEL: Record<string, string> = {
 
 @Injectable()
 export class ClubAnalyticsService {
+  private readonly logger = new Logger(ClubAnalyticsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly revenue: ClubRevenueService,
@@ -88,6 +96,7 @@ export class ClubAnalyticsService {
       dataSince,
       trainerRankings,
       fot,
+      installments,
     ] = await Promise.all([
       this.moneyBlock(clubId, params.from, params.to),
       this.moneyBlock(clubId, compareFrom, compareTo),
@@ -102,9 +111,10 @@ export class ClubAnalyticsService {
       params.includePay
         ? this.fotBlock(clubId, params.from, params.to, compareFrom, compareTo)
         : Promise.resolve(null),
+      this.installmentsSnapshot(),
     ]);
 
-    const money = {
+    const money: ClubAnalyticsMoney = {
       revenue: metric(moneyCur.revenueMinor, moneyCmp.revenueMinor, {
         unit: 'money' as const,
         trend: moneyCur.revenueTrend,
@@ -120,6 +130,7 @@ export class ClubAnalyticsService {
       debtOutstanding: metric(moneyCur.debtMinor, moneyCmp.debtMinor, {
         unit: 'money' as const,
       }),
+      installments,
     };
 
     const members = {
@@ -252,6 +263,35 @@ export class ClubAnalyticsService {
       .map((d) => d.toISOString().slice(0, 10));
     if (!dates.length) return null;
     return dates.sort()[0] ?? null;
+  }
+
+  private analyticsProvider(): FitgoAnalyticsHttpProvider | null {
+    const baseUrl = this.config.get<string>('FORMA_ANALYTICS_URL')?.trim();
+    const apiKey = this.config.get<string>('FORMA_API_KEY')?.trim() ?? '';
+    const basicAuth =
+      this.config.get<string>('FORMA_BASIC_AUTH')?.trim() ?? '';
+    if (!baseUrl || !apiKey) return null;
+    return new FitgoAnalyticsHttpProvider({ baseUrl, apiKey, basicAuth });
+  }
+
+  /**
+   * Snapshot of open installment schedules from 1C (Minsk calendar).
+   * Failures return null so club analytics still loads.
+   */
+  private async installmentsSnapshot(): Promise<
+    ClubAnalyticsMoney['installments']
+  > {
+    const provider = this.analyticsProvider();
+    if (!provider?.getInstallments) return null;
+    try {
+      const rows = (await provider.getInstallments()) ?? [];
+      return aggregateInstallments(rows);
+    } catch (err) {
+      this.logger.warn(
+        `Installments snapshot failed: ${err instanceof Error ? err.message : err}`,
+      );
+      return null;
+    }
   }
 
   private async moneyBlock(clubId: string, from: string, to: string) {
@@ -976,4 +1016,46 @@ function addDaysLocal(iso: string, days: number): string {
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
   const day = String(d.getUTCDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+/** Aggregate open installment schedules into Debitorka sub-metrics (amounts → minor). */
+export function aggregateInstallments(
+  rows: FitgoInstallmentSale[],
+  now = new Date(),
+): NonNullable<ClubAnalyticsMoney['installments']> {
+  const { year, month, day } = minskParts(now);
+  const todayIso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
+  const monthEndDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const monthEnd = `${year}-${String(month).padStart(2, '0')}-${String(monthEndDay).padStart(2, '0')}`;
+
+  let dueThisMonth = 0;
+  let soldTotal = 0;
+  let overdue = 0;
+
+  for (const row of rows) {
+    soldTotal += Number(row.total || 0);
+    for (const p of row.payments ?? []) {
+      const planAmt = Number(p.planAmount || 0);
+      const factAmt = Number(p.factAmount || 0);
+      const paid = factAmt >= planAmt && planAmt > 0;
+      if (paid) continue;
+      const rem = Math.max(0, planAmt - factAmt);
+      if (rem <= 0) continue;
+      const planIso = String(p.planDate ?? '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(planIso)) continue;
+      if (planIso >= monthStart && planIso <= monthEnd) {
+        dueThisMonth += rem;
+      }
+      if (planIso < todayIso) {
+        overdue += rem;
+      }
+    }
+  }
+
+  return {
+    dueThisMonthMinor: Math.round(dueThisMonth * 100),
+    soldTotalMinor: Math.round(soldTotal * 100),
+    overdueMinor: Math.round(overdue * 100),
+  };
 }

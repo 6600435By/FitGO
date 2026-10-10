@@ -74,6 +74,31 @@ export function ClubAnalyticsPanel({
             currency={currency}
           />
         </div>
+        {m.installments && (
+          <div className="card mt-3">
+            <p className="mb-2 text-sm font-medium">Рассрочки</p>
+            <ul className="space-y-1 text-sm text-slate-300">
+              <li className="flex justify-between gap-3">
+                <span>К оплате в этом месяце</span>
+                <span>
+                  {money(m.installments.dueThisMonthMinor, currency)}
+                </span>
+              </li>
+              <li className="flex justify-between gap-3">
+                <span>Продано в рассрочку</span>
+                <span>
+                  {money(m.installments.soldTotalMinor, currency)}
+                </span>
+              </li>
+              <li className="flex justify-between gap-3">
+                <span>Просрочено</span>
+                <span>
+                  {money(m.installments.overdueMinor, currency)}
+                </span>
+              </li>
+            </ul>
+          </div>
+        )}
         <div className="card mt-3">
           <p className="mb-2 text-sm font-medium">По способу оплаты</p>
           <ul className="space-y-1 text-sm text-slate-300">

@@ -57,6 +57,18 @@ export interface ClubAnalyticsMoney {
   avgCheck: AnalyticMetric;
   refunds: AnalyticMetric;
   debtOutstanding: AnalyticMetric;
+  /**
+   * Open installment schedules from 1C Analytics `scope=installments`.
+   * Snapshot (not period-bound). Null when Analytics is unavailable.
+   */
+  installments: {
+    /** Unpaid plan amount with planDate in the current calendar month (Minsk). */
+    dueThisMonthMinor: number;
+    /** Sum of open installment sale totals (full schedule). */
+    soldTotalMinor: number;
+    /** Unpaid plan amount with planDate before today (Minsk). */
+    overdueMinor: number;
+  } | null;
 }
 
 export interface ClubAnalyticsMembers {
