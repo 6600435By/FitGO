@@ -53,6 +53,10 @@ import {
   type AdminRenewalCounters,
   type SuperAdminAnalytics,
   type StaffAuditLogItem,
+  type ClubAnalyticsReport,
+  type StaffAnalyticsReport,
+  type AnalyticsCompareMode,
+  type AnalyticsDepartment,
   AdminPermission,
   AdminTaskStatus,
   type ProductModulesState,
@@ -1998,6 +2002,86 @@ export const api = {
     const q = period ? `?period=${period}` : '';
     return request<SuperAdminAnalytics>(`/super-admin/analytics${q}`, {}, token);
   },
+
+  analyticsClub: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      compare?: AnalyticsCompareMode;
+      cmpFrom?: string;
+      cmpTo?: string;
+      includePay?: boolean;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.compare) q.set('compare', params.compare);
+    if (params.cmpFrom) q.set('cmpFrom', params.cmpFrom);
+    if (params.cmpTo) q.set('cmpTo', params.cmpTo);
+    if (params.includePay) q.set('includePay', '1');
+    return request<ClubAnalyticsReport>(
+      `/super-admin/analytics/club?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsStaff: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      department?: AnalyticsDepartment;
+      userId?: string;
+      includePay?: boolean;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.department) q.set('department', params.department);
+    if (params.userId) q.set('userId', params.userId);
+    if (params.includePay) q.set('includePay', '1');
+    return request<StaffAnalyticsReport>(
+      `/super-admin/analytics/staff?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsStaffXlsx: async (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      department?: AnalyticsDepartment;
+      userId?: string;
+      includePay?: boolean;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.department) q.set('department', params.department);
+    if (params.userId) q.set('userId', params.userId);
+    if (params.includePay) q.set('includePay', '1');
+    const base = API_URL;
+    const res = await fetch(
+      `${base}/super-admin/analytics/staff.xlsx?${q}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    return res.blob();
+  },
+
 
   superAdminAuditLog: (token: string) =>
     request<StaffAuditLogItem[]>('/super-admin/audit-log', {}, token),

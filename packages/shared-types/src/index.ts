@@ -579,6 +579,7 @@ export * from './staff-roster';
 export * from './booking-control';
 export * from './club-schedule';
 export * from './hall-class-snapshot';
+export * from './analytics';
 
 import type {
   ServiceControlLevel,

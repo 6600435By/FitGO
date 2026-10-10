@@ -28,6 +28,7 @@ import { HallSnapshotModule } from './hall-snapshot/hall-snapshot.module';
 import { StaffProfileModule } from './staff-profile/staff-profile.module';
 import { ClubScheduleModule } from './club-schedule/club-schedule.module';
 import { ClubSyncModule } from './club-sync/club-sync.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { ClubSyncModule } from './club-sync/club-sync.module';
     TrainerModule,
     AdminModule,
     SuperAdminModule,
+    AnalyticsModule,
     NotificationsModule,
     ChatModule,
     EngagementModule,
