@@ -440,6 +440,12 @@ export class AdminService {
 
   async getMyTasks(user: JwtPayload) {
     const clubId = requireClubId(user);
+    // Rebuild grouped debtor rows ASAP (legacy per-sale tasks still in DB until sync).
+    try {
+      await this.tasksScheduler.refreshDebtors(clubId);
+    } catch {
+      // non-fatal — list whatever we have
+    }
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
     const sharedOpen = {
@@ -455,7 +461,18 @@ export class AdminService {
       where: {
         clubId,
         OR: [
-          { assigneeId: user.sub },
+          {
+            assigneeId: user.sub,
+            NOT: {
+              OR: [
+                { source: 'DEBT_OVERDUE' },
+                {
+                  source: { in: ['STAFF_DEBT', 'CLIENT_DEBT'] },
+                  dedupeKey: { startsWith: 'debt:' },
+                },
+              ],
+            },
+          },
           {
             source: sharedOpen,
             status: {
@@ -464,6 +481,11 @@ export class AdminService {
                 PrismaAdminTaskStatus.IN_PROGRESS,
               ],
             },
+            // Debt queue: only aggregated debtor:* rows
+            OR: [
+              { source: { notIn: ['CLIENT_DEBT', 'STAFF_DEBT'] } },
+              { dedupeKey: { startsWith: 'debtor:' } },
+            ],
           },
           {
             source: 'MEMBERSHIP_EXPIRING',
@@ -560,37 +582,59 @@ export class AdminService {
       where: {
         id: taskId,
         clubId,
-        source: { in: ['CLIENT_DEBT', 'STAFF_DEBT'] },
+        source: { in: ['CLIENT_DEBT', 'STAFF_DEBT', 'DEBT_OVERDUE'] },
       },
     });
     if (!task) throw new NotFoundException('Задача не найдена');
 
     const meta = (task.meta ?? {}) as Record<string, unknown>;
-    const name =
+    const rawName =
       typeof meta.clientName === 'string'
         ? meta.clientName
-        : task.title.replace(/^Долг (клиента|сотрудника):\s*/i, '').split(' (')[0];
+        : task.title
+            .replace(/^Долг (клиента|сотрудника):\s*/i, '')
+            .replace(/\s*\([\d.,]+\s*BYN\)\s*$/i, '')
+            .trim();
+    const baseName = rawName
+      .replace(/\(\s*сотрудник\s*\)/gi, '')
+      .trim()
+      .replace(/\s+/g, ' ');
 
-    const where = {
-      clubId,
-      isActive: true,
-      paidAt: null as null,
-      ...(task.clientExternalId
-        ? { clientExternalId: task.clientExternalId }
-        : { clientName: name }),
-    };
+    let clientExternalId = task.clientExternalId?.trim() || null;
+    if (!clientExternalId && task.relatedSaleId) {
+      const related = await this.prisma.saleTransaction.findUnique({
+        where: { id: task.relatedSaleId },
+        select: { clientExternalId: true, clientName: true },
+      });
+      clientExternalId = related?.clientExternalId?.trim() || null;
+    }
+
+    const staffDebt =
+      task.source === 'STAFF_DEBT' ||
+      /\(\s*сотрудник\s*\)/i.test(rawName) ||
+      /\(\s*сотрудник\s*\)/i.test(task.title);
 
     const lines = await this.prisma.saleTransaction.findMany({
-      where,
+      where: {
+        clubId,
+        isActive: true,
+        paidAt: null,
+        ...(clientExternalId
+          ? { clientExternalId }
+          : baseName
+            ? { clientName: { contains: baseName, mode: 'insensitive' } }
+            : task.relatedSaleId
+              ? { id: task.relatedSaleId }
+              : { id: '__none__' }),
+      },
       orderBy: { soldAt: 'asc' },
       take: 200,
     });
 
-    // Staff vs client: filter by (сотрудник) marker when needed
-    const filtered =
-      task.source === 'STAFF_DEBT'
-        ? lines.filter((l) => /\(\s*сотрудник\s*\)/i.test(l.clientName ?? ''))
-        : lines.filter((l) => !/\(\s*сотрудник\s*\)/i.test(l.clientName ?? ''));
+    const filtered = lines.filter((l) => {
+      const isStaff = /\(\s*сотрудник\s*\)/i.test(l.clientName ?? '');
+      return staffDebt ? isStaff : !isStaff;
+    });
 
     return filtered.map((l) => ({
       id: l.id,
@@ -1115,8 +1159,15 @@ export class AdminService {
           (new Date(validUntil).getTime() - Date.now()) / 86400000,
         )
       : undefined;
-    const debtTotal =
+    let debtTotal =
       typeof meta.total === 'number' ? meta.total : undefined;
+    if (debtTotal == null) {
+      const m = task.title.match(/\(([\d\s.,]+)\s*BYN\)\s*$/i);
+      if (m) {
+        const parsed = Number(m[1].replace(/\s/g, '').replace(',', '.'));
+        if (Number.isFinite(parsed)) debtTotal = parsed;
+      }
+    }
     const debtCount =
       typeof meta.count === 'number' ? meta.count : undefined;
     const oldestSoldAt =

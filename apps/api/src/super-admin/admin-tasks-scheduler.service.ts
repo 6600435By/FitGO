@@ -117,6 +117,63 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     };
   }
 
+  private readonly lastDebtRefreshAt = new Map<string, number>();
+
+  /**
+   * Rebuild debtor tasks (one row per person). Safe to call from admin UI.
+   * Cancels legacy per-sale debt tasks first.
+   */
+  async refreshDebtors(clubId: string, force = false) {
+    const last = this.lastDebtRefreshAt.get(clubId) ?? 0;
+    if (!force && Date.now() - last < REFRESH_MIN_MS) {
+      return { created: 0, skipped: true as const };
+    }
+
+    const systemUser =
+      (await this.prisma.user.findFirst({
+        where: {
+          clubId,
+          roles: { some: { role: Role.SUPER_ADMIN } },
+          isActive: true,
+        },
+        select: { id: true },
+      })) ??
+      (await this.prisma.user.findFirst({
+        where: {
+          clubId,
+          roles: { some: { role: Role.ADMIN } },
+          isActive: true,
+        },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' },
+      }));
+    if (!systemUser) {
+      return { created: 0, skipped: false as const };
+    }
+
+    this.lastDebtRefreshAt.set(clubId, Date.now());
+    // Cancel in batches until none left (legacy take was 500)
+    for (let i = 0; i < 20; i++) {
+      const before = await this.prisma.adminTask.count({
+        where: {
+          clubId,
+          status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
+          OR: [
+            { source: 'DEBT_OVERDUE' },
+            {
+              source: { in: ['STAFF_DEBT', 'CLIENT_DEBT'] },
+              dedupeKey: { startsWith: 'debt:' },
+            },
+          ],
+        },
+      });
+      if (before === 0) break;
+      await this.cancelLegacyPerSaleDebtTasks(clubId, systemUser.id);
+    }
+    const created = await this.syncDebtors(clubId, systemUser.id);
+    return { created, skipped: false as const };
+  }
+
   /** Public refresh used by admin UI — at most once per 30 min per club. */
   async refreshMembershipRenewals(clubId: string, force = false) {
     const last = this.lastRefreshAt.get(clubId) ?? 0;
@@ -167,7 +224,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     );
   }
 
-  /** One-shot: cancel old per-sale debt tasks (debt:{saleId}:…). */
+  /** One-shot batch: cancel old per-sale debt tasks (debt:{saleId}:…). */
   private async cancelLegacyPerSaleDebtTasks(
     clubId: string,
     systemUserId: string,
@@ -179,7 +236,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         OR: [
           { source: 'DEBT_OVERDUE' },
           {
-            source: 'STAFF_DEBT',
+            source: { in: ['STAFF_DEBT', 'CLIENT_DEBT'] },
             dedupeKey: { startsWith: 'debt:' },
           },
         ],
@@ -187,23 +244,22 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       select: { id: true },
       take: 500,
     });
-    for (const row of legacy) {
-      await this.prisma.adminTask.update({
-        where: { id: row.id },
-        data: {
-          status: AdminTaskStatus.CANCELLED,
-          completedAt: new Date(),
-          nextActionAt: null,
-        },
-      });
-      await this.prisma.adminTaskEvent.create({
-        data: {
-          taskId: row.id,
-          actorId: systemUserId,
-          comment: 'Авто: заменено на задачу «один должник»',
-        },
-      });
-    }
+    if (!legacy.length) return;
+    await this.prisma.adminTask.updateMany({
+      where: { id: { in: legacy.map((r) => r.id) } },
+      data: {
+        status: AdminTaskStatus.CANCELLED,
+        completedAt: new Date(),
+        nextActionAt: null,
+      },
+    });
+    await this.prisma.adminTaskEvent.createMany({
+      data: legacy.map((row) => ({
+        taskId: row.id,
+        actorId: systemUserId,
+        comment: 'Авто: заменено на задачу «один должник»',
+      })),
+    });
   }
 
   /**
@@ -286,6 +342,8 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     );
     const seen = new Set<string>();
 
+    const toCreate: Prisma.AdminTaskCreateManyInput[] = [];
+    const now = new Date();
     for (const bucket of buckets.values()) {
       const dedupeKey = `debtor:${bucket.key}`;
       seen.add(dedupeKey);
@@ -321,24 +379,28 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         });
         continue;
       }
-      await this.prisma.adminTask.create({
-        data: {
-          clubId,
-          assigneeId: null,
-          createdById: systemUserId,
-          title,
-          description,
-          dueAt: bucket.oldestSoldAt,
-          status: AdminTaskStatus.OPEN,
-          source,
-          dedupeKey,
-          relatedSaleId: bucket.saleIds[0] ?? null,
-          clientExternalId: bucket.clientExternalId,
-          meta,
-          nextActionAt: new Date(),
-        },
+      toCreate.push({
+        clubId,
+        assigneeId: null,
+        createdById: systemUserId,
+        title,
+        description,
+        dueAt: bucket.oldestSoldAt,
+        status: AdminTaskStatus.OPEN,
+        source,
+        dedupeKey,
+        relatedSaleId: bucket.saleIds[0] ?? null,
+        clientExternalId: bucket.clientExternalId,
+        meta,
+        nextActionAt: now,
       });
-      created += 1;
+    }
+    if (toCreate.length) {
+      const res = await this.prisma.adminTask.createMany({
+        data: toCreate,
+        skipDuplicates: true,
+      });
+      created += res.count;
     }
 
     for (const task of openTasks) {

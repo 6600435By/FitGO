@@ -72,6 +72,7 @@ function AdminTasksInner() {
   const [openTaskId, setOpenTaskId] = useState<string | null>(initialTask);
   const [expandedDebtId, setExpandedDebtId] = useState<string | null>(null);
   const [debtLines, setDebtLines] = useState<Record<string, AdminDebtLine[]>>({});
+  const [debtLoadingId, setDebtLoadingId] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState<Record<string, string>>({});
 
   const load = () => {
@@ -149,13 +150,22 @@ function AdminTasksInner() {
     if (debtLines[id]) return;
     const token = getToken();
     if (!token) return;
+    setDebtLoadingId(id);
     try {
       const lines = await api.adminDebtLines(token, id);
       setDebtLines((prev) => ({ ...prev, [id]: lines }));
     } catch {
       setDebtLines((prev) => ({ ...prev, [id]: [] }));
+    } finally {
+      setDebtLoadingId(null);
     }
   };
+
+  const debtDisplayName = (task: AdminTaskItem) =>
+    task.title
+      .replace(/^Долг (клиента|сотрудника):\s*/i, '')
+      .replace(/\s*\([\d\s.,]+\s*BYN\)\s*$/i, '')
+      .trim();
 
   const managerTasks = useMemo(
     () =>
@@ -284,9 +294,7 @@ function AdminTasksInner() {
             >
               <div className="flex items-start justify-between gap-2">
                 <div>
-                  <p className="font-medium">
-                    {task.title.replace(/^Долг (клиента|сотрудника):\s*/i, '')}
-                  </p>
+                  <p className="font-medium">{debtDisplayName(task)}</p>
                   <p className="text-sm text-slate-400">
                     {(task.debtTotal ?? 0).toFixed(2)} BYN
                     {task.debtCount != null ? ` · ${task.debtCount} продаж` : ''}
@@ -309,8 +317,10 @@ function AdminTasksInner() {
             </button>
             {expandedDebtId === task.id ? (
               <div className="space-y-2 border-t border-slate-700/50 pt-2">
-                {(debtLines[task.id] ?? []).length === 0 ? (
-                  <p className="text-xs text-slate-500">Нет строк или загрузка…</p>
+                {debtLoadingId === task.id ? (
+                  <p className="text-xs text-slate-500">Загрузка строк…</p>
+                ) : (debtLines[task.id] ?? []).length === 0 ? (
+                  <p className="text-xs text-slate-500">Нет неоплаченных продаж</p>
                 ) : (
                   <ul className="space-y-1 text-sm">
                     {(debtLines[task.id] ?? []).map((line) => (

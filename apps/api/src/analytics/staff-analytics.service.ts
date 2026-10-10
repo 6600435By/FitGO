@@ -75,6 +75,21 @@ export class StaffAnalyticsService {
     const staff = await this.loadStaff(clubId);
     const { start, end } = rangeBounds(params.from, params.to);
 
+    // Skip heavy collectors when a single department is selected.
+    const needAdmin =
+      department === 'ALL' ||
+      department === 'ADMIN' ||
+      department === 'MANAGER';
+    const needGroup =
+      department === 'ALL' || department === 'GROUP_TRAINER';
+    const needPt = department === 'ALL' || department === 'PT_TRAINER';
+    const needSpa = department === 'ALL' || department === 'SPECIALIST';
+    const needTech = department === 'ALL' || department === 'TECH';
+    const emptyKpi = Promise.resolve(new Map<string, StaffDepartmentKpi>());
+    const emptyPay = Promise.resolve(
+      new Map<string, StaffPayColumns & { openExceptions: number }>(),
+    );
+
     const [
       hoursByUser,
       remarksByUser,
@@ -87,14 +102,29 @@ export class StaffAnalyticsService {
     ] = await Promise.all([
       this.collectHours(clubId, start, end),
       this.collectRemarks(clubId, start, end),
-      this.collectAdminKpis(clubId, staff, start, end, params.from, params.to),
-      this.collectGroupTrainerKpis(clubId, staff, start, end),
-      this.collectPtTrainerKpis(clubId, staff, start, end, params.from, params.to),
-      this.collectSpaKpis(clubId, staff, start, end, params.from, params.to),
-      this.collectTechKpis(clubId, staff, start, end),
+      needAdmin
+        ? this.collectAdminKpis(clubId, staff, start, end, params.from, params.to)
+        : emptyKpi,
+      needGroup
+        ? this.collectGroupTrainerKpis(clubId, staff, start, end)
+        : emptyKpi,
+      needPt
+        ? this.collectPtTrainerKpis(
+            clubId,
+            staff,
+            start,
+            end,
+            params.from,
+            params.to,
+          )
+        : emptyKpi,
+      needSpa
+        ? this.collectSpaKpis(clubId, staff, start, end, params.from, params.to)
+        : emptyKpi,
+      needTech ? this.collectTechKpis(clubId, staff, start, end) : emptyKpi,
       includePay
         ? this.collectPay(clubId, params.from, params.to)
-        : Promise.resolve(new Map<string, StaffPayColumns & { openExceptions: number }>()),
+        : emptyPay,
     ]);
 
     const rows: StaffKpiRow[] = [];

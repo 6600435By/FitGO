@@ -2810,18 +2810,22 @@ export class PayrollService {
       return section === department;
     });
 
-    const rows: ClubPayrollRow[] = [];
-    for (const s of filtered) {
-      const summary = await this.getPeriodSummary(clubId, s.userId, from, to);
-      const payouts = await this.prisma.payrollPayout.findMany({
-        where: {
-          clubId,
-          userId: s.userId,
-          status: PayrollPayoutStatus.PAID,
-          periodFrom: { gte: new Date(`${from}T00:00:00`) },
-          periodTo: { lte: new Date(`${to}T23:59:59`) },
-        },
-      });
+    const periodFrom = new Date(`${from}T00:00:00`);
+    const periodTo = new Date(`${to}T23:59:59`);
+    const rows: ClubPayrollRow[] = await Promise.all(
+      filtered.map(async (s) => {
+      const [summary, payouts] = await Promise.all([
+        this.getPeriodSummary(clubId, s.userId, from, to),
+        this.prisma.payrollPayout.findMany({
+          where: {
+            clubId,
+            userId: s.userId,
+            status: PayrollPayoutStatus.PAID,
+            periodFrom: { gte: periodFrom },
+            periodTo: { lte: periodTo },
+          },
+        }),
+      ]);
       const advancePaidMinor = payouts
         .filter((p) => p.kind === PrismaPayoutKind.ADVANCE_HALF)
         .reduce((a, p) => a + p.totalMinor, 0);
@@ -2856,7 +2860,7 @@ export class PayrollService {
         asPayProfile(comp?.payProfile),
       );
 
-      rows.push({
+      return {
         userId: s.userId,
         name: s.name,
         section,
@@ -2896,8 +2900,9 @@ export class PayrollService {
             .reduce((a, u) => a + u.quantity, 0),
         },
         ...(summary.ptStats ? { ptStats: summary.ptStats } : {}),
-      });
-    }
+      };
+      }),
+    );
 
     const sectionIds: ClubPayrollSectionId[] = [
       'ADMIN',
