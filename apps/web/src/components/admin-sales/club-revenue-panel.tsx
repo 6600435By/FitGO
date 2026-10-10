@@ -557,7 +557,10 @@ export function ClubRevenuePanel() {
 
   useEffect(() => {
     if (!backfillBusy) return;
-    const id = setInterval(() => void refreshBackfill(), 4000);
+    const id = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void refreshBackfill();
+    }, 4000);
     return () => clearInterval(id);
   }, [backfillBusy, refreshBackfill]);
 

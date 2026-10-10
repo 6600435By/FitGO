@@ -164,6 +164,7 @@ export function ChatInbox({
 
   useEffect(() => {
     const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       void refresh();
     }, 8000);
     return () => clearInterval(interval);

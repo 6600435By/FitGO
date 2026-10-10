@@ -59,6 +59,8 @@ Analytics «Персонал» and payroll club summary must **not** call live 1
 - Manager block → `GET …/staff/manager-efficiency` only for ALL / MANAGER
 - Integration HTTP gate: max 3 concurrent; Analytics: max 2; identical GETs single-flight
 - Trainer roster / admin at-risk → `ClubMembershipSnapshot` + visits in Postgres
+- Booking-control list → PT sales from `TrainerPtSale` only; live 1C on «Обновить из 1С»
+- Chat / sync-status / sales backfill polls pause while the browser tab is hidden
 
 `DATABASE_URL` should include `connection_limit=10` on the shared Windows box (see `fitgo-api.env.example`).
 

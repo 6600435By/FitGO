@@ -2444,41 +2444,11 @@ export class BookingControlService {
     const hit = this.ptSalesCache.get(key);
     if (hit && Date.now() - hit.at < 60_000) return hit.rows;
 
+    // List reads Postgres only (club-sync / refreshFrom1c). No background 1C.
     const dbRows = await this.loadTrainerPtSalesFromDb(clubId, from, to);
-    const provider = this.fitness.getProvider();
-    const hasLive = Boolean(provider.getTrainerPtSales);
-
-    // Prefer synced DB so list stays fast (~30s live 1C otherwise).
-    if (dbRows.length > 0) {
-      this.ptSalesCache.set(key, { at: Date.now(), rows: dbRows });
-      this.indexTrainerPtSales(dbRows);
-      if (hasLive) {
-        void this.fetchTrainerPtSalesLive(from, to)
-          .then((live) => {
-            if (!live.length) return;
-            this.ptSalesCache.set(key, { at: Date.now(), rows: live });
-            this.indexTrainerPtSales(live);
-          })
-          .catch(() => undefined);
-      }
-      return dbRows;
-    }
-
-    if (!hasLive) {
-      this.ptSalesCache.set(key, { at: Date.now(), rows: [] });
-      return [];
-    }
-
-    try {
-      const list = await this.fetchTrainerPtSalesLive(from, to);
-      this.ptSalesCache.set(key, { at: Date.now(), rows: list });
-      this.indexTrainerPtSales(list);
-      return list;
-    } catch {
-      // Never poison with a long-lived empty on timeout when DB was empty.
-      this.ptSalesCache.set(key, { at: Date.now(), rows: [] });
-      return [];
-    }
+    this.ptSalesCache.set(key, { at: Date.now(), rows: dbRows });
+    this.indexTrainerPtSales(dbRows);
+    return dbRows;
   }
 
   /** Prefer in-memory index from list; at most one ≤30d 1C fetch. */

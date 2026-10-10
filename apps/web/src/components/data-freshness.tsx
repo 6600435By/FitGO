@@ -145,6 +145,7 @@ export function DataFreshness({
   useEffect(() => {
     if (!status?.running || !canRefresh) return;
     const id = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       void (async () => {
         const s = await load();
         if (s && !s.running) {
