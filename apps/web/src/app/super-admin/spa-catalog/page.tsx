@@ -182,7 +182,7 @@ export default function SuperAdminSpaCatalogPage() {
         <div>
           <h2 className="text-xl font-semibold">Каталог SPA</h2>
           <p className="text-sm text-slate-400">
-            Сегмент 1С «Спа кабинет приложение» → цены и видимость в записи. Новые
+            Сегмент 1С «SPA кабинет приложение» → цены и видимость в записи. Новые
             услуги из 1С скрыты, пока не включите «В записи». Если sync не находит
             сегмент — обновите FitGOIntegration (BSL) и переопубликуйте HTTP.
           </p>

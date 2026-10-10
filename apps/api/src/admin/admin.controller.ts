@@ -61,9 +61,32 @@ export class AdminController {
     return this.adminService.getTaskDetail(user, id);
   }
 
+  @Get('tasks/:id/debt-lines')
+  getDebtLines(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.adminService.getDebtLines(user, id);
+  }
+
   @Post('tasks/:id/claim')
   claimTask(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.adminService.claimTask(user, id);
+  }
+
+  @Post('tasks/:id/snooze')
+  snoozeTask(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { days?: number },
+  ) {
+    return this.adminService.snoozeTask(user, id, body.days ?? 3);
+  }
+
+  @Post('tasks/:id/comment')
+  addTaskComment(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { comment?: string },
+  ) {
+    return this.adminService.addTaskComment(user, id, body.comment ?? '');
   }
 
   @Post('tasks/:id/action')

@@ -442,6 +442,14 @@ export class AdminService {
     const clubId = requireClubId(user);
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
+    const sharedOpen = {
+      in: [
+        'MEMBERSHIP_EXPIRING',
+        'CLIENT_DEBT',
+        'STAFF_DEBT',
+        'INSTALLMENT_PAYMENT',
+      ] as string[],
+    };
 
     const tasks = await this.prisma.adminTask.findMany({
       where: {
@@ -449,7 +457,7 @@ export class AdminService {
         OR: [
           { assigneeId: user.sub },
           {
-            source: 'MEMBERSHIP_EXPIRING',
+            source: sharedOpen,
             status: {
               in: [
                 PrismaAdminTaskStatus.OPEN,
@@ -464,9 +472,12 @@ export class AdminService {
           },
         ],
       },
-      include: { assignee: true },
+      include: {
+        assignee: true,
+        createdBy: { select: { id: true, firstName: true, lastName: true } },
+      },
       orderBy: [{ status: 'asc' }, { nextActionAt: 'asc' }, { dueAt: 'asc' }],
-      take: 200,
+      take: 300,
     });
 
     const saleIds = tasks
@@ -480,9 +491,191 @@ export class AdminService {
       : [];
     const clientBySale = new Map(sales.map((sale) => [sale.id, sale.clientName]));
 
-    return tasks.map((task) =>
-      this.mapTaskItem(task, clientBySale.get(task.relatedSaleId ?? '') ?? null),
-    );
+    const groupIds = [
+      ...new Set(
+        tasks
+          .map((t) => t.groupId)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    const groupStats = new Map<
+      string,
+      { total: number; done: number; assignees: string[] }
+    >();
+    if (groupIds.length) {
+      const siblings = await this.prisma.adminTask.findMany({
+        where: { clubId, groupId: { in: groupIds } },
+        include: {
+          assignee: { select: { firstName: true, lastName: true } },
+        },
+      });
+      for (const g of groupIds) {
+        const rows = siblings.filter((s) => s.groupId === g);
+        groupStats.set(g, {
+          total: rows.length,
+          done: rows.filter(
+            (r) =>
+              r.status === PrismaAdminTaskStatus.DONE ||
+              r.status === PrismaAdminTaskStatus.CANCELLED,
+          ).length,
+          assignees: rows
+            .map((r) =>
+              r.assignee
+                ? `${r.assignee.firstName} ${r.assignee.lastName}`.trim()
+                : '',
+            )
+            .filter(Boolean),
+        });
+      }
+    }
+
+    return tasks.map((task) => {
+      const item = this.mapTaskItem(
+        task,
+        clientBySale.get(task.relatedSaleId ?? '') ?? null,
+      ) as ReturnType<AdminService['mapTaskItem']> & {
+        groupProgress?: {
+          done: number;
+          total: number;
+          assignees: string[];
+        };
+      };
+      if (task.groupId) {
+        const stats = groupStats.get(task.groupId);
+        if (stats) {
+          item.groupProgress = {
+            done: stats.done,
+            total: stats.total,
+            assignees: stats.assignees,
+          };
+        }
+      }
+      return item;
+    });
+  }
+
+  async getDebtLines(user: JwtPayload, taskId: string) {
+    const clubId = requireClubId(user);
+    const task = await this.prisma.adminTask.findFirst({
+      where: {
+        id: taskId,
+        clubId,
+        source: { in: ['CLIENT_DEBT', 'STAFF_DEBT'] },
+      },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+
+    const meta = (task.meta ?? {}) as Record<string, unknown>;
+    const name =
+      typeof meta.clientName === 'string'
+        ? meta.clientName
+        : task.title.replace(/^Долг (клиента|сотрудника):\s*/i, '').split(' (')[0];
+
+    const where = {
+      clubId,
+      isActive: true,
+      paidAt: null as null,
+      ...(task.clientExternalId
+        ? { clientExternalId: task.clientExternalId }
+        : { clientName: name }),
+    };
+
+    const lines = await this.prisma.saleTransaction.findMany({
+      where,
+      orderBy: { soldAt: 'asc' },
+      take: 200,
+    });
+
+    // Staff vs client: filter by (сотрудник) marker when needed
+    const filtered =
+      task.source === 'STAFF_DEBT'
+        ? lines.filter((l) => /\(\s*сотрудник\s*\)/i.test(l.clientName ?? ''))
+        : lines.filter((l) => !/\(\s*сотрудник\s*\)/i.test(l.clientName ?? ''));
+
+    return filtered.map((l) => ({
+      id: l.id,
+      soldAt: l.soldAt.toISOString(),
+      productName: l.productName ?? l.saleType,
+      amount: Number(l.amount || 0),
+      employeeName: l.employeeName ?? undefined,
+      employeeExternalId: l.employeeExternalId ?? undefined,
+      externalSaleId: l.externalSaleId,
+    }));
+  }
+
+  async snoozeTask(user: JwtPayload, taskId: string, days: number) {
+    const clubId = requireClubId(user);
+    const n = Math.min(30, Math.max(1, Math.floor(days) || 1));
+    const task = await this.prisma.adminTask.findFirst({
+      where: {
+        id: taskId,
+        clubId,
+        source: {
+          in: ['CLIENT_DEBT', 'STAFF_DEBT', 'INSTALLMENT_PAYMENT', 'MANAGER'],
+        },
+        OR: [
+          { assigneeId: user.sub },
+          { assigneeId: null },
+          { source: { in: ['CLIENT_DEBT', 'STAFF_DEBT', 'INSTALLMENT_PAYMENT'] } },
+        ],
+      },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+    const next = new Date();
+    next.setDate(next.getDate() + n);
+    next.setHours(10, 0, 0, 0);
+    const updated = await this.prisma.adminTask.update({
+      where: { id: taskId },
+      data: {
+        nextActionAt: next,
+        status:
+          task.status === PrismaAdminTaskStatus.OPEN
+            ? PrismaAdminTaskStatus.IN_PROGRESS
+            : task.status,
+        assigneeId: task.assigneeId ?? user.sub,
+      },
+      include: { assignee: true },
+    });
+    await this.prisma.adminTaskEvent.create({
+      data: {
+        taskId,
+        actorId: user.sub,
+        stage: task.stage,
+        comment: `Напомнить через ${n} дн.`,
+      },
+    });
+    return this.mapTaskItem(updated);
+  }
+
+  async addTaskComment(user: JwtPayload, taskId: string, comment: string) {
+    const clubId = requireClubId(user);
+    const text = comment?.trim();
+    if (!text) throw new BadRequestException('Укажите комментарий');
+    const task = await this.prisma.adminTask.findFirst({
+      where: { id: taskId, clubId },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+    await this.prisma.adminTaskEvent.create({
+      data: {
+        taskId,
+        actorId: user.sub,
+        stage: task.stage,
+        comment: text,
+      },
+    });
+    if (!task.assigneeId) {
+      await this.prisma.adminTask.update({
+        where: { id: taskId },
+        data: {
+          assigneeId: user.sub,
+          status:
+            task.status === PrismaAdminTaskStatus.OPEN
+              ? PrismaAdminTaskStatus.IN_PROGRESS
+              : task.status,
+        },
+      });
+    }
+    return this.getTaskDetail(user, taskId);
   }
 
   async getRenewalCounters(user: JwtPayload) {
@@ -647,7 +840,18 @@ export class AdminService {
   async claimTask(user: JwtPayload, taskId: string) {
     const clubId = requireClubId(user);
     const task = await this.prisma.adminTask.findFirst({
-      where: { id: taskId, clubId, source: 'MEMBERSHIP_EXPIRING' },
+      where: {
+        id: taskId,
+        clubId,
+        source: {
+          in: [
+            'MEMBERSHIP_EXPIRING',
+            'CLIENT_DEBT',
+            'STAFF_DEBT',
+            'INSTALLMENT_PAYMENT',
+          ],
+        },
+      },
     });
     if (!task) throw new NotFoundException('Задача не найдена');
 
@@ -799,19 +1003,83 @@ export class AdminService {
         clubId,
         OR: [
           { assigneeId: user.sub },
-          { source: 'MEMBERSHIP_EXPIRING' },
+          {
+            source: {
+              in: [
+                'MEMBERSHIP_EXPIRING',
+                'CLIENT_DEBT',
+                'STAFF_DEBT',
+                'INSTALLMENT_PAYMENT',
+              ],
+            },
+          },
         ],
+      },
+      include: {
+        assignee: { select: { firstName: true, lastName: true } },
       },
     });
     if (!task) throw new NotFoundException('Задача не найдена');
 
-    return this.prisma.adminTask.update({
+    const updated = await this.prisma.adminTask.update({
       where: { id: taskId },
       data: {
         status: status as PrismaAdminTaskStatus,
         completedAt: status === AdminTaskStatus.DONE ? new Date() : null,
+        assigneeId: task.assigneeId ?? user.sub,
       },
     });
+
+    if (
+      status === AdminTaskStatus.DONE &&
+      task.groupId &&
+      task.completionMode === 'SHARED'
+    ) {
+      const actorName = task.assignee
+        ? `${task.assignee.firstName} ${task.assignee.lastName}`.trim()
+        : 'админ';
+      const siblings = await this.prisma.adminTask.findMany({
+        where: {
+          clubId,
+          groupId: task.groupId,
+          id: { not: taskId },
+          status: {
+            in: [PrismaAdminTaskStatus.OPEN, PrismaAdminTaskStatus.IN_PROGRESS],
+          },
+        },
+      });
+      for (const sib of siblings) {
+        await this.prisma.adminTask.update({
+          where: { id: sib.id },
+          data: {
+            status: PrismaAdminTaskStatus.DONE,
+            completedAt: new Date(),
+          },
+        });
+        await this.prisma.adminTaskEvent.create({
+          data: {
+            taskId: sib.id,
+            actorId: user.sub,
+            comment: `Выполнил: ${actorName} (общее выполнение)`,
+          },
+        });
+      }
+    }
+
+    await this.prisma.adminTaskEvent.create({
+      data: {
+        taskId,
+        actorId: user.sub,
+        comment:
+          status === AdminTaskStatus.DONE
+            ? 'Выполнена'
+            : status === AdminTaskStatus.IN_PROGRESS
+              ? 'В работу'
+              : String(status),
+      },
+    });
+
+    return updated;
   }
 
   private mapTaskItem(
@@ -832,7 +1100,10 @@ export class AdminService {
       clientExternalId?: string | null;
       meta?: unknown;
       relatedSaleId?: string | null;
+      groupId?: string | null;
+      completionMode?: string | null;
       assignee?: { id: string; firstName: string; lastName: string } | null;
+      createdBy?: { id: string; firstName: string; lastName: string } | null;
     },
     clientName?: string | null,
   ) {
@@ -842,6 +1113,27 @@ export class AdminService {
     const daysLeft = validUntil
       ? Math.floor(
           (new Date(validUntil).getTime() - Date.now()) / 86400000,
+        )
+      : undefined;
+    const debtTotal =
+      typeof meta.total === 'number' ? meta.total : undefined;
+    const debtCount =
+      typeof meta.count === 'number' ? meta.count : undefined;
+    const oldestSoldAt =
+      typeof meta.oldestSoldAt === 'string' ? meta.oldestSoldAt : undefined;
+    const debtAgeDays = oldestSoldAt
+      ? Math.floor(
+          (Date.now() - new Date(oldestSoldAt).getTime()) / 86400000,
+        )
+      : undefined;
+    const planDate =
+      typeof meta.planDate === 'string' ? meta.planDate : undefined;
+    const overdueDays = planDate
+      ? Math.max(
+          0,
+          Math.floor(
+            (Date.now() - new Date(planDate).getTime()) / 86400000,
+          ),
         )
       : undefined;
 
@@ -856,7 +1148,9 @@ export class AdminService {
       topic: adminTaskTopic({
         source: task.source,
         title: task.title,
-        clientName: clientName ?? null,
+        clientName:
+          clientName ??
+          (typeof meta.clientName === 'string' ? meta.clientName : null),
       }),
       assignee: task.assignee
         ? {
@@ -865,7 +1159,17 @@ export class AdminService {
             lastName: task.assignee.lastName,
           }
         : undefined,
+      createdBy: task.createdBy
+        ? {
+            id: task.createdBy.id,
+            firstName: task.createdBy.firstName,
+            lastName: task.createdBy.lastName,
+          }
+        : undefined,
       createdAt: task.createdAt.toISOString(),
+      groupId: task.groupId ?? undefined,
+      completionMode:
+        (task.completionMode as 'SHARED' | 'INDIVIDUAL') || undefined,
       stage: (task.stage as RenewalStage) || undefined,
       nextActionAt: task.nextActionAt?.toISOString(),
       attempts: task.attempts ?? 0,
@@ -883,6 +1187,25 @@ export class AdminService {
       kind: typeof meta.kind === 'string' ? meta.kind : undefined,
       termDays:
         typeof meta.termDays === 'number' ? meta.termDays : undefined,
+      debtTotal,
+      debtCount,
+      oldestSoldAt,
+      debtAgeDays,
+      sellers: Array.isArray(meta.sellers)
+        ? (meta.sellers as string[])
+        : undefined,
+      installmentPaymentN:
+        typeof meta.paymentN === 'number' ? meta.paymentN : undefined,
+      installmentPaymentTotal:
+        typeof meta.paymentTotal === 'number' ? meta.paymentTotal : undefined,
+      planAmount:
+        typeof meta.planAmount === 'number' ? meta.planAmount : undefined,
+      planDate,
+      overdueDays,
+      templateName:
+        typeof meta.templateName === 'string' ? meta.templateName : undefined,
+      saleNumber:
+        typeof meta.number === 'string' ? meta.number : undefined,
     };
   }
 

@@ -21,7 +21,7 @@ const ROWS: {
   label: string;
 }[] = [
   { key: 'membershipMinor', salesKey: 'membershipMinor', label: 'Абонементы' },
-  { key: 'spaMinor', salesKey: 'massageMinor', label: 'Спа' },
+  { key: 'spaMinor', salesKey: 'massageMinor', label: 'SPA' },
   { key: 'solariumMinor', salesKey: 'solariumMinor', label: 'Солярий' },
   { key: 'shopMinor', salesKey: 'shopMinor', label: 'Магазин' },
   { key: 'corporateMinor', salesKey: 'corporateMinor', label: 'Корпо' },

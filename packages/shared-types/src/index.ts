@@ -208,7 +208,7 @@ export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
   },
   {
     key: 'spa_booking',
-    label: 'Спа-запись',
+    label: 'SPA-запись',
     description: 'Массаж, анализ состава тела, расписание специалистов',
     defaultEnabled: true,
     surfaces: [
@@ -1025,12 +1025,22 @@ export interface AdminTaskItem {
   status: AdminTaskStatus;
   dueAt?: string;
   completedAt?: string;
-  /** MANUAL | DEBT_OVERDUE | STAFF_DEBT | MEMBERSHIP_EXPIRING */
+  /** MANUAL | MANAGER | CLIENT_DEBT | STAFF_DEBT | DEBT_OVERDUE | MEMBERSHIP_EXPIRING | INSTALLMENT_PAYMENT */
   source?: string;
-  /** Display filter: staff_debt | client_debt | membership | other */
-  topic?: 'staff_debt' | 'client_debt' | 'membership' | 'other';
+  /** Display filter */
+  topic?:
+    | 'staff_debt'
+    | 'client_debt'
+    | 'membership'
+    | 'installment'
+    | 'manager'
+    | 'other';
   assignee?: { id: string; firstName: string; lastName: string };
+  createdBy?: { id: string; firstName: string; lastName: string };
   createdAt: string;
+  groupId?: string;
+  completionMode?: 'SHARED' | 'INDIVIDUAL';
+  groupProgress?: { done: number; total: number; assignees: string[] };
   /** Renewal funnel fields (MEMBERSHIP_EXPIRING) */
   stage?: RenewalStage;
   nextActionAt?: string;
@@ -1047,6 +1057,30 @@ export interface AdminTaskItem {
   kind?: string;
   /** Duration in days — ≤31 → short window (7d) */
   termDays?: number;
+  /** Aggregated debtor fields */
+  debtTotal?: number;
+  debtCount?: number;
+  oldestSoldAt?: string;
+  debtAgeDays?: number;
+  sellers?: string[];
+  /** Installment payment fields */
+  installmentPaymentN?: number;
+  installmentPaymentTotal?: number;
+  planAmount?: number;
+  planDate?: string;
+  overdueDays?: number;
+  templateName?: string;
+  saleNumber?: string;
+}
+
+export interface AdminDebtLine {
+  id: string;
+  soldAt: string;
+  productName: string;
+  amount: number;
+  employeeName?: string;
+  employeeExternalId?: string;
+  externalSaleId: string;
 }
 
 export interface AdminTaskEventItem {

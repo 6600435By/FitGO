@@ -1,6 +1,9 @@
 import {
+  ArrayMinSize,
+  IsArray,
   IsDateString,
   IsEnum,
+  IsIn,
   IsOptional,
   IsString,
   MinLength,
@@ -8,8 +11,20 @@ import {
 import { AdminTaskStatus } from '@fitgo/shared-types';
 
 export class CreateAdminTaskDto {
+  /** Prefer multi-assign; single assigneeId kept for backwards compatibility */
+  @IsOptional()
   @IsString()
-  assigneeId!: string;
+  assigneeId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  assigneeIds?: string[];
+
+  @IsOptional()
+  @IsIn(['SHARED', 'INDIVIDUAL'])
+  completionMode?: 'SHARED' | 'INDIVIDUAL';
 
   @IsString()
   @MinLength(2)

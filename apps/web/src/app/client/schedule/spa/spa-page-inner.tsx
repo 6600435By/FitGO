@@ -17,10 +17,10 @@ function formatPrice(minor: number, currency: string) {
 
 /** Направления как на сайте ffs.by/ceny-uslug/spa-uslugi. */
 const CATEGORY_ORDER = [
-  'Классический спа-массаж',
-  'Расслабляющий спа-массаж',
+  'Классический SPA-массаж',
+  'Расслабляющий SPA-массаж',
   'Коррекция фигуры',
-  'Спортивный спа-массаж',
+  'Спортивный SPA-массаж',
   'Обертывание',
   'Анализ состава тела',
   'Другое',
@@ -30,10 +30,10 @@ function categoryOf(el: SpaServiceEligibility): string {
   const name = el.service.name.toLowerCase();
   if (el.service.kind === 'BODY_COMPOSITION') return 'Анализ состава тела';
   if (el.service.kind === 'WRAP') return 'Обертывание';
-  if (/классическ/.test(name)) return 'Классический спа-массаж';
-  if (/расслаб|релакс/.test(name)) return 'Расслабляющий спа-массаж';
+  if (/классическ/.test(name)) return 'Классический SPA-массаж';
+  if (/расслаб|релакс/.test(name)) return 'Расслабляющий SPA-массаж';
   if (/коррекц|медов/.test(name)) return 'Коррекция фигуры';
-  if (/спортив/.test(name)) return 'Спортивный спа-массаж';
+  if (/спортив/.test(name)) return 'Спортивный SPA-массаж';
   if (/бандаж|оберт/.test(name)) return 'Обертывание';
   return 'Другое';
 }
@@ -136,7 +136,7 @@ export default function ClientSpaSchedulePage() {
         setServices(list);
         if (forcedQuota && list.length === 0) {
           setMessage(
-            `Нет услуг спа, доступных по абонементу «${membershipServiceName}». Обратитесь к администратору.`,
+            `Нет услуг SPA, доступных по абонементу «${membershipServiceName}». Обратитесь к администратору.`,
           );
         } else {
           setMessage('');

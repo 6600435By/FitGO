@@ -173,7 +173,7 @@ export interface BookingControlDetail extends BookingControlListItem {
   history?: BookingControlHistoryEvent[];
 }
 
-/** Shared admin inbox row for GROUP sessions awaiting admin confirm. */
+/** Shared admin inbox row for GROUP / SPA / PT tasks awaiting admin action. */
 export interface GroupApprovalPendingTask {
   sessionKey: string;
   title: string;
@@ -187,6 +187,12 @@ export interface GroupApprovalPendingTask {
   bookedCount: number;
   arrivedCount: number;
   trainerSeenCount: number;
+  /** Defaults to GROUP for backwards compatibility */
+  kind?: BookingControlKind;
+  /** Why it is in the inbox */
+  reason?: 'AWAITING_ADMIN' | 'UNPAID';
+  clientName?: string;
+  paymentStatus?: string;
 }
 
 export interface BookingControlListQuery {

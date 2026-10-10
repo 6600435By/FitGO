@@ -500,7 +500,12 @@ export class ClubSyncOrchestrator {
               club?.externalId ?? null,
               today,
             );
-            return { rows: (r?.debt ?? 0) + (r?.membership ?? 0) };
+            return {
+              rows:
+                (r?.debt ?? 0) +
+                (r?.membership ?? 0) +
+                (r?.installment ?? 0),
+            };
           });
         }
       }

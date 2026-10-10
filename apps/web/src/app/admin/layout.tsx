@@ -30,7 +30,7 @@ const ALL_NAV: Array<{
   },
   {
     href: '/admin/spa',
-    label: 'Спа',
+    label: 'SPA',
     permission: AdminPermission.CLIENTS_VIEW,
     module: 'spa_booking' as const,
   },

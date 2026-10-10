@@ -117,7 +117,7 @@ export default function AdminHomePage() {
               href={`/admin/schedule?types=SPA&date=${today}`}
               className="flex min-h-11 items-center justify-between rounded-lg px-1 text-sm text-slate-300 hover:bg-slate-800/60"
             >
-              <span>СПА</span>
+              <span>SPA</span>
               <span className="text-white">
                 {data.stats.sessionsToday.spa} ›
               </span>

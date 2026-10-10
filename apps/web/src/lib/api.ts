@@ -1945,9 +1945,16 @@ export const api = {
 
   superAdminCreateTask: (
     token: string,
-    data: { assigneeId: string; title: string; description?: string; dueAt?: string },
+    data: {
+      assigneeId?: string;
+      assigneeIds?: string[];
+      title: string;
+      description?: string;
+      dueAt?: string;
+      completionMode?: 'SHARED' | 'INDIVIDUAL';
+    },
   ) =>
-    request<AdminTaskItem>('/super-admin/tasks', {
+    request<AdminTaskItem | AdminTaskItem[]>('/super-admin/tasks', {
       method: 'POST',
       body: JSON.stringify(data),
     }, token),
@@ -2273,11 +2280,12 @@ export const api = {
   bookingControlPendingApprovals: (
     token: string,
     base: 'super-admin' | 'admin',
-    params?: { from?: string; to?: string },
+    params?: { from?: string; to?: string; kind?: 'GROUP' | 'SPA' | 'PT' },
   ) => {
     const q = new URLSearchParams();
     if (params?.from) q.set('from', params.from);
     if (params?.to) q.set('to', params.to);
+    if (params?.kind) q.set('kind', params.kind);
     const qs = q.toString();
     return request<import('@fitgo/shared-types').GroupApprovalPendingTask[]>(
       `/${base}/booking-control/pending-approvals${qs ? `?${qs}` : ''}`,
@@ -2285,6 +2293,25 @@ export const api = {
       token,
     );
   },
+
+  adminDebtLines: (token: string, taskId: string) =>
+    request<import('@fitgo/shared-types').AdminDebtLine[]>(
+      `/admin/tasks/${taskId}/debt-lines`,
+      {},
+      token,
+    ),
+
+  adminSnoozeTask: (token: string, taskId: string, days: number) =>
+    request<AdminTaskItem>(`/admin/tasks/${taskId}/snooze`, {
+      method: 'POST',
+      body: JSON.stringify({ days }),
+    }, token),
+
+  adminTaskComment: (token: string, taskId: string, comment: string) =>
+    request(`/admin/tasks/${taskId}/comment`, {
+      method: 'POST',
+      body: JSON.stringify({ comment }),
+    }, token),
 
   bookingControlHallSnapshots: (
     token: string,

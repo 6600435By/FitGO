@@ -458,7 +458,7 @@ export default function SpecialistSchedulePage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-xl font-semibold">Расписание спа</h2>
+        <h2 className="text-xl font-semibold">Расписание SPA</h2>
         <button
           type="button"
           className="btn-primary"

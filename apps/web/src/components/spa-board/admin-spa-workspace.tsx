@@ -662,7 +662,7 @@ export function AdminSpaWorkspace() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Спа</h2>
+      <h2 className="text-xl font-semibold">SPA</h2>
       {message && (
         <p className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-300">
           {message}

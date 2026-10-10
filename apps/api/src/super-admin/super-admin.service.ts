@@ -498,12 +498,16 @@ export class SuperAdminService implements OnModuleInit {
   }
 
   async listTasks(user: JwtPayload, status?: AdminTaskStatus) {
+    const clubId = requireClubId(user);
     const tasks = await this.prisma.adminTask.findMany({
       where: {
-        clubId: requireClubId(user),
+        clubId,
         ...(status ? { status: status as PrismaAdminTaskStatus } : {}),
       },
-      include: { assignee: true },
+      include: {
+        assignee: true,
+        createdBy: { select: { id: true, firstName: true, lastName: true } },
+      },
       orderBy: [{ status: 'asc' }, { dueAt: 'asc' }, { createdAt: 'desc' }],
     });
 
@@ -518,40 +522,126 @@ export class SuperAdminService implements OnModuleInit {
       : [];
     const clientBySale = new Map(sales.map((sale) => [sale.id, sale.clientName]));
 
-    return tasks.map((task) =>
-      this.mapTask(task, clientBySale.get(task.relatedSaleId ?? '') ?? null),
-    );
+    const groupIds = [
+      ...new Set(tasks.map((t) => t.groupId).filter((id): id is string => !!id)),
+    ];
+    const groupStats = new Map<
+      string,
+      { total: number; done: number; assignees: string[] }
+    >();
+    if (groupIds.length) {
+      const siblings = await this.prisma.adminTask.findMany({
+        where: { clubId, groupId: { in: groupIds } },
+        include: {
+          assignee: { select: { firstName: true, lastName: true } },
+        },
+      });
+      for (const g of groupIds) {
+        const rows = siblings.filter((s) => s.groupId === g);
+        groupStats.set(g, {
+          total: rows.length,
+          done: rows.filter(
+            (r) =>
+              r.status === PrismaAdminTaskStatus.DONE ||
+              r.status === PrismaAdminTaskStatus.CANCELLED,
+          ).length,
+          assignees: rows
+            .map((r) =>
+              r.assignee
+                ? `${r.assignee.firstName} ${r.assignee.lastName}`.trim()
+                : '',
+            )
+            .filter(Boolean),
+        });
+      }
+    }
+
+    return tasks.map((task) => {
+      const item = this.mapTask(
+        task,
+        clientBySale.get(task.relatedSaleId ?? '') ?? null,
+      );
+      if (task.groupId) {
+        const stats = groupStats.get(task.groupId);
+        if (stats) {
+          item.groupProgress = {
+            done: stats.done,
+            total: stats.total,
+            assignees: stats.assignees,
+          };
+        }
+      }
+      return item;
+    });
   }
 
   async createTask(user: JwtPayload, dto: CreateAdminTaskDto) {
     const clubId = requireClubId(user);
-    await this.ensureClubAdmin(clubId, dto.assigneeId);
+    const assigneeIds = [
+      ...new Set(
+        (dto.assigneeIds?.length
+          ? dto.assigneeIds
+          : dto.assigneeId
+            ? [dto.assigneeId]
+            : []
+        ).map((id) => id.trim()).filter(Boolean),
+      ),
+    ];
+    if (!assigneeIds.length) {
+      throw new BadRequestException('Выберите хотя бы одного администратора');
+    }
+    for (const id of assigneeIds) {
+      await this.ensureClubAdmin(clubId, id);
+    }
 
-    const task = await this.prisma.adminTask.create({
-      data: {
-        clubId,
-        assigneeId: dto.assigneeId,
-        createdById: user.sub,
-        title: dto.title.trim(),
-        description: dto.description?.trim() || null,
-        dueAt: dto.dueAt ? new Date(dto.dueAt) : null,
-      },
-      include: { assignee: true },
+    const completionMode =
+      dto.completionMode === 'SHARED' ? 'SHARED' : 'INDIVIDUAL';
+    const groupId =
+      assigneeIds.length > 1 || completionMode === 'SHARED'
+        ? `mgr_${randomBytes(8).toString('hex')}`
+        : null;
+    const title = dto.title.trim();
+    const description = dto.description?.trim() || null;
+    const dueAt = dto.dueAt ? new Date(dto.dueAt) : null;
+
+    const created = [];
+    for (const assigneeId of assigneeIds) {
+      const task = await this.prisma.adminTask.create({
+        data: {
+          clubId,
+          assigneeId,
+          createdById: user.sub,
+          title,
+          description,
+          dueAt,
+          source: 'MANAGER',
+          groupId,
+          completionMode,
+        },
+        include: {
+          assignee: true,
+          createdBy: { select: { id: true, firstName: true, lastName: true } },
+        },
+      });
+      created.push(task);
+      await this.prisma.notification.create({
+        data: {
+          userId: assigneeId,
+          type: 'GENERAL',
+          title: 'Новая задача от руководителя',
+          body: title,
+          senderId: user.sub,
+        },
+      });
+    }
+
+    await this.logAudit(user, 'TASK_CREATED', created[0]?.id ?? '', {
+      assigneeIds,
+      groupId,
+      completionMode,
     });
 
-    await this.prisma.notification.create({
-      data: {
-        userId: dto.assigneeId,
-        type: 'GENERAL',
-        title: 'Новая задача',
-        body: dto.title,
-        senderId: user.sub,
-      },
-    });
-
-    await this.logAudit(user, 'TASK_CREATED', task.id, { assigneeId: dto.assigneeId });
-
-    return this.mapTask(task);
+    return created.map((task) => this.mapTask(task));
   }
 
   async updateTask(
@@ -564,8 +654,12 @@ export class SuperAdminService implements OnModuleInit {
       dueAt?: string;
     },
   ) {
+    const clubId = requireClubId(user);
     const task = await this.prisma.adminTask.findFirst({
-      where: { id: taskId, clubId: requireClubId(user) },
+      where: { id: taskId, clubId },
+      include: {
+        assignee: { select: { firstName: true, lastName: true } },
+      },
     });
     if (!task) throw new NotFoundException('Задача не найдена');
 
@@ -587,8 +681,47 @@ export class SuperAdminService implements OnModuleInit {
             }
           : {}),
       },
-      include: { assignee: true },
+      include: {
+        assignee: true,
+        createdBy: { select: { id: true, firstName: true, lastName: true } },
+      },
     });
+
+    if (
+      data.status === AdminTaskStatus.DONE &&
+      task.groupId &&
+      task.completionMode === 'SHARED'
+    ) {
+      const actorName = task.assignee
+        ? `${task.assignee.firstName} ${task.assignee.lastName}`.trim()
+        : 'админ';
+      const siblings = await this.prisma.adminTask.findMany({
+        where: {
+          clubId,
+          groupId: task.groupId,
+          id: { not: taskId },
+          status: {
+            in: [PrismaAdminTaskStatus.OPEN, PrismaAdminTaskStatus.IN_PROGRESS],
+          },
+        },
+      });
+      for (const sib of siblings) {
+        await this.prisma.adminTask.update({
+          where: { id: sib.id },
+          data: {
+            status: PrismaAdminTaskStatus.DONE,
+            completedAt: new Date(),
+          },
+        });
+        await this.prisma.adminTaskEvent.create({
+          data: {
+            taskId: sib.id,
+            actorId: user.sub,
+            comment: `Выполнил: ${actorName} (общее выполнение)`,
+          },
+        });
+      }
+    }
 
     return this.mapTask(updated);
   }
@@ -710,7 +843,10 @@ export class SuperAdminService implements OnModuleInit {
       doNotCall?: boolean;
       clientExternalId?: string | null;
       meta?: unknown;
+      groupId?: string | null;
+      completionMode?: string | null;
       assignee: { id: string; firstName: string; lastName: string } | null;
+      createdBy?: { id: string; firstName: string; lastName: string } | null;
     },
     clientName?: string | null,
   ) {
@@ -735,7 +871,20 @@ export class SuperAdminService implements OnModuleInit {
             lastName: task.assignee.lastName,
           }
         : undefined,
+      createdBy: task.createdBy
+        ? {
+            id: task.createdBy.id,
+            firstName: task.createdBy.firstName,
+            lastName: task.createdBy.lastName,
+          }
+        : undefined,
       createdAt: task.createdAt.toISOString(),
+      groupId: task.groupId ?? undefined,
+      completionMode:
+        (task.completionMode as 'SHARED' | 'INDIVIDUAL') || undefined,
+      groupProgress: undefined as
+        | { done: number; total: number; assignees: string[] }
+        | undefined,
       stage: task.stage ?? undefined,
       nextActionAt: task.nextActionAt?.toISOString(),
       attempts: task.attempts ?? 0,

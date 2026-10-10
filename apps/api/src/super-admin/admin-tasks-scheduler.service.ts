@@ -1,13 +1,16 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AdminTaskStatus, Role } from '@prisma/client';
-import type { FitgoExpiringMembershipRow } from '@fitgo/1c-adapter';
+import { AdminTaskStatus, Prisma, Role } from '@prisma/client';
+import {
+  FitgoAnalyticsHttpProvider,
+  type FitgoExpiringMembershipRow,
+  type FitgoInstallmentSale,
+} from '@fitgo/1c-adapter';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { localDayKey } from '../club-schedule/trainer-schedule.helpers';
 
-const DEBT_DAYS = 7;
 const SCAN_DAYS = 14;
 const SHORT_TERM_MAX_DAYS = 31;
 const WINDOW = { short: 7, long: 14 } as const;
@@ -90,10 +93,11 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       return { debt: 0, membership: 0, closedRenewed: 0, closedLost: 0 };
     }
 
-    const debtCreated = await this.generateDebtTasks(
+    await this.cancelLegacyPerSaleDebtTasks(clubId, systemUser.id);
+    const debtCreated = await this.syncDebtors(clubId, systemUser.id);
+    const installment = await this.syncInstallmentPayments(
       clubId,
       systemUser.id,
-      dayKey,
     );
     const membership = await this.syncMembershipRenewals(
       clubId,
@@ -102,10 +106,11 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     );
 
     this.logger.log(
-      `Club ${clubId}: debt +${debtCreated}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}`,
+      `Club ${clubId}: debt +${debtCreated}, installment +${installment}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}`,
     );
     return {
       debt: debtCreated,
+      installment,
       membership: membership.created,
       closedRenewed: membership.closedRenewed,
       closedLost: membership.closedLost,
@@ -162,69 +167,343 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     );
   }
 
-  private async generateDebtTasks(
+  /** One-shot: cancel old per-sale debt tasks (debt:{saleId}:…). */
+  private async cancelLegacyPerSaleDebtTasks(
     clubId: string,
     systemUserId: string,
-    dayKey: string,
   ) {
-    let debtCreated = 0;
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - DEBT_DAYS);
+    const legacy = await this.prisma.adminTask.findMany({
+      where: {
+        clubId,
+        status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
+        OR: [
+          { source: 'DEBT_OVERDUE' },
+          {
+            source: 'STAFF_DEBT',
+            dedupeKey: { startsWith: 'debt:' },
+          },
+        ],
+      },
+      select: { id: true },
+      take: 500,
+    });
+    for (const row of legacy) {
+      await this.prisma.adminTask.update({
+        where: { id: row.id },
+        data: {
+          status: AdminTaskStatus.CANCELLED,
+          completedAt: new Date(),
+          nextActionAt: null,
+        },
+      });
+      await this.prisma.adminTaskEvent.create({
+        data: {
+          taskId: row.id,
+          actorId: systemUserId,
+          comment: 'Авто: заменено на задачу «один должник»',
+        },
+      });
+    }
+  }
 
+  /**
+   * One AdminTask per debtor (client or staff), shared club queue.
+   * Groups unpaid SaleTransaction by clientExternalId (fallback: clientName).
+   */
+  private async syncDebtors(clubId: string, systemUserId: string) {
+    let created = 0;
     const unpaid = await this.prisma.saleTransaction.findMany({
       where: {
         clubId,
         isActive: true,
         paidAt: null,
-        soldAt: { lte: cutoff },
-        employeeExternalId: { not: null },
       },
-      take: 200,
+      take: 2000,
       orderBy: { soldAt: 'asc' },
     });
 
+    type Bucket = {
+      key: string;
+      kind: 'client' | 'staff';
+      name: string;
+      clientExternalId: string | null;
+      total: number;
+      count: number;
+      oldestSoldAt: Date;
+      sellers: Set<string>;
+      saleIds: string[];
+    };
+    const buckets = new Map<string, Bucket>();
+
     for (const sale of unpaid) {
-      const code = sale.employeeExternalId?.trim();
-      if (!code) continue;
-      const seller = await this.prisma.user.findFirst({
-        where: {
-          clubId,
-          OR: [{ employeeCode: code }, { externalId: code }],
-          roles: { some: { role: Role.ADMIN } },
-          isActive: true,
-        },
-        select: { id: true },
-      });
-      if (!seller) continue;
-
-      const dedupeKey = `debt:${sale.externalSaleId}:${dayKey.slice(0, 7)}`;
-      const existing = await this.prisma.adminTask.findUnique({
-        where: { clubId_dedupeKey: { clubId, dedupeKey } },
-      });
-      if (existing) continue;
-
-      const amount = Number(sale.amount || 0).toFixed(2);
+      const amount = Number(sale.amount || 0);
+      if (!(amount > 0)) continue;
       const staffDebt = /\(\s*сотрудник\s*\)/i.test(sale.clientName ?? '');
+      const kind = staffDebt ? 'staff' : 'client';
+      const ext = sale.clientExternalId?.trim() || null;
+      const name =
+        (sale.clientName ?? '').trim() ||
+        (staffDebt ? 'сотрудник' : 'клиент');
+      const key = ext ? `${kind}:id:${ext}` : `${kind}:name:${name.toLowerCase()}`;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = {
+          key,
+          kind,
+          name,
+          clientExternalId: ext,
+          total: 0,
+          count: 0,
+          oldestSoldAt: sale.soldAt,
+          sellers: new Set(),
+          saleIds: [],
+        };
+        buckets.set(key, bucket);
+      }
+      bucket.total += amount;
+      bucket.count += 1;
+      if (sale.soldAt < bucket.oldestSoldAt) bucket.oldestSoldAt = sale.soldAt;
+      const seller =
+        (sale.employeeName ?? '').trim() ||
+        (sale.employeeExternalId ?? '').trim();
+      if (seller) bucket.sellers.add(seller);
+      bucket.saleIds.push(sale.id);
+    }
+
+    const openSources = ['CLIENT_DEBT', 'STAFF_DEBT'] as const;
+    const openTasks = await this.prisma.adminTask.findMany({
+      where: {
+        clubId,
+        source: { in: [...openSources] },
+        status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
+        dedupeKey: { startsWith: 'debtor:' },
+      },
+    });
+    const byDedupe = new Map(
+      openTasks
+        .filter((t) => t.dedupeKey)
+        .map((t) => [t.dedupeKey as string, t]),
+    );
+    const seen = new Set<string>();
+
+    for (const bucket of buckets.values()) {
+      const dedupeKey = `debtor:${bucket.key}`;
+      seen.add(dedupeKey);
+      const totalStr = bucket.total.toFixed(2);
+      const oldestIso = bucket.oldestSoldAt.toISOString().slice(0, 10);
+      const sellers = [...bucket.sellers];
+      const meta = {
+        total: bucket.total,
+        count: bucket.count,
+        oldestSoldAt: oldestIso,
+        sellers,
+        debtorKind: bucket.kind,
+        clientName: bucket.name,
+      };
+      const source = bucket.kind === 'staff' ? 'STAFF_DEBT' : 'CLIENT_DEBT';
+      const title =
+        bucket.kind === 'staff'
+          ? `Долг сотрудника: ${bucket.name} (${totalStr} BYN)`
+          : `Долг клиента: ${bucket.name} (${totalStr} BYN)`;
+      const description = `${bucket.count} продаж(и), всего ${totalStr} BYN. Самый старый долг: ${oldestIso}.${sellers.length ? ` Продавцы: ${sellers.join(', ')}.` : ''}`;
+      const existing = byDedupe.get(dedupeKey);
+      if (existing) {
+        await this.prisma.adminTask.update({
+          where: { id: existing.id },
+          data: {
+            title,
+            description,
+            meta,
+            clientExternalId: bucket.clientExternalId,
+            dueAt: bucket.oldestSoldAt,
+            relatedSaleId: bucket.saleIds[0] ?? null,
+          },
+        });
+        continue;
+      }
       await this.prisma.adminTask.create({
         data: {
           clubId,
-          assigneeId: seller.id,
+          assigneeId: null,
           createdById: systemUserId,
-          title: staffDebt
-            ? `Долг сотрудника: ${sale.clientName ?? 'сотрудник'} (${amount} BYN)`
-            : `Долг клиента: ${sale.clientName ?? 'клиент'} (${amount} BYN)`,
-          description: `Неоплаченная продажа старше ${DEBT_DAYS} дн. ${sale.productName ?? sale.saleType}. Дата продажи: ${sale.soldAt.toISOString().slice(0, 10)}.`,
-          dueAt: new Date(),
+          title,
+          description,
+          dueAt: bucket.oldestSoldAt,
           status: AdminTaskStatus.OPEN,
-          source: staffDebt ? 'STAFF_DEBT' : 'DEBT_OVERDUE',
+          source,
           dedupeKey,
-          relatedSaleId: sale.id,
-          relatedUserId: seller.id,
+          relatedSaleId: bucket.saleIds[0] ?? null,
+          clientExternalId: bucket.clientExternalId,
+          meta,
+          nextActionAt: new Date(),
         },
       });
-      debtCreated += 1;
+      created += 1;
     }
-    return debtCreated;
+
+    for (const task of openTasks) {
+      if (!task.dedupeKey || seen.has(task.dedupeKey)) continue;
+      await this.prisma.adminTask.update({
+        where: { id: task.id },
+        data: {
+          status: AdminTaskStatus.DONE,
+          completedAt: new Date(),
+          nextActionAt: null,
+        },
+      });
+      await this.prisma.adminTaskEvent.create({
+        data: {
+          taskId: task.id,
+          actorId: systemUserId,
+          comment: 'Авто: долг погашен',
+        },
+      });
+    }
+
+    return created;
+  }
+
+  private analyticsProvider(): FitgoAnalyticsHttpProvider | null {
+    const baseUrl = this.config.get<string>('FORMA_ANALYTICS_URL')?.trim();
+    const apiKey = this.config.get<string>('FORMA_API_KEY')?.trim() ?? '';
+    const basicAuth =
+      this.config.get<string>('FORMA_BASIC_AUTH')?.trim() ?? '';
+    if (!baseUrl || !apiKey) return null;
+    return new FitgoAnalyticsHttpProvider({ baseUrl, apiKey, basicAuth });
+  }
+
+  /**
+   * Per unpaid installment payment due today or earlier.
+   * Requires Analytics `scope=installments`.
+   */
+  private async syncInstallmentPayments(
+    clubId: string,
+    systemUserId: string,
+  ): Promise<number> {
+    const provider = this.analyticsProvider();
+    if (!provider?.getInstallments) return 0;
+
+    let rows: FitgoInstallmentSale[] = [];
+    try {
+      rows = (await provider.getInstallments()) ?? [];
+    } catch (err) {
+      this.logger.warn(
+        `Installments scan failed: ${err instanceof Error ? err.message : err}`,
+      );
+      return 0;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let created = 0;
+
+    const open = await this.prisma.adminTask.findMany({
+      where: {
+        clubId,
+        source: 'INSTALLMENT_PAYMENT',
+        status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
+      },
+    });
+    const byDedupe = new Map(
+      open.filter((t) => t.dedupeKey).map((t) => [t.dedupeKey as string, t]),
+    );
+    const seen = new Set<string>();
+
+    for (const row of rows) {
+      const payments = row.payments ?? [];
+      const totalN = payments.length;
+      for (const p of payments) {
+        const planAmt = Number(p.planAmount || 0);
+        const factAmt = Number(p.factAmount || 0);
+        const paid = factAmt >= planAmt && planAmt > 0;
+        const planDate = new Date(String(p.planDate).slice(0, 10));
+        if (Number.isNaN(planDate.getTime())) continue;
+        const dedupeKey = `installment:${row.saleDocumentId}:${p.n}`;
+        if (paid) {
+          const existing = byDedupe.get(dedupeKey);
+          if (existing) {
+            await this.prisma.adminTask.update({
+              where: { id: existing.id },
+              data: {
+                status: AdminTaskStatus.DONE,
+                completedAt: new Date(),
+                nextActionAt: null,
+              },
+            });
+            await this.prisma.adminTaskEvent.create({
+              data: {
+                taskId: existing.id,
+                actorId: systemUserId,
+                comment: 'Авто: платёж по рассрочке оплачен',
+              },
+            });
+          }
+          continue;
+        }
+        // Show from plan date onward (not future)
+        if (planDate > today) continue;
+
+        seen.add(dedupeKey);
+        const name = (row.clientName ?? '').trim() || 'клиент';
+        const amountStr = planAmt.toFixed(2);
+        const planIso = planDate.toISOString().slice(0, 10);
+        const meta = {
+          saleDocumentId: row.saleDocumentId,
+          number: row.number ?? null,
+          soldAt: row.soldAt ?? null,
+          templateName: row.templateName ?? null,
+          total: row.total ?? null,
+          paymentN: p.n,
+          paymentTotal: totalN,
+          planDate: planIso,
+          planAmount: planAmt,
+          phone: row.phone ?? null,
+          clientName: name,
+          payments: JSON.parse(JSON.stringify(payments)),
+        } as Prisma.InputJsonValue;
+        const title = `Рассрочка: ${name} — платёж ${p.n} из ${totalN} (${amountStr} BYN)`;
+        const description = `${row.templateName ?? 'Рассрочка'}${row.number ? ` · №${row.number}` : ''} · план ${planIso}`;
+        const existing = byDedupe.get(dedupeKey);
+        if (existing) {
+          await this.prisma.adminTask.update({
+            where: { id: existing.id },
+            data: {
+              title,
+              description,
+              meta,
+              clientExternalId: row.clientExternalId ?? null,
+              dueAt: planDate,
+              nextActionAt: planDate,
+            },
+          });
+          continue;
+        }
+        await this.prisma.adminTask.create({
+          data: {
+            clubId,
+            assigneeId: null,
+            createdById: systemUserId,
+            title,
+            description,
+            dueAt: planDate,
+            nextActionAt: planDate,
+            status: AdminTaskStatus.OPEN,
+            source: 'INSTALLMENT_PAYMENT',
+            dedupeKey,
+            clientExternalId: row.clientExternalId ?? null,
+            meta,
+          },
+        });
+        created += 1;
+      }
+    }
+
+    for (const task of open) {
+      if (!task.dedupeKey || seen.has(task.dedupeKey)) continue;
+      // Paid or no longer in feed — leave paid closers above; stale unpaid leave open
+    }
+
+    return created;
   }
 
   private termBucket(termDays: number | undefined): TermBucket {

@@ -15,7 +15,7 @@ const DEPTS: { id: AnalyticsDepartment; label: string }[] = [
   { id: 'ADMIN', label: 'Админы' },
   { id: 'GROUP_TRAINER', label: 'ГП' },
   { id: 'PT_TRAINER', label: 'ПТ' },
-  { id: 'SPECIALIST', label: 'СПА' },
+  { id: 'SPECIALIST', label: 'SPA' },
   { id: 'TECH', label: 'Тех' },
   { id: 'MANAGER', label: 'Упр.' },
 ];
@@ -413,7 +413,7 @@ function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
           спа {money(k.salesBySegment.spaMinor, currency)}, магазин{' '}
           {money(k.salesBySegment.shopMinor, currency)}. Задачи: {k.tasksDone}/
           {k.tasksAssigned}, медиана закрытия {k.medianCloseHours ?? '—'} ч.
-          Подтверждения ГП {k.bookingApprovalsGroup}, ПТ/СПА{' '}
+          Подтверждения ГП {k.bookingApprovalsGroup}, ПТ/SPA{' '}
           {k.bookingApprovalsSession}
           {k.approvalSharePct != null ? ` (${k.approvalSharePct}% клуба)` : ''}.
         </p>

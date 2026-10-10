@@ -31,6 +31,7 @@ import {
   parseSessionKey,
   saleSessionKey,
   sessionApprovalLabelRu,
+  sessionApprovalPhase,
   spaSettlementLabelRu,
   type BookingControlDetail,
   type BookingControlHistoryEvent,
@@ -1744,8 +1745,28 @@ export class BookingControlService {
     return this.detail(clubId, sessionKey);
   }
 
-  /** Shared admin inbox: GROUP sessions waiting for admin confirm. */
+  /**
+   * Shared admin inbox by kind:
+   * - GROUP (default): trainer confirmed, awaits admin
+   * - SPA: specialist confirmed, awaits admin
+   * - PT: unpaid past sessions (+ optional AWAITING_ADMIN SessionApproval)
+   */
   async listPendingAdminApprovals(
+    clubId: string,
+    from?: string,
+    to?: string,
+    kind: 'GROUP' | 'SPA' | 'PT' = 'GROUP',
+  ): Promise<GroupApprovalPendingTask[]> {
+    if (kind === 'SPA') {
+      return this.listPendingSpaAdminApprovals(clubId, from, to);
+    }
+    if (kind === 'PT') {
+      return this.listPendingPtAdminTasks(clubId, from, to);
+    }
+    return this.listPendingGroupAdminApprovals(clubId, from, to);
+  }
+
+  private async listPendingGroupAdminApprovals(
     clubId: string,
     from?: string,
     to?: string,
@@ -1812,6 +1833,8 @@ export class BookingControlService {
 
       out.push({
         sessionKey,
+        kind: 'GROUP',
+        reason: 'AWAITING_ADMIN',
         title: s.title,
         startAt: s.startAt.toISOString(),
         endAt: s.endAt?.toISOString(),
@@ -1825,6 +1848,198 @@ export class BookingControlService {
         trainerSeenCount: seenIds.length,
       });
     }
+    return out;
+  }
+
+  private async listPendingSpaAdminApprovals(
+    clubId: string,
+    from?: string,
+    to?: string,
+  ): Promise<GroupApprovalPendingTask[]> {
+    const fromD = new Date(
+      `${from?.trim() || this.ymdDaysAgo(30)}T00:00:00`,
+    );
+    const toD = new Date(
+      `${to?.trim() || this.ymdToday()}T23:59:59.999`,
+    );
+    const now = new Date();
+
+    const bookings = await this.prisma.spaBooking.findMany({
+      where: {
+        clubId,
+        status: { not: SpaBookingStatus.CANCELLED },
+        startAt: { gte: fromD, lte: toD },
+      },
+      include: {
+        specialist: { select: { firstName: true, lastName: true } },
+        service: { select: { name: true } },
+        client: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { startAt: 'desc' },
+      take: 200,
+    });
+    if (!bookings.length) return [];
+
+    const ids = bookings.map((b) => b.id);
+    const approvals = await this.prisma.sessionApproval.findMany({
+      where: {
+        clubId,
+        kind: SessionApprovalKind.SPA,
+        bookingId: { in: ids },
+      },
+    });
+    const byId = new Map(approvals.map((a) => [a.bookingId, a]));
+
+    const out: GroupApprovalPendingTask[] = [];
+    for (const b of bookings) {
+      if (b.endAt > now && b.startAt > now) continue;
+      const row = byId.get(b.id);
+      if (!row) continue;
+      const phase = sessionApprovalPhase({
+        performerConfirmedAt: row.performerConfirmedAt?.toISOString() ?? null,
+        adminApprovedAt: row.adminApprovedAt?.toISOString() ?? null,
+        overrideApprovedAt: row.overrideApprovedAt?.toISOString() ?? null,
+      });
+      if (phase !== 'PENDING_ADMIN') continue;
+      const clientName = b.client
+        ? `${b.client.lastName} ${b.client.firstName}`.trim()
+        : b.guestName?.trim() || undefined;
+      out.push({
+        sessionKey: fitgoSessionKey('SPA', b.id),
+        kind: 'SPA',
+        reason: 'AWAITING_ADMIN',
+        title: b.service.name,
+        startAt: b.startAt.toISOString(),
+        endAt: b.endAt.toISOString(),
+        performerName:
+          `${b.specialist.lastName} ${b.specialist.firstName}`.trim() || '—',
+        trainerName: undefined,
+        trainerApprovedAt: row.performerConfirmedAt?.toISOString(),
+        bookedCount: 1,
+        arrivedCount: 1,
+        trainerSeenCount: 1,
+        clientName,
+        paymentStatus: b.paymentStatus,
+      });
+    }
+    return out;
+  }
+
+  private async listPendingPtAdminTasks(
+    clubId: string,
+    from?: string,
+    to?: string,
+  ): Promise<GroupApprovalPendingTask[]> {
+    const fromD = new Date(
+      `${from?.trim() || this.ymdDaysAgo(30)}T00:00:00`,
+    );
+    const toD = new Date(
+      `${to?.trim() || this.ymdToday()}T23:59:59.999`,
+    );
+    const now = new Date();
+    const out: GroupApprovalPendingTask[] = [];
+    const seen = new Set<string>();
+
+    const unpaid = await this.prisma.personalTrainingBooking.findMany({
+      where: {
+        trainer: { clubId },
+        isComplimentary: false,
+        status: { not: PersonalBookingStatus.CANCELLED },
+        startAt: { gte: fromD, lte: toD, lt: now },
+        paymentStatus: {
+          in: [
+            ServicePaymentStatus.PENDING_PAYMENT,
+            ServicePaymentStatus.DEBT,
+          ],
+        },
+      },
+      include: {
+        trainer: { select: { firstName: true, lastName: true } },
+        client: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { startAt: 'desc' },
+      take: 200,
+    });
+
+    for (const b of unpaid) {
+      const sessionKey = fitgoSessionKey('PT', b.id);
+      seen.add(sessionKey);
+      out.push({
+        sessionKey,
+        kind: 'PT',
+        reason: 'UNPAID',
+        title: 'Персональная тренировка',
+        startAt: b.startAt.toISOString(),
+        endAt: b.endAt.toISOString(),
+        performerName:
+          `${b.trainer.lastName} ${b.trainer.firstName}`.trim() || '—',
+        clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+        bookedCount: 1,
+        arrivedCount: 1,
+        trainerSeenCount: 0,
+        paymentStatus: b.paymentStatus,
+      });
+    }
+
+    const awaiting = await this.prisma.sessionApproval.findMany({
+      where: {
+        clubId,
+        kind: SessionApprovalKind.PT,
+        performerConfirmedAt: { not: null },
+        adminApprovedAt: null,
+        overrideApprovedAt: null,
+      },
+      take: 200,
+    });
+    if (awaiting.length) {
+      const bookingIds = awaiting.map((a) => a.bookingId);
+      const bookings = await this.prisma.personalTrainingBooking.findMany({
+        where: {
+          id: { in: bookingIds },
+          startAt: { gte: fromD, lte: toD },
+          status: { not: PersonalBookingStatus.CANCELLED },
+        },
+        include: {
+          trainer: { select: { firstName: true, lastName: true } },
+          client: { select: { firstName: true, lastName: true } },
+        },
+      });
+      const byId = new Map(bookings.map((b) => [b.id, b]));
+      for (const a of awaiting) {
+        const b = byId.get(a.bookingId);
+        if (!b) continue;
+        const sessionKey = fitgoSessionKey('PT', b.id);
+        if (seen.has(sessionKey)) {
+          const row = out.find((x) => x.sessionKey === sessionKey);
+          if (row) {
+            row.reason = 'AWAITING_ADMIN';
+            row.trainerApprovedAt = a.performerConfirmedAt?.toISOString();
+          }
+          continue;
+        }
+        seen.add(sessionKey);
+        out.push({
+          sessionKey,
+          kind: 'PT',
+          reason: 'AWAITING_ADMIN',
+          title: b.isComplimentary
+            ? 'Подарочная ПТ'
+            : 'Персональная тренировка',
+          startAt: b.startAt.toISOString(),
+          endAt: b.endAt.toISOString(),
+          performerName:
+            `${b.trainer.lastName} ${b.trainer.firstName}`.trim() || '—',
+          trainerApprovedAt: a.performerConfirmedAt?.toISOString(),
+          clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+          bookedCount: 1,
+          arrivedCount: 1,
+          trainerSeenCount: 1,
+          paymentStatus: b.paymentStatus,
+        });
+      }
+    }
+
+    out.sort((a, b) => b.startAt.localeCompare(a.startAt));
     return out;
   }
 

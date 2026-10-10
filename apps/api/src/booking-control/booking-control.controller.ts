@@ -170,11 +170,13 @@ export class BookingControlController {
     @CurrentUser() user: JwtPayload,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('kind') kind?: 'GROUP' | 'SPA' | 'PT',
   ) {
     return this.bookingControl.listPendingAdminApprovals(
       requireClubId(user),
       from,
       to,
+      kind === 'SPA' || kind === 'PT' ? kind : 'GROUP',
     );
   }
 
@@ -273,11 +275,13 @@ export class BookingControlController {
     @CurrentUser() user: JwtPayload,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('kind') kind?: 'GROUP' | 'SPA' | 'PT',
   ) {
     return this.bookingControl.listPendingAdminApprovals(
       requireClubId(user),
       from,
       to,
+      kind === 'SPA' || kind === 'PT' ? kind : 'GROUP',
     );
   }
 

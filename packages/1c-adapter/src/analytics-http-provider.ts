@@ -127,8 +127,8 @@ export class FitgoAnalyticsHttpProvider {
     employeeId?: string;
     page?: number;
     pageSize?: number;
-    /** cash = сводный отчёт по выручке; debt = открытые остатки долга; changes = журнал */
-    scope?: 'cash' | 'debt' | 'changes';
+    /** cash | debt | changes | installments */
+    scope?: 'cash' | 'debt' | 'changes' | 'installments';
   }): Promise<FitgoAnalyticsSalesPage | null> {
     const q = new URLSearchParams({
       from: params.from,
@@ -177,6 +177,48 @@ export class FitgoAnalyticsHttpProvider {
     if (!data || typeof data.count !== 'number') return null;
     return data.count;
   }
+
+  /**
+   * Open installment schedules (sale + plan/fact payments).
+   * Requires published Analytics `scope=installments`.
+   */
+  async getInstallments(): Promise<FitgoInstallmentSale[] | null> {
+    const today = new Date().toISOString().slice(0, 10);
+    const q = new URLSearchParams({
+      from: '2020-01-01',
+      to: today,
+      scope: 'installments',
+    });
+    const data = await this.request<{
+      items?: FitgoInstallmentSale[];
+      error?: string;
+    }>(`/sales?${q.toString()}`);
+    if (!data) return null;
+    if (data.error && !data.items?.length) {
+      throw new Error(`FitGO installments: ${data.error}`);
+    }
+    return data.items ?? [];
+  }
+}
+
+export interface FitgoInstallmentPayment {
+  n: number;
+  planDate: string;
+  planAmount: number;
+  factDate?: string | null;
+  factAmount?: number | null;
+}
+
+export interface FitgoInstallmentSale {
+  saleDocumentId: string;
+  number?: string;
+  soldAt?: string;
+  clientExternalId?: string;
+  clientName?: string;
+  phone?: string;
+  templateName?: string;
+  total?: number;
+  payments: FitgoInstallmentPayment[];
 }
 
 export type {

@@ -36,7 +36,7 @@ export default function ClientBookingsPage() {
       if (result.success) {
         setMessage(
           booking.type === SessionType.SPA
-            ? 'Запись в спа-кабинет отменена'
+            ? 'Запись в SPA-кабинет отменена'
             : 'Запись отменена на сервере клуба. Администратор уведомлён.',
         );
         load();

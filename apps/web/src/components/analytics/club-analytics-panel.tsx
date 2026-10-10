@@ -209,10 +209,10 @@ export function ClubAnalyticsPanel({
             label="ПТ доля подарочных"
             metric={services.pt.giftSharePct}
           />
-          <MetricCard label="СПА оказано" metric={services.spa.completed} />
+          <MetricCard label="SPA оказано" metric={services.spa.completed} />
         </div>
         <div className="card mt-3 text-sm text-slate-300">
-          СПА: абонемент {services.spa.quota} · оплата {services.spa.paid} ·
+          SPA: абонемент {services.spa.quota} · оплата {services.spa.paid} ·
           Allsports {services.spa.allsports}
         </div>
         {services.group.topDirections.length > 0 && (

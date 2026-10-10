@@ -34,7 +34,7 @@ export function membershipStatusLabel(status: MembershipStatus) {
 
 export function sessionTypeLabel(type: SessionType) {
   if (type === SessionType.GROUP) return 'Групповое';
-  if (type === SessionType.SPA) return 'Спа-кабинет';
+  if (type === SessionType.SPA) return 'SPA-кабинет';
   return 'Персональное';
 }
 

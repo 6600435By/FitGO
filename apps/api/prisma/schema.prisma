@@ -41,6 +41,12 @@ enum AdminTaskStatus {
   CANCELLED
 }
 
+/// Manager multi-assign: one admin closes all (SHARED) or each closes own (INDIVIDUAL)
+enum AdminTaskCompletionMode {
+  SHARED
+  INDIVIDUAL
+}
+
 enum ClubCrmLinkStatus {
   LINKED
   PENDING_CRM
@@ -1424,7 +1430,7 @@ model AdminPermissionGrant {
 model AdminTask {
   id          String          @id @default(cuid())
   clubId      String
-  /// Optional — renewal queue is club-wide until claimed
+  /// Optional — renewal / debt / installment queues are club-wide until claimed
   assigneeId  String?
   createdById String
   title       String
@@ -1432,12 +1438,15 @@ model AdminTask {
   dueAt       DateTime?
   status      AdminTaskStatus @default(OPEN)
   completedAt DateTime?
-  /// MANUAL | DEBT_OVERDUE | STAFF_DEBT | MEMBERSHIP_EXPIRING
+  /// MANUAL | MANAGER | CLIENT_DEBT | STAFF_DEBT | DEBT_OVERDUE | MEMBERSHIP_EXPIRING | INSTALLMENT_PAYMENT
   source      String          @default("MANUAL")
-  /// Idempotency key for auto tasks (e.g. debt:{saleId}:2026-09 | membership:{docId})
+  /// Idempotency key for auto tasks (e.g. debtor:client:{id} | membership:{docId} | installment:{sale}:{n})
   dedupeKey   String?
   relatedSaleId String?
   relatedUserId String?
+  /// Shared id when manager assigns the same task to several admins
+  groupId     String?
+  completionMode AdminTaskCompletionMode @default(INDIVIDUAL)
   /// Renewal funnel: NEW | NO_ANSWER | THINKING | WILL_RENEW | RENEWED | LOST
   stage       String?
   nextActionAt DateTime?
@@ -1445,7 +1454,7 @@ model AdminTask {
   lostReason  String?
   doNotCall   Boolean         @default(false)
   clientExternalId String?
-  /// phone, membershipName, validUntil, docId, firstName, lastName, pushSentAt
+  /// phone, membershipName, validUntil, docId, debt totals, installment schedule, …
   meta        Json?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
@@ -1461,6 +1470,7 @@ model AdminTask {
   @@index([clubId, source])
   @@index([clubId, source, stage])
   @@index([clubId, nextActionAt])
+  @@index([clubId, groupId])
 }
 
 model AdminTaskEvent {
