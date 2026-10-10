@@ -6,7 +6,10 @@ import {
   type FitgoExpiringMembershipRow,
   type FitgoInstallmentSale,
 } from '@fitgo/1c-adapter';
-import { isCollectibleClientDebt } from '../admin-sales/club-revenue-debt';
+import {
+  isCollectibleClientDebt,
+  isStaffDebtorName,
+} from '../admin-sales/club-revenue-debt';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -306,7 +309,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       }
       const amount = Number(row.amount || row.saleAmount || 0);
       if (!(amount > 0)) continue;
-      const staffDebt = /\(\s*сотрудник\s*\)/i.test(row.clientName ?? '');
+      const staffDebt = isStaffDebtorName(row.clientName);
       const kind = staffDebt ? 'staff' : 'client';
       const ext = row.clientExternalId?.trim() || null;
       const name =

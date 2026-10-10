@@ -97,6 +97,8 @@ export class SuperAdminSalesController {
     @Query('paymentMethod') paymentMethod?: string,
     @Query('employeeExternalId') employeeExternalId?: string,
     @Query('q') q?: string,
+    @Query('segment') segment?: string,
+    @Query('debtor') debtor?: string,
   ) {
     assertPeriod(from, to);
     return this.clubRevenue.report(requireClubId(user), {
@@ -106,6 +108,8 @@ export class SuperAdminSalesController {
       paymentMethod,
       employeeExternalId,
       q,
+      segment,
+      debtor,
     });
   }
 

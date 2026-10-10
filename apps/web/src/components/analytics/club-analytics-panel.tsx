@@ -1,6 +1,7 @@
 'use client';
 
 import type { ClubAnalyticsReport } from '@fitgo/shared-types';
+import Link from 'next/link';
 import { MetricCard } from './metric-card';
 
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -11,6 +12,30 @@ function money(minor: number, currency: string) {
   })}\u00a0${currency}`;
 }
 
+function salesHref(
+  from: string,
+  to: string,
+  extra: Record<string, string | undefined>,
+) {
+  const q = new URLSearchParams({ from, to });
+  for (const [k, v] of Object.entries(extra)) {
+    if (v) q.set(k, v);
+  }
+  return `/super-admin/sales?${q.toString()}`;
+}
+
+function controlHref(
+  from: string,
+  to: string,
+  extra: Record<string, string | undefined>,
+) {
+  const q = new URLSearchParams({ from, to });
+  for (const [k, v] of Object.entries(extra)) {
+    if (v) q.set(k, v);
+  }
+  return `/super-admin/review-queue?${q.toString()}`;
+}
+
 export function ClubAnalyticsPanel({
   report,
   showPay,
@@ -18,8 +43,19 @@ export function ClubAnalyticsPanel({
   report: ClubAnalyticsReport;
   showPay: boolean;
 }) {
-  const { money: m, members, visits, services, currency } = report;
+  const { money: m, members, visits, services, currency, from, to } = report;
   const heatMax = Math.max(1, ...report.visits.heatmap.flat());
+  const hourFrom = visits.heatmapHours?.from ?? 0;
+  const hourTo = visits.heatmapHours?.to ?? 23;
+  const hours = Array.from(
+    { length: hourTo - hourFrom + 1 },
+    (_, i) => hourFrom + i,
+  );
+  const days =
+    visits.heatmapDays?.length > 0
+      ? visits.heatmapDays
+      : [0, 1, 2, 3, 4, 5, 6];
+  const colTemplate = `32px repeat(${hours.length}, minmax(0, 1fr))`;
 
   return (
     <div className="space-y-4">
@@ -57,23 +93,56 @@ export function ClubAnalyticsPanel({
       <section>
         <h3 className="mb-2 text-sm font-semibold text-slate-300">Деньги</h3>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-          <MetricCard label="Выручка" metric={m.revenue} currency={currency} />
+          <MetricCard
+            label="Выручка"
+            metric={m.revenue}
+            currency={currency}
+            href={salesHref(from, to, { op: 'payment' })}
+          />
           <MetricCard
             label="Средний чек"
             metric={m.avgCheck}
             currency={currency}
+            href={salesHref(from, to, { op: 'payment' })}
           />
           <MetricCard
             label="Возвраты"
             metric={m.refunds}
             currency={currency}
+            href={salesHref(from, to, { op: 'refund' })}
           />
           <MetricCard
             label="Дебиторка"
             metric={m.debtOutstanding}
             currency={currency}
+            href={salesHref(from, to, { op: 'unpaid' })}
           />
         </div>
+        {m.debtBreakdown && (
+          <div className="card mt-3">
+            <p className="mb-2 text-sm font-medium">Дебиторка — расшифровка</p>
+            <ul className="space-y-1 text-sm text-slate-300">
+              <li className="flex justify-between gap-3">
+                <Link
+                  href={salesHref(from, to, { op: 'unpaid', debtor: 'client' })}
+                  className="text-fitgo-400 hover:underline"
+                >
+                  Клиенты
+                </Link>
+                <span>{money(m.debtBreakdown.clientsMinor, currency)}</span>
+              </li>
+              <li className="flex justify-between gap-3">
+                <Link
+                  href={salesHref(from, to, { op: 'unpaid', debtor: 'staff' })}
+                  className="text-fitgo-400 hover:underline"
+                >
+                  Сотрудники
+                </Link>
+                <span>{money(m.debtBreakdown.staffMinor, currency)}</span>
+              </li>
+            </ul>
+          </div>
+        )}
         {m.installments && (
           <div className="card mt-3">
             <p className="mb-2 text-sm font-medium">Рассрочки</p>
@@ -102,22 +171,24 @@ export function ClubAnalyticsPanel({
         <div className="card mt-3">
           <p className="mb-2 text-sm font-medium">По способу оплаты</p>
           <ul className="space-y-1 text-sm text-slate-300">
-            <li className="flex justify-between">
-              <span>Наличные</span>
-              <span>{money(m.byPayment.cashMinor, currency)}</span>
-            </li>
-            <li className="flex justify-between">
-              <span>Карта</span>
-              <span>{money(m.byPayment.cardMinor, currency)}</span>
-            </li>
-            <li className="flex justify-between">
-              <span>Безнал</span>
-              <span>{money(m.byPayment.cashlessMinor, currency)}</span>
-            </li>
-            <li className="flex justify-between">
-              <span>ЛС</span>
-              <span>{money(m.byPayment.personalAccountMinor, currency)}</span>
-            </li>
+            {(
+              [
+                ['Наличные', 'cash', m.byPayment.cashMinor],
+                ['Карта', 'card', m.byPayment.cardMinor],
+                ['Безнал', 'cashless', m.byPayment.cashlessMinor],
+                ['ЛС', 'personalAccount', m.byPayment.personalAccountMinor],
+              ] as const
+            ).map(([label, payment, amount]) => (
+              <li key={payment} className="flex justify-between">
+                <Link
+                  href={salesHref(from, to, { op: 'payment', payment })}
+                  className="text-fitgo-400 hover:underline"
+                >
+                  {label}
+                </Link>
+                <span>{money(amount, currency)}</span>
+              </li>
+            ))}
             <li className="flex justify-between">
               <span>Корпо</span>
               <span>{money(m.byPayment.corpoMinor, currency)}</span>
@@ -136,7 +207,15 @@ export function ClubAnalyticsPanel({
             {m.bySegment.map((s) => (
               <li key={s.key} className="text-sm">
                 <div className="flex justify-between">
-                  <span>{s.label}</span>
+                  <Link
+                    href={salesHref(from, to, {
+                      op: 'payment',
+                      segment: s.key,
+                    })}
+                    className="text-fitgo-400 hover:underline"
+                  >
+                    {s.label}
+                  </Link>
                   <span className="text-slate-400">
                     {money(s.amountMinor, currency)} ·{' '}
                     {Math.round(s.share * 100)}%
@@ -185,38 +264,46 @@ export function ClubAnalyticsPanel({
         </div>
         <div className="card mt-3 overflow-x-auto">
           <p className="mb-2 text-sm font-medium">Загрузка по дням / часам</p>
-          <div className="min-w-[480px]">
-            <div className="mb-1 grid grid-cols-[32px_repeat(24,minmax(0,1fr))] gap-0.5 text-[9px] text-slate-500">
+          <div className="min-w-[320px]">
+            <div
+              className="mb-1 grid gap-0.5 text-[9px] text-slate-500"
+              style={{ gridTemplateColumns: colTemplate }}
+            >
               <span />
-              {Array.from({ length: 24 }, (_, h) => (
+              {hours.map((h) => (
                 <span key={h} className="text-center">
                   {h}
                 </span>
               ))}
             </div>
-            {visits.heatmap.map((row, di) => (
-              <div
-                key={di}
-                className="mb-0.5 grid grid-cols-[32px_repeat(24,minmax(0,1fr))] gap-0.5"
-              >
-                <span className="text-[10px] text-slate-400">
-                  {WEEKDAYS[di]}
-                </span>
-                {row.map((v, hi) => {
-                  const intensity = v / heatMax;
-                  return (
-                    <div
-                      key={hi}
-                      title={`${WEEKDAYS[di]} ${hi}:00 — ${v}`}
-                      className="h-3 rounded-sm"
-                      style={{
-                        backgroundColor: `rgba(20, 184, 138, ${0.08 + intensity * 0.92})`,
-                      }}
-                    />
-                  );
-                })}
-              </div>
-            ))}
+            {days.map((di) => {
+              const row = visits.heatmap[di] ?? [];
+              return (
+                <div
+                  key={di}
+                  className="mb-0.5 grid gap-0.5"
+                  style={{ gridTemplateColumns: colTemplate }}
+                >
+                  <span className="text-[10px] text-slate-400">
+                    {WEEKDAYS[di]}
+                  </span>
+                  {hours.map((hi) => {
+                    const v = row[hi] ?? 0;
+                    const intensity = v / heatMax;
+                    return (
+                      <div
+                        key={hi}
+                        title={`${WEEKDAYS[di]} ${hi}:00 — ${v}`}
+                        className="h-3 rounded-sm"
+                        style={{
+                          backgroundColor: `rgba(20, 184, 138, ${0.08 + intensity * 0.92})`,
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            })}
           </div>
         </div>
       </section>
@@ -224,17 +311,37 @@ export function ClubAnalyticsPanel({
       <section>
         <h3 className="mb-2 text-sm font-semibold text-slate-300">Услуги</h3>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
-          <MetricCard label="ГП занятий" metric={services.group.sessions} />
+          <MetricCard
+            label="ГП занятий"
+            metric={services.group.sessions}
+            href={controlHref(from, to, {
+              kind: 'GROUP',
+              status: 'COMPLETED',
+            })}
+          />
           <MetricCard
             label="ГП заполняемость"
             metric={services.group.avgFillPct}
           />
-          <MetricCard label="ПТ проведено" metric={services.pt.completed} />
+          <MetricCard
+            label="ПТ проведено"
+            metric={services.pt.completed}
+            href={controlHref(from, to, { kind: 'PT', status: 'COMPLETED' })}
+          />
           <MetricCard
             label="ПТ доля подарочных"
             metric={services.pt.giftSharePct}
+            href={controlHref(from, to, {
+              kind: 'PT',
+              status: 'COMPLETED',
+              payment: 'GIFT',
+            })}
           />
-          <MetricCard label="SPA оказано" metric={services.spa.completed} />
+          <MetricCard
+            label="SPA оказано"
+            metric={services.spa.completed}
+            href={controlHref(from, to, { kind: 'SPA', status: 'COMPLETED' })}
+          />
         </div>
         <div className="card mt-3 text-sm text-slate-300">
           SPA: абонемент {services.spa.quota} · оплата {services.spa.paid} ·
@@ -280,20 +387,66 @@ export function ClubAnalyticsPanel({
       )}
 
       {report.trainerRankings.length > 0 && (
-        <div className="card">
+        <div className="card overflow-x-auto">
           <h3 className="mb-3 font-semibold">Рейтинг тренеров ПТ</h3>
-          <ul className="space-y-2">
-            {report.trainerRankings.map((t, i) => (
-              <li key={t.trainerId} className="flex justify-between text-sm">
-                <span>
-                  {i + 1}. {t.name}
-                </span>
-                <span className="text-slate-400">
-                  score {t.score} · ПТ {t.completedPt}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <table className="w-full min-w-[480px] text-sm">
+            <thead className="text-left text-xs text-slate-500">
+              <tr>
+                <th className="pb-2 pr-2">Тренер</th>
+                <th className="pb-2 pr-2 text-right">Проведено</th>
+                <th className="pb-2 pr-2 text-right">Оплачено</th>
+                <th className="pb-2 pr-2 text-right">Не оплачено</th>
+                <th className="pb-2 pr-2 text-right">Клиентов</th>
+                <th className="pb-2 text-right">Сумма</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.trainerRankings.map((t, i) => (
+                <tr key={t.trainerId} className="border-t border-slate-800">
+                  <td className="py-2 pr-2">
+                    <Link
+                      href={controlHref(from, to, {
+                        kind: 'PT',
+                        performerId: t.trainerId,
+                      })}
+                      className="text-fitgo-400 hover:underline"
+                    >
+                      {i + 1}. {t.name}
+                    </Link>
+                  </td>
+                  <td className="py-2 pr-2 text-right">{t.completedPt}</td>
+                  <td className="py-2 pr-2 text-right">
+                    <Link
+                      href={controlHref(from, to, {
+                        kind: 'PT',
+                        performerId: t.trainerId,
+                        payment: 'PAID',
+                      })}
+                      className="text-fitgo-400 hover:underline"
+                    >
+                      {t.paidPt}
+                    </Link>
+                  </td>
+                  <td className="py-2 pr-2 text-right">
+                    <Link
+                      href={controlHref(from, to, {
+                        kind: 'PT',
+                        performerId: t.trainerId,
+                        payment: 'DEBT',
+                      })}
+                      className="text-fitgo-400 hover:underline"
+                    >
+                      {t.debtPt}
+                    </Link>
+                  </td>
+                  <td className="py-2 pr-2 text-right">{t.activeClients}</td>
+                  <td className="py-2 text-right text-slate-400">
+                    {money(t.amountMinor, currency)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

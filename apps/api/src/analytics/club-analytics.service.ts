@@ -9,22 +9,28 @@ import type {
   AnalyticsCompareMode,
   ClubAnalyticsMoney,
   ClubAnalyticsReport,
+  ClubWorkingHours,
+} from '@fitgo/shared-types';
+import {
+  DEFAULT_CLUB_WORKING_HOURS,
+  DAY_OF_WEEK_KEYS,
 } from '@fitgo/shared-types';
 import {
   OnexClassKind,
   OnexClassStatus,
-  PersonalBookingStatus,
-  PtSessionPayKind,
-  SpaBookingStatus,
-  SpaPaymentType,
 } from '@prisma/client';
 import {
   classifySaleType,
   loadPayrollSegmentSets,
 } from '../admin-sales/admin-sales-segments';
+import {
+  isCollectibleClientDebt,
+  isStaffDebtorName,
+} from '../admin-sales/club-revenue-debt';
 import { ClubRevenueService } from '../admin-sales/club-revenue.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { BookingControlService } from '../booking-control/booking-control.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollService } from '../payroll/payroll.service';
 import {
@@ -47,6 +53,7 @@ const SEG_LABEL: Record<string, string> = {
 };
 
 const INSTALLMENTS_CACHE_TTL_MS = 15 * 60 * 1000;
+const REPORT_CACHE_TTL_MS = 3 * 60 * 1000;
 
 @Injectable()
 export class ClubAnalyticsService {
@@ -61,11 +68,18 @@ export class ClubAnalyticsService {
     }
   >();
 
+  /** clubId|period|flags → report (2–5 min). */
+  private readonly reportCache = new Map<
+    string,
+    { at: number; value: Promise<ClubAnalyticsReport> }
+  >();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly revenue: ClubRevenueService,
     private readonly payroll: PayrollService,
     private readonly config: ConfigService,
+    private readonly bookingControl: BookingControlService,
   ) {}
 
   async getClubReport(
@@ -89,11 +103,55 @@ export class ClubAnalyticsService {
       params.cmpFrom,
       params.cmpTo,
     );
+    const cacheKey = [
+      clubId,
+      params.from,
+      params.to,
+      compareFrom,
+      compareTo,
+      compareMode,
+      params.includePay ? 'pay' : 'nopay',
+    ].join('|');
+    const cached = this.reportCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < REPORT_CACHE_TTL_MS) {
+      return cached.value;
+    }
+    const value = this.buildClubReport(clubId, {
+      ...params,
+      compareMode,
+      compareFrom,
+      compareTo,
+    }).finally(() => {
+      setTimeout(() => {
+        const cur = this.reportCache.get(cacheKey);
+        if (cur?.value === value) this.reportCache.delete(cacheKey);
+      }, REPORT_CACHE_TTL_MS);
+    });
+    this.reportCache.set(cacheKey, { at: Date.now(), value });
+    return value;
+  }
+
+  private async buildClubReport(
+    clubId: string,
+    params: {
+      from: string;
+      to: string;
+      compareMode: AnalyticsCompareMode;
+      compareFrom: string;
+      compareTo: string;
+      includePay?: boolean;
+    },
+  ): Promise<ClubAnalyticsReport> {
+    const { compareFrom, compareTo, compareMode } = params;
 
     const club = await this.prisma.club.findUnique({
       where: { id: clubId },
-      select: { currency: true, externalId: true },
+      select: { currency: true, externalId: true, workingHours: true },
     });
+
+    const workingHours =
+      (club?.workingHours as ClubWorkingHours | null) ??
+      DEFAULT_CLUB_WORKING_HOURS;
 
     const [
       moneyCur,
@@ -108,13 +166,14 @@ export class ClubAnalyticsService {
       trainerRankings,
       fot,
       installments,
+      debtSnap,
     ] = await Promise.all([
       this.moneyBlock(clubId, params.from, params.to),
       this.moneyBlock(clubId, compareFrom, compareTo),
       this.membersBlock(clubId, params.from, params.to),
       this.membersBlock(clubId, compareFrom, compareTo),
-      this.visitsBlock(clubId, params.from, params.to),
-      this.visitsBlock(clubId, compareFrom, compareTo),
+      this.visitsBlock(clubId, params.from, params.to, workingHours),
+      this.visitsBlock(clubId, compareFrom, compareTo, workingHours),
       this.servicesBlock(clubId, params.from, params.to),
       this.servicesBlock(clubId, compareFrom, compareTo),
       this.earliestSaleDate(clubId),
@@ -123,6 +182,7 @@ export class ClubAnalyticsService {
         ? this.fotBlock(clubId, params.from, params.to, compareFrom, compareTo)
         : Promise.resolve(null),
       this.installmentsSnapshot(clubId),
+      this.debtSnapshot(clubId),
     ]);
 
     const money: ClubAnalyticsMoney = {
@@ -138,9 +198,15 @@ export class ClubAnalyticsService {
       refunds: metric(moneyCur.refundsMinor, moneyCmp.refundsMinor, {
         unit: 'money' as const,
       }),
-      debtOutstanding: metric(moneyCur.debtMinor, moneyCmp.debtMinor, {
+      debtOutstanding: metric(debtSnap.totalMinor, null, {
         unit: 'money' as const,
+        skipCompare: true,
+        hint: 'Открытый долг по неоплаченным продажам (на сегодня)',
       }),
+      debtBreakdown: {
+        clientsMinor: debtSnap.clientsMinor,
+        staffMinor: debtSnap.staffMinor,
+      },
       installments,
     };
 
@@ -185,6 +251,8 @@ export class ClubAnalyticsService {
         unit: 'count',
       }),
       heatmap: visitsCur.heatmap,
+      heatmapHours: visitsCur.heatmapHours,
+      heatmapDays: visitsCur.heatmapDays,
     };
 
     const services = {
@@ -197,7 +265,13 @@ export class ClubAnalyticsService {
         avgFillPct: metric(
           servicesCur.group.avgFillPct,
           servicesCmp.group.avgFillPct,
-          { unit: 'percent' },
+          {
+            unit: 'percent',
+            unavailable: servicesCur.group.fillUnavailable,
+            hint: servicesCur.group.fillUnavailable
+              ? 'н/д — нет вместимости занятий'
+              : undefined,
+          },
         ),
         topDirections: servicesCur.group.topDirections,
         bottomDirections: servicesCur.group.bottomDirections,
@@ -337,11 +411,39 @@ export class ClubAnalyticsService {
     }
   }
 
+  /** Open collectible unpaid sales — snapshot (not period-bound). */
+  private async debtSnapshot(clubId: string) {
+    const rows = await this.prisma.clubRevenueEntry.findMany({
+      where: { clubId, isActive: true, operationType: 'unpaid' },
+      select: {
+        externalId: true,
+        productName: true,
+        clientName: true,
+        saleAmount: true,
+        amount: true,
+      },
+    });
+    let clientsMinor = 0;
+    let staffMinor = 0;
+    for (const r of rows) {
+      if (!isCollectibleClientDebt(r)) continue;
+      const minor = Math.round((Number(r.saleAmount || r.amount) || 0) * 100);
+      if (minor <= 0) continue;
+      if (isStaffDebtorName(r.clientName)) staffMinor += minor;
+      else clientsMinor += minor;
+    }
+    return {
+      clientsMinor,
+      staffMinor,
+      totalMinor: clientsMinor + staffMinor,
+    };
+  }
+
   private async moneyBlock(clubId: string, from: string, to: string) {
     const revenueMinor = await this.revenue.cashRevenueMinor(clubId, from, to);
     const { start, end } = rangeBounds(from, to);
 
-    const [receipts, manuals, unpaidDebt] = await Promise.all([
+    const [receipts, manuals] = await Promise.all([
       this.prisma.clubRevenueEntry.findMany({
         where: {
           clubId,
@@ -367,10 +469,6 @@ export class ClubAnalyticsService {
       }),
       this.prisma.clubRevenueManualEntry.findMany({
         where: { clubId, entryDate: { gte: start, lte: end } },
-      }),
-      this.prisma.clubMembershipSnapshot.aggregate({
-        where: { clubId, debtAmount: { gt: 0 } },
-        _sum: { debtAmount: true },
       }),
     ]);
 
@@ -418,7 +516,6 @@ export class ClubAnalyticsService {
       revenueMinor,
       avgCheckMinor,
       refundsMinor: refunds,
-      debtMinor: Math.round((unpaidDebt._sum.debtAmount ?? 0) * 100),
       byPayment: {
         cashMinor: cash,
         cardMinor: card,
@@ -508,18 +605,15 @@ export class ClubAnalyticsService {
   }
 
   private async membersBlock(clubId: string, from: string, to: string) {
-    const snapshots = await this.prisma.clubMembershipSnapshot.findMany({
-      where: { clubId },
-      select: {
-        clientExternalId: true,
-        status: true,
-        startDate: true,
-        endDate: true,
-      },
+    let summary = await this.prisma.clubMembersSummary.findUnique({
+      where: { clubId_asOfDate: { clubId, asOfDate: to } },
     });
-
-    const statusNorm = (s: string | null | undefined) =>
-      (s ?? '').toUpperCase();
+    if (!summary) {
+      summary = await this.prisma.clubMembersSummary.findFirst({
+        where: { clubId, asOfDate: { lte: to } },
+        orderBy: { asOfDate: 'desc' },
+      });
+    }
 
     let active = 0;
     let frozen = 0;
@@ -528,53 +622,60 @@ export class ClubAnalyticsService {
     let expiredInPeriod = 0;
     const expiredClients = new Set<string>();
 
-    for (const s of snapshots) {
-      const st = statusNorm(s.status);
-      if (st === 'ACTIVE' || st === 'АКТИВНЫЙ' || st.includes('ACTIVE')) {
-        active++;
+    if (summary) {
+      active = summary.active;
+      frozen = summary.frozen;
+      expiring7 = summary.expiring7;
+      expiring30 = summary.expiring30;
+      expiredInPeriod = summary.endedInPeriod;
+      const ids = Array.isArray(summary.endedClientIds)
+        ? (summary.endedClientIds as string[])
+        : [];
+      for (const id of ids) expiredClients.add(id);
+    } else {
+      const snapshots = await this.prisma.clubMembershipSnapshot.findMany({
+        where: { clubId },
+        select: {
+          clientExternalId: true,
+          status: true,
+          startDate: true,
+          endDate: true,
+        },
+      });
+
+      const statusNorm = (s: string | null | undefined) =>
+        (s ?? '').toUpperCase();
+
+      for (const s of snapshots) {
+        const st = statusNorm(s.status);
+        if (st === 'ACTIVE' || st === 'АКТИВНЫЙ' || st.includes('ACTIVE')) {
+          active++;
+          if (s.endDate) {
+            const end = s.endDate.slice(0, 10);
+            if (end >= to && end <= addDaysLocal(to, 7)) expiring7++;
+            if (end >= to && end <= addDaysLocal(to, 30)) expiring30++;
+          }
+        }
+        if (st.includes('FREEZ') || st.includes('ЗАМОРОЗ')) frozen++;
         if (s.endDate) {
           const end = s.endDate.slice(0, 10);
-          if (end >= to && end <= addDaysLocal(to, 7)) expiring7++;
-          if (end >= to && end <= addDaysLocal(to, 30)) expiring30++;
-        }
-      }
-      if (st.includes('FREEZ') || st.includes('ЗАМОРОЗ')) frozen++;
-      if (s.endDate) {
-        const end = s.endDate.slice(0, 10);
-        if (end >= from && end <= to) {
-          expiredInPeriod++;
-          expiredClients.add(s.clientExternalId);
+          if (end >= from && end <= to) {
+            expiredInPeriod++;
+            expiredClients.add(s.clientExternalId);
+          }
         }
       }
     }
 
     const { start, end } = rangeBounds(from, to);
-    const membershipSales = await this.prisma.saleTransaction.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        paidAt: { not: null },
-        soldAt: { gte: start, lte: end },
-        OR: [
-          { saleType: { contains: 'abon', mode: 'insensitive' } },
-          { saleType: { contains: 'member', mode: 'insensitive' } },
-          { saleType: { contains: 'абонемент', mode: 'insensitive' } },
-          { productName: { contains: 'абонемент', mode: 'insensitive' } },
-        ],
-      },
-      select: {
-        clientExternalId: true,
-        soldAt: true,
-        productName: true,
-        saleType: true,
-      },
-    });
-
-    // Better classification via segments when available
+    // Prefer segment classification (saleType from 1C is often a UUID / code).
     const payrollSegs = await loadPayrollSegmentSets(this.config);
-    const memSales = membershipSales.length
-      ? membershipSales
-      : await this.membershipSalesViaSegments(clubId, start, end, payrollSegs);
+    const memSales = await this.membershipSalesViaSegments(
+      clubId,
+      start,
+      end,
+      payrollSegs,
+    );
 
     const priorSales = await this.prisma.saleTransaction.findMany({
       where: {
@@ -686,7 +787,12 @@ export class ClubAnalyticsService {
     });
   }
 
-  private async visitsBlock(clubId: string, from: string, to: string) {
+  private async visitsBlock(
+    clubId: string,
+    from: string,
+    to: string,
+    workingHours: ClubWorkingHours,
+  ) {
     const hall = await this.prisma.clubHallVisit.findMany({
       where: {
         clubId,
@@ -723,6 +829,11 @@ export class ClubAnalyticsService {
       }
     }
 
+    const { heatmapHours, heatmapDays } = resolveHeatmapWindow(
+      workingHours,
+      heatmap,
+    );
+
     const activeSnaps = await this.prisma.clubMembershipSnapshot.findMany({
       where: {
         clubId,
@@ -756,6 +867,8 @@ export class ClubAnalyticsService {
       avgPerActive,
       sleeping,
       heatmap,
+      heatmapHours,
+      heatmapDays,
       trend: weekBuckets(from, to, byDay),
     };
   }
@@ -763,46 +876,38 @@ export class ClubAnalyticsService {
   private async servicesBlock(clubId: string, from: string, to: string) {
     const { start, end } = rangeBounds(from, to);
 
-    const [groupSessions, scheduleSlots, ptBookings, spaBookings] =
-      await Promise.all([
-        this.prisma.onexClassSession.findMany({
-          where: {
-            clubId,
-            isActive: true,
-            kind: OnexClassKind.GROUP,
-            startAt: { gte: start, lte: end },
-            status: { in: [OnexClassStatus.COMPLETED, OnexClassStatus.CANCELLED] },
+    const [groupSessions, scheduleSlots, controlItems] = await Promise.all([
+      this.prisma.onexClassSession.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          kind: OnexClassKind.GROUP,
+          startAt: { gte: start, lte: end },
+          status: {
+            in: [OnexClassStatus.COMPLETED, OnexClassStatus.CANCELLED],
           },
-          select: {
-            title: true,
-            status: true,
-            attendedCount: true,
-            bookedCount: true,
-            startAt: true,
-            externalId: true,
-          },
-        }),
-        this.prisma.clubScheduleSlot.findMany({
-          where: { clubId, startAt: { gte: start, lte: end } },
-          select: { externalId: true, capacity: true, title: true },
-        }),
-        this.prisma.personalTrainingBooking.findMany({
-          where: {
-            trainer: { clubId },
-            status: PersonalBookingStatus.COMPLETED,
-            startAt: { gte: start, lte: end },
-          },
-          select: { isComplimentary: true, payKind: true },
-        }),
-        this.prisma.spaBooking.findMany({
-          where: {
-            clubId,
-            status: SpaBookingStatus.COMPLETED,
-            startAt: { gte: start, lte: end },
-          },
-          select: { paymentType: true, partnerSource: true },
-        }),
-      ]);
+        },
+        select: {
+          title: true,
+          status: true,
+          attendedCount: true,
+          bookedCount: true,
+          startAt: true,
+          externalId: true,
+          capacity: true,
+        },
+      }),
+      this.prisma.clubScheduleSlot.findMany({
+        where: { clubId, startAt: { gte: start, lte: end } },
+        select: { externalId: true, capacity: true, title: true },
+      }),
+      this.bookingControl.list(clubId, {
+        from,
+        to,
+        kind: 'ALL',
+        skipExternal: true,
+      }),
+    ]);
 
     const capByExternal = new Map(
       scheduleSlots.map((s) => [s.externalId, s.capacity]),
@@ -817,7 +922,9 @@ export class ClubAnalyticsService {
       { sessions: number; attended: number; fill: number; fillN: number }
     >();
     for (const s of completed) {
-      const cap = capByExternal.get(s.externalId) ?? 0;
+      const cap = (s.capacity && s.capacity > 0
+        ? s.capacity
+        : capByExternal.get(s.externalId)) ?? 0;
       const fill = cap > 0 ? (s.attendedCount / cap) * 100 : 0;
       if (cap > 0) {
         fillSum += fill;
@@ -852,23 +959,27 @@ export class ClubAnalyticsService {
       .sort((a, b) => a.fillPct - b.fillPct)
       .slice(0, 5);
 
-    const gift = ptBookings.filter(
-      (b) => b.isComplimentary || b.payKind === PtSessionPayKind.GIFT,
-    ).length;
+    const ptCompleted = controlItems.filter(
+      (i) => i.kind === 'PT' && i.status === 'COMPLETED',
+    );
+    const gift = ptCompleted.filter((i) => i.payment === 'GIFT').length;
     const giftSharePct =
-      ptBookings.length > 0
-        ? Math.round((gift / ptBookings.length) * 1000) / 10
+      ptCompleted.length > 0
+        ? Math.round((gift / ptCompleted.length) * 1000) / 10
         : 0;
 
+    const spaCompleted = controlItems.filter(
+      (i) => i.kind === 'SPA' && i.status === 'COMPLETED',
+    );
     let quota = 0;
     let paid = 0;
     let allsports = 0;
-    for (const s of spaBookings) {
-      if ((s.partnerSource ?? '').toUpperCase().includes('ALLSPORT')) {
+    for (const s of spaCompleted) {
+      if (s.payment === 'PARTNER') {
         allsports++;
-      } else if (s.paymentType === SpaPaymentType.QUOTA) {
+      } else if (s.payment === 'QUOTA' || s.payTag === 'PACKAGE') {
         quota++;
-      } else if (s.paymentType === SpaPaymentType.PAID) {
+      } else if (s.payment === 'PAID' || s.payTag === 'SALE') {
         paid++;
       }
     }
@@ -877,15 +988,16 @@ export class ClubAnalyticsService {
       group: {
         sessions: completed.length,
         avgFillPct: fillN > 0 ? Math.round(fillSum / fillN) : 0,
+        fillUnavailable: fillN === 0 && completed.length > 0,
         topDirections,
         bottomDirections,
       },
       pt: {
-        completed: ptBookings.length,
+        completed: ptCompleted.length,
         giftSharePct,
       },
       spa: {
-        completed: spaBookings.length,
+        completed: spaCompleted.length,
         quota,
         paid,
         allsports,
@@ -948,45 +1060,60 @@ export class ClubAnalyticsService {
   }
 
   private async trainerRankings(clubId: string, from: string, to: string) {
-    const { start, end } = rangeBounds(from, to);
-    const trainers = await this.prisma.user.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        roles: { some: { role: 'TRAINER' } },
-      },
-      select: { id: true, firstName: true, lastName: true },
+    const items = await this.bookingControl.list(clubId, {
+      from,
+      to,
+      kind: 'PT',
+      status: 'COMPLETED',
+      skipExternal: true,
     });
-    const rankings = await Promise.all(
-      trainers.map(async (t) => {
-        const [completedPt, clients] = await Promise.all([
-          this.prisma.personalTrainingBooking.count({
-            where: {
-              trainerId: t.id,
-              status: PersonalBookingStatus.COMPLETED,
-              startAt: { gte: start, lte: end },
-            },
-          }),
-          this.prisma.personalTrainingBooking.findMany({
-            where: {
-              trainerId: t.id,
-              status: PersonalBookingStatus.COMPLETED,
-              startAt: { gte: start, lte: end },
-            },
-            distinct: ['clientId'],
-            select: { clientId: true },
-          }),
-        ]);
-        return {
-          trainerId: t.id,
-          name: `${t.lastName} ${t.firstName}`.trim(),
-          score: completedPt * 2 + clients.length,
-          completedPt,
-          activeClients: clients.length,
-        };
-      }),
-    );
-    return rankings.sort((a, b) => b.score - a.score).slice(0, 10);
+
+    type Acc = {
+      trainerId: string;
+      name: string;
+      completedPt: number;
+      paidPt: number;
+      debtPt: number;
+      clients: Set<string>;
+      amountMinor: number;
+    };
+    const byKey = new Map<string, Acc>();
+
+    for (const i of items) {
+      const key = i.performerId || i.performerName || 'unknown';
+      const cur = byKey.get(key) ?? {
+        trainerId: i.performerId || key,
+        name: i.performerName || '—',
+        completedPt: 0,
+        paidPt: 0,
+        debtPt: 0,
+        clients: new Set<string>(),
+        amountMinor: 0,
+      };
+      cur.completedPt++;
+      if (i.payment === 'PAID' || i.payment === 'QUOTA' || i.payment === 'GIFT') {
+        cur.paidPt++;
+      } else if (i.payment === 'DEBT' || i.payment === 'UNKNOWN') {
+        cur.debtPt++;
+      }
+      if (i.clientName) cur.clients.add(i.clientName);
+      cur.amountMinor += i.priceMinor ?? 0;
+      byKey.set(key, cur);
+    }
+
+    return [...byKey.values()]
+      .map((t) => ({
+        trainerId: t.trainerId,
+        name: t.name,
+        score: t.completedPt * 2 + t.clients.size,
+        completedPt: t.completedPt,
+        paidPt: t.paidPt,
+        debtPt: t.debtPt,
+        activeClients: t.clients.size,
+        amountMinor: t.amountMinor,
+      }))
+      .sort((a, b) => b.completedPt - a.completedPt || b.amountMinor - a.amountMinor)
+      .slice(0, 10);
   }
 
   private buildInsights(input: {
@@ -1066,6 +1193,62 @@ function addDaysLocal(iso: string, days: number): string {
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
   const day = String(d.getUTCDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+function parseHour(hhmm: string | undefined): number | null {
+  if (!hhmm) return null;
+  const m = /^(\d{1,2})/.exec(hhmm);
+  if (!m) return null;
+  const h = Number(m[1]);
+  return h >= 0 && h <= 23 ? h : null;
+}
+
+/** Inclusive open hours + open weekdays from Club.workingHours; fallback to hours with visits. */
+function resolveHeatmapWindow(
+  hours: ClubWorkingHours,
+  heatmap: number[][],
+): { heatmapHours: { from: number; to: number }; heatmapDays: number[] } {
+  let minH = 24;
+  let maxH = -1;
+  const openDays: number[] = [];
+  for (let di = 0; di < 7; di++) {
+    const key = DAY_OF_WEEK_KEYS[di]!;
+    const day = hours[key];
+    if (!day || day.closed) continue;
+    openDays.push(di);
+    const open = parseHour(day.open);
+    const close = parseHour(day.close);
+    if (open != null) minH = Math.min(minH, open);
+    if (close != null) {
+      // close 23:00 → include hour 22; close 23:30 → include 23
+      const lastHour = close > 0 && /:00$/.test(day.close)
+        ? close - 1
+        : close;
+      maxH = Math.max(maxH, Math.min(23, Math.max(0, lastHour)));
+    }
+  }
+
+  if (minH > maxH) {
+    // No club hours — use hours that actually have visits
+    for (let di = 0; di < 7; di++) {
+      for (let h = 0; h < 24; h++) {
+        if ((heatmap[di]?.[h] ?? 0) > 0) {
+          minH = Math.min(minH, h);
+          maxH = Math.max(maxH, h);
+          if (!openDays.includes(di)) openDays.push(di);
+        }
+      }
+    }
+  }
+
+  if (minH > maxH) {
+    return { heatmapHours: { from: 7, to: 22 }, heatmapDays: [0, 1, 2, 3, 4, 5, 6] };
+  }
+  openDays.sort((a, b) => a - b);
+  return {
+    heatmapHours: { from: minH, to: maxH },
+    heatmapDays: openDays.length ? openDays : [0, 1, 2, 3, 4, 5, 6],
+  };
 }
 
 /** Aggregate open installment schedules into Debitorka sub-metrics (amounts → minor). */

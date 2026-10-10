@@ -2143,6 +2143,7 @@ export const api = {
       needsReview?: boolean;
       payment?: string;
       performerId?: string;
+      payTag?: string;
     },
   ) => {
     const q = new URLSearchParams({ from: params.from, to: params.to });
@@ -2152,6 +2153,7 @@ export const api = {
       q.set('payment', params.payment);
     if (params.needsReview) q.set('needsReview', '1');
     if (params.performerId) q.set('performerId', params.performerId);
+    if (params.payTag) q.set('payTag', params.payTag);
     return request<import('@fitgo/shared-types').BookingControlListItem[]>(
       `/${base}/booking-control?${q}`,
       {},
@@ -3041,6 +3043,8 @@ export const api = {
       paymentMethod?: string;
       employeeExternalId?: string;
       q?: string;
+      segment?: string;
+      debtor?: string;
     },
   ) => {
     const q = new URLSearchParams({ from: params.from, to: params.to });
@@ -3051,6 +3055,9 @@ export const api = {
     if (params.employeeExternalId)
       q.set('employeeExternalId', params.employeeExternalId);
     if (params.q) q.set('q', params.q);
+    if (params.segment && params.segment !== 'all')
+      q.set('segment', params.segment);
+    if (params.debtor) q.set('debtor', params.debtor);
     return request<import('@fitgo/shared-types').ClubRevenueReportResponse>(
       `/super-admin/sales/club?${q}`,
       {},

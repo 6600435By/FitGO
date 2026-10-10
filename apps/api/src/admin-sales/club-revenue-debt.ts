@@ -14,3 +14,17 @@ export function isCollectibleClientDebt(row: {
   if (name.includes('(удален)')) return false;
   return true;
 }
+
+/** 1C labels staff buyers as «Имя (сотрудник)» on unpaid sales / debt tasks. */
+const STAFF_DEBTOR_RE = /\(\s*сотрудник\s*\)/i;
+
+export function isStaffDebtorName(
+  clientName?: string | null,
+  title?: string | null,
+): boolean {
+  if (clientName && STAFF_DEBTOR_RE.test(clientName)) return true;
+  if (title && (/долг сотрудника/i.test(title) || STAFF_DEBTOR_RE.test(title))) {
+    return true;
+  }
+  return false;
+}

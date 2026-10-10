@@ -55,6 +55,8 @@ export interface FitgoClassSessionRow {
   bookedCount?: number;
   headerAttendedCount?: number;
   attendedCount?: number;
+  /** Max places (1C «Ёмкость»). */
+  capacity?: number;
   /** FitGO SpaBooking id from document comment bookingRef=… */
   fitgoBookingRef?: string;
   members?: FitgoClassSessionMemberRow[];

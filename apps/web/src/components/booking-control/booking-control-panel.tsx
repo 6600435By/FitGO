@@ -25,6 +25,7 @@ export type BookingControlApi = {
     needsReview?: boolean;
     payment?: string;
     performerId?: string;
+    payTag?: string;
   }) => Promise<BookingControlListItem[]>;
   detail: (sessionKey: string) => Promise<BookingControlDetail>;
   openRemark: (
@@ -98,7 +99,11 @@ type Props = {
   initialTo?: string;
   /** Deep-link from payroll hints. */
   initialNeedsReview?: boolean;
-  initialPayment?: 'PAID' | 'DEBT' | 'ALL';
+  initialPayment?: 'PAID' | 'DEBT' | 'GIFT' | 'ALL';
+  initialKind?: string;
+  initialStatus?: string;
+  initialPerformerId?: string;
+  initialPayTag?: string;
   /** Hide kind filter (specialist SPA-only) */
   fixedKind?: BookingControlKind;
   title?: string;
@@ -192,6 +197,10 @@ export function BookingControlPanel({
   initialTo,
   initialNeedsReview = false,
   initialPayment = 'ALL',
+  initialKind,
+  initialStatus,
+  initialPerformerId,
+  initialPayTag,
   fixedKind,
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
@@ -204,11 +213,18 @@ export function BookingControlPanel({
     initialFrom?.trim() || daysAgoIso(approvalSegments ? 14 : 7),
   );
   const [to, setTo] = useState(initialTo?.trim() || todayIso());
-  const [kind, setKind] = useState<string>(fixedKind ?? 'ALL');
-  const [status, setStatus] = useState('ALL');
+  const [kind, setKind] = useState<string>(
+    fixedKind ?? initialKind?.toUpperCase() ?? 'ALL',
+  );
+  const [status, setStatus] = useState(
+    initialStatus?.toUpperCase() || 'ALL',
+  );
   const [payment, setPayment] = useState(initialPayment);
+  const [payTag, setPayTag] = useState(initialPayTag?.toUpperCase() || '');
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'SALE' | '1C'>('ALL');
-  const [performerId, setPerformerId] = useState('');
+  const [performerId, setPerformerId] = useState(
+    initialPerformerId?.trim() || '',
+  );
   const [performers, setPerformers] = useState<BookingControlPerformerOption[]>(
     [],
   );
@@ -258,6 +274,7 @@ export function BookingControlPanel({
         payment,
         needsReview,
         ...(performerId ? { performerId } : {}),
+        ...(payTag ? { payTag } : {}),
       })
       .then(setItems)
       .catch((e) =>
@@ -271,6 +288,7 @@ export function BookingControlPanel({
     kind,
     status,
     payment,
+    payTag,
     needsReview,
     performerId,
     fixedKind,

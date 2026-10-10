@@ -79,15 +79,24 @@ export function deltaPct(current: number, previous: number | null | undefined): 
 export function metric(
   value: number,
   compareValue?: number | null,
-  opts?: { unit?: 'count' | 'money' | 'percent' | 'hours'; trend?: number[]; hint?: string },
+  opts?: {
+    unit?: 'count' | 'money' | 'percent' | 'hours';
+    trend?: number[];
+    hint?: string;
+    unavailable?: boolean;
+    /** Snapshot metrics (e.g. open debt) — no period comparison. */
+    skipCompare?: boolean;
+  },
 ) {
+  const skip = opts?.skipCompare || opts?.unavailable;
   return {
     value,
-    compareValue: compareValue ?? null,
-    deltaPct: deltaPct(value, compareValue),
+    compareValue: skip ? null : (compareValue ?? null),
+    deltaPct: skip ? null : deltaPct(value, compareValue),
     unit: opts?.unit,
     trend: opts?.trend,
     hint: opts?.hint,
+    unavailable: opts?.unavailable,
   };
 }
 

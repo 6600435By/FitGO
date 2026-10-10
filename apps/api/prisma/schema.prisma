@@ -502,6 +502,7 @@ model Club {
   clubSyncRuns         ClubSyncRun[]
   clubScheduleSlots    ClubScheduleSlot[]
   clubMembershipSnapshots ClubMembershipSnapshot[]
+  clubMembersSummaries ClubMembersSummary[]
   trainerPtSales       TrainerPtSale[]
   specialistServiceDebts SpecialistServiceDebt[]
 }
@@ -2235,6 +2236,8 @@ model OnexClassSession {
   headerAttendedCount  Int             @default(0)
   /// Count of ATTENDED members — source for payroll quantity
   attendedCount        Int             @default(0)
+  /// Max places (1C «Ёмкость» / schedule capacity). Null when unknown.
+  capacity             Int?
   isActive             Boolean         @default(true)
   /// When true, open-period sync must not overwrite payroll-facing fields
   payrollLocked        Boolean         @default(false)
@@ -2487,6 +2490,30 @@ model ClubMembershipSnapshot {
   @@unique([clubId, clientExternalId])
   @@index([clubId, syncedAt])
   @@index([clubId, endDate])
+}
+
+/// Club-wide membership counters from FitGOAnalytics `scope=members` (one row per as-of date).
+model ClubMembersSummary {
+  id              String   @id @default(cuid())
+  clubId          String
+  /// Snapshot date (YYYY-MM-DD, usually period `to`).
+  asOfDate        String
+  active          Int      @default(0)
+  frozen          Int      @default(0)
+  expiring7       Int      @default(0)
+  expiring30      Int      @default(0)
+  endedInPeriod   Int      @default(0)
+  /// clientExternalId[] whose membership ended in the request period
+  endedClientIds  Json     @default("[]")
+  fromDate        String?
+  syncedAt        DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, asOfDate])
+  @@index([clubId, syncedAt])
 }
 
 /// Cached trainer PT sales from FitGO HTTP GET /trainer-pt-sales.

@@ -245,6 +245,10 @@ export class ClassSessionsSyncService {
       bookedCount: row.bookedCount ?? 0,
       headerAttendedCount: row.headerAttendedCount ?? 0,
       attendedCount,
+      capacity:
+        typeof row.capacity === 'number' && row.capacity > 0
+          ? Math.round(row.capacity)
+          : existing?.capacity ?? null,
       isActive: status !== OnexClassStatus.CANCELLED,
       syncedAt: new Date(),
     };

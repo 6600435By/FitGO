@@ -65,13 +65,84 @@ function ManagerEfficiencyPanel({
   );
 }
 
-function kpiCells(row: StaffKpiRow, currency: string) {
+function salesLink(
+  from: string,
+  to: string,
+  employeeExternalId?: string | null,
+) {
+  if (!employeeExternalId) return null;
+  const q = new URLSearchParams({
+    from,
+    to,
+    op: 'payment',
+    employee: employeeExternalId,
+  });
+  return `/super-admin/sales?${q.toString()}`;
+}
+
+function controlLink(
+  from: string,
+  to: string,
+  performerId: string,
+  kind?: string,
+) {
+  const q = new URLSearchParams({ from, to, performerId });
+  if (kind) q.set('kind', kind);
+  return `/super-admin/review-queue?${q.toString()}`;
+}
+
+function MoneyCell({
+  minor,
+  currency,
+  href,
+}: {
+  minor: number;
+  currency: string;
+  href?: string | null;
+}) {
+  const text = money(minor, currency);
+  if (!href) return <>{text}</>;
+  return (
+    <Link href={href} className="text-fitgo-400 hover:underline">
+      {text}
+    </Link>
+  );
+}
+
+function CountCell({
+  value,
+  href,
+}: {
+  value: number;
+  href?: string | null;
+}) {
+  if (!href) return <>{value}</>;
+  return (
+    <Link href={href} className="text-fitgo-400 hover:underline">
+      {value}
+    </Link>
+  );
+}
+
+function kpiCells(
+  row: StaffKpiRow,
+  currency: string,
+  from: string,
+  to: string,
+) {
   const k = row.kpi;
+  const salesHref = salesLink(from, to, row.employeeExternalId);
+  const controlHref = (kind?: string) =>
+    controlLink(from, to, row.userId, kind);
   if (k.kind === 'ADMIN') {
     return (
       <>
         <td className="px-2 py-2 text-right">
-          {money(k.salesBySegment.totalMinor, currency)}
+          <MoneyCell
+            minor={k.salesBySegment.totalMinor}
+            currency={currency}
+            href={salesHref}
+          />
         </td>
         <td className="px-2 py-2 text-right">
           {k.salesPerHourMinor != null
@@ -81,7 +152,10 @@ function kpiCells(row: StaffKpiRow, currency: string) {
         <td className="px-2 py-2 text-right">{k.tasksDonePct}%</td>
         <td className="px-2 py-2 text-right">{k.tasksOverdue}</td>
         <td className="px-2 py-2 text-right">
-          {k.bookingApprovalsGroup + k.bookingApprovalsSession}
+          <CountCell
+            value={k.bookingApprovalsGroup + k.bookingApprovalsSession}
+            href={controlHref()}
+          />
         </td>
       </>
     );
@@ -89,7 +163,12 @@ function kpiCells(row: StaffKpiRow, currency: string) {
   if (k.kind === 'GROUP_TRAINER') {
     return (
       <>
-        <td className="px-2 py-2 text-right">{k.sessionsConducted}</td>
+        <td className="px-2 py-2 text-right">
+          <CountCell
+            value={k.sessionsConducted}
+            href={controlHref('GROUP')}
+          />
+        </td>
         <td className="px-2 py-2 text-right">{k.avgAttendees}</td>
         <td className="px-2 py-2 text-right">
           {k.avgFillPct != null ? `${k.avgFillPct}%` : '—'}
@@ -106,7 +185,9 @@ function kpiCells(row: StaffKpiRow, currency: string) {
   if (k.kind === 'PT_TRAINER') {
     return (
       <>
-        <td className="px-2 py-2 text-right">{k.sessionsConducted}</td>
+        <td className="px-2 py-2 text-right">
+          <CountCell value={k.sessionsConducted} href={controlHref('PT')} />
+        </td>
         <td className="px-2 py-2 text-right">{k.newClients}</td>
         <td
           className="px-2 py-2 text-right"
@@ -126,7 +207,11 @@ function kpiCells(row: StaffKpiRow, currency: string) {
         </td>
         <td className="px-2 py-2 text-right">{k.activeClients30d}</td>
         <td className="px-2 py-2 text-right">
-          {money(k.ptSalesMinor, currency)}
+          <MoneyCell
+            minor={k.ptSalesMinor}
+            currency={currency}
+            href={salesHref}
+          />
         </td>
       </>
     );
@@ -134,7 +219,9 @@ function kpiCells(row: StaffKpiRow, currency: string) {
   if (k.kind === 'SPECIALIST') {
     return (
       <>
-        <td className="px-2 py-2 text-right">{k.servicesTotal}</td>
+        <td className="px-2 py-2 text-right">
+          <CountCell value={k.servicesTotal} href={controlHref('SPA')} />
+        </td>
         <td className="px-2 py-2 text-right">{k.quotaCount}</td>
         <td className="px-2 py-2 text-right">{k.paidCount}</td>
         <td className="px-2 py-2 text-right">{k.allsportsCount}</td>
@@ -142,7 +229,11 @@ function kpiCells(row: StaffKpiRow, currency: string) {
           {k.repeatPct != null ? `${k.repeatPct}%` : '—'}
         </td>
         <td className="px-2 py-2 text-right">
-          {money(k.paidRevenueMinor, currency)}
+          <MoneyCell
+            minor={k.paidRevenueMinor}
+            currency={currency}
+            href={salesHref}
+          />
         </td>
       </>
     );
@@ -159,10 +250,18 @@ function kpiCells(row: StaffKpiRow, currency: string) {
     return (
       <>
         <td className="px-2 py-2 text-right">
-          {money(k.corporateSalesMinor, currency)}
+          <MoneyCell
+            minor={k.corporateSalesMinor}
+            currency={currency}
+            href={salesHref}
+          />
         </td>
         <td className="px-2 py-2 text-right">
-          {money(k.motivationSalesMinor, currency)}
+          <MoneyCell
+            minor={k.motivationSalesMinor}
+            currency={currency}
+            href={salesHref}
+          />
         </td>
       </>
     );
@@ -353,7 +452,7 @@ export function StaffAnalyticsTable({
                         {Math.round(r.hours * 10) / 10}
                       </td>
                       {department !== 'ALL' ? (
-                        kpiCells(r, report.currency)
+                        kpiCells(r, report.currency, report.from, report.to)
                       ) : (
                         <td className="px-2 py-2 text-right text-slate-400">
                           {r.kpi.kind === 'ADMIN'

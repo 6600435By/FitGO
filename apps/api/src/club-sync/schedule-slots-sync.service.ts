@@ -77,6 +77,7 @@ export class ScheduleSlotsSyncService {
         if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
           continue;
         }
+        const capacity = slot.capacity ?? 0;
         await this.prisma.clubScheduleSlot.upsert({
           where: {
             clubId_externalId: { clubId, externalId: slot.id },
@@ -89,7 +90,7 @@ export class ScheduleSlotsSyncService {
             roomTitle: slot.roomTitle ?? null,
             startAt,
             endAt,
-            capacity: slot.capacity ?? 0,
+            capacity,
             bookedIn1c: slot.booked ?? 0,
             sessionType: slot.type ?? null,
             syncedAt: now,
@@ -100,12 +101,19 @@ export class ScheduleSlotsSyncService {
             roomTitle: slot.roomTitle ?? null,
             startAt,
             endAt,
-            capacity: slot.capacity ?? 0,
+            capacity,
             bookedIn1c: slot.booked ?? 0,
             sessionType: slot.type ?? null,
             syncedAt: now,
           },
         });
+        // Mirror capacity onto matching class session (same appointment UUID).
+        if (capacity > 0) {
+          await this.prisma.onexClassSession.updateMany({
+            where: { clubId, externalId: slot.id },
+            data: { capacity },
+          });
+        }
         upserted += 1;
       }
 

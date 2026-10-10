@@ -1,10 +1,24 @@
 'use client';
 
-import { ChevronDown, Globe, LogOut, MapPin, Phone, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  ChevronDown,
+  Globe,
+  LogOut,
+  MapPin,
+  Phone,
+  X,
+} from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { type ReactNode, useEffect, useState } from 'react';
 import { clearAuth, getUser } from '@/lib/auth';
+import {
+  locationKey,
+  navStackDepth,
+  popNavLocation,
+  recordNavLocation,
+} from '@/lib/nav-history';
 import { cn } from '@/lib/utils';
 import {
   subscribeWorkoutTimerDockChrome,
@@ -51,6 +65,7 @@ export function AppShell({
     null,
   );
   const [clubOpen, setClubOpen] = useState(false);
+  const [canGoBack, setCanGoBack] = useState(false);
   const immersiveCard = pathname === '/client/card';
 
   useEffect(
@@ -60,6 +75,57 @@ export function AppShell({
       }),
     [],
   );
+
+  // In-app back stack: path changes push; same path + new query updates top.
+  useEffect(() => {
+    const sync = () => {
+      const key = locationKey(
+        window.location.pathname,
+        window.location.search,
+      );
+      recordNavLocation(key);
+      setCanGoBack(navStackDepth() > 1);
+    };
+    sync();
+
+    window.addEventListener('popstate', sync);
+    const hist = window.history;
+    const origPush = hist.pushState.bind(hist);
+    const origReplace = hist.replaceState.bind(hist);
+    hist.pushState = (...args: Parameters<History['pushState']>) => {
+      origPush(...args);
+      sync();
+    };
+    hist.replaceState = (...args: Parameters<History['replaceState']>) => {
+      origReplace(...args);
+      sync();
+    };
+    return () => {
+      window.removeEventListener('popstate', sync);
+      hist.pushState = origPush;
+      hist.replaceState = origReplace;
+    };
+  }, []);
+
+  // Next App Router also updates pathname without always going through our patch
+  // in the same tick — keep stack in sync on React route changes.
+  useEffect(() => {
+    const key = locationKey(pathname, window.location.search);
+    recordNavLocation(key);
+    setCanGoBack(navStackDepth() > 1);
+  }, [pathname]);
+
+  const goBack = () => {
+    const prev = popNavLocation();
+    setCanGoBack(navStackDepth() > 1);
+    if (prev) {
+      router.replace(prev);
+      return;
+    }
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      router.back();
+    }
+  };
 
   const hideHeader =
     immersiveCard ||
@@ -100,35 +166,50 @@ export function AppShell({
           hideHeader && 'pointer-events-none invisible absolute',
         )}
       >
-        <div className="flex items-center justify-between">
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-wider text-fitgo-400">FITGO</p>
-            {headerClub ? (
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-start gap-2">
+            {canGoBack && (
               <button
                 type="button"
-                onClick={() => setClubOpen(true)}
-                className="group flex max-w-full items-center gap-1 text-left"
-                aria-haspopup="dialog"
-                aria-expanded={clubOpen}
+                onClick={goBack}
+                className="mt-0.5 shrink-0 rounded-xl border border-slate-700 p-2 text-slate-300 hover:bg-slate-800 hover:text-white"
+                aria-label="Назад"
+                title="Назад"
               >
-                <h1 className="truncate text-lg font-semibold group-hover:text-fitgo-300">
-                  {headerClub.name}
-                </h1>
-                <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-fitgo-300" />
+                <ArrowLeft className="h-5 w-5" />
               </button>
-            ) : (
-              <h1 className="text-lg font-semibold">{title}</h1>
             )}
-            {user && (
-              <p className="text-sm text-slate-400">
-                {user.firstName} {user.lastName}
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-wider text-fitgo-400">
+                FITGO
               </p>
-            )}
+              {headerClub ? (
+                <button
+                  type="button"
+                  onClick={() => setClubOpen(true)}
+                  className="group flex max-w-full items-center gap-1 text-left"
+                  aria-haspopup="dialog"
+                  aria-expanded={clubOpen}
+                >
+                  <h1 className="truncate text-lg font-semibold group-hover:text-fitgo-300">
+                    {headerClub.name}
+                  </h1>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-fitgo-300" />
+                </button>
+              ) : (
+                <h1 className="text-lg font-semibold">{title}</h1>
+              )}
+              {user && (
+                <p className="text-sm text-slate-400">
+                  {user.firstName} {user.lastName}
+                </p>
+              )}
+            </div>
           </div>
           <button
             type="button"
             onClick={logout}
-            className="rounded-xl border border-slate-700 p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
+            className="shrink-0 rounded-xl border border-slate-700 p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
             aria-label="Выйти"
           >
             <LogOut className="h-5 w-5" />

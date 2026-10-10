@@ -26,6 +26,7 @@ type ListQuery = {
   status?: string;
   needsReview?: string;
   payment?: string;
+  payTag?: string;
   sessionKey?: string;
 };
 
@@ -411,13 +412,15 @@ export class BookingControlController {
     const payment = (query.payment?.toUpperCase() || 'ALL') as
       | 'ALL'
       | 'PAID'
-      | 'DEBT';
+      | 'DEBT'
+      | 'GIFT';
     return this.bookingControl.list(clubId, {
       from,
       to,
       kind,
       status,
       payment,
+      payTag: query.payTag?.trim() || undefined,
       needsReview:
         query.needsReview === '1' || query.needsReview === 'true',
       performerId: query._own ? undefined : query.performerId,

@@ -16,6 +16,7 @@ import {
   MEMBERSHIP_LIMITS,
   MembershipSnapshotSyncService,
 } from './membership-snapshot-sync.service';
+import { MembersSummarySyncService } from './members-summary-sync.service';
 import {
   addMoscowDays,
   isMoscowNightWindow,
@@ -84,6 +85,7 @@ export class ClubSyncOrchestrator {
     private readonly ptSales: TrainerPtSalesSyncService,
     private readonly specialistDebts: SpecialistDebtSyncService,
     private readonly memberships: MembershipSnapshotSyncService,
+    private readonly membersSummary: MembersSummarySyncService,
   ) {}
 
   async reclaimOrphan(clubId: string): Promise<void> {
@@ -490,6 +492,14 @@ export class ClubSyncOrchestrator {
           const r = await this.ptSales.syncClub(clubId, {
             from: ptFrom,
             to: ptTo,
+          });
+          return { rows: r.upserted, from: r.from, to: r.to };
+        });
+
+        await runStep('members_summary', async () => {
+          const r = await this.membersSummary.syncClub(clubId, {
+            from: addMoscowDays(today, isFull ? -31 : -7),
+            to: today,
           });
           return { rows: r.upserted, from: r.from, to: r.to };
         });

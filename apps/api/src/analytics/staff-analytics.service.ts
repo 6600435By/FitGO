@@ -176,6 +176,7 @@ export class StaffAnalyticsService {
         rows.push({
           userId: s.id,
           name,
+          employeeExternalId: s.externalId || s.employeeCode || null,
           department: dept,
           roles: [...roleSet],
           hours,

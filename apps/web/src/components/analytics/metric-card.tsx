@@ -1,9 +1,11 @@
 'use client';
 
 import type { AnalyticMetric } from '@fitgo/shared-types';
+import Link from 'next/link';
 import { Sparkline } from './sparkline';
 
 function formatValue(m: AnalyticMetric, currency: string) {
+  if (m.unavailable) return 'н/д';
   if (m.unit === 'money') {
     return `${(m.value / 100).toLocaleString('ru-RU', {
       maximumFractionDigits: 0,
@@ -18,10 +20,12 @@ export function MetricCard({
   label,
   metric,
   currency = 'BYN',
+  href,
 }: {
   label: string;
   metric: AnalyticMetric;
   currency?: string;
+  href?: string;
 }) {
   const delta = metric.deltaPct;
   const deltaColor =
@@ -32,8 +36,8 @@ export function MetricCard({
         : delta < 0
           ? 'text-rose-400'
           : 'text-slate-400';
-  return (
-    <div className="card">
+  const body = (
+    <>
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="stat-value text-xl">{formatValue(metric, currency)}</p>
@@ -50,6 +54,17 @@ export function MetricCard({
       {metric.hint && (
         <p className="mt-1 text-[11px] text-slate-500">{metric.hint}</p>
       )}
-    </div>
+    </>
   );
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className="card block transition hover:border-fitgo-500/40 hover:bg-slate-800/40"
+      >
+        {body}
+      </Link>
+    );
+  }
+  return <div className="card">{body}</div>;
 }

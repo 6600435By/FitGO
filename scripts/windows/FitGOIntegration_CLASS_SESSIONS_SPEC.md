@@ -25,6 +25,7 @@ Response `200`:
       "bookedCount": 7,
       "headerAttendedCount": 6,
       "attendedCount": 6,
+      "capacity": 12,
       "members": [
         {
           "externalId": "uuid-клиента",

@@ -141,8 +141,8 @@ export class FitgoAnalyticsHttpProvider {
     employeeId?: string;
     page?: number;
     pageSize?: number;
-    /** cash | debt | changes | installments */
-    scope?: 'cash' | 'debt' | 'changes' | 'installments';
+    /** cash | debt | changes | installments | members */
+    scope?: 'cash' | 'debt' | 'changes' | 'installments' | 'members';
   }): Promise<FitgoAnalyticsSalesPage | null> {
     const q = new URLSearchParams({
       from: params.from,
@@ -220,6 +220,53 @@ export class FitgoAnalyticsHttpProvider {
       return null;
     }
   }
+
+  /**
+   * Club membership counters (active/frozen/expiring/ended).
+   * Requires published Analytics `scope=members`.
+   */
+  async getMembersSummary(params: {
+    from: string;
+    to: string;
+  }): Promise<FitgoMembersSummary | null> {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+      scope: 'members',
+    });
+    try {
+      const data = await this.request<FitgoMembersSummary & {
+        error?: string | { message?: string };
+      }>(`/sales?${q.toString()}`, 20_000);
+      if (!data) return null;
+      if (data.error && data.active == null) return null;
+      return {
+        active: Number(data.active) || 0,
+        frozen: Number(data.frozen) || 0,
+        expiring7: Number(data.expiring7) || 0,
+        expiring30: Number(data.expiring30) || 0,
+        endedInPeriod: Number(data.endedInPeriod) || 0,
+        endedClientIds: Array.isArray(data.endedClientIds)
+          ? data.endedClientIds.map(String)
+          : [],
+        asOf: data.asOf ?? params.to,
+        from: data.from ?? params.from,
+      };
+    } catch {
+      return null;
+    }
+  }
+}
+
+export interface FitgoMembersSummary {
+  active: number;
+  frozen: number;
+  expiring7: number;
+  expiring30: number;
+  endedInPeriod: number;
+  endedClientIds: string[];
+  asOf?: string;
+  from?: string;
 }
 
 export interface FitgoInstallmentPayment {

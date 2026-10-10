@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type {
   ClubRevenueDetailResponse,
   ClubRevenueLineDto,
@@ -9,7 +10,14 @@ import type {
   ClubRevenueReportResponse,
   ClubRevenueSummary,
 } from '@fitgo/shared-types';
-import { isCollectibleClientDebt } from './club-revenue-debt';
+import {
+  classifySaleType,
+  loadPayrollSegmentSets,
+} from './admin-sales-segments';
+import {
+  isCollectibleClientDebt,
+  isStaffDebtorName,
+} from './club-revenue-debt';
 import { PrismaService } from '../prisma/prisma.service';
 
 function toMinor(major: number): number {
@@ -174,7 +182,10 @@ function normalizeReceiptRow(r: Row): Row | null {
  */
 @Injectable()
 export class ClubRevenueService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
 
   async report(
     clubId: string,
@@ -185,6 +196,8 @@ export class ClubRevenueService {
       paymentMethod?: string;
       employeeExternalId?: string;
       q?: string;
+      segment?: string;
+      debtor?: string;
     },
   ): Promise<ClubRevenueReportResponse> {
     const from = new Date(`${params.from}T00:00:00.000Z`);
@@ -240,15 +253,16 @@ export class ClubRevenueService {
       occurredAt: { lte: to },
     };
 
-    // Line filters (chips / clickable card metrics). Employee is applied
-    // after SaleTransaction enrichment — cash scope from 1C has empty staff.
+    // Line filters (chips / clickable card metrics). Employee / payment-part /
+    // segment / debtor applied after enrichment so mixed payments match analytics.
     const lineFilters: Record<string, unknown> = { ...baseWhere };
-    if (params.paymentMethod && params.paymentMethod !== 'all') {
-      lineFilters.paymentMethod = params.paymentMethod;
-    }
     if (searchFilter) {
       lineFilters.AND = [searchFilter];
     }
+    const payPart =
+      params.paymentMethod && params.paymentMethod !== 'all'
+        ? params.paymentMethod
+        : null;
 
     const op = params.operationType && params.operationType !== 'all'
       ? params.operationType
@@ -427,7 +441,78 @@ export class ClubRevenueService {
       lineRows = lineRows.filter((r) => r.employeeExternalId === empFilter);
     }
 
-    const lines = lineRows.slice(0, 2000).map((r) => this.toLine(r, from, to));
+    if (payPart === 'cash') {
+      lineRows = lineRows.filter((r) => r.cash > 0);
+    } else if (payPart === 'card') {
+      lineRows = lineRows.filter((r) => r.card > 0);
+    } else if (payPart === 'cashless') {
+      lineRows = lineRows.filter((r) => r.cashless > 0);
+    } else if (payPart === 'personalAccount') {
+      lineRows = lineRows.filter((r) => r.personalAccount > 0);
+    } else if (payPart === 'mixed') {
+      lineRows = lineRows.filter((r) => {
+        const n =
+          (r.cash > 0 ? 1 : 0) +
+          (r.card > 0 ? 1 : 0) +
+          (r.cashless > 0 ? 1 : 0) +
+          (r.personalAccount > 0 ? 1 : 0);
+        return n > 1;
+      });
+    }
+
+    const debtor = params.debtor?.trim().toLowerCase();
+    if (debtor === 'staff') {
+      lineRows = lineRows.filter((r) => isStaffDebtorName(r.clientName));
+    } else if (debtor === 'client') {
+      lineRows = lineRows.filter((r) => !isStaffDebtorName(r.clientName));
+    }
+
+    const segment = params.segment?.trim().toLowerCase();
+    if (segment && segment !== 'all' && segment !== 'corporate') {
+      const payrollSegs = await loadPayrollSegmentSets(this.config);
+      const segmentKey =
+        segment === 'spa'
+          ? 'massage'
+          : segment === 'training'
+            ? 'training'
+            : segment;
+      lineRows = lineRows.filter((r) => {
+        const classified = classifySaleType(
+          r.saleType ?? undefined,
+          r.productName,
+          payrollSegs,
+        );
+        if (segment === 'spa') return classified === 'massage';
+        if (segment === 'other') {
+          return (
+            classified !== 'membership' &&
+            classified !== 'training' &&
+            classified !== 'massage' &&
+            classified !== 'solarium' &&
+            classified !== 'shop'
+          );
+        }
+        return classified === segmentKey;
+      });
+    }
+
+    const lines = lineRows.slice(0, 2000).map((r) => {
+      const line = this.toLine(r, from, to);
+      if (payPart === 'cash') {
+        line.amountMinor = toMinor(r.cash);
+        line.paidAmountMinor = toMinor(r.cash);
+      } else if (payPart === 'card') {
+        line.amountMinor = toMinor(r.card);
+        line.paidAmountMinor = toMinor(r.card);
+      } else if (payPart === 'cashless') {
+        line.amountMinor = toMinor(r.cashless);
+        line.paidAmountMinor = toMinor(r.cashless);
+      } else if (payPart === 'personalAccount') {
+        line.amountMinor = toMinor(r.personalAccount);
+        line.paidAmountMinor = toMinor(r.personalAccount);
+      }
+      return line;
+    });
 
     const employeeMap = new Map<string, string>();
     for (const r of [...normalizedLines, ...enrichedLineDebt]) {

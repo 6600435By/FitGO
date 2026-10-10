@@ -1,6 +1,6 @@
 'use client';
 
-import { useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   ClubRevenueDetailResponse,
@@ -489,16 +489,28 @@ function amountForLine(line: ClubRevenueLineDto): number {
 
 export function ClubRevenuePanel() {
   const search = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const bounds = useMemo(() => monthBounds(), []);
   const [from, setFrom] = useState(
     () => search.get('from') || bounds.from,
   );
   const [to, setTo] = useState(() => search.get('to') || bounds.to);
-  const [operationType, setOperationType] = useState('all');
-  const [paymentMethod, setPaymentMethod] = useState('all');
+  const [operationType, setOperationType] = useState(
+    () => search.get('op') || 'all',
+  );
+  const [paymentMethod, setPaymentMethod] = useState(
+    () => search.get('payment') || 'all',
+  );
   const [filterKey, setFilterKey] = useState('all');
-  const [employeeExternalId, setEmployeeExternalId] = useState('');
-  const [q, setQ] = useState('');
+  const [employeeExternalId, setEmployeeExternalId] = useState(
+    () => search.get('employee') || '',
+  );
+  const [segment, setSegment] = useState(
+    () => search.get('segment') || '',
+  );
+  const [debtor, setDebtor] = useState(() => search.get('debtor') || '');
+  const [q, setQ] = useState(() => search.get('q') || '');
   const [data, setData] = useState<ClubRevenueReportResponse | null>(null);
   const [detail, setDetail] = useState<ClubRevenueDetailResponse | null>(null);
   const [error, setError] = useState('');
@@ -506,6 +518,36 @@ export function ClubRevenuePanel() {
   const [loading, setLoading] = useState(false);
   const [backfillHint, setBackfillHint] = useState('');
   const [backfillBusy, setBackfillBusy] = useState(false);
+
+  useEffect(() => {
+    const next = new URLSearchParams();
+    next.set('from', from);
+    next.set('to', to);
+    if (operationType && operationType !== 'all') next.set('op', operationType);
+    if (paymentMethod && paymentMethod !== 'all')
+      next.set('payment', paymentMethod);
+    if (employeeExternalId) next.set('employee', employeeExternalId);
+    if (segment) next.set('segment', segment);
+    if (debtor) next.set('debtor', debtor);
+    if (q.trim()) next.set('q', q.trim());
+    const qs = next.toString();
+    const current = search.toString();
+    if (qs !== current) {
+      router.replace(`${pathname}?${qs}`);
+    }
+  }, [
+    from,
+    to,
+    operationType,
+    paymentMethod,
+    employeeExternalId,
+    segment,
+    debtor,
+    q,
+    pathname,
+    router,
+    search,
+  ]);
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -520,6 +562,8 @@ export function ClubRevenuePanel() {
         paymentMethod,
         employeeExternalId: employeeExternalId || undefined,
         q: q.trim() || undefined,
+        segment: segment || undefined,
+        debtor: debtor || undefined,
       });
       setData(res);
     } catch (e) {
@@ -527,7 +571,16 @@ export function ClubRevenuePanel() {
     } finally {
       setLoading(false);
     }
-  }, [from, to, operationType, paymentMethod, employeeExternalId, q]);
+  }, [
+    from,
+    to,
+    operationType,
+    paymentMethod,
+    employeeExternalId,
+    q,
+    segment,
+    debtor,
+  ]);
 
   useEffect(() => {
     void load();
@@ -572,6 +625,8 @@ export function ClubRevenuePanel() {
     setFilterKey(key);
     setOperationType(nextOp);
     setPaymentMethod(nextPay);
+    setSegment('');
+    setDebtor('');
   };
 
   const addManual = async (kind: 'corpo' | 'other') => {
@@ -831,6 +886,26 @@ export function ClubRevenuePanel() {
           </Chip>
         ))}
       </div>
+      {(segment || debtor) && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+          {segment ? <span>Сегмент: {segment}</span> : null}
+          {debtor ? (
+            <span>
+              Должник: {debtor === 'staff' ? 'сотрудники' : 'клиенты'}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="text-fitgo-400 hover:underline"
+            onClick={() => {
+              setSegment('');
+              setDebtor('');
+            }}
+          >
+            Сбросить
+          </button>
+        </div>
+      )}
 
       {error ? <p className="text-sm text-rose-400">{error}</p> : null}
       {loading && !data ? (

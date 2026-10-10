@@ -20,7 +20,10 @@ import { adminTaskTopic } from './task-topic';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { BookingControlService } from '../booking-control/booking-control.service';
-import { isCollectibleClientDebt } from '../admin-sales/club-revenue-debt';
+import {
+  isCollectibleClientDebt,
+  isStaffDebtorName,
+} from '../admin-sales/club-revenue-debt';
 import { ClubRevenueService } from '../admin-sales/club-revenue.service';
 import { ClubRevenueSyncService } from '../admin-sales/club-revenue-sync.service';
 import { FitnessService } from '../fitness/fitness.service';
@@ -665,9 +668,7 @@ export class AdminService {
     const clientExternalId = task.clientExternalId?.trim() || null;
 
     const staffDebt =
-      task.source === 'STAFF_DEBT' ||
-      /\(\s*сотрудник\s*\)/i.test(rawName) ||
-      /\(\s*сотрудник\s*\)/i.test(task.title);
+      task.source === 'STAFF_DEBT' || isStaffDebtorName(rawName, task.title);
 
     // Same source as syncDebtors: ClubRevenue unpaid (1C debt register).
     const lines = await this.prisma.clubRevenueEntry.findMany({
@@ -694,7 +695,7 @@ export class AdminService {
       ) {
         return false;
       }
-      const isStaff = /\(\s*сотрудник\s*\)/i.test(l.clientName ?? '');
+      const isStaff = isStaffDebtorName(l.clientName);
       return staffDebt ? isStaff : !isStaff;
     });
 

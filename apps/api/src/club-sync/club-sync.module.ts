@@ -11,6 +11,7 @@ import { ClubSyncController } from './club-sync.controller';
 import { ClubSyncOrchestrator } from './club-sync-orchestrator.service';
 import { ClubSyncStatusService } from './club-sync-status.service';
 import { MembershipSnapshotSyncService } from './membership-snapshot-sync.service';
+import { MembersSummarySyncService } from './members-summary-sync.service';
 import { NightlySyncScheduler } from './nightly-sync-scheduler.service';
 import { ScheduleSlotsSyncService } from './schedule-slots-sync.service';
 import { SpecialistDebtSyncService } from './specialist-debt-sync.service';
@@ -41,6 +42,7 @@ import { TrainerPtSalesSyncService } from './trainer-pt-sales-sync.service';
     TrainerPtSalesSyncService,
     SpecialistDebtSyncService,
     MembershipSnapshotSyncService,
+    MembersSummarySyncService,
     BookingGateway,
     BookingReconcileScheduler,
   ],

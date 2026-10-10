@@ -29,6 +29,8 @@ export interface AnalyticMetric {
   trend?: number[];
   unit?: 'count' | 'money' | 'percent' | 'hours';
   hint?: string;
+  /** When true, UI shows «н/д» instead of the numeric value. */
+  unavailable?: boolean;
 }
 
 export interface AnalyticInsight {
@@ -57,6 +59,11 @@ export interface ClubAnalyticsMoney {
   avgCheck: AnalyticMetric;
   refunds: AnalyticMetric;
   debtOutstanding: AnalyticMetric;
+  /** Snapshot open debt split (not period-bound). */
+  debtBreakdown: {
+    clientsMinor: number;
+    staffMinor: number;
+  };
   /**
    * Open installment schedules from 1C Analytics `scope=installments`.
    * Snapshot (not period-bound). Null when Analytics is unavailable.
@@ -89,6 +96,10 @@ export interface ClubAnalyticsVisits {
   sleeping: AnalyticMetric;
   /** [weekday 0=Mon..6=Sun][hour 0..23] visit counts */
   heatmap: number[][];
+  /** Inclusive hour range shown in UI (club working hours or hours with visits). */
+  heatmapHours: { from: number; to: number };
+  /** Weekday indices 0=Mon..6=Sun that have at least one open day in club hours. */
+  heatmapDays: number[];
 }
 
 export interface ClubAnalyticsServices {
@@ -137,7 +148,10 @@ export interface ClubAnalyticsReport {
     name: string;
     score: number;
     completedPt: number;
+    paidPt: number;
+    debtPt: number;
     activeClients: number;
+    amountMinor: number;
   }>;
   integrationHealth?: {
     provider: string;
@@ -246,6 +260,8 @@ export type StaffDepartmentKpi =
 export interface StaffKpiRow {
   userId: string;
   name: string;
+  /** 1C employee UUID or code for sales / booking-control drill-down. */
+  employeeExternalId?: string | null;
   department: Exclude<AnalyticsDepartment, 'ALL'>;
   roles: string[];
   hours: number;

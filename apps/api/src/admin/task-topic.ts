@@ -1,3 +1,5 @@
+import { isStaffDebtorName } from '../admin-sales/club-revenue-debt';
+
 export type AdminTaskTopic =
   | 'staff_debt'
   | 'client_debt'
@@ -23,11 +25,7 @@ export function adminTaskTopic(input: {
     source === 'CLIENT_DEBT' ||
     source === 'DEBT_OVERDUE'
   ) {
-    if (
-      source === 'STAFF_DEBT' ||
-      /\(\s*сотрудник\s*\)/i.test(client) ||
-      /долг сотрудника/i.test(title)
-    ) {
+    if (source === 'STAFF_DEBT' || isStaffDebtorName(client, title)) {
       return 'staff_debt';
     }
     return 'client_debt';

@@ -64,7 +64,9 @@ type ListFilters = {
   restrictPerformerId?: string;
   status?: BookingControlStatus | 'ALL';
   needsReview?: boolean;
-  payment?: 'PAID' | 'DEBT' | 'ALL';
+  payment?: 'PAID' | 'DEBT' | 'GIFT' | 'ALL';
+  /** Optional payTag filter (e.g. SALE / PACKAGE from analytics drill-down). */
+  payTag?: string;
   /** Skip live 1C PT-sales fetch (dashboard KPI / counts). */
   skipExternal?: boolean;
 };
@@ -176,7 +178,9 @@ export class BookingControlService {
           },
           include: { client: true, specialist: true, service: true },
         }),
-        wantPtSales && !filters.skipExternal
+        // Always DB (club-sync / refreshFrom1c). skipExternal kept for callers
+        // that historically meant «no live 1C» — fetchTrainerPtSales is DB-only.
+        wantPtSales
           ? this.fetchTrainerPtSales(clubId, filters.from, filters.to)
           : Promise.resolve([] as SpecialistServiceDebt[]),
       ]);
@@ -546,6 +550,7 @@ export class BookingControlService {
     if (filters.payment && filters.payment !== 'ALL') {
       out = out.filter((i) => {
         if (i.kind === 'GROUP') return false;
+        if (filters.payment === 'GIFT') return i.payment === 'GIFT';
         if (filters.payment === 'PAID') {
           return (
             i.payment === 'PAID' ||
@@ -556,6 +561,10 @@ export class BookingControlService {
         }
         return i.payment === 'DEBT' || i.payment === 'UNKNOWN';
       });
+    }
+    if (filters.payTag?.trim()) {
+      const tag = filters.payTag.trim().toUpperCase();
+      out = out.filter((i) => (i.payTag ?? '').toUpperCase() === tag);
     }
 
     return out.sort(
