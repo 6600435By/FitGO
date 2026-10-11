@@ -2144,6 +2144,7 @@ export const api = {
       payment?: string;
       performerId?: string;
       payTag?: string;
+      flag?: string;
     },
   ) => {
     const q = new URLSearchParams({ from: params.from, to: params.to });
@@ -2154,6 +2155,7 @@ export const api = {
     if (params.needsReview) q.set('needsReview', '1');
     if (params.performerId) q.set('performerId', params.performerId);
     if (params.payTag) q.set('payTag', params.payTag);
+    if (params.flag) q.set('flag', params.flag);
     return request<import('@fitgo/shared-types').BookingControlListItem[]>(
       `/${base}/booking-control?${q}`,
       {},
@@ -2414,6 +2416,144 @@ export const api = {
       {},
       token,
     ),
+
+  discrepanciesSummary: (
+    token: string,
+    params: { from: string; to: string; employee?: string },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.employee) q.set('employee', params.employee);
+    return request<import('@fitgo/shared-types').DiscrepancySummary>(
+      `/super-admin/discrepancies/summary?${q}`,
+      {},
+      token,
+    );
+  },
+
+  discrepanciesSegments: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      employee?: string;
+      showAcked?: boolean;
+    },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.employee) q.set('employee', params.employee);
+    if (params.showAcked) q.set('showAcked', '1');
+    return request<import('@fitgo/shared-types').DiscrepancySegmentsResponse>(
+      `/super-admin/discrepancies/segments?${q}`,
+      {},
+      token,
+    );
+  },
+
+  discrepanciesRecheckSegments: (token: string) =>
+    request<{ ok: boolean }>(
+      '/super-admin/discrepancies/segments/recheck',
+      { method: 'POST', body: '{}' },
+      token,
+    ),
+
+  discrepanciesSales: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      employee?: string;
+      showAcked?: boolean;
+    },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.employee) q.set('employee', params.employee);
+    if (params.showAcked) q.set('showAcked', '1');
+    return request<import('@fitgo/shared-types').DiscrepancySalesResponse>(
+      `/super-admin/discrepancies/sales?${q}`,
+      {},
+      token,
+    );
+  },
+
+  discrepanciesSpa: (
+    token: string,
+    params: { from: string; to: string; employee?: string },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.employee) q.set('employee', params.employee);
+    return request<import('@fitgo/shared-types').DiscrepancySpaPtResponse>(
+      `/super-admin/discrepancies/spa?${q}`,
+      {},
+      token,
+    );
+  },
+
+  discrepanciesPt: (
+    token: string,
+    params: { from: string; to: string; employee?: string },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.employee) q.set('employee', params.employee);
+    return request<import('@fitgo/shared-types').DiscrepancySpaPtResponse>(
+      `/super-admin/discrepancies/pt?${q}`,
+      {},
+      token,
+    );
+  },
+
+  discrepanciesGroup: (
+    token: string,
+    params: { from: string; to: string; employee?: string },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.employee) q.set('employee', params.employee);
+    return request<import('@fitgo/shared-types').DiscrepancyGroupResponse>(
+      `/super-admin/discrepancies/group?${q}`,
+      {},
+      token,
+    );
+  },
+
+  discrepanciesAck: (
+    token: string,
+    body: {
+      tab: string;
+      itemKey: string;
+      fingerprint: string;
+      note?: string;
+    },
+  ) =>
+    request<{ ok: boolean }>(
+      '/super-admin/discrepancies/ack',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  webkassaSync: (token: string, from: string, to: string) => {
+    const q = new URLSearchParams({ from, to });
+    return request<{ ok: boolean; count: number }>(
+      `/super-admin/webkassa/sync?${q}`,
+      { method: 'POST', body: '{}' },
+      token,
+    );
+  },
+
+  webkassaUpload: async (token: string, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API_URL}/api/super-admin/webkassa/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(
+        (err as { message?: string }).message || `HTTP ${res.status}`,
+      );
+    }
+    return (await res.json()) as { ok: boolean; count: number };
+  },
 
   superAdminResolveTrust: (
     token: string,

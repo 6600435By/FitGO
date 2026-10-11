@@ -31,11 +31,50 @@ export type SaleClassifyBucket = AdminSaleType | 'training';
 let cache: { at: number; sets: PayrollSegmentSets } | null = null;
 const CACHE_MS = 15 * 60 * 1000;
 
-function normNom(name: string) {
+export function clearPayrollSegmentCache() {
+  cache = null;
+}
+
+export function normNom(name: string) {
   return name
     .toLowerCase()
     .replace(/ё/g, 'е')
     .replace(/[^a-zа-я0-9]+/gi, '');
+}
+
+export type SegmentMatchKey =
+  | 'membership'
+  | 'spa'
+  | 'shop'
+  | 'solarium'
+  | 'training';
+
+/** All nomenclature segments that contain this product name (normalized). */
+export function matchPayrollSegments(
+  productName: string | null | undefined,
+  segments: PayrollSegmentSets | null,
+  productExternalId?: string | null,
+): SegmentMatchKey[] {
+  if (!segments) return [];
+  const key = normNom(productName ?? '');
+  const uuid = (productExternalId ?? '').trim().toLowerCase();
+  const out: SegmentMatchKey[] = [];
+  const order: SegmentMatchKey[] = [
+    'shop',
+    'spa',
+    'solarium',
+    'training',
+    'membership',
+  ];
+  for (const seg of order) {
+    const set = segments[seg];
+    if (key && set.has(key)) {
+      out.push(seg);
+      continue;
+    }
+    if (uuid && set.has(uuid)) out.push(seg);
+  }
+  return out;
 }
 
 function fitgoBaseUrl(config: ConfigService): string | null {
@@ -57,10 +96,20 @@ async function fetchSegmentMembers(
   });
   if (!res.ok) return new Set();
   const body = (await res.json()) as {
-    data?: { found?: boolean; data?: Array<{ name?: string }> };
+    data?: {
+      found?: boolean;
+      data?: Array<{ name?: string; externalId?: string }>;
+    };
   };
   const rows = body.data?.data ?? [];
-  return new Set(rows.map((row) => normNom(row.name ?? '')).filter(Boolean));
+  const out = new Set<string>();
+  for (const row of rows) {
+    const n = normNom(row.name ?? '');
+    if (n) out.add(n);
+    const id = (row.externalId ?? '').trim().toLowerCase();
+    if (id) out.add(id);
+  }
+  return out;
 }
 
 async function segmentNames(
@@ -183,14 +232,19 @@ export function classifySaleType(
   rawType: string | undefined,
   productName: string | null | undefined,
   segments: PayrollSegmentSets | null,
+  productExternalId?: string | null,
 ): SaleClassifyBucket {
   const key = normNom(productName ?? '');
-  if (segments && key) {
-    if (segments.shop.has(key)) return 'shop';
-    if (segments.spa.has(key)) return 'massage';
-    if (segments.solarium.has(key)) return 'solarium';
-    if (segments.training.has(key)) return 'training';
-    if (segments.membership.has(key)) return 'membership';
+  const uuid = (productExternalId ?? '').trim().toLowerCase();
+  if (segments) {
+    for (const probe of [uuid, key]) {
+      if (!probe) continue;
+      if (segments.shop.has(probe)) return 'shop';
+      if (segments.spa.has(probe)) return 'massage';
+      if (segments.solarium.has(probe)) return 'solarium';
+      if (segments.training.has(probe)) return 'training';
+      if (segments.membership.has(probe)) return 'membership';
+    }
   }
   const t = (rawType ?? '').toLowerCase();
   if (t === 'training' || isLikelyTrainingProductName(productName)) {

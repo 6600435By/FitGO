@@ -510,7 +510,9 @@ export function ClubRevenuePanel() {
     () => search.get('segment') || '',
   );
   const [debtor, setDebtor] = useState(() => search.get('debtor') || '');
-  const [q, setQ] = useState(() => search.get('q') || '');
+  const [q, setQ] = useState(
+    () => search.get('product') || search.get('q') || '',
+  );
   const [data, setData] = useState<ClubRevenueReportResponse | null>(null);
   const [detail, setDetail] = useState<ClubRevenueDetailResponse | null>(null);
   const [error, setError] = useState('');
@@ -529,7 +531,10 @@ export function ClubRevenuePanel() {
     if (employeeExternalId) next.set('employee', employeeExternalId);
     if (segment) next.set('segment', segment);
     if (debtor) next.set('debtor', debtor);
-    if (q.trim()) next.set('q', q.trim());
+    if (q.trim()) {
+      next.set('q', q.trim());
+      next.set('product', q.trim());
+    }
     const qs = next.toString();
     const current = search.toString();
     if (qs !== current) {

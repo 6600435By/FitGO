@@ -505,6 +505,9 @@ model Club {
   clubMembersSummaries ClubMembersSummary[]
   trainerPtSales       TrainerPtSale[]
   specialistServiceDebts SpecialistServiceDebt[]
+  webkassaReceipts     WebkassaReceipt[]
+  webkassaSyncStates   WebkassaSyncState[]
+  discrepancyAcks      DiscrepancyAck[]
 }
 
 model ClubTheme {
@@ -1951,6 +1954,10 @@ model SaleTransaction {
   /// membership | massage | solarium | shop
   saleType             String
   productName          String?
+  /// 1C nomenclature UUID (when Analytics publishes it)
+  productExternalId    String?
+  productCode          String?
+  productGroupName     String?
   clientExternalId     String?
   clientName           String?
   /// 1C Author (employee code) — attribution target
@@ -1971,6 +1978,7 @@ model SaleTransaction {
   @@index([clubId, paidAt])
   @@index([clubId, employeeExternalId, soldAt])
   @@index([clubId, isActive, paidAt])
+  @@index([clubId, productExternalId])
 }
 
 model SalesSyncState {
@@ -2049,6 +2057,10 @@ model ClubRevenueEntry {
   paymentMethod        String?
   saleType             String?
   productName          String?
+  /// 1C nomenclature UUID (when Analytics publishes it)
+  productExternalId    String?
+  productCode          String?
+  productGroupName     String?
   clientExternalId     String?
   clientName           String?
   employeeExternalId   String?
@@ -2066,6 +2078,7 @@ model ClubRevenueEntry {
   @@index([clubId, operationType, occurredAt])
   @@index([clubId, employeeExternalId, occurredAt])
   @@index([clubId, isActive, occurredAt])
+  @@index([clubId, productExternalId])
 }
 
 /// Manual cash-desk lines for club revenue: Корпо (р/с) and Прочие.
@@ -2270,6 +2283,12 @@ model OnexClassSessionMember {
   paySource      String?
   /// Unit amount for payroll (minor): sale line or blockPrice/N
   unitPriceMinor Int?
+  /// When the client was added to the session in 1C (if published)
+  bookedAt       DateTime?
+  /// Package / membership document UUID used for write-off
+  packageDocId   String?
+  /// Package valid-until date from 1C (ISO date or datetime string)
+  packageValidUntil String?
   createdAt      DateTime                   @default(now())
   updatedAt      DateTime                   @updatedAt
 
@@ -2278,6 +2297,74 @@ model OnexClassSessionMember {
   @@unique([sessionId, externalId])
   @@index([externalId])
   @@index([sessionId, attendance])
+  @@index([paySource])
+}
+
+/// Webkassa KЭД cheque row (cash desk movements).
+model WebkassaReceipt {
+  id           String   @id @default(cuid())
+  clubId       String
+  /// ID Чека from Webkassa export
+  receiptId    String
+  occurredAt   DateTime
+  shiftNumber  String?
+  kedNumber    String?
+  amount       Float
+  cash         Float    @default(0)
+  cashless     Float    @default(0)
+  /// Чек продажи | Чек возврата | …
+  receiptType  String
+  tradeObject  String?
+  cashier      String?
+  status       String?
+  uid          String?
+  syncedAt     DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, receiptId])
+  @@index([clubId, occurredAt])
+  @@index([clubId, cashier, occurredAt])
+}
+
+model WebkassaSyncState {
+  id            String    @id @default(cuid())
+  clubId        String
+  lastRunAt     DateTime?
+  lastSuccessAt DateTime?
+  lastStatus    String?
+  lastError     String?
+  lastFrom      String?
+  lastTo        String?
+  lastCount     Int       @default(0)
+  updatedAt     DateTime  @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId])
+}
+
+/// Manager marked a discrepancy item as reviewed (hidden unless showAcked).
+model DiscrepancyAck {
+  id          String   @id @default(cuid())
+  clubId      String
+  /// segments | sales | spa | gp | pt
+  tab         String
+  itemKey     String
+  /// Hash of amounts/counts — invalidated when data changes
+  fingerprint String
+  note        String?
+  userId      String
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, tab, itemKey])
+  @@index([clubId, tab])
+  @@index([expiresAt])
 }
 
 /// Dual approval for GROUP class payroll (trainer checkmarks → admin confirm).

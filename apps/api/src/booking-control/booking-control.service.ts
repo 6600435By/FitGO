@@ -52,6 +52,7 @@ import {
   UserRole,
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { sessionMatchesFlag } from '../discrepancies/discrepancies-predicates';
 import { FitnessService } from '../fitness/fitness.service';
 import { SessionApprovalService } from './session-approval.service';
 
@@ -67,6 +68,8 @@ type ListFilters = {
   payment?: 'PAID' | 'DEBT' | 'GIFT' | 'ALL';
   /** Optional payTag filter (e.g. SALE / PACKAGE from analytics drill-down). */
   payTag?: string;
+  /** Discrepancy deep-link: EXPIRING_PACKAGE | LATE_ADD */
+  flag?: 'EXPIRING_PACKAGE' | 'LATE_ADD';
   /** Skip live 1C PT-sales fetch (dashboard KPI / counts). */
   skipExternal?: boolean;
 };
@@ -566,11 +569,87 @@ export class BookingControlService {
       const tag = filters.payTag.trim().toUpperCase();
       out = out.filter((i) => (i.payTag ?? '').toUpperCase() === tag);
     }
+    if (filters.flag) {
+      out = await this.filterByDiscrepancyFlag(clubId, out, filters.flag);
+    }
 
     return out.sort(
       (a, b) =>
         new Date(b.startAt).getTime() - new Date(a.startAt).getTime(),
     );
+  }
+
+  private async filterByDiscrepancyFlag(
+    clubId: string,
+    items: BookingControlListItem[],
+    flag: 'EXPIRING_PACKAGE' | 'LATE_ADD',
+  ): Promise<BookingControlListItem[]> {
+    const onexIds = items
+      .map((i) => {
+        const m = /^1c:(.+)$/.exec(i.sessionKey);
+        return m?.[1];
+      })
+      .filter((x): x is string => Boolean(x));
+    if (!onexIds.length) return [];
+
+    const sessions = await this.prisma.onexClassSession.findMany({
+      where: { clubId, externalId: { in: onexIds }, isActive: true },
+      include: { members: true },
+    });
+    const byExt = new Map(sessions.map((s) => [s.externalId, s]));
+
+    let membershipByClient: Map<
+      string,
+      { clientExternalId: string; packageName?: string | null; endDate?: string | null }
+    > | undefined;
+    if (flag === 'EXPIRING_PACKAGE') {
+      const snaps = await this.prisma.clubMembershipSnapshot.findMany({
+        where: { clubId },
+        select: {
+          clientExternalId: true,
+          packageName: true,
+          endDate: true,
+        },
+      });
+      membershipByClient = new Map(
+        snaps.map((s) => [s.clientExternalId, s]),
+      );
+    }
+
+    return items.filter((item) => {
+      const m = /^1c:(.+)$/.exec(item.sessionKey);
+      if (!m) return false;
+      const s = byExt.get(m[1]);
+      if (!s) return false;
+      return sessionMatchesFlag(
+        {
+          externalId: s.externalId,
+          kind: s.kind,
+          status: s.status,
+          startAt: s.startAt,
+          endAt: s.endAt,
+          employeeExternalId: s.employeeExternalId,
+          employeeName: s.employeeName,
+          title: s.title,
+          createdAt: s.createdAt,
+          members: s.members.map((mem) => ({
+            externalId: mem.externalId,
+            clientName: mem.clientName,
+            attendance: mem.attendance,
+            cancelled: mem.cancelled,
+            paySource: mem.paySource,
+            paymentBasis: mem.paymentBasis,
+            bookedAt: mem.bookedAt,
+            packageDocId: mem.packageDocId,
+            packageValidUntil: mem.packageValidUntil,
+            createdAt: mem.createdAt,
+            quantity: mem.quantity,
+          })),
+        },
+        flag,
+        membershipByClient,
+      );
+    });
   }
 
   async detail(

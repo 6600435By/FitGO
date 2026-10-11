@@ -26,6 +26,7 @@ export type BookingControlApi = {
     payment?: string;
     performerId?: string;
     payTag?: string;
+    flag?: string;
   }) => Promise<BookingControlListItem[]>;
   detail: (sessionKey: string) => Promise<BookingControlDetail>;
   openRemark: (
@@ -104,6 +105,8 @@ type Props = {
   initialStatus?: string;
   initialPerformerId?: string;
   initialPayTag?: string;
+  /** Discrepancy deep-link: EXPIRING_PACKAGE | LATE_ADD */
+  initialFlag?: string;
   /** Hide kind filter (specialist SPA-only) */
   fixedKind?: BookingControlKind;
   title?: string;
@@ -201,6 +204,7 @@ export function BookingControlPanel({
   initialStatus,
   initialPerformerId,
   initialPayTag,
+  initialFlag,
   fixedKind,
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
@@ -221,6 +225,12 @@ export function BookingControlPanel({
   );
   const [payment, setPayment] = useState(initialPayment);
   const [payTag, setPayTag] = useState(initialPayTag?.toUpperCase() || '');
+  const [flag, setFlag] = useState(
+    initialFlag?.toUpperCase() === 'EXPIRING_PACKAGE' ||
+      initialFlag?.toUpperCase() === 'LATE_ADD'
+      ? initialFlag.toUpperCase()
+      : '',
+  );
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'SALE' | '1C'>('ALL');
   const [performerId, setPerformerId] = useState(
     initialPerformerId?.trim() || '',
@@ -275,6 +285,7 @@ export function BookingControlPanel({
         needsReview,
         ...(performerId ? { performerId } : {}),
         ...(payTag ? { payTag } : {}),
+        ...(flag ? { flag } : {}),
       })
       .then(setItems)
       .catch((e) =>
@@ -289,6 +300,7 @@ export function BookingControlPanel({
     status,
     payment,
     payTag,
+    flag,
     needsReview,
     performerId,
     fixedKind,
@@ -901,6 +913,21 @@ export function BookingControlPanel({
             />
             На проверке
           </label>
+          {flag ? (
+            <div className="col-span-2 flex h-11 items-center md:col-span-2">
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 rounded-full border border-amber-700/60 bg-amber-950/40 px-3 py-1 text-xs text-amber-200"
+                onClick={() => setFlag('')}
+                title="Снять фильтр нестыковки"
+              >
+                {flag === 'EXPIRING_PACKAGE'
+                  ? 'Истекающий пакет'
+                  : 'Добавлены после занятия'}
+                <span aria-hidden>×</span>
+              </button>
+            </div>
+          ) : null}
           <div className="col-span-2 flex flex-wrap gap-2 md:col-span-4">
             <button
               type="button"

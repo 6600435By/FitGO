@@ -22,6 +22,9 @@ interface FitgoAnalyticsSalesItem {
   attributionMode?: string;
   saleType: string;
   productName: string;
+  productExternalId?: string;
+  productCode?: string;
+  productGroupName?: string;
   clientExternalId?: string;
   clientName?: string;
   employeeExternalId?: string;

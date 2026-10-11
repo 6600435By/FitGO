@@ -86,6 +86,9 @@ type SaleRow = {
   personalAccount: number;
   saleType: string;
   productName: string | null;
+  productExternalId: string | null;
+  productCode: string | null;
+  productGroupName: string | null;
   clientExternalId: string | null;
   clientName: string | null;
   employeeExternalId: string | null;
@@ -109,7 +112,8 @@ export async function upsertSaleRows(
           ${sqlUtcTimestamp(r.soldAt)}, ${sqlUtcTimestamp(r.paidAt)}, ${r.amount},
           ${r.cash}, ${r.card}, ${r.cashless}, ${r.personalAccount},
           ${r.saleType},
-          ${r.productName}, ${r.clientExternalId}, ${r.clientName},
+          ${r.productName}, ${r.productExternalId}, ${r.productCode}, ${r.productGroupName},
+          ${r.clientExternalId}, ${r.clientName},
           ${r.employeeExternalId}, ${r.employeeName}, ${r.paymentMethod},
           ${true}, ${sqlUtcTimestamp(now)}
         )`,
@@ -118,7 +122,8 @@ export async function upsertSaleRows(
       INSERT INTO "SaleTransaction" (
         "id", "clubId", "externalSaleId", "soldAt", "paidAt", "amount",
         "cash", "card", "cashless", "personalAccount",
-        "saleType", "productName", "clientExternalId", "clientName",
+        "saleType", "productName", "productExternalId", "productCode", "productGroupName",
+        "clientExternalId", "clientName",
         "employeeExternalId", "employeeName", "paymentMethod",
         "isActive", "syncedAt"
       )
@@ -133,6 +138,9 @@ export async function upsertSaleRows(
         "personalAccount" = EXCLUDED."personalAccount",
         "saleType" = EXCLUDED."saleType",
         "productName" = EXCLUDED."productName",
+        "productExternalId" = EXCLUDED."productExternalId",
+        "productCode" = EXCLUDED."productCode",
+        "productGroupName" = EXCLUDED."productGroupName",
         "clientExternalId" = EXCLUDED."clientExternalId",
         "clientName" = EXCLUDED."clientName",
         "employeeExternalId" = EXCLUDED."employeeExternalId",
@@ -161,6 +169,9 @@ type RevenueRow = {
   paymentMethod: string | null;
   saleType: string | null;
   productName: string | null;
+  productExternalId: string | null;
+  productCode: string | null;
+  productGroupName: string | null;
   clientExternalId: string | null;
   clientName: string | null;
   employeeExternalId: string | null;
@@ -186,6 +197,7 @@ export async function upsertRevenueRows(
           ${r.saleAmount}, ${r.paidAmount}, ${r.refundAmount}, ${r.amount},
           ${r.cash}, ${r.card}, ${r.cashless}, ${r.personalAccount},
           ${r.paymentMethod}, ${r.saleType}, ${r.productName},
+          ${r.productExternalId}, ${r.productCode}, ${r.productGroupName},
           ${r.clientExternalId}, ${r.clientName},
           ${r.employeeExternalId}, ${r.employeeName},
           ${r.countsTowardIncome}, ${r.countsTowardMotivation},
@@ -198,6 +210,7 @@ export async function upsertRevenueRows(
         "occurredAt", "paidAt", "saleAmount", "paidAmount", "refundAmount",
         "amount", "cash", "card", "cashless", "personalAccount",
         "paymentMethod", "saleType", "productName",
+        "productExternalId", "productCode", "productGroupName",
         "clientExternalId", "clientName", "employeeExternalId", "employeeName",
         "countsTowardIncome", "countsTowardMotivation", "isActive", "syncedAt"
       )
@@ -218,6 +231,9 @@ export async function upsertRevenueRows(
         "paymentMethod" = EXCLUDED."paymentMethod",
         "saleType" = EXCLUDED."saleType",
         "productName" = EXCLUDED."productName",
+        "productExternalId" = EXCLUDED."productExternalId",
+        "productCode" = EXCLUDED."productCode",
+        "productGroupName" = EXCLUDED."productGroupName",
         "clientExternalId" = EXCLUDED."clientExternalId",
         "clientName" = EXCLUDED."clientName",
         "employeeExternalId" = EXCLUDED."employeeExternalId",

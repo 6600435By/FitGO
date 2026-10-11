@@ -286,6 +286,9 @@ export class ClassSessionsSyncService {
           quantity: m.quantity && m.quantity > 0 ? m.quantity : 1,
           paySource: mapPaySource(m.paySource),
           unitPriceMinor: majorToMinorOrNull(m.unitAmount),
+          bookedAt: parseOptionalDate(m.bookedAt),
+          packageDocId: m.packageDocId?.trim() || null,
+          packageValidUntil: m.packageValidUntil?.trim() || null,
         },
         update: {
           clientName: m.clientName?.trim() || mid,
@@ -295,6 +298,9 @@ export class ClassSessionsSyncService {
           quantity: m.quantity && m.quantity > 0 ? m.quantity : 1,
           paySource: mapPaySource(m.paySource),
           unitPriceMinor: majorToMinorOrNull(m.unitAmount),
+          bookedAt: parseOptionalDate(m.bookedAt),
+          packageDocId: m.packageDocId?.trim() || null,
+          packageValidUntil: m.packageValidUntil?.trim() || null,
         },
       });
       memberCount += 1;
@@ -710,6 +716,12 @@ function mapPaySource(raw: string | undefined): string | null {
 function majorToMinorOrNull(amount: number | undefined): number | null {
   if (amount == null || !Number.isFinite(amount) || amount <= 0) return null;
   return Math.round(amount * 100);
+}
+
+function parseOptionalDate(raw: string | undefined): Date | null {
+  if (!raw?.trim()) return null;
+  const d = new Date(raw.trim());
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function mapStatus(s: string): OnexClassStatus {

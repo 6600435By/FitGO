@@ -216,6 +216,7 @@ export class AdminSalesService {
         row.saleType,
         row.productName,
         segments,
+        row.productExternalId,
       );
       // «Тренировки» — дашборд / ПТ, не мотивация админа
       if (bucket === 'training' || !allowedTypes.has(bucket)) continue;
@@ -918,6 +919,7 @@ export class AdminSalesService {
         row.saleType,
         row.productName,
         segments,
+        row.productExternalId,
       );
       if (saleType === 'training') continue;
       if (

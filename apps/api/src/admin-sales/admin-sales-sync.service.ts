@@ -251,6 +251,7 @@ export class AdminSalesSyncService {
           item.saleType,
           item.productName,
           segments,
+          item.productExternalId,
         );
         const paidDay = moscowDayKey(paidAt);
         const amount = Number(item.amount) || 0;
@@ -273,6 +274,9 @@ export class AdminSalesSyncService {
           personalAccount,
           saleType,
           productName: item.productName ?? null,
+          productExternalId: item.productExternalId?.trim() || null,
+          productCode: item.productCode?.trim() || null,
+          productGroupName: item.productGroupName?.trim() || null,
           clientExternalId: item.clientExternalId ?? null,
           clientName: item.clientName ?? null,
           employeeExternalId: item.employeeExternalId ?? null,

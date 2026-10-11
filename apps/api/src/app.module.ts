@@ -29,6 +29,8 @@ import { StaffProfileModule } from './staff-profile/staff-profile.module';
 import { ClubScheduleModule } from './club-schedule/club-schedule.module';
 import { ClubSyncModule } from './club-sync/club-sync.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { DiscrepanciesModule } from './discrepancies/discrepancies.module';
+import { WebkassaModule } from './webkassa/webkassa.module';
 
 @Module({
   imports: [
@@ -62,6 +64,8 @@ import { AnalyticsModule } from './analytics/analytics.module';
     HallSnapshotModule,
     StaffProfileModule,
     ClubScheduleModule,
+    DiscrepanciesModule,
+    WebkassaModule,
   ],
 })
 export class AppModule {}

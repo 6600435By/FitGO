@@ -36,6 +36,12 @@ export interface FitgoClassSessionMemberRow {
   paySource?: string;
   /** Unit price in major currency (blockPrice/N or sale line). */
   unitAmount?: number;
+  /** When the client was added to the session in 1C (ISO). */
+  bookedAt?: string;
+  /** Package / membership document UUID used for write-off. */
+  packageDocId?: string;
+  /** Package valid-until (ISO date or datetime). */
+  packageValidUntil?: string;
 }
 
 export interface FitgoClassSessionRow {

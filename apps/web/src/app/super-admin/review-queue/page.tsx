@@ -35,6 +35,11 @@ function SuperAdminBookingControlInner() {
   const initialPerformerId =
     searchParams.get('performerId')?.trim() || undefined;
   const initialPayTag = searchParams.get('payTag')?.trim() || undefined;
+  const flagRaw = searchParams.get('flag')?.trim()?.toUpperCase();
+  const initialFlag =
+    flagRaw === 'EXPIRING_PACKAGE' || flagRaw === 'LATE_ADD'
+      ? flagRaw
+      : undefined;
 
   const panelApi = useMemo(() => createBookingControlApi('super-admin'), []);
 
@@ -56,6 +61,7 @@ function SuperAdminBookingControlInner() {
       initialStatus={initialStatus}
       initialPerformerId={initialPerformerId}
       initialPayTag={initialPayTag}
+      initialFlag={initialFlag}
       cancelSpaBooking={async (bookingId) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');

@@ -42,6 +42,7 @@ type Row = {
   paymentMethod: string | null;
   saleType: string | null;
   productName: string | null;
+  productExternalId?: string | null;
   clientName: string | null;
   clientExternalId: string | null;
   employeeName: string | null;
@@ -481,6 +482,7 @@ export class ClubRevenueService {
           r.saleType ?? undefined,
           r.productName,
           payrollSegs,
+          r.productExternalId,
         );
         if (segment === 'spa') return classified === 'massage';
         if (segment === 'other') {
