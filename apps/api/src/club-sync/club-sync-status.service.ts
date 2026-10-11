@@ -6,7 +6,10 @@ import {
   isMoscowNightWindow,
   nextNightlyAtIso,
 } from './moscow-time';
-import { MANUAL_COOLDOWN_MS } from './club-sync-orchestrator.service';
+import {
+  ClubSyncOrchestrator,
+  MANUAL_COOLDOWN_MS,
+} from './club-sync-orchestrator.service';
 
 /** Resources that feed the global «Данные на …» label (updated by LIGHT + FULL). */
 const FRESHNESS_RESOURCES = [
@@ -58,9 +61,15 @@ export type ClubSyncStatusDto = {
 
 @Injectable()
 export class ClubSyncStatusService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly orchestrator: ClubSyncOrchestrator,
+  ) {}
 
   async status(clubId: string, opts?: { includeErrors?: boolean }): Promise<ClubSyncStatusDto> {
+    // Polls must free dead locks — after SP reinstall UI otherwise spins forever.
+    await this.orchestrator.reclaimOrphan(clubId);
+
     const states = await this.prisma.salesSyncState.findMany({
       where: { clubId, resourceKey: { in: [...KEY_RESOURCES] } },
     });

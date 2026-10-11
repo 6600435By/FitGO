@@ -27,6 +27,8 @@ import { SpecialistDebtSyncService } from './specialist-debt-sync.service';
 import { TrainerPtSalesSyncService } from './trainer-pt-sales-sync.service';
 
 const ORPHAN_MS = 3 * 60 * 1000;
+/** RUNNING not owned by this process (create→execute handoff grace). */
+const UNOWNED_GRACE_MS = 30_000;
 const HEARTBEAT_MS = 20_000;
 const MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
 /** Manual LIGHT must finish fast so staff don't hammer 1C. */
@@ -73,6 +75,8 @@ export type StartSyncResult =
 @Injectable()
 export class ClubSyncOrchestrator {
   private readonly logger = new Logger(ClubSyncOrchestrator.name);
+  /** Runs whose execute() lives in this process. Survives neither restart nor crash. */
+  private readonly activeRunIds = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -92,10 +96,13 @@ export class ClubSyncOrchestrator {
    * Mark stuck RUNNING rows as FAILED. Clears nightKey so a NIGHTLY can
    * retry the same Moscow night (@@unique([clubId, nightKey]) otherwise
    * blocks the scheduler for the rest of the window after an API restart).
+   *
+   * Also fails RUNNING rows this process does not own (API restarted while
+   * heartbeat was still "fresh" — UI otherwise spins forever on GET status).
    */
   async reclaimOrphan(clubId: string): Promise<void> {
     const cutoff = new Date(Date.now() - ORPHAN_MS);
-    const result = await this.prisma.clubSyncRun.updateMany({
+    const byHeartbeat = await this.prisma.clubSyncRun.updateMany({
       where: {
         clubId,
         status: ClubSyncRunStatus.RUNNING,
@@ -108,18 +115,52 @@ export class ClubSyncOrchestrator {
         nightKey: null,
       },
     });
-    if (result.count > 0) {
+    if (byHeartbeat.count > 0) {
       this.logger.warn(
-        `Reclaimed ${result.count} orphaned RUNNING sync club=${clubId}`,
+        `Reclaimed ${byHeartbeat.count} heartbeat-stale RUNNING club=${clubId}`,
+      );
+    }
+
+    const running = await this.getRunning(clubId);
+    if (
+      !running ||
+      this.activeRunIds.has(running.id) ||
+      Date.now() - running.startedAt.getTime() < UNOWNED_GRACE_MS
+    ) {
+      return;
+    }
+    const unowned = await this.prisma.clubSyncRun.updateMany({
+      where: {
+        id: running.id,
+        status: ClubSyncRunStatus.RUNNING,
+      },
+      data: {
+        status: ClubSyncRunStatus.FAILED,
+        finishedAt: new Date(),
+        lastError: 'Orphaned RUNNING — no worker after API restart',
+        nightKey: null,
+      },
+    });
+    if (unowned.count > 0) {
+      this.logger.warn(
+        `Reclaimed unowned RUNNING run=${running.id} club=${clubId}`,
       );
     }
   }
 
-  /** Startup / cron: free locks left by a dead API process. */
+  /** Boot: any RUNNING predates this process — no execute() can finish it. */
   async reclaimAllOrphans(): Promise<void> {
-    const clubs = await this.prisma.club.findMany({ select: { id: true } });
-    for (const club of clubs) {
-      await this.reclaimOrphan(club.id);
+    const result = await this.prisma.clubSyncRun.updateMany({
+      where: { status: ClubSyncRunStatus.RUNNING },
+      data: {
+        status: ClubSyncRunStatus.FAILED,
+        finishedAt: new Date(),
+        lastError: 'Orphaned RUNNING — API process restarted',
+        nightKey: null,
+      },
+    });
+    if (result.count > 0) {
+      this.logger.warn(`Boot: reclaimed ${result.count} RUNNING sync(s)`);
     }
   }
 
@@ -329,6 +370,7 @@ export class ClubSyncOrchestrator {
     profile: ClubSyncProfile,
     trigger: ClubSyncTrigger,
   ) {
+    this.activeRunIds.add(runId);
     const steps: SyncStepResult[] = [];
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
     const stopHeartbeat = () => {
@@ -635,6 +677,9 @@ export class ClubSyncOrchestrator {
         },
       });
       this.logger.error(`Club sync ${clubId} crashed: ${msg}`);
+    } finally {
+      stopHeartbeat();
+      this.activeRunIds.delete(runId);
     }
   }
 }
