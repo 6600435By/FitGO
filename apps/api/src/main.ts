@@ -14,9 +14,9 @@ if (
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
-  // Hall snapshot JPEG as base64 can exceed default 100kb JSON limit
-  app.useBodyParser('json', { limit: '12mb' });
-  app.useBodyParser('urlencoded', { limit: '12mb', extended: true });
+  // Hall snapshot JPEG / Webkassa xlsx as base64 exceed default 100kb JSON limit
+  app.useBodyParser('json', { limit: '28mb' });
+  app.useBodyParser('urlencoded', { limit: '28mb', extended: true });
   // Comma-separated origins for SP admin-web + specialist portal (Cloudflare Pages).
   const corsRaw = process.env.CORS_ORIGIN ?? 'http://localhost:3000';
   const corsOrigins = corsRaw

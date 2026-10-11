@@ -2539,20 +2539,24 @@ export const api = {
   },
 
   webkassaUpload: async (token: string, file: File) => {
-    const form = new FormData();
-    form.append('file', file);
-    const res = await fetch(`${API_URL}/api/super-admin/webkassa/upload`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: form,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(
-        (err as { message?: string }).message || `HTTP ${res.status}`,
-      );
+    // JSON base64 — Next rewrite /api → Nest truncates multipart («Unexpected end of form»).
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
     }
-    return (await res.json()) as { ok: boolean; count: number };
+    return request<{ ok: boolean; count: number }>(
+      '/super-admin/webkassa/upload-json',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          fileBase64: btoa(binary),
+          filename: file.name,
+        }),
+      },
+      token,
+    );
   },
 
   superAdminResolveTrust: (

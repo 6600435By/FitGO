@@ -114,6 +114,11 @@ export function DiscrepanciesWorkspace() {
   const showAcked =
     search.get('showAcked') === '1' || search.get('showAcked') === 'true';
   const statusFilter = search.get('status')?.trim()?.toUpperCase() || '';
+  const tenderFilter = ((): 'all' | 'cash' | 'card' => {
+    const t = search.get('tender')?.trim()?.toLowerCase();
+    if (t === 'cash' || t === 'card') return t;
+    return 'all';
+  })();
 
   const [customPeriod, setCustomPeriod] = useState(false);
   const [summary, setSummary] = useState<DiscrepancySummary | null>(null);
@@ -382,6 +387,10 @@ export function DiscrepanciesWorkspace() {
           data={sales}
           from={from}
           to={to}
+          tenderFilter={tenderFilter}
+          onTender={(t) =>
+            setParams({ tender: t === 'all' ? null : t })
+          }
           expandedDay={expandedDay}
           setExpandedDay={setExpandedDay}
           onSync={async () => {
@@ -617,6 +626,8 @@ function SalesTab({
   data,
   from,
   to,
+  tenderFilter,
+  onTender,
   expandedDay,
   setExpandedDay,
   onSync,
@@ -627,6 +638,8 @@ function SalesTab({
   data: DiscrepancySalesResponse;
   from: string;
   to: string;
+  tenderFilter: 'all' | 'cash' | 'card';
+  onTender: (t: 'all' | 'cash' | 'card') => void;
   expandedDay: string | null;
   setExpandedDay: (d: string | null) => void;
   onSync: () => void;
@@ -634,6 +647,23 @@ function SalesTab({
   onAck: (itemKey: string, fingerprint: string) => void;
   busy: string;
 }) {
+  const eps = 0.02;
+  const days = data.days.filter((d) => {
+    if (tenderFilter === 'cash') return Math.abs(d.diffCash) > eps;
+    if (tenderFilter === 'card') return Math.abs(d.diffCard) > eps;
+    return true;
+  });
+  const unmatchedKassa = data.unmatchedKassa.filter((r) => {
+    if (tenderFilter === 'cash') return Math.abs(r.cash) > eps;
+    if (tenderFilter === 'card') return Math.abs(r.cashless) > eps;
+    return true;
+  });
+  const unmatchedOneC = data.unmatchedOneC.filter((r) => {
+    if (tenderFilter === 'cash') return Math.abs(r.cash) > eps;
+    if (tenderFilter === 'card') return Math.abs(r.card) > eps;
+    return true;
+  });
+
   return (
     <div className="space-y-4">
       <div className="card space-y-2 p-3 text-sm">
@@ -674,12 +704,46 @@ function SalesTab({
             />
           </label>
         </div>
+        <div className="flex flex-wrap gap-2 pt-1 text-xs">
+          {(
+            [
+              ['all', 'Все'],
+              ['cash', 'Нал'],
+              ['card', 'Карта'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={
+                tenderFilter === id
+                  ? 'rounded bg-slate-700 px-2 py-1 text-slate-100'
+                  : 'rounded px-2 py-1 text-slate-400 hover:text-slate-200'
+              }
+              onClick={() => onTender(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <ul className="space-y-2">
-        {data.days.map((d) => {
+        {days.map((d) => {
+          const problemCash = Math.abs(d.diffCash) > eps;
+          const problemCard = Math.abs(d.diffCard) > eps;
           const problem =
-            Math.abs(d.diffCash) > 0.02 || Math.abs(d.diffCard) > 0.02;
+            tenderFilter === 'cash'
+              ? problemCash
+              : tenderFilter === 'card'
+                ? problemCard
+                : problemCash || problemCard;
+          const diffLabel =
+            tenderFilter === 'cash'
+              ? `нал ${money(d.diffCash)}`
+              : tenderFilter === 'card'
+                ? `карта ${money(d.diffCard)}`
+                : `нал ${money(d.diffCash)} · карта ${money(d.diffCard)}`;
           return (
             <li key={d.date} className="card p-3">
               <button
@@ -693,43 +757,66 @@ function SalesTab({
                 <span
                   className={`text-sm ${problem ? 'text-red-400' : 'text-emerald-400'}`}
                 >
-                  нал {money(d.diffCash)} · карта {money(d.diffCard)}
+                  {diffLabel}
                 </span>
               </button>
               {expandedDay === d.date ? (
                 <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-400 md:grid-cols-4">
-                  <div>
-                    Касса нал:{' '}
-                    <span className="text-slate-200">{money(d.kassaCash)}</span>
-                  </div>
-                  <div>
-                    1С нал:{' '}
-                    <Link
-                      className="text-emerald-400"
-                      href={`/super-admin/sales?from=${d.date}&to=${d.date}&payment=cash`}
-                    >
-                      {money(d.oneCCash)}
-                    </Link>
-                  </div>
-                  <div>
-                    Касса карта:{' '}
-                    <span className="text-slate-200">{money(d.kassaCard)}</span>
-                  </div>
-                  <div>
-                    1С карта:{' '}
-                    <Link
-                      className="text-emerald-400"
-                      href={`/super-admin/sales?from=${d.date}&to=${d.date}&payment=card`}
-                    >
-                      {money(d.oneCCard)}
-                    </Link>
-                  </div>
+                  {tenderFilter !== 'card' ? (
+                    <>
+                      <div>
+                        Касса нал:{' '}
+                        <span className="text-slate-200">
+                          {money(d.kassaCash)}
+                        </span>
+                      </div>
+                      <div>
+                        1С нал:{' '}
+                        <Link
+                          className="text-emerald-400"
+                          href={`/super-admin/sales?from=${d.date}&to=${d.date}&payment=cash`}
+                        >
+                          {money(d.oneCCash)}
+                        </Link>
+                      </div>
+                    </>
+                  ) : null}
+                  {tenderFilter !== 'cash' ? (
+                    <>
+                      <div>
+                        Касса карта:{' '}
+                        <span className="text-slate-200">
+                          {money(d.kassaCard)}
+                        </span>
+                      </div>
+                      <div>
+                        1С карта:{' '}
+                        <Link
+                          className="text-emerald-400"
+                          href={`/super-admin/sales?from=${d.date}&to=${d.date}&payment=card`}
+                        >
+                          {money(d.oneCCard)}
+                        </Link>
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               ) : null}
             </li>
           );
         })}
       </ul>
+      {days.length === 0 ? (
+        <p className="text-sm text-slate-500">
+          Нет расхождений
+          {tenderFilter === 'cash'
+            ? ' по наличным'
+            : tenderFilter === 'card'
+              ? ' по карте'
+              : ''}{' '}
+          за период
+        </p>
+      ) : null}
 
       <p className="text-xs text-slate-500">
         Сопоставлено чеков: {data.matchedCount}
@@ -737,11 +824,11 @@ function SalesTab({
         {data.combinedMatched ? ` · составных: ${data.combinedMatched}` : ''}
       </p>
 
-      {data.unmatchedKassa.length > 0 ? (
+      {unmatchedKassa.length > 0 ? (
         <div className="card space-y-2 p-3">
           <p className="text-sm font-medium">Чеки без пары в 1С</p>
           <ul className="space-y-2 text-sm">
-            {data.unmatchedKassa.slice(0, 40).map((r) => (
+            {unmatchedKassa.slice(0, 40).map((r) => (
               <li
                 key={r.itemKey}
                 className="space-y-1 border-t border-slate-800 pt-2 first:border-0 first:pt-0"
@@ -751,8 +838,19 @@ function SalesTab({
                     {new Date(r.occurredAt).toLocaleString('ru-RU')} · {r.receiptId}
                     {r.cashier ? ` · ${r.cashier}` : ''}
                   </span>
-                  <span className="shrink-0">{money(r.amount)}</span>
+                  <span className="shrink-0">
+                    {tenderFilter === 'cash'
+                      ? money(r.cash)
+                      : tenderFilter === 'card'
+                        ? money(r.cashless)
+                        : money(r.amount)}
+                  </span>
                 </div>
+                {tenderFilter === 'all' ? (
+                  <p className="text-xs text-slate-500">
+                    нал {money(r.cash)} · карта {money(r.cashless)}
+                  </p>
+                ) : null}
                 {r.nearestOneC ? (
                   <div className="text-xs text-slate-500">
                     <p>
@@ -774,11 +872,11 @@ function SalesTab({
         </div>
       ) : null}
 
-      {data.unmatchedOneC.length > 0 ? (
+      {unmatchedOneC.length > 0 ? (
         <div className="card space-y-2 p-3">
           <p className="text-sm font-medium">Оплаты 1С без чека</p>
           <ul className="space-y-2 text-sm">
-            {data.unmatchedOneC.slice(0, 40).map((r) => (
+            {unmatchedOneC.slice(0, 40).map((r) => (
               <li
                 key={r.itemKey}
                 className="space-y-1 border-t border-slate-800 pt-2 first:border-0 first:pt-0"
@@ -792,12 +890,20 @@ function SalesTab({
                     className="shrink-0 text-emerald-400"
                     href={`/super-admin/sales?from=${from}&to=${to}&q=${encodeURIComponent(r.clientName || r.lines[0]?.productName || '')}`}
                   >
-                    {money(r.amount)}
+                    {tenderFilter === 'cash'
+                      ? money(r.cash)
+                      : tenderFilter === 'card'
+                        ? money(r.card)
+                        : money(r.amount)}
                   </Link>
                 </div>
                 <SaleLines lines={r.lines} />
                 <p className="text-xs text-slate-500">
-                  нал {money(r.cash)} · карта {money(r.card)}
+                  {tenderFilter === 'cash'
+                    ? `нал ${money(r.cash)}`
+                    : tenderFilter === 'card'
+                      ? `карта ${money(r.card)}`
+                      : `нал ${money(r.cash)} · карта ${money(r.card)}`}
                   {r.employeeName ? ` · ${r.employeeName}` : ''}
                 </p>
                 <AckButton
