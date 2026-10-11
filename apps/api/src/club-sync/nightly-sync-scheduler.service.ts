@@ -18,6 +18,12 @@ export class NightlySyncScheduler implements OnModuleInit {
   ) {}
 
   onModuleInit() {
+    // Always reclaim stuck locks after restart (even if cron is off).
+    void this.orchestrator.reclaimAllOrphans().catch((err) => {
+      this.logger.warn(
+        `reclaimAllOrphans: ${err instanceof Error ? err.message : err}`,
+      );
+    });
     if (this.config.get('ENABLE_CLUB_SYNC_CRON') === 'false') return;
     setInterval(() => void this.tick(), TICK_MS);
     // Safe: no-ops outside 03:00–04:00 Moscow.

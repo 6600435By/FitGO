@@ -52,6 +52,9 @@ function cooldownLeft(until: string | null): string | null {
 /** Bare Forma/WP codes were stored as "1025" before message formatting. */
 function formatSyncError(raw: string): string {
   const t = raw.trim();
+  if (/Orphaned RUNNING|heartbeat stale/i.test(t)) {
+    return 'Ночная выгрузка оборвалась (перезапуск API). Нажмите «Обновить из 1С» или дождитесь следующей ночи.';
+  }
   if (/^\d{3,5}$/.test(t)) return `Forma/WP ошибка ${t}`;
   if (/^[\w.]+:\s*\d{3,5}$/.test(t)) {
     const [step, code] = t.split(/:\s*/);

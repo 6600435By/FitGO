@@ -120,7 +120,12 @@ export class ClubSyncStatusService {
     }
 
     let sourceLabel: string | null = null;
-    if (lastRun?.trigger === ClubSyncTrigger.NIGHTLY && lastRun.finishedAt) {
+    if (
+      lastRun?.trigger === ClubSyncTrigger.NIGHTLY &&
+      lastRun.finishedAt &&
+      (lastRun.status === ClubSyncRunStatus.SUCCESS ||
+        lastRun.status === ClubSyncRunStatus.PARTIAL)
+    ) {
       sourceLabel = 'ночная выгрузка';
     } else if (lastManualOk?.triggeredByUserId) {
       const u = await this.prisma.user.findUnique({

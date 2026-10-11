@@ -88,9 +88,14 @@ export class ClubSyncOrchestrator {
     private readonly membersSummary: MembersSummarySyncService,
   ) {}
 
+  /**
+   * Mark stuck RUNNING rows as FAILED. Clears nightKey so a NIGHTLY can
+   * retry the same Moscow night (@@unique([clubId, nightKey]) otherwise
+   * blocks the scheduler for the rest of the window after an API restart).
+   */
   async reclaimOrphan(clubId: string): Promise<void> {
     const cutoff = new Date(Date.now() - ORPHAN_MS);
-    await this.prisma.clubSyncRun.updateMany({
+    const result = await this.prisma.clubSyncRun.updateMany({
       where: {
         clubId,
         status: ClubSyncRunStatus.RUNNING,
@@ -100,8 +105,22 @@ export class ClubSyncOrchestrator {
         status: ClubSyncRunStatus.FAILED,
         finishedAt: new Date(),
         lastError: 'Orphaned RUNNING — heartbeat stale (>3 min)',
+        nightKey: null,
       },
     });
+    if (result.count > 0) {
+      this.logger.warn(
+        `Reclaimed ${result.count} orphaned RUNNING sync club=${clubId}`,
+      );
+    }
+  }
+
+  /** Startup / cron: free locks left by a dead API process. */
+  async reclaimAllOrphans(): Promise<void> {
+    const clubs = await this.prisma.club.findMany({ select: { id: true } });
+    for (const club of clubs) {
+      await this.reclaimOrphan(club.id);
+    }
   }
 
   async getRunning(clubId: string) {
@@ -241,12 +260,28 @@ export class ClubSyncOrchestrator {
       opts.trigger === ClubSyncTrigger.NIGHTLY ? moscowDayKey() : null;
 
     if (nightKey) {
+      // Only SUCCESS/PARTIAL count as "done tonight". FAILED (incl. orphan)
+      // must not block retry — free their nightKey for @@unique([clubId, nightKey]).
       const existingNight = await this.prisma.clubSyncRun.findFirst({
-        where: { clubId, nightKey },
+        where: {
+          clubId,
+          nightKey,
+          status: {
+            in: [ClubSyncRunStatus.SUCCESS, ClubSyncRunStatus.PARTIAL],
+          },
+        },
       });
       if (existingNight) {
         return { status: 'already_nightly', nightKey };
       }
+      await this.prisma.clubSyncRun.updateMany({
+        where: {
+          clubId,
+          nightKey,
+          status: ClubSyncRunStatus.FAILED,
+        },
+        data: { nightKey: null },
+      });
     }
 
     let run;
@@ -579,6 +614,8 @@ export class ClubSyncOrchestrator {
           heartbeatAt: new Date(),
           steps,
           lastError,
+          // Free night slot so cron can retry a total failure before 04:00.
+          ...(status === ClubSyncRunStatus.FAILED ? { nightKey: null } : {}),
         },
       });
       this.logger.log(
@@ -594,6 +631,7 @@ export class ClubSyncOrchestrator {
           finishedAt: new Date(),
           lastError: msg,
           steps,
+          nightKey: null,
         },
       });
       this.logger.error(`Club sync ${clubId} crashed: ${msg}`);
