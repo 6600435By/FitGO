@@ -6,8 +6,10 @@ const MOSCOW = 'Europe/Moscow';
 const CLUB_OFFSET_MS = 3 * 3600_000;
 
 /**
- * Parse `yyyy-MM-ddTHH:mm:ss` from 1C as club local time.
- * Node treats timezone-less ISO as UTC — that shifts UI times +3h vs 1C.
+ * Parse `yyyy-MM-ddTHH:mm:ss` from 1C as club local time (Minsk/Moscow).
+ * Returns a real UTC instant. When writing to Prisma `timestamp without time
+ * zone` via raw SQL, use `::timestamptz AT TIME ZONE 'UTC'` — a bare Date bind
+ * follows the PG session TZ and shifts stored walls +3h (future UI times).
  */
 export function parseClubWallClock(
   value: string | null | undefined,

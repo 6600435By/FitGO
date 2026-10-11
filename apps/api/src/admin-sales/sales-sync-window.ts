@@ -2,6 +2,17 @@ import { Prisma } from '@prisma/client';
 import type { FitgoAnalyticsHttpProvider, FitgoAnalyticsSalesItem } from '@fitgo/1c-adapter';
 import type { PrismaService } from '../prisma/prisma.service';
 
+/**
+ * Write a Date into Prisma `timestamp without time zone` as UTC wall digits.
+ * Bare `${date}` is cast through the PG session TZ (Europe/Minsk here), so a
+ * correct UTC instant becomes +3h when Prisma later reads the naive timestamp
+ * as UTC — sales then show ~3 hours in the future.
+ */
+function sqlUtcTimestamp(d: Date | null | undefined): Prisma.Sql {
+  if (d == null) return Prisma.sql`NULL`;
+  return Prisma.sql`(${d.toISOString()}::timestamptz AT TIME ZONE 'UTC')`;
+}
+
 /** Nightly reconciliation window. */
 export const SYNC_FULL_LOOKBACK_DAYS = 60;
 /** Manual sync re-reads this many days before the last success (late edits). */
@@ -95,12 +106,12 @@ export async function upsertSaleRows(
       (r) =>
         Prisma.sql`(
           ${crypto.randomUUID()}, ${clubId}, ${r.externalSaleId},
-          ${r.soldAt}, ${r.paidAt}, ${r.amount},
+          ${sqlUtcTimestamp(r.soldAt)}, ${sqlUtcTimestamp(r.paidAt)}, ${r.amount},
           ${r.cash}, ${r.card}, ${r.cashless}, ${r.personalAccount},
           ${r.saleType},
           ${r.productName}, ${r.clientExternalId}, ${r.clientName},
           ${r.employeeExternalId}, ${r.employeeName}, ${r.paymentMethod},
-          ${true}, ${now}
+          ${true}, ${sqlUtcTimestamp(now)}
         )`,
     );
     await prisma.$executeRaw`
@@ -171,14 +182,14 @@ export async function upsertRevenueRows(
       (r) =>
         Prisma.sql`(
           ${crypto.randomUUID()}, ${clubId}, ${r.externalId}, ${r.documentId},
-          ${r.operationType}, ${r.occurredAt}, ${r.paidAt},
+          ${r.operationType}, ${sqlUtcTimestamp(r.occurredAt)}, ${sqlUtcTimestamp(r.paidAt)},
           ${r.saleAmount}, ${r.paidAmount}, ${r.refundAmount}, ${r.amount},
           ${r.cash}, ${r.card}, ${r.cashless}, ${r.personalAccount},
           ${r.paymentMethod}, ${r.saleType}, ${r.productName},
           ${r.clientExternalId}, ${r.clientName},
           ${r.employeeExternalId}, ${r.employeeName},
           ${r.countsTowardIncome}, ${r.countsTowardMotivation},
-          ${true}, ${now}
+          ${true}, ${sqlUtcTimestamp(now)}
         )`,
     );
     await prisma.$executeRaw`
