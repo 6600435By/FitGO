@@ -513,6 +513,15 @@ export function ClubRevenuePanel() {
   const [q, setQ] = useState(
     () => search.get('product') || search.get('q') || '',
   );
+  const [productId, setProductId] = useState(
+    () => search.get('productId') || '',
+  );
+  const [productExact, setProductExact] = useState(
+    () =>
+      search.get('productExact') === '1' ||
+      search.get('productExact') === 'true' ||
+      Boolean(search.get('productId')?.trim()),
+  );
   const [data, setData] = useState<ClubRevenueReportResponse | null>(null);
   const [detail, setDetail] = useState<ClubRevenueDetailResponse | null>(null);
   const [error, setError] = useState('');
@@ -520,6 +529,30 @@ export function ClubRevenuePanel() {
   const [loading, setLoading] = useState(false);
   const [backfillHint, setBackfillHint] = useState('');
   const [backfillBusy, setBackfillBusy] = useState(false);
+
+  // Keep filters in sync when navigating here with query params (Нестыковки → Продажи).
+  useEffect(() => {
+    const nextFrom = search.get('from');
+    const nextTo = search.get('to');
+    const nextEmp = search.get('employee') || '';
+    const nextSeg = search.get('segment') || '';
+    const nextDebtor = search.get('debtor') || '';
+    const nextQ = search.get('product') || search.get('q') || '';
+    const nextProductId = search.get('productId') || '';
+    const nextExact =
+      search.get('productExact') === '1' ||
+      search.get('productExact') === 'true' ||
+      Boolean(nextProductId.trim());
+    if (nextFrom && nextFrom !== from) setFrom(nextFrom);
+    if (nextTo && nextTo !== to) setTo(nextTo);
+    if (nextEmp !== employeeExternalId) setEmployeeExternalId(nextEmp);
+    if (nextSeg !== segment) setSegment(nextSeg);
+    if (nextDebtor !== debtor) setDebtor(nextDebtor);
+    if (nextQ !== q) setQ(nextQ);
+    if (nextProductId !== productId) setProductId(nextProductId);
+    if (nextExact !== productExact) setProductExact(nextExact);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- URL is source on external nav
+  }, [search]);
 
   useEffect(() => {
     const next = new URLSearchParams();
@@ -535,6 +568,8 @@ export function ClubRevenuePanel() {
       next.set('q', q.trim());
       next.set('product', q.trim());
     }
+    if (productId.trim()) next.set('productId', productId.trim());
+    if (productExact && q.trim()) next.set('productExact', '1');
     const qs = next.toString();
     const current = search.toString();
     if (qs !== current) {
@@ -549,6 +584,8 @@ export function ClubRevenuePanel() {
     segment,
     debtor,
     q,
+    productId,
+    productExact,
     pathname,
     router,
     search,
@@ -567,6 +604,8 @@ export function ClubRevenuePanel() {
         paymentMethod,
         employeeExternalId: employeeExternalId || undefined,
         q: q.trim() || undefined,
+        productId: productId.trim() || undefined,
+        productExact: productExact || undefined,
         segment: segment || undefined,
         debtor: debtor || undefined,
       });
@@ -583,6 +622,8 @@ export function ClubRevenuePanel() {
     paymentMethod,
     employeeExternalId,
     q,
+    productId,
+    productExact,
     segment,
     debtor,
   ]);
@@ -860,7 +901,11 @@ export function ClubRevenuePanel() {
             className="input"
             placeholder="Клиент или товар"
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setProductId('');
+              setProductExact(false);
+            }}
           />
         </label>
       </div>

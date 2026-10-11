@@ -197,6 +197,10 @@ export class ClubRevenueService {
       paymentMethod?: string;
       employeeExternalId?: string;
       q?: string;
+      /** Exact 1C nomenclature UUID (from Нестыковки deep-link). */
+      productExternalId?: string;
+      /** When true with q — match productName equals (not client/employee contains). */
+      productExact?: boolean;
       segment?: string;
       debtor?: string;
     },
@@ -209,15 +213,43 @@ export class ClubRevenueService {
       isActive: true,
     };
 
-    const searchFilter =
-      params.q?.trim()
+    const productId = params.productExternalId?.trim() || '';
+    const qTrim = params.q?.trim() || '';
+    const productExact = Boolean(params.productExact) && Boolean(qTrim);
+
+    const productFilter =
+      productId && productExact
         ? {
             OR: [
-              { clientName: { contains: params.q.trim(), mode: 'insensitive' } },
-              { productName: { contains: params.q.trim(), mode: 'insensitive' } },
+              { productExternalId: productId },
+              {
+                productName: {
+                  equals: qTrim,
+                  mode: 'insensitive' as const,
+                },
+              },
+            ],
+          }
+        : productId
+          ? { productExternalId: productId }
+          : productExact
+            ? {
+                productName: {
+                  equals: qTrim,
+                  mode: 'insensitive' as const,
+                },
+              }
+            : null;
+
+    const searchFilter =
+      !productFilter && qTrim
+        ? {
+            OR: [
+              { clientName: { contains: qTrim, mode: 'insensitive' } },
+              { productName: { contains: qTrim, mode: 'insensitive' } },
               {
                 employeeName: {
-                  contains: params.q.trim(),
+                  contains: qTrim,
                   mode: 'insensitive',
                 },
               },
@@ -257,7 +289,9 @@ export class ClubRevenueService {
     // Line filters (chips / clickable card metrics). Employee / payment-part /
     // segment / debtor applied after enrichment so mixed payments match analytics.
     const lineFilters: Record<string, unknown> = { ...baseWhere };
-    if (searchFilter) {
+    if (productFilter) {
+      Object.assign(lineFilters, productFilter);
+    } else if (searchFilter) {
       lineFilters.AND = [searchFilter];
     }
     const payPart =
@@ -291,7 +325,7 @@ export class ClubRevenueService {
     };
 
     const lineDebtWhere: Record<string, unknown> = {
-      ...baseWhere,
+      ...lineFilters,
       operationType: 'unpaid',
       occurredAt: { lte: to },
     };

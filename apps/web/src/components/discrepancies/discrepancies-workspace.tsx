@@ -7,6 +7,7 @@ import type {
   DiscrepancyGroupResponse,
   DiscrepancySaleLine,
   DiscrepancySalesResponse,
+  DiscrepancySegmentProduct,
   DiscrepancySegmentsResponse,
   DiscrepancySpaPtResponse,
   DiscrepancySummary,
@@ -78,6 +79,22 @@ function statusClass(s: string) {
 
 function oldestAllowed() {
   return addDays(todayIso(), -DISCREPANCY_RETENTION_DAYS);
+}
+
+/** Deep-link to Продажи filtered by exact nomenclature (name and/or 1C UUID). */
+function productSalesHref(
+  p: Pick<DiscrepancySegmentProduct, 'name' | 'uuid'>,
+  from: string,
+  to: string,
+) {
+  const q = new URLSearchParams({
+    from,
+    to,
+    product: p.name,
+    productExact: '1',
+  });
+  if (p.uuid?.trim()) q.set('productId', p.uuid.trim());
+  return `/super-admin/sales?${q.toString()}`;
 }
 
 export function DiscrepanciesWorkspace() {
@@ -500,12 +517,29 @@ function SegmentsTab({
             {data.missingEmployees.map((e) => (
               <li key={e.externalId} className="flex justify-between gap-2">
                 <span>{e.name}</span>
-                <Link
-                  className="text-emerald-400"
-                  href={`/super-admin/sales?employee=${encodeURIComponent(e.externalId)}&from=${from}&to=${to}`}
-                >
-                  {e.salesCount} прод. · {e.sessionsCount} зан.
-                </Link>
+                <span className="shrink-0 text-emerald-400">
+                  {e.salesCount > 0 ? (
+                    <Link
+                      href={`/super-admin/sales?employee=${encodeURIComponent(e.externalId)}&from=${from}&to=${to}`}
+                    >
+                      {e.salesCount} прод.
+                    </Link>
+                  ) : (
+                    <span className="text-slate-500">{e.salesCount} прод.</span>
+                  )}
+                  {' · '}
+                  {e.sessionsCount > 0 ? (
+                    <Link
+                      href={`/super-admin/review-queue?performerId=${encodeURIComponent(e.externalId)}&from=${from}&to=${to}`}
+                    >
+                      {e.sessionsCount} зан.
+                    </Link>
+                  ) : (
+                    <span className="text-slate-500">
+                      {e.sessionsCount} зан.
+                    </span>
+                  )}
+                </span>
               </li>
             ))}
           </ul>
@@ -531,12 +565,17 @@ function SegmentsTab({
               </div>
               <Link
                 className="text-lg font-semibold text-emerald-400"
-                href={`/super-admin/sales?product=${encodeURIComponent(p.name)}&from=${from}&to=${to}`}
+                href={productSalesHref(p, from, to)}
+                title="Продажи по этой номенклатуре"
               >
                 {p.salesCount}
               </Link>
             </div>
             <p className="text-sm text-slate-300">{money(p.amount)} BYN</p>
+            <p className="text-xs text-slate-500">
+              Номенклатура не в сегменте · {p.salesCount} продаж · клик по числу —
+              Продажи с фильтром
+            </p>
             <details className="text-xs text-slate-500">
               <summary>UUID / группа</summary>
               <p className="mt-1 break-all">

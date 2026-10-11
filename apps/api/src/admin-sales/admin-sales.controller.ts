@@ -97,6 +97,8 @@ export class SuperAdminSalesController {
     @Query('paymentMethod') paymentMethod?: string,
     @Query('employeeExternalId') employeeExternalId?: string,
     @Query('q') q?: string,
+    @Query('productId') productId?: string,
+    @Query('productExact') productExact?: string,
     @Query('segment') segment?: string,
     @Query('debtor') debtor?: string,
   ) {
@@ -108,6 +110,11 @@ export class SuperAdminSalesController {
       paymentMethod,
       employeeExternalId,
       q,
+      productExternalId: productId,
+      productExact:
+        productExact === '1' ||
+        productExact === 'true' ||
+        Boolean(productId?.trim()),
       segment,
       debtor,
     });

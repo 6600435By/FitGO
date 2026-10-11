@@ -3183,6 +3183,8 @@ export const api = {
       paymentMethod?: string;
       employeeExternalId?: string;
       q?: string;
+      productId?: string;
+      productExact?: boolean;
       segment?: string;
       debtor?: string;
     },
@@ -3195,6 +3197,8 @@ export const api = {
     if (params.employeeExternalId)
       q.set('employeeExternalId', params.employeeExternalId);
     if (params.q) q.set('q', params.q);
+    if (params.productId) q.set('productId', params.productId);
+    if (params.productExact) q.set('productExact', '1');
     if (params.segment && params.segment !== 'all')
       q.set('segment', params.segment);
     if (params.debtor) q.set('debtor', params.debtor);

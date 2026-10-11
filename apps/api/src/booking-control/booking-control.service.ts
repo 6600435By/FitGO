@@ -104,22 +104,34 @@ export class BookingControlService {
     let performerExt: string | undefined;
     let performerCodes: string[] = [];
     let performerName: string | undefined;
+    /** FitGO user id when filter resolved to a staff user (not a raw 1C code). */
+    let fitgoPerformerUserId: string | undefined;
     if (performerFilterId) {
       const u = await this.prisma.user.findFirst({
         where: { id: performerFilterId, clubId },
       });
-      if (!u) return [];
-      performerExt = u.externalId ?? u.employeeCode ?? undefined;
       const codeSet = new Set<string>();
-      for (const raw of [u.externalId, u.employeeCode]) {
-        const t = raw?.trim();
-        if (!t) continue;
-        codeSet.add(t);
-        const stripped = t.replace(/^0+/, '');
+      if (u) {
+        fitgoPerformerUserId = u.id;
+        performerExt = u.externalId ?? u.employeeCode ?? undefined;
+        for (const raw of [u.externalId, u.employeeCode]) {
+          const t = raw?.trim();
+          if (!t) continue;
+          codeSet.add(t);
+          const stripped = t.replace(/^0+/, '');
+          if (stripped) codeSet.add(stripped);
+        }
+        performerName = `${u.lastName} ${u.firstName}`.trim();
+      } else {
+        // Deep-link from Нестыковки: 1C employeeExternalId for staff not in FitGO.
+        const ext = performerFilterId.trim();
+        if (!ext) return [];
+        performerExt = ext;
+        codeSet.add(ext);
+        const stripped = ext.replace(/^0+/, '');
         if (stripped) codeSet.add(stripped);
       }
       performerCodes = [...codeSet];
-      performerName = `${u.lastName} ${u.firstName}`.trim();
     }
 
     const wantPtSales = !kindFilter || kindFilter === OnexClassKind.PT;
@@ -168,7 +180,11 @@ export class BookingControlService {
             trainer: { clubId },
             status: { not: PersonalBookingStatus.CANCELLED },
             startAt: { gte: fromD, lte: toD },
-            ...(performerFilterId ? { trainerId: performerFilterId } : {}),
+            ...(fitgoPerformerUserId
+              ? { trainerId: fitgoPerformerUserId }
+              : performerFilterId
+                ? { id: { in: [] } }
+                : {}),
           },
           include: { client: true, trainer: true },
         }),
@@ -177,7 +193,11 @@ export class BookingControlService {
             clubId,
             status: { not: SpaBookingStatus.CANCELLED },
             startAt: { gte: fromD, lte: toD },
-            ...(performerFilterId ? { specialistId: performerFilterId } : {}),
+            ...(fitgoPerformerUserId
+              ? { specialistId: fitgoPerformerUserId }
+              : performerFilterId
+                ? { id: { in: [] } }
+                : {}),
           },
           include: { client: true, specialist: true, service: true },
         }),
@@ -195,6 +215,7 @@ export class BookingControlService {
       const status = mapOnexStatusToControl(s.status);
       const performerId =
         (s.employeeExternalId && staffByExt.get(s.employeeExternalId)?.id) ||
+        s.employeeExternalId?.trim() ||
         undefined;
 
       const primaryMember = s.members.find((m) => !m.cancelled) ?? s.members[0];
@@ -303,7 +324,9 @@ export class BookingControlService {
           sale.paymentStatus === 'PAID' ? 'PAID' : 'DEBT';
         const performerId =
           (sale.employeeCode && staffByExt.get(sale.employeeCode)?.id) ||
-          this.findStaffIdByName(staffByExt, sale.employeeName);
+          this.findStaffIdByName(staffByExt, sale.employeeName) ||
+          sale.employeeCode?.trim() ||
+          undefined;
         const saleCounts = this.singleClientCounts('COMPLETED', {
           arrived: payment === 'PAID',
         });
