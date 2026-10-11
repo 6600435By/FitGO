@@ -27,8 +27,6 @@ import { SpecialistDebtSyncService } from './specialist-debt-sync.service';
 import { TrainerPtSalesSyncService } from './trainer-pt-sales-sync.service';
 
 const ORPHAN_MS = 3 * 60 * 1000;
-/** RUNNING not owned by this process (create→execute handoff grace). */
-const UNOWNED_GRACE_MS = 30_000;
 const HEARTBEAT_MS = 20_000;
 const MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
 /** Manual LIGHT must finish fast so staff don't hammer 1C. */
@@ -93,20 +91,23 @@ export class ClubSyncOrchestrator {
   ) {}
 
   /**
-   * Mark stuck RUNNING rows as FAILED. Clears nightKey so a NIGHTLY can
-   * retry the same Moscow night (@@unique([clubId, nightKey]) otherwise
-   * blocks the scheduler for the rest of the window after an API restart).
-   *
-   * Also fails RUNNING rows this process does not own (API restarted while
-   * heartbeat was still "fresh" — UI otherwise spins forever on GET status).
+   * Mark stuck RUNNING rows as FAILED. Clears nightKey for nightly retry.
+   * @param aggressive — also fail RUNNING this process does not own (for
+   *   start/boot only). Status polls must stay non-aggressive: they run
+   *   every 5s and were aborting live LIGHT syncs after 30s.
    */
-  async reclaimOrphan(clubId: string): Promise<void> {
+  async reclaimOrphan(
+    clubId: string,
+    opts?: { aggressive?: boolean },
+  ): Promise<void> {
     const cutoff = new Date(Date.now() - ORPHAN_MS);
+    const active = [...this.activeRunIds];
     const byHeartbeat = await this.prisma.clubSyncRun.updateMany({
       where: {
         clubId,
         status: ClubSyncRunStatus.RUNNING,
         heartbeatAt: { lt: cutoff },
+        ...(active.length > 0 ? { id: { notIn: active } } : {}),
       },
       data: {
         status: ClubSyncRunStatus.FAILED,
@@ -121,19 +122,13 @@ export class ClubSyncOrchestrator {
       );
     }
 
+    if (!opts?.aggressive) return;
+
     const running = await this.getRunning(clubId);
-    if (
-      !running ||
-      this.activeRunIds.has(running.id) ||
-      Date.now() - running.startedAt.getTime() < UNOWNED_GRACE_MS
-    ) {
-      return;
-    }
+    if (!running || this.activeRunIds.has(running.id)) return;
+
     const unowned = await this.prisma.clubSyncRun.updateMany({
-      where: {
-        id: running.id,
-        status: ClubSyncRunStatus.RUNNING,
-      },
+      where: { id: running.id, status: ClubSyncRunStatus.RUNNING },
       data: {
         status: ClubSyncRunStatus.FAILED,
         finishedAt: new Date(),
@@ -148,10 +143,17 @@ export class ClubSyncOrchestrator {
     }
   }
 
-  /** Boot: any RUNNING predates this process — no execute() can finish it. */
+  /**
+   * Boot only: RUNNING from a previous process. Skips activeRunIds so a
+   * late boot reclaim cannot kill a sync that already started.
+   */
   async reclaimAllOrphans(): Promise<void> {
+    const active = [...this.activeRunIds];
     const result = await this.prisma.clubSyncRun.updateMany({
-      where: { status: ClubSyncRunStatus.RUNNING },
+      where: {
+        status: ClubSyncRunStatus.RUNNING,
+        ...(active.length > 0 ? { id: { notIn: active } } : {}),
+      },
       data: {
         status: ClubSyncRunStatus.FAILED,
         finishedAt: new Date(),
@@ -213,7 +215,7 @@ export class ClubSyncOrchestrator {
   private async ensureFreshTodayAsync(clubId: string): Promise<void> {
     if (isMoscowNightWindow()) return;
 
-    await this.reclaimOrphan(clubId);
+    await this.reclaimOrphan(clubId, { aggressive: true });
     const running = await this.getRunning(clubId);
     if (running) return;
 
@@ -264,7 +266,7 @@ export class ClubSyncOrchestrator {
       force?: boolean;
     },
   ): Promise<StartSyncResult> {
-    await this.reclaimOrphan(clubId);
+    await this.reclaimOrphan(clubId, { aggressive: true });
 
     const running = await this.getRunning(clubId);
     if (running) {
@@ -360,6 +362,8 @@ export class ClubSyncOrchestrator {
       throw err;
     }
 
+    // Register before scheduling execute so boot/status reclaim cannot race.
+    this.activeRunIds.add(run.id);
     void this.execute(run.id, clubId, opts.profile, opts.trigger);
     return { status: 'started', runId: run.id };
   }

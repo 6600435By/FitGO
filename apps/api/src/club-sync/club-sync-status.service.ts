@@ -168,7 +168,10 @@ export class ClubSyncStatusService {
       cooldownUntil,
       nextNightlyAt: nextNightlyAtIso(),
       inNightWindow: isMoscowNightWindow(),
-      lastError: opts?.includeErrors ? (lastRun?.lastError ?? null) : null,
+      // Hide boot-reclaim noise until the next real attempt finishes.
+      lastError: opts?.includeErrors
+        ? orphanNoiseError(lastRun?.lastError)
+        : null,
       lastRun: lastRun
         ? {
             id: lastRun.id,
@@ -188,6 +191,13 @@ export class ClubSyncStatusService {
     });
     return formatMoscowDataAsOf(s?.lastSuccessAt ?? null);
   }
+}
+
+/** Boot/reclaim messages are not actionable sync failures — don't sticky-show them. */
+function orphanNoiseError(lastError: string | null | undefined): string | null {
+  if (!lastError) return null;
+  if (/Orphaned RUNNING/i.test(lastError)) return null;
+  return lastError;
 }
 
 function computeFreshness(
