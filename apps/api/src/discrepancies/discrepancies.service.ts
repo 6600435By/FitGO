@@ -32,6 +32,13 @@ import {
   type PayrollSegmentSets,
 } from '../admin-sales/admin-sales-segments';
 import { normalizeSaleType } from '../admin-sales/admin-sales.util';
+import {
+  enrichGenericPaymentProducts,
+  isGenericPaymentProduct,
+  loadBasisProductsBySaleDoc,
+  saleDocIdsForRevenueRow,
+  type BasisProductLine,
+} from '../admin-sales/payment-basis-products';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { GroupSessionService } from '../group-session/group-session.service';
@@ -182,6 +189,7 @@ export class DiscrepanciesService {
         operationType: { in: ['payment', 'sale', 'refund'] },
       },
       select: {
+        id: true,
         externalId: true,
         documentId: true,
         operationType: true,
@@ -200,6 +208,24 @@ export class DiscrepanciesService {
       },
     });
 
+    // «Оплата от клиента» → real nomenclature from SaleTransaction (основание).
+    const generics = sales.filter((r) => isGenericPaymentProduct(r.productName));
+    if (generics.length) {
+      await enrichGenericPaymentProducts(this.prisma, clubId, generics);
+    }
+
+    const saleDocIds = sales.flatMap((r) =>
+      saleDocIdsForRevenueRow({
+        externalId: r.externalId,
+        documentId: r.documentId,
+      }),
+    );
+    const basisByDoc = await loadBasisProductsBySaleDoc(
+      this.prisma,
+      clubId,
+      saleDocIds,
+    );
+
     type Agg = {
       name: string;
       uuid: string | null;
@@ -214,10 +240,86 @@ export class DiscrepanciesService {
     };
     const byProduct = new Map<string, Agg>();
 
+    const rowMoney = (row: (typeof sales)[0], isRefund: boolean) => {
+      if (isRefund) {
+        return Math.abs(
+          Number(row.refundAmount || 0) || Number(row.amount || 0),
+        );
+      }
+      return row.operationType === 'sale'
+        ? Number(row.saleAmount || row.amount || 0)
+        : Number(row.paidAmount || row.amount || 0);
+    };
+
+    const expandProducts = (
+      row: (typeof sales)[0],
+    ): Array<{
+      name: string;
+      uuid: string | null;
+      code: string | null;
+      groupName: string | null;
+      saleType: string | null;
+      amount: number;
+    }> => {
+      const isRefund = row.operationType === 'refund';
+      const payAmt = rowMoney(row, isRefund);
+      const docs = saleDocIdsForRevenueRow({
+        externalId: row.externalId,
+        documentId: row.documentId,
+      });
+      const basis: BasisProductLine[] = docs.flatMap(
+        (d) => basisByDoc.get(d) ?? [],
+      );
+      const shouldExpand =
+        (row.operationType === 'payment' || row.operationType === 'refund') &&
+        basis.length > 0 &&
+        (isGenericPaymentProduct(row.productName) ||
+          (row.productName ?? '').includes(', '));
+      if (shouldExpand) {
+        const total =
+          basis.reduce((s, l) => s + Math.abs(l.amount), 0) || basis.length;
+        return basis.map((l) => ({
+          name: l.productName,
+          uuid: l.productExternalId,
+          code: l.productCode,
+          groupName: l.productGroupName,
+          saleType: l.saleType ?? row.saleType,
+          amount: isRefund
+            ? -(payAmt * (Math.abs(l.amount) / total))
+            : payAmt * (Math.abs(l.amount) / total),
+        }));
+      }
+      // After enrich, productName is real — use it; still prefer single basis line uuid.
+      if (
+        !isGenericPaymentProduct(row.productName) &&
+        basis.length === 1 &&
+        !row.productExternalId
+      ) {
+        const L = basis[0]!;
+        return [
+          {
+            name: (row.productName ?? '').trim() || L.productName,
+            uuid: L.productExternalId,
+            code: L.productCode ?? row.productCode,
+            groupName: L.productGroupName ?? row.productGroupName,
+            saleType: L.saleType ?? row.saleType,
+            amount: isRefund ? -payAmt : payAmt,
+          },
+        ];
+      }
+      return [
+        {
+          name: (row.productName ?? '').trim() || '—',
+          uuid: row.productExternalId?.trim() || null,
+          code: row.productCode ?? null,
+          groupName: row.productGroupName ?? null,
+          saleType: row.saleType,
+          amount: isRefund ? -payAmt : payAmt,
+        },
+      ];
+    };
+
     for (const row of sales) {
-      const name = (row.productName ?? '').trim() || '—';
-      const uuid = row.productExternalId?.trim() || null;
-      const key = (uuid || name).toLowerCase();
       if (opts.employee?.trim()) {
         const emp = opts.employee.trim();
         if (
@@ -227,56 +329,53 @@ export class DiscrepanciesService {
           continue;
         }
       }
-      let agg = byProduct.get(key);
-      if (!agg) {
-        agg = {
-          name,
-          uuid,
-          code: row.productCode ?? null,
-          groupName: row.productGroupName ?? null,
-          oneCSaleType: row.saleType ?? null,
-          docs: new Set(),
-          amount: 0,
-          sellers: new Map(),
-          lastSoldAt: null,
-        };
-        byProduct.set(key, agg);
-      }
       const isRefund = row.operationType === 'refund';
       const docKey = row.documentId?.trim() || row.externalId;
-      if (isRefund) {
-        agg.amount -= Math.abs(
-          Number(row.refundAmount || 0) || Number(row.amount || 0),
-        );
-      } else {
-        agg.docs.add(docKey);
-        agg.amount +=
-          row.operationType === 'sale'
-            ? Number(row.saleAmount || row.amount || 0)
-            : Number(row.paidAmount || row.amount || 0);
-      }
-      if (row.productCode && !agg.code) agg.code = row.productCode;
-      if (row.productGroupName && !agg.groupName) {
-        agg.groupName = row.productGroupName;
-      }
-      if (row.productExternalId && !agg.uuid) {
-        agg.uuid = row.productExternalId.trim();
-      }
-      if (row.saleType && !agg.oneCSaleType) agg.oneCSaleType = row.saleType;
-      const sid = row.employeeExternalId?.trim() || row.employeeName?.trim() || '';
-      if (sid && !isRefund) {
-        const prev = agg.sellers.get(sid);
-        if (prev) prev.docs.add(docKey);
-        else {
-          agg.sellers.set(sid, {
-            id: sid,
-            name: row.employeeName?.trim() || sid,
-            docs: new Set([docKey]),
-          });
+      for (const part of expandProducts(row)) {
+        const name = part.name;
+        const uuid = part.uuid;
+        const key = (uuid || name).toLowerCase();
+        let agg = byProduct.get(key);
+        if (!agg) {
+          agg = {
+            name,
+            uuid,
+            code: part.code,
+            groupName: part.groupName,
+            oneCSaleType: part.saleType,
+            docs: new Set(),
+            amount: 0,
+            sellers: new Map(),
+            lastSoldAt: null,
+          };
+          byProduct.set(key, agg);
         }
-      }
-      if (!agg.lastSoldAt || row.occurredAt > agg.lastSoldAt) {
-        agg.lastSoldAt = row.occurredAt;
+        if (isRefund) {
+          agg.amount += part.amount; // already signed negative
+        } else {
+          agg.docs.add(docKey);
+          agg.amount += part.amount;
+        }
+        if (part.code && !agg.code) agg.code = part.code;
+        if (part.groupName && !agg.groupName) agg.groupName = part.groupName;
+        if (part.uuid && !agg.uuid) agg.uuid = part.uuid;
+        if (part.saleType && !agg.oneCSaleType) agg.oneCSaleType = part.saleType;
+        const sid =
+          row.employeeExternalId?.trim() || row.employeeName?.trim() || '';
+        if (sid && !isRefund) {
+          const prev = agg.sellers.get(sid);
+          if (prev) prev.docs.add(docKey);
+          else {
+            agg.sellers.set(sid, {
+              id: sid,
+              name: row.employeeName?.trim() || sid,
+              docs: new Set([docKey]),
+            });
+          }
+        }
+        if (!agg.lastSoldAt || row.occurredAt > agg.lastSoldAt) {
+          agg.lastSoldAt = row.occurredAt;
+        }
       }
     }
 

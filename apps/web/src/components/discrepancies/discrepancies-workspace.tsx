@@ -558,33 +558,34 @@ function SegmentsTab({
       <ul className="space-y-2">
         {products.map((p) => (
           <li key={p.itemKey} className="card space-y-2 p-3">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <p className="font-medium">{p.name}</p>
-                <p className={`text-xs ${statusClass(p.status)}`}>
-                  {statusRu(p.status)}
-                  {p.suggestedSegment
-                    ? ` → ${DISCREPANCY_SEGMENT_TITLES[p.suggestedSegment]}`
-                    : ''}
-                </p>
-                <p className="text-xs text-slate-500">
-                  сейчас: {p.currentBucket}
-                  {p.oneCSaleType ? ` · 1С: ${p.oneCSaleType}` : ''}
-                </p>
-              </div>
+            <div>
+              <p className="text-xs text-slate-500">Номенклатура вне сегмента</p>
+              <p className="text-base font-medium leading-snug">{p.name}</p>
+              <p className={`mt-1 text-xs ${statusClass(p.status)}`}>
+                {statusRu(p.status)}
+                {p.suggestedSegment
+                  ? ` → ${DISCREPANCY_SEGMENT_TITLES[p.suggestedSegment]}`
+                  : ''}
+                {p.oneCSaleType ? ` · 1С: ${p.oneCSaleType}` : ''}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <p className="text-sm text-slate-200">
+                {money(p.amount)} BYN
+              </p>
               <Link
-                className="text-lg font-semibold text-emerald-400"
+                className="text-sm font-medium text-emerald-400"
                 href={productSalesHref(p, from, to)}
                 title="Продажи по этой номенклатуре"
               >
-                {p.salesCount}
+                {p.salesCount}{' '}
+                {p.salesCount === 1
+                  ? 'продажа'
+                  : p.salesCount < 5
+                    ? 'продажи'
+                    : 'продаж'}
               </Link>
             </div>
-            <p className="text-sm text-slate-300">{money(p.amount)} BYN</p>
-            <p className="text-xs text-slate-500">
-              Номенклатура не в сегменте · {p.salesCount} продаж · клик по числу —
-              Продажи с фильтром
-            </p>
             <details className="text-xs text-slate-500">
               <summary>UUID / группа</summary>
               <p className="mt-1 break-all">
@@ -601,6 +602,7 @@ function SegmentsTab({
               </p>
               <p>
                 код: {p.code || '—'} · группа: {p.groupName || '—'}
+                {p.currentBucket ? ` · бакет: ${p.currentBucket}` : ''}
               </p>
             </details>
             <div className="flex flex-wrap gap-2">

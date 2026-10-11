@@ -10,6 +10,7 @@ import {
   parseClubWallClock,
 } from '../club-sync/moscow-time';
 import { isCollectibleClientDebt } from './club-revenue-debt';
+import { enrichGenericPaymentProducts } from './payment-basis-products';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   applyChangeLog,
@@ -341,6 +342,32 @@ export class ClubRevenueSyncService {
     }
     await upsertRevenueRows(this.prisma, clubId, [...pending.values()]);
     const upserted = pending.size;
+
+    // Attach sale nomenclature to cash payments labeled «Оплата от клиента».
+    const genericPay = [...pending.values()].filter(
+      (r) =>
+        (r.operationType === 'payment' || r.operationType === 'refund') &&
+        (!r.productName ||
+          r.productName.trim().toLowerCase() === 'оплата от клиента' ||
+          r.productName.trim().toLowerCase() === 'возврат'),
+    );
+    if (genericPay.length) {
+      const ids = genericPay.map((r) => r.externalId);
+      const rows = await this.prisma.clubRevenueEntry.findMany({
+        where: { clubId, externalId: { in: ids } },
+        select: {
+          id: true,
+          externalId: true,
+          documentId: true,
+          productName: true,
+          productExternalId: true,
+          productCode: true,
+          productGroupName: true,
+          saleType: true,
+        },
+      });
+      await enrichGenericPaymentProducts(this.prisma, clubId, rows);
+    }
 
     // After payments: drop stale unpaid, keep residual debt until fully paid
     if (!options.skipDebt) {

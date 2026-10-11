@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type {
+  ClubRevenueBasisProductDto,
   ClubRevenueDetailResponse,
   ClubRevenueLineDto,
   ClubRevenueManualEntryDto,
@@ -18,6 +19,13 @@ import {
   isCollectibleClientDebt,
   isStaffDebtorName,
 } from './club-revenue-debt';
+import {
+  enrichGenericPaymentProducts,
+  isGenericPaymentProduct,
+  loadBasisProductsBySaleDoc,
+  saleDocIdsForRevenueRow,
+  summarizeBasisProducts,
+} from './payment-basis-products';
 import { PrismaService } from '../prisma/prisma.service';
 
 function toMinor(major: number): number {
@@ -65,32 +73,7 @@ const STATUS_LABELS: Record<string, string> = {
 export const SYSTEM_EMPLOYEE_ID = '__1c__';
 export const SYSTEM_EMPLOYEE_NAME = '1С';
 
-/**
- * Sale document UUID from club-revenue externalId / documentId.
- * cash: `payDoc:cash:Тип:client:saleDoc:ts:op…`
- * debt: `saleDoc:debt:client`
- * sales cache: `saleDoc:nomenclature:ts:…`
- */
-function saleDocIdsForRow(row: {
-  externalId: string;
-  documentId: string | null;
-}): string[] {
-  const ids = new Set<string>();
-  const parts = row.externalId.split(':');
-  const cashIdx = parts.indexOf('cash');
-  if (cashIdx >= 0 && parts[cashIdx + 3]) {
-    ids.add(parts[cashIdx + 3]);
-  }
-  const debtIdx = parts.indexOf('debt');
-  if (debtIdx > 0) {
-    ids.add(parts[0]);
-  }
-  if (row.documentId && !parts.includes('cash')) {
-    // unpaid / PA: documentId is usually the sale or day-close doc
-    ids.add(row.documentId);
-  }
-  return [...ids].filter((id) => /^[0-9a-f-]{36}$/i.test(id));
-}
+const saleDocIdsForRow = saleDocIdsForRevenueRow;
 
 /**
  * «Документ.ЗакрытиеДня» пишет сгорание/списание ЛС в 23:59 как оплату с ЛС
@@ -207,6 +190,9 @@ export class ClubRevenueService {
   ): Promise<ClubRevenueReportResponse> {
     const from = new Date(`${params.from}T00:00:00.000Z`);
     const to = new Date(`${params.to}T23:59:59.999Z`);
+
+    // Resolve «Оплата от клиента» → nomenclature from sale basis (SaleTransaction).
+    await this.enrichGenericPaymentsInRange(clubId, from, to);
 
     const baseWhere: Record<string, unknown> = {
       clubId,
@@ -649,10 +635,18 @@ export class ClubRevenueService {
     clubId: string,
     id: string,
   ): Promise<ClubRevenueDetailResponse> {
-    const row = await this.prisma.clubRevenueEntry.findFirst({
+    let row = await this.prisma.clubRevenueEntry.findFirst({
       where: { id, clubId, isActive: true },
     });
     if (!row) throw new NotFoundException('Sale not found');
+
+    if (isGenericPaymentProduct(row.productName)) {
+      await enrichGenericPaymentProducts(this.prisma, clubId, [row]);
+      row =
+        (await this.prisma.clubRevenueEntry.findFirst({
+          where: { id, clubId, isActive: true },
+        })) ?? row;
+    }
 
     const related = row.documentId
       ? await this.prisma.clubRevenueEntry.findMany({
@@ -677,6 +671,19 @@ export class ClubRevenueService {
       ...related.flatMap((r) => saleDocIdsForRow(r as Row)),
     ];
     const uniqueDocs = [...new Set(saleDocs)];
+    const basisByDoc = await loadBasisProductsBySaleDoc(
+      this.prisma,
+      clubId,
+      uniqueDocs,
+    );
+    const basisLines = uniqueDocs.flatMap((d) => basisByDoc.get(d) ?? []);
+    const basisProducts: ClubRevenueBasisProductDto[] = basisLines.map((l) => ({
+      productName: l.productName,
+      productExternalId: l.productExternalId,
+      amountMinor: toMinor(l.amount),
+      saleType: l.saleType,
+    }));
+
     const sales =
       uniqueDocs.length > 0
         ? await this.prisma.saleTransaction.findMany({
@@ -698,18 +705,79 @@ export class ClubRevenueService {
 
     const from = new Date(0);
     const to = new Date();
-    const main = attachEmployee(
-      (normalizeReceiptRow(row as Row) ?? (row as Row)),
+    let main = attachEmployee(
+      normalizeReceiptRow(row as Row) ?? (row as Row),
       staffBySaleDoc,
     );
+    if (isGenericPaymentProduct(main.productName) && basisLines.length) {
+      const summary = summarizeBasisProducts(basisLines);
+      if (summary) {
+        main = {
+          ...main,
+          productName: summary.productName,
+          productExternalId: summary.productExternalId,
+          saleType: summary.saleType ?? main.saleType,
+        };
+      }
+    }
     return {
       line: this.toLine(main, from, to),
       related: related
         .map((r) => normalizeReceiptRow(r as Row) ?? (r as Row))
         .map((r) => attachEmployee(r, staffBySaleDoc))
         .map((r) => this.toLine(r, from, to)),
+      basisProducts,
       currency: club?.currency ?? 'BYN',
     };
+  }
+
+  private async enrichGenericPaymentsInRange(
+    clubId: string,
+    from: Date,
+    to: Date,
+  ): Promise<void> {
+    const generics = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        operationType: { in: ['payment', 'refund'] },
+        AND: [
+          {
+            OR: [
+              { productName: null },
+              { productName: '' },
+              {
+                productName: {
+                  equals: 'Оплата от клиента',
+                  mode: 'insensitive',
+                },
+              },
+              { productName: { equals: 'Возврат', mode: 'insensitive' } },
+            ],
+          },
+          {
+            OR: [
+              { paidAt: { gte: from, lte: to } },
+              { paidAt: null, occurredAt: { gte: from, lte: to } },
+            ],
+          },
+        ],
+      },
+      select: {
+        id: true,
+        externalId: true,
+        documentId: true,
+        productName: true,
+        productExternalId: true,
+        productCode: true,
+        productGroupName: true,
+        saleType: true,
+      },
+      take: 5000,
+    });
+    if (generics.length) {
+      await enrichGenericPaymentProducts(this.prisma, clubId, generics);
+    }
   }
 
   /** Same «Выручка» total as the sales tab, without loading the line table. */

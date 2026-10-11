@@ -384,6 +384,28 @@ function DetailPanel({
             <dt className="text-slate-500">Товар / услуга</dt>
             <dd>{line.productName ?? '—'}</dd>
           </div>
+          {(detail.basisProducts?.length ?? 0) > 0 ? (
+            <div>
+              <dt className="mb-1 text-slate-500">
+                Номенклатура (за что оплата)
+              </dt>
+              <dd>
+                <ul className="space-y-1 rounded-lg bg-slate-900 p-3">
+                  {detail.basisProducts!.map((b, i) => (
+                    <li
+                      key={`${b.productName}-${i}`}
+                      className="flex justify-between gap-2"
+                    >
+                      <span>{b.productName}</span>
+                      <span className="shrink-0 text-slate-400">
+                        {money(b.amountMinor)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </dd>
+            </div>
+          ) : null}
           <div>
             <dt className="text-slate-500">Сотрудник</dt>
             <dd>{employeeLabel(line.employeeName, line.employeeExternalId)}</dd>

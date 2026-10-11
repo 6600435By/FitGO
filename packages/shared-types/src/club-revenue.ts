@@ -141,8 +141,18 @@ export interface ClubRevenueReportResponse {
   lastSyncedAt?: string | null;
 }
 
+/** Nomenclature of the sale document a cash payment settled. */
+export interface ClubRevenueBasisProductDto {
+  productName: string;
+  productExternalId?: string | null;
+  amountMinor: number;
+  saleType?: string | null;
+}
+
 export interface ClubRevenueDetailResponse {
   line: ClubRevenueLineDto;
   related: ClubRevenueLineDto[];
+  /** What the client paid for (from SaleTransaction / основание). */
+  basisProducts: ClubRevenueBasisProductDto[];
   currency: string;
 }
