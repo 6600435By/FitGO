@@ -627,15 +627,26 @@ export class DiscrepanciesService {
 
     const dayRows = [...days.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, v]) => ({
-        date,
-        kassaCash: round2(v.kassaCash),
-        oneCCash: round2(v.oneCCash),
-        kassaCard: round2(v.kassaCard),
-        oneCCard: round2(v.oneCCard),
-        diffCash: round2(v.kassaCash - v.oneCCash),
-        diffCard: round2(v.kassaCard - v.oneCCard),
-      }));
+      .map(([date, v]) => {
+        const diffCash = round2(v.kassaCash - v.oneCCash);
+        const diffCard = round2(v.kassaCard - v.oneCCard);
+        const itemKey = `day:${date}`;
+        const fp = fingerprint(itemKey, diffCash, diffCard);
+        const ack = acks.get(itemKey);
+        return {
+          itemKey,
+          fingerprint: fp,
+          acked: Boolean(ack && ack.fingerprint === fp),
+          date,
+          kassaCash: round2(v.kassaCash),
+          oneCCash: round2(v.oneCCash),
+          kassaCard: round2(v.kassaCard),
+          oneCCard: round2(v.oneCCard),
+          diffCash,
+          diffCard,
+        };
+      })
+      .filter((d) => opts.showAcked || !d.acked);
 
     const windowMs = DISCREPANCY_SALES_MATCH_WINDOW_MIN * 60 * 1000;
     const unmatchedKassa: DiscrepancySalesResponse['unmatchedKassa'] = [];
@@ -935,10 +946,21 @@ export class DiscrepanciesService {
     }
 
     const resolveUser = await this.performerUserResolver(clubId);
-    const performers = [...byPerformer.values()].map((p) => ({
-      ...p,
-      performerUserId: resolveUser(p.performerId, p.performerName),
-    }));
+    const acks = await this.loadAcks(clubId, kind === 'SPA' ? 'spa' : 'pt');
+    const performers = [...byPerformer.values()]
+      .map((p) => {
+        const itemKey = `perf:${p.performerId}:${period.from}:${period.to}`;
+        const fp = fingerprint(itemKey, p.count, p.redCount);
+        const ack = acks.get(itemKey);
+        return {
+          ...p,
+          itemKey,
+          fingerprint: fp,
+          acked: Boolean(ack && ack.fingerprint === fp),
+          performerUserId: resolveUser(p.performerId, p.performerName),
+        };
+      })
+      .filter((p) => opts.showAcked || !p.acked);
 
     performers.sort((a, b) => b.count - a.count);
     return {
@@ -979,6 +1001,7 @@ export class DiscrepanciesService {
       select: { sessionKey: true },
     });
     const approvedKeys = new Set(approvals.map((a) => a.sessionKey));
+    const acks = await this.loadAcks(clubId, 'gp');
     const emp = opts.employee?.trim() || '';
 
     const byPerformer = new Map<
@@ -1005,6 +1028,12 @@ export class DiscrepanciesService {
       }
       if (lateAdds === 0) continue;
 
+      const itemKey = `session:${sessionKey}`;
+      const fp = fingerprint(itemKey, lateAdds);
+      const ack = acks.get(itemKey);
+      const acked = Boolean(ack && ack.fingerprint === fp);
+      if (acked && !opts.showAcked) continue;
+
       const confirmed = session.members.filter(
         (m) =>
           !m.cancelled &&
@@ -1025,6 +1054,9 @@ export class DiscrepanciesService {
       }
       row.lateAddCount += lateAdds;
       row.sessions.push({
+        itemKey,
+        fingerprint: fp,
+        acked,
         sessionKey,
         startAt: session.startAt.toISOString(),
         title: session.title || 'ГП',
@@ -1312,9 +1344,13 @@ export class DiscrepanciesService {
   }
 
   private invalidateSummary(clubId: string) {
-    for (const key of summaryCache.keys()) {
-      if (key.startsWith(`${clubId}|`)) summaryCache.delete(key);
-    }
+    invalidateDiscrepancySummary(clubId);
+  }
+}
+
+export function invalidateDiscrepancySummary(clubId: string) {
+  for (const key of summaryCache.keys()) {
+    if (key.startsWith(`${clubId}|`)) summaryCache.delete(key);
   }
 }
 

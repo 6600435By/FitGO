@@ -30,6 +30,7 @@ import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminTasksSchedulerService, MAX_NO_ANSWER, NO_ANSWER_RETRY_DAYS } from '../super-admin/admin-tasks-scheduler.service';
+import { ackDiscrepancyFromTask } from '../discrepancies/discrepancy-task-ack';
 import { localDayKey } from '../club-schedule/trainer-schedule.helpers';
 import { CreateDailyReportDto } from './dto/create-daily-report.dto';
 
@@ -1102,7 +1103,12 @@ export class AdminService {
     return this.tasksScheduler.refreshMembershipRenewals(clubId);
   }
 
-  async updateMyTask(user: JwtPayload, taskId: string, status: AdminTaskStatus) {
+  async updateMyTask(
+    user: JwtPayload,
+    taskId: string,
+    status: AdminTaskStatus,
+    comment?: string,
+  ) {
     const clubId = requireClubId(user);
     const task = await this.prisma.adminTask.findFirst({
       where: {
@@ -1179,12 +1185,18 @@ export class AdminService {
         actorId: user.sub,
         comment:
           status === AdminTaskStatus.DONE
-            ? 'Выполнена'
+            ? comment?.trim()
+              ? `Выполнена: ${comment.trim()}`
+              : 'Выполнена'
             : status === AdminTaskStatus.IN_PROGRESS
               ? 'В работу'
               : String(status),
       },
     });
+
+    if (status === AdminTaskStatus.DONE) {
+      await ackDiscrepancyFromTask(this.prisma, task, user.sub, comment);
+    }
 
     return updated;
   }

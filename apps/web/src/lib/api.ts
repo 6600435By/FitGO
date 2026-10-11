@@ -1776,10 +1776,15 @@ export const api = {
   adminMyTasks: (token: string) =>
     request<AdminTaskItem[]>('/admin/tasks', {}, token),
 
-  adminUpdateTask: (token: string, taskId: string, status: AdminTaskStatus) =>
+  adminUpdateTask: (
+    token: string,
+    taskId: string,
+    status: AdminTaskStatus,
+    comment?: string,
+  ) =>
     request(`/admin/tasks/${taskId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, comment }),
     }, token),
 
   adminRenewalCounters: (token: string) =>
@@ -2477,10 +2482,11 @@ export const api = {
 
   discrepanciesSpa: (
     token: string,
-    params: { from: string; to: string; employee?: string },
+    params: { from: string; to: string; employee?: string; showAcked?: boolean },
   ) => {
     const q = new URLSearchParams({ from: params.from, to: params.to });
     if (params.employee) q.set('employee', params.employee);
+    if (params.showAcked) q.set('showAcked', '1');
     return request<import('@fitgo/shared-types').DiscrepancySpaPtResponse>(
       `/super-admin/discrepancies/spa?${q}`,
       {},
@@ -2490,10 +2496,11 @@ export const api = {
 
   discrepanciesPt: (
     token: string,
-    params: { from: string; to: string; employee?: string },
+    params: { from: string; to: string; employee?: string; showAcked?: boolean },
   ) => {
     const q = new URLSearchParams({ from: params.from, to: params.to });
     if (params.employee) q.set('employee', params.employee);
+    if (params.showAcked) q.set('showAcked', '1');
     return request<import('@fitgo/shared-types').DiscrepancySpaPtResponse>(
       `/super-admin/discrepancies/pt?${q}`,
       {},
@@ -2503,10 +2510,11 @@ export const api = {
 
   discrepanciesGroup: (
     token: string,
-    params: { from: string; to: string; employee?: string },
+    params: { from: string; to: string; employee?: string; showAcked?: boolean },
   ) => {
     const q = new URLSearchParams({ from: params.from, to: params.to });
     if (params.employee) q.set('employee', params.employee);
+    if (params.showAcked) q.set('showAcked', '1');
     return request<import('@fitgo/shared-types').DiscrepancyGroupResponse>(
       `/super-admin/discrepancies/group?${q}`,
       {},
@@ -2526,6 +2534,89 @@ export const api = {
     request<{ ok: boolean }>(
       '/super-admin/discrepancies/ack',
       { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  discrepancyTaskOptions: (
+    token: string,
+    params: {
+      date?: string;
+      at?: string;
+      tab?: string;
+      performerUserId?: string;
+    },
+  ) => {
+    const q = new URLSearchParams();
+    if (params.date) q.set('date', params.date);
+    if (params.at) q.set('at', params.at);
+    if (params.tab) q.set('tab', params.tab);
+    if (params.performerUserId) q.set('performerUserId', params.performerUserId);
+    return request<import('@fitgo/shared-types').DiscrepancyTaskOptions>(
+      `/super-admin/discrepancies/tasks/options?${q}`,
+      {},
+      token,
+    );
+  },
+
+  discrepancyTaskLinks: (token: string, tab: string) =>
+    request<import('@fitgo/shared-types').DiscrepancyTaskLink[]>(
+      `/super-admin/discrepancies/tasks/links?tab=${encodeURIComponent(tab)}`,
+      {},
+      token,
+    ),
+
+  discrepancyTaskCreate: (
+    token: string,
+    body: import('@fitgo/shared-types').DiscrepancyTaskCreateBody,
+  ) =>
+    request<{ created: number }>(
+      '/super-admin/discrepancies/tasks',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  discrepancyTaskRules: (token: string) =>
+    request<import('@fitgo/shared-types').DiscrepancyTaskRuleDto[]>(
+      '/super-admin/discrepancies/tasks/rules',
+      {},
+      token,
+    ),
+
+  discrepancyTaskRulesSave: (
+    token: string,
+    rules: import('@fitgo/shared-types').DiscrepancyTaskRuleDto[],
+  ) =>
+    request<import('@fitgo/shared-types').DiscrepancyTaskRuleDto[]>(
+      '/super-admin/discrepancies/tasks/rules',
+      { method: 'PUT', body: JSON.stringify({ rules }) },
+      token,
+    ),
+
+  discrepancyTaskAutoRun: (token: string) =>
+    request<import('@fitgo/shared-types').DiscrepancyAutoRunResult>(
+      '/super-admin/discrepancies/tasks/auto/run',
+      { method: 'POST', body: '{}' },
+      token,
+    ),
+
+  staffTasksMine: (token: string) =>
+    request<
+      Array<{
+        id: string;
+        title: string;
+        description?: string;
+        status: string;
+        dueAt?: string;
+        createdAt: string;
+        createdBy?: string;
+        auto: boolean;
+      }>
+    >('/staff-tasks/mine', {}, token),
+
+  staffTaskDone: (token: string, id: string, comment?: string) =>
+    request<{ ok: boolean }>(
+      `/staff-tasks/${id}/done`,
+      { method: 'POST', body: JSON.stringify({ comment }) },
       token,
     ),
 

@@ -111,10 +111,20 @@ function AdminTasksInner() {
     router.replace(qs ? `/admin/tasks?${qs}` : '/admin/tasks', { scroll: false });
   }, [topic, openTaskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const updateStatus = async (id: string, status: AdminTaskStatus) => {
+  const updateStatus = async (
+    id: string,
+    status: AdminTaskStatus,
+    askComment = false,
+  ) => {
     const token = getToken();
     if (!token) return;
-    await api.adminUpdateTask(token, id, status);
+    let comment: string | undefined;
+    if (askComment && status === AdminTaskStatus.DONE) {
+      const note = window.prompt('Что выяснили? (необязательно)');
+      if (note === null) return;
+      comment = note.trim() || undefined;
+    }
+    await api.adminUpdateTask(token, id, status, comment);
     load();
   };
 
@@ -171,7 +181,7 @@ function AdminTasksInner() {
     () =>
       tasks.filter(
         (t) =>
-          t.source === 'MANAGER' &&
+          (t.source === 'MANAGER' || t.source === 'DISCREPANCY') &&
           t.status !== AdminTaskStatus.DONE &&
           t.status !== AdminTaskStatus.CANCELLED,
       ),
@@ -458,7 +468,9 @@ function AdminTasksInner() {
                   </p>
                 ) : null}
                 {task.description ? (
-                  <p className="text-sm text-slate-400">{task.description}</p>
+                  <p className="whitespace-pre-line text-sm text-slate-400">
+                    {task.description}
+                  </p>
                 ) : null}
                 {task.dueAt ? (
                   <p className="text-xs text-slate-500">
@@ -493,7 +505,13 @@ function AdminTasksInner() {
                 <button
                   type="button"
                   className="btn-primary text-xs flex-1"
-                  onClick={() => void updateStatus(task.id, AdminTaskStatus.DONE)}
+                  onClick={() =>
+                    void updateStatus(
+                      task.id,
+                      AdminTaskStatus.DONE,
+                      task.source === 'DISCREPANCY',
+                    )
+                  }
                 >
                   Выполнена
                 </button>

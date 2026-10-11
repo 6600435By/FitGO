@@ -102,9 +102,9 @@ export class AdminController {
   updateMyTask(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
-    @Body() body: { status: AdminTaskStatus },
+    @Body() body: { status: AdminTaskStatus; comment?: string },
   ) {
-    return this.adminService.updateMyTask(user, id, body.status);
+    return this.adminService.updateMyTask(user, id, body.status, body.comment);
   }
 
   @Get('dashboard')

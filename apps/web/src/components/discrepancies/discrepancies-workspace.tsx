@@ -12,14 +12,19 @@ import type {
   DiscrepancySpaPtResponse,
   DiscrepancySummary,
   DiscrepancyTab,
+  DiscrepancyTaskLink,
 } from '@fitgo/shared-types';
 import {
   DISCREPANCY_RETENTION_DAYS,
   DISCREPANCY_SEGMENT_TITLES,
+  discrepancyClubDay,
 } from '@fitgo/shared-types';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { DateField } from '@/components/admin-sales/date-field';
+import { AutoTasksSettings, TaskButton } from './discrepancy-tasks';
+
+type TaskLinks = Map<string, DiscrepancyTaskLink>;
 
 const TABS: { id: DiscrepancyTab; label: string }[] = [
   { id: 'segments', label: 'Сегменты' },
@@ -133,6 +138,8 @@ export function DiscrepanciesWorkspace() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [expandedDay, setExpandedDay] = useState<string | null>(null);
+  const [links, setLinks] = useState<TaskLinks>(new Map());
+  const [showAuto, setShowAuto] = useState(false);
 
   const setParams = useCallback(
     (patch: Record<string, string | null | undefined>) => {
@@ -189,6 +196,9 @@ export function DiscrepanciesWorkspace() {
     const common = { from, to, employee: employee || undefined, showAcked };
     const jobs: Promise<unknown>[] = [
       api.discrepanciesSummary(token, common).then(setSummary),
+      api
+        .discrepancyTaskLinks(token, tab)
+        .then((rows) => setLinks(new Map(rows.map((r) => [r.itemKey, r])))),
     ];
     if (tab === 'segments') {
       jobs.push(api.discrepanciesSegments(token, common).then(setSegments));
@@ -352,7 +362,16 @@ export function DiscrepanciesWorkspace() {
           />
           Показать разобранные
         </label>
+        <button
+          type="button"
+          className={`mt-5 text-sm ${showAuto ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setShowAuto((v) => !v)}
+        >
+          Авто-задачи
+        </button>
       </div>
+
+      {showAuto ? <AutoTasksSettings /> : null}
 
       {message ? <p className="text-sm text-red-400">{message}</p> : null}
       {loading ? (
@@ -381,6 +400,8 @@ export function DiscrepanciesWorkspace() {
           onAck={(itemKey, fingerprint) =>
             void ackItem('segments', itemKey, fingerprint)
           }
+          links={links}
+          onTask={load}
         />
       ) : tab === 'sales' && sales ? (
         <SalesTab
@@ -423,13 +444,44 @@ export function DiscrepanciesWorkspace() {
             void ackItem('sales', itemKey, fingerprint)
           }
           busy={busy}
+          links={links}
+          onTask={load}
         />
       ) : tab === 'spa' && spa ? (
-        <PerformerTab kind="SPA" data={spa} from={from} to={to} />
+        <PerformerTab
+          kind="SPA"
+          data={spa}
+          from={from}
+          to={to}
+          onAck={(itemKey, fingerprint) =>
+            void ackItem('spa', itemKey, fingerprint)
+          }
+          links={links}
+          onTask={load}
+        />
       ) : tab === 'pt' && pt ? (
-        <PerformerTab kind="PT" data={pt} from={from} to={to} />
+        <PerformerTab
+          kind="PT"
+          data={pt}
+          from={from}
+          to={to}
+          onAck={(itemKey, fingerprint) =>
+            void ackItem('pt', itemKey, fingerprint)
+          }
+          links={links}
+          onTask={load}
+        />
       ) : tab === 'gp' && group ? (
-        <GroupTab data={group} from={from} to={to} />
+        <GroupTab
+          data={group}
+          from={from}
+          to={to}
+          onAck={(itemKey, fingerprint) =>
+            void ackItem('gp', itemKey, fingerprint)
+          }
+          links={links}
+          onTask={load}
+        />
       ) : (
         <p className="text-sm text-slate-500">Нет данных</p>
       )}
@@ -446,6 +498,8 @@ function SegmentsTab({
   onRecheck,
   busy,
   onAck,
+  links,
+  onTask,
 }: {
   data: DiscrepancySegmentsResponse;
   statusFilter: string;
@@ -455,6 +509,8 @@ function SegmentsTab({
   onRecheck: () => void;
   busy: boolean;
   onAck: (itemKey: string, fingerprint: string) => void;
+  links: TaskLinks;
+  onTask: () => void;
 }) {
   const products = data.products.filter((p) => {
     if (!statusFilter) return p.status !== 'OK';
@@ -613,6 +669,20 @@ function SegmentsTab({
               >
                 Разобрано
               </button>
+              <TaskButton
+                tab="segments"
+                itemKey={p.itemKey}
+                fingerprint={p.fingerprint}
+                subject={{
+                  kind: 'product',
+                  name: p.name,
+                  status: p.status,
+                  salesCount: p.salesCount,
+                  amount: p.amount,
+                }}
+                link={links.get(p.itemKey)}
+                onCreated={onTask}
+              />
             </div>
           </li>
         ))}
@@ -636,6 +706,8 @@ function SalesTab({
   onUpload,
   onAck,
   busy,
+  links,
+  onTask,
 }: {
   data: DiscrepancySalesResponse;
   from: string;
@@ -648,6 +720,8 @@ function SalesTab({
   onUpload: (file: File) => void;
   onAck: (itemKey: string, fingerprint: string) => void;
   busy: string;
+  links: TaskLinks;
+  onTask: () => void;
 }) {
   const eps = 0.02;
   const days = data.days.filter((d) => {
@@ -755,13 +829,35 @@ function SalesTab({
                   setExpandedDay(expandedDay === d.date ? null : d.date)
                 }
               >
-                <span className="font-medium">{d.date}</span>
+                <span className="font-medium">
+                  {d.date}
+                  {links.get(d.itemKey) && links.get(d.itemKey)!.status !== 'DONE' ? (
+                    <span className="ml-2 text-xs text-amber-300">задача</span>
+                  ) : null}
+                </span>
                 <span
                   className={`text-sm ${problem ? 'text-red-400' : 'text-emerald-400'}`}
                 >
                   {diffLabel}
                 </span>
               </button>
+              {problem ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <AckButton
+                    acked={d.acked}
+                    onClick={() => onAck(d.itemKey, d.fingerprint)}
+                  />
+                  <TaskButton
+                    tab="sales"
+                    itemKey={d.itemKey}
+                    fingerprint={d.fingerprint}
+                    subject={{ kind: 'salesDay', ...d }}
+                    date={d.date}
+                    link={links.get(d.itemKey)}
+                    onCreated={onTask}
+                  />
+                </div>
+              ) : null}
               {expandedDay === d.date ? (
                 <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-400 md:grid-cols-4">
                   {tenderFilter !== 'card' ? (
@@ -864,10 +960,28 @@ function SalesTab({
                     <SaleLines lines={r.nearestOneC.lines} />
                   </div>
                 ) : null}
-                <AckButton
-                  acked={r.acked}
-                  onClick={() => onAck(r.itemKey, r.fingerprint)}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <AckButton
+                    acked={r.acked}
+                    onClick={() => onAck(r.itemKey, r.fingerprint)}
+                  />
+                  <TaskButton
+                    tab="sales"
+                    itemKey={r.itemKey}
+                    fingerprint={r.fingerprint}
+                    subject={{
+                      kind: 'kassa',
+                      at: r.occurredAt,
+                      receiptId: r.receiptId,
+                      amount: r.amount,
+                      cashier: r.cashier,
+                    }}
+                    date={discrepancyClubDay(r.occurredAt)}
+                    at={r.occurredAt}
+                    link={links.get(r.itemKey)}
+                    onCreated={onTask}
+                  />
+                </div>
               </li>
             ))}
           </ul>
@@ -908,10 +1022,29 @@ function SalesTab({
                       : `нал ${money(r.cash)} · карта ${money(r.card)}`}
                   {r.employeeName ? ` · ${r.employeeName}` : ''}
                 </p>
-                <AckButton
-                  acked={r.acked}
-                  onClick={() => onAck(r.itemKey, r.fingerprint)}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <AckButton
+                    acked={r.acked}
+                    onClick={() => onAck(r.itemKey, r.fingerprint)}
+                  />
+                  <TaskButton
+                    tab="sales"
+                    itemKey={r.itemKey}
+                    fingerprint={r.fingerprint}
+                    subject={{
+                      kind: 'onec',
+                      at: r.occurredAt,
+                      amount: r.amount,
+                      clientName: r.clientName,
+                      productName: r.productName,
+                      employeeName: r.employeeName,
+                    }}
+                    date={discrepancyClubDay(r.occurredAt)}
+                    at={r.occurredAt}
+                    link={links.get(r.itemKey)}
+                    onCreated={onTask}
+                  />
+                </div>
               </li>
             ))}
           </ul>
@@ -973,11 +1106,17 @@ function PerformerTab({
   data,
   from,
   to,
+  onAck,
+  links,
+  onTask,
 }: {
   kind: 'SPA' | 'PT';
   data: DiscrepancySpaPtResponse;
   from: string;
   to: string;
+  onAck: (itemKey: string, fingerprint: string) => void;
+  links: TaskLinks;
+  onTask: () => void;
 }) {
   return (
     <div className="space-y-3">
@@ -988,22 +1127,48 @@ function PerformerTab({
       </p>
       <ul className="space-y-2">
         {data.performers.map((p) => (
-          <li key={p.performerId} className="card flex items-center justify-between gap-3 p-3">
-            <div>
-              <p className="font-medium">{p.performerName}</p>
-              {p.approximate ? (
-                <p className="text-xs text-amber-300">приблизительно</p>
-              ) : null}
+          <li key={p.performerId} className="card space-y-2 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="font-medium">{p.performerName}</p>
+                {p.approximate ? (
+                  <p className="text-xs text-amber-300">приблизительно</p>
+                ) : null}
+              </div>
+              <Link
+                className="text-xl font-semibold text-emerald-400"
+                href={performerHref(kind, 'EXPIRING_PACKAGE', p.performerUserId, from, to)}
+              >
+                {p.count}
+                {p.redCount ? (
+                  <span className="ml-1 text-sm text-red-400">/{p.redCount}</span>
+                ) : null}
+              </Link>
             </div>
-            <Link
-              className="text-xl font-semibold text-emerald-400"
-              href={performerHref(kind, 'EXPIRING_PACKAGE', p.performerUserId, from, to)}
-            >
-              {p.count}
-              {p.redCount ? (
-                <span className="ml-1 text-sm text-red-400">/{p.redCount}</span>
-              ) : null}
-            </Link>
+            <div className="flex flex-wrap items-center gap-2">
+              <AckButton
+                acked={p.acked}
+                onClick={() => onAck(p.itemKey, p.fingerprint)}
+              />
+              <TaskButton
+                tab={kind === 'SPA' ? 'spa' : 'pt'}
+                itemKey={p.itemKey}
+                fingerprint={p.fingerprint}
+                subject={{
+                  kind: 'performer',
+                  tab: kind === 'SPA' ? 'spa' : 'pt',
+                  from,
+                  to,
+                  performerName: p.performerName,
+                  count: p.count,
+                  redCount: p.redCount,
+                }}
+                date={from === to ? from : undefined}
+                performerUserId={p.performerUserId}
+                link={links.get(p.itemKey)}
+                onCreated={onTask}
+              />
+            </div>
           </li>
         ))}
         {data.performers.length === 0 ? (
@@ -1018,10 +1183,16 @@ function GroupTab({
   data,
   from,
   to,
+  onAck,
+  links,
+  onTask,
 }: {
   data: DiscrepancyGroupResponse;
   from: string;
   to: string;
+  onAck: (itemKey: string, fingerprint: string) => void;
+  links: TaskLinks;
+  onTask: () => void;
 }) {
   return (
     <div className="space-y-4">
@@ -1040,20 +1211,50 @@ function GroupTab({
                 {p.lateAddCount}
               </Link>
             </div>
-            <ul className="space-y-1 text-xs text-slate-400">
+            <ul className="space-y-2 text-xs text-slate-400">
               {p.sessions.map((s) => (
-                <li key={s.sessionKey} className="flex justify-between gap-2">
-                  <Link
-                    className="text-slate-300 hover:text-emerald-400"
-                    href={`/super-admin/review-queue?sessionKey=${encodeURIComponent(s.sessionKey)}`}
-                  >
-                    {new Date(s.startAt).toLocaleString('ru-RU')} · {s.title}
-                  </Link>
-                  <span>
-                    старт {s.bookedAtStart} → факт {s.confirmed} · +{s.lateAdds}
-                    {s.duringAdds ? ` · во время ${s.duringAdds}` : ''}
-                    {s.approximate ? ' ≈' : ''}
-                  </span>
+                <li
+                  key={s.sessionKey}
+                  className="space-y-1 border-t border-slate-800 pt-2 first:border-0 first:pt-0"
+                >
+                  <div className="flex justify-between gap-2">
+                    <Link
+                      className="text-slate-300 hover:text-emerald-400"
+                      href={`/super-admin/review-queue?sessionKey=${encodeURIComponent(s.sessionKey)}`}
+                    >
+                      {new Date(s.startAt).toLocaleString('ru-RU')} · {s.title}
+                    </Link>
+                    <span>
+                      старт {s.bookedAtStart} → факт {s.confirmed} · +{s.lateAdds}
+                      {s.duringAdds ? ` · во время ${s.duringAdds}` : ''}
+                      {s.approximate ? ' ≈' : ''}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <AckButton
+                      acked={s.acked}
+                      onClick={() => onAck(s.itemKey, s.fingerprint)}
+                    />
+                    <TaskButton
+                      tab="gp"
+                      itemKey={s.itemKey}
+                      fingerprint={s.fingerprint}
+                      subject={{
+                        kind: 'session',
+                        at: s.startAt,
+                        title: s.title,
+                        performerName: p.performerName,
+                        lateAdds: s.lateAdds,
+                        bookedAtStart: s.bookedAtStart,
+                        confirmed: s.confirmed,
+                      }}
+                      date={discrepancyClubDay(s.startAt)}
+                      at={s.startAt}
+                      performerUserId={p.performerUserId}
+                      link={links.get(s.itemKey)}
+                      onCreated={onTask}
+                    />
+                  </div>
                 </li>
               ))}
             </ul>

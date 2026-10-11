@@ -12,6 +12,7 @@ import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.serv
 import { HallVisitsSyncService } from '../class-sync/hall-visits-sync.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminTasksSchedulerService } from '../super-admin/admin-tasks-scheduler.service';
+import { DiscrepancyTasksService } from '../discrepancies/discrepancy-tasks.service';
 import {
   MEMBERSHIP_LIMITS,
   MembershipSnapshotSyncService,
@@ -632,6 +633,15 @@ export class ClubSyncOrchestrator {
                 (r?.membership ?? 0) +
                 (r?.installment ?? 0),
             };
+          });
+
+          await runStep('discrepancy_tasks', async () => {
+            const discrepancyTasks = this.moduleRef.get(
+              DiscrepancyTasksService,
+              { strict: false },
+            );
+            const r = await discrepancyTasks.runAuto(clubId);
+            return { rows: r.created };
           });
         }
 

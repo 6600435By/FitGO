@@ -7,6 +7,7 @@ import { AuthGuard } from '@/components/auth-guard';
 import { AppShell } from '@/components/app-shell';
 import { DataFreshness } from '@/components/data-freshness';
 import { useFeatures } from '@/components/features-provider';
+import { StaffTasksInbox } from '@/components/staff-tasks-inbox';
 import { api, type AuthUser } from '@/lib/api';
 import { getToken, getUser, saveAuth } from '@/lib/auth';
 
@@ -131,6 +132,7 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
         <div className="mb-4">
           <DataFreshness canRefresh={false} />
         </div>
+        <StaffTasksInbox />
         {children}
       </AppShell>
     </AuthGuard>

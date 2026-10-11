@@ -23,6 +23,7 @@ import { requireClubId } from '../auth/require-club-id';
 import { AdminPermissionsService } from '../auth/admin-permissions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminTasksSchedulerService } from './admin-tasks-scheduler.service';
+import { ackDiscrepancyFromTask } from '../discrepancies/discrepancy-task-ack';
 import type { CreateAdminTaskDto } from './dto/task.dto';
 import type { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 import { randomBytes } from 'crypto';
@@ -750,6 +751,10 @@ export class SuperAdminService implements OnModuleInit {
           },
         });
       }
+    }
+
+    if (data.status === AdminTaskStatus.DONE) {
+      await ackDiscrepancyFromTask(this.prisma, task, user.sub);
     }
 
     return this.mapTask(updated);

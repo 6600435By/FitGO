@@ -508,6 +508,7 @@ model Club {
   webkassaReceipts     WebkassaReceipt[]
   webkassaSyncStates   WebkassaSyncState[]
   discrepancyAcks      DiscrepancyAck[]
+  discrepancyTaskRules DiscrepancyTaskRule[]
 }
 
 model ClubTheme {
@@ -2365,6 +2366,30 @@ model DiscrepancyAck {
   @@unique([clubId, tab, itemKey])
   @@index([clubId, tab])
   @@index([expiresAt])
+}
+
+/// Auto-task rule per «Нестыковки» tab. Tasks land in AdminTask (source DISCREPANCY).
+model DiscrepancyTaskRule {
+  id           String   @id @default(cuid())
+  clubId       String
+  /// segments | sales | spa | gp | pt
+  tab          String
+  enabled      Boolean  @default(false)
+  /// sales: min |diff| BYN · spa/pt: min write-offs per performer/day · gp: min late adds per class
+  threshold    Float    @default(1)
+  /// sales: all | cash | card · spa/pt: all | red · segments: problems | all
+  scope        String   @default("all")
+  /// LAST_SHIFT | ON_SHIFT | ADMINS | PERFORMER | USER
+  assignTo     String   @default("LAST_SHIFT")
+  assigneeId   String?
+  dueHours     Int      @default(24)
+  /// Days back from yesterday to scan (1 = only yesterday)
+  lookbackDays Int      @default(1)
+  updatedAt    DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, tab])
 }
 
 /// Dual approval for GROUP class payroll (trainer checkmarks → admin confirm).

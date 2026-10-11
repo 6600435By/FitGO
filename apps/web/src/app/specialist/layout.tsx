@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { AuthGuard } from '@/components/auth-guard';
 import { AppShell } from '@/components/app-shell';
 import { DataFreshness } from '@/components/data-freshness';
+import { StaffTasksInbox } from '@/components/staff-tasks-inbox';
 
 const NAV = [
   { href: '/specialist/schedule', label: 'Расписание' },
@@ -20,6 +21,7 @@ export default function SpecialistLayout({ children }: { children: ReactNode }) 
         <div className="mb-4">
           <DataFreshness canRefresh={false} />
         </div>
+        <StaffTasksInbox />
         {children}
       </AppShell>
     </AuthGuard>
