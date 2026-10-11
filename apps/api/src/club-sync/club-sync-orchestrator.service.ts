@@ -494,6 +494,9 @@ export class ClubSyncOrchestrator {
             from: today,
             to: today,
           });
+          if (r.endpointMissing) {
+            throw new Error('GET /v1/class-sessions not published (1C)');
+          }
           return {
             rows: r.sessionsUpserted,
             from: r.from,
@@ -506,6 +509,9 @@ export class ClubSyncOrchestrator {
             from: today,
             to: today,
           });
+          if (r.endpointMissing) {
+            throw new Error('GET /v1/visits (club) not published (1C)');
+          }
           return { rows: r.upserted, from: r.from, to: r.to };
         });
 
@@ -540,6 +546,9 @@ export class ClubSyncOrchestrator {
             from: classFrom,
             to: classTo,
           });
+          if (r.endpointMissing) {
+            throw new Error('GET /v1/class-sessions not published (1C)');
+          }
           return {
             rows: r.sessionsUpserted,
             from: r.from,
@@ -552,6 +561,9 @@ export class ClubSyncOrchestrator {
             from: classFrom,
             to: classTo,
           });
+          if (r.endpointMissing) {
+            throw new Error('GET /v1/visits (club) not published (1C)');
+          }
           return { rows: r.upserted, from: r.from, to: r.to };
         });
 

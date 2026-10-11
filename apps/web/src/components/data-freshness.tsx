@@ -55,6 +55,12 @@ function formatSyncError(raw: string): string {
   if (/Orphaned RUNNING|heartbeat stale|no worker|API process restarted/i.test(t)) {
     return 'Выгрузка оборвалась (перезапуск API). Нажмите «Обновить из 1С» ещё раз.';
   }
+  if (/class-sessions not published/i.test(t)) {
+    return '1С: не опубликован GET /v1/class-sessions (FitGOIntegration).';
+  }
+  if (/visits \(club\) not published/i.test(t)) {
+    return '1С: не опубликован GET /v1/visits без клиента (FitGOIntegration).';
+  }
   if (/^\d{3,5}$/.test(t)) return `Forma/WP ошибка ${t}`;
   if (/^[\w.]+:\s*\d{3,5}$/.test(t)) {
     const [step, code] = t.split(/:\s*/);

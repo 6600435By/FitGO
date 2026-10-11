@@ -75,6 +75,7 @@ export class ClubSyncStatusService {
     });
     const resources: ClubSyncStatusDto['resources'] = {};
     let minSuccess: Date | null = null;
+    let maxSuccess: Date | null = null;
     for (const key of KEY_RESOURCES) {
       const s = states.find((x) => x.resourceKey === key);
       resources[key] = {
@@ -89,8 +90,27 @@ export class ClubSyncStatusService {
         if (!minSuccess || s.lastSuccessAt < minSuccess) {
           minSuccess = s.lastSuccessAt;
         }
+        if (!maxSuccess || s.lastSuccessAt > maxSuccess) {
+          maxSuccess = s.lastSuccessAt;
+        }
       }
     }
+
+    const lastOkRun = await this.prisma.clubSyncRun.findFirst({
+      where: {
+        clubId,
+        status: {
+          in: [ClubSyncRunStatus.SUCCESS, ClubSyncRunStatus.PARTIAL],
+        },
+        finishedAt: { not: null },
+      },
+      orderBy: { finishedAt: 'desc' },
+    });
+
+    // Prefer last sync finish — min(resource) was pinned by one stale key
+    // (e.g. class_sessions missing endpoint) so «Обновить» never moved the badge.
+    const dataAsOfDate =
+      lastOkRun?.finishedAt ?? maxSuccess ?? minSuccess;
 
     const running = await this.prisma.clubSyncRun.findFirst({
       where: { clubId, status: ClubSyncRunStatus.RUNNING },
@@ -147,11 +167,11 @@ export class ClubSyncStatusService {
       sourceLabel = 'кэш FitGO';
     }
 
-    const freshness = computeFreshness(minSuccess, lastRun);
+    const freshness = computeFreshness(dataAsOfDate, lastRun);
 
     return {
-      dataAsOf: formatMoscowDataAsOf(minSuccess),
-      dataAsOfIso: minSuccess?.toISOString() ?? null,
+      dataAsOf: formatMoscowDataAsOf(dataAsOfDate),
+      dataAsOfIso: dataAsOfDate?.toISOString() ?? null,
       freshness,
       sourceLabel,
       resources,
@@ -193,10 +213,10 @@ export class ClubSyncStatusService {
   }
 }
 
-/** Boot/reclaim messages are not actionable sync failures — don't sticky-show them. */
+/** Boot reclaim only — keep real orphan/step errors visible after a user refresh. */
 function orphanNoiseError(lastError: string | null | undefined): string | null {
   if (!lastError) return null;
-  if (/Orphaned RUNNING/i.test(lastError)) return null;
+  if (/API process restarted/i.test(lastError)) return null;
   return lastError;
 }
 
