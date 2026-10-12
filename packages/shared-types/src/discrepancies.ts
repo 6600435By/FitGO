@@ -165,6 +165,17 @@ export interface DiscrepancySalesResponse {
   employees: DiscrepancyEmployeeOption[];
 }
 
+/** One SPA/PT session with expiring-package write-offs. */
+export interface DiscrepancySpaPtSessionRow {
+  sessionKey: string;
+  startAt: string;
+  title: string;
+  clientNames: string[];
+  writeOffCount: number;
+  redCount: number;
+  approximate?: boolean;
+}
+
 export interface DiscrepancyPerformerRow {
   /** `perf:{performerId}:{from}:{to}` — scoped to the viewed period. */
   itemKey: string;
@@ -178,6 +189,7 @@ export interface DiscrepancyPerformerRow {
   count: number;
   redCount: number;
   approximate?: boolean;
+  sessions: DiscrepancySpaPtSessionRow[];
 }
 
 export interface DiscrepancySpaPtResponse {
@@ -498,3 +510,5 @@ export function discrepancyTaskText(s: DiscrepancyTaskSubject): {
 export const DISCREPANCY_RETENTION_DAYS = 92;
 export const DISCREPANCY_EXPIRING_PACKAGE_DAYS = 7;
 export const DISCREPANCY_SALES_MATCH_WINDOW_MIN = 10;
+/** Cheque↔1C matching report — temporarily off (heavy; day totals stay). */
+export const DISCREPANCY_CHEQUE_MATCH_ENABLED = false;

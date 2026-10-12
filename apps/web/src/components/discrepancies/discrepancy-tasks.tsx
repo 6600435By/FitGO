@@ -129,7 +129,7 @@ export function TaskButton({
 
   if (!open) {
     return (
-      <span className="inline-flex flex-wrap items-center gap-2">
+      <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
         {link ? (
           <span
             className={`text-xs ${link.status === 'DONE' ? 'text-emerald-400' : 'text-amber-300'}`}
@@ -140,7 +140,7 @@ export function TaskButton({
         {!link || link.status === 'DONE' ? (
           <button
             type="button"
-            className="btn-secondary text-xs"
+            className="text-xs text-slate-400 underline-offset-2 hover:text-emerald-400 hover:underline"
             onClick={() => void start()}
           >
             Задача

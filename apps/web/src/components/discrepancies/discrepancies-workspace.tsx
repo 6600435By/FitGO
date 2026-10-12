@@ -15,6 +15,7 @@ import type {
   DiscrepancyTaskLink,
 } from '@fitgo/shared-types';
 import {
+  DISCREPANCY_CHEQUE_MATCH_ENABLED,
   DISCREPANCY_RETENTION_DAYS,
   DISCREPANCY_SEGMENT_TITLES,
   discrepancyClubDay,
@@ -414,11 +415,6 @@ export function DiscrepanciesWorkspace() {
             }
           }}
           busy={busy === 'recheck'}
-          onAck={(itemKey, fingerprint) =>
-            void ackItem('segments', itemKey, fingerprint)
-          }
-          links={links}
-          onTask={load}
         />
       ) : tab === 'sales' && sales ? (
         <SalesTab
@@ -514,9 +510,6 @@ function SegmentsTab({
   onStatus,
   onRecheck,
   busy,
-  onAck,
-  links,
-  onTask,
 }: {
   data: DiscrepancySegmentsResponse;
   statusFilter: string;
@@ -525,9 +518,6 @@ function SegmentsTab({
   onStatus: (s: string) => void;
   onRecheck: () => void;
   busy: boolean;
-  onAck: (itemKey: string, fingerprint: string) => void;
-  links: TaskLinks;
-  onTask: () => void;
 }) {
   const products = data.products.filter((p) => {
     if (!statusFilter) return p.status !== 'OK';
@@ -628,85 +618,47 @@ function SegmentsTab({
         </div>
       ) : null}
 
-      <ul className="space-y-2">
-        {products.map((p) => (
-          <li key={p.itemKey} className="card space-y-2 p-3">
-            <div>
-              <p className="text-xs text-slate-500">Номенклатура вне сегмента</p>
-              <p className="text-base font-medium leading-snug">{p.name}</p>
-              <p className={`mt-1 text-xs ${statusClass(p.status)}`}>
-                {statusRu(p.status)}
-                {p.suggestedSegment
-                  ? ` → ${DISCREPANCY_SEGMENT_TITLES[p.suggestedSegment]}`
-                  : ''}
-                {p.oneCSaleType ? ` · 1С: ${p.oneCSaleType}` : ''}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="text-sm text-slate-200">
-                {money(p.amount)} BYN
-              </p>
-              <Link
-                className="text-sm font-medium text-emerald-400"
-                href={productSalesHref(p, from, to)}
-                title="Продажи по этой номенклатуре"
-              >
-                {p.salesCount}{' '}
-                {p.salesCount === 1
-                  ? 'продажа'
-                  : p.salesCount < 5
-                    ? 'продажи'
-                    : 'продаж'}
-              </Link>
-            </div>
-            <details className="text-xs text-slate-500">
-              <summary>UUID / группа</summary>
-              <p className="mt-1 break-all">
-                {p.uuid || '—'}{' '}
-                {p.uuid ? (
-                  <button
-                    type="button"
-                    className="text-emerald-400"
-                    onClick={() => void navigator.clipboard.writeText(p.uuid!)}
-                  >
-                    Копировать
-                  </button>
-                ) : null}
-              </p>
-              <p>
-                код: {p.code || '—'} · группа: {p.groupName || '—'}
-                {p.currentBucket ? ` · бакет: ${p.currentBucket}` : ''}
-              </p>
-            </details>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className="btn-secondary text-xs"
-                onClick={() => onAck(p.itemKey, p.fingerprint)}
-              >
-                Разобрано
-              </button>
-              <TaskButton
-                tab="segments"
-                itemKey={p.itemKey}
-                fingerprint={p.fingerprint}
-                subject={{
-                  kind: 'product',
-                  name: p.name,
-                  status: p.status,
-                  salesCount: p.salesCount,
-                  amount: p.amount,
-                }}
-                link={links.get(p.itemKey)}
-                onCreated={onTask}
-              />
-            </div>
-          </li>
-        ))}
+      <div className="card overflow-hidden p-0">
+        <p className="border-b border-slate-800 px-3 py-2 text-sm font-medium">
+          Номенклатура вне сегментов
+        </p>
         {products.length === 0 ? (
-          <p className="text-sm text-emerald-400">Проблемных позиций нет.</p>
-        ) : null}
-      </ul>
+          <p className="px-3 py-3 text-sm text-emerald-400">
+            Проблемных позиций нет.
+          </p>
+        ) : (
+          <ul className="divide-y divide-slate-800">
+            {products.map((p) => (
+              <li
+                key={p.itemKey}
+                className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 px-3 py-2 text-sm"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium text-slate-100">{p.name}</p>
+                  <p className={`text-xs ${statusClass(p.status)}`}>
+                    {statusRu(p.status)}
+                    {p.suggestedSegment
+                      ? ` → ${DISCREPANCY_SEGMENT_TITLES[p.suggestedSegment]}`
+                      : ''}
+                  </p>
+                </div>
+                <Link
+                  className="shrink-0 text-emerald-400 hover:underline"
+                  href={productSalesHref(p, from, to)}
+                  title="Открыть продажи по этой номенклатуре"
+                >
+                  {p.salesCount}{' '}
+                  {p.salesCount === 1
+                    ? 'продажа'
+                    : p.salesCount < 5
+                      ? 'продажи'
+                      : 'продаж'}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
@@ -861,7 +813,7 @@ function SalesTab({
                 </span>
               </button>
               {problem ? (
-                <div className="mt-2 flex flex-wrap items-center gap-2">
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
                   <AckButton
                     acked={d.acked}
                     onClick={() => onAck(d.itemKey, d.fingerprint)}
@@ -935,139 +887,153 @@ function SalesTab({
         </p>
       ) : null}
 
-      <p className="text-xs text-slate-500">
-        Сопоставлено чеков: {data.matchedCount}
-        {data.mixedMatched ? ` · смешанных продаж: ${data.mixedMatched}` : ''}
-        {data.combinedMatched ? ` · составных: ${data.combinedMatched}` : ''}
-      </p>
+      {DISCREPANCY_CHEQUE_MATCH_ENABLED ? (
+        <>
+          <p className="text-xs text-slate-500">
+            Сопоставлено чеков: {data.matchedCount}
+            {data.mixedMatched
+              ? ` · смешанных продаж: ${data.mixedMatched}`
+              : ''}
+            {data.combinedMatched
+              ? ` · составных: ${data.combinedMatched}`
+              : ''}
+          </p>
 
-      {unmatchedKassa.length > 0 ? (
-        <div className="card space-y-2 p-3">
-          <p className="text-sm font-medium">Чеки без пары в 1С</p>
-          <ul className="space-y-2 text-sm">
-            {unmatchedKassa.slice(0, 40).map((r) => (
-              <li
-                key={r.itemKey}
-                className="space-y-1 border-t border-slate-800 pt-2 first:border-0 first:pt-0"
-              >
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-400">
-                    {new Date(r.occurredAt).toLocaleString('ru-RU')} · {r.receiptId}
-                    {r.cashier ? ` · ${r.cashier}` : ''}
-                  </span>
-                  <span className="shrink-0">
-                    {tenderFilter === 'cash'
-                      ? money(r.cash)
-                      : tenderFilter === 'card'
-                        ? money(r.cashless)
-                        : money(r.amount)}
-                  </span>
-                </div>
-                {tenderFilter === 'all' ? (
-                  <p className="text-xs text-slate-500">
-                    нал {money(r.cash)} · карта {money(r.cashless)}
-                  </p>
-                ) : null}
-                {r.nearestOneC ? (
-                  <div className="text-xs text-slate-500">
-                    <p>
-                      Ближайшая оплата 1С{' '}
-                      {new Date(r.nearestOneC.occurredAt).toLocaleTimeString('ru-RU')} ·{' '}
-                      {money(r.nearestOneC.amount)} (разница{' '}
-                      <span className="text-amber-300">{money(r.nearestOneC.diff)}</span>)
-                    </p>
-                    <SaleLines lines={r.nearestOneC.lines} />
-                  </div>
-                ) : null}
-                <div className="flex flex-wrap items-center gap-2">
-                  <AckButton
-                    acked={r.acked}
-                    onClick={() => onAck(r.itemKey, r.fingerprint)}
-                  />
-                  <TaskButton
-                    tab="sales"
-                    itemKey={r.itemKey}
-                    fingerprint={r.fingerprint}
-                    subject={{
-                      kind: 'kassa',
-                      at: r.occurredAt,
-                      receiptId: r.receiptId,
-                      amount: r.amount,
-                      cashier: r.cashier,
-                    }}
-                    date={discrepancyClubDay(r.occurredAt)}
-                    at={r.occurredAt}
-                    link={links.get(r.itemKey)}
-                    onCreated={onTask}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {unmatchedOneC.length > 0 ? (
-        <div className="card space-y-2 p-3">
-          <p className="text-sm font-medium">Оплаты 1С без чека</p>
-          <ul className="space-y-2 text-sm">
-            {unmatchedOneC.slice(0, 40).map((r) => (
-              <li
-                key={r.itemKey}
-                className="space-y-1 border-t border-slate-800 pt-2 first:border-0 first:pt-0"
-              >
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-400">
-                    {new Date(r.occurredAt).toLocaleString('ru-RU')}
-                    {r.clientName ? ` · ${r.clientName}` : ''}
-                  </span>
-                  <Link
-                    className="shrink-0 text-emerald-400"
-                    href={`/super-admin/sales?from=${from}&to=${to}&q=${encodeURIComponent(r.clientName || r.lines[0]?.productName || '')}`}
+          {unmatchedKassa.length > 0 ? (
+            <div className="card space-y-2 p-3">
+              <p className="text-sm font-medium">Чеки без пары в 1С</p>
+              <ul className="space-y-2 text-sm">
+                {unmatchedKassa.slice(0, 40).map((r) => (
+                  <li
+                    key={r.itemKey}
+                    className="space-y-1 border-t border-slate-800 pt-2 first:border-0 first:pt-0"
                   >
-                    {tenderFilter === 'cash'
-                      ? money(r.cash)
-                      : tenderFilter === 'card'
-                        ? money(r.card)
-                        : money(r.amount)}
-                  </Link>
-                </div>
-                <SaleLines lines={r.lines} />
-                <p className="text-xs text-slate-500">
-                  {tenderFilter === 'cash'
-                    ? `нал ${money(r.cash)}`
-                    : tenderFilter === 'card'
-                      ? `карта ${money(r.card)}`
-                      : `нал ${money(r.cash)} · карта ${money(r.card)}`}
-                  {r.employeeName ? ` · ${r.employeeName}` : ''}
-                </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <AckButton
-                    acked={r.acked}
-                    onClick={() => onAck(r.itemKey, r.fingerprint)}
-                  />
-                  <TaskButton
-                    tab="sales"
-                    itemKey={r.itemKey}
-                    fingerprint={r.fingerprint}
-                    subject={{
-                      kind: 'onec',
-                      at: r.occurredAt,
-                      amount: r.amount,
-                      clientName: r.clientName,
-                      productName: r.productName,
-                      employeeName: r.employeeName,
-                    }}
-                    date={discrepancyClubDay(r.occurredAt)}
-                    at={r.occurredAt}
-                    link={links.get(r.itemKey)}
-                    onCreated={onTask}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">
+                        {new Date(r.occurredAt).toLocaleString('ru-RU')} ·{' '}
+                        {r.receiptId}
+                        {r.cashier ? ` · ${r.cashier}` : ''}
+                      </span>
+                      <span className="shrink-0">
+                        {tenderFilter === 'cash'
+                          ? money(r.cash)
+                          : tenderFilter === 'card'
+                            ? money(r.cashless)
+                            : money(r.amount)}
+                      </span>
+                    </div>
+                    {tenderFilter === 'all' ? (
+                      <p className="text-xs text-slate-500">
+                        нал {money(r.cash)} · карта {money(r.cashless)}
+                      </p>
+                    ) : null}
+                    {r.nearestOneC ? (
+                      <div className="text-xs text-slate-500">
+                        <p>
+                          Ближайшая оплата 1С{' '}
+                          {new Date(
+                            r.nearestOneC.occurredAt,
+                          ).toLocaleTimeString('ru-RU')}{' '}
+                          · {money(r.nearestOneC.amount)} (разница{' '}
+                          <span className="text-amber-300">
+                            {money(r.nearestOneC.diff)}
+                          </span>
+                          )
+                        </p>
+                        <SaleLines lines={r.nearestOneC.lines} />
+                      </div>
+                    ) : null}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                      <AckButton
+                        acked={r.acked}
+                        onClick={() => onAck(r.itemKey, r.fingerprint)}
+                      />
+                      <TaskButton
+                        tab="sales"
+                        itemKey={r.itemKey}
+                        fingerprint={r.fingerprint}
+                        subject={{
+                          kind: 'kassa',
+                          at: r.occurredAt,
+                          receiptId: r.receiptId,
+                          amount: r.amount,
+                          cashier: r.cashier,
+                        }}
+                        date={discrepancyClubDay(r.occurredAt)}
+                        at={r.occurredAt}
+                        link={links.get(r.itemKey)}
+                        onCreated={onTask}
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {unmatchedOneC.length > 0 ? (
+            <div className="card space-y-2 p-3">
+              <p className="text-sm font-medium">Оплаты 1С без чека</p>
+              <ul className="space-y-2 text-sm">
+                {unmatchedOneC.slice(0, 40).map((r) => (
+                  <li
+                    key={r.itemKey}
+                    className="space-y-1 border-t border-slate-800 pt-2 first:border-0 first:pt-0"
+                  >
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">
+                        {new Date(r.occurredAt).toLocaleString('ru-RU')}
+                        {r.clientName ? ` · ${r.clientName}` : ''}
+                      </span>
+                      <Link
+                        className="shrink-0 text-emerald-400"
+                        href={`/super-admin/sales?from=${from}&to=${to}&q=${encodeURIComponent(r.clientName || r.lines[0]?.productName || '')}`}
+                      >
+                        {tenderFilter === 'cash'
+                          ? money(r.cash)
+                          : tenderFilter === 'card'
+                            ? money(r.card)
+                            : money(r.amount)}
+                      </Link>
+                    </div>
+                    <SaleLines lines={r.lines} />
+                    <p className="text-xs text-slate-500">
+                      {tenderFilter === 'cash'
+                        ? `нал ${money(r.cash)}`
+                        : tenderFilter === 'card'
+                          ? `карта ${money(r.card)}`
+                          : `нал ${money(r.cash)} · карта ${money(r.card)}`}
+                      {r.employeeName ? ` · ${r.employeeName}` : ''}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                      <AckButton
+                        acked={r.acked}
+                        onClick={() => onAck(r.itemKey, r.fingerprint)}
+                      />
+                      <TaskButton
+                        tab="sales"
+                        itemKey={r.itemKey}
+                        fingerprint={r.fingerprint}
+                        subject={{
+                          kind: 'onec',
+                          at: r.occurredAt,
+                          amount: r.amount,
+                          clientName: r.clientName,
+                          productName: r.productName,
+                          employeeName: r.employeeName,
+                        }}
+                        date={discrepancyClubDay(r.occurredAt)}
+                        at={r.occurredAt}
+                        link={links.get(r.itemKey)}
+                        onCreated={onTask}
+                      />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </>
       ) : null}
     </div>
   );
@@ -1099,9 +1065,13 @@ function AckButton({
   acked?: boolean;
   onClick: () => void;
 }) {
-  if (acked) return <p className="text-xs text-slate-500">Разобрано</p>;
+  if (acked) return <span className="text-xs text-slate-500">Разобрано</span>;
   return (
-    <button type="button" className="btn-secondary text-xs" onClick={onClick}>
+    <button
+      type="button"
+      className="text-xs text-slate-400 underline-offset-2 hover:text-emerald-400 hover:underline"
+      onClick={onClick}
+    >
       Разобрано
     </button>
   );
@@ -1137,6 +1107,8 @@ function PerformerTab({
   links: TaskLinks;
   onTask: () => void;
 }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+
   return (
     <div className="space-y-3">
       <p className="text-sm text-slate-400">
@@ -1145,51 +1117,109 @@ function PerformerTab({
         {data.redTotal ? ` · красных: ${data.redTotal}` : ''}.
       </p>
       <ul className="space-y-2">
-        {data.performers.map((p) => (
-          <li key={p.performerId} className="card space-y-2 p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="font-medium">{p.performerName}</p>
-                {p.approximate ? (
-                  <p className="text-xs text-amber-300">приблизительно</p>
-                ) : null}
-              </div>
-              <Link
-                className="text-xl font-semibold text-emerald-400"
-                href={performerHref(kind, 'EXPIRING_PACKAGE', p.performerUserId, from, to)}
+        {data.performers.map((p) => {
+          const open = openId === p.performerId;
+          return (
+            <li key={p.performerId} className="card space-y-2 p-3">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 text-left"
+                onClick={() =>
+                  setOpenId(open ? null : p.performerId)
+                }
               >
-                {p.count}
-                {p.redCount ? (
-                  <span className="ml-1 text-sm text-red-400">/{p.redCount}</span>
-                ) : null}
-              </Link>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <AckButton
-                acked={p.acked}
-                onClick={() => onAck(p.itemKey, p.fingerprint)}
-              />
-              <TaskButton
-                tab={kind === 'SPA' ? 'spa' : 'pt'}
-                itemKey={p.itemKey}
-                fingerprint={p.fingerprint}
-                subject={{
-                  kind: 'performer',
-                  tab: kind === 'SPA' ? 'spa' : 'pt',
-                  from,
-                  to,
-                  performerName: p.performerName,
-                  count: p.count,
-                  redCount: p.redCount,
-                }}
-                date={from === to ? from : undefined}
-                performerUserId={p.performerUserId}
-                link={links.get(p.itemKey)}
-                onCreated={onTask}
-              />
-            </div>
-          </li>
-        ))}
+                <div>
+                  <p className="font-medium">
+                    {open ? '▾ ' : '▸ '}
+                    {p.performerName}
+                  </p>
+                  {p.approximate ? (
+                    <p className="text-xs text-amber-300">приблизительно</p>
+                  ) : null}
+                  <p className="text-xs text-slate-500">
+                    {p.sessions.length}{' '}
+                    {p.sessions.length === 1
+                      ? 'занятие'
+                      : p.sessions.length < 5
+                        ? 'занятия'
+                        : 'занятий'}
+                  </p>
+                </div>
+                <span className="text-xl font-semibold text-emerald-400">
+                  {p.count}
+                  {p.redCount ? (
+                    <span className="ml-1 text-sm text-red-400">
+                      /{p.redCount}
+                    </span>
+                  ) : null}
+                </span>
+              </button>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                <AckButton
+                  acked={p.acked}
+                  onClick={() => onAck(p.itemKey, p.fingerprint)}
+                />
+                <TaskButton
+                  tab={kind === 'SPA' ? 'spa' : 'pt'}
+                  itemKey={p.itemKey}
+                  fingerprint={p.fingerprint}
+                  subject={{
+                    kind: 'performer',
+                    tab: kind === 'SPA' ? 'spa' : 'pt',
+                    from,
+                    to,
+                    performerName: p.performerName,
+                    count: p.count,
+                    redCount: p.redCount,
+                  }}
+                  date={from === to ? from : undefined}
+                  performerUserId={p.performerUserId}
+                  link={links.get(p.itemKey)}
+                  onCreated={onTask}
+                />
+                <Link
+                  className="text-xs text-slate-500 underline-offset-2 hover:text-emerald-400 hover:underline"
+                  href={performerHref(
+                    kind,
+                    'EXPIRING_PACKAGE',
+                    p.performerUserId,
+                    from,
+                    to,
+                  )}
+                >
+                  Очередь
+                </Link>
+              </div>
+              {open ? (
+                <ul className="space-y-1.5 border-t border-slate-800 pt-2 text-xs text-slate-400">
+                  {p.sessions.map((s) => (
+                    <li
+                      key={s.sessionKey}
+                      className="flex flex-wrap items-baseline justify-between gap-2"
+                    >
+                      <Link
+                        className="text-slate-300 hover:text-emerald-400"
+                        href={`/super-admin/review-queue?sessionKey=${encodeURIComponent(s.sessionKey)}`}
+                      >
+                        {new Date(s.startAt).toLocaleString('ru-RU')} · {s.title}
+                        {s.clientNames.length
+                          ? ` · ${s.clientNames.join(', ')}`
+                          : ''}
+                        {s.approximate ? ' ≈' : ''}
+                      </Link>
+                      <span className="shrink-0">
+                        {s.writeOffCount}
+                        {s.redCount ? (
+                          <span className="text-red-400">/{s.redCount}</span>
+                        ) : null}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </li>
+          );
+        })}
         {data.performers.length === 0 ? (
           <p className="text-sm text-emerald-400">Очередь пуста.</p>
         ) : null}
@@ -1213,72 +1243,105 @@ function GroupTab({
   links: TaskLinks;
   onTask: () => void;
 }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-400">
-        Записи, добавленные после окончания занятия. Всего поздних: {data.lateAddTotal}.
+        Записи, добавленные после окончания занятия. Всего поздних:{' '}
+        {data.lateAddTotal}.
       </p>
       <ul className="space-y-2">
-        {data.performers.map((p) => (
-          <li key={p.performerId} className="card space-y-2 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <p className="font-medium">{p.performerName}</p>
-              <Link
-                className="text-xl font-semibold text-emerald-400"
-                href={performerHref('GROUP', 'LATE_ADD', p.performerUserId, from, to)}
+        {data.performers.map((p) => {
+          const open = openId === p.performerId;
+          return (
+            <li key={p.performerId} className="card space-y-2 p-3">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-2 text-left"
+                onClick={() => setOpenId(open ? null : p.performerId)}
               >
-                {p.lateAddCount}
+                <div>
+                  <p className="font-medium">
+                    {open ? '▾ ' : '▸ '}
+                    {p.performerName}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {p.sessions.length}{' '}
+                    {p.sessions.length === 1
+                      ? 'занятие'
+                      : p.sessions.length < 5
+                        ? 'занятия'
+                        : 'занятий'}
+                  </p>
+                </div>
+                <span className="text-xl font-semibold text-emerald-400">
+                  {p.lateAddCount}
+                </span>
+              </button>
+              <Link
+                className="text-xs text-slate-500 underline-offset-2 hover:text-emerald-400 hover:underline"
+                href={performerHref(
+                  'GROUP',
+                  'LATE_ADD',
+                  p.performerUserId,
+                  from,
+                  to,
+                )}
+              >
+                Очередь
               </Link>
-            </div>
-            <ul className="space-y-2 text-xs text-slate-400">
-              {p.sessions.map((s) => (
-                <li
-                  key={s.sessionKey}
-                  className="space-y-1 border-t border-slate-800 pt-2 first:border-0 first:pt-0"
-                >
-                  <div className="flex justify-between gap-2">
-                    <Link
-                      className="text-slate-300 hover:text-emerald-400"
-                      href={`/super-admin/review-queue?sessionKey=${encodeURIComponent(s.sessionKey)}`}
-                    >
-                      {new Date(s.startAt).toLocaleString('ru-RU')} · {s.title}
-                    </Link>
-                    <span>
-                      старт {s.bookedAtStart} → факт {s.confirmed} · +{s.lateAdds}
-                      {s.duringAdds ? ` · во время ${s.duringAdds}` : ''}
-                      {s.approximate ? ' ≈' : ''}
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <AckButton
-                      acked={s.acked}
-                      onClick={() => onAck(s.itemKey, s.fingerprint)}
-                    />
-                    <TaskButton
-                      tab="gp"
-                      itemKey={s.itemKey}
-                      fingerprint={s.fingerprint}
-                      subject={{
-                        kind: 'session',
-                        at: s.startAt,
-                        title: s.title,
-                        performerName: p.performerName,
-                        lateAdds: s.lateAdds,
-                        bookedAtStart: s.bookedAtStart,
-                        confirmed: s.confirmed,
-                      }}
-                      date={discrepancyClubDay(s.startAt)}
-                      at={s.startAt}
-                      performerUserId={p.performerUserId}
-                      link={links.get(s.itemKey)}
-                      onCreated={onTask}
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </li>
-        ))}
+              {open ? (
+                <ul className="space-y-2 border-t border-slate-800 pt-2 text-xs text-slate-400">
+                  {p.sessions.map((s) => (
+                    <li key={s.sessionKey} className="space-y-1">
+                      <div className="flex justify-between gap-2">
+                        <Link
+                          className="text-slate-300 hover:text-emerald-400"
+                          href={`/super-admin/review-queue?sessionKey=${encodeURIComponent(s.sessionKey)}`}
+                        >
+                          {new Date(s.startAt).toLocaleString('ru-RU')} ·{' '}
+                          {s.title}
+                        </Link>
+                        <span>
+                          старт {s.bookedAtStart} → факт {s.confirmed} · +
+                          {s.lateAdds}
+                          {s.duringAdds ? ` · во время ${s.duringAdds}` : ''}
+                          {s.approximate ? ' ≈' : ''}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                        <AckButton
+                          acked={s.acked}
+                          onClick={() => onAck(s.itemKey, s.fingerprint)}
+                        />
+                        <TaskButton
+                          tab="gp"
+                          itemKey={s.itemKey}
+                          fingerprint={s.fingerprint}
+                          subject={{
+                            kind: 'session',
+                            at: s.startAt,
+                            title: s.title,
+                            performerName: p.performerName,
+                            lateAdds: s.lateAdds,
+                            bookedAtStart: s.bookedAtStart,
+                            confirmed: s.confirmed,
+                          }}
+                          date={discrepancyClubDay(s.startAt)}
+                          at={s.startAt}
+                          performerUserId={p.performerUserId}
+                          link={links.get(s.itemKey)}
+                          onCreated={onTask}
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </li>
+          );
+        })}
         {data.performers.length === 0 ? (
           <p className="text-sm text-emerald-400">Поздних добавлений нет.</p>
         ) : null}

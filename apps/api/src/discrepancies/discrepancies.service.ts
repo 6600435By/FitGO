@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  DISCREPANCY_CHEQUE_MATCH_ENABLED,
   DISCREPANCY_SEGMENT_TITLES,
   DISCREPANCY_SALES_MATCH_WINDOW_MIN,
   type DiscrepancyGroupResponse,
@@ -13,6 +14,7 @@ import {
   type DiscrepancySegmentKey,
   type DiscrepancySegmentProduct,
   type DiscrepancySpaPtResponse,
+  type DiscrepancySpaPtSessionRow,
   type DiscrepancySummary,
   type DiscrepancyTab,
   type DiscrepancyProductStatus,
@@ -99,7 +101,11 @@ export class DiscrepanciesService {
         segments.problems.guessed +
         segments.problems.conflict +
         segments.missingEmployees.length,
-      sales: sales.problemDays + sales.unmatchedKassa.length + sales.unmatchedOneC.length,
+      sales: DISCREPANCY_CHEQUE_MATCH_ENABLED
+        ? sales.problemDays +
+          sales.unmatchedKassa.length +
+          sales.unmatchedOneC.length
+        : sales.problemDays,
       spa: spa.total,
       gp: gp.lateAddTotal + gp.trustExceptions.length,
       pt: pt.total,
@@ -568,7 +574,9 @@ export class DiscrepanciesService {
         },
       }),
       this.prisma.webkassaSyncState.findUnique({ where: { clubId } }),
-      loadPayrollSegmentSets(this.config),
+      DISCREPANCY_CHEQUE_MATCH_ENABLED
+        ? loadPayrollSegmentSets(this.config)
+        : Promise.resolve(null),
     ]);
     // Only cheques accepted by the operator (Статус КЭД = OK) are real money.
     const receipts = allReceipts.filter(
@@ -648,199 +656,208 @@ export class DiscrepanciesService {
       })
       .filter((d) => opts.showAcked || !d.acked);
 
-    const windowMs = DISCREPANCY_SALES_MATCH_WINDOW_MIN * 60 * 1000;
+    // Cheque↔1C matching is temporarily off — day totals stay; skip the heavy
+    // subset search until the report is ready again.
     const unmatchedKassa: DiscrepancySalesResponse['unmatchedKassa'] = [];
     const unmatchedOneC: DiscrepancySalesResponse['unmatchedOneC'] = [];
-
-    // 1C splits one sale document into a row per nomenclature line (payment is
-    // prorated by line cost). The cheque covers the whole document, so rows of
-    // one document paid at one moment are glued back into a single tender.
-    const tenders = new Map<string, Tender>();
-    for (const r of revenue) {
-      const cash = Number(r.cash || 0);
-      const card = Number(r.card || 0);
-      if (cash <= 0 && card <= 0) continue;
-      const sign = r.operationType === 'refund' ? -1 : 1;
-      const at = tenderAt(r);
-      const docId = r.documentId?.trim() || null;
-      const key = `${docId || r.externalId}|${r.operationType}|${Math.floor(at.getTime() / 60000)}`;
-      let t = tenders.get(key);
-      if (!t) {
-        t = {
-          key,
-          documentId: docId,
-          externalId: r.externalId,
-          at,
-          cash: 0,
-          card: 0,
-          clientName: r.clientName?.trim() || null,
-          employees: [],
-          lines: new Map(),
-        };
-        tenders.set(key, t);
-      }
-      t.cash += sign * cash;
-      t.card += sign * card;
-      t.employees.push({ id: r.employeeExternalId, name: r.employeeName });
-      const name = r.productName?.trim() || '—';
-      const lineKey = (r.productExternalId?.trim() || name).toLowerCase();
-      const line = t.lines.get(lineKey);
-      if (line) line.amount += sign * (cash + card);
-      else {
-        t.lines.set(lineKey, {
-          productName: name,
-          segment: lineSegment(name, r.productExternalId, segments),
-          amount: sign * (cash + card),
-        });
-      }
-    }
-
-    const tenderList = [...tenders.values()].sort(
-      (a, b) => a.at.getTime() - b.at.getTime(),
-    );
-    const sortedReceipts = [...receipts].sort(
-      (a, b) => a.occurredAt.getTime() - b.occurredAt.getTime(),
-    );
-    const usedTender = new Set<string>();
-    const usedReceipt = new Set<string>();
     let mixedMatched = 0;
     let combinedMatched = 0;
-    const countMixed = (group: Tender[]) => {
-      const keys = new Set(group.flatMap((t) => [...t.lines.keys()]));
-      if (keys.size > 1) mixedMatched += 1;
-    };
-    const dt = (a: Date, b: Date) => Math.abs(a.getTime() - b.getTime());
+    let matchedCount = 0;
 
-    // 1) One cheque ↔ one 1C payment (whole document, all its lines).
-    for (const rec of sortedReceipts) {
-      const amount = receiptTotal(rec);
-      let best: Tender | null = null;
-      let bestDt = Infinity;
-      for (const t of tenderList) {
-        if (usedTender.has(t.key)) continue;
-        if (Math.abs(tenderTotal(t) - amount) > MONEY_EPS) continue;
-        const d = dt(t.at, rec.occurredAt);
-        if (d <= windowMs && d < bestDt) {
-          best = t;
-          bestDt = d;
+    if (DISCREPANCY_CHEQUE_MATCH_ENABLED) {
+      const windowMs = DISCREPANCY_SALES_MATCH_WINDOW_MIN * 60 * 1000;
+      // 1C splits one sale document into a row per nomenclature line (payment is
+      // prorated by line cost). The cheque covers the whole document, so rows of
+      // one document paid at one moment are glued back into a single tender.
+      const tenders = new Map<string, Tender>();
+      for (const r of revenue) {
+        const cash = Number(r.cash || 0);
+        const card = Number(r.card || 0);
+        if (cash <= 0 && card <= 0) continue;
+        const sign = r.operationType === 'refund' ? -1 : 1;
+        const at = tenderAt(r);
+        const docId = r.documentId?.trim() || null;
+        const key = `${docId || r.externalId}|${r.operationType}|${Math.floor(at.getTime() / 60000)}`;
+        let t = tenders.get(key);
+        if (!t) {
+          t = {
+            key,
+            documentId: docId,
+            externalId: r.externalId,
+            at,
+            cash: 0,
+            card: 0,
+            clientName: r.clientName?.trim() || null,
+            employees: [],
+            lines: new Map(),
+          };
+          tenders.set(key, t);
+        }
+        t.cash += sign * cash;
+        t.card += sign * card;
+        t.employees.push({ id: r.employeeExternalId, name: r.employeeName });
+        const name = r.productName?.trim() || '—';
+        const lineKey = (r.productExternalId?.trim() || name).toLowerCase();
+        const line = t.lines.get(lineKey);
+        if (line) line.amount += sign * (cash + card);
+        else {
+          t.lines.set(lineKey, {
+            productName: name,
+            segment: lineSegment(name, r.productExternalId, segments),
+            amount: sign * (cash + card),
+          });
         }
       }
-      if (best) {
-        usedTender.add(best.key);
+
+      const tenderList = [...tenders.values()].sort(
+        (a, b) => a.at.getTime() - b.at.getTime(),
+      );
+      const sortedReceipts = [...receipts].sort(
+        (a, b) => a.occurredAt.getTime() - b.occurredAt.getTime(),
+      );
+      const usedTender = new Set<string>();
+      const usedReceipt = new Set<string>();
+      const countMixed = (group: Tender[]) => {
+        const keys = new Set(group.flatMap((t) => [...t.lines.keys()]));
+        if (keys.size > 1) mixedMatched += 1;
+      };
+      const dt = (a: Date, b: Date) => Math.abs(a.getTime() - b.getTime());
+
+      // 1) One cheque ↔ one 1C payment (whole document, all its lines).
+      for (const rec of sortedReceipts) {
+        const amount = receiptTotal(rec);
+        let best: Tender | null = null;
+        let bestDt = Infinity;
+        for (const t of tenderList) {
+          if (usedTender.has(t.key)) continue;
+          if (Math.abs(tenderTotal(t) - amount) > MONEY_EPS) continue;
+          const d = dt(t.at, rec.occurredAt);
+          if (d <= windowMs && d < bestDt) {
+            best = t;
+            bestDt = d;
+          }
+        }
+        if (best) {
+          usedTender.add(best.key);
+          usedReceipt.add(rec.id);
+          countMixed([best]);
+        }
+      }
+
+      // 2) One cheque ↔ several 1C payments (sale split into documents).
+      for (const rec of sortedReceipts) {
+        if (usedReceipt.has(rec.id)) continue;
+        const pool = tenderList.filter(
+          (t) => !usedTender.has(t.key) && dt(t.at, rec.occurredAt) <= windowMs,
+        );
+        const subset = findSubset(pool, tenderTotal, receiptTotal(rec), (t) =>
+          dt(t.at, rec.occurredAt),
+        );
+        if (!subset) continue;
+        for (const t of subset) usedTender.add(t.key);
         usedReceipt.add(rec.id);
-        countMixed([best]);
+        combinedMatched += 1;
+        countMixed(subset);
       }
-    }
 
-    // 2) One cheque ↔ several 1C payments (sale split into documents, debt + new sale).
-    for (const rec of sortedReceipts) {
-      if (usedReceipt.has(rec.id)) continue;
-      const pool = tenderList.filter(
-        (t) => !usedTender.has(t.key) && dt(t.at, rec.occurredAt) <= windowMs,
-      );
-      const subset = findSubset(pool, tenderTotal, receiptTotal(rec), (t) =>
-        dt(t.at, rec.occurredAt),
-      );
-      if (!subset) continue;
-      for (const t of subset) usedTender.add(t.key);
-      usedReceipt.add(rec.id);
-      combinedMatched += 1;
-      countMixed(subset);
-    }
-
-    // 3) One 1C payment ↔ several cheques (cash and card punched separately).
-    for (const t of tenderList) {
-      if (usedTender.has(t.key)) continue;
-      const pool = sortedReceipts.filter(
-        (r) => !usedReceipt.has(r.id) && dt(r.occurredAt, t.at) <= windowMs,
-      );
-      const subset = findSubset(pool, receiptTotal, tenderTotal(t), (r) =>
-        dt(r.occurredAt, t.at),
-      );
-      if (!subset) continue;
-      for (const r of subset) usedReceipt.add(r.id);
-      usedTender.add(t.key);
-      combinedMatched += 1;
-      countMixed([t]);
-    }
-
-    const toLines = (t: Tender) =>
-      [...t.lines.values()].map((l) => ({ ...l, amount: round2(l.amount) }));
-
-    for (const rec of sortedReceipts) {
-      if (usedReceipt.has(rec.id) || !receiptMatchesEmp(rec)) continue;
-      const sign = receiptSign(rec);
-      const cash = sign * Number(rec.cash || 0);
-      const card = sign * Number(rec.cashless || 0);
-      const total = cash + card;
-      const itemKey = `kassa:${rec.receiptId}`;
-      const fp = fingerprint(itemKey, total, rec.occurredAt.toISOString());
-      const ack = acks.get(itemKey);
-      const acked = Boolean(ack && ack.fingerprint === fp);
-      if (acked && !opts.showAcked) continue;
-      let nearest: Tender | null = null;
-      let nearestDt = Infinity;
+      // 3) One 1C payment ↔ several cheques.
       for (const t of tenderList) {
         if (usedTender.has(t.key)) continue;
-        const d = dt(t.at, rec.occurredAt);
-        if (d <= windowMs * 3 && d < nearestDt) {
-          nearest = t;
-          nearestDt = d;
-        }
+        const pool = sortedReceipts.filter(
+          (r) => !usedReceipt.has(r.id) && dt(r.occurredAt, t.at) <= windowMs,
+        );
+        const subset = findSubset(pool, receiptTotal, tenderTotal(t), (r) =>
+          dt(r.occurredAt, t.at),
+        );
+        if (!subset) continue;
+        for (const r of subset) usedReceipt.add(r.id);
+        usedTender.add(t.key);
+        combinedMatched += 1;
+        countMixed([t]);
       }
-      unmatchedKassa.push({
-        itemKey,
-        fingerprint: fp,
-        receiptId: rec.receiptId,
-        occurredAt: rec.occurredAt.toISOString(),
-        amount: round2(total),
-        cash: round2(cash),
-        cashless: round2(card),
-        cashier: rec.cashier,
-        receiptType: rec.receiptType,
-        nearestOneC: nearest
-          ? {
-              documentId: nearest.documentId,
-              occurredAt: nearest.at.toISOString(),
-              amount: round2(tenderTotal(nearest)),
-              diff: round2(total - tenderTotal(nearest)),
-              lines: toLines(nearest),
-            }
-          : null,
-        acked,
-      });
-    }
 
-    for (const t of tenderList) {
-      if (usedTender.has(t.key)) continue;
-      if (!t.employees.some((e) => employeeMatches(e.id, e.name))) continue;
-      const total = tenderTotal(t);
-      const itemKey = `onec:${t.key}`;
-      const fp = fingerprint(itemKey, round2(total), t.at.toISOString());
-      const ack = acks.get(itemKey);
-      const acked = Boolean(ack && ack.fingerprint === fp);
-      if (acked && !opts.showAcked) continue;
-      const lines = toLines(t);
-      const employeeNames = [
-        ...new Set(
-          t.employees.map((e) => e.name?.trim()).filter((n): n is string => !!n),
-        ),
-      ];
-      unmatchedOneC.push({
-        itemKey,
-        fingerprint: fp,
-        externalId: t.externalId,
-        documentId: t.documentId,
-        occurredAt: t.at.toISOString(),
-        amount: round2(total),
-        cash: round2(t.cash),
-        card: round2(t.card),
-        productName: lines.map((l) => l.productName).join(' + '),
-        lines,
-        clientName: t.clientName,
-        employeeName: employeeNames.join(', ') || null,
-        acked,
-      });
+      const toLines = (t: Tender) =>
+        [...t.lines.values()].map((l) => ({ ...l, amount: round2(l.amount) }));
+
+      for (const rec of sortedReceipts) {
+        if (usedReceipt.has(rec.id) || !receiptMatchesEmp(rec)) continue;
+        const sign = receiptSign(rec);
+        const cash = sign * Number(rec.cash || 0);
+        const card = sign * Number(rec.cashless || 0);
+        const total = cash + card;
+        const itemKey = `kassa:${rec.receiptId}`;
+        const fp = fingerprint(itemKey, total, rec.occurredAt.toISOString());
+        const ack = acks.get(itemKey);
+        const acked = Boolean(ack && ack.fingerprint === fp);
+        if (acked && !opts.showAcked) continue;
+        let nearest: Tender | null = null;
+        let nearestDt = Infinity;
+        for (const t of tenderList) {
+          if (usedTender.has(t.key)) continue;
+          const d = dt(t.at, rec.occurredAt);
+          if (d <= windowMs * 3 && d < nearestDt) {
+            nearest = t;
+            nearestDt = d;
+          }
+        }
+        unmatchedKassa.push({
+          itemKey,
+          fingerprint: fp,
+          receiptId: rec.receiptId,
+          occurredAt: rec.occurredAt.toISOString(),
+          amount: round2(total),
+          cash: round2(cash),
+          cashless: round2(card),
+          cashier: rec.cashier,
+          receiptType: rec.receiptType,
+          nearestOneC: nearest
+            ? {
+                documentId: nearest.documentId,
+                occurredAt: nearest.at.toISOString(),
+                amount: round2(tenderTotal(nearest)),
+                diff: round2(total - tenderTotal(nearest)),
+                lines: toLines(nearest),
+              }
+            : null,
+          acked,
+        });
+      }
+
+      for (const t of tenderList) {
+        if (usedTender.has(t.key)) continue;
+        if (!t.employees.some((e) => employeeMatches(e.id, e.name))) continue;
+        const total = tenderTotal(t);
+        const itemKey = `onec:${t.key}`;
+        const fp = fingerprint(itemKey, round2(total), t.at.toISOString());
+        const ack = acks.get(itemKey);
+        const acked = Boolean(ack && ack.fingerprint === fp);
+        if (acked && !opts.showAcked) continue;
+        const lines = toLines(t);
+        const employeeNames = [
+          ...new Set(
+            t.employees
+              .map((e) => e.name?.trim())
+              .filter((n): n is string => !!n),
+          ),
+        ];
+        unmatchedOneC.push({
+          itemKey,
+          fingerprint: fp,
+          externalId: t.externalId,
+          documentId: t.documentId,
+          occurredAt: t.at.toISOString(),
+          amount: round2(total),
+          cash: round2(t.cash),
+          card: round2(t.card),
+          productName: lines.map((l) => l.productName).join(' + '),
+          lines,
+          clientName: t.clientName,
+          employeeName: employeeNames.join(', ') || null,
+          acked,
+        });
+      }
+
+      matchedCount = usedReceipt.size;
     }
 
     const employeesMap = new Map<string, { id: string; name: string; count: number }>();
@@ -878,7 +895,7 @@ export class DiscrepanciesService {
       oneCCashless: round2(oneCCashless),
       oneCPersonalAccount: round2(oneCPersonalAccount),
       problemDays,
-      matchedCount: usedReceipt.size,
+      matchedCount,
       mixedMatched,
       combinedMatched,
       webkassa: {
@@ -914,12 +931,18 @@ export class DiscrepanciesService {
         count: number;
         redCount: number;
         approximate: boolean;
+        sessions: Map<string, DiscrepancySpaPtSessionRow>;
       }
     >();
 
     const emp = opts.employee?.trim() || '';
     for (const session of sessions) {
       if (emp && performerKey(session) !== emp) continue;
+      const sessionKey = `1c:${session.externalId}`;
+      let sessionHits = 0;
+      let sessionRed = 0;
+      let sessionApprox = false;
+      const clientNames: string[] = [];
       for (const member of session.members) {
         const check = isExpiringPackageWriteOff(
           session,
@@ -927,22 +950,39 @@ export class DiscrepanciesService {
           membershipByClient,
         );
         if (!check.hit) continue;
-        const pid = performerKey(session);
-        let row = byPerformer.get(pid);
-        if (!row) {
-          row = {
-            performerId: pid,
-            performerName: session.employeeName?.trim() || pid,
-            count: 0,
-            redCount: 0,
-            approximate: false,
-          };
-          byPerformer.set(pid, row);
-        }
-        row.count += 1;
-        if (check.redReasons.length) row.redCount += 1;
-        if (check.approximate) row.approximate = true;
+        sessionHits += 1;
+        if (check.redReasons.length) sessionRed += 1;
+        if (check.approximate) sessionApprox = true;
+        const cn = member.clientName?.trim();
+        if (cn && !clientNames.includes(cn)) clientNames.push(cn);
       }
+      if (sessionHits === 0) continue;
+
+      const pid = performerKey(session);
+      let row = byPerformer.get(pid);
+      if (!row) {
+        row = {
+          performerId: pid,
+          performerName: session.employeeName?.trim() || pid,
+          count: 0,
+          redCount: 0,
+          approximate: false,
+          sessions: new Map(),
+        };
+        byPerformer.set(pid, row);
+      }
+      row.count += sessionHits;
+      row.redCount += sessionRed;
+      if (sessionApprox) row.approximate = true;
+      row.sessions.set(sessionKey, {
+        sessionKey,
+        startAt: session.startAt.toISOString(),
+        title: session.title || (kind === 'SPA' ? 'SPA' : 'ПТ'),
+        clientNames,
+        writeOffCount: sessionHits,
+        redCount: sessionRed,
+        approximate: sessionApprox,
+      });
     }
 
     const resolveUser = await this.performerUserResolver(clubId);
@@ -952,8 +992,16 @@ export class DiscrepanciesService {
         const itemKey = `perf:${p.performerId}:${period.from}:${period.to}`;
         const fp = fingerprint(itemKey, p.count, p.redCount);
         const ack = acks.get(itemKey);
+        const sessionList = [...p.sessions.values()].sort((a, b) =>
+          a.startAt.localeCompare(b.startAt),
+        );
         return {
-          ...p,
+          performerId: p.performerId,
+          performerName: p.performerName,
+          count: p.count,
+          redCount: p.redCount,
+          approximate: p.approximate,
+          sessions: sessionList,
           itemKey,
           fingerprint: fp,
           acked: Boolean(ack && ack.fingerprint === fp),
