@@ -11,6 +11,7 @@ import {
   parseMoneyToMinor,
 } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -294,24 +295,20 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
                 ))}
               </select>
             </label>
-            <label className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-              С
-              <input
-                type="date"
-                className="input mt-1 w-[9.5rem] py-1.5 text-sm"
-                value={periodFrom}
-                onChange={(e) => setPeriodFrom(e.target.value)}
-              />
-            </label>
-            <label className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-              По
-              <input
-                type="date"
-                className="input mt-1 w-[9.5rem] py-1.5 text-sm"
-                value={periodTo}
-                onChange={(e) => setPeriodTo(e.target.value)}
-              />
-            </label>
+            <DateField
+              label="С"
+              value={periodFrom}
+              onChange={setPeriodFrom}
+              className="w-[9.5rem]"
+              inputClassName="text-sm"
+            />
+            <DateField
+              label="По"
+              value={periodTo}
+              onChange={setPeriodTo}
+              className="w-[9.5rem]"
+              inputClassName="text-sm"
+            />
             <label className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
               Сотрудник
               <select

@@ -10,7 +10,7 @@ import type {
 } from '@fitgo/shared-types';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import { DateField } from '@/components/admin-sales/date-field';
+import { DateField } from '@/components/ui/date-field';
 
 const SYSTEM_EMPLOYEE_ID = '__1c__';
 

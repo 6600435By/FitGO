@@ -5,6 +5,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { X } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { dateKey } from './schedule-grid';
@@ -164,11 +165,10 @@ export function WorkScheduleSheet({
 
         <div className="card space-y-3">
           <p className="font-medium">До или после дежурства</p>
-          <input
-            type="date"
+          <DateField
+            label="Дата"
             value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="input"
+            onChange={setSelectedDate}
           />
           {dutiesForDate.length === 0 ? (
             <p className="text-sm text-slate-400">

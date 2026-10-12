@@ -2,8 +2,9 @@
 
 import { addDays, format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { DateField } from '@/components/ui/date-field';
 import type { ScheduleView } from './schedule-grid';
-import { dateKey, formatDateTitle, shiftDateKey } from './schedule-grid';
+import { dateKey, formatDateTitle } from './schedule-grid';
 
 const VIEW_LABELS: Record<ScheduleView, string> = {
   day: 'День',
@@ -63,14 +64,11 @@ export function ScheduleToolbar({
             </button>
           </div>
 
-          <input
-            type="date"
+          <DateField
             value={dateStr}
-            onChange={(e) => {
-              if (!e.target.value) return;
-              onDateChange(new Date(`${e.target.value}T12:00:00`));
-            }}
-            className="input min-h-[44px] w-full sm:w-auto"
+            onChange={(v) => onDateChange(new Date(`${v}T12:00:00`))}
+            className="w-full sm:w-auto"
+            inputClassName="min-h-[44px]"
           />
 
           <div className="flex rounded-xl border border-slate-700 p-0.5">

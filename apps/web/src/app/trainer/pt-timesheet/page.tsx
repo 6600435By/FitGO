@@ -6,6 +6,7 @@ import type {
 } from '@fitgo/shared-types';
 import { clientIssueLabel } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -95,15 +96,12 @@ export default function TrainerPtTimesheetPage() {
         </p>
       </header>
 
-      <label className="block text-xs uppercase text-slate-500">
-        Дата
-        <input
-          type="date"
-          className="input mt-1 w-full sm:w-auto"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-        />
-      </label>
+      <DateField
+        label="Дата"
+        value={date}
+        onChange={setDate}
+        className="w-full sm:w-auto"
+      />
 
       {message && (
         <p className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-200">

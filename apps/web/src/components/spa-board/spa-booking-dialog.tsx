@@ -2,6 +2,7 @@
 
 import type { SpaService } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -368,15 +369,11 @@ export function SpaBookingDialog({
         <div className="space-y-1">
           <p className="text-sm text-slate-400">Дата и время начала</p>
           <div className="grid grid-cols-2 gap-2">
-            <label className="block space-y-1 text-sm">
-              <span className="text-[11px] text-slate-500">Дата</span>
-              <input
-                type="date"
-                className="input date-field"
-                value={datePart}
-                onChange={(e) => setDatePart(e.target.value)}
-              />
-            </label>
+            <DateField
+              label="Дата"
+              value={datePart}
+              onChange={setDatePart}
+            />
             <label className="block space-y-1 text-sm">
               <span className="text-[11px] text-slate-500">Время</span>
               <input
@@ -460,17 +457,11 @@ export function SpaBookingDialog({
                   ))}
                 </ul>
                 <div className="flex flex-wrap items-end gap-2">
-                  <label className="block space-y-1 text-sm">
-                    <span className="text-[11px] text-slate-500">
-                      Добавить дату
-                    </span>
-                    <input
-                      type="date"
-                      className="input date-field"
-                      value={extraDate}
-                      onChange={(e) => setExtraDate(e.target.value)}
-                    />
-                  </label>
+                  <DateField
+                    label="Добавить дату"
+                    value={extraDate}
+                    onChange={setExtraDate}
+                  />
                   <button
                     type="button"
                     className="btn-secondary text-xs"

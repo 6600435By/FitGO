@@ -2,6 +2,7 @@
 
 import type { SpecialistServiceDebt } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -169,37 +170,13 @@ export default function SpecialistDebtsPage() {
           </label>
         </fieldset>
         {mode === 'day' ? (
-          <label className="text-sm">
-            Дата
-            <input
-              type="date"
-              className="input ml-1"
-              value={day}
-              onChange={(e) => setDay(e.target.value)}
-            />
-          </label>
+          <DateField label="Дата" value={day} onChange={setDay} />
         ) : (
           <>
-            <label className="text-sm">
-              С
-              <input
-                type="date"
-                className="input ml-1"
-                value={from}
-                onChange={(e) => setFrom(e.target.value)}
-              />
-            </label>
-            <label className="text-sm">
-              По
-              <input
-                type="date"
-                className="input ml-1"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-              />
-            </label>
+            <DateField label="С" value={from} onChange={setFrom} />
+            <DateField label="По" value={to} onChange={setTo} />
             <span
-              className={`text-xs ${periodOk ? 'text-slate-400' : 'text-amber-300'}`}
+              className={`self-end pb-2 text-xs ${periodOk ? 'text-slate-400' : 'text-amber-300'}`}
             >
               {periodDays > 0 ? `${periodDays} дн.` : '—'}
             </span>

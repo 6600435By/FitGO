@@ -2,6 +2,7 @@
 
 import type { StaffShiftDto } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 
 type StaffOption = { id: string; name: string };
 
@@ -71,26 +72,13 @@ function FillPeriodForm({
     <div className="mt-2 space-y-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
       <p className="text-xs text-slate-300">Период и дни недели</p>
       <div className="grid grid-cols-2 gap-2">
-        <label className="text-xs text-slate-400">
-          С
-          <input
-            type="date"
-            className="input mt-1 w-full"
-            value={from}
-            disabled={busy}
-            onChange={(e) => setFrom(e.target.value)}
-          />
-        </label>
-        <label className="text-xs text-slate-400">
-          По
-          <input
-            type="date"
-            className="input mt-1 w-full"
-            value={to}
-            disabled={busy}
-            onChange={(e) => setTo(e.target.value)}
-          />
-        </label>
+        <DateField
+          label="С"
+          value={from}
+          disabled={busy}
+          onChange={setFrom}
+        />
+        <DateField label="По" value={to} disabled={busy} onChange={setTo} />
       </div>
       <div className="flex flex-wrap gap-1">
         {WEEKDAY_BITS.map((w) => {

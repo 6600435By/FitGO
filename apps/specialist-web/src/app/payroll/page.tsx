@@ -2,6 +2,7 @@
 
 import type { PayrollPeriodSummary } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
+import { DateField } from '@/components/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -53,24 +54,8 @@ export default function PayrollPage() {
       <h1 className="font-display text-2xl">Моя ЗП</h1>
 
       <section className="panel flex flex-wrap items-end gap-3">
-        <label className="space-y-1 text-sm">
-          <span style={{ color: 'var(--muted)' }}>С</span>
-          <input
-            type="date"
-            className="field"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-          />
-        </label>
-        <label className="space-y-1 text-sm">
-          <span style={{ color: 'var(--muted)' }}>По</span>
-          <input
-            type="date"
-            className="field"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-          />
-        </label>
+        <DateField label="С" value={from} onChange={setFrom} />
+        <DateField label="По" value={to} onChange={setTo} />
         <button
           type="button"
           className="btn-primary"

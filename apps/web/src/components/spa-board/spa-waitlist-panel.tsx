@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { toDatetimeLocalValue } from '@/components/spa-board/spa-booking-dialog';
+import { DateField } from '@/components/ui/date-field';
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString('ru-RU', {
@@ -365,21 +366,17 @@ function SpaWaitlistAddDialog({
         </label>
 
         <div className="grid grid-cols-2 gap-2">
-          <label className="block space-y-1 text-sm">
-            <span className="text-[11px] text-slate-500">Дата</span>
-            <input
-              type="date"
-              className="input date-field"
-              value={datePart}
-              onChange={(e) => {
-                const time = timePart || '10:00';
-                setForm((f) => ({
-                  ...f,
-                  startAt: e.target.value ? `${e.target.value}T${time}` : '',
-                }));
-              }}
-            />
-          </label>
+          <DateField
+            label="Дата"
+            value={datePart}
+            onChange={(v) => {
+              const time = timePart || '10:00';
+              setForm((f) => ({
+                ...f,
+                startAt: v ? `${v}T${time}` : '',
+              }));
+            }}
+          />
           <label className="block space-y-1 text-sm">
             <span className="text-[11px] text-slate-500">Время</span>
             <input

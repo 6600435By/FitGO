@@ -15,6 +15,7 @@ import {
   readPayVisibility,
 } from '@/components/analytics/pay-visibility-toggle';
 import { StaffAnalyticsTable } from '@/components/analytics/staff-analytics-table';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -291,24 +292,16 @@ function AnalyticsInner() {
       </div>
 
       <div className="card flex flex-wrap items-end gap-3">
-        <label className="text-sm">
-          <span className="mb-1 block text-slate-400">С</span>
-          <input
-            type="date"
-            className="input"
-            value={from}
-            onChange={(e) => setParams({ from: e.target.value })}
-          />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-slate-400">По</span>
-          <input
-            type="date"
-            className="input"
-            value={to}
-            onChange={(e) => setParams({ to: e.target.value })}
-          />
-        </label>
+        <DateField
+          label="С"
+          value={from}
+          onChange={(v) => setParams({ from: v })}
+        />
+        <DateField
+          label="По"
+          value={to}
+          onChange={(v) => setParams({ to: v })}
+        />
         {tab === 'club' && (
           <label className="text-sm">
             <span className="mb-1 block text-slate-400">Сравнение</span>

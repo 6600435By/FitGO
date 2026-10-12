@@ -4,6 +4,7 @@ import type { PayrollSelfOverview, WorkUnit } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 import { MotivationBreakdownList } from '@/components/payroll/motivation-breakdown-list';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -163,24 +164,18 @@ export function SelfPayrollView({ role }: Props) {
           </div>
         ) : null}
         <div className="grid grid-cols-2 gap-2">
-          <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-            С
-            <input
-              type="date"
-              className="input mt-1 w-full py-1.5 text-sm"
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-            />
-          </label>
-          <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
-            По
-            <input
-              type="date"
-              className="input mt-1 w-full py-1.5 text-sm"
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-            />
-          </label>
+          <DateField
+            label="С"
+            value={from}
+            onChange={setFrom}
+            inputClassName="text-sm"
+          />
+          <DateField
+            label="По"
+            value={to}
+            onChange={setTo}
+            inputClassName="text-sm"
+          />
         </div>
         <div
           className={

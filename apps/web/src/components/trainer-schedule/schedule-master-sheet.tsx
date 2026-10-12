@@ -5,6 +5,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { X } from 'lucide-react';
 import { useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { WorkScheduleTemplateEditor } from './work-schedule-template-editor';
@@ -169,11 +170,10 @@ export function ScheduleMasterSheet({
 
             <div className="card space-y-3">
               <p className="font-medium">Добавить открытый слот</p>
-              <input
-                type="date"
+              <DateField
+                label="Дата"
                 value={newDate}
-                onChange={(e) => setNewDate(e.target.value)}
-                className="input"
+                onChange={setNewDate}
               />
               <div className="grid grid-cols-2 gap-2">
                 <input

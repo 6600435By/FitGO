@@ -3,6 +3,7 @@
 import type { SpaBoardBooking, SpaService } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
 import { toDatetimeLocalValue } from '@/components/spa-board/spa-booking-dialog';
+import { DateField } from '@/components/ui/date-field';
 
 function formatPrice(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)} ${currency}`;
@@ -257,15 +258,11 @@ export function SpaBookingEditDialog({
         <div className="space-y-1">
           <p className="text-sm text-slate-400">Дата и время начала</p>
           <div className="grid grid-cols-2 gap-2">
-            <label className="block space-y-1 text-sm">
-              <span className="text-[11px] text-slate-500">Дата</span>
-              <input
-                type="date"
-                className="input date-field"
-                value={datePart}
-                onChange={(e) => setDatePart(e.target.value)}
-              />
-            </label>
+            <DateField
+              label="Дата"
+              value={datePart}
+              onChange={setDatePart}
+            />
             <label className="block space-y-1 text-sm">
               <span className="text-[11px] text-slate-500">Время</span>
               <input

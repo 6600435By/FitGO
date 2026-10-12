@@ -6,6 +6,7 @@ import {
   CLIENT_PRIMARY_GOAL_LABELS,
   type ClientPrimaryGoal,
 } from '@fitgo/shared-types';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -104,16 +105,12 @@ export default function ProfileCompletePage() {
             <option value="OTHER">Другой</option>
           </select>
         </div>
-        <div>
-          <label className="mb-1 block text-sm text-slate-400">Дата рождения</label>
-          <input
-            className="input"
-            type="date"
-            required
-            value={form.dateOfBirth}
-            onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
-          />
-        </div>
+        <DateField
+          label="Дата рождения"
+          required
+          value={form.dateOfBirth}
+          onChange={(v) => setForm({ ...form, dateOfBirth: v })}
+        />
 
         <div>
           <label className="mb-2 block text-sm text-slate-400">Главная цель</label>

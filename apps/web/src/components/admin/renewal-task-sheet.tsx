@@ -8,6 +8,7 @@ import {
   type RenewalStage,
 } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDate, formatDateTime } from '@/lib/utils';
@@ -264,11 +265,11 @@ export function RenewalTaskSheet({
                   ) : null}
                 </div>
                 <div className="flex gap-2">
-                  <input
-                    type="date"
-                    className="input date-field flex-1 text-sm"
+                  <DateField
                     value={nextActionAt}
-                    onChange={(e) => setNextActionAt(e.target.value)}
+                    onChange={setNextActionAt}
+                    className="flex-1"
+                    inputClassName="text-sm"
                   />
                   <button
                     type="button"

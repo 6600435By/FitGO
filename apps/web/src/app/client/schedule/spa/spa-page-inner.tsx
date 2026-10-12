@@ -8,6 +8,7 @@ import type {
 } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -593,17 +594,15 @@ export default function ClientSpaSchedulePage() {
               <div className="flex items-center justify-between gap-2">
                 <h3 className="font-medium">Дата и время</h3>
                 {availableDays.length > 0 && (
-                  <label className="relative inline-flex cursor-pointer items-center gap-1.5 text-sm text-fitgo-300">
-                    <span>Перейти к дате</span>
-                    <input
-                      type="date"
-                      className="absolute inset-0 cursor-pointer opacity-0"
-                      min={dateMin}
-                      max={dateMax}
-                      value={selectedDate ?? dateMin}
-                      onChange={(e) => jumpToDate(e.target.value)}
-                    />
-                  </label>
+                  <DateField
+                    value={selectedDate ?? dateMin}
+                    min={dateMin}
+                    max={dateMax}
+                    onChange={jumpToDate}
+                    className="w-[10.5rem]"
+                    inputClassName="text-sm"
+                    align="right"
+                  />
                 )}
               </div>
 
@@ -635,16 +634,12 @@ export default function ClientSpaSchedulePage() {
                         Можно встать в лист ожидания на нужное время
                       </p>
                       <div className="flex flex-wrap items-end gap-2">
-                        <label className="block space-y-1 text-sm">
-                          <span className="text-slate-500">Дата</span>
-                          <input
-                            type="date"
-                            className="input date-field"
-                            min={todayKey()}
-                            value={selectedDate ?? todayKey()}
-                            onChange={(e) => setSelectedDate(e.target.value)}
-                          />
-                        </label>
+                        <DateField
+                          label="Дата"
+                          value={selectedDate ?? todayKey()}
+                          min={todayKey()}
+                          onChange={setSelectedDate}
+                        />
                         <label className="block space-y-1 text-sm">
                           <span className="text-slate-500">Время</span>
                           <input

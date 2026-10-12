@@ -24,6 +24,7 @@ import {
   type PreferredModality,
   type PreferredTimeOfDay,
 } from '@fitgo/shared-types';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -435,11 +436,10 @@ export default function ClientProfilePage() {
             <option value="FEMALE">Женский</option>
             <option value="OTHER">Другой</option>
           </select>
-          <input
-            className="input"
-            type="date"
+          <DateField
+            label="Дата рождения"
             value={profile.dateOfBirth ?? ''}
-            onChange={(e) => setProfile({ ...profile, dateOfBirth: e.target.value })}
+            onChange={(v) => setProfile({ ...profile, dateOfBirth: v })}
           />
           <button type="button" onClick={saveProfile} className="btn-primary w-full">
             Сохранить

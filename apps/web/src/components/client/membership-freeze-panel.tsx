@@ -3,6 +3,7 @@
 import { MembershipStatus, type Membership } from '@fitgo/shared-types';
 import { ChevronDown } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDate } from '@/lib/utils';
@@ -213,16 +214,12 @@ export function MembershipFreezePanel({ membership, onFrozen }: Props) {
       <FreezeBudgetLine membership={membership} />
 
       <div className="grid grid-cols-2 gap-2">
-        <label className="block text-xs text-slate-400">
-          С
-          <input
-            type="date"
-            min={todayIso()}
-            value={fromDate}
-            onChange={(e) => setFromDate(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-sm text-white"
-          />
-        </label>
+        <DateField
+          label="С"
+          value={fromDate}
+          min={todayIso()}
+          onChange={setFromDate}
+        />
         <label className="block text-xs text-slate-400">
           На срок (дни)
           <input

@@ -6,6 +6,7 @@ import {
   DEFAULT_CLUB_WORKING_HOURS,
 } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -206,12 +207,12 @@ export default function SuperAdminClubSettingsPage() {
           В праздник клуб и лимит часов подразделения как в выходной: 09:00–21:00.
           Перенесённые дни добавьте вручную.
         </p>
-        <div className="flex gap-2">
-          <input
-            type="date"
-            className="input"
+        <div className="flex items-end gap-2">
+          <DateField
+            label="Дата"
             value={holidayInput}
-            onChange={(e) => setHolidayInput(e.target.value)}
+            onChange={setHolidayInput}
+            className="min-w-0 flex-1"
           />
           <button
             type="button"

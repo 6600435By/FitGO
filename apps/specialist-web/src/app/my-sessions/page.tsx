@@ -6,6 +6,7 @@ import {
   type BookingControlListItem,
 } from '@fitgo/shared-types';
 import { useCallback, useEffect, useState } from 'react';
+import { DateField } from '@/components/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -74,20 +75,10 @@ export default function MySessionsPage() {
       <p className="text-sm opacity-70">
         SPA из 1С. Замечание отправит запись на проверку администратору.
       </p>
-      <div className="flex flex-wrap gap-2">
-        <input
-          type="date"
-          className="field"
-          value={from}
-          onChange={(e) => setFrom(e.target.value)}
-        />
-        <input
-          type="date"
-          className="field"
-          value={to}
-          onChange={(e) => setTo(e.target.value)}
-        />
-        <button type="button" className="btn-secondary" onClick={load}>
+      <div className="flex flex-wrap items-end gap-2">
+        <DateField label="С" value={from} onChange={setFrom} />
+        <DateField label="По" value={to} onChange={setTo} />
+        <button type="button" className="btn-ghost" onClick={load}>
           Обновить
         </button>
       </div>

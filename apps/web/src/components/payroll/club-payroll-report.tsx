@@ -2,6 +2,7 @@
 
 import type { ClubPayrollReport, StaffPaySummary } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -227,24 +228,20 @@ export function ClubPayrollReportPanel({
           </div>
 
           <div className="flex flex-wrap items-end gap-2">
-            <label className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-              С
-              <input
-                type="date"
-                className="input mt-1 w-[9.5rem] py-1.5 text-sm"
-                value={from}
-                onChange={(e) => setFrom(e.target.value)}
-              />
-            </label>
-            <label className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-              По
-              <input
-                type="date"
-                className="input mt-1 w-[9.5rem] py-1.5 text-sm"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-              />
-            </label>
+            <DateField
+              label="С"
+              value={from}
+              onChange={setFrom}
+              className="w-[9.5rem]"
+              inputClassName="text-sm"
+            />
+            <DateField
+              label="По"
+              value={to}
+              onChange={setTo}
+              className="w-[9.5rem]"
+              inputClassName="text-sm"
+            />
             <button
               type="button"
               className="btn-primary px-3 py-1.5 text-sm"

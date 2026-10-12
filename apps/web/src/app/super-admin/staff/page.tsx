@@ -4,6 +4,7 @@ import type { StaffMember, StaffPaySummary } from '@fitgo/shared-types';
 import { UserRole } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -378,15 +379,11 @@ export default function SuperAdminStaffPage() {
               }
             />
           </label>
-          <label className="block text-xs text-slate-400">
-            Дата рождения
-            <input
-              className="input mt-1 w-full"
-              type="date"
-              value={form.dateOfBirth}
-              onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
-            />
-          </label>
+          <DateField
+            label="Дата рождения"
+            value={form.dateOfBirth}
+            onChange={(v) => setForm({ ...form, dateOfBirth: v })}
+          />
           <label className="block text-xs text-slate-400">
             Телефон
             <input

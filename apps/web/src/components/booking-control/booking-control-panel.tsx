@@ -9,6 +9,7 @@ import {
   type BookingControlStatus,
 } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { formatDateTime } from '@/lib/utils';
 
 export type BookingControlPerformerOption = {
@@ -802,24 +803,20 @@ export function BookingControlPanel({
 
       <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
         <div className="grid grid-cols-2 items-end gap-2 md:grid-cols-4">
-          <label className="min-w-0 text-[11px] text-slate-500">
-            С
-            <input
-              type="date"
-              className="input date-field mt-1 block w-full min-w-0 text-sm"
-              value={from}
-              onChange={(e) => setFrom(e.target.value)}
-            />
-          </label>
-          <label className="min-w-0 text-[11px] text-slate-500">
-            По
-            <input
-              type="date"
-              className="input date-field mt-1 block w-full min-w-0 text-sm"
-              value={to}
-              onChange={(e) => setTo(e.target.value)}
-            />
-          </label>
+          <DateField
+            label="С"
+            value={from}
+            onChange={setFrom}
+            className="min-w-0"
+            inputClassName="text-sm"
+          />
+          <DateField
+            label="По"
+            value={to}
+            onChange={setTo}
+            className="min-w-0"
+            inputClassName="text-sm"
+          />
           {!fixedKind && (
             <label className="min-w-0 text-[11px] text-slate-500">
               Вид

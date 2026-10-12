@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api, type GroupClassSessionDto } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -123,25 +124,9 @@ export default function TrainerGroupJournalPage() {
       </p>
       {message && <p className="text-sm text-amber-300">{message}</p>}
 
-      <div className="flex flex-wrap gap-2 items-end">
-        <label className="text-sm">
-          С
-          <input
-            type="date"
-            className="input ml-1"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-          />
-        </label>
-        <label className="text-sm">
-          По
-          <input
-            type="date"
-            className="input ml-1"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-          />
-        </label>
+      <div className="flex flex-wrap items-end gap-2">
+        <DateField label="С" value={from} onChange={setFrom} />
+        <DateField label="По" value={to} onChange={setTo} />
         <button type="button" className="btn-secondary" onClick={load}>
           Обновить
         </button>

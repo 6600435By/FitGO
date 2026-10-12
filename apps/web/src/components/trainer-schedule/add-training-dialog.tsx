@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -79,15 +80,7 @@ export function AddTrainingDialog({
               </select>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="mb-2 block text-sm text-slate-400">Дата</label>
-                <input
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="input"
-                />
-              </div>
+              <DateField label="Дата" value={date} onChange={setDate} />
               <div>
                 <label className="mb-2 block text-sm text-slate-400">Время</label>
                 <input

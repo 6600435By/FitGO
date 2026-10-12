@@ -6,6 +6,7 @@ import { ru } from 'date-fns/locale';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { ClubScheduleEvent } from '@fitgo/shared-types';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { createBookingControlApi } from '@/lib/booking-control-api';
@@ -178,16 +179,13 @@ export function ClubSchedulePage({
           >
             ‹
           </button>
-          <input
-            type="date"
-            className="input date-field text-sm"
+          <DateField
             value={day}
             min={minDay}
             max={maxDay}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v >= minDay && v <= maxDay) updateDay(v);
-            }}
+            onChange={updateDay}
+            className="w-[10.5rem]"
+            inputClassName="text-sm"
           />
           <button
             type="button"

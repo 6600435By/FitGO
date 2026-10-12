@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useEffect, useState } from 'react';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDate } from '@/lib/utils';
@@ -69,16 +70,12 @@ export default function AdminReportsPage() {
       <h2 className="text-xl font-semibold">Дневная статистика</h2>
 
       <form onSubmit={handleSubmit} className="card space-y-4">
-        <div>
-          <label className="mb-2 block text-sm text-slate-400">Дата</label>
-          <input
-            type="date"
-            className="input"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            required
-          />
-        </div>
+        <DateField
+          label="Дата"
+          value={date}
+          onChange={setDate}
+          required
+        />
         <div>
           <label className="mb-2 block text-sm text-slate-400">Выручка (BYN)</label>
           <input
