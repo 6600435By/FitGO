@@ -19,6 +19,7 @@ import {
   upsertSaleRows,
   type SalesSyncMode,
 } from './sales-sync-window';
+import { enrichGenericPaymentProducts } from './payment-basis-products';
 
 const RESOURCE_KEY = 'admin_sales';
 
@@ -289,6 +290,10 @@ export class AdminSalesSyncService {
     await upsertSaleRows(this.prisma, clubId, pending);
     const upserted = pending.length;
 
+    // Cash rows often land as «Оплата от клиента» before SaleTransaction exists.
+    // Re-resolve nomenclature now that sale lines for this window are loaded.
+    await this.enrichClubRevenueGenerics(clubId, fromStr, toStr);
+
     const windowStart = new Date(`${fromStr}T00:00:00.000Z`);
     const windowEnd = new Date(`${toStr}T23:59:59.999Z`);
     const existing = await this.prisma.saleTransaction.findMany({
@@ -330,6 +335,49 @@ export class AdminSalesSyncService {
       `Sales range club=${clubId} upserted=${upserted} deactivated=${deactivated} debtDropped=${debtDropped} window=${fromStr}..${toStr} days=${days.length}`,
     );
     return { upserted, deactivated, from: fromStr, to: toStr };
+  }
+
+  /** Map «Оплата от клиента» ClubRevenue rows onto SaleTransaction nomenclature. */
+  private async enrichClubRevenueGenerics(
+    clubId: string,
+    fromStr: string,
+    toStr: string,
+  ): Promise<void> {
+    const from = new Date(`${fromStr}T00:00:00.000Z`);
+    const to = new Date(`${toStr}T23:59:59.999Z`);
+    const rows = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        operationType: { in: ['payment', 'refund'] },
+        OR: [
+          { paidAt: { gte: from, lte: to } },
+          { occurredAt: { gte: from, lte: to } },
+        ],
+      },
+      select: {
+        id: true,
+        externalId: true,
+        documentId: true,
+        productName: true,
+        productExternalId: true,
+        productCode: true,
+        productGroupName: true,
+        saleType: true,
+      },
+      take: 5000,
+    });
+    if (!rows.length) return;
+    const updated = await enrichGenericPaymentProducts(
+      this.prisma,
+      clubId,
+      rows,
+    );
+    if (updated > 0) {
+      this.logger.log(
+        `Enriched ${updated} club-revenue payment labels from sale basis club=${clubId}`,
+      );
+    }
   }
 }
 

@@ -746,8 +746,8 @@ export class ClubRevenueService {
     from: Date,
     to: Date,
   ): Promise<void> {
-    // All payments/refunds in range: enrich decides which labels to replace
-    // (Оплата от клиента, «Продажа N от …», mismatched membership titles).
+    // All payments/refunds touching the window (paidAt or occurredAt).
+    // Enrich replaces «Оплата от клиента» / «Продажа N» via SaleTransaction.
     const candidates = await this.prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
@@ -755,7 +755,7 @@ export class ClubRevenueService {
         operationType: { in: ['payment', 'refund'] },
         OR: [
           { paidAt: { gte: from, lte: to } },
-          { paidAt: null, occurredAt: { gte: from, lte: to } },
+          { occurredAt: { gte: from, lte: to } },
         ],
       },
       select: {
@@ -774,6 +774,7 @@ export class ClubRevenueService {
       await enrichGenericPaymentProducts(this.prisma, clubId, candidates);
     }
   }
+
 
   /** Same «Выручка» total as the sales tab, without loading the line table. */
   async cashRevenueMinor(

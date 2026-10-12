@@ -10,7 +10,10 @@ import {
   parseClubWallClock,
 } from '../club-sync/moscow-time';
 import { isCollectibleClientDebt } from './club-revenue-debt';
-import { enrichGenericPaymentProducts } from './payment-basis-products';
+import {
+  enrichGenericPaymentProducts,
+  isGenericPaymentProduct,
+} from './payment-basis-products';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   applyChangeLog,
@@ -365,6 +368,11 @@ export class ClubRevenueSyncService {
       await enrichGenericPaymentProducts(this.prisma, clubId, rows);
     }
 
+    // BSL may change cash-key «основание» (membership UUID → sale UUID).
+    // New row lands with real nomenclature; old «Оплата от клиента» twin stays
+    // unless we drop placeholders that share documentId with a resolved payment.
+    await this.deactivateStaleGenericPaymentTwins(clubId, fromStr, toStr);
+
     // After payments: drop stale unpaid, keep residual debt until fully paid
     if (!options.skipDebt) {
       for (const baseId of paidBaseIds) {
@@ -464,6 +472,73 @@ export class ClubRevenueSyncService {
       `Club revenue range club=${clubId} upserted=${upserted} deactivated=${deactivated} unpaid=${unpaidExternalIds.size} debtSnapshot=${debtSnapshot} skipDebt=${!!options.skipDebt} window=${fromStr}..${toStr}`,
     );
     return { upserted, deactivated, from: fromStr, to: toStr };
+  }
+
+  /**
+   * After Analytics starts putting the sale UUID in the cash key, old rows still
+   * keyed by membership UUID keep productName «Оплата от клиента». Drop those
+   * when the same registrar already has a resolved payment in the window.
+   */
+  private async deactivateStaleGenericPaymentTwins(
+    clubId: string,
+    fromStr: string,
+    toStr: string,
+  ): Promise<void> {
+    const from = new Date(`${fromStr}T00:00:00.000Z`);
+    const to = new Date(`${toStr}T23:59:59.999Z`);
+    const rows = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        operationType: { in: ['payment', 'refund'] },
+        documentId: { not: null },
+        OR: [
+          { paidAt: { gte: from, lte: to } },
+          { occurredAt: { gte: from, lte: to } },
+        ],
+      },
+      select: {
+        id: true,
+        documentId: true,
+        productName: true,
+        paidAmount: true,
+      },
+      take: 8000,
+    });
+    const byDoc = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const doc = r.documentId?.trim();
+      if (!doc) continue;
+      const list = byDoc.get(doc) ?? [];
+      list.push(r);
+      byDoc.set(doc, list);
+    }
+    const kill: string[] = [];
+    for (const list of byDoc.values()) {
+      if (list.length < 2) continue;
+      const resolved = list.filter(
+        (r) => !isGenericPaymentProduct(r.productName),
+      );
+      if (!resolved.length) continue;
+      const resolvedAmts = new Set(
+        resolved.map((r) => Math.round((Number(r.paidAmount) || 0) * 100)),
+      );
+      for (const r of list) {
+        if (!isGenericPaymentProduct(r.productName)) continue;
+        const amt = Math.round((Number(r.paidAmount) || 0) * 100);
+        if (resolvedAmts.has(amt) || resolvedAmts.has(-amt)) {
+          kill.push(r.id);
+        }
+      }
+    }
+    if (!kill.length) return;
+    await this.prisma.clubRevenueEntry.updateMany({
+      where: { id: { in: kill } },
+      data: { isActive: false, syncedAt: new Date() },
+    });
+    this.logger.log(
+      `Deactivated ${kill.length} stale generic payment twin(s) club=${clubId}`,
+    );
   }
 }
 
