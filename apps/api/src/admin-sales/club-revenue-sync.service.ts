@@ -343,11 +343,12 @@ export class ClubRevenueSyncService {
         prev ? mergeRevenueRows(prev, mapped) : { externalId, ...mapped },
       );
     }
-    await upsertRevenueRows(this.prisma, clubId, [...pending.values()]);
+    const pendingRows = [...pending.values()];
+    await upsertRevenueRows(this.prisma, clubId, pendingRows);
     const upserted = pending.size;
 
     // Attach sale nomenclature to cash payments (placeholders / mismatched labels).
-    const genericPay = [...pending.values()].filter(
+    const genericPay = pendingRows.filter(
       (r) => r.operationType === 'payment' || r.operationType === 'refund',
     );
     if (genericPay.length) {
@@ -368,9 +369,10 @@ export class ClubRevenueSyncService {
       await enrichGenericPaymentProducts(this.prisma, clubId, rows);
     }
 
-    // BSL may change cash-key «основание» (membership UUID → sale UUID).
-    // New row lands with real nomenclature; old «Оплата от клиента» twin stays
-    // unless we drop placeholders that share documentId with a resolved payment.
+    // BSL may change cash-key «основание» (membership UUID → sale UUID):
+    // new key upserts with real SKU; old «Оплата от клиента» twin stays until
+    // we copy the name onto it and/or deactivate by registrar+amount.
+    await this.applyPendingNamesToGenericTwins(clubId, pendingRows);
     await this.deactivateStaleGenericPaymentTwins(clubId, fromStr, toStr);
 
     // After payments: drop stale unpaid, keep residual debt until fully paid
@@ -472,6 +474,83 @@ export class ClubRevenueSyncService {
       `Club revenue range club=${clubId} upserted=${upserted} deactivated=${deactivated} unpaid=${unpaidExternalIds.size} debtSnapshot=${debtSnapshot} skipDebt=${!!options.skipDebt} window=${fromStr}..${toStr}`,
     );
     return { upserted, deactivated, from: fromStr, to: toStr };
+  }
+
+  /**
+   * When Analytics cash key «основание» flips (membership → sale UUID), the new
+   * row has nomenclature while the old twin is still «Оплата от клиента».
+   * Copy SKU fields onto matching registrar+amount generics before we deactivate.
+   */
+  private async applyPendingNamesToGenericTwins(
+    clubId: string,
+    pending: Array<{
+      documentId: string | null;
+      operationType: string;
+      productName: string | null;
+      productExternalId: string | null;
+      productCode: string | null;
+      productGroupName: string | null;
+      saleType: string | null;
+      paidAmount: number;
+    }>,
+  ): Promise<void> {
+    const named = pending.filter(
+      (r) =>
+        (r.operationType === 'payment' || r.operationType === 'refund') &&
+        r.documentId?.trim() &&
+        !isGenericPaymentProduct(r.productName),
+    );
+    if (!named.length) return;
+
+    const docs = [...new Set(named.map((r) => r.documentId!.trim()))];
+    const generics = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        operationType: { in: ['payment', 'refund'] },
+        documentId: { in: docs },
+      },
+      select: {
+        id: true,
+        documentId: true,
+        productName: true,
+        paidAmount: true,
+      },
+      take: 8000,
+    });
+    const byDocAmt = new Map<string, (typeof named)[number]>();
+    for (const n of named) {
+      const doc = n.documentId!.trim();
+      const amt = Math.round((Number(n.paidAmount) || 0) * 100);
+      byDocAmt.set(`${doc}|${amt}`, n);
+      byDocAmt.set(`${doc}|${-amt}`, n);
+    }
+
+    let updated = 0;
+    for (const g of generics) {
+      if (!isGenericPaymentProduct(g.productName)) continue;
+      const doc = g.documentId?.trim();
+      if (!doc) continue;
+      const amt = Math.round((Number(g.paidAmount) || 0) * 100);
+      const src = byDocAmt.get(`${doc}|${amt}`);
+      if (!src?.productName) continue;
+      await this.prisma.clubRevenueEntry.update({
+        where: { id: g.id },
+        data: {
+          productName: src.productName,
+          productExternalId: src.productExternalId,
+          productCode: src.productCode,
+          productGroupName: src.productGroupName,
+          saleType: src.saleType ?? undefined,
+        },
+      });
+      updated += 1;
+    }
+    if (updated > 0) {
+      this.logger.log(
+        `Applied nomenclature to ${updated} stale generic payment twin(s) club=${clubId}`,
+      );
+    }
   }
 
   /**

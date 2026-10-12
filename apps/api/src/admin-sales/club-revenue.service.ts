@@ -748,30 +748,37 @@ export class ClubRevenueService {
   ): Promise<void> {
     // All payments/refunds touching the window (paidAt or occurredAt).
     // Enrich replaces «Оплата от клиента» / «Продажа N» via SaleTransaction.
-    const candidates = await this.prisma.clubRevenueEntry.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        operationType: { in: ['payment', 'refund'] },
-        OR: [
-          { paidAt: { gte: from, lte: to } },
-          { occurredAt: { gte: from, lte: to } },
-        ],
-      },
-      select: {
-        id: true,
-        externalId: true,
-        documentId: true,
-        productName: true,
-        productExternalId: true,
-        productCode: true,
-        productGroupName: true,
-        saleType: true,
-      },
-      take: 5000,
-    });
-    if (candidates.length) {
+    const page = 2000;
+    let offset = 0;
+    for (;;) {
+      const candidates = await this.prisma.clubRevenueEntry.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          operationType: { in: ['payment', 'refund'] },
+          OR: [
+            { paidAt: { gte: from, lte: to } },
+            { occurredAt: { gte: from, lte: to } },
+          ],
+        },
+        select: {
+          id: true,
+          externalId: true,
+          documentId: true,
+          productName: true,
+          productExternalId: true,
+          productCode: true,
+          productGroupName: true,
+          saleType: true,
+        },
+        orderBy: { id: 'asc' },
+        skip: offset,
+        take: page,
+      });
+      if (!candidates.length) break;
       await enrichGenericPaymentProducts(this.prisma, clubId, candidates);
+      offset += candidates.length;
+      if (candidates.length < page) break;
     }
   }
 
