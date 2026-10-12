@@ -532,6 +532,9 @@ export function ClubRevenuePanel() {
     () => search.get('segment') || '',
   );
   const [debtor, setDebtor] = useState(() => search.get('debtor') || '');
+  const [qInput, setQInput] = useState(
+    () => search.get('product') || search.get('q') || '',
+  );
   const [q, setQ] = useState(
     () => search.get('product') || search.get('q') || '',
   );
@@ -569,11 +572,19 @@ export function ClubRevenuePanel() {
     if (nextEmp !== employeeExternalId) setEmployeeExternalId(nextEmp);
     if (nextSeg !== segment) setSegment(nextSeg);
     if (nextDebtor !== debtor) setDebtor(nextDebtor);
+    if (nextQ !== qInput) setQInput(nextQ);
     if (nextQ !== q) setQ(nextQ);
     if (nextProductId !== productId) setProductId(nextProductId);
     if (nextExact !== productExact) setProductExact(nextExact);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- URL is source on external nav
   }, [search]);
+
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setQ((prev) => (prev === qInput ? prev : qInput));
+    }, 400);
+    return () => window.clearTimeout(id);
+  }, [qInput]);
 
   useEffect(() => {
     const next = new URLSearchParams();
@@ -867,9 +878,9 @@ export function ClubRevenuePanel() {
           <input
             className="input"
             placeholder="Клиент или товар"
-            value={q}
+            value={qInput}
             onChange={(e) => {
-              setQ(e.target.value);
+              setQInput(e.target.value);
               setProductId('');
               setProductExact(false);
             }}

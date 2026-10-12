@@ -193,8 +193,12 @@ export class ClubRevenueService {
     const from = new Date(`${params.from}T00:00:00.000Z`);
     const to = new Date(`${params.to}T23:59:59.999Z`);
 
-    // Resolve «Оплата от клиента» → nomenclature from sale basis (SaleTransaction).
-    await this.enrichGenericPaymentsInRange(clubId, from, to);
+    // Cheap DB enrich only (SaleTransaction). Never hit 1C on report/search.
+    // Skip when the user is filtering — first unfiltered load already rewrote names.
+    const qTrimEarly = params.q?.trim() || '';
+    if (!qTrimEarly) {
+      await this.enrichGenericPaymentsInRange(clubId, from, to);
+    }
 
     const baseWhere: Record<string, unknown> = {
       clubId,
@@ -238,18 +242,20 @@ export class ClubRevenueService {
 
     const searchFilter =
       !productFilter && qTrim
-        ? {
-            OR: [
-              { clientName: { contains: qTrim, mode: 'insensitive' } },
-              { productName: { contains: qTrim, mode: 'insensitive' } },
-              {
-                employeeName: {
-                  contains: qTrim,
-                  mode: 'insensitive',
+        ? isGenericPaymentProduct(qTrim)
+          ? { id: { equals: '__not_a_sku__' } }
+          : {
+              OR: [
+                { clientName: { contains: qTrim, mode: 'insensitive' } },
+                { productName: { contains: qTrim, mode: 'insensitive' } },
+                {
+                  employeeName: {
+                    contains: qTrim,
+                    mode: 'insensitive',
+                  },
                 },
-              },
-            ],
-          }
+              ],
+            }
         : null;
 
     // Summary always covers the full period (cards stay fixed when drilling into a metric).
@@ -764,9 +770,34 @@ export class ClubRevenueService {
           clubId,
           isActive: true,
           operationType: { in: ['payment', 'refund'] },
-          OR: [
-            { paidAt: { gte: from, lte: to } },
-            { occurredAt: { gte: from, lte: to } },
+          AND: [
+            {
+              OR: [
+                { paidAt: { gte: from, lte: to } },
+                { occurredAt: { gte: from, lte: to } },
+              ],
+            },
+            {
+              OR: [
+                { productName: null },
+                { productName: '' },
+                {
+                  productName: {
+                    equals: 'Оплата от клиента',
+                    mode: 'insensitive',
+                  },
+                },
+                {
+                  productName: { equals: 'Возврат', mode: 'insensitive' },
+                },
+                {
+                  productName: {
+                    startsWith: 'Продажа ',
+                    mode: 'insensitive',
+                  },
+                },
+              ],
+            },
           ],
         },
         select: {
