@@ -22,6 +22,7 @@ import {
 import {
   enrichGenericPaymentProducts,
   loadBasisProductsBySaleDoc,
+  pickBasisLinesForRevenueRow,
   saleDocIdsForRevenueRow,
   shouldReplaceProductWithBasis,
   summarizeBasisProducts,
@@ -679,7 +680,10 @@ export class ClubRevenueService {
       clubId,
       uniqueDocs,
     );
-    const basisLines = uniqueDocs.flatMap((d) => basisByDoc.get(d) ?? []);
+    const basisLines = pickBasisLinesForRevenueRow(
+      row as Row,
+      basisByDoc,
+    );
     const basisProducts: ClubRevenueBasisProductDto[] = basisLines.map((l) => ({
       productName: l.productName,
       productExternalId: l.productExternalId,
