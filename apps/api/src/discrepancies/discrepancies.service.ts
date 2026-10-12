@@ -364,9 +364,13 @@ export class DiscrepanciesService {
           },
         ];
       }
+      const name = (row.productName ?? '').trim() || '—';
+      // Cash placeholders are not nomenclature — don't list them as
+      // «вне сегментов» / «угадано → SPA» (saleType=service maps to massage).
+      if (isGenericPaymentProduct(name)) return [];
       return [
         {
-          name: (row.productName ?? '').trim() || '—',
+          name,
           uuid: row.productExternalId?.trim() || null,
           code: row.productCode ?? null,
           groupName: row.productGroupName ?? null,
@@ -390,6 +394,7 @@ export class DiscrepanciesService {
       const docKey = row.documentId?.trim() || row.externalId;
       for (const part of expandProducts(row)) {
         const name = part.name;
+        if (isGenericPaymentProduct(name)) continue;
         const uuid = part.uuid;
         const key = (uuid || name).toLowerCase();
         let agg = byProduct.get(key);

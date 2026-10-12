@@ -21,6 +21,7 @@ import {
 } from './club-revenue-debt';
 import {
   enrichGenericPaymentProducts,
+  isGenericPaymentProduct,
   loadBasisProductsBySaleDoc,
   pickBasisLinesForRevenueRow,
   saleDocIdsForRevenueRow,
@@ -204,7 +205,14 @@ export class ClubRevenueService {
     const qTrim = params.q?.trim() || '';
     const productExact = Boolean(params.productExact) && Boolean(qTrim);
 
-    const productFilter =
+    // «Оплата от клиента» / «Продажа N» are cash placeholders, not SKUs.
+    // After enrich, a Нестыковки deep-link on that name must not list leftovers.
+    const placeholderExact =
+      productExact && !productId && isGenericPaymentProduct(qTrim);
+
+    const productFilter = placeholderExact
+      ? { id: { equals: '__not_a_sku__' } }
+      :
       productId && productExact
         ? {
             OR: [
