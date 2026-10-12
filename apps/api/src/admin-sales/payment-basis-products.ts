@@ -61,10 +61,16 @@ export function shouldReplaceProductWithBasis(
   return true;
 }
 
+const DOC_UUID_RE = /^[0-9a-f-]{36}$/i;
+
 /**
- * Sale document UUID from club-revenue externalId / documentId.
+ * Sale document UUID candidates from club-revenue externalId / documentId.
  * cash: `payDoc:cash:Тип:client:saleDoc:ts:op…`
  * debt: `saleDoc:debt:client`
+ *
+ * Always includes documentId (Регистратор). For shop paid from personal account
+ * that was auto-credited with a membership, cash-key «основание» is often
+ * ЧленствоПакетУслуг (VIP №N) while Регистратор is Document.Продажа (коктейль).
  */
 export function saleDocIdsForRevenueRow(row: {
   externalId: string;
@@ -80,16 +86,51 @@ export function saleDocIdsForRevenueRow(row: {
   if (debtIdx > 0) {
     ids.add(parts[0]);
   }
-  if (row.documentId && !parts.includes('cash')) {
-    ids.add(row.documentId);
+  if (row.documentId?.trim()) {
+    ids.add(row.documentId.trim());
   }
-  return [...ids].filter((id) => /^[0-9a-f-]{36}$/i.test(id));
+  return [...ids].filter((id) => DOC_UUID_RE.test(id));
+}
+
+/**
+ * Pick SaleTransaction lines for a revenue row.
+ * Prefer Регистратор (documentId) when it has nomenclature — PA shop sales —
+ * otherwise cash/debt основание.
+ */
+export function pickBasisLinesForRevenueRow(
+  row: { externalId: string; documentId: string | null },
+  byDoc: Map<string, BasisProductLine[]>,
+): BasisProductLine[] {
+  const docs = saleDocIdsForRevenueRow(row);
+  const withLines = docs
+    .map((d) => ({ d, lines: byDoc.get(d) ?? [] }))
+    .filter((x) => x.lines.length > 0);
+  if (!withLines.length) return [];
+  if (withLines.length === 1) return withLines[0]!.lines;
+
+  const docId = row.documentId?.trim();
+  if (docId) {
+    const byRegistrar = withLines.find((x) => x.d === docId);
+    if (byRegistrar) return byRegistrar.lines;
+  }
+
+  const parts = row.externalId.split(':');
+  const cashIdx = parts.indexOf('cash');
+  const osn = cashIdx >= 0 ? parts[cashIdx + 3] : null;
+  if (osn) {
+    const byOsn = withLines.find((x) => x.d === osn);
+    if (byOsn) return byOsn.lines;
+  }
+  return withLines[0]!.lines;
 }
 
 function saleDocUuidFromExternalSaleId(externalSaleId: string): string | null {
   const first = externalSaleId.trim().split(':')[0];
   return first && /^[0-9a-f-]{36}$/i.test(first) ? first : null;
 }
+
+/** Cap OR-clause size — one giant OR over thousands of docs spikes CPU/planner. */
+const BASIS_DOC_CHUNK = 100;
 
 /** Load SaleTransaction nomenclature lines keyed by 1C sale document UUID. */
 export async function loadBasisProductsBySaleDoc(
@@ -101,41 +142,44 @@ export async function loadBasisProductsBySaleDoc(
   const map = new Map<string, BasisProductLine[]>();
   if (!unique.length) return map;
 
-  const rows = await prisma.saleTransaction.findMany({
-    where: {
-      clubId,
-      isActive: true,
-      OR: unique.flatMap((doc) => [
-        { externalSaleId: { startsWith: `${doc}:` } },
-        { externalSaleId: doc },
-      ]),
-    },
-    select: {
-      externalSaleId: true,
-      productName: true,
-      productExternalId: true,
-      productCode: true,
-      productGroupName: true,
-      saleType: true,
-      amount: true,
-    },
-  });
-
-  for (const r of rows) {
-    const doc = saleDocUuidFromExternalSaleId(r.externalSaleId);
-    if (!doc) continue;
-    const name = (r.productName ?? '').trim();
-    if (!name || isGenericPaymentProduct(name)) continue;
-    const list = map.get(doc) ?? [];
-    list.push({
-      productName: name,
-      productExternalId: r.productExternalId?.trim() || null,
-      productCode: r.productCode?.trim() || null,
-      productGroupName: r.productGroupName?.trim() || null,
-      saleType: r.saleType?.trim() || null,
-      amount: Number(r.amount) || 0,
+  for (let i = 0; i < unique.length; i += BASIS_DOC_CHUNK) {
+    const chunk = unique.slice(i, i + BASIS_DOC_CHUNK);
+    const rows = await prisma.saleTransaction.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        OR: chunk.flatMap((doc) => [
+          { externalSaleId: { startsWith: `${doc}:` } },
+          { externalSaleId: doc },
+        ]),
+      },
+      select: {
+        externalSaleId: true,
+        productName: true,
+        productExternalId: true,
+        productCode: true,
+        productGroupName: true,
+        saleType: true,
+        amount: true,
+      },
     });
-    map.set(doc, list);
+
+    for (const r of rows) {
+      const doc = saleDocUuidFromExternalSaleId(r.externalSaleId);
+      if (!doc) continue;
+      const name = (r.productName ?? '').trim();
+      if (!name || isGenericPaymentProduct(name)) continue;
+      const list = map.get(doc) ?? [];
+      list.push({
+        productName: name,
+        productExternalId: r.productExternalId?.trim() || null,
+        productCode: r.productCode?.trim() || null,
+        productGroupName: r.productGroupName?.trim() || null,
+        saleType: r.saleType?.trim() || null,
+        amount: Number(r.amount) || 0,
+      });
+      map.set(doc, list);
+    }
   }
   return map;
 }
@@ -173,6 +217,7 @@ export function summarizeBasisProducts(lines: BasisProductLine[]): {
 /**
  * Resolve basis nomenclature for generic / mismatched payment rows and persist
  * onto ClubRevenueEntry so list filters and discrepancies see real product names.
+ * Pass `preloaded` when the caller already loaded basis (avoids a second query).
  */
 export async function enrichGenericPaymentProducts(
   prisma: PrismaService,
@@ -187,25 +232,30 @@ export async function enrichGenericPaymentProducts(
     productGroupName: string | null;
     saleType: string | null;
   }>,
+  preloaded?: Map<string, BasisProductLine[]>,
 ): Promise<number> {
   if (!rows.length) return 0;
 
-  const saleDocIds = rows.flatMap((r) =>
-    saleDocIdsForRevenueRow({
-      externalId: r.externalId,
-      documentId: r.documentId,
-    }),
-  );
-  const byDoc = await loadBasisProductsBySaleDoc(prisma, clubId, saleDocIds);
+  const byDoc =
+    preloaded ??
+    (await loadBasisProductsBySaleDoc(
+      prisma,
+      clubId,
+      rows.flatMap((r) =>
+        saleDocIdsForRevenueRow({
+          externalId: r.externalId,
+          documentId: r.documentId,
+        }),
+      ),
+    ));
   if (!byDoc.size) return 0;
 
   let updated = 0;
   for (const r of rows) {
-    const docs = saleDocIdsForRevenueRow({
-      externalId: r.externalId,
-      documentId: r.documentId,
-    });
-    const lines = docs.flatMap((d) => byDoc.get(d) ?? []);
+    const lines = pickBasisLinesForRevenueRow(
+      { externalId: r.externalId, documentId: r.documentId },
+      byDoc,
+    );
     if (!shouldReplaceProductWithBasis(r.productName, lines)) continue;
     const summary = summarizeBasisProducts(lines);
     if (!summary) continue;

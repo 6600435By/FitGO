@@ -38,6 +38,7 @@ import {
   enrichGenericPaymentProducts,
   isGenericPaymentProduct,
   loadBasisProductsBySaleDoc,
+  pickBasisLinesForRevenueRow,
   saleDocIdsForRevenueRow,
   type BasisProductLine,
 } from '../admin-sales/payment-basis-products';
@@ -68,6 +69,41 @@ type QueryOpts = {
 
 const summaryCache = new Map<string, { at: number; value: DiscrepancySummary }>();
 const SUMMARY_CACHE_MS = 5 * 60 * 1000;
+
+/** Per-tab payload cache + in-flight dedupe (summary ∥ tab share one compute). */
+const tabResultCache = new Map<string, { at: number; value: unknown }>();
+const tabInflight = new Map<string, Promise<unknown>>();
+
+function discrepancyTabCacheKey(
+  clubId: string,
+  tab: string,
+  opts: QueryOpts,
+  period: { from: string; to: string },
+) {
+  return `${clubId}|${tab}|${period.from}|${period.to}|${opts.employee ?? ''}|${opts.showAcked ? 1 : 0}`;
+}
+
+async function withDiscrepancyTabCache<T>(
+  key: string,
+  compute: () => Promise<T>,
+): Promise<T> {
+  const hit = tabResultCache.get(key);
+  if (hit && Date.now() - hit.at < SUMMARY_CACHE_MS) return hit.value as T;
+  const pending = tabInflight.get(key);
+  if (pending) return pending as Promise<T>;
+  const p = compute()
+    .then((value) => {
+      tabResultCache.set(key, { at: Date.now(), value });
+      tabInflight.delete(key);
+      return value;
+    })
+    .catch((err) => {
+      tabInflight.delete(key);
+      throw err;
+    });
+  tabInflight.set(key, p);
+  return p;
+}
 
 @Injectable()
 export class DiscrepanciesService {
@@ -184,6 +220,17 @@ export class DiscrepanciesService {
   ): Promise<DiscrepancySegmentsResponse> {
     const clubId = requireClubId(user);
     const period = parsePeriod(opts.from, opts.to);
+    return withDiscrepancyTabCache(
+      discrepancyTabCacheKey(clubId, 'segments', opts, period),
+      () => this.computeSegmentsTab(clubId, period, opts),
+    );
+  }
+
+  private async computeSegmentsTab(
+    clubId: string,
+    period: ReturnType<typeof parsePeriod>,
+    opts: QueryOpts,
+  ): Promise<DiscrepancySegmentsResponse> {
     const segments = await loadPayrollSegmentSets(this.config);
     const acks = await this.loadAcks(clubId, 'segments', opts.showAcked);
 
@@ -214,14 +261,6 @@ export class DiscrepanciesService {
       },
     });
 
-    // Cash placeholders / wrong labels → real nomenclature from SaleTransaction.
-    const payRows = sales.filter(
-      (r) => r.operationType === 'payment' || r.operationType === 'refund',
-    );
-    if (payRows.length) {
-      await enrichGenericPaymentProducts(this.prisma, clubId, payRows);
-    }
-
     const saleDocIds = sales.flatMap((r) =>
       saleDocIdsForRevenueRow({
         externalId: r.externalId,
@@ -233,6 +272,19 @@ export class DiscrepanciesService {
       clubId,
       saleDocIds,
     );
+
+    // Cash placeholders / wrong labels → real nomenclature (reuse basis map).
+    const payRows = sales.filter(
+      (r) => r.operationType === 'payment' || r.operationType === 'refund',
+    );
+    if (payRows.length) {
+      await enrichGenericPaymentProducts(
+        this.prisma,
+        clubId,
+        payRows,
+        basisByDoc,
+      );
+    }
 
     type Agg = {
       name: string;
@@ -271,12 +323,9 @@ export class DiscrepanciesService {
     }> => {
       const isRefund = row.operationType === 'refund';
       const payAmt = rowMoney(row, isRefund);
-      const docs = saleDocIdsForRevenueRow({
-        externalId: row.externalId,
-        documentId: row.documentId,
-      });
-      const basis: BasisProductLine[] = docs.flatMap(
-        (d) => basisByDoc.get(d) ?? [],
+      const basis: BasisProductLine[] = pickBasisLinesForRevenueRow(
+        { externalId: row.externalId, documentId: row.documentId },
+        basisByDoc,
       );
       // Payments/refunds: always classify by sale nomenclature (installments,
       // «Оплата от клиента», document titles, ЛС shop charges mislabeled as VIP).
@@ -555,6 +604,17 @@ export class DiscrepanciesService {
   ): Promise<DiscrepancySalesResponse> {
     const clubId = requireClubId(user);
     const period = parsePeriod(opts.from, opts.to);
+    return withDiscrepancyTabCache(
+      discrepancyTabCacheKey(clubId, 'sales', opts, period),
+      () => this.computeSalesTab(clubId, period, opts),
+    );
+  }
+
+  private async computeSalesTab(
+    clubId: string,
+    period: ReturnType<typeof parsePeriod>,
+    opts: QueryOpts,
+  ): Promise<DiscrepancySalesResponse> {
     const acks = await this.loadAcks(clubId, 'sales', opts.showAcked);
     const empFilter = opts.employee?.trim() || '';
     const empLower = empFilter.toLowerCase();
@@ -917,6 +977,18 @@ export class DiscrepanciesService {
   ): Promise<DiscrepancySpaPtResponse> {
     const clubId = requireClubId(user);
     const period = parsePeriod(opts.from, opts.to);
+    return withDiscrepancyTabCache(
+      discrepancyTabCacheKey(clubId, kind === 'SPA' ? 'spa' : 'pt', opts, period),
+      () => this.computeSpaPtTab(clubId, period, kind, opts),
+    );
+  }
+
+  private async computeSpaPtTab(
+    clubId: string,
+    period: ReturnType<typeof parsePeriod>,
+    kind: 'SPA' | 'PT',
+    opts: QueryOpts,
+  ): Promise<DiscrepancySpaPtResponse> {
     const membershipByClient = await this.loadMembershipMap(clubId);
     const sessions = await this.loadSessions(
       clubId,
@@ -1033,6 +1105,17 @@ export class DiscrepanciesService {
   ): Promise<DiscrepancyGroupResponse> {
     const clubId = requireClubId(user);
     const period = parsePeriod(opts.from, opts.to);
+    return withDiscrepancyTabCache(
+      discrepancyTabCacheKey(clubId, 'gp', opts, period),
+      () => this.computeGroupTab(clubId, period, opts),
+    );
+  }
+
+  private async computeGroupTab(
+    clubId: string,
+    period: ReturnType<typeof parsePeriod>,
+    opts: QueryOpts,
+  ): Promise<DiscrepancyGroupResponse> {
     const sessions = await this.loadSessions(
       clubId,
       period.fromD,
@@ -1401,6 +1484,9 @@ export class DiscrepanciesService {
 export function invalidateDiscrepancySummary(clubId: string) {
   for (const key of summaryCache.keys()) {
     if (key.startsWith(`${clubId}|`)) summaryCache.delete(key);
+  }
+  for (const key of tabResultCache.keys()) {
+    if (key.startsWith(`${clubId}|`)) tabResultCache.delete(key);
   }
 }
 

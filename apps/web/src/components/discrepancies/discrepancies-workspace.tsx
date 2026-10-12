@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   DiscrepancyGroupResponse,
   DiscrepancySaleLine,
@@ -158,6 +158,8 @@ export function DiscrepanciesWorkspace() {
   const [expandedDay, setExpandedDay] = useState<string | null>(null);
   const [links, setLinks] = useState<TaskLinks>(new Map());
   const [showAuto, setShowAuto] = useState(false);
+  /** Skip summary refetch when only the tab changes (same period/employee). */
+  const summaryKeyRef = useRef('');
 
   const setParams = useCallback(
     (patch: Record<string, string | null | undefined>) => {
@@ -206,33 +208,52 @@ export function DiscrepanciesWorkspace() {
     }
   };
 
-  const load = useCallback(() => {
-    const token = getToken();
-    if (!token) return;
-    setLoading(true);
-    setMessage('');
-    const common = { from, to, employee: employee || undefined, showAcked };
-    const jobs: Promise<unknown>[] = [
-      api.discrepanciesSummary(token, common).then(setSummary),
-      api
-        .discrepancyTaskLinks(token, tab)
-        .then((rows) => setLinks(new Map(rows.map((r) => [r.itemKey, r])))),
-    ];
-    if (tab === 'segments') {
-      jobs.push(api.discrepanciesSegments(token, common).then(setSegments));
-    } else if (tab === 'sales') {
-      jobs.push(api.discrepanciesSales(token, common).then(setSales));
-    } else if (tab === 'spa') {
-      jobs.push(api.discrepanciesSpa(token, common).then(setSpa));
-    } else if (tab === 'pt') {
-      jobs.push(api.discrepanciesPt(token, common).then(setPt));
-    } else if (tab === 'gp') {
-      jobs.push(api.discrepanciesGroup(token, common).then(setGroup));
-    }
-    Promise.all(jobs)
-      .catch((e) => setMessage(e instanceof Error ? e.message : 'Ошибка'))
-      .finally(() => setLoading(false));
-  }, [from, to, employee, showAcked, tab]);
+  const load = useCallback(
+    (opts?: { refreshSummary?: boolean }) => {
+      const token = getToken();
+      if (!token) return;
+      setLoading(true);
+      setMessage('');
+      const common = { from, to, employee: employee || undefined, showAcked };
+      const summaryKey = `${from}|${to}|${employee}`;
+      const needSummary =
+        opts?.refreshSummary === true || summaryKeyRef.current !== summaryKey;
+
+      void (async () => {
+        try {
+          // 1) Active tab first — show data ASAP; avoids ∥ summary CPU spike.
+          if (tab === 'segments') {
+            setSegments(await api.discrepanciesSegments(token, common));
+          } else if (tab === 'sales') {
+            setSales(await api.discrepanciesSales(token, common));
+          } else if (tab === 'spa') {
+            setSpa(await api.discrepanciesSpa(token, common));
+          } else if (tab === 'pt') {
+            setPt(await api.discrepanciesPt(token, common));
+          } else if (tab === 'gp') {
+            setGroup(await api.discrepanciesGroup(token, common));
+          }
+          setLoading(false);
+
+          const linksP = api
+            .discrepancyTaskLinks(token, tab)
+            .then((rows) => setLinks(new Map(rows.map((r) => [r.itemKey, r]))));
+
+          // 2) Badge summary in background — server reuses tab cache for current tab.
+          if (needSummary) {
+            const s = await api.discrepanciesSummary(token, common);
+            summaryKeyRef.current = summaryKey;
+            setSummary(s);
+          }
+          await linksP;
+        } catch (e) {
+          setMessage(e instanceof Error ? e.message : 'Ошибка');
+          setLoading(false);
+        }
+      })();
+    },
+    [from, to, employee, showAcked, tab],
+  );
 
   useEffect(() => {
     load();
@@ -254,7 +275,7 @@ export function DiscrepanciesWorkspace() {
         fingerprint,
         note: note || undefined,
       });
-      load();
+      load({ refreshSummary: true });
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     }
@@ -407,7 +428,7 @@ export function DiscrepanciesWorkspace() {
             setBusy('recheck');
             try {
               await api.discrepanciesRecheckSegments(token);
-              load();
+              load({ refreshSummary: true });
             } catch (e) {
               setMessage(e instanceof Error ? e.message : 'Ошибка');
             } finally {
