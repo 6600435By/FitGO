@@ -129,12 +129,33 @@ export class FitgoHttpProvider {
       body = JSON.stringify(init.body);
     }
     const timeoutMs = init?.timeoutMs ?? 12_000;
-    const response = await fetch(url, {
-      method,
-      headers,
-      body,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    // Manual AbortController — AbortSignal.timeout() can leave unhandled
+    // rejections on Node and take down Nest during sync.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method,
+        headers,
+        body,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      const name = err instanceof Error ? err.name : '';
+      if (
+        name === 'TimeoutError' ||
+        name === 'AbortError' ||
+        controller.signal.aborted
+      ) {
+        throw new Error(
+          `FitGO 1C API timeout after ${timeoutMs}ms: ${method} ${path}`,
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
     const text = await response.text();
 
     let parsed: FitgoApiError & { data?: T | null };

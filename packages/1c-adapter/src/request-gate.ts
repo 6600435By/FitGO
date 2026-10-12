@@ -27,9 +27,13 @@ export class RequestGate {
 
     if (key) {
       this.inflight.set(key, run);
-      void run.finally(() => {
-        if (this.inflight.get(key) === run) this.inflight.delete(key);
-      });
+      // finally() returns a NEW promise that re-rejects on failure — voiding it
+      // without .catch() is an unhandled rejection and kills Nest (Node 15+).
+      void run
+        .finally(() => {
+          if (this.inflight.get(key) === run) this.inflight.delete(key);
+        })
+        .catch(() => undefined);
     }
     return run;
   }

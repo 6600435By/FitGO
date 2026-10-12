@@ -98,20 +98,26 @@ export class FitgoAnalyticsHttpProvider {
   ): Promise<T | null> {
     const base = this.config.baseUrl.replace(/\/$/, '');
     const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+    // Manual AbortController — AbortSignal.timeout() can leave an unhandled
+    // rejection on Node and crash Nest during nightly sync.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     let response: Response;
     try {
       response = await fetch(url, {
         headers: this.headers(),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: controller.signal,
       });
     } catch (err) {
       const name = err instanceof Error ? err.name : '';
-      if (name === 'TimeoutError' || name === 'AbortError') {
+      if (name === 'TimeoutError' || name === 'AbortError' || controller.signal.aborted) {
         throw new Error(
           `FitGO Analytics API timeout after ${timeoutMs}ms: ${path}`,
         );
       }
       throw err;
+    } finally {
+      clearTimeout(timer);
     }
     const text = await response.text();
 

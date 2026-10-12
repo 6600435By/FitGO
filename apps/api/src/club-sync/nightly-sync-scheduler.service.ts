@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { ClubSyncProfile, ClubSyncTrigger } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ClubSyncOrchestrator } from './club-sync-orchestrator.service';
-import { isMoscowNightWindow, moscowDayKey } from './moscow-time';
+import { isMoscowNightWindow, moscowDayKey, moscowParts } from './moscow-time';
 
 const TICK_MS = 5 * 60 * 1000;
 
@@ -28,13 +28,27 @@ export class NightlySyncScheduler implements OnModuleInit {
     }
     if (this.config.get('ENABLE_CLUB_SYNC_CRON') === 'false') return;
     setInterval(() => void this.tick(), TICK_MS);
-    // Safe: no-ops outside 03:00–04:00 Moscow.
+    // Night window: start FULL. Outside window: catch up if last night missed.
     void this.tick();
   }
 
   private async tick() {
-    if (!isMoscowNightWindow()) return;
     const nightKey = moscowDayKey();
+    if (isMoscowNightWindow()) {
+      await this.startNightlyForAllClubs(nightKey, 'night');
+      return;
+    }
+    // After 04:00 Moscow: if tonight's nightKey never finished SUCCESS/PARTIAL,
+    // run FULL once (API was down / Update-FitGO during 03–04, etc.).
+    const { hour } = moscowParts();
+    if (hour < 4) return;
+    await this.startNightlyForAllClubs(nightKey, 'catch-up');
+  }
+
+  private async startNightlyForAllClubs(
+    nightKey: string,
+    reason: 'night' | 'catch-up',
+  ) {
     const clubs = await this.prisma.club.findMany({ select: { id: true } });
     for (const club of clubs) {
       try {
@@ -44,15 +58,19 @@ export class NightlySyncScheduler implements OnModuleInit {
           force: true,
         });
         if (res.status === 'started') {
-          this.logger.log(`Nightly FULL started club=${club.id} night=${nightKey}`);
+          this.logger.log(
+            `Nightly FULL started (${reason}) club=${club.id} night=${nightKey}`,
+          );
         } else if (res.status === 'already_nightly') {
-          // already done tonight
+          // already done for this nightKey
         } else if (res.status === 'running') {
-          this.logger.debug(`Nightly already running club=${club.id}`);
+          this.logger.debug(
+            `Nightly already running (${reason}) club=${club.id}`,
+          );
         }
       } catch (err) {
         this.logger.error(
-          `Nightly sync failed to start club=${club.id}`,
+          `Nightly sync failed to start (${reason}) club=${club.id}`,
           err instanceof Error ? err.stack : err,
         );
       }

@@ -34,7 +34,7 @@ UI: `DataFreshness` shows **«Данные на dd.MM.yyyy HH:mm»** (Europe/Mos
 
 ## Night window
 
-03:00–04:00 Europe/Moscow, once per club (`ClubSyncRun.nightKey`). Env: `ENABLE_CLUB_SYNC_CRON` (default on). Legacy `ENABLE_*_CRON` for sales/class/tasks are no-ops while club sync is enabled.
+03:00–04:00 Europe/Moscow, once per club (`ClubSyncRun.nightKey`). A run that starts in the window **finishes** within the 40 min budget even after 04:00. If the API was down during the window, the same scheduler starts a one-shot **catch-up FULL** after 04:00 (same `nightKey`, skipped if SUCCESS/PARTIAL already exists). Env: `ENABLE_CLUB_SYNC_CRON` (default on). Legacy `ENABLE_*_CRON` for sales/class/tasks are no-ops while club sync is enabled.
 
 ## Schema extras
 

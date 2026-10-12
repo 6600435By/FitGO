@@ -264,7 +264,29 @@ export async function applyChangeLog(
 ): Promise<string[]> {
   let items: FitgoAnalyticsSalesItem[] = [];
   try {
-    items = await fetchSalesOnce(provider, { from, to, scope: 'changes' });
+    // Multi-day scope=changes often hangs 1C. Long catch-up windows skip the
+    // journal — day-by-day sales re-read below is enough. Short windows use
+    // day-by-day changes so one timeout cannot burn the whole night budget.
+    const days = eachUtcDay(from, to);
+    if (days.length > 7) {
+      return [];
+    }
+    if (days.length <= 2) {
+      items = await fetchSalesOnce(provider, { from, to, scope: 'changes' });
+    } else {
+      for (const day of days) {
+        try {
+          const chunk = await fetchSalesOnce(provider, {
+            from: day,
+            to: day,
+            scope: 'changes',
+          });
+          items.push(...chunk);
+        } catch {
+          /* one bad day must not abort the whole change-log pass */
+        }
+      }
+    }
   } catch {
     return [];
   }

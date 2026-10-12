@@ -304,6 +304,16 @@ export class ClubSyncOrchestrator {
       opts.trigger === ClubSyncTrigger.NIGHTLY ? moscowDayKey() : null;
 
     if (nightKey) {
+      // Truncated-by-04:00 PARTIAL (legacy) must not block catch-up / retry.
+      await this.prisma.clubSyncRun.updateMany({
+        where: {
+          clubId,
+          nightKey,
+          status: ClubSyncRunStatus.PARTIAL,
+          lastError: { contains: 'Night window ended' },
+        },
+        data: { nightKey: null },
+      });
       // Only SUCCESS/PARTIAL count as "done tonight". FAILED (incl. orphan)
       // must not block retry — free their nightKey for @@unique([clubId, nightKey]).
       const existingNight = await this.prisma.clubSyncRun.findFirst({
@@ -365,7 +375,14 @@ export class ClubSyncOrchestrator {
 
     // Register before scheduling execute so boot/status reclaim cannot race.
     this.activeRunIds.add(run.id);
-    void this.execute(run.id, clubId, opts.profile, opts.trigger);
+    void this.execute(run.id, clubId, opts.profile, opts.trigger).catch(
+      (err) => {
+        this.logger.error(
+          `Club sync execute unhandled club=${clubId} run=${run.id}`,
+          err instanceof Error ? err.stack : err,
+        );
+      },
+    );
     return { status: 'started', runId: run.id };
   }
 
@@ -423,18 +440,9 @@ export class ClubSyncOrchestrator {
         resource: string,
         fn: () => Promise<{ rows?: number; from?: string; to?: string }>,
       ) => {
-        if (
-          trigger === ClubSyncTrigger.NIGHTLY &&
-          !isMoscowNightWindow() &&
-          steps.length > 0
-        ) {
-          steps.push({
-            resource,
-            skipped: true,
-            error: 'Night window ended (after 04:00 Moscow)',
-          });
-          return;
-        }
+        // Night window only gates *starting* a NIGHTLY run (scheduler). Once
+        // started, finish within FULL_RUN_BUDGET_MS — aborting at 04:00 left
+        // PARTIAL + nightKey and blocked same-night retry / catch-up.
         const remaining = deadline - Date.now();
         if (remaining <= 0) {
           steps.push({
@@ -450,10 +458,11 @@ export class ClubSyncOrchestrator {
         }
         try {
           let timeoutId: ReturnType<typeof setTimeout> | undefined;
+          const work = fn();
+          // If budget wins the race, a late reject from work must not crash Nest.
+          void work.catch(() => undefined);
           const res = await Promise.race([
-            fn().finally(() => {
-              if (timeoutId !== undefined) clearTimeout(timeoutId);
-            }),
+            work,
             new Promise<never>((_, reject) => {
               timeoutId = setTimeout(
                 () =>
@@ -465,7 +474,9 @@ export class ClubSyncOrchestrator {
                 remaining,
               );
             }),
-          ]);
+          ]).finally(() => {
+            if (timeoutId !== undefined) clearTimeout(timeoutId);
+          });
           steps.push({
             resource,
             from: res.from,
@@ -618,6 +629,9 @@ export class ClubSyncOrchestrator {
             const adminTasks = this.moduleRef.get(AdminTasksSchedulerService, {
               strict: false,
             });
+            if (!adminTasks?.generateForClub) {
+              return { rows: 0 };
+            }
             const club = await this.prisma.club.findUnique({
               where: { id: clubId },
               select: { externalId: true },
@@ -640,6 +654,9 @@ export class ClubSyncOrchestrator {
               DiscrepancyTasksService,
               { strict: false },
             );
+            if (!discrepancyTasks?.runAuto) {
+              return { rows: 0 };
+            }
             const r = await discrepancyTasks.runAuto(clubId);
             return { rows: r.created };
           });
