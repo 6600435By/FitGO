@@ -9,16 +9,19 @@ const DEFAULT_REPORT_KIND = '100';
  * Fetches cheque report from cabinet.webkassa.by ЛК.
  *
  * Flow (SPA parity):
- * 1. GET  /rsCashAppsWeb/index → cookies + X-CSRF-TOKEN
- * 2. POST /rsCashAppsWeb/noauth/crypto/salt { value: login }
- * 3. cryptLoginPassword: bcrypt → AES decrypt secret → AES encrypt(bcryptHash)
- * 4. POST /rsCashAppsWeb/login (form-urlencoded: username+password only)
- * 5. POST /rsCashAppsWeb/cashdocs/report/checks/{kind} → xlsx
+ * 1. GET  /index → SESSION + X-CSRF-TOKEN
+ * 2. POST /noauth/crypto/salt
+ * 3. GET  /index again (SPA getTocken) — CSRF must match current SESSION
+ * 4. cryptLoginPassword → POST /login
+ * 5. GET  /index again (session may rotate on login)
+ * 6. POST /cashdocs/report/checks/{kind} → xlsx
  */
 export class WebkassaFetcher {
   private readonly logger = new Logger(WebkassaFetcher.name);
   private cookie = '';
   private csrf = '';
+  /** True only after a successful login in this process. */
+  private authenticated = false;
 
   constructor(private readonly config: ConfigService) {}
 
@@ -63,7 +66,7 @@ export class WebkassaFetcher {
     };
 
     let res = await this.postJson(exportUrl, body);
-    if (res.status === 401 || res.status === 302 || res.status === 303) {
+    if (await this.shouldRelogin(res)) {
       this.resetSession();
       await this.ensureSession(login, password, base);
       res = await this.postJson(exportUrl, body);
@@ -89,6 +92,7 @@ export class WebkassaFetcher {
   private resetSession() {
     this.cookie = '';
     this.csrf = '';
+    this.authenticated = false;
   }
 
   private async ensureSession(
@@ -96,18 +100,32 @@ export class WebkassaFetcher {
     password: string,
     base: string,
   ) {
-    if (this.cookie && this.csrf) return;
+    if (this.authenticated && this.cookie && this.csrf) {
+      // Session may have rotated; refresh CSRF like SPA getTocken before API calls.
+      await this.refreshCsrf(base);
+      return;
+    }
 
-    await this.bootstrap(base);
+    await this.refreshCsrf(base);
     const salt = await this.fetchSalt(base, login);
     const encryptedPassword = cryptLoginPassword(salt, password);
+    // SPA LOGIN effect: getTocken immediately before POST /login
+    await this.refreshCsrf(base);
     await this.login(base, login, encryptedPassword);
+    // After login SESSION/JSESSIONID may change — CSRF must be re-read.
+    await this.refreshCsrf(base);
+    this.authenticated = true;
   }
 
-  private async bootstrap(base: string) {
+  /** SPA getTocken: GET /index → X-CSRF-TOKEN bound to current SESSION. */
+  private async refreshCsrf(base: string) {
     const res = await fetch(`${base}/index`, {
       method: 'GET',
-      headers: { Accept: 'text/html,application/json,*/*' },
+      headers: {
+        Accept: 'text/html,application/json,*/*',
+        ...(this.cookie ? { Cookie: this.cookie } : {}),
+        ...browserOriginHeaders(),
+      },
       redirect: 'manual',
     });
     this.ingestCookies(res);
@@ -130,8 +148,8 @@ export class WebkassaFetcher {
       body: JSON.stringify({ value: login }),
       redirect: 'manual',
     });
+    // Keep SESSION cookies; do not trust CSRF from salt — login uses fresh getTocken.
     this.ingestCookies(res);
-    this.ingestCsrf(res);
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new Error(
@@ -163,12 +181,14 @@ export class WebkassaFetcher {
           'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
         Cookie: this.cookie,
         ...(this.csrf ? { 'X-CSRF-TOKEN': this.csrf } : {}),
+        ...browserOriginHeaders(),
+        Referer: 'https://cabinet.webkassa.by/login',
       },
       body,
       redirect: 'manual',
     });
     this.ingestCookies(res);
-    this.ingestCsrf(res);
+    // CSRF after login comes from the following getTocken, not this response.
 
     const loc = res.headers.get('location') || '';
     const text = await res.text().catch(() => '');
@@ -190,7 +210,6 @@ export class WebkassaFetcher {
         'Webkassa: отказ входа (проверьте WEBKASSA_LOGIN / WEBKASSA_PASSWORD)',
       );
     }
-    // JSON error body even on 200 (defensive)
     const loginErr = parseWebkassaErrorMessage(text);
     if (loginErr) throw new Error(loginErr);
     if (!this.cookie) {
@@ -198,30 +217,22 @@ export class WebkassaFetcher {
         `${formatWebkassaHttpError(res.status, text)} Войдите на https://cabinet.webkassa.by/login, скачайте отчёт и нажмите «Загрузить xlsx».`,
       );
     }
+  }
 
-    // Refresh CSRF after login redirect (rare for SPA; success is usually 200).
-    if ((res.status === 302 || res.status === 303) && loc) {
-      const nextUrl = loc.startsWith('http')
-        ? loc
-        : new URL(loc, base).toString();
-      const follow = await fetch(nextUrl, {
-        method: 'GET',
-        headers: {
-          Cookie: this.cookie,
-          Accept: 'text/html,application/json,*/*',
-          ...(this.csrf ? { 'X-CSRF-TOKEN': this.csrf } : {}),
-        },
-        redirect: 'manual',
-      });
-      this.ingestCookies(follow);
-      this.ingestCsrf(follow);
-      if (!this.csrf) {
-        const html = await follow.text().catch(() => '');
-        this.csrfFromHtml(html);
-      }
-    } else if (!this.csrf) {
-      this.csrfFromHtml(text);
+  private async shouldRelogin(res: Response): Promise<boolean> {
+    if (
+      res.status === 401 ||
+      res.status === 403 ||
+      res.status === 302 ||
+      res.status === 303
+    ) {
+      return true;
     }
+    if (!res.ok) {
+      const text = await res.clone().text().catch(() => '');
+      return /csrf|токен не совпад/i.test(text);
+    }
+    return false;
   }
 
   private async postJson(url: string, body: unknown): Promise<Response> {
@@ -239,6 +250,7 @@ export class WebkassaFetcher {
       Accept: 'application/json,application/octet-stream,*/*',
       Cookie: this.cookie,
       ...(this.csrf ? { 'X-CSRF-TOKEN': this.csrf } : {}),
+      ...browserOriginHeaders(),
     };
   }
 
@@ -291,6 +303,13 @@ export class WebkassaFetcher {
     );
     if (input?.[1]) this.csrf = input[1];
   }
+}
+
+function browserOriginHeaders(): Record<string, string> {
+  return {
+    Origin: 'https://cabinet.webkassa.by',
+    Referer: 'https://cabinet.webkassa.by/',
+  };
 }
 
 /**
