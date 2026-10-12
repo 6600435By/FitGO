@@ -165,11 +165,6 @@ export interface StaffPayProfile {
   ptSessionPriceMinor?: number;
   /** ADMIN / штатный PT: fixed advance paid on the 25th (days 1–15), minor units. */
   fixedAdvanceMinor?: number;
-  /**
-   * ADMIN: unpaid seller debts do not enter desk motivation (paid-only).
-   * When true (default), overdue unpaid (>7d) is surfaced on payroll as a hold hint.
-   */
-  considerDebtsInMotivation?: boolean;
   notes?: string;
   /**
    * Extra department schemes for multi-role staff.
@@ -399,7 +394,6 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         shopSalesPercent: 0,
         corporateSalesPercent: 0,
         fixedAdvanceMinor: 0,
-        considerDebtsInMotivation: true,
       };
     case 'MANAGER':
       return {

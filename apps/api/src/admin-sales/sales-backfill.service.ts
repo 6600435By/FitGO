@@ -197,7 +197,8 @@ export class SalesBackfillService {
     });
     const cursor = parseCursor(row?.cursor);
     if (cursor && cursor.phase !== 'done') {
-      cursor.note = 'Остановлено вручную. Можно продолжить start без сброса курсора — см. resume.';
+      cursor.note =
+        'Остановлено вручную. Нажмите «Продолжить» — с того же дня.';
     }
     await this.prisma.salesSyncState.upsert({
       where: { clubId_resourceKey: { clubId, resourceKey: RESOURCE_KEY } },
@@ -227,7 +228,7 @@ export class SalesBackfillService {
     const cursor = parseCursor(row?.cursor);
     if (!cursor || cursor.phase === 'done') {
       throw new BadRequestException(
-        'Нет незавершённого backfill — запустите start (full или mutable-refresh).',
+        'Нет незавершённой загрузки — нажмите «2018→сейчас» или «Только 2025–26».',
       );
     }
     if (this.inFlight.has(clubId)) {
@@ -284,8 +285,8 @@ export class SalesBackfillService {
           cursor.phase = 'done';
           cursor.note =
             cursor.mutablePass > 0
-              ? 'Готово. После чистки долгов 2025–2026 в 1С: POST backfill mode=mutable-refresh.'
-              : 'Готово. Закрытые годы залиты; 2025–2026 — после правок в 1С сделайте mutable-refresh.';
+              ? 'Готово. После чистки долгов 2025–2026 в 1С нажмите «Только 2025–26».'
+              : 'Готово. Закрытые годы залиты; после правок 2025–2026 в 1С — «Только 2025–26».';
           await this.prisma.salesSyncState.update({
             where: { id: row.id },
             data: {
@@ -340,7 +341,7 @@ export class SalesBackfillService {
         if (cursor.nextDay > cursor.planTo) {
           cursor.phase = 'done';
           cursor.note =
-            'Готово. Операционный «Обновить из 1С» подтянет долги и последние дни. После чистки 2025–2026 — mode=mutable-refresh.';
+            'Готово. Долги и последние дни — «Обновить из 1С» сверху. После чистки 2025–2026 в 1С — «Только 2025–26».';
         } else if (cursor.nextDay > cursor.sealedUntil) {
           cursor.phase = 'mutable';
           if (!cursor.mutablePass) cursor.mutablePass = 1;
@@ -387,7 +388,7 @@ export class SalesBackfillService {
     const cursor = parseCursor(row?.cursor);
     if (cursor) {
       cursor.note =
-        'Пауза: идёт операционный синк. После него — POST .../backfill/resume.';
+        'Пауза: идёт «Обновить из 1С». После него нажмите «Продолжить».';
     }
     await this.prisma.salesSyncState.update({
       where: { id: stateId },
@@ -428,7 +429,7 @@ export class SalesBackfillService {
       data: {
         lastStatus: 'error',
         lastError:
-          'Backfill прерван (перезапуск API). POST .../backfill/resume.',
+          'Загрузка истории прервана (перезапуск API). Нажмите «Продолжить».',
         lastRunAt: new Date(),
       },
     });
@@ -474,24 +475,37 @@ function hintFor(
   status: string | null,
 ): string | null {
   if (!cursor) {
-    return 'Ещё не запускали. POST /super-admin/sales/backfill { } — 2018…вчера, sealed до 2024-12-31.';
+    return (
+      'Архив ещё не загружали. Нужны старые продажи в FitGO — нажмите «2018→сейчас» ' +
+      '(закрытые годы до 31.12.2024 заливаются один раз; 2025–вчера — потом). ' +
+      'Долги и сегодняшние дни подтянет обычное «Обновить из 1С» сверху.'
+    );
   }
   if (status === 'running') {
-    return `Идёт ${cursor.phase}: следующий день ${cursor.nextDay} (${cursor.daysDone}/${cursor.daysTotal}).`;
+    const phaseRu =
+      cursor.phase === 'sealed'
+        ? 'закрытые годы'
+        : cursor.phase === 'mutable'
+          ? '2025–сейчас'
+          : cursor.phase;
+    return `Идёт загрузка (${phaseRu}): день ${cursor.nextDay} (${cursor.daysDone}/${cursor.daysTotal}). Можно «Стоп».`;
   }
   if (status === 'paused') {
-    return cursor.note ?? 'Пауза из‑за операционного синка — resume.';
+    return (
+      cursor.note ??
+      'Пауза: идёт обычное «Обновить из 1С». После него нажмите «Продолжить».'
+    );
   }
   if (status === 'stopped') {
-    return 'Остановлено — resume или новый start.';
+    return 'Остановлено. «Продолжить» — с того же дня, или «2018→сейчас» заново.';
   }
   if (status === 'error') {
-    return 'Ошибка — resume с того же курсора или start заново.';
+    return 'Ошибка загрузки. «Продолжить» с того же дня или запустите снова.';
   }
   if (cursor.phase === 'done') {
     return (
       cursor.note ??
-      'Готово. Для 2025–2026 после чистки долгов: { "mode": "mutable-refresh" }.'
+      'Готово. После чистки долгов 2025–2026 в 1С нажмите «Только 2025–26».'
     );
   }
   return cursor.note;

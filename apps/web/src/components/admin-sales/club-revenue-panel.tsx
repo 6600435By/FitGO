@@ -547,7 +547,6 @@ export function ClubRevenuePanel() {
   const [data, setData] = useState<ClubRevenueReportResponse | null>(null);
   const [detail, setDetail] = useState<ClubRevenueDetailResponse | null>(null);
   const [error, setError] = useState('');
-  const [syncMsg, setSyncMsg] = useState('');
   const [loading, setLoading] = useState(false);
   const [backfillHint, setBackfillHint] = useState('');
   const [backfillBusy, setBackfillBusy] = useState(false);
@@ -748,44 +747,6 @@ export function ClubRevenuePanel() {
     }
   };
 
-  const syncNow = async () => {
-    const token = getToken();
-    if (!token) return;
-    setSyncMsg('Синхронизация…');
-    setError('');
-    try {
-      await api.superAdminSalesSync(token);
-      const deadline = Date.now() + 12 * 60 * 1000;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const s = await api.superAdminSalesSyncStatus(token);
-        if (s.running) {
-          setSyncMsg('Синхронизация… (идёт обмен с 1С)');
-          continue;
-        }
-        if (s.error) {
-          throw new Error(s.error);
-        }
-        setSyncMsg(
-          s.lastSyncedAt
-            ? `Обновлено: ${new Date(s.lastSyncedAt).toLocaleString('ru-RU', {
-                day: '2-digit',
-                month: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}`
-            : 'Синхронизация завершена',
-        );
-        await load();
-        return;
-      }
-      throw new Error('Синхронизация слишком долгая — обновите страницу через пару минут');
-    } catch (e) {
-      setSyncMsg('');
-      setError(e instanceof Error ? e.message : 'Ошибка синхронизации');
-    }
-  };
-
   const runBackfill = async (mode: 'full' | 'mutable-refresh') => {
     const token = getToken();
     if (!token) return;
@@ -818,29 +779,12 @@ export function ClubRevenuePanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Продажи клуба</h1>
-          <p className="text-sm text-slate-400">
-            Продажи · выручка · лицевые счета. Цифры в карточках — фильтры списка.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {data?.lastSyncedAt ? (
-            <span className="text-xs text-slate-500">
-              Синк:{' '}
-              {new Date(data.lastSyncedAt).toLocaleString('ru-RU', {
-                day: '2-digit',
-                month: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </span>
-          ) : null}
-          <button type="button" className="btn-secondary text-sm" onClick={() => void syncNow()}>
-            Обновить из 1С
-          </button>
-        </div>
+      <div>
+        <h1 className="text-xl font-semibold">Продажи клуба</h1>
+        <p className="text-sm text-slate-400">
+          Продажи · выручка · лицевые счета. Цифры в карточках — фильтры списка.
+          Свежие дни — кнопка «Обновить из 1С» сверху страницы.
+        </p>
       </div>
 
       <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
@@ -851,6 +795,7 @@ export function ClubRevenuePanel() {
             className="btn-ghost text-xs"
             disabled={backfillBusy}
             onClick={() => void runBackfill('full')}
+            title="Разовая загрузка архива продаж с 2018 (часы, нагрузка на 1С)"
           >
             2018→сейчас
           </button>
@@ -859,6 +804,7 @@ export function ClubRevenuePanel() {
             className="btn-ghost text-xs"
             disabled={backfillBusy}
             onClick={() => void runBackfill('mutable-refresh')}
+            title="Перечитать только 2025–вчера после правок долгов в 1С"
           >
             Только 2025–26
           </button>
@@ -881,7 +827,6 @@ export function ClubRevenuePanel() {
           )}
         </div>
         {backfillHint ? <p className="mt-1 text-slate-500">{backfillHint}</p> : null}
-        {syncMsg ? <p className="mt-1 text-emerald-500/80">{syncMsg}</p> : null}
       </div>
 
       <div className="card grid grid-cols-1 items-end gap-3 sm:grid-cols-[auto_minmax(11rem,1fr)_minmax(11rem,1fr)]">

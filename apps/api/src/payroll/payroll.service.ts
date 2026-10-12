@@ -850,19 +850,11 @@ export class PayrollService {
     }
     if (sales.hint) anomalyHints.push(sales.hint);
 
-    const adminSlice = sliceForTrack(profile, 'ADMIN');
-    if (
-      slices.some((s) => s.track === 'ADMIN') &&
-      adminSlice.considerDebtsInMotivation !== false
-    ) {
-      const overdue = await this.countOverdueSellerDebts(
-        clubId,
-        performerId,
-        to,
-      );
-      if (overdue.count > 0) {
+    if (slices.some((s) => s.track === 'ADMIN')) {
+      const debt = await this.countOpenSellerDebts(clubId, performerId, to);
+      if (debt.count > 0) {
         anomalyHints.push(
-          `Просроченный долг продавца (>7 дн.): ${overdue.count} поз. на ${(overdue.amountMinor / 100).toFixed(2)} BYN — в мотивацию не входит до оплаты (см. «Мои долги»)`,
+          `Долг продавца: ${debt.count} поз. на ${(debt.amountMinor / 100).toFixed(2)} BYN — в мотивацию не входит до оплаты (см. «Мои долги»)`,
         );
       }
     }
@@ -2652,37 +2644,21 @@ export class PayrollService {
     return out;
   }
 
-  private async countOverdueSellerDebts(
+  private async countOpenSellerDebts(
     clubId: string,
     userId: string,
     asOfYmd: string,
   ): Promise<{ count: number; amountMinor: number }> {
-    // Same source as admin «Неоплаченные» / self-payroll (~9k), not stale
-    // SaleTransaction unpaid (~40k).
+    // Same source as admin «Неоплаченные» / self-payroll — all open debts.
     const debt = await this.adminSales.sellerOpenUnpaid(
       clubId,
       userId,
       asOfYmd,
     );
-    const cutoffKey = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Europe/Minsk',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(
-      new Date(
-        new Date(`${asOfYmd}T12:00:00+03:00`).getTime() - 7 * 86400000,
-      ),
-    );
-    let count = 0;
-    let amountMinor = 0;
-    for (const line of debt.lines) {
-      const sold = (line.soldAt || '').slice(0, 10);
-      if (!sold || sold > cutoffKey) continue;
-      count += 1;
-      amountMinor += line.amountMinor;
-    }
-    return { count, amountMinor };
+    return {
+      count: debt.lines.length,
+      amountMinor: debt.unpaidMinor,
+    };
   }
 
   private async resolveStaffSales(
