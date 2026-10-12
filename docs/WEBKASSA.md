@@ -57,33 +57,39 @@ ClubRevenueEntry (1С sync) ─────────────────�
 2. Убедиться, что в кабинете скачивается файл вида  
    `cheque_report_{fromMs}_{toMs}.xls` (xlsx внутри).
 
-### Шаг B — разведка Network (один раз)
+### Шаг B — два разных «login» на одном домене
 
-Если дефолтные URL не совпали с вашим кабинетом:
+| URL | Что это | Пароль FitGO |
+|-----|---------|--------------|
+| [cabinet.webkassa.by/login](https://cabinet.webkassa.by/login) | **ЛК СПД** (личный кабинет оператора) | Да — вход в веб-кабинет |
+| `…/rsCashAppsWeb/login` | HTML-форма Spring Security API | **Нет** — пароль перед POST шифруется (salt + bcrypt) |
 
-1. Открыть [cabinet.webkassa.by](https://cabinet.webkassa.by/) → DevTools → **Network**.
-2. Войти → найти запрос login (`POST`, JSON или form) → скопировать URL → `WEBKASSA_LOGIN_URL`.
-3. Скачать отчёт за период → найти запрос файла → URL с датами →  
-   `WEBKASSA_EXPORT_URL` с плейсхолдерами `{fromMs}` и `{toMs}` (миллисекунды).
+Не копируйте `https://cabinet.webkassa.by/rsCashAppsWeb/login` в `WEBKASSA_LOGIN_URL` и не проверяйте пароль, открыв эту страницу в браузере — форма «Please sign in» отвергнет логин ЛК.
 
-Дефолты в коде:
+Реальный API кабинета (база `/rsCashAppsWeb`):
 
-```text
-WEBKASSA_LOGIN_URL=https://cabinet.webkassa.by/api/auth/login
-WEBKASSA_EXPORT_URL=https://cabinet.webkassa.by/api/reports/cheque_report?from={fromMs}&to={toMs}
-```
+1. `GET /rsCashAppsWeb/index` → заголовок `X-CSRF-TOKEN`
+2. `POST /rsCashAppsWeb/noauth/crypto/salt` body `{ "value": "<login>" }`
+3. Пароль преобразуется в браузере, затем `POST /rsCashAppsWeb/login` (form-urlencoded)
+4. Отчёт Excel: **`POST`** `/rsCashAppsWeb/cashdocs/report/checks/100` с телом периода  
+   (не GET — иначе 500 «метод GET не существует»)
 
-Fetcher шлёт JSON `{ login, email, username, password }` и сохраняет cookie из `Set-Cookie`.
+Пока FitGO не повторяет crypto-login, **автовыгрузка по env не работает**. Рабочий путь:
+
+1. Войти на [cabinet.webkassa.by/login](https://cabinet.webkassa.by/login)
+2. Отчёты → история чеков → скачать `cheque_report_*.xls`
+3. **Нестыковки → Касса → Загрузить xlsx**
+
+Не подставляйте URL 1С (`/forma/hs/…`). URL `…/cashdocs/report/checks/100` без сессии и без POST тоже не сработает.
 
 ### Шаг C — env API (`apps/api/.env`)
 
 ```bash
-WEBKASSA_LOGIN=...
+WEBKASSA_LOGIN=FitGO          # логин ЛК (как на cabinet.webkassa.by/login)
 WEBKASSA_PASSWORD=...
-# Опционально после разведки:
-# WEBKASSA_LOGIN_URL=...
-# WEBKASSA_EXPORT_URL=...
-# ENABLE_WEBKASSA_CRON=false   # отключить автовыгрузку
+# Пока не ставьте WEBKASSA_LOGIN_URL / WEBKASSA_EXPORT_URL —
+# /rsCashAppsWeb/login и /cashdocs/report/checks/100 без crypto+POST не работают.
+# ENABLE_WEBKASSA_CRON=false
 # DISCREPANCY_RETENTION_DAYS=92
 ```
 

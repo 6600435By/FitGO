@@ -62,6 +62,23 @@ function monthBounds(): { from: string; to: string } {
   };
 }
 
+function shortWebkassaError(raw: string) {
+  const t = raw.trim();
+  try {
+    const j = JSON.parse(t) as { errMessageForClient?: string };
+    if (j.errMessageForClient) {
+      return 'Кабинет Webkassa не отдаёт отчёт по этому адресу. Загрузите xlsx из кабинета.';
+    }
+  } catch {
+    /* plain text */
+  }
+  if (/cashdocs|не существует|errCodeForClient/i.test(t)) {
+    return 'Кабинет Webkassa не отдаёт отчёт по этому адресу. Загрузите xlsx из кабинета.';
+  }
+  const cut = t.replace(/\s+/g, ' ');
+  return cut.length > 180 ? `${cut.slice(0, 180)}…` : cut;
+}
+
 function money(n: number) {
   return n.toLocaleString('ru-RU', {
     minimumFractionDigits: 2,
@@ -748,10 +765,12 @@ function SalesTab({
           {data.webkassa.lastSuccessAt
             ? new Date(data.webkassa.lastSuccessAt).toLocaleString('ru-RU')
             : 'ещё не выгружали'}
-          {data.webkassa.lastStatus === 'error' && data.webkassa.lastError ? (
-            <span className="text-red-400"> · {data.webkassa.lastError}</span>
-          ) : null}
         </p>
+        {data.webkassa.lastStatus === 'error' && data.webkassa.lastError ? (
+          <p className="text-sm text-red-400">
+            {shortWebkassaError(data.webkassa.lastError)}
+          </p>
+        ) : null}
         <p className="text-xs text-slate-500">
           Безнал 1С (не через кассу): {money(data.oneCCashless)} · ЛС:{' '}
           {money(data.oneCPersonalAccount)}
