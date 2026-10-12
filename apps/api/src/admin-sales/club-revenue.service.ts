@@ -21,9 +21,9 @@ import {
 } from './club-revenue-debt';
 import {
   enrichGenericPaymentProducts,
-  isGenericPaymentProduct,
   loadBasisProductsBySaleDoc,
   saleDocIdsForRevenueRow,
+  shouldReplaceProductWithBasis,
   summarizeBasisProducts,
 } from './payment-basis-products';
 import { PrismaService } from '../prisma/prisma.service';
@@ -640,7 +640,10 @@ export class ClubRevenueService {
     });
     if (!row) throw new NotFoundException('Sale not found');
 
-    if (isGenericPaymentProduct(row.productName)) {
+    if (
+      row.operationType === 'payment' ||
+      row.operationType === 'refund'
+    ) {
       await enrichGenericPaymentProducts(this.prisma, clubId, [row]);
       row =
         (await this.prisma.clubRevenueEntry.findFirst({
@@ -709,7 +712,10 @@ export class ClubRevenueService {
       normalizeReceiptRow(row as Row) ?? (row as Row),
       staffBySaleDoc,
     );
-    if (isGenericPaymentProduct(main.productName) && basisLines.length) {
+    if (
+      basisLines.length &&
+      shouldReplaceProductWithBasis(main.productName, basisLines)
+    ) {
       const summary = summarizeBasisProducts(basisLines);
       if (summary) {
         main = {
@@ -736,31 +742,16 @@ export class ClubRevenueService {
     from: Date,
     to: Date,
   ): Promise<void> {
-    const generics = await this.prisma.clubRevenueEntry.findMany({
+    // All payments/refunds in range: enrich decides which labels to replace
+    // (Оплата от клиента, «Продажа N от …», mismatched membership titles).
+    const candidates = await this.prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
         isActive: true,
         operationType: { in: ['payment', 'refund'] },
-        AND: [
-          {
-            OR: [
-              { productName: null },
-              { productName: '' },
-              {
-                productName: {
-                  equals: 'Оплата от клиента',
-                  mode: 'insensitive',
-                },
-              },
-              { productName: { equals: 'Возврат', mode: 'insensitive' } },
-            ],
-          },
-          {
-            OR: [
-              { paidAt: { gte: from, lte: to } },
-              { paidAt: null, occurredAt: { gte: from, lte: to } },
-            ],
-          },
+        OR: [
+          { paidAt: { gte: from, lte: to } },
+          { paidAt: null, occurredAt: { gte: from, lte: to } },
         ],
       },
       select: {
@@ -775,8 +766,8 @@ export class ClubRevenueService {
       },
       take: 5000,
     });
-    if (generics.length) {
-      await enrichGenericPaymentProducts(this.prisma, clubId, generics);
+    if (candidates.length) {
+      await enrichGenericPaymentProducts(this.prisma, clubId, candidates);
     }
   }
 

@@ -343,13 +343,9 @@ export class ClubRevenueSyncService {
     await upsertRevenueRows(this.prisma, clubId, [...pending.values()]);
     const upserted = pending.size;
 
-    // Attach sale nomenclature to cash payments labeled «Оплата от клиента».
+    // Attach sale nomenclature to cash payments (placeholders / mismatched labels).
     const genericPay = [...pending.values()].filter(
-      (r) =>
-        (r.operationType === 'payment' || r.operationType === 'refund') &&
-        (!r.productName ||
-          r.productName.trim().toLowerCase() === 'оплата от клиента' ||
-          r.productName.trim().toLowerCase() === 'возврат'),
+      (r) => r.operationType === 'payment' || r.operationType === 'refund',
     );
     if (genericPay.length) {
       const ids = genericPay.map((r) => r.externalId);

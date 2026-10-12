@@ -1,10 +1,15 @@
 import type { PrismaService } from '../prisma/prisma.service';
+import { normNom } from './admin-sales-segments';
 
 /** Cash-scope labels from Analytics when nomenclature is not on the payment row. */
 const GENERIC_PAYMENT_NAMES = new Set([
   'оплата от клиента',
   'возврат',
 ]);
+
+/** 1C `Строка(Основание)` for Document.Продажа → "Продажа 26253 от 29.08.2026". */
+const SALE_DOCUMENT_TITLE_RE =
+  /^продажа\s+\d+(\s+от\s+\d{1,2}\.\d{1,2}\.\d{2,4})?/i;
 
 export type BasisProductLine = {
   productName: string;
@@ -15,11 +20,45 @@ export type BasisProductLine = {
   amount: number;
 };
 
+/**
+ * Placeholder product names on cash/debt rows — not real nomenclature.
+ * Includes Analytics substitution of the sale document presentation.
+ */
 export function isGenericPaymentProduct(
   name: string | null | undefined,
 ): boolean {
   const n = (name ?? '').trim().toLowerCase();
-  return !n || GENERIC_PAYMENT_NAMES.has(n);
+  if (!n) return true;
+  if (GENERIC_PAYMENT_NAMES.has(n)) return true;
+  if (SALE_DOCUMENT_TITLE_RE.test(n)) return true;
+  return false;
+}
+
+/**
+ * Whether ClubRevenueEntry.productName should be replaced with sale lines.
+ * True for placeholders and when the cash label does not match any basis SKU
+ * (e.g. membership title on a personal-account shop payment).
+ */
+export function shouldReplaceProductWithBasis(
+  productName: string | null | undefined,
+  lines: BasisProductLine[],
+): boolean {
+  if (!lines.length) return false;
+  if (isGenericPaymentProduct(productName)) return true;
+  const raw = (productName ?? '').trim();
+  if (!raw) return true;
+  const n = normNom(raw);
+  if (lines.some((l) => normNom(l.productName) === n)) return false;
+  if (raw.includes(', ')) {
+    const parts = raw.split(',').map((p) => normNom(p.trim()));
+    if (
+      parts.length > 0 &&
+      parts.every((p) => p && lines.some((l) => normNom(l.productName) === p))
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -132,8 +171,8 @@ export function summarizeBasisProducts(lines: BasisProductLine[]): {
 }
 
 /**
- * Resolve basis nomenclature for generic payment rows and persist onto
- * ClubRevenueEntry so list filters and discrepancies see real product names.
+ * Resolve basis nomenclature for generic / mismatched payment rows and persist
+ * onto ClubRevenueEntry so list filters and discrepancies see real product names.
  */
 export async function enrichGenericPaymentProducts(
   prisma: PrismaService,
@@ -149,10 +188,9 @@ export async function enrichGenericPaymentProducts(
     saleType: string | null;
   }>,
 ): Promise<number> {
-  const need = rows.filter((r) => isGenericPaymentProduct(r.productName));
-  if (!need.length) return 0;
+  if (!rows.length) return 0;
 
-  const saleDocIds = need.flatMap((r) =>
+  const saleDocIds = rows.flatMap((r) =>
     saleDocIdsForRevenueRow({
       externalId: r.externalId,
       documentId: r.documentId,
@@ -162,12 +200,13 @@ export async function enrichGenericPaymentProducts(
   if (!byDoc.size) return 0;
 
   let updated = 0;
-  for (const r of need) {
+  for (const r of rows) {
     const docs = saleDocIdsForRevenueRow({
       externalId: r.externalId,
       documentId: r.documentId,
     });
     const lines = docs.flatMap((d) => byDoc.get(d) ?? []);
+    if (!shouldReplaceProductWithBasis(r.productName, lines)) continue;
     const summary = summarizeBasisProducts(lines);
     if (!summary) continue;
     // Single line → exact nomenclature; several → joined names for list/detail.

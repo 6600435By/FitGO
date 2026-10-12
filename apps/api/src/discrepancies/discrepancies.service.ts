@@ -214,10 +214,12 @@ export class DiscrepanciesService {
       },
     });
 
-    // «Оплата от клиента» → real nomenclature from SaleTransaction (основание).
-    const generics = sales.filter((r) => isGenericPaymentProduct(r.productName));
-    if (generics.length) {
-      await enrichGenericPaymentProducts(this.prisma, clubId, generics);
+    // Cash placeholders / wrong labels → real nomenclature from SaleTransaction.
+    const payRows = sales.filter(
+      (r) => r.operationType === 'payment' || r.operationType === 'refund',
+    );
+    if (payRows.length) {
+      await enrichGenericPaymentProducts(this.prisma, clubId, payRows);
     }
 
     const saleDocIds = sales.flatMap((r) =>
@@ -276,11 +278,11 @@ export class DiscrepanciesService {
       const basis: BasisProductLine[] = docs.flatMap(
         (d) => basisByDoc.get(d) ?? [],
       );
+      // Payments/refunds: always classify by sale nomenclature (installments,
+      // «Оплата от клиента», document titles, ЛС shop charges mislabeled as VIP).
       const shouldExpand =
         (row.operationType === 'payment' || row.operationType === 'refund') &&
-        basis.length > 0 &&
-        (isGenericPaymentProduct(row.productName) ||
-          (row.productName ?? '').includes(', '));
+        basis.length > 0;
       if (shouldExpand) {
         const total =
           basis.reduce((s, l) => s + Math.abs(l.amount), 0) || basis.length;
