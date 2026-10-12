@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { cryptUserPsw } from './webkassa-crypto';
+import { cryptLoginPassword } from './webkassa-crypto';
 
 const DEFAULT_BASE = 'https://cabinet.webkassa.by/rsCashAppsWeb';
 const DEFAULT_REPORT_KIND = '100';
@@ -11,8 +11,8 @@ const DEFAULT_REPORT_KIND = '100';
  * Flow (SPA parity):
  * 1. GET  /rsCashAppsWeb/index → cookies + X-CSRF-TOKEN
  * 2. POST /rsCashAppsWeb/noauth/crypto/salt { value: login }
- * 3. cryptUserPsw (bcrypt + AES) → encrypted password hex
- * 4. POST /rsCashAppsWeb/login (form-urlencoded)
+ * 3. cryptLoginPassword: bcrypt → AES decrypt secret → AES encrypt(bcryptHash)
+ * 4. POST /rsCashAppsWeb/login (form-urlencoded: username+password only)
  * 5. POST /rsCashAppsWeb/cashdocs/report/checks/{kind} → xlsx
  */
 export class WebkassaFetcher {
@@ -100,11 +100,7 @@ export class WebkassaFetcher {
 
     await this.bootstrap(base);
     const salt = await this.fetchSalt(base, login);
-    const encryptedPassword = cryptUserPsw({
-      hash: salt,
-      adminPassword: password,
-      userPassword: password,
-    });
+    const encryptedPassword = cryptLoginPassword(salt, password);
     await this.login(base, login, encryptedPassword);
   }
 
@@ -154,73 +150,77 @@ export class WebkassaFetcher {
     username: string,
     encryptedPassword: string,
   ) {
+    // SPA: only username+password in body; CSRF only as X-CSRF-TOKEN header.
     const body = new URLSearchParams({
       username,
       password: encryptedPassword,
-      ...(this.csrf ? { _csrf: this.csrf } : {}),
-    });
+    }).toString();
     const res = await fetch(`${base}/login`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'text/html,application/json,*/*',
+        Accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
         Cookie: this.cookie,
         ...(this.csrf ? { 'X-CSRF-TOKEN': this.csrf } : {}),
       },
-      body: body.toString(),
+      body,
       redirect: 'manual',
     });
     this.ingestCookies(res);
     this.ingestCsrf(res);
 
     const loc = res.headers.get('location') || '';
-    const loginFailed =
-      res.status === 401 ||
-      res.status === 403 ||
-      /login.*error|error=true|\/login\/?$/i.test(loc);
+    const text = await res.text().catch(() => '');
 
-    if (loginFailed) {
+    // SPA treats status>=400 as login error with JSON errMessForClient.
+    if (res.status >= 400) {
+      throw new Error(
+        formatWebkassaHttpError(res.status, text) ||
+          'Webkassa: отказ входа (проверьте WEBKASSA_LOGIN / WEBKASSA_PASSWORD)',
+      );
+    }
+    if (/login.*error|error=true|\/login\/?$/i.test(loc)) {
       throw new Error(
         'Webkassa: отказ входа (проверьте WEBKASSA_LOGIN / WEBKASSA_PASSWORD)',
       );
     }
+    if (/Please sign in|name=["']username["']/i.test(text)) {
+      throw new Error(
+        'Webkassa: отказ входа (проверьте WEBKASSA_LOGIN / WEBKASSA_PASSWORD)',
+      );
+    }
+    // JSON error body even on 200 (defensive)
+    const loginErr = parseWebkassaErrorMessage(text);
+    if (loginErr) throw new Error(loginErr);
     if (!this.cookie) {
-      const text = await res.text().catch(() => '');
       throw new Error(
         `${formatWebkassaHttpError(res.status, text)} Войдите на https://cabinet.webkassa.by/login, скачайте отчёт и нажмите «Загрузить xlsx».`,
       );
     }
 
-    // Refresh CSRF after login (header or follow redirect page).
-    if (res.status === 302 || res.status === 303) {
-      if (loc) {
-        const nextUrl = loc.startsWith('http')
-          ? loc
-          : new URL(loc, base).toString();
-        const follow = await fetch(nextUrl, {
-          method: 'GET',
-          headers: {
-            Cookie: this.cookie,
-            Accept: 'text/html,application/json,*/*',
-            ...(this.csrf ? { 'X-CSRF-TOKEN': this.csrf } : {}),
-          },
-          redirect: 'manual',
-        });
-        this.ingestCookies(follow);
-        this.ingestCsrf(follow);
-        if (!this.csrf) {
-          const html = await follow.text().catch(() => '');
-          this.csrfFromHtml(html);
-        }
+    // Refresh CSRF after login redirect (rare for SPA; success is usually 200).
+    if ((res.status === 302 || res.status === 303) && loc) {
+      const nextUrl = loc.startsWith('http')
+        ? loc
+        : new URL(loc, base).toString();
+      const follow = await fetch(nextUrl, {
+        method: 'GET',
+        headers: {
+          Cookie: this.cookie,
+          Accept: 'text/html,application/json,*/*',
+          ...(this.csrf ? { 'X-CSRF-TOKEN': this.csrf } : {}),
+        },
+        redirect: 'manual',
+      });
+      this.ingestCookies(follow);
+      this.ingestCsrf(follow);
+      if (!this.csrf) {
+        const html = await follow.text().catch(() => '');
+        this.csrfFromHtml(html);
       }
-    } else {
-      const html = await res.text().catch(() => '');
-      if (/Please sign in|name=["']username["']/i.test(html)) {
-        throw new Error(
-          'Webkassa: отказ входа (проверьте WEBKASSA_LOGIN / WEBKASSA_PASSWORD)',
-        );
-      }
-      if (!this.csrf) this.csrfFromHtml(html);
+    } else if (!this.csrf) {
+      this.csrfFromHtml(text);
     }
   }
 
@@ -303,23 +303,35 @@ export function explainBadWebkassaConfig(baseUrl: string): string | null {
   return null;
 }
 
-function formatWebkassaHttpError(status: number, text: string): string {
+function parseWebkassaErrorMessage(text: string): string | null {
   const raw = text.trim();
+  if (!raw) return null;
   try {
     const j = JSON.parse(raw) as Record<string, unknown>;
+    const nested =
+      j.error && typeof j.error === 'object'
+        ? (j.error as Record<string, unknown>)
+        : null;
     const msg = [
+      nested?.errMessForClient,
+      nested?.errMessageForClient,
       j.errMessForClient,
       j.errMessageForClient,
       j.message,
-      j.error,
+      typeof j.error === 'string' ? j.error : null,
     ].find((v): v is string => typeof v === 'string' && v.trim().length > 0);
-    if (msg && /не существует|cashdocs|GET не существует/i.test(msg)) {
-      return 'Адрес выгрузки Webkassa неверный (нужен POST отчёта из ЛК).';
-    }
-    if (msg) return msg.slice(0, 180);
+    return msg ? msg.slice(0, 180) : null;
   } catch {
-    /* not JSON */
+    return null;
   }
+}
+
+function formatWebkassaHttpError(status: number, text: string): string {
+  const msg = parseWebkassaErrorMessage(text);
+  if (msg && /не существует|cashdocs|GET не существует/i.test(msg)) {
+    return 'Адрес выгрузки Webkassa неверный (нужен POST отчёта из ЛК).';
+  }
+  if (msg) return msg;
   if (status === 404 || status === 405) {
     return 'Адрес выгрузки Webkassa неверный.';
   }

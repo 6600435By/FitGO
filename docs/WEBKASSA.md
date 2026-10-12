@@ -63,8 +63,8 @@ ClubRevenueEntry (1С sync) ─────────────────�
 
 1. `GET /index` → cookies (`SESSION` / `JSESSIONID`) + `X-CSRF-TOKEN`
 2. `POST /noauth/crypto/salt` body `{ "value": "<login>" }`
-3. Пароль → `cryptUserPsw` (bcrypt salt 29 символов + AES-256-CBC / PBKDF2-SHA1) — см. `webkassa-crypto.ts`
-4. `POST /login` form-urlencoded: `username` + зашифрованный `password`
+3. Пароль → `cryptLoginPassword` (bcrypt → AES decrypt secret → AES **encrypt bcrypt-hash**, не plaintext) — см. `webkassa-crypto.ts`
+4. `POST /login` form-urlencoded: только `username` + `password` (CSRF в заголовке `X-CSRF-TOKEN`)
 5. `POST /cashdocs/report/checks/100` JSON-фильтр по `docDate` BETWEEN → xlsx
 
 Не открывайте «Please sign in» на `/rsCashAppsWeb/login` в браузере для проверки пароля — туда нужен уже преобразованный пароль. Вход человека: [cabinet.webkassa.by/login](https://cabinet.webkassa.by/login).
