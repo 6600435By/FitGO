@@ -18,6 +18,14 @@ function AdminBookingControlInner() {
   const paymentRaw = searchParams.get('payment')?.trim()?.toUpperCase();
   const initialPayment =
     paymentRaw === 'DEBT' || paymentRaw === 'PAID' ? paymentRaw : 'ALL';
+  const kindRaw = searchParams.get('kind')?.trim()?.toUpperCase();
+  const initialKind =
+    kindRaw === 'GROUP' ||
+    kindRaw === 'PT' ||
+    kindRaw === 'SPA' ||
+    kindRaw === 'SOLARIUM'
+      ? kindRaw
+      : undefined;
 
   const panelApi = useMemo(() => createBookingControlApi('admin'), []);
 
@@ -34,6 +42,7 @@ function AdminBookingControlInner() {
       initialTo={initialTo}
       initialNeedsReview={initialNeedsReview}
       initialPayment={initialPayment}
+      initialKind={initialKind}
       cancelSpaBooking={async (bookingId) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');

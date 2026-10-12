@@ -8,7 +8,6 @@ import type {
   SpaService,
   SpaSpecialistSummary,
   SpaWaitlistEntry,
-  SpecialistWorkSlotInput,
 } from '@fitgo/shared-types';
 import { UserRole } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -19,10 +18,6 @@ import {
 } from '@/components/spa-board/spa-booking-dialog';
 import { SpaBookingEditDialog } from '@/components/spa-board/spa-booking-edit-dialog';
 import { SpaDayHoursDialog } from '@/components/spa-board/spa-day-hours-dialog';
-import {
-  normalizeHm,
-  SpaHoursEditor,
-} from '@/components/spa-board/spa-hours-editor';
 import { SpaWaitlistPanel } from '@/components/spa-board/spa-waitlist-panel';
 import { SpaWaitlistPickDialog } from '@/components/spa-board/spa-waitlist-pick-dialog';
 import { api } from '@/lib/api';
@@ -41,14 +36,6 @@ function toDayIso(d: Date) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
-
-function normalizeSlots(slots: SpecialistWorkSlotInput[]) {
-  return slots.map((s) => ({
-    ...s,
-    startTime: normalizeHm(s.startTime),
-    endTime: normalizeHm(s.endTime),
-  }));
 }
 
 export function AdminSpaWorkspace() {
@@ -70,8 +57,6 @@ export function AdminSpaWorkspace() {
     d.setHours(0, 0, 0, 0);
     return d;
   });
-  const [scheduleSpecialistId, setScheduleSpecialistId] = useState('');
-  const [workSlots, setWorkSlots] = useState<SpecialistWorkSlotInput[]>([]);
   const [showAssign, setShowAssign] = useState(false);
   const [assignDefaults, setAssignDefaults] = useState<{
     specialistId?: string;
@@ -122,18 +107,6 @@ export function AdminSpaWorkspace() {
     end.setHours(23, 59, 59, 999);
     return { start: start.toISOString(), end: end.toISOString() };
   }, [day]);
-
-  const publishPeriod = useMemo(() => {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 28);
-    end.setHours(23, 59, 59, 999);
-    return { start: start.toISOString(), end: end.toISOString() };
-  }, []);
-
-  const activeScheduleId =
-    scheduleSpecialistId || specialists[0]?.id || '';
 
   const reload = useCallback(async () => {
     const token = getToken();
@@ -222,21 +195,8 @@ export function AdminSpaWorkspace() {
     if (!canEditQuotaRules && tab === 'rules') setTab('calendar');
   }, [canEditQuotaRules, tab]);
 
-  useEffect(() => {
-    if (!activeScheduleId) {
-      setWorkSlots([]);
-      return;
-    }
-    const token = getToken();
-    if (!token) return;
-    api
-      .adminGetSpecialistWorkSchedule(token, activeScheduleId)
-      .then(setWorkSlots)
-      .catch(() => setWorkSlots([]));
-  }, [activeScheduleId]);
-
   const dayHoursForSpecialist = useMemo(() => {
-    const sid = dayHoursSpecialistId || activeScheduleId;
+    const sid = dayHoursSpecialistId;
     if (!board || !sid) return null;
     const blocks = board.hours.filter(
       (h) =>
@@ -254,24 +214,12 @@ export function AdminSpaWorkspace() {
     const fmt = (d: Date) =>
       `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     return { startTime: fmt(start), endTime: fmt(end) };
-  }, [
-    activeScheduleId,
-    board,
-    boardPeriod.end,
-    boardPeriod.start,
-    dayHoursSpecialistId,
-  ]);
-
-  const scheduleSpecialistName = useMemo(() => {
-    const sp = specialists.find((s) => s.id === activeScheduleId);
-    return sp ? `${sp.lastName} ${sp.firstName}` : '';
-  }, [activeScheduleId, specialists]);
+  }, [board, boardPeriod.end, boardPeriod.start, dayHoursSpecialistId]);
 
   const dayHoursSpecialistLabel = useMemo(() => {
-    const sid = dayHoursSpecialistId || activeScheduleId;
-    const sp = specialists.find((s) => s.id === sid);
+    const sp = specialists.find((s) => s.id === dayHoursSpecialistId);
     return sp ? `${sp.lastName} ${sp.firstName}` : '';
-  }, [activeScheduleId, dayHoursSpecialistId, specialists]);
+  }, [dayHoursSpecialistId, specialists]);
 
   const activeCatalogServices = useMemo(
     () => services.filter((s) => s.active),
@@ -421,75 +369,12 @@ export function AdminSpaWorkspace() {
     }
   };
 
-  const saveTemplate = async () => {
-    const token = getToken();
-    if (!token || !activeScheduleId) return;
-    if (workSlots.length === 0) {
-      setMessage('Отметьте хотя бы один рабочий день');
-      return;
-    }
-    setBusy(true);
-    setMessage('');
-    try {
-      const saved = await api.adminSetSpecialistWorkSchedule(
-        token,
-        activeScheduleId,
-        normalizeSlots(workSlots),
-      );
-      setWorkSlots(saved);
-      setMessage(`Шаблон сохранён · ${scheduleSpecialistName}`);
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Ошибка сохранения');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const fillAndPublish = async () => {
-    const token = getToken();
-    if (!token || !activeScheduleId) return;
-    if (workSlots.length === 0) {
-      setMessage('Отметьте хотя бы один рабочий день');
-      return;
-    }
-    setBusy(true);
-    setMessage('');
-    try {
-      const saved = await api.adminSetSpecialistWorkSchedule(
-        token,
-        activeScheduleId,
-        normalizeSlots(workSlots),
-      );
-      setWorkSlots(saved);
-      const filled = await api.adminFillSpecialistFromTemplate(
-        token,
-        activeScheduleId,
-        publishPeriod.start,
-        publishPeriod.end,
-      );
-      const result = await api.adminPublishSpecialistSchedule(
-        token,
-        activeScheduleId,
-        publishPeriod.start,
-        publishPeriod.end,
-      );
-      setMessage(
-        `${scheduleSpecialistName}: шаблон сохранён · создано ${filled.createdBlocks}, опубликовано ${result.publishedBlocks}`,
-      );
-      await reload();
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Ошибка публикации');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const saveDayHours = async (value: {
     startTime: string | null;
     endTime: string | null;
   }) => {
     const token = getToken();
-    const sid = dayHoursSpecialistId || activeScheduleId;
+    const sid = dayHoursSpecialistId;
     if (!token || !sid) return;
     setBusy(true);
     setMessage('');
@@ -1014,43 +899,6 @@ export function AdminSpaWorkspace() {
           ) : (
             <p className="text-sm text-slate-400">Загрузка доски…</p>
           )}
-
-          <div className="space-y-3">
-            <label className="block text-[11px] text-slate-500">
-              График специалиста
-              <select
-                className="input mt-0.5 block h-9 max-w-md py-1 text-sm"
-                value={activeScheduleId}
-                onChange={(e) => setScheduleSpecialistId(e.target.value)}
-              >
-                {specialists.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.lastName} {s.firstName}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="text-xs text-slate-500">
-              Шаблон недели и публикация на 28 дней. Один день — «Часы дня» на
-              доске.
-            </p>
-            {activeScheduleId ? (
-              <SpaHoursEditor
-                workSlots={workSlots}
-                onChange={setWorkSlots}
-                busy={busy}
-                title={
-                  scheduleSpecialistName
-                    ? `График · ${scheduleSpecialistName}`
-                    : 'График специалиста'
-                }
-                onSaveTemplate={saveTemplate}
-                onFillAndPublish={fillAndPublish}
-              />
-            ) : (
-              <p className="text-sm text-slate-400">Нет специалистов</p>
-            )}
-          </div>
 
           <ul className="space-y-2">
             {bookings.map((b) => (

@@ -126,7 +126,7 @@ export class AdminController {
   }
 
   @Get('at-risk')
-  @RequirePermission(AdminPermission.AT_RISK_VIEW)
+  @RequirePermission(AdminPermission.AT_RISK_VIEW, AdminPermission.CLIENTS_VIEW)
   getAtRisk(@CurrentUser() user: JwtPayload) {
     return this.adminService.getAtRiskClients(user);
   }

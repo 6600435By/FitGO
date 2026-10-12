@@ -64,15 +64,23 @@ export class AdminService {
 
     // DB-only path: never await Forma/Analytics on dashboard GET (was stacking
     // WordpressUserAPI / Analytics sessions on every tab revisit).
+    const now = new Date();
+    const dueSoon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
     const [
       reviewItems,
-      groupBooked,
+      groupCount,
       spaCount,
       ptCount,
       revenueBlock,
       pendingCrmCount,
       expiringSoon,
       callTodayTasks,
+      membershipDueCount,
+      managerDueCount,
+      groupApprovalCount,
+      spaApprovalCount,
+      ptApprovalCount,
     ] = await Promise.all([
       this.bookingControl
         .list(clubId, {
@@ -83,7 +91,7 @@ export class AdminService {
         })
         .catch(() => []),
       this.prisma.onexClassSession
-        .findMany({
+        .count({
           where: {
             clubId,
             kind: 'GROUP',
@@ -91,9 +99,7 @@ export class AdminService {
             status: { not: OnexClassStatus.CANCELLED },
             startAt: { gte: dayStart, lte: dayEnd },
           },
-          select: { bookedCount: true },
         })
-        .then((rows) => rows.reduce((s, r) => s + (r.bookedCount ?? 0), 0))
         .catch(() => 0),
       this.prisma.spaBooking
         .count({
@@ -153,7 +159,7 @@ export class AdminService {
               PrismaAdminTaskStatus.IN_PROGRESS,
             ],
           },
-          nextActionAt: { lte: new Date() },
+          nextActionAt: { lte: now },
           AND: [
             {
               OR: [
@@ -166,11 +172,76 @@ export class AdminService {
         orderBy: { nextActionAt: 'asc' },
         take: 5,
       }),
+      this.prisma.adminTask.count({
+        where: {
+          clubId,
+          source: 'MEMBERSHIP_EXPIRING',
+          status: {
+            in: [
+              PrismaAdminTaskStatus.OPEN,
+              PrismaAdminTaskStatus.IN_PROGRESS,
+            ],
+          },
+          nextActionAt: { lte: now },
+          AND: [
+            {
+              OR: [
+                { stage: null },
+                { stage: { notIn: ['RENEWED', 'LOST', 'WILL_RENEW'] } },
+              ],
+            },
+          ],
+        },
+      }),
+      this.prisma.adminTask.count({
+        where: {
+          clubId,
+          assigneeId: user.sub,
+          source: { in: ['MANAGER', 'DISCREPANCY'] },
+          status: {
+            in: [
+              PrismaAdminTaskStatus.OPEN,
+              PrismaAdminTaskStatus.IN_PROGRESS,
+            ],
+          },
+          OR: [
+            { nextActionAt: null, dueAt: null },
+            { nextActionAt: { lte: dueSoon } },
+            { nextActionAt: null, dueAt: { lte: dueSoon } },
+          ],
+        },
+      }),
+      this.bookingControl
+        .listPendingAdminApprovals(clubId, from30Str, today, 'GROUP')
+        .then((rows) => rows.length)
+        .catch(() => 0),
+      this.bookingControl
+        .listPendingAdminApprovals(clubId, from30Str, today, 'SPA')
+        .then((rows) => rows.length)
+        .catch(() => 0),
+      this.bookingControl
+        .listPendingAdminApprovals(clubId, from30Str, today, 'PT')
+        .then((rows) => rows.length)
+        .catch(() => 0),
     ]);
 
-    const group = groupBooked;
+    const group = groupCount;
     const spa = spaCount;
     const pt = ptCount;
+    const bookingControlTasks =
+      groupApprovalCount + spaApprovalCount + ptApprovalCount;
+    const tasksStats = {
+      bookingControl: bookingControlTasks,
+      membership: membershipDueCount,
+      group: groupApprovalCount,
+      spa: spaApprovalCount,
+      pt: ptApprovalCount,
+      manager: managerDueCount,
+      total:
+        bookingControlTasks +
+        membershipDueCount +
+        managerDueCount,
+    };
 
     const callToday = callTodayTasks.map((task) => {
       const meta = (task.meta ?? {}) as Record<string, unknown>;
@@ -219,6 +290,7 @@ export class AdminService {
           pt,
         },
         revenueToday: revenueBlock,
+        tasks: tasksStats,
         expiringSoon,
         pendingCrmCount,
       },

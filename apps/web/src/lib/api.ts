@@ -178,6 +178,15 @@ export interface AdminDashboard {
       currency: string;
       syncedAt?: string;
     };
+    tasks: {
+      total: number;
+      bookingControl: number;
+      membership: number;
+      group: number;
+      spa: number;
+      pt: number;
+      manager: number;
+    };
     expiringSoon: number;
     pendingCrmCount?: number;
   };

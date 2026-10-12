@@ -43,7 +43,12 @@ export default function AdminAtRiskPage() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Клиенты в зоне риска</h2>
+      <div>
+        <h2 className="text-xl font-semibold">Клиенты в зоне риска</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Не были в клубе 3+ дней или абонемент истекает в ближайшие 14 дней.
+        </p>
+      </div>
 
       {message && (
         <p className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-400">

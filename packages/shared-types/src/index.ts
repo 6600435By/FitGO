@@ -497,6 +497,18 @@ export interface AdminDashboardRevenueToday {
   syncedAt?: string;
 }
 
+/** Open task queues for the admin dashboard Tasks card. */
+export interface AdminDashboardTasks {
+  total: number;
+  /** Pending session approvals (ГП + SPA + ПТ). */
+  bookingControl: number;
+  membership: number;
+  group: number;
+  spa: number;
+  pt: number;
+  manager: number;
+}
+
 export interface AdminDashboardCallTodayItem {
   taskId: string;
   clientName: string;
@@ -519,6 +531,7 @@ export interface AdminDashboard {
     needsReviewCount: number;
     sessionsToday: AdminDashboardSessionsToday;
     revenueToday: AdminDashboardRevenueToday;
+    tasks: AdminDashboardTasks;
     expiringSoon: number;
     pendingCrmCount?: number;
   };
@@ -1181,6 +1194,7 @@ export const ADMIN_PERMISSION_PRESETS: Record<
       AdminPermission.DASHBOARD_VIEW,
       AdminPermission.CLIENTS_VIEW,
       AdminPermission.CLIENTS_MESSAGE,
+      AdminPermission.AT_RISK_VIEW,
       AdminPermission.NOTIFICATIONS_SEND,
     ],
   },

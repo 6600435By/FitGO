@@ -14,14 +14,14 @@ const ALL_NAV: Array<{
   href: string;
   label: string;
   permission?: AdminPermission;
+  /** Extra permissions that also unlock the item (OR with permission). */
+  anyOf?: AdminPermission[];
   module?: 'messaging' | 'club_admin' | 'spa_booking';
+  /** Hidden from bottom nav until product asks to show again. */
+  hidden?: boolean;
 }> = [
   { href: '/admin', label: 'Дашборд', permission: AdminPermission.DASHBOARD_VIEW },
-  {
-    href: '/admin/pending-crm',
-    label: 'Без 1С',
-    permission: AdminPermission.CLIENTS_VIEW,
-  },
+  { href: '/admin/tasks', label: 'Задачи' },
   {
     href: '/admin/notifications',
     label: 'Сообщения',
@@ -53,6 +53,7 @@ const ALL_NAV: Array<{
     href: '/admin/exceptions',
     label: 'Нестыковки',
     permission: AdminPermission.CLIENTS_VIEW,
+    hidden: true,
   },
   {
     href: '/admin/booking-control',
@@ -62,10 +63,19 @@ const ALL_NAV: Array<{
   // Personal payroll / own sales — always for ADMIN (not gated by REPORTS_VIEW).
   { href: '/admin/payroll', label: 'Расчёт ЗП' },
   { href: '/admin/sales', label: 'Мои продажи' },
-  { href: '/admin/at-risk', label: 'Риск', permission: AdminPermission.AT_RISK_VIEW },
+  {
+    href: '/admin/at-risk',
+    label: 'Риск',
+    permission: AdminPermission.AT_RISK_VIEW,
+    anyOf: [AdminPermission.CLIENTS_VIEW],
+  },
   { href: '/admin/funnel', label: 'Воронка', permission: AdminPermission.FUNNEL_VIEW },
   { href: '/admin/reports', label: 'Отчёты', permission: AdminPermission.REPORTS_VIEW },
-  { href: '/admin/tasks', label: 'Задачи' },
+  {
+    href: '/admin/pending-crm',
+    label: 'Без 1С',
+    permission: AdminPermission.CLIENTS_VIEW,
+  },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
@@ -80,9 +90,14 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       .then(({ permissions }) => {
         setNavItems(
           ALL_NAV.filter((item) => {
+            if (item.hidden) return false;
             if (item.module && !isEnabled(item.module)) return false;
             if (item.permission && !permissions.includes(item.permission)) {
-              return false;
+              if (
+                !item.anyOf?.some((p) => permissions.includes(p))
+              ) {
+                return false;
+              }
             }
             return true;
           }),

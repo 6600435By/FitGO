@@ -12,6 +12,7 @@ import type {
 } from '@fitgo/shared-types';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { DateField } from '@/components/ui/date-field';
 
 function money(minor: number): string {
   return (minor / 100).toLocaleString('ru-RU', {
@@ -95,69 +96,126 @@ function TotalsBar({
   );
 }
 
+function lineStatus(line: AdminSaleLineDto, overdueCutoff: number) {
+  const unpaid = !line.paid;
+  const soldAt = line.soldAt ? new Date(line.soldAt).getTime() : 0;
+  const overdue = unpaid && soldAt > 0 && soldAt < overdueCutoff;
+  return { unpaid, overdue };
+}
+
 function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+
   if (!lines.length) {
     return (
       <p className="text-sm text-slate-500">Нет продаж за выбранный период</p>
     );
   }
+
   const overdueCutoff = Date.now() - 7 * 86400000;
+  const groups = new Map<
+    string,
+    { key: string; name: string; lines: AdminSaleLineDto[]; totalMinor: number }
+  >();
+  for (const line of lines) {
+    const name = line.clientName?.trim() || '—';
+    const key = name.toLowerCase();
+    const g = groups.get(key);
+    if (g) {
+      g.lines.push(line);
+      g.totalMinor += line.attributedMinor;
+    } else {
+      groups.set(key, {
+        key,
+        name,
+        lines: [line],
+        totalMinor: line.attributedMinor,
+      });
+    }
+  }
+  const rows = [...groups.values()].sort((a, b) =>
+    a.name.localeCompare(b.name, 'ru'),
+  );
+
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-800">
       <table className="min-w-full text-left text-sm">
         <thead className="bg-slate-900/80 text-slate-400">
           <tr>
             <th className="px-3 py-2 font-medium">Клиент</th>
-            <th className="px-3 py-2 font-medium">Вид</th>
-            <th className="px-3 py-2 font-medium">Продажа</th>
-            <th className="px-3 py-2 font-medium">Оплата</th>
+            <th className="px-3 py-2 font-medium text-right">Продаж</th>
             <th className="px-3 py-2 font-medium text-right">Сумма</th>
-            <th className="px-3 py-2 font-medium">Статус</th>
           </tr>
         </thead>
         <tbody>
-          {lines.map((line) => {
-            const unpaid = !line.paid;
-            const soldAt = line.soldAt ? new Date(line.soldAt).getTime() : 0;
-            const overdue = unpaid && soldAt > 0 && soldAt < overdueCutoff;
+          {rows.map((group) => {
+            const open = expanded === group.key;
             return (
-            <tr
-              key={line.id}
-              className={`border-t border-slate-800 ${
-                overdue ? 'bg-amber-500/5' : ''
-              }`}
-            >
-              <td className="px-3 py-2">
-                <div>{line.clientName ?? '—'}</div>
-                {line.productName ? (
-                  <div className="text-xs text-slate-500">{line.productName}</div>
-                ) : null}
-                {line.employeeName ? (
-                  <div className="text-xs text-slate-600">
-                    автор 1С: {line.employeeName}
-                  </div>
-                ) : null}
-              </td>
-              <td className="px-3 py-2">{saleTypeLabel(line.saleType)}</td>
-              <td className="px-3 py-2 whitespace-nowrap">
-                {line.soldAt.slice(0, 10)}
-              </td>
-              <td className="px-3 py-2 whitespace-nowrap">
-                {line.paidAt ? line.paidAt.slice(0, 10) : '—'}
-              </td>
-              <td className="px-3 py-2 text-right font-medium">
-                {money(line.attributedMinor)}
-              </td>
-              <td className="px-3 py-2">
-                {line.paid ? (
-                  <span className="text-fitgo-300">Оплачена</span>
-                ) : overdue ? (
-                  <span className="text-amber-200">Долг &gt;7 дн.</span>
-                ) : (
-                  <span className="text-amber-300">Не оплачена</span>
-                )}
-              </td>
-            </tr>
+              <Fragment key={group.key}>
+                <tr
+                  className="cursor-pointer border-t border-slate-800 hover:bg-slate-900/60"
+                  onClick={() =>
+                    setExpanded(open ? null : group.key)
+                  }
+                >
+                  <td className="px-3 py-2 font-medium">
+                    <span className="mr-2 text-slate-500">{open ? '▾' : '▸'}</span>
+                    {group.name}
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-400">
+                    {group.lines.length}
+                  </td>
+                  <td className="px-3 py-2 text-right font-medium">
+                    {money(group.totalMinor)}
+                  </td>
+                </tr>
+                {open
+                  ? group.lines.map((line) => {
+                      const { overdue } = lineStatus(line, overdueCutoff);
+                      return (
+                        <tr
+                          key={line.id}
+                          className={`border-t border-slate-800/80 bg-slate-950/40 ${
+                            overdue ? 'bg-amber-500/5' : ''
+                          }`}
+                        >
+                          <td className="px-3 py-2 pl-8" colSpan={2}>
+                            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                              <span>{saleTypeLabel(line.saleType)}</span>
+                              <span className="text-xs text-slate-500">
+                                {line.soldAt.slice(0, 10)}
+                                {line.paidAt
+                                  ? ` · опл. ${line.paidAt.slice(0, 10)}`
+                                  : ''}
+                              </span>
+                              {line.productName ? (
+                                <span className="text-xs text-slate-500">
+                                  {line.productName}
+                                </span>
+                              ) : null}
+                              {line.paid ? (
+                                <span className="text-xs text-fitgo-300">
+                                  Оплачена
+                                </span>
+                              ) : overdue ? (
+                                <span className="text-xs text-amber-200">
+                                  Долг &gt;7 дн.
+                                </span>
+                              ) : (
+                                <span className="text-xs text-amber-300">
+                                  Не оплачена
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-right font-medium">
+                            {money(line.attributedMinor)}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  : null}
+              </Fragment>
             );
           })}
         </tbody>
@@ -241,24 +299,8 @@ export function AdminMySalesPanel() {
         </div>
       </div>
       <div className="card flex flex-wrap gap-3">
-        <label className="text-sm">
-          <span className="mb-1 block text-slate-400">С</span>
-          <input
-            type="date"
-            className="input"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-          />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-slate-400">По</span>
-          <input
-            type="date"
-            className="input"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-          />
-        </label>
+        <DateField label="С" value={from} onChange={setFrom} />
+        <DateField label="По" value={to} onChange={setTo} />
         <label className="text-sm">
           <span className="mb-1 block text-slate-400">Вид</span>
           <select
@@ -416,24 +458,8 @@ export function SuperAdminSalesPanel() {
       </div>
       {syncMsg ? <p className="text-sm text-slate-400">{syncMsg}</p> : null}
       <div className="card flex flex-wrap gap-3">
-        <label className="text-sm">
-          <span className="mb-1 block text-slate-400">С</span>
-          <input
-            type="date"
-            className="input"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-          />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-slate-400">По</span>
-          <input
-            type="date"
-            className="input"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-          />
-        </label>
+        <DateField label="С" value={from} onChange={setFrom} />
+        <DateField label="По" value={to} onChange={setTo} />
         <label className="text-sm">
           <span className="mb-1 block text-slate-400">Вид</span>
           <select
