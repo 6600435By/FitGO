@@ -185,6 +185,8 @@ function AnalyticsInner() {
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : 'Ошибка загрузки');
+          if (tab === 'club') setClub(null);
+          else setStaffAll(null);
         }
       } finally {
         if (!cancelled) setLoading(false);

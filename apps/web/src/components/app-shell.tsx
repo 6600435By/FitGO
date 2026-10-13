@@ -71,13 +71,16 @@ interface AppShellProps {
    */
   hideBottomNav?: boolean;
   /**
-   * Bottom nav only from md+ (super-admin / manager). Top nav always visible;
-   * mobile uses mobileSubNav for secondary links.
+   * Two-tier top nav (super-admin / manager): groups in the bar,
+   * pages in mobileSubNav on all breakpoints; bottom nav hidden.
    */
   bottomNavMdOnly?: boolean;
   /** Inline section + page links in the sticky bar (md+ only, or always if hideBottomNav / bottomNavMdOnly). */
   desktopTopNav?: ReactNode;
-  /** Sticky section chips under the bar (mobile only). */
+  /**
+   * Secondary links under the sticky bar.
+   * With bottomNavMdOnly — all breakpoints; otherwise mobile only.
+   */
   mobileSubNav?: ReactNode;
   /** When set, FITGO brand is a link (e.g. overview home). */
   brandHref?: string;
@@ -222,7 +225,7 @@ export function AppShell({
           : hideBottomNav
             ? 'pb-6'
             : bottomNavMdOnly
-              ? 'pb-6 md:pb-24'
+              ? 'pb-6'
               : adminChrome
                 ? 'pb-24 md:pb-6'
                 : 'pb-24',
@@ -286,7 +289,12 @@ export function AppShell({
             </div>
           </div>
           {mobileSubNav && (!hideBottomNav || bottomNavMdOnly) ? (
-            <div className="border-t border-slate-800/80 px-2 py-1.5 md:hidden">
+            <div
+              className={cn(
+                'border-t border-slate-800/80 px-2 py-1.5',
+                !bottomNavMdOnly && 'md:hidden',
+              )}
+            >
               {mobileSubNav}
             </div>
           ) : null}
@@ -370,7 +378,7 @@ export function AppShell({
           'admin-chrome fixed bottom-0 left-0 right-0 border-t border-slate-800 bg-slate-950/95 backdrop-blur',
           'pb-[env(safe-area-inset-bottom)]',
           hideBottomNav && 'hidden',
-          bottomNavMdOnly && 'hidden md:block',
+          bottomNavMdOnly && 'hidden',
           !hideBottomNav && !bottomNavMdOnly && adminChrome && 'md:hidden',
         )}
       >

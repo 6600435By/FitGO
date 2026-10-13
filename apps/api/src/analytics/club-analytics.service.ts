@@ -116,17 +116,29 @@ export class ClubAnalyticsService {
     if (cached && Date.now() - cached.at < REPORT_CACHE_TTL_MS) {
       return cached.value;
     }
+    // Single-flight: cache the in-flight promise, but drop it immediately on
+    // failure so a pool timeout / 1C blip does not stick as 500 for the TTL.
     const value = this.buildClubReport(clubId, {
       ...params,
       compareMode,
       compareFrom,
       compareTo,
-    }).finally(() => {
-      setTimeout(() => {
+    })
+      .then((report) => {
+        setTimeout(() => {
+          const cur = this.reportCache.get(cacheKey);
+          if (cur?.value === value) this.reportCache.delete(cacheKey);
+        }, REPORT_CACHE_TTL_MS);
+        return report;
+      })
+      .catch((err) => {
         const cur = this.reportCache.get(cacheKey);
         if (cur?.value === value) this.reportCache.delete(cacheKey);
-      }, REPORT_CACHE_TTL_MS);
-    });
+        this.logger.error(
+          `getClubReport failed ${cacheKey}: ${err instanceof Error ? err.message : err}`,
+        );
+        throw err;
+      });
     this.reportCache.set(cacheKey, { at: Date.now(), value });
     return value;
   }
@@ -153,6 +165,7 @@ export class ClubAnalyticsService {
       (club?.workingHours as ClubWorkingHours | null) ??
       DEFAULT_CLUB_WORKING_HOURS;
 
+    // Wave 1: DB aggregates (no booking-control fan-out).
     const [
       moneyCur,
       moneyCmp,
@@ -160,10 +173,7 @@ export class ClubAnalyticsService {
       membersCmp,
       visitsCur,
       visitsCmp,
-      servicesCur,
-      servicesCmp,
       dataSince,
-      trainerRankings,
       fot,
       installments,
       debtSnap,
@@ -174,16 +184,31 @@ export class ClubAnalyticsService {
       this.membersBlock(clubId, compareFrom, compareTo),
       this.visitsBlock(clubId, params.from, params.to, workingHours),
       this.visitsBlock(clubId, compareFrom, compareTo, workingHours),
-      this.servicesBlock(clubId, params.from, params.to),
-      this.servicesBlock(clubId, compareFrom, compareTo),
       this.earliestSaleDate(clubId),
-      this.trainerRankings(clubId, params.from, params.to),
       params.includePay
         ? this.fotBlock(clubId, params.from, params.to, compareFrom, compareTo)
         : Promise.resolve(null),
       this.installmentsSnapshot(clubId),
       this.debtSnapshot(clubId),
     ]);
+
+    // Wave 2: booking-control lists are connection-heavy — run sequentially
+    // so Prisma pool (often limit 5–10) is not exhausted under cron load.
+    const servicesCur = await this.servicesBlock(
+      clubId,
+      params.from,
+      params.to,
+    );
+    const servicesCmp = await this.servicesBlock(
+      clubId,
+      compareFrom,
+      compareTo,
+    );
+    const trainerRankings = await this.trainerRankings(
+      clubId,
+      params.from,
+      params.to,
+    );
 
     const money: ClubAnalyticsMoney = {
       revenue: metric(moneyCur.revenueMinor, moneyCmp.revenueMinor, {

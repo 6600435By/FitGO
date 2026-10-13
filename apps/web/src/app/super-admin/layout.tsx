@@ -215,7 +215,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
 
   const mobileSubNav =
     pathname === '/super-admin' ? null : (
-      <div className="flex gap-0.5">
+      <div className="flex gap-0.5 overflow-x-auto md:justify-center">
         {groupPages.map((item) => {
           const active =
             pathname === item.href || pathname.startsWith(`${item.href}/`);
