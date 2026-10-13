@@ -78,6 +78,11 @@ export class CreateStaffDto {
   @IsOptional()
   @IsBoolean()
   trainerClub?: boolean;
+
+  /** Trainer group «Реформеры». */
+  @IsOptional()
+  @IsBoolean()
+  trainerReformers?: boolean;
 }
 
 export class UpdateStaffDto {
@@ -136,4 +141,8 @@ export class UpdateStaffDto {
   @IsOptional()
   @IsBoolean()
   trainerClub?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  trainerReformers?: boolean;
 }

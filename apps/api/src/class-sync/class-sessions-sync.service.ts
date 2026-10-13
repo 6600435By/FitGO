@@ -286,6 +286,11 @@ export class ClassSessionsSyncService {
           quantity: m.quantity && m.quantity > 0 ? m.quantity : 1,
           paySource: mapPaySource(m.paySource),
           unitPriceMinor: majorToMinorOrNull(m.unitAmount),
+          packageAmountMinor: majorToMinorOrNull(m.packageAmount),
+          packageQty:
+            m.packageQty != null && Number(m.packageQty) > 0
+              ? Math.round(Number(m.packageQty))
+              : null,
           bookedAt: parseOptionalDate(m.bookedAt),
           packageDocId: m.packageDocId?.trim() || null,
           packageValidUntil: m.packageValidUntil?.trim() || null,
@@ -298,6 +303,11 @@ export class ClassSessionsSyncService {
           quantity: m.quantity && m.quantity > 0 ? m.quantity : 1,
           paySource: mapPaySource(m.paySource),
           unitPriceMinor: majorToMinorOrNull(m.unitAmount),
+          packageAmountMinor: majorToMinorOrNull(m.packageAmount),
+          packageQty:
+            m.packageQty != null && Number(m.packageQty) > 0
+              ? Math.round(Number(m.packageQty))
+              : null,
           bookedAt: parseOptionalDate(m.bookedAt),
           packageDocId: m.packageDocId?.trim() || null,
           packageValidUntil: m.packageValidUntil?.trim() || null,

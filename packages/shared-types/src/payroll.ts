@@ -38,7 +38,13 @@ export interface WorkUnit {
   serviceExternalId?: string;
   /** True when session is «АСД группа» (nomenclature or title). */
   isAsd?: boolean;
-  /** SPA partner channel, e.g. ALLSPORTS. */
+  /** SPA «Allsports БИОИМПЕДАНС» — fixed spaPartnerRateMinor. */
+  isSpaAllSportsBioimpedance?: boolean;
+  /** PT «Занятие с тренером ALL SPORTS» — fixed ptAllSportsRateMinor. */
+  isPtAllSports?: boolean;
+  /** Individual reformer session (nomenclature in segment). */
+  isReformerPersonal?: boolean;
+  /** SPA partner channel, e.g. ALLSPORTS (legacy toggle; pay uses nomenclature). */
   partnerSource?: string;
 }
 

@@ -79,6 +79,7 @@ export interface AuthUser {
   groupPrograms?: boolean;
   trainerStaff?: boolean;
   trainerClub?: boolean;
+  trainerReformers?: boolean;
   roles: UserRole[];
   club?: {
     id: string;
@@ -98,6 +99,7 @@ export type StaffProfileDto = {
   groupPrograms: boolean;
   trainerStaff: boolean;
   trainerClub: boolean;
+  trainerReformers: boolean;
   bio: string;
   photoUrl: string | null;
   photoThumbUrl: string | null;
@@ -1906,6 +1908,7 @@ export const api = {
       groupPrograms?: boolean;
       trainerStaff?: boolean;
       trainerClub?: boolean;
+      trainerReformers?: boolean;
     },
   ) =>
     request<StaffCreateResult>('/super-admin/staff', {
@@ -1929,6 +1932,7 @@ export const api = {
       groupPrograms: boolean;
       trainerStaff: boolean;
       trainerClub: boolean;
+      trainerReformers: boolean;
     }>,
   ) =>
     request<StaffMember & { credentials?: { email: string; password: string } }>(
@@ -2796,9 +2800,16 @@ export const api = {
     body: {
       departments: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
       tracks?: Array<
-        'ADMIN' | 'MANAGER' | 'GROUP_TRAINER' | 'SPA' | 'TECH' | 'PT' | 'CLUB'
+        | 'ADMIN'
+        | 'MANAGER'
+        | 'GROUP_TRAINER'
+        | 'SPA'
+        | 'TECH'
+        | 'PT'
+        | 'CLUB'
+        | 'REFORMER'
       >;
-      trainerGroups?: Array<'GP' | 'STAFF' | 'CLUB'>;
+      trainerGroups?: Array<'GP' | 'STAFF' | 'CLUB' | 'REFORMER'>;
     },
   ) =>
     request<{ copied: number; skipped: number }>(

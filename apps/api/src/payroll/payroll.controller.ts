@@ -71,9 +71,16 @@ export class PayrollController {
     body: {
       departments: Array<'ADMIN' | 'MANAGER' | 'TRAINER' | 'SPECIALIST' | 'TECH'>;
       tracks?: Array<
-        'ADMIN' | 'MANAGER' | 'GROUP_TRAINER' | 'SPA' | 'TECH' | 'PT' | 'CLUB'
+        | 'ADMIN'
+        | 'MANAGER'
+        | 'GROUP_TRAINER'
+        | 'SPA'
+        | 'TECH'
+        | 'PT'
+        | 'CLUB'
+        | 'REFORMER'
       >;
-      trainerGroups?: Array<'GP' | 'STAFF' | 'CLUB'>;
+      trainerGroups?: Array<'GP' | 'STAFF' | 'CLUB' | 'REFORMER'>;
     },
   ) {
     return this.payroll.copyStaffPayProfile(

@@ -44,6 +44,7 @@ export class AuthService {
     groupPrograms?: boolean;
     trainerStaff?: boolean;
     trainerClub?: boolean;
+    trainerReformers?: boolean;
     roles: { role: Role }[];
     club: {
       id: string;
@@ -64,6 +65,7 @@ export class AuthService {
       groupPrograms: Boolean(user.groupPrograms),
       trainerStaff: Boolean(user.trainerStaff),
       trainerClub: Boolean(user.trainerClub),
+      trainerReformers: Boolean(user.trainerReformers),
       roles,
       club: user.club
         ? {

@@ -66,6 +66,7 @@ export class StaffProfileService {
       groupPrograms: boolean;
       trainerStaff: boolean;
       trainerClub: boolean;
+      trainerReformers: boolean;
       employmentKind: string;
       roles: { role: Role }[];
       staffProfile: {
@@ -93,6 +94,7 @@ export class StaffProfileService {
       groupPrograms: user.groupPrograms,
       trainerStaff: user.trainerStaff,
       trainerClub: user.trainerClub,
+      trainerReformers: user.trainerReformers,
       employmentKind: user.employmentKind,
       from1c: true as const,
       bio: showPublic ? (p?.bio ?? '') : '',

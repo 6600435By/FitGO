@@ -24,12 +24,13 @@ const ROLE_OPTIONS: {
 ];
 
 const TRAINER_GROUP_OPTIONS: {
-  id: 'gp' | 'staff' | 'club';
+  id: 'gp' | 'staff' | 'club' | 'reformers';
   label: string;
 }[] = [
   { id: 'gp', label: 'Тренеры ГП' },
   { id: 'staff', label: 'Тренеры штат' },
   { id: 'club', label: 'Тренеры клуб' },
+  { id: 'reformers', label: 'Реформеры' },
 ];
 
 function randomPassword() {
@@ -191,17 +192,21 @@ export default function SuperAdminStaffDetailPage() {
     }
   };
 
-  const toggleTrainerGroup = async (group: 'gp' | 'staff' | 'club') => {
+  const toggleTrainerGroup = async (
+    group: 'gp' | 'staff' | 'club' | 'reformers',
+  ) => {
     const token = getToken();
     if (!token || !member) return;
     const next = {
       groupPrograms: !!member.groupPrograms,
       trainerStaff: !!member.trainerStaff,
       trainerClub: !!member.trainerClub,
+      trainerReformers: !!member.trainerReformers,
     };
     if (group === 'gp') next.groupPrograms = !next.groupPrograms;
     if (group === 'staff') next.trainerStaff = !next.trainerStaff;
     if (group === 'club') next.trainerClub = !next.trainerClub;
+    if (group === 'reformers') next.trainerReformers = !next.trainerReformers;
     setRolesBusy(true);
     setMessage('');
     try {
@@ -294,7 +299,9 @@ export default function SuperAdminStaffDetailPage() {
                     ? !!member.groupPrograms
                     : group.id === 'staff'
                       ? !!member.trainerStaff
-                      : !!member.trainerClub;
+                      : group.id === 'club'
+                        ? !!member.trainerClub
+                        : !!member.trainerReformers;
                 return (
                   <button
                     key={group.id}
@@ -372,6 +379,7 @@ export default function SuperAdminStaffDetailPage() {
                 gp: !!member.groupPrograms,
                 staff: !!member.trainerStaff,
                 club: !!member.trainerClub,
+                reformers: !!member.trainerReformers,
               }
             : undefined
         }

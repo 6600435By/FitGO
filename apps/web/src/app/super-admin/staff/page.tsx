@@ -19,6 +19,7 @@ type DeptFilter =
   | 'TRAINER_GP'
   | 'TRAINER_STAFF'
   | 'TRAINER_CLUB'
+  | 'TRAINER_REFORMER'
   | 'SPECIALIST'
   | 'TECH'
   | 'ARCHIVED';
@@ -30,6 +31,7 @@ const DEPT_FILTERS: { id: DeptFilter; label: string }[] = [
   { id: 'TRAINER_GP', label: 'Тренеры ГП' },
   { id: 'TRAINER_STAFF', label: 'Тренеры штат' },
   { id: 'TRAINER_CLUB', label: 'Тренеры клуб' },
+  { id: 'TRAINER_REFORMER', label: 'Реформеры' },
   { id: 'SPECIALIST', label: 'SPA' },
   { id: 'TECH', label: 'Техперсонал' },
   { id: 'ARCHIVED', label: 'Архив' },
@@ -78,6 +80,7 @@ function trainerGroupLabels(member: StaffMember): string[] {
   if (member.groupPrograms) labels.push('ГП');
   if (member.trainerStaff) labels.push('Штат');
   if (member.trainerClub) labels.push('Клуб');
+  if (member.trainerReformers) labels.push('Реформеры');
   return labels;
 }
 
@@ -107,6 +110,7 @@ export default function SuperAdminStaffPage() {
     trainerGp: false,
     trainerStaff: true,
     trainerClub: false,
+    trainerReformers: false,
   });
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
@@ -153,6 +157,11 @@ export default function SuperAdminStaffPage() {
     if (filter === 'TRAINER_CLUB') {
       return staff.filter(
         (m) => m.trainerClub && m.roles.includes(UserRole.TRAINER),
+      );
+    }
+    if (filter === 'TRAINER_REFORMER') {
+      return staff.filter(
+        (m) => m.trainerReformers && m.roles.includes(UserRole.TRAINER),
       );
     }
     if (filter === 'ADMIN') {
@@ -205,6 +214,7 @@ export default function SuperAdminStaffPage() {
               groupPrograms: form.trainerGp,
               trainerStaff: form.trainerStaff,
               trainerClub: form.trainerClub,
+              trainerReformers: form.trainerReformers,
             }
           : {}),
         ...(appLogin
@@ -228,6 +238,7 @@ export default function SuperAdminStaffPage() {
         trainerGp: false,
         trainerStaff: true,
         trainerClub: false,
+        trainerReformers: false,
       });
       load();
     } catch (e) {
@@ -422,6 +433,7 @@ export default function SuperAdminStaffPage() {
                     ['trainerGp', 'Тренеры ГП'],
                     ['trainerStaff', 'Тренеры штат'],
                     ['trainerClub', 'Тренеры клуб'],
+                    ['trainerReformers', 'Реформеры'],
                   ] as const
                 ).map(([key, label]) => (
                   <button

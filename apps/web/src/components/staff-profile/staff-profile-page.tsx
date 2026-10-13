@@ -84,6 +84,7 @@ export function StaffProfilePage({ title }: { title: string }) {
     profile?.groupPrograms ? 'Тренер ГП' : null,
     profile?.trainerStaff ? 'Тренер ПТ (штат)' : null,
     profile?.trainerClub ? 'Тренер ПТ (клуб)' : null,
+    profile?.trainerReformers ? 'Реформеры' : null,
     profile?.roles?.includes('SPECIALIST') ? 'SPA-специалист' : null,
   ]
     .filter(Boolean)

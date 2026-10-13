@@ -15,6 +15,8 @@ export const PAYROLL_SEGMENT_UUIDS = {
   solarium: '69a8b477-2279-11eb-8119-7085c20c362e',
   /** e1cib ref 81167085c20c362e11eb0959bebe7aeb — продажи тренеров / ПТ */
   training: 'bebe7aeb-0959-11eb-8116-7085c20c362e',
+  /** e1cib ref 8deca45d36c32cf111f1c6f94643a7d2 — индивидуальные реформер */
+  reformerPersonal: '8deca45d-36c3-2cf1-11f1-c6f94643a7d2',
 } as const;
 
 export type PayrollSegmentSets = {
@@ -23,6 +25,7 @@ export type PayrollSegmentSets = {
   shop: Set<string>;
   solarium: Set<string>;
   training: Set<string>;
+  reformerPersonal: Set<string>;
 };
 
 /** Admin payroll buckets + training (dashboard / PT, not admin %). */
@@ -146,56 +149,65 @@ export async function loadPayrollSegmentSets(
   const basicAuth = config.get<string>('FORMA_BASIC_AUTH')?.trim();
   if (!base || !apiKey || !basicAuth) return cache?.sets ?? null;
   try {
-    const [membership, spa, shop, solarium, training] = await Promise.all([
-      segmentNames(
-        base,
-        apiKey,
-        basicAuth,
-        PAYROLL_SEGMENT_UUIDS.membership,
-        'nom.membershipApp',
-      ),
-      segmentNames(
-        base,
-        apiKey,
-        basicAuth,
-        PAYROLL_SEGMENT_UUIDS.spa,
-        'nom.spaCabinet',
-      ),
-      segmentNames(
-        base,
-        apiKey,
-        basicAuth,
-        PAYROLL_SEGMENT_UUIDS.shop,
-        'nom.shop',
-      ),
-      segmentNames(
-        base,
-        apiKey,
-        basicAuth,
-        PAYROLL_SEGMENT_UUIDS.solarium,
-        'nom.solarium',
-      ),
-      segmentNames(
-        base,
-        apiKey,
-        basicAuth,
-        PAYROLL_SEGMENT_UUIDS.training,
-        'nom.training',
-      ),
-    ]);
+    const [membership, spa, shop, solarium, training, reformerPersonal] =
+      await Promise.all([
+        segmentNames(
+          base,
+          apiKey,
+          basicAuth,
+          PAYROLL_SEGMENT_UUIDS.membership,
+          'nom.membershipApp',
+        ),
+        segmentNames(
+          base,
+          apiKey,
+          basicAuth,
+          PAYROLL_SEGMENT_UUIDS.spa,
+          'nom.spaCabinet',
+        ),
+        segmentNames(
+          base,
+          apiKey,
+          basicAuth,
+          PAYROLL_SEGMENT_UUIDS.shop,
+          'nom.shop',
+        ),
+        segmentNames(
+          base,
+          apiKey,
+          basicAuth,
+          PAYROLL_SEGMENT_UUIDS.solarium,
+          'nom.solarium',
+        ),
+        segmentNames(
+          base,
+          apiKey,
+          basicAuth,
+          PAYROLL_SEGMENT_UUIDS.training,
+          'nom.training',
+        ),
+        segmentNames(
+          base,
+          apiKey,
+          basicAuth,
+          PAYROLL_SEGMENT_UUIDS.reformerPersonal,
+        ),
+      ]);
     const sets: PayrollSegmentSets = {
       membership,
       spa,
       shop,
       solarium,
       training,
+      reformerPersonal,
     };
     if (
       !membership.size &&
       !spa.size &&
       !shop.size &&
       !solarium.size &&
-      !training.size
+      !training.size &&
+      !reformerPersonal.size
     ) {
       return cache?.sets ?? null;
     }
@@ -204,6 +216,31 @@ export async function loadPayrollSegmentSets(
   } catch {
     return cache?.sets ?? null;
   }
+}
+
+/** Match nomenclature against «Индивидуальные Реформер» segment. */
+export function isReformerPersonalNomenclature(
+  productName: string | null | undefined,
+  productExternalId: string | null | undefined,
+  segments: PayrollSegmentSets | null,
+): boolean {
+  if (!segments?.reformerPersonal?.size) {
+    const title = (productName ?? '').toLowerCase();
+    return /индивидуальн.*реформер|реформер.*индивидуальн/i.test(title);
+  }
+  const key = normNom(productName ?? '');
+  const uuid = (productExternalId ?? '').trim().toLowerCase().replace(/-/g, '');
+  for (const entry of segments.reformerPersonal) {
+    if (key && entry === key) return true;
+    const entryId = entry.replace(/-/g, '');
+    if (uuid && entryId === uuid) return true;
+    if (
+      productExternalId &&
+      entry === (productExternalId ?? '').trim().toLowerCase()
+    )
+      return true;
+  }
+  return false;
 }
 
 /** PT / trainer SKUs — never admin membership %, even if 1C tagged membership. */

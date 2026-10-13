@@ -7,15 +7,17 @@ export type StaffPayTrack =
   | 'SPA'
   | 'TECH'
   | 'PT'
-  | 'CLUB';
+  | 'CLUB'
+  | 'REFORMER';
 
 /** Staff-tab trainer subdivisions. A trainer may belong to several. */
-export type TrainerGroupId = 'GP' | 'STAFF' | 'CLUB';
+export type TrainerGroupId = 'GP' | 'STAFF' | 'CLUB' | 'REFORMER';
 
 export const TRAINER_GROUP_TRACK: Record<TrainerGroupId, StaffPayTrack> = {
   GP: 'GROUP_TRAINER',
   STAFF: 'PT',
   CLUB: 'CLUB',
+  REFORMER: 'REFORMER',
 };
 
 export interface TrainerPayFlags {
@@ -25,6 +27,8 @@ export interface TrainerPayFlags {
   gp: boolean;
   staff: boolean;
   club: boolean;
+  /** Reformer room / individual reformer scheme. */
+  reformers: boolean;
 }
 
 export function trainerPayFlags(input: {
@@ -32,21 +36,25 @@ export function trainerPayFlags(input: {
   groupPrograms?: boolean | null;
   trainerStaff?: boolean | null;
   trainerClub?: boolean | null;
+  trainerReformers?: boolean | null;
   trainerGroupsSet?: boolean | null;
 }): TrainerPayFlags {
   const isTrainer = input.roles.includes('TRAINER');
   const groupsSet = !!input.trainerGroupsSet;
   const gp = !!input.groupPrograms;
   const club = !!input.trainerClub;
+  const reformers = !!input.trainerReformers;
   let staff = !!input.trainerStaff;
-  if (isTrainer && !groupsSet && !gp && !staff && !club) staff = true;
-  return { isTrainer, groupsSet, gp, staff, club };
+  if (isTrainer && !groupsSet && !gp && !staff && !club && !reformers)
+    staff = true;
+  return { isTrainer, groupsSet, gp, staff, club, reformers };
 }
 
 /**
  * Pay slices that actually accrue for this person.
  * Штат and клуб both price PT sessions — if both are on, штат wins so % is not doubled.
  * Клуб rates stay stored so they can be copied onto the club group.
+ * Reformer pay only when the Reformers flag is on.
  */
 export function payProfileForCalculation(
   profile: StaffPayProfile | null | undefined,
@@ -58,13 +66,32 @@ export function payProfileForCalculation(
   const hasGroupSlice = stored.some((slice) => slice.track === 'GROUP_TRAINER');
   const hasPtSlice = stored.some((slice) => slice.track === 'PT');
   // GP-only trainers who were still on the PT scheme keep it until a GP scheme is saved.
-  const keepLegacyPt = flags.gp && !flags.staff && !flags.club && !hasGroupSlice && hasPtSlice;
+  const keepLegacyPt =
+    flags.gp &&
+    !flags.staff &&
+    !flags.club &&
+    !flags.reformers &&
+    !hasGroupSlice &&
+    hasPtSlice;
   const slices = stored.filter((slice) => {
     if (slice.track === 'GROUP_TRAINER') return flags.gp;
     if (slice.track === 'PT') return flags.staff || keepLegacyPt;
     if (slice.track === 'CLUB') return flags.club && !flags.staff;
+    if (slice.track === 'REFORMER') return flags.reformers;
     return true;
   });
+  // Seed reformer scheme from defaults + migrate legacy GP personal % when flag is on.
+  if (flags.reformers && !slices.some((s) => s.track === 'REFORMER')) {
+    const seeded = defaultPayProfile('REFORMER');
+    const legacyGp = stored.find((s) => s.track === 'GROUP_TRAINER');
+    if (
+      legacyGp?.reformerPersonalPercent &&
+      !(seeded.reformerPersonalPercent ?? 0)
+    ) {
+      seeded.reformerPersonalPercent = legacyGp.reformerPersonalPercent;
+    }
+    slices.push(seeded);
+  }
   if (!slices.length) {
     return {
       track: 'PT',
@@ -139,12 +166,13 @@ export interface StaffPayProfile {
   /** GROUP: attendee × room matrix (preferred). */
   groupRateTiers?: GroupRateTier[];
   /**
-   * GROUP_TRAINER: fixed rate per reformer room group class when ≥1 attended (minor).
-   * Default club rate: 35 BYN.
+   * @deprecated Legacy flat reformer group rate on GROUP_TRAINER.
+   * Reformer group pay now uses REFORMER track + groupRateTiers (room REFORMER).
    */
   reformerGroupRateMinor?: number;
   /**
-   * GROUP_TRAINER: % of paid price for individual (PT) sessions in the reformer room.
+   * REFORMER (legacy also on GROUP_TRAINER): % of per-session price for
+   * individual sessions in «Индивидуальные Реформер» nomenclature segment.
    * These sessions do not count toward PT volume tiers.
    */
   reformerPersonalPercent?: number;
@@ -157,12 +185,20 @@ export interface StaffPayProfile {
   spaSoldPercent?: number;
   /** SPA: fixed rates for membership-package services. */
   spaQuotaRates?: SpaQuotaServiceRate[];
-  /** SPA: fixed rate per AllSports / partner client visit (minor). */
+  /**
+   * SPA: fixed rate per rendered «Allsports БИОИМПЕДАНС» service (minor).
+   * Matched by nomenclature UUID, not partner visit flag.
+   */
   spaPartnerRateMinor?: number;
   /** PT: volume tiers for % of paid conducted sessions. */
   ptPercentTiers?: PtPercentTier[];
   /** PT: session catalog price (minor) when booking has no CRM price. */
   ptSessionPriceMinor?: number;
+  /**
+   * PT / CLUB: fixed rate per conducted paid «Занятие с тренером ALL SPORTS» (minor).
+   * Does not enter PT % ladder.
+   */
+  ptAllSportsRateMinor?: number;
   /** ADMIN / штатный PT: fixed advance paid on the 25th (days 1–15), minor units. */
   fixedAdvanceMinor?: number;
   notes?: string;
@@ -218,8 +254,42 @@ export const ASD_GROUP_SERVICE_IDS = [
   '39bba6e9-c242-11f1-8dec-a45d36c32cf1',
 ] as const;
 
-/** Default club rate for reformer group classes: 35 BYN. */
+/**
+ * SPA «Allsports БИОИМПЕДАНС»
+ * e1cib ref 8de2a45d36c32cf111f1318f3dd9913b
+ */
+export const SPA_ALLSPORTS_BIOIMPEDANCE_IDS = [
+  '8de2a45d-36c3-2cf1-11f1-318f3dd9913b',
+  '8de2a45d36c32cf111f1318f3dd9913b',
+  '3dd9913b-318f-11f1-8de2-a45d36c32cf1',
+] as const;
+
+/**
+ * PT «Занятие с тренером ALL SPORTS»
+ * e1cib ref 8de2a45d36c32cf111f1318fdac9a158
+ */
+export const PT_ALLSPORTS_SESSION_IDS = [
+  '8de2a45d-36c3-2cf1-11f1-318fdac9a158',
+  '8de2a45d36c32cf111f1318fdac9a158',
+  'dac9a158-318f-11f1-8de2-a45d36c32cf1',
+] as const;
+
+/**
+ * 1C segment «Индивидуальные Реформер»
+ * e1cib ref 8deca45d36c32cf111f1c6f94643a7d2
+ */
+export const REFORMER_PERSONAL_SEGMENT_UUID =
+  '8deca45d-36c3-2cf1-11f1-c6f94643a7d2';
+
+/** @deprecated Prefer DEFAULT_REFORMER_RATE_TIERS on REFORMER track. */
 export const DEFAULT_REFORMER_GROUP_RATE_MINOR = 3500;
+
+/** Club default reformer group tiers (BYN → minor). */
+export const DEFAULT_REFORMER_RATE_TIERS: GroupRateTier[] = [
+  { roomKey: 'REFORMER', minAttendees: 1, maxAttendees: 2, rateMinor: 3000 },
+  { roomKey: 'REFORMER', minAttendees: 3, maxAttendees: 3, rateMinor: 5000 },
+  { roomKey: 'REFORMER', minAttendees: 4, rateMinor: 6000 },
+];
 
 export function normalizeServiceExternalId(
   raw: string | null | undefined,
@@ -227,15 +297,62 @@ export function normalizeServiceExternalId(
   return (raw ?? '').trim().toLowerCase().replace(/[{}]/g, '');
 }
 
+/** Compare 1C nomenclature ids ignoring braces and dashes. */
+export function serviceExternalIdsEqual(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const na = normalizeServiceExternalId(a).replace(/-/g, '');
+  const nb = normalizeServiceExternalId(b).replace(/-/g, '');
+  return Boolean(na && nb && na === nb);
+}
+
+export function serviceExternalIdInList(
+  raw: string | null | undefined,
+  list: readonly string[],
+): boolean {
+  return list.some((id) => serviceExternalIdsEqual(raw, id));
+}
+
 /** Match «АСД группа» by nomenclature UUID or title fallback. */
 export function isAsdGroupSession(input: {
   serviceExternalId?: string | null;
   title?: string | null;
 }): boolean {
-  const id = normalizeServiceExternalId(input.serviceExternalId);
-  if (id && ASD_GROUP_SERVICE_IDS.some((x) => x === id)) return true;
+  if (serviceExternalIdInList(input.serviceExternalId, ASD_GROUP_SERVICE_IDS))
+    return true;
   const title = (input.title ?? '').toLowerCase();
   return /асд/i.test(title);
+}
+
+/** SPA AllSports биоимпеданс — fixed spaPartnerRateMinor. */
+export function isSpaAllSportsBioimpedance(input: {
+  serviceExternalId?: string | null;
+  title?: string | null;
+}): boolean {
+  if (
+    serviceExternalIdInList(
+      input.serviceExternalId,
+      SPA_ALLSPORTS_BIOIMPEDANCE_IDS,
+    )
+  )
+    return true;
+  const title = (input.title ?? '').toLowerCase();
+  return /биоимпеданс|bio.?imped/i.test(title);
+}
+
+/** PT «Занятие с тренером ALL SPORTS» — fixed ptAllSportsRateMinor. */
+export function isPtAllSportsSession(input: {
+  serviceExternalId?: string | null;
+  title?: string | null;
+  serviceName?: string | null;
+}): boolean {
+  if (serviceExternalIdInList(input.serviceExternalId, PT_ALLSPORTS_SESSION_IDS))
+    return true;
+  const text = `${input.title ?? ''} ${input.serviceName ?? ''}`.toLowerCase();
+  return /занятие с тренер.*all\s*sports|all\s*sports.*занятие с тренер/i.test(
+    text,
+  );
 }
 
 /** Club default GP rates (BYN → minor). */
@@ -409,9 +526,13 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         groupMinAttendees: 1,
         groupPerAttendeeMinor: 0,
         groupRateTiers: DEFAULT_GROUP_RATE_TIERS.map((t) => ({ ...t })),
-        reformerGroupRateMinor: DEFAULT_REFORMER_GROUP_RATE_MINOR,
-        reformerPersonalPercent: 0,
         asdGroupRateMinor: 0,
+      };
+    case 'REFORMER':
+      return {
+        track,
+        groupRateTiers: DEFAULT_REFORMER_RATE_TIERS.map((t) => ({ ...t })),
+        reformerPersonalPercent: 0,
       };
     case 'SPA':
       return {
@@ -431,6 +552,7 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         track,
         ptPercentTiers: DEFAULT_PT_TIERS.map((t) => ({ ...t })),
         ptSessionPriceMinor: 0,
+        ptAllSportsRateMinor: 0,
         hourlyRateMinor: 0,
         fixedAdvanceMinor: 0,
         asdGroupRateMinor: 0,
@@ -440,6 +562,7 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         track,
         ptPercentTiers: DEFAULT_PT_TIERS.map((t) => ({ ...t })),
         ptSessionPriceMinor: 0,
+        ptAllSportsRateMinor: 0,
       };
   }
 }
@@ -461,7 +584,9 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
             ? 'штат: '
             : slice.track === 'CLUB'
               ? 'клуб: '
-              : `${slice.track}: `
+              : slice.track === 'REFORMER'
+                ? 'реформер: '
+                : `${slice.track}: `
         : '';
     switch (slice.track) {
       case 'ADMIN':
@@ -539,17 +664,28 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           chips.push(`${tag}от ${slice.groupMinAttendees} чел.`);
         if (slice.groupPerAttendeeMinor)
           chips.push(`${tag}+${money(slice.groupPerAttendeeMinor)}/чел`);
-        if (slice.reformerGroupRateMinor)
-          chips.push(
-            `${tag}реформер гр. ${money(slice.reformerGroupRateMinor)}`,
-          );
-        if (slice.reformerPersonalPercent)
-          chips.push(
-            `${tag}реформер инд. ${formatPercent(slice.reformerPersonalPercent)}%`,
-          );
         if (slice.asdGroupRateMinor)
           chips.push(`${tag}АСД ${money(slice.asdGroupRateMinor)}`);
         break;
+      case 'REFORMER': {
+        const tiers =
+          slice.groupRateTiers?.filter((t) => t.roomKey === 'REFORMER') ?? [];
+        if (tiers.length) {
+          const parts = tiers.map((t) => {
+            const span =
+              t.maxAttendees == null
+                ? `${t.minAttendees}+`
+                : `${t.minAttendees}–${t.maxAttendees}`;
+            return `${span}: ${money(t.rateMinor)}`;
+          });
+          chips.push(`${tag}гр. ${parts.join(', ')}`);
+        }
+        if (slice.reformerPersonalPercent)
+          chips.push(
+            `${tag}инд. ${formatPercent(slice.reformerPersonalPercent)}%`,
+          );
+        break;
+      }
       case 'SPA':
         if (slice.spaSoldPercent)
           chips.push(`${tag}услуги ${formatPercent(slice.spaSoldPercent)}%`);
@@ -558,7 +694,9 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
             chips.push(`${tag}${r.label}: ${money(r.rateMinor)}`);
         }
         if (slice.spaPartnerRateMinor)
-          chips.push(`${tag}AllSports ${money(slice.spaPartnerRateMinor)}`);
+          chips.push(
+            `${tag}биоимпеданс ${money(slice.spaPartnerRateMinor)}`,
+          );
         break;
       case 'TECH':
         if (slice.hourlyRateMinor)
@@ -575,6 +713,10 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           );
         if (slice.ptSessionPriceMinor)
           chips.push(`${tag}ПТ ${money(slice.ptSessionPriceMinor)}`);
+        if (slice.ptAllSportsRateMinor)
+          chips.push(
+            `${tag}ALL SPORTS ${money(slice.ptAllSportsRateMinor)}`,
+          );
         for (const t of slice.ptPercentTiers ?? []) {
           chips.push(`${tag}≥${t.minSessions}: ${formatPercent(t.percent)}%`);
         }
@@ -584,6 +726,10 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
       case 'CLUB':
         if (slice.ptSessionPriceMinor)
           chips.push(`${tag}ПТ ${money(slice.ptSessionPriceMinor)}`);
+        if (slice.ptAllSportsRateMinor)
+          chips.push(
+            `${tag}ALL SPORTS ${money(slice.ptAllSportsRateMinor)}`,
+          );
         for (const t of slice.ptPercentTiers ?? []) {
           chips.push(`${tag}≥${t.minSessions}: ${formatPercent(t.percent)}%`);
         }

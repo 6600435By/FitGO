@@ -3,7 +3,7 @@
 import {
   DEFAULT_GROUP_RATE_TIERS,
   DEFAULT_PT_TIERS,
-  DEFAULT_REFORMER_GROUP_RATE_MINOR,
+  DEFAULT_REFORMER_RATE_TIERS,
   DEFAULT_SPA_QUOTA_RATES,
   defaultPayProfile,
   departmentsForPayTrack,
@@ -35,17 +35,24 @@ const TRACKS: { id: StaffPayTrack; label: string }[] = [
   { id: 'ADMIN', label: 'Админ (часы + % продаж)' },
   { id: 'MANAGER', label: 'Управляющий (оклад + % клуба)' },
   { id: 'GROUP_TRAINER', label: 'Групповой тренер' },
+  { id: 'REFORMER', label: 'Реформеры' },
   { id: 'SPA', label: 'SPA-специалист' },
   { id: 'TECH', label: 'Техперсонал (часы)' },
   { id: 'PT', label: 'Персональный тренер' },
 ];
 
-const TRAINER_PAY_TRACKS: StaffPayTrack[] = ['PT', 'GROUP_TRAINER', 'CLUB'];
+const TRAINER_PAY_TRACKS: StaffPayTrack[] = [
+  'PT',
+  'GROUP_TRAINER',
+  'CLUB',
+  'REFORMER',
+];
 
 export type TrainerGroupSelection = {
   gp: boolean;
   staff: boolean;
   club: boolean;
+  reformers?: boolean;
 };
 
 type Props = {
@@ -62,6 +69,7 @@ function activeTrainerTracks(groups: TrainerGroupSelection | undefined): StaffPa
   if (groups.gp) out.push('GROUP_TRAINER');
   if (groups.staff) out.push('PT');
   if (groups.club) out.push('CLUB');
+  if (groups.reformers) out.push('REFORMER');
   return out;
 }
 
@@ -193,7 +201,21 @@ export function StaffPayProfileEditor({
     if (groups) {
       const active = activeTrainerTracks(groups);
       for (const track of active) {
-        map[track] = { ...(map[track] ?? defaultPayProfile(track)), track };
+        if (!map[track]) {
+          const seeded = defaultPayProfile(track);
+          if (
+            track === 'REFORMER' &&
+            !(seeded.reformerPersonalPercent ?? 0)
+          ) {
+            const legacy =
+              map.GROUP_TRAINER?.reformerPersonalPercent ??
+              byTrackRef.current.GROUP_TRAINER?.reformerPersonalPercent;
+            if (legacy) seeded.reformerPersonalPercent = legacy;
+          }
+          map[track] = { ...seeded, track };
+        } else {
+          map[track] = { ...map[track]!, track };
+        }
       }
       for (const track of TRAINER_PAY_TRACKS) {
         if (!active.includes(track)) delete map[track];
@@ -276,7 +298,10 @@ export function StaffPayProfileEditor({
           groups.gp ? ('GP' as const) : null,
           groups.staff ? ('STAFF' as const) : null,
           groups.club ? ('CLUB' as const) : null,
-        ].filter((group): group is 'GP' | 'STAFF' | 'CLUB' => !!group)
+          groups.reformers ? ('REFORMER' as const) : null,
+        ].filter(
+          (group): group is 'GP' | 'STAFF' | 'CLUB' | 'REFORMER' => !!group,
+        )
       : [];
     if (selectedGroups.length) {
       const names = selectedGroups.map((group) =>
@@ -284,12 +309,15 @@ export function StaffPayProfileEditor({
           ? 'Тренеры ГП'
           : group === 'STAFF'
             ? 'Тренеры штат'
-            : 'Тренеры клуб',
+            : group === 'CLUB'
+              ? 'Тренеры клуб'
+              : 'Реформеры',
       );
       const lines = [
         groups?.gp ? 'ГП — ставки занятий' : null,
         groups?.staff ? 'Штат — оклад, час, аванс и % ПТ' : null,
         groups?.club ? 'Клуб — % ПТ' : null,
+        groups?.reformers ? 'Реформеры — тиры зала и % индивидуального' : null,
       ].filter(Boolean);
       if (
         !window.confirm(
@@ -375,7 +403,9 @@ export function StaffPayProfileEditor({
               ? 'Тренеры ГП'
               : trainerGroups?.club
                 ? 'Тренеры клуб'
-                : 'Тренеры штат'
+                : trainerGroups?.reformers
+                  ? 'Реформеры'
+                  : 'Тренеры штат'
           }»`
         : 'Скопировать на подразделение';
 
@@ -532,6 +562,16 @@ export function StaffPayProfileEditor({
         </div>
       ) : null}
 
+      {stacked && trainerGroups?.reformers ? (
+        <div className="space-y-3 rounded-xl border border-slate-800 p-3">
+          <p className="text-sm font-medium text-white">Реформеры</p>
+          <ReformerRates
+            profile={readSlice('REFORMER')}
+            onChange={(next) => writeSlice('REFORMER', next)}
+          />
+        </div>
+      ) : null}
+
       {profile.track === 'ADMIN' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
@@ -678,11 +718,15 @@ export function StaffPayProfileEditor({
         />
       )}
 
+      {profile.track === 'REFORMER' && !stacked && (
+        <ReformerRates profile={profile} onChange={setProfile} />
+      )}
+
       {profile.track === 'SPA' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
-            % от оплаченных услуг + фикс из абонемента + фикс AllSports (метка на
-            записи SPA).
+            % от оплаченных услуг + фикс из абонемента + фикс за услугу
+            «Allsports БИОИМПЕДАНС» (по номенклатуре 1С).
           </p>
           <PercentField
             label="% от проведённых / оплаченных платных услуг"
@@ -692,7 +736,7 @@ export function StaffPayProfileEditor({
             }
           />
           <MoneyField
-            label="Ставка AllSports / партнёр, BYN"
+            label="Ставка AllSports биоимпеданс, BYN"
             value={formatMinor(profile.spaPartnerRateMinor)}
             onChange={(v) =>
               setProfile({
@@ -773,6 +817,20 @@ export function StaffPayProfileEditor({
               })
             }
           />
+          <MoneyField
+            label="Занятие с тренером ALL SPORTS, BYN"
+            value={formatMinor(profile.ptAllSportsRateMinor)}
+            onChange={(v) =>
+              setProfile({
+                ...profile,
+                ptAllSportsRateMinor: parseMoneyToMinor(v),
+              })
+            }
+          />
+          <p className="text-xs leading-relaxed text-slate-500">
+            Фикс за проведённое и оплаченное занятие с номенклатурой ALL SPORTS.
+            В ступени % не входит.
+          </p>
           <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
             <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
               Ступени %
@@ -876,6 +934,17 @@ function PtPercentFields({
           onChange({ ...profile, ptSessionPriceMinor: parseMoneyToMinor(v) })
         }
       />
+      <MoneyField
+        label="Занятие с тренером ALL SPORTS, BYN"
+        value={formatMinor(profile.ptAllSportsRateMinor)}
+        onChange={(v) =>
+          onChange({ ...profile, ptAllSportsRateMinor: parseMoneyToMinor(v) })
+        }
+      />
+      <p className="text-xs leading-relaxed text-slate-500">
+        Фикс за проведённое и оплаченное занятие с номенклатурой ALL SPORTS. В
+        ступени % не входит.
+      </p>
       <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
         <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
           Ступени %
@@ -914,6 +983,100 @@ function groupTiersOf(profile: StaffPayTrackSlice): GroupRateTier[] {
   return profile.groupRateTiers?.length
     ? profile.groupRateTiers
     : DEFAULT_GROUP_RATE_TIERS.map((t) => ({ ...t }));
+}
+
+function reformerTiersOf(profile: StaffPayTrackSlice): GroupRateTier[] {
+  const fromProfile =
+    profile.groupRateTiers?.filter((t) => t.roomKey === 'REFORMER') ?? [];
+  return fromProfile.length
+    ? fromProfile
+    : DEFAULT_REFORMER_RATE_TIERS.map((t) => ({ ...t }));
+}
+
+function ReformerRates({
+  profile,
+  onChange,
+}: {
+  profile: StaffPayTrackSlice;
+  onChange: (next: StaffPayTrackSlice) => void;
+}) {
+  const tiers = reformerTiersOf(profile);
+
+  const updateTier = (index: number, patch: Partial<GroupRateTier>) => {
+    const next = tiers.map((t) => ({ ...t }));
+    next[index] = { ...next[index], ...patch };
+    onChange({ ...profile, groupRateTiers: next });
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs leading-relaxed text-slate-500">
+        Групповые в зале реформеров — ставка по числу людей после подтверждения
+        админом. Индивидуальные — % от цены одного занятия из сегмента
+        «Индивидуальные Реформер» (не от всей продажи пакета).
+      </p>
+      <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+          Групповое занятие
+        </p>
+        {tiers.map((t, index) => (
+          <div key={index} className="grid grid-cols-3 gap-2">
+            <IntField
+              label="От, чел."
+              value={String(t.minAttendees)}
+              onChange={(v) =>
+                updateTier(index, {
+                  minAttendees: Math.max(0, Math.round(parseDecimal(v))),
+                })
+              }
+            />
+            <IntField
+              label="До, чел."
+              value={t.maxAttendees == null ? '' : String(t.maxAttendees)}
+              onChange={(v) => {
+                const trimmed = v.trim();
+                updateTier(index, {
+                  maxAttendees: trimmed
+                    ? Math.max(0, Math.round(parseDecimal(trimmed)))
+                    : undefined,
+                });
+              }}
+            />
+            <MoneyField
+              label="Ставка, BYN"
+              value={formatMinor(t.rateMinor)}
+              onChange={(v) =>
+                updateTier(index, { rateMinor: parseMoneyToMinor(v) })
+              }
+            />
+          </div>
+        ))}
+      </div>
+      <PercentField
+        label="% за индивидуальное занятие"
+        value={formatPercent(profile.reformerPersonalPercent)}
+        onChange={(v) =>
+          onChange({
+            ...profile,
+            reformerPersonalPercent: parseDecimal(v),
+          })
+        }
+      />
+      <button
+        type="button"
+        className="btn-secondary text-sm"
+        onClick={() =>
+          onChange({
+            ...profile,
+            groupRateTiers: DEFAULT_REFORMER_RATE_TIERS.map((t) => ({ ...t })),
+            reformerPersonalPercent: 0,
+          })
+        }
+      >
+        Вернуть стандарт клуба
+      </button>
+    </div>
+  );
 }
 
 function GroupTrainerRates({
@@ -993,40 +1156,6 @@ function GroupTrainerRates({
           </div>
         );
       })}
-      <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-          Зал реформеров
-        </p>
-        <p className="text-xs leading-relaxed text-slate-500">
-          Групповое — фикс за занятие при 1+ пришедших. Индивидуальное — % от
-          оплаченной цены; в счёт ступеней ПТ не входит.
-        </p>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <MoneyField
-            label="Групповое, BYN за занятие"
-            value={formatMinor(
-              profile.reformerGroupRateMinor ??
-                DEFAULT_REFORMER_GROUP_RATE_MINOR,
-            )}
-            onChange={(v) =>
-              onChange({
-                ...profile,
-                reformerGroupRateMinor: parseMoneyToMinor(v),
-              })
-            }
-          />
-          <PercentField
-            label="Индивидуальное, % от оплаченного"
-            value={formatPercent(profile.reformerPersonalPercent)}
-            onChange={(v) =>
-              onChange({
-                ...profile,
-                reformerPersonalPercent: parseDecimal(v),
-              })
-            }
-          />
-        </div>
-      </div>
       <button
         type="button"
         className="btn-secondary text-sm"
@@ -1034,8 +1163,6 @@ function GroupTrainerRates({
           onChange({
             ...profile,
             groupRateTiers: DEFAULT_GROUP_RATE_TIERS.map((t) => ({ ...t })),
-            reformerGroupRateMinor: DEFAULT_REFORMER_GROUP_RATE_MINOR,
-            reformerPersonalPercent: 0,
           })
         }
       >

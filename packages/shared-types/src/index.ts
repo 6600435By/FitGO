@@ -1040,6 +1040,8 @@ export interface StaffMember {
   trainerStaff?: boolean;
   /** Тренер группы «Тренеры клуб». */
   trainerClub?: boolean;
+  /** Тренер группы «Реформеры». */
+  trainerReformers?: boolean;
   roles: UserRole[];
   isActive: boolean;
   /** When set, employee is archived (hidden from active lists). */

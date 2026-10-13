@@ -17,6 +17,7 @@ import {
   TrustBand,
 } from '@prisma/client';
 import {
+  isPtAllSportsSession,
   resolveGroupRoomKey,
   resolvePtPercent,
   type StaffPayProfile,
@@ -33,6 +34,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { SessionApprovalService } from '../booking-control/session-approval.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
+import {
+  isReformerPersonalNomenclature,
+  loadPayrollSegmentSets,
+} from '../admin-sales/admin-sales-segments';
+import { ConfigService } from '@nestjs/config';
 
 const SESSION_DURATION_MIN = 60;
 
@@ -63,6 +69,7 @@ export class PtTimesheetService {
     private readonly roster: TrainerRosterService,
     private readonly fitness: FitnessService,
     private readonly sessionApproval: SessionApprovalService,
+    private readonly config: ConfigService,
   ) {}
 
   // ── Shifts ──────────────────────────────────────────────────────────
@@ -1000,37 +1007,58 @@ export class PtTimesheetService {
     const profile = asPayProfile(compensation?.payProfile);
     const hourlyMinor = profile?.hourlyRateMinor ?? 0;
     const catalog = profile?.ptSessionPriceMinor ?? 0;
-    // Individual reformer PT (Onex room) is paid via GP reformerPersonalPercent — exclude from ladder.
+    // Individual reformer / ALL SPORTS PT — paid via dedicated rates; exclude from % ladder.
     const monthStart = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
     const monthEnd = new Date(
       Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + 1, 0, 23, 59, 59, 999),
     );
     const trainer = await this.prisma.user.findUnique({
       where: { id: trainerId },
-      select: { externalId: true },
+      select: { externalId: true, employeeCode: true },
     });
-    const reformerRefs = new Set<string>();
-    if (trainer?.externalId) {
+    const payrollSegments = await loadPayrollSegmentSets(this.config);
+    const excludeLadderRefs = new Set<string>();
+    const employeeIds = [trainer?.externalId, trainer?.employeeCode]
+      .filter((x): x is string => !!x?.trim())
+      .map((x) => x.trim());
+    if (employeeIds.length) {
       const onexPt = await this.prisma.onexClassSession.findMany({
         where: {
           clubId,
           kind: 'PT',
           isActive: true,
           startAt: { gte: monthStart, lte: monthEnd },
-          employeeExternalId: trainer.externalId,
+          OR: employeeIds.map((id) => ({ employeeExternalId: id })),
         },
-        select: { externalId: true, number: true, roomTitle: true },
+        select: {
+          externalId: true,
+          number: true,
+          roomTitle: true,
+          title: true,
+          serviceExternalId: true,
+        },
       });
       for (const o of onexPt) {
-        if (resolveGroupRoomKey(o.roomTitle) !== 'REFORMER') continue;
-        reformerRefs.add(o.externalId);
-        if (o.number) reformerRefs.add(o.number);
+        const reformerByRoom =
+          resolveGroupRoomKey(o.roomTitle) === 'REFORMER';
+        const reformerByNom = isReformerPersonalNomenclature(
+          o.title,
+          o.serviceExternalId,
+          payrollSegments,
+        );
+        const allSports = isPtAllSportsSession({
+          serviceExternalId: o.serviceExternalId,
+          title: o.title,
+        });
+        if (!reformerByRoom && !reformerByNom && !allSports) continue;
+        excludeLadderRefs.add(o.externalId);
+        if (o.number) excludeLadderRefs.add(o.number);
       }
     }
-    const isReformerBooking = (crmDocRef: string | null | undefined) =>
-      !!crmDocRef && reformerRefs.has(crmDocRef);
+    const isExcludedFromLadder = (crmDocRef: string | null | undefined) =>
+      !!crmDocRef && excludeLadderRefs.has(crmDocRef);
     const ladderBookings = bookings.filter(
-      (b) => !isReformerBooking(b.crmDocRef),
+      (b) => !isExcludedFromLadder(b.crmDocRef),
     );
     const monthCount = ladderBookings.length;
     const pct = resolvePtPercent(monthCount, profile?.ptPercentTiers);
@@ -1099,11 +1127,12 @@ export class PtTimesheetService {
         b.paymentStatus === ServicePaymentStatus.PAID &&
         issue === PtClientIssue.NONE &&
         !manualPaid;
-      const reformerPersonal = isReformerBooking(b.crmDocRef);
+      const excludedFromLadder = isExcludedFromLadder(b.crmDocRef);
       // Payable when linked + paid, OR admin confirmed payment without 1C.
+      // Reformer personal / ALL SPORTS are paid in payroll motivation, not sheet %.
       const payable =
         !b.isComplimentary &&
-        !reformerPersonal &&
+        !excludedFromLadder &&
         (b.forceIncludeInPayroll ||
           manualPaid ||
           (issue === PtClientIssue.NONE &&
@@ -1128,7 +1157,7 @@ export class PtTimesheetService {
         paymentStatus: b.paymentStatus,
         verified1c,
         payable,
-        countsForVolume: !reformerPersonal,
+        countsForVolume: !excludedFromLadder,
         isLateAdd: b.isLateAdd,
         clientIssue: issue,
         clientIssueEscalated: b.clientIssueEscalated,

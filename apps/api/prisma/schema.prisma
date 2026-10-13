@@ -563,6 +563,8 @@ model User {
   trainerStaff Boolean @default(false)
   /// true — тренер группы «Тренеры клуб» (% ПТ без оклада и аванса).
   trainerClub Boolean @default(false)
+  /// true — тренер группы «Реформеры» (тиры зала + % индивидуального).
+  trainerReformers Boolean @default(false)
   /// false — группы ещё не выбирали; список Staff один раз относит не-ГП тренеров в штат.
   trainerGroupsSet Boolean @default(false)
   /// false — учётка есть, пароль входа ещё не выдан.
@@ -2290,6 +2292,10 @@ model OnexClassSessionMember {
   paySource      String?
   /// Unit amount for payroll (minor): sale line or blockPrice/N
   unitPriceMinor Int?
+  /// Full package amount from 1C (major→minor) when unitAmount missing.
+  packageAmountMinor Int?
+  /// Visit/service count in package from 1C (for price-per-session fallback).
+  packageQty     Int?
   /// When the client was added to the session in 1C (if published)
   bookedAt       DateTime?
   /// Package / membership document UUID used for write-off

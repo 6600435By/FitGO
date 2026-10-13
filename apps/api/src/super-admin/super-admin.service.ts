@@ -155,7 +155,10 @@ export class SuperAdminService implements OnModuleInit {
     if (pending.length) {
       const toStaff = pending.filter(
         (member) =>
-          !member.groupPrograms && !member.trainerStaff && !member.trainerClub,
+          !member.groupPrograms &&
+          !member.trainerStaff &&
+          !member.trainerClub &&
+          !member.trainerReformers,
       );
       const rest = pending.filter((member) => !toStaff.includes(member));
       if (toStaff.length) {
@@ -267,10 +270,11 @@ export class SuperAdminService implements OnModuleInit {
     const isTrainer = roleList.includes('TRAINER');
     const groupPrograms = isTrainer && !!dto.groupPrograms;
     const trainerClub = isTrainer && !!dto.trainerClub;
+    const trainerReformers = isTrainer && !!dto.trainerReformers;
     const trainerStaff = isTrainer
       ? dto.trainerStaff !== undefined
         ? dto.trainerStaff
-        : !groupPrograms && !trainerClub
+        : !groupPrograms && !trainerClub && !trainerReformers
       : false;
 
     const created = await this.prisma.user.create({
@@ -287,6 +291,7 @@ export class SuperAdminService implements OnModuleInit {
         groupPrograms,
         trainerStaff,
         trainerClub,
+        trainerReformers,
         trainerGroupsSet: isTrainer,
         roles: {
           create: roleList.map((r) => ({ role: toStaffPrismaRole(r) })),
@@ -332,6 +337,7 @@ export class SuperAdminService implements OnModuleInit {
       groupPrograms?: boolean;
       trainerStaff?: boolean;
       trainerClub?: boolean;
+      trainerReformers?: boolean;
       trainerGroupsSet?: boolean;
     } = {};
 
@@ -347,11 +353,14 @@ export class SuperAdminService implements OnModuleInit {
     if (
       dto.groupPrograms !== undefined ||
       dto.trainerStaff !== undefined ||
-      dto.trainerClub !== undefined
+      dto.trainerClub !== undefined ||
+      dto.trainerReformers !== undefined
     ) {
       if (dto.groupPrograms !== undefined) data.groupPrograms = dto.groupPrograms;
       if (dto.trainerStaff !== undefined) data.trainerStaff = dto.trainerStaff;
       if (dto.trainerClub !== undefined) data.trainerClub = dto.trainerClub;
+      if (dto.trainerReformers !== undefined)
+        data.trainerReformers = dto.trainerReformers;
       data.trainerGroupsSet = true;
     }
     if (dto.email !== undefined) {
@@ -822,6 +831,7 @@ export class SuperAdminService implements OnModuleInit {
     groupPrograms?: boolean;
     trainerStaff?: boolean;
     trainerClub?: boolean;
+    trainerReformers?: boolean;
     isActive: boolean;
     archivedAt?: Date | null;
     employmentKind?: 'STAFF' | 'EXTERNAL' | string;
@@ -850,6 +860,7 @@ export class SuperAdminService implements OnModuleInit {
       groupPrograms: member.groupPrograms ?? false,
       trainerStaff: member.trainerStaff ?? false,
       trainerClub: member.trainerClub ?? false,
+      trainerReformers: member.trainerReformers ?? false,
       roles: member.roles.map((r) => roleMap[r.role]),
       isActive: member.isActive,
       archivedAt: member.archivedAt?.toISOString() ?? null,

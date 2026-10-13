@@ -36,6 +36,10 @@ export interface FitgoClassSessionMemberRow {
   paySource?: string;
   /** Unit price in major currency (blockPrice/N or sale line). */
   unitAmount?: number;
+  /** Full package amount in major currency (when unitAmount may be 0). */
+  packageAmount?: number;
+  /** Visit/service count in the package. */
+  packageQty?: number;
   /** When the client was added to the session in 1C (ISO). */
   bookedAt?: string;
   /** Package / membership document UUID used for write-off. */

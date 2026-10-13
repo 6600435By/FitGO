@@ -9,10 +9,13 @@ import {
   allPaySlices,
   advanceHalfRange,
   DEFAULT_GROUP_RATE_TIERS,
+  DEFAULT_REFORMER_RATE_TIERS,
   monthSettlementRange,
   payProfileForCalculation,
   payProfileSummary,
   isAsdGroupSession,
+  isPtAllSportsSession,
+  isSpaAllSportsBioimpedance,
   resolveGroupRoomKey,
   resolveGroupSessionRateMinor,
   resolvePtPercent,
@@ -78,6 +81,10 @@ import {
   createAnalyticsProvider,
   fetchStaffSalesFromAnalytics,
 } from './payroll-sales.helper';
+import {
+  isReformerPersonalNomenclature,
+  loadPayrollSegmentSets,
+} from '../admin-sales/admin-sales-segments';
 
 function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -248,11 +255,13 @@ export class PayrollService {
           groupPrograms: performer.groupPrograms,
           trainerStaff: performer.trainerStaff,
           trainerClub: performer.trainerClub,
+          trainerReformers: performer.trainerReformers,
           trainerGroupsSet: performer.trainerGroupsSet,
         })
       : null;
     const needsPtSales =
       !!payFlags?.isTrainer && (!!payFlags.staff || !!payFlags.club);
+    const payrollSegments = await loadPayrollSegmentSets(this.config);
 
     const performerOr =
       performerCodes.length > 0 || performerName
@@ -302,6 +311,11 @@ export class PayrollService {
         payment === 'PARTNER'
           ? 'ALLSPORTS'
           : matched?.partnerSource ?? undefined;
+      const serviceExternalId = o.serviceExternalId ?? undefined;
+      const bioimpedance = isSpaAllSportsBioimpedance({
+        serviceExternalId,
+        title: o.title,
+      });
       units.push({
         id: matched?.id ?? `onex:${o.id}`,
         kind: 'SPA',
@@ -315,12 +329,13 @@ export class PayrollService {
         payrollTrusted: paymentCountsForMoney(payment),
         clientName: primary?.clientName,
         serviceId: matched?.serviceId,
+        serviceExternalId,
         partnerSource: partner,
+        isSpaAllSportsBioimpedance: bioimpedance,
         sessionId: o.id,
       });
-      // stash payment on a side channel via title prefix? Better: use isComplimentary false
-      // and partnerSource / price for calc. For QUOTA leave price 0 and rely on spaQuotaRates.
-      if (payment === 'QUOTA' && units[units.length - 1]) {
+      // For QUOTA leave price 0 and rely on spaQuotaRates (bioimpedance uses fixed rate).
+      if (payment === 'QUOTA' && units[units.length - 1] && !bioimpedance) {
         units[units.length - 1].priceMinor = 0;
       }
     }
@@ -360,7 +375,12 @@ export class PayrollService {
       const unitFromPackage =
         primary?.unitPriceMinor != null && primary.unitPriceMinor > 0
           ? primary.unitPriceMinor
-          : undefined;
+          : primary?.packageAmountMinor != null &&
+              primary.packageAmountMinor > 0 &&
+              primary.packageQty != null &&
+              primary.packageQty > 0
+            ? Math.round(primary.packageAmountMinor / primary.packageQty)
+            : undefined;
       // Package/block write-offs pay from unit price; one-time cash sales pay via sale lines below
       const isPackage = paySource === 'PACKAGE' || payment === 'QUOTA';
       const trusted =
@@ -377,6 +397,15 @@ export class PayrollService {
       const roomTitle = o.roomTitle ?? undefined;
       const roomKey = resolveGroupRoomKey(roomTitle);
       const serviceExternalId = o.serviceExternalId ?? undefined;
+      const isPtAllSports = isPtAllSportsSession({
+        serviceExternalId,
+        title: o.title,
+      });
+      const isReformerPersonal = isReformerPersonalNomenclature(
+        o.title,
+        serviceExternalId,
+        payrollSegments,
+      );
       units.push({
         id: matched?.id ?? `onex:${o.id}`,
         kind: 'PT',
@@ -406,6 +435,8 @@ export class PayrollService {
           serviceExternalId,
           title: o.title,
         }),
+        isPtAllSports,
+        isReformerPersonal,
       });
       if (
         trusted &&
@@ -439,6 +470,13 @@ export class PayrollService {
         );
         remarkKeys.push(sk);
         const unitId = `ptsale:${sale.docRef || sale.externalId}`;
+        const isPtAllSports = isPtAllSportsSession({
+          title: sale.serviceName,
+          serviceName: sale.serviceName,
+        });
+        // Sale of ALL SPORTS package is not a conducted session — skip pay here
+        // (fix is paid when the class is conducted). Still track for remarks.
+        if (isPtAllSports) continue;
         units.push({
           id: unitId,
           kind: 'PT',
@@ -453,6 +491,7 @@ export class PayrollService {
           trustResolution: 'NONE',
           payrollTrusted: true,
           clientName: sale.clientName,
+          isPtAllSports: false,
         });
         ptSaleUnitKeys.set(unitId, sk);
       }
@@ -661,6 +700,7 @@ export class PayrollService {
       groupPrograms: performer.groupPrograms,
       trainerStaff: performer.trainerStaff,
       trainerClub: performer.trainerClub,
+      trainerReformers: performer.trainerReformers,
       trainerGroupsSet: performer.trainerGroupsSet,
     });
 
@@ -739,8 +779,8 @@ export class PayrollService {
             };
           })()
         : undefined;
-    const hasGroupScheme = allPaySlices(profile).some(
-      (s) => s.track === 'GROUP_TRAINER',
+    const hasReformerScheme = allPaySlices(profile).some(
+      (s) => s.track === 'REFORMER',
     );
     const ptSlice = allPaySlices(profile).find(
       (s) => s.track === 'PT' || s.track === 'CLUB',
@@ -750,7 +790,9 @@ export class PayrollService {
           const ptUnits = trusted.filter(
             (x) =>
               x.kind === 'PT' &&
-              !(hasGroupScheme && x.roomKey === 'REFORMER'),
+              !x.isPtAllSports &&
+              !(hasReformerScheme && x.isReformerPersonal) &&
+              !(x.roomKey === 'REFORMER' && x.isReformerPersonal),
           );
           return {
             sessionCount: ptUnits.length,
@@ -1007,6 +1049,7 @@ export class PayrollService {
         groupPrograms: user.groupPrograms,
         trainerStaff: user.trainerStaff,
         trainerClub: user.trainerClub,
+        trainerReformers: user.trainerReformers,
         trainerGroupsSet: user.trainerGroupsSet,
       }),
     );
@@ -1553,7 +1596,7 @@ export class PayrollService {
       throw new BadRequestException('Сначала сохраните мотивацию у источника');
     }
     if (trainerGroups?.length) {
-      const allowed: TrainerGroupId[] = ['GP', 'STAFF', 'CLUB'];
+      const allowed: TrainerGroupId[] = ['GP', 'STAFF', 'CLUB', 'REFORMER'];
       const groups = [...new Set(trainerGroups)].filter((g): g is TrainerGroupId =>
         allowed.includes(g),
       );
@@ -1562,9 +1605,9 @@ export class PayrollService {
       }
       const copiedIds = new Set<string>();
       const effectiveFrom = new Date().toISOString().slice(0, 10);
-      const ordered = (['GP', 'CLUB', 'STAFF'] as TrainerGroupId[]).filter((g) =>
-        groups.includes(g),
-      );
+      const ordered = (
+        ['GP', 'CLUB', 'STAFF', 'REFORMER'] as TrainerGroupId[]
+      ).filter((g) => groups.includes(g));
       for (const group of ordered) {
         const track = TRAINER_GROUP_TRACK[group];
         const peers = await this.prisma.user.findMany({
@@ -1575,6 +1618,7 @@ export class PayrollService {
             roles: { some: { role: Role.TRAINER } },
             ...(group === 'GP' ? { groupPrograms: true } : {}),
             ...(group === 'CLUB' ? { trainerClub: true } : {}),
+            ...(group === 'REFORMER' ? { trainerReformers: true } : {}),
             ...(group === 'STAFF'
               ? {
                   OR: [
@@ -1584,6 +1628,7 @@ export class PayrollService {
                       groupPrograms: false,
                       trainerStaff: false,
                       trainerClub: false,
+                      trainerReformers: false,
                     },
                   ],
                 }
@@ -2428,13 +2473,13 @@ export class PayrollService {
     let total = 0;
     const trusted = units.filter((u) => u.payrollTrusted);
     const slices = allPaySlices(profile);
-    const groupSlice = slices.find((s) => s.track === 'GROUP_TRAINER');
-    const hasGroupScheme = !!groupSlice;
+    const hasReformerScheme = slices.some((s) => s.track === 'REFORMER');
     const asdRateMinor = Math.max(
       0,
       ...slices.map((s) => s.asdGroupRateMinor ?? 0),
     );
     const paidAsdIds = new Set<string>();
+    const paidPtAllSportsIds = new Set<string>();
 
     // «АСД группа»: once per session if GP or staff scheme carries a rate.
     if (asdRateMinor > 0) {
@@ -2443,6 +2488,22 @@ export class PayrollService {
         if (paidAsdIds.has(u.id)) continue;
         paidAsdIds.add(u.id);
         total += asdRateMinor;
+      }
+    }
+
+    // PT ALL SPORTS fix — once per conducted session from any PT/CLUB slice that carries a rate.
+    const ptAllSportsRate = Math.max(
+      0,
+      ...slices
+        .filter((s) => s.track === 'PT' || s.track === 'CLUB')
+        .map((s) => s.ptAllSportsRateMinor ?? 0),
+    );
+    if (ptAllSportsRate > 0) {
+      for (const u of trusted) {
+        if (u.kind !== 'PT' || !u.isPtAllSports || u.isComplimentary) continue;
+        if (paidPtAllSportsIds.has(u.id)) continue;
+        paidPtAllSportsIds.add(u.id);
+        total += ptAllSportsRate;
       }
     }
 
@@ -2463,19 +2524,8 @@ export class PayrollService {
       if (slice.track === 'GROUP_TRAINER') {
         for (const u of trusted.filter((x) => x.kind === 'GROUP')) {
           if (u.isAsd) continue; // already paid via asdGroupRateMinor
-          if (u.roomKey === 'REFORMER') {
-            if (u.quantity >= 1) {
-              total +=
-                slice.reformerGroupRateMinor ??
-                (slice.groupRateTiers?.find(
-                  (t) =>
-                    t.roomKey === 'REFORMER' &&
-                    u.quantity >= t.minAttendees &&
-                    (t.maxAttendees == null || u.quantity <= t.maxAttendees),
-                )?.rateMinor ?? 0);
-            }
-            continue;
-          }
+          // Reformer room group classes pay via REFORMER track only.
+          if (u.roomKey === 'REFORMER') continue;
           const hasTiers = (slice.groupRateTiers?.length ?? 0) > 0;
           if (hasTiers || u.roomKey) {
             total += resolveGroupSessionRateMinor(
@@ -2496,15 +2546,34 @@ export class PayrollService {
             total += slice.groupPerAttendeeMinor * u.quantity;
           }
         }
+      }
 
-        // Individual reformer (PT in reformer room) — % of paid, not in PT ladder.
+      if (slice.track === 'REFORMER') {
+        const tiers =
+          (slice.groupRateTiers?.filter((t) => t.roomKey === 'REFORMER')
+            ?.length ?? 0) > 0
+            ? slice.groupRateTiers
+            : DEFAULT_REFORMER_RATE_TIERS;
+        for (const u of trusted.filter(
+          (x) => x.kind === 'GROUP' && x.roomKey === 'REFORMER',
+        )) {
+          if (u.isAsd) continue;
+          if (u.quantity < 1) continue;
+          total += resolveGroupSessionRateMinor(
+            u.quantity,
+            'REFORMER',
+            tiers,
+          );
+        }
+
         const refPct = slice.reformerPersonalPercent ?? 0;
         if (refPct > 0) {
           for (const u of trusted.filter(
             (x) =>
               x.kind === 'PT' &&
-              x.roomKey === 'REFORMER' &&
-              !x.isComplimentary,
+              x.isReformerPersonal &&
+              !x.isComplimentary &&
+              !x.isPtAllSports,
           )) {
             const price = u.priceMinor ?? 0;
             if (price > 0) {
@@ -2516,11 +2585,7 @@ export class PayrollService {
 
       if (slice.track === 'SPA') {
         for (const u of trusted.filter((x) => x.kind === 'SPA')) {
-          if (
-            u.partnerSource &&
-            u.partnerSource.toUpperCase() === 'ALLSPORTS' &&
-            slice.spaPartnerRateMinor
-          ) {
+          if (u.isSpaAllSportsBioimpedance && slice.spaPartnerRateMinor) {
             total += slice.spaPartnerRateMinor;
             continue;
           }
@@ -2542,12 +2607,15 @@ export class PayrollService {
       }
 
       if (slice.track === 'PT' || slice.track === 'CLUB') {
-        // Staff (non-GP) trainers can still earn ASD on GROUP units via asdRate above.
-        // Exclude individual reformer PT from ladder when GP scheme pays them separately.
+        // Exclude ALL SPORTS (fixed rate) and reformer personal (REFORMER track %).
         const ptUnits = trusted.filter(
           (x) =>
             x.kind === 'PT' &&
-            !(hasGroupScheme && x.roomKey === 'REFORMER'),
+            !x.isPtAllSports &&
+            !(hasReformerScheme && x.isReformerPersonal) &&
+            // Legacy: room-based reformer exclusion when reformer scheme absent
+            // but still tagged as reformer room (avoid double-count with old GP %).
+            !(x.roomKey === 'REFORMER' && x.isReformerPersonal),
         );
         const monthCount = ptUnits.length;
         const pct = resolvePtPercent(monthCount, slice.ptPercentTiers);
