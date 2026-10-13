@@ -111,6 +111,10 @@ export type SpaSettlementStatus =
   | 'AWAITING_PAYMENT'
   | 'PAID'
   | 'NOT_IN_1C'
+  /** Guest / unlinked — no 1C counterparty on the booking. */
+  | 'AWAITING_CLIENT_LINK'
+  /** Admin confirmed payment without posting to 1C. */
+  | 'MANUAL_PAID'
   | 'CANCELLED_IN_1C'
   | 'DELETED_IN_1C'
   | 'UNKNOWN';
@@ -141,6 +145,10 @@ export function spaSettlementLabelRu(
       return 'Оплачено';
     case 'NOT_IN_1C':
       return 'Нет документа в 1С';
+    case 'AWAITING_CLIENT_LINK':
+      return 'Ожидает привязки к 1С';
+    case 'MANUAL_PAID':
+      return 'Оплата подтверждена без 1С';
     case 'CANCELLED_IN_1C':
       return 'Отменено в 1С';
     case 'DELETED_IN_1C':

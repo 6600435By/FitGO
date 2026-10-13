@@ -588,6 +588,15 @@ export class SpaBookingController {
     return this.spa.adminUpdateBooking(user, bookingId, dto);
   }
 
+  @Post('admin/spa-bookings/:bookingId/confirm-manual-payment')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminConfirmManualPayment(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.spa.adminConfirmManualPayment(user, bookingId);
+  }
+
   @Patch('admin/spa-bookings/:bookingId')
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminCancelBooking(

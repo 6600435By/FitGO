@@ -187,7 +187,13 @@ export default function AdminPtTimesheetPage() {
               <p className="text-xs text-slate-500">
                 {l.payKind} · {l.paymentStatus}
                 {l.payable ? ' · в ЗП' : ''}
+                {l.manualPaymentConfirmed ? ' · без 1С' : ''}
               </p>
+              {l.clientIssue === 'CRM_UNMATCHED' ? (
+                <p className="mt-1 text-xs text-amber-300">
+                  Нет в 1С — ждёт привязки
+                </p>
+              ) : null}
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -225,6 +231,39 @@ export default function AdminPtTimesheetPage() {
                 >
                   Оплачено
                 </button>
+                {l.clientIssue !== 'NONE' && !l.manualPaymentConfirmed ? (
+                  <button
+                    type="button"
+                    className="btn-secondary text-xs"
+                    onClick={async () => {
+                      const token = getToken();
+                      if (!token) return;
+                      if (
+                        !window.confirm(
+                          'Подтвердить оплату без документа в 1С? Привязка к 1С не снимется.',
+                        )
+                      ) {
+                        return;
+                      }
+                      try {
+                        setSelected(
+                          await api.adminPtConfirmManualPayment(
+                            token,
+                            l.bookingId,
+                          ),
+                        );
+                      } catch (e) {
+                        setMessage(
+                          e instanceof Error
+                            ? e.message
+                            : 'Не удалось подтвердить',
+                        );
+                      }
+                    }}
+                  >
+                    Оплата без 1С
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="btn-secondary text-xs"

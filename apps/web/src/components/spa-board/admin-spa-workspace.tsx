@@ -514,6 +514,26 @@ export function AdminSpaWorkspace() {
     }
   };
 
+  const confirmManualPaymentCard = async () => {
+    const token = getToken();
+    if (!token || !selectedBooking) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.adminConfirmSpaManualPayment(token, selectedBooking.id);
+      setSelectedBooking(null);
+      setMessage('Оплата подтверждена без 1С');
+      await reload();
+    } catch (err) {
+      setMessage(
+        err instanceof Error ? err.message : 'Не удалось подтвердить оплату',
+      );
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const cancelBookingCard = async () => {
     const token = getToken();
     if (!token || !selectedBooking) return;
@@ -1007,10 +1027,12 @@ export function AdminSpaWorkspace() {
             services={services}
             specialists={specialists}
             allowPickSpecialist
+            allowManualPayment
             busy={busy}
             onClose={() => setSelectedBooking(null)}
             onSave={saveBookingCard}
             onCancel={cancelBookingCard}
+            onConfirmManualPayment={confirmManualPaymentCard}
           />
         </div>
       )}

@@ -4,6 +4,8 @@ import type { SpaBoardBooking, SpaService } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
 import { toDatetimeLocalValue } from '@/components/spa-board/spa-booking-dialog';
 import { DateField } from '@/components/ui/date-field';
+import { api } from '@/lib/api';
+import { getToken } from '@/lib/auth';
 
 function formatPrice(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)} ${currency}`;
@@ -25,16 +27,20 @@ export function SpaBookingEditDialog({
   services,
   specialists,
   allowPickSpecialist,
+  allowManualPayment,
   busy,
   onClose,
   onSave,
   onCancel,
+  onConfirmManualPayment,
 }: {
   open: boolean;
   booking: SpaBoardBooking | null;
   services: SpaService[];
   specialists?: Array<{ id: string; firstName: string; lastName: string }>;
   allowPickSpecialist?: boolean;
+  /** Admin-only: confirm paid SPA without posting to 1C. */
+  allowManualPayment?: boolean;
   busy?: boolean;
   onClose: () => void;
   onSave: (payload: {
@@ -47,10 +53,12 @@ export function SpaBookingEditDialog({
     paymentType: 'QUOTA' | 'PAID';
   }) => Promise<void>;
   onCancel: () => Promise<void>;
+  onConfirmManualPayment?: () => Promise<void>;
 }) {
   const bookable = services.filter((s) => s.active && (s.bookable ?? true));
   const crmLocked = Boolean(booking?.crmLocked);
   const [error, setError] = useState('');
+  const [phoneLookup, setPhoneLookup] = useState('');
   const [form, setForm] = useState({
     specialistId: '',
     guestName: '',
@@ -63,6 +71,7 @@ export function SpaBookingEditDialog({
   useEffect(() => {
     if (!open || !booking) return;
     setError('');
+    setPhoneLookup('');
     setForm({
       specialistId: booking.specialistId,
       guestName: booking.guestName ?? booking.clientName ?? '',
@@ -78,6 +87,15 @@ export function SpaBookingEditDialog({
 
   const selected = bookable.find((s) => s.id === form.serviceId);
   const { datePart, timePart } = splitDatetimeLocal(form.startAt);
+  const unlinked =
+    booking.oneCLinkStatus === 'NOT_LINKED' && !booking.manualPaymentConfirmed;
+  const canManualPay =
+    Boolean(allowManualPayment) &&
+    Boolean(onConfirmManualPayment) &&
+    !crmLocked &&
+    booking.paymentType === 'PAID' &&
+    !booking.manualPaymentConfirmed &&
+    !booking.consumedInCrm;
 
   const setDatePart = (date: string) => {
     const time = timePart || '10:00';
@@ -93,6 +111,42 @@ export function SpaBookingEditDialog({
       ...f,
       startAt: time ? `${date}T${time}` : `${date}T00:00`,
     }));
+  };
+
+  const lookupPhone = async (raw: string) => {
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length < 9) {
+      setPhoneLookup('Введите номер полностью');
+      return;
+    }
+    const token = getToken();
+    if (!token) return;
+    setPhoneLookup('Ищем клиента…');
+    try {
+      const found = await api.lookupSpaClientByPhone(token, raw);
+      if (found.pending) {
+        setPhoneLookup(
+          '1С не ответила. Сохраните телефон — привязка повторится позже.',
+        );
+        return;
+      }
+      if (!found.found) {
+        setPhoneLookup('В 1С и в базе нет. Сохраните ФИО и телефон.');
+        return;
+      }
+      const name = `${found.lastName ?? ''} ${found.firstName ?? ''}`.trim();
+      setPhoneLookup(
+        found.clientId
+          ? `Клиент из базы: ${name}. Сохраните — запись привяжется.`
+          : `Клиент из 1С: ${name}. Сохраните — запись привяжется.`,
+      );
+      setForm((f) => ({
+        ...f,
+        guestName: f.guestName || name,
+      }));
+    } catch (err) {
+      setPhoneLookup(err instanceof Error ? err.message : 'Ошибка поиска');
+    }
   };
 
   const submit = async () => {
@@ -151,6 +205,25 @@ export function SpaBookingEditDialog({
     }
   };
 
+  const confirmManual = async () => {
+    if (!onConfirmManualPayment) return;
+    if (
+      !window.confirm(
+        'Подтвердить оплату без документа в 1С? Мотивация засчитается, привязка к 1С не изменится.',
+      )
+    ) {
+      return;
+    }
+    setError('');
+    try {
+      await onConfirmManualPayment();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Не удалось подтвердить оплату',
+      );
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4"
@@ -177,6 +250,15 @@ export function SpaBookingEditDialog({
           <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
             Проведено в 1С — можно менять только дату и время. Удаление
             недоступно, пока документ есть в 1С.
+          </p>
+        ) : booking.manualPaymentConfirmed ? (
+          <p className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-sm text-sky-200">
+            Оплата подтверждена без 1С. Документ в CRM не создавался.
+          </p>
+        ) : unlinked ? (
+          <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            Нет в 1С — списание и продажа ждут привязки по телефону. Укажите
+            номер и сохраните.
           </p>
         ) : booking.consumedInCrm ? (
           <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
@@ -226,8 +308,14 @@ export function SpaBookingEditDialog({
             onChange={(e) =>
               setForm((f) => ({ ...f, guestPhone: e.target.value }))
             }
+            onBlur={(e) => {
+              if (!crmLocked) void lookupPhone(e.target.value);
+            }}
             placeholder="+375…"
           />
+          {phoneLookup ? (
+            <p className="text-xs text-slate-400">{phoneLookup}</p>
+          ) : null}
         </label>
 
         <label className="block space-y-1 text-sm">
@@ -292,6 +380,11 @@ export function SpaBookingEditDialog({
             <option value="PAID">Платно</option>
             <option value="QUOTA">По квоте</option>
           </select>
+          {form.paymentType === 'QUOTA' && unlinked ? (
+            <p className="text-xs text-amber-300/90">
+              Квоту можно списать только после привязки клиента к 1С.
+            </p>
+          ) : null}
         </label>
 
         {error ? (
@@ -300,7 +393,7 @@ export function SpaBookingEditDialog({
           </p>
         ) : null}
 
-        <div className="flex flex-col gap-2 sm:flex-row">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           {!crmLocked ? (
             <button
               type="button"
@@ -311,6 +404,18 @@ export function SpaBookingEditDialog({
               }}
             >
               Удалить запись
+            </button>
+          ) : null}
+          {canManualPay ? (
+            <button
+              type="button"
+              className="btn-secondary flex-1"
+              disabled={busy}
+              onClick={() => {
+                void confirmManual();
+              }}
+            >
+              Подтвердить оплату без 1С
             </button>
           ) : null}
           <button

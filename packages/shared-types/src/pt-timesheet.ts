@@ -46,6 +46,8 @@ export interface TrainerDaySheetLineDto {
   isLateAdd: boolean;
   clientIssue: PtClientIssue;
   clientIssueEscalated: boolean;
+  /** Admin confirmed payment without a 1C document. */
+  manualPaymentConfirmed?: boolean;
   forceIncludeInPayroll: boolean;
   isComplimentary: boolean;
   motivationMinor: number;
@@ -95,7 +97,7 @@ export function clientIssueLabel(issue: PtClientIssue): string {
     case 'WRONG_PHONE':
       return 'Ошибочный телефон';
     case 'CRM_UNMATCHED':
-      return 'Нет в 1С';
+      return 'Нет в 1С — ждёт привязки';
     case 'IDENTITY_MISMATCH':
       return 'Не тот клиент';
     default:

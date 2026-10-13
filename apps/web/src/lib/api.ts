@@ -1249,6 +1249,13 @@ export const api = {
       token,
     ),
 
+  adminConfirmSpaManualPayment: (token: string, bookingId: string) =>
+    request<{ booking: SpaBooking }>(
+      `/admin/spa-bookings/${bookingId}/confirm-manual-payment`,
+      { method: 'POST', body: '{}' },
+      token,
+    ),
+
   adminGetSpecialistWorkSchedule: (token: string, specialistId: string) =>
     request<SpecialistWorkSlotInput[]>(
       `/admin/spa/specialists/${specialistId}/work-schedule`,
@@ -3468,6 +3475,13 @@ export const api = {
     request<import('@fitgo/shared-types').TrainerDaySheetDto>(
       `/admin/pt-timesheet/bookings/${bookingId}/payment`,
       { method: 'PATCH', body: JSON.stringify(body) },
+      token,
+    ),
+
+  adminPtConfirmManualPayment: (token: string, bookingId: string) =>
+    request<import('@fitgo/shared-types').TrainerDaySheetDto>(
+      `/admin/pt-timesheet/bookings/${bookingId}/confirm-manual-payment`,
+      { method: 'POST', body: '{}' },
       token,
     ),
 

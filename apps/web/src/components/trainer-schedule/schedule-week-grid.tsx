@@ -177,6 +177,13 @@ export function ScheduleWeekGrid({
                       {layout.height >= 36 && (
                         <span className="block truncate">{event.title}</span>
                       )}
+                      {layout.height >= 48 &&
+                      event.clientIssue &&
+                      event.clientIssue !== 'NONE' ? (
+                        <span className="block truncate text-amber-300/90">
+                          Нет в 1С
+                        </span>
+                      ) : null}
                       {layout.height >= 52 && endMin !== null && (
                         <span className="block truncate opacity-70">
                           до {minutesToTime(endMin)}

@@ -547,6 +547,41 @@ export class PtTimesheetService {
     return this.buildOrRefreshSheet(clubId, booking.trainerId, date);
   }
 
+  /**
+   * Admin confirms PT payment without 1C document.
+   * Leaves clientIssue unchanged (still «Нет в 1С») so staff keep the link queue.
+   */
+  async adminConfirmManualPayment(actor: JwtPayload, bookingId: string) {
+    const clubId = requireClubId(actor);
+    const booking = await this.prisma.personalTrainingBooking.findFirst({
+      where: { id: bookingId, trainer: { clubId } },
+    });
+    if (!booking) throw new NotFoundException('Запись не найдена');
+    if (booking.isComplimentary) {
+      throw new BadRequestException('Подарочная тренировка не требует оплаты');
+    }
+    if (booking.manualPaymentConfirmedAt) {
+      const date = booking.startAt.toISOString().slice(0, 10);
+      return this.buildOrRefreshSheet(clubId, booking.trainerId, date);
+    }
+    await this.prisma.personalTrainingBooking.update({
+      where: { id: bookingId },
+      data: {
+        manualPaymentConfirmedAt: new Date(),
+        manualPaymentConfirmedById: actor.sub,
+        paymentStatus: ServicePaymentStatus.PAID,
+        payKind:
+          booking.payKind === PtSessionPayKind.UNKNOWN
+            ? PtSessionPayKind.PAID
+            : booking.payKind,
+        paidAt: new Date(),
+        eligibleForMotivation: true,
+      },
+    });
+    const date = booking.startAt.toISOString().slice(0, 10);
+    return this.buildOrRefreshSheet(clubId, booking.trainerId, date);
+  }
+
   /** Probe 1C (or mock) for PT payment and apply to booking. */
   async verifyBookingPayment1c(actor: JwtPayload, bookingId: string) {
     const clubId = requireClubId(actor);
@@ -794,6 +829,7 @@ export class PtTimesheetService {
     externalId?: string | null;
     phoneNormalized?: string | null;
     clubMemberships?: Array<{
+      id?: string;
       crmStatus?: string | null;
       externalId?: string | null;
     }>;
@@ -806,6 +842,80 @@ export class PtTimesheetService {
       return PtClientIssue.CRM_UNMATCHED;
     }
     return PtClientIssue.NONE;
+  }
+
+  /**
+   * Re-probe 1C by phone for CRM_UNMATCHED bookings on the day sheet.
+   * Caps lookups per refresh so sheet open stays responsive.
+   */
+  private async retryCrmLinkForUnmatchedBookings(
+    clubId: string,
+    bookings: Array<{
+      id: string;
+      clientIssue: PtClientIssue;
+      client: {
+        id: string;
+        phoneNormalized: string | null;
+        phone: string | null;
+        externalId: string | null;
+        clubMemberships: Array<{
+          id: string;
+          crmStatus: ClubCrmLinkStatus | null;
+          externalId: string | null;
+        }>;
+      };
+    }>,
+  ) {
+    const provider = this.fitness.getProvider();
+    if (!provider.findClientByPhone) return;
+
+    const candidates = bookings.filter(
+      (b) =>
+        b.clientIssue === PtClientIssue.CRM_UNMATCHED &&
+        Boolean(b.client.phoneNormalized) &&
+        b.client.phoneNormalized!.length >= 9,
+    );
+    for (const b of candidates.slice(0, 12)) {
+      try {
+        const remote = await provider.findClientByPhone(
+          b.client.phoneNormalized!,
+        );
+        if (!remote?.externalId) continue;
+
+        await this.prisma.user.update({
+          where: { id: b.client.id },
+          data: {
+            externalId: b.client.externalId ?? remote.externalId,
+          },
+        });
+        const membership = b.client.clubMemberships[0];
+        if (membership) {
+          await this.prisma.userClubMembership.update({
+            where: { id: membership.id },
+            data: {
+              externalId: remote.externalId,
+              crmStatus: ClubCrmLinkStatus.LINKED,
+              lastCrmSyncAt: new Date(),
+            },
+          });
+        }
+        await this.prisma.personalTrainingBooking.update({
+          where: { id: b.id },
+          data: {
+            clientIssue: PtClientIssue.NONE,
+            trustBand: TrustBand.GREEN,
+          },
+        });
+        b.clientIssue = PtClientIssue.NONE;
+        b.client.externalId = remote.externalId;
+        if (membership) {
+          membership.externalId = remote.externalId;
+          membership.crmStatus = ClubCrmLinkStatus.LINKED;
+        }
+      } catch {
+        /* ignore single lookup */
+      }
+    }
   }
 
   private mapShift(r: {
@@ -880,6 +990,8 @@ export class PtTimesheetService {
       },
       orderBy: { startAt: 'asc' },
     });
+
+    await this.retryCrmLinkForUnmatchedBookings(clubId, bookings);
 
     const compensation = await this.prisma.staffCompensation.findFirst({
       where: { clubId, userId: trainerId },
@@ -982,16 +1094,20 @@ export class PtTimesheetService {
             ? catalog
             : 0;
 
+      const manualPaid = Boolean(b.manualPaymentConfirmedAt);
       const verified1c =
         b.paymentStatus === ServicePaymentStatus.PAID &&
-        issue === PtClientIssue.NONE;
-      const reformerPersonal = isReformerBooking(b.crmDocRef);
-      const payable =
         issue === PtClientIssue.NONE &&
+        !manualPaid;
+      const reformerPersonal = isReformerBooking(b.crmDocRef);
+      // Payable when linked + paid, OR admin confirmed payment without 1C.
+      const payable =
         !b.isComplimentary &&
         !reformerPersonal &&
         (b.forceIncludeInPayroll ||
-          b.paymentStatus === ServicePaymentStatus.PAID);
+          manualPaid ||
+          (issue === PtClientIssue.NONE &&
+            b.paymentStatus === ServicePaymentStatus.PAID));
       const motivationMinor =
         payable && price > 0 ? Math.round((price * pct) / 100) : 0;
       if (payable) sessionMotivationMinor += motivationMinor;
@@ -1102,6 +1218,7 @@ export class PtTimesheetService {
       isLateAdd: l.isLateAdd,
       clientIssue: l.clientIssue as TrainerDaySheetLineDto['clientIssue'],
       clientIssueEscalated: l.clientIssueEscalated,
+      manualPaymentConfirmed: Boolean(l.booking.manualPaymentConfirmedAt),
       forceIncludeInPayroll: l.forceIncludeInPayroll,
       isComplimentary: l.booking.isComplimentary,
       motivationMinor: l.motivationMinor,
@@ -1137,6 +1254,7 @@ export class PtTimesheetService {
         (l) =>
           !l.isComplimentary &&
           l.paymentStatus !== 'PAID' &&
+          !l.manualPaymentConfirmed &&
           !l.forceIncludeInPayroll,
       ).length,
     };

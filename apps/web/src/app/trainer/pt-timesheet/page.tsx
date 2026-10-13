@@ -203,6 +203,11 @@ export default function TrainerPtTimesheetPage() {
                           {clientIssueLabel(l.clientIssue) || l.clientIssue}
                         </span>
                       )}
+                      {l.manualPaymentConfirmed && (
+                        <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] text-sky-300">
+                          оплата без 1С
+                        </span>
+                      )}
                       {l.isComplimentary && (
                         <span className="rounded bg-slate-700 px-1.5 py-0.5 text-[10px]">
                           подарок

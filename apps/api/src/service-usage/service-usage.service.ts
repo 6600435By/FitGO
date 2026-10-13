@@ -514,14 +514,16 @@ export class ServiceUsageService {
 
   /**
    * Consume SPA quota / record sale when dual-gate reached ATTENDED.
+   * Unlinked guests stay on soft hold (consumeState cleared) so a later
+   * client link can retry — no eternal FAILED without externalId.
    */
   async consumeSpaIfReady(bookingId: string): Promise<void> {
-    // Atomic claim — second concurrent path gets 0 rows and exits.
+    // Atomic claim — null or prior FAILED (retry after link / 1C blip).
     const claimed = await this.prisma.spaBooking.updateMany({
       where: {
         id: bookingId,
         consumedInCrmAt: null,
-        consumeState: null,
+        OR: [{ consumeState: null }, { consumeState: 'FAILED' }],
         status: { not: SpaBookingStatus.CANCELLED },
       },
       data: { consumeState: 'IN_PROGRESS' },
@@ -548,14 +550,30 @@ export class ServiceUsageService {
       return;
     }
 
+    // Manual payment already closed payroll — do not post to 1C.
+    if (booking.manualPaymentConfirmedAt) {
+      await this.prisma.spaBooking.update({
+        where: { id: bookingId },
+        data: {
+          consumeState: null,
+          eligibleForMotivation: true,
+        },
+      });
+      return;
+    }
+
     const externalId =
       booking.client?.externalId ?? booking.clientExternalId;
     if (!externalId) {
+      // Soft hold: clear claim so a later link can retry consume.
       await this.prisma.spaBooking.update({
         where: { id: bookingId },
-        data: { consumeState: 'FAILED' },
+        data: {
+          consumeState: null,
+          eligibleForMotivation: false,
+        },
       });
-      throw new BadRequestException('У клиента нет CRM externalId');
+      return;
     }
 
     const provider = this.fitness.getProvider();
@@ -696,12 +714,16 @@ export class ServiceUsageService {
         status,
         existing.performanceStatus,
       );
+      // SPA motivation only after 1C document or admin manual payment.
+      const spaEligible =
+        Boolean(existing.consumedInCrmAt) ||
+        Boolean(existing.manualPaymentConfirmedAt);
       await this.prisma.spaBooking.update({
         where: { id: bookingId },
         data: {
           presenceStatus: status,
           usageStatus: next.usageStatus,
-          eligibleForMotivation: next.eligibleForMotivation,
+          eligibleForMotivation: spaEligible,
           ...trust,
           ...overrideData,
         },
@@ -789,13 +811,16 @@ export class ServiceUsageService {
         existing.presenceStatus,
         status,
       );
+      const spaEligible =
+        Boolean(existing.consumedInCrmAt) ||
+        Boolean(existing.manualPaymentConfirmedAt);
       await this.prisma.spaBooking.update({
         where: { id: bookingId },
         data: {
           performanceStatus: status,
           specialistCompletedAt: new Date(),
           usageStatus: next.usageStatus,
-          eligibleForMotivation: next.eligibleForMotivation,
+          eligibleForMotivation: spaEligible,
           ...trust,
         },
       });

@@ -172,6 +172,11 @@ export function ScheduleDayGrid({
                     </span>
                   </div>
                   <span className="block truncate font-medium">{event.title}</span>
+                  {event.clientIssue && event.clientIssue !== 'NONE' ? (
+                    <span className="block truncate text-amber-300/90">
+                      Нет в 1С — ждёт привязки
+                    </span>
+                  ) : null}
                   {showKind && (
                     <span className="block truncate opacity-75">
                       {eventKindLabel(event.kind)}

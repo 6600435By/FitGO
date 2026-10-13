@@ -29,6 +29,12 @@ function EventActionDialog({
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
       <div className="card w-full max-w-sm space-y-3">
         <h3 className="font-semibold">{event.title}</h3>
+        {event.clientIssue && event.clientIssue !== 'NONE' ? (
+          <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            Нет в 1С — ждёт привязки. Исправьте телефон в табеле ПТ или попросите
+            администратора.
+          </p>
+        ) : null}
         {event.kind === 'DUTY' && (
           <p className="text-sm text-slate-300">
             Дежурство ставит администратор. В эти часы клиенты могут записаться, и они идут в ставку.

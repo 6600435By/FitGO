@@ -1036,6 +1036,8 @@ export class BookingControlService {
           partnerSource: b.partnerSource,
           client: b.client,
           clientExternalId: b.clientExternalId,
+          oneCLinkStatus: b.oneCLinkStatus,
+          manualPaymentConfirmedAt: b.manualPaymentConfirmedAt,
           specialist: b.specialist,
         },
       });
@@ -3039,6 +3041,8 @@ export class BookingControlService {
       startAt: Date;
       partnerSource?: string | null;
       clientExternalId?: string | null;
+      oneCLinkStatus?: string | null;
+      manualPaymentConfirmedAt?: Date | null;
       client?: { externalId: string | null } | null;
       specialist?: {
         externalId: string | null;
@@ -3075,6 +3079,19 @@ export class BookingControlService {
       };
     }
 
+    if (booking?.manualPaymentConfirmedAt) {
+      return {
+        settlement: {
+          status: 'MANUAL_PAID',
+          label: spaSettlementLabelRu('MANUAL_PAID'),
+          source: 'local',
+          editableInApp: true,
+        },
+        payment: 'PAID',
+        payTag: 'SALE',
+      };
+    }
+
     const isQuota =
       booking?.paymentType === SpaPaymentType.QUOTA ||
       (input.paySource ?? '').toUpperCase() === 'PACKAGE' ||
@@ -3084,6 +3101,24 @@ export class BookingControlService {
       booking?.client?.externalId?.trim() ||
       booking?.clientExternalId?.trim() ||
       undefined;
+
+    if (
+      booking &&
+      !clientExt &&
+      !booking.consumedInCrmAt &&
+      booking.oneCLinkStatus !== 'LINKED'
+    ) {
+      return {
+        settlement: {
+          status: 'AWAITING_CLIENT_LINK',
+          label: spaSettlementLabelRu('AWAITING_CLIENT_LINK'),
+          source: 'local',
+          editableInApp: true,
+        },
+        payment: isQuota ? 'QUOTA' : 'UNKNOWN',
+        payTag: isQuota ? 'PACKAGE' : 'SALE',
+      };
+    }
     const bookingRef = booking?.id;
     const crmRef = booking?.crmDocRef?.trim() || onex?.externalId || undefined;
 
@@ -3185,6 +3220,18 @@ export class BookingControlService {
         };
       }
       if (!foundIn1c && !booking?.consumedInCrmAt) {
+        if (!clientExt) {
+          return {
+            settlement: {
+              status: 'AWAITING_CLIENT_LINK',
+              label: spaSettlementLabelRu('AWAITING_CLIENT_LINK'),
+              source: 'local',
+              editableInApp: true,
+            },
+            payment: 'QUOTA',
+            payTag: 'PACKAGE',
+          };
+        }
         return {
           settlement: {
             status: 'NOT_IN_1C',
@@ -3319,6 +3366,19 @@ export class BookingControlService {
           editableInApp: false,
         },
         payment: 'PAID',
+        payTag: 'SALE',
+      };
+    }
+
+    if (!clientExt) {
+      return {
+        settlement: {
+          status: 'AWAITING_CLIENT_LINK',
+          label: spaSettlementLabelRu('AWAITING_CLIENT_LINK'),
+          source: 'local',
+          editableInApp: true,
+        },
+        payment: 'UNKNOWN',
         payTag: 'SALE',
       };
     }

@@ -66,6 +66,11 @@ export function ScheduleMobileList({
                       minute: '2-digit',
                     })}
                   </p>
+                  {event.clientIssue && event.clientIssue !== 'NONE' ? (
+                    <p className="mt-1 text-xs text-amber-300">
+                      Нет в 1С — ждёт привязки
+                    </p>
+                  ) : null}
                   <p className="mt-1 text-[10px] uppercase tracking-wide opacity-60">
                     {eventKindLabel(event.kind)}
                   </p>

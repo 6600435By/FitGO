@@ -197,6 +197,10 @@ export class PersonalTrainingService {
         clientName: `${booking.client.firstName} ${booking.client.lastName}`.trim(),
         bookingId: booking.id,
         origin: booking.origin,
+        clientIssue:
+          booking.clientIssue === 'NONE'
+            ? undefined
+            : (booking.clientIssue as TrainerCalendarEvent['clientIssue']),
       });
     }
 

@@ -1056,6 +1056,9 @@ model PersonalTrainingBooking {
   presenceOverrideById String?
   paidAt             DateTime?
   crmDocRef          String?
+  /// Admin confirmed payment without a 1C document (unlinked / unmatched client).
+  manualPaymentConfirmedAt DateTime?
+  manualPaymentConfirmedById String?
   /// Late booking created during/after session (exception path).
   isLateAdd          Boolean               @default(false)
   clientIssue        PtClientIssue         @default(NONE)
@@ -1677,6 +1680,9 @@ model SpaBooking {
   presenceOverrideById   String?
   paidAt                 DateTime?
   specialistCompletedAt  DateTime?
+  /// Admin confirmed payment without a 1C document (guest / unlinked client).
+  manualPaymentConfirmedAt DateTime?
+  manualPaymentConfirmedById String?
   /// Partner channel for fixed SPA rate (e.g. ALLSPORTS).
   partnerSource          String?
   createdAt              DateTime         @default(now())

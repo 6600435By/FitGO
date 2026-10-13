@@ -8,6 +8,7 @@ import {
 import {
   AvailabilityBlockStatus,
   Role,
+  ServicePaymentStatus,
   ServiceUsageStatus,
   SessionApprovalKind,
   SpaBookingOrigin,
@@ -294,6 +295,64 @@ export class SpaBookingService {
         this.syncCrmCancellations(clientId, list),
       ),
     );
+  }
+
+  /**
+   * Re-probe 1C by guestPhone for NOT_LINKED admin-board rows (cached lookup).
+   * Cap per load so board open stays responsive.
+   */
+  private async retryLinkUnlinkedSpaBookings(
+    actor: JwtPayload,
+    bookings: Array<{
+      id: string;
+      guestPhone: string | null;
+      oneCLinkStatus: SpaOneCLinkStatus;
+      clientExternalId: string | null;
+      clientId: string | null;
+      usageStatus: ServiceUsageStatus;
+      consumedInCrmAt: Date | null;
+    }>,
+  ) {
+    const candidates = bookings.filter(
+      (b) =>
+        b.oneCLinkStatus === SpaOneCLinkStatus.NOT_LINKED &&
+        !b.clientExternalId &&
+        Boolean(b.guestPhone?.trim()) &&
+        !b.consumedInCrmAt,
+    );
+    const limited = candidates.slice(0, 12);
+    for (const b of limited) {
+      try {
+        const found = await this.lookupClientByPhone(actor, b.guestPhone!);
+        if (!found.found || !found.externalId) continue;
+        await this.prisma.spaBooking.update({
+          where: { id: b.id },
+          data: {
+            clientId: found.clientId ?? b.clientId,
+            clientExternalId: found.externalId,
+            oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+            consumeState: null,
+            ...(found.firstName || found.lastName
+              ? {
+                  guestName:
+                    [found.lastName, found.firstName]
+                      .filter(Boolean)
+                      .join(' ')
+                      .trim() || undefined,
+                }
+              : {}),
+          },
+        });
+        if (
+          b.usageStatus === ServiceUsageStatus.ATTENDED ||
+          b.usageStatus === ServiceUsageStatus.CONSUMED
+        ) {
+          await this.serviceUsage.consumeSpaIfReady(b.id).catch(() => undefined);
+        }
+      } catch {
+        /* ignore single lookup errors */
+      }
+    }
   }
 
   private isSpaMembershipService(name: string): boolean {
@@ -2264,6 +2323,10 @@ export class SpaBookingService {
     }
 
     try {
+      const becameLinked =
+        oneCLinkStatus === SpaOneCLinkStatus.LINKED &&
+        existing.oneCLinkStatus !== SpaOneCLinkStatus.LINKED &&
+        Boolean(clientExternalId);
       const updated = await this.prisma.spaBooking.update({
         where: { id: existing.id },
         data: {
@@ -2276,6 +2339,12 @@ export class SpaBookingService {
           guestPhone,
           clientExternalId,
           oneCLinkStatus,
+          ...(becameLinked
+            ? {
+                // Clear prior soft-hold / FAILED so consume can retry.
+                consumeState: null,
+              }
+            : {}),
           paymentType:
             paymentType === 'QUOTA'
               ? SpaPaymentType.QUOTA
@@ -2285,6 +2354,13 @@ export class SpaBookingService {
         },
         include: { specialist: true, client: true, service: true },
       });
+      if (
+        becameLinked &&
+        (updated.usageStatus === ServiceUsageStatus.ATTENDED ||
+          updated.usageStatus === ServiceUsageStatus.CONSUMED)
+      ) {
+        await this.serviceUsage.consumeSpaIfReady(updated.id).catch(() => undefined);
+      }
       return { booking: this.mapBooking(updated) };
     } catch (err) {
       if (
@@ -2295,6 +2371,50 @@ export class SpaBookingService {
       }
       throw err;
     }
+  }
+
+  /**
+   * Admin confirms paid SPA without posting to 1C (guest / unlinked client).
+   * Quota cannot be replaced this way. Does not set oneCLinkStatus=LINKED.
+   */
+  async adminConfirmManualPayment(
+    actor: JwtPayload,
+    bookingId: string,
+  ): Promise<{ booking: SpaBooking }> {
+    const clubId = requireClubId(actor);
+    const booking = await this.prisma.spaBooking.findFirst({
+      where: { id: bookingId, clubId },
+      include: { specialist: true, client: true, service: true },
+    });
+    if (!booking) throw new NotFoundException('Запись не найдена');
+    if (booking.status === SpaBookingStatus.CANCELLED) {
+      throw new BadRequestException('Запись отменена');
+    }
+    if (booking.paymentType !== SpaPaymentType.PAID) {
+      throw new BadRequestException(
+        'Без 1С можно подтвердить только платную запись — квоту списывают после привязки клиента',
+      );
+    }
+    if (booking.consumedInCrmAt) {
+      throw new BadRequestException('Запись уже проведена в 1С');
+    }
+    if (booking.manualPaymentConfirmedAt) {
+      return { booking: this.mapBooking(booking) };
+    }
+
+    const updated = await this.prisma.spaBooking.update({
+      where: { id: booking.id },
+      data: {
+        manualPaymentConfirmedAt: new Date(),
+        manualPaymentConfirmedById: actor.sub,
+        paymentStatus: ServicePaymentStatus.PAID,
+        paidAt: new Date(),
+        eligibleForMotivation: true,
+        consumeState: null,
+      },
+      include: { specialist: true, client: true, service: true },
+    });
+    return { booking: this.mapBooking(updated) };
   }
 
   async specialistUpdateBooking(
@@ -2574,6 +2694,7 @@ export class SpaBookingService {
   ): Promise<SpaBoardResponse> {
     const clubId = requireClubId(user);
     return this.buildSpaBoard({
+      actor: user,
       clubId,
       from,
       to,
@@ -2595,6 +2716,7 @@ export class SpaBookingService {
   ): Promise<SpaBoardResponse> {
     const clubId = requireClubId(user);
     return this.buildSpaBoard({
+      actor: user,
       clubId,
       from,
       to,
@@ -2607,6 +2729,7 @@ export class SpaBookingService {
   }
 
   private async buildSpaBoard(opts: {
+    actor: JwtPayload;
     clubId: string;
     from: string;
     to: string;
@@ -2664,6 +2787,9 @@ export class SpaBookingService {
     ]);
 
     await this.syncCrmCancellationsForBookings(bookingsRaw);
+    if (opts.revealAll) {
+      await this.retryLinkUnlinkedSpaBookings(opts.actor, bookingsRaw);
+    }
     const bookings = await this.prisma.spaBooking.findMany({
       where: {
         clubId: opts.clubId,
@@ -2776,6 +2902,8 @@ export class SpaBookingService {
         serviceName: b.service.name,
         status: b.status as SpaBoardBooking['status'],
         paymentType: b.paymentType as SpaBoardBooking['paymentType'],
+        oneCLinkStatus: b.oneCLinkStatus as SpaBoardBooking['oneCLinkStatus'],
+        manualPaymentConfirmed: Boolean(b.manualPaymentConfirmedAt),
         approvalPhase: phase,
         approvalLabel:
           phase === 'PENDING_PERFORMER'

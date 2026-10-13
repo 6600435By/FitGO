@@ -756,6 +756,13 @@ export function SpaBoard({
                     {b.clientName ?? 'Клиент'}
                   </p>
                   <p className="truncate text-amber-200/80">{b.serviceName}</p>
+                  {b.oneCLinkStatus === 'NOT_LINKED' &&
+                  !b.manualPaymentConfirmed ? (
+                    <p className="truncate text-rose-300/90">Нет в 1С</p>
+                  ) : null}
+                  {b.manualPaymentConfirmed ? (
+                    <p className="truncate text-sky-300/90">Оплата без 1С</p>
+                  ) : null}
                   {b.approvalLabel ? (
                     <p className="truncate text-amber-300/90">
                       {b.approvalLabel}

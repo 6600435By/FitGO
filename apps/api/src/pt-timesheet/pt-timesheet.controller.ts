@@ -147,6 +147,14 @@ export class AdminPtTimesheetController {
     return this.svc.adminSetPayment(user, id, body);
   }
 
+  @Post('bookings/:id/confirm-manual-payment')
+  confirmManualPayment(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.svc.adminConfirmManualPayment(user, id);
+  }
+
   @Post('bookings/:id/verify-1c')
   verify1c(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.svc.verifyBookingPayment1c(user, id);

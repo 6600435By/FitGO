@@ -753,6 +753,8 @@ export interface TrainerCalendarEvent {
   clientName?: string;
   bookingId?: string;
   origin?: PersonalBookingOrigin;
+  /** PT: CRM link / phone issue on the booking. */
+  clientIssue?: import('./pt-timesheet').PtClientIssue;
   available?: boolean;
   capacity?: number;
   booked?: number;
@@ -1314,6 +1316,8 @@ export interface SpaBoardHourBlock {
   status: 'PUBLISHED' | 'DRAFT';
 }
 
+export type SpaOneCLinkStatus = 'NOT_LINKED' | 'LINKED';
+
 export interface SpaBoardBooking {
   id: string;
   specialistId: string;
@@ -1329,6 +1333,10 @@ export interface SpaBoardBooking {
   serviceName?: string;
   status?: SpaBookingStatus;
   paymentType?: SpaPaymentType;
+  /** CRM counterparty link at booking time. */
+  oneCLinkStatus?: SpaOneCLinkStatus;
+  /** Admin confirmed payment without a 1C document. */
+  manualPaymentConfirmed?: boolean;
   approvalPhase?: import('./club-schedule').SessionApprovalPhase;
   approvalLabel?: string;
   /**
