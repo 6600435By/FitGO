@@ -40,31 +40,28 @@ export default function AdminPendingCrmPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold">Клиенты без 1С</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Зарегистрировались в FitGO, но ещё не найдены в CRM по телефону.
-          Заведите клиента и штрихкод в 1С — привязка подтянется при обновлении
-          карты.
-        </p>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-4">
+      <p className="text-sm text-slate-400">
+        Зарегистрировались в FitGO, но ещё не найдены в CRM по телефону.
+        Заведите клиента и штрихкод в 1С — привязка подтянется при обновлении
+        карты.
+      </p>
 
       {error && <p className="text-red-400">{error}</p>}
 
       {rows.length === 0 ? (
-        <div className="card text-center text-slate-400">Очередь пуста</div>
+        <p className="card py-3 text-sm text-slate-400">Очередь пуста</p>
       ) : (
-        <ul className="space-y-2">
+        <ul className="card divide-y divide-slate-800 !p-0 overflow-hidden">
           {rows.map((row) => (
-            <li key={row.membershipId} className="card">
+            <li key={row.membershipId} className="px-4 py-3">
               <p className="font-semibold">
                 {row.firstName} {row.lastName}
               </p>
               <p className="text-sm text-slate-400">
                 {row.phone ?? 'без телефона'} · {row.email}
               </p>
-              <p className="mt-1 text-xs text-slate-500">
+              <p className="mt-0.5 text-xs text-slate-500">
                 Вступил: {formatDateTime(row.joinedAt)}
                 {row.lastCrmSyncAt
                   ? ` · sync ${formatDateTime(row.lastCrmSyncAt)}`

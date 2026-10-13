@@ -791,7 +791,7 @@ export function SpaBoard({
         : null;
 
     return (
-      <div className="w-12 shrink-0 border-r border-slate-800 bg-slate-950">
+      <div className="admin-time-rail w-12 shrink-0 border-r border-slate-800 bg-slate-950">
         <div className="relative" style={{ height: colHeight }}>
           {hourMarks.map((m) => {
             const clockHour = DAY_START_HOUR + m / 60;

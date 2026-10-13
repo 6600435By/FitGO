@@ -28,17 +28,15 @@ export default function AdminFunnelPage() {
   const maxCount = Math.max(...funnel.map((s) => s.count), 1);
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Воронка продаж</h2>
-
-      <div className="card space-y-4">
+    <div className="mx-auto max-w-3xl space-y-4">
+      <div className="card space-y-3">
         {funnel.map((stage, index) => (
           <div key={stage.stage}>
             <div className="mb-1 flex justify-between text-sm">
               <span>{stage.stage}</span>
               <span className="font-medium">{stage.count}</span>
             </div>
-            <div className="h-3 overflow-hidden rounded-full bg-slate-800">
+            <div className="h-2.5 overflow-hidden rounded-full bg-slate-800">
               <div
                 className="h-full rounded-full bg-fitgo-500 transition-all"
                 style={{
@@ -52,8 +50,7 @@ export default function AdminFunnelPage() {
       </div>
 
       <p className="text-sm text-slate-400">
-        Данные рассчитываются из клиентской базы клуба. Автоматические напоминания
-        доступны в разделе «Риск».
+        Данные из клиентской базы клуба. Напоминания — в разделе «Риск».
       </p>
     </div>
   );

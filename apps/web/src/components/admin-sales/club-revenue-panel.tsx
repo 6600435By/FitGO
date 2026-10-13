@@ -8,6 +8,7 @@ import type {
   ClubRevenuePaymentMethod,
   ClubRevenueReportResponse,
 } from '@fitgo/shared-types';
+import { AdminStickyTable } from '@/components/admin/admin-sticky-table';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { DateField } from '@/components/ui/date-field';
@@ -950,17 +951,16 @@ export function ClubRevenuePanel() {
       ) : null}
 
       {data ? (
-        <div className="overflow-x-auto rounded-xl border border-slate-800">
-          <table className="min-w-full text-left text-sm">
-            <thead className="bg-slate-900/80 text-slate-400">
+        <AdminStickyTable>
+            <thead className="bg-slate-900/80 text-xs font-medium text-slate-400">
               <tr>
-                <th className="px-3 py-2 font-medium">Дата</th>
-                <th className="px-3 py-2 font-medium">Клиент</th>
-                <th className="px-3 py-2 font-medium">Операция</th>
-                <th className="px-3 py-2 font-medium">Товар</th>
-                <th className="px-3 py-2 font-medium">Сотрудник</th>
-                <th className="px-3 py-2 font-medium">Оплата</th>
-                <th className="px-3 py-2 font-medium text-right">Сумма</th>
+                <th className="px-3 py-2">Дата</th>
+                <th className="px-3 py-2">Клиент</th>
+                <th className="px-3 py-2">Операция</th>
+                <th className="px-3 py-2">Товар</th>
+                <th className="px-3 py-2">Сотрудник</th>
+                <th className="px-3 py-2">Оплата</th>
+                <th className="px-3 py-2 text-right">Сумма</th>
               </tr>
             </thead>
             <tbody>
@@ -1025,8 +1025,7 @@ export function ClubRevenuePanel() {
                 })
               )}
             </tbody>
-          </table>
-        </div>
+        </AdminStickyTable>
       ) : null}
 
       {detail ? (

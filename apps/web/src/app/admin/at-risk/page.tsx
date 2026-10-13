@@ -42,13 +42,10 @@ export default function AdminAtRiskPage() {
   if (error) return <p className="text-red-400">{error}</p>;
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold">Клиенты в зоне риска</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Не были в клубе 3+ дней или абонемент истекает в ближайшие 14 дней.
-        </p>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-4">
+      <p className="text-sm text-slate-400">
+        Не были в клубе 3+ дней или абонемент истекает в ближайшие 14 дней.
+      </p>
 
       {message && (
         <p className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-400">
@@ -57,42 +54,39 @@ export default function AdminAtRiskPage() {
       )}
 
       {clients.length === 0 ? (
-        <div className="card text-center text-slate-400">
-          <p>Все клиенты активны</p>
-        </div>
+        <p className="card py-3 text-sm text-slate-400">Все клиенты активны</p>
       ) : (
-        <ul className="space-y-3">
+        <ul className="card divide-y divide-slate-800 !p-0 overflow-hidden">
           {clients.map((client) => (
-            <li key={`${client.id}-${client.reason}`} className="card">
-              <div className="mb-2 flex items-start justify-between">
-                <div>
-                  <p className="font-semibold">{client.name}</p>
-                  <p className="text-sm text-slate-400">{client.email}</p>
-                  {client.membership && (
-                    <p className="text-sm text-slate-400">{client.membership}</p>
-                  )}
-                </div>
+            <li
+              key={`${client.id}-${client.reason}`}
+              className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+            >
+              <div className="min-w-0">
+                <p className="font-semibold">{client.name}</p>
+                <p className="text-sm text-slate-400">
+                  {client.email}
+                  {client.membership ? ` · ${client.membership}` : ''}
+                  {client.daysInactive !== undefined
+                    ? ` · не был ${client.daysInactive} дн.`
+                    : ''}
+                  {client.daysUntilExpiry !== undefined
+                    ? ` · истекает через ${client.daysUntilExpiry} дн.`
+                    : ''}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
                 <span className="rounded-full bg-amber-400/10 px-2 py-1 text-xs text-amber-400">
                   {client.reason}
                 </span>
+                <button
+                  onClick={() => sendReminder(client)}
+                  disabled={sending === client.userId}
+                  className="btn-primary px-3 py-2 text-xs"
+                >
+                  Напомнить
+                </button>
               </div>
-              {client.daysInactive !== undefined && (
-                <p className="text-sm text-slate-400">
-                  Не был {client.daysInactive} дн.
-                </p>
-              )}
-              {client.daysUntilExpiry !== undefined && (
-                <p className="text-sm text-slate-400">
-                  Истекает через {client.daysUntilExpiry} дн.
-                </p>
-              )}
-              <button
-                onClick={() => sendReminder(client)}
-                disabled={sending === client.userId}
-                className="btn-primary mt-3 w-full"
-              >
-                Отправить напоминание
-              </button>
             </li>
           ))}
         </ul>

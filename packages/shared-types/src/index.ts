@@ -155,7 +155,12 @@ export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
     label: 'Групповые занятия',
     description: 'Расписание, запись, мои записи, лист ожидания',
     defaultEnabled: true,
-    surfaces: ['/client/schedule', '/client/bookings', '/client/booking-history'],
+    surfaces: [
+      '/client/schedule',
+      '/client/bookings',
+      '/client/booking-history',
+      '/admin/schedule',
+    ],
   },
   {
     key: 'membership_read',
@@ -197,7 +202,11 @@ export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
     label: 'Лист ПТ',
     description: 'План/факт персональной тренировки',
     defaultEnabled: true,
-    surfaces: ['/trainer/sessions', '/client/personal-bookings'],
+    surfaces: [
+      '/trainer/sessions',
+      '/client/personal-bookings',
+      '/admin/pt-timesheet',
+    ],
   },
   {
     key: 'session_timer',
@@ -220,9 +229,20 @@ export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
   {
     key: 'club_admin',
     label: 'Админка клуба',
-    description: 'Дашборд, отчёты, воронка, at-risk',
+    description: 'Дашборд, отчёты, воронка, at-risk, контроль записей',
     defaultEnabled: true,
-    surfaces: ['/admin'],
+    surfaces: [
+      '/admin',
+      '/admin/tasks',
+      '/admin/booking-control',
+      '/admin/sales',
+      '/admin/payroll',
+      '/admin/reports',
+      '/admin/at-risk',
+      '/admin/funnel',
+      '/admin/pending-crm',
+      '/admin/staff-roster',
+    ],
   },
   {
     key: 'messaging',

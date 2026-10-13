@@ -29,6 +29,9 @@ interface NavItem {
   href: string;
   label: string;
   matchSubpaths?: boolean;
+  /** Mark active when pathname starts with any of these prefixes. */
+  matchPrefixes?: string[];
+  badge?: number;
 }
 
 export interface HeaderClubInfo {
@@ -49,6 +52,34 @@ interface AppShellProps {
    * Mobile stays phone-width; desktop uses full content width.
    */
   wide?: boolean;
+  /** Extra controls in the header (e.g. theme toggle). Left of logout. */
+  headerActions?: ReactNode;
+  /**
+   * Optional «Ещё» sheet — off by default. When set, a fifth-style button
+   * opens a list of secondary destinations (admin groups).
+   */
+  moreItems?: NavItem[];
+  moreLabel?: string;
+  /**
+   * Admin compact chrome: low sticky bar, no title/FIO block.
+   * Desktop hides bottom nav; optional desktopTopNav / mobileSubNav slots.
+   */
+  adminChrome?: boolean;
+  /** Inline section + page links in the sticky bar (md+ only). */
+  desktopTopNav?: ReactNode;
+  /** Sticky section chips under the bar (mobile only). */
+  mobileSubNav?: ReactNode;
+}
+
+function navItemActive(pathname: string, item: NavItem): boolean {
+  if (item.matchPrefixes?.length) {
+    return item.matchPrefixes.some(
+      (p) => pathname === p || pathname.startsWith(`${p}/`),
+    );
+  }
+  if (pathname === item.href) return true;
+  if (item.matchSubpaths && pathname.startsWith(`${item.href}/`)) return true;
+  return false;
 }
 
 export function AppShell({
@@ -57,6 +88,12 @@ export function AppShell({
   navItems,
   headerClub,
   wide = false,
+  headerActions,
+  moreItems,
+  moreLabel = 'Ещё',
+  adminChrome = false,
+  desktopTopNav,
+  mobileSubNav,
 }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -65,8 +102,13 @@ export function AppShell({
     null,
   );
   const [clubOpen, setClubOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
   const immersiveCard = pathname === '/client/card';
+  const primaryActive = navItems.some((item) => navItemActive(pathname, item));
+  const moreActive =
+    !primaryActive &&
+    !!moreItems?.some((item) => navItemActive(pathname, item));
 
   useEffect(
     () =>
@@ -76,7 +118,6 @@ export function AppShell({
     [],
   );
 
-  // In-app back stack: path changes push; same path + new query updates top.
   useEffect(() => {
     const sync = () => {
       const key = locationKey(
@@ -107,8 +148,6 @@ export function AppShell({
     };
   }, []);
 
-  // Next App Router also updates pathname without always going through our patch
-  // in the same tick — keep stack in sync on React route changes.
   useEffect(() => {
     const key = locationKey(pathname, window.location.search);
     recordNavLocation(key);
@@ -147,103 +186,278 @@ export function AppShell({
     .replace(/\/$/, '');
 
   const shellWidth = wide
-    ? 'mx-auto min-h-screen w-full max-w-lg md:max-w-none [--app-header-h:5.5rem]'
-    : 'mx-auto min-h-screen max-w-lg [--app-header-h:5.5rem]';
+    ? 'mx-auto min-h-screen w-full max-w-lg md:max-w-none'
+    : 'mx-auto min-h-screen max-w-lg';
   const navWidth = wide
     ? 'mx-auto w-full max-w-lg md:max-w-none'
     : 'mx-auto max-w-lg';
+
+  const headerH = adminChrome
+    ? '[--app-header-h:2.5rem]'
+    : '[--app-header-h:5.5rem]';
 
   return (
     <div
       className={cn(
         shellWidth,
-        immersiveCard ? 'pb-20' : 'pb-24',
+        headerH,
+        immersiveCard
+          ? 'pb-20'
+          : adminChrome
+            ? 'pb-24 md:pb-6'
+            : 'pb-24',
       )}
     >
-      <header
-        className={cn(
-          'sticky top-0 z-10 min-h-[var(--app-header-h)] border-b border-slate-800 bg-slate-950/90 px-4 py-4 backdrop-blur md:px-6',
-          hideHeader && 'pointer-events-none invisible absolute',
-        )}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-start gap-2">
-            {canGoBack && (
+      {adminChrome ? (
+        <header
+          className={cn(
+            'admin-chrome admin-chrome-bar sticky top-0 z-30 border-b border-slate-800 bg-slate-950/95 backdrop-blur',
+            hideHeader && 'pointer-events-none invisible absolute',
+          )}
+        >
+          <div className="flex h-10 items-center gap-2 px-3 md:px-4">
+            {canGoBack ? (
               <button
                 type="button"
                 onClick={goBack}
-                className="mt-0.5 shrink-0 rounded-xl border border-slate-700 p-2 text-slate-300 hover:bg-slate-800 hover:text-white"
+                className="admin-chrome-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
                 aria-label="Назад"
                 title="Назад"
               >
-                <ArrowLeft className="h-5 w-5" />
+                <ArrowLeft className="h-4 w-4" />
               </button>
+            ) : null}
+            <p className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-fitgo-400">
+              FITGO
+            </p>
+            {desktopTopNav ? (
+              <div className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto md:flex">
+                {desktopTopNav}
+              </div>
+            ) : (
+              <div className="min-w-0 flex-1" />
             )}
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-wider text-fitgo-400">
-                FITGO
-              </p>
-              {headerClub ? (
-                <button
-                  type="button"
-                  onClick={() => setClubOpen(true)}
-                  className="group flex max-w-full items-center gap-1 text-left"
-                  aria-haspopup="dialog"
-                  aria-expanded={clubOpen}
-                >
-                  <h1 className="truncate text-lg font-semibold group-hover:text-fitgo-300">
-                    {headerClub.name}
-                  </h1>
-                  <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-fitgo-300" />
-                </button>
-              ) : (
-                <h1 className="text-lg font-semibold">{title}</h1>
-              )}
-              {user && (
-                <p className="text-sm text-slate-400">
-                  {user.firstName} {user.lastName}
-                </p>
-              )}
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              {headerActions}
+              <button
+                type="button"
+                onClick={logout}
+                className="admin-chrome-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-white"
+                aria-label="Выйти"
+                title="Выйти"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={logout}
-            className="shrink-0 rounded-xl border border-slate-700 p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
-            aria-label="Выйти"
-          >
-            <LogOut className="h-5 w-5" />
-          </button>
-        </div>
-      </header>
+          {mobileSubNav ? (
+            <div className="border-t border-slate-800/80 px-3 py-1.5 md:hidden">
+              {mobileSubNav}
+            </div>
+          ) : null}
+        </header>
+      ) : (
+        <header
+          className={cn(
+            'admin-chrome sticky top-0 z-10 min-h-[var(--app-header-h)] border-b border-slate-800 bg-slate-950/90 px-4 py-4 backdrop-blur md:px-6',
+            hideHeader && 'pointer-events-none invisible absolute',
+          )}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-start gap-2">
+              {canGoBack && (
+                <button
+                  type="button"
+                  onClick={goBack}
+                  className="admin-chrome-btn mt-0.5 shrink-0 rounded-xl border border-slate-700 p-2 text-slate-300 hover:bg-slate-800 hover:text-white"
+                  aria-label="Назад"
+                  title="Назад"
+                >
+                  <ArrowLeft className="h-5 w-5" />
+                </button>
+              )}
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-wider text-fitgo-400">
+                  FITGO
+                </p>
+                {headerClub ? (
+                  <button
+                    type="button"
+                    onClick={() => setClubOpen(true)}
+                    className="group flex max-w-full items-center gap-1 text-left"
+                    aria-haspopup="dialog"
+                    aria-expanded={clubOpen}
+                  >
+                    <h1 className="truncate text-lg font-semibold group-hover:text-fitgo-300">
+                      {headerClub.name}
+                    </h1>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-fitgo-300" />
+                  </button>
+                ) : (
+                  <h1 className="text-lg font-semibold">{title}</h1>
+                )}
+                {user && (
+                  <p className="text-sm text-slate-400">
+                    {user.firstName} {user.lastName}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {headerActions}
+              <button
+                type="button"
+                onClick={logout}
+                className="admin-chrome-btn shrink-0 rounded-xl border border-slate-700 p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
+                aria-label="Выйти"
+              >
+                <LogOut className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+        </header>
+      )}
 
-      <main className={cn(immersiveCard ? 'px-3 py-3' : 'px-4 py-6 md:px-6')}>
+      <main
+        className={cn(
+          immersiveCard
+            ? 'px-3 py-3'
+            : adminChrome
+              ? 'px-4 py-4 md:px-6'
+              : 'px-4 py-6 md:px-6',
+        )}
+      >
         {children}
       </main>
 
-      <nav className="fixed bottom-0 left-0 right-0 border-t border-slate-800 bg-slate-950/95 backdrop-blur">
-        <div className={cn(navWidth, 'flex justify-around overflow-x-auto px-2 py-2')}>
+      <nav
+        className={cn(
+          'admin-chrome fixed bottom-0 left-0 right-0 border-t border-slate-800 bg-slate-950/95 backdrop-blur',
+          adminChrome && 'md:hidden',
+        )}
+      >
+        <div
+          className={cn(
+            navWidth,
+            'flex justify-around gap-1 overflow-x-auto px-2 py-2 md:justify-start md:gap-1',
+          )}
+        >
           {navItems.map((item) => {
-            const active =
-              pathname === item.href ||
-              (item.matchSubpaths && pathname.startsWith(`${item.href}/`));
+            const active = navItemActive(pathname, item);
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  'shrink-0 rounded-xl px-3 py-2 text-center text-sm transition',
+                  'relative shrink-0 rounded-xl px-3 py-2 text-center text-sm transition',
                   active
                     ? 'bg-fitgo-500/20 text-fitgo-300'
                     : 'text-slate-400 hover:text-white',
                 )}
               >
                 {item.label}
+                {item.badge != null && item.badge > 0 ? (
+                  <span className="ml-1 inline-flex min-w-[1.25rem] justify-center rounded-full bg-fitgo-500 px-1 text-[10px] font-semibold leading-5 text-white">
+                    {item.badge > 99 ? '99+' : item.badge}
+                  </span>
+                ) : null}
               </Link>
             );
           })}
+          {moreItems?.map((item) => {
+            const active = navItemActive(pathname, item);
+            return (
+              <Link
+                key={`desk-${item.href}`}
+                href={item.href}
+                className={cn(
+                  'relative hidden shrink-0 rounded-xl px-3 py-2 text-center text-sm transition md:inline-flex md:items-center',
+                  active
+                    ? 'bg-fitgo-500/20 text-fitgo-300'
+                    : 'text-slate-400 hover:text-white',
+                )}
+              >
+                {item.label}
+                {item.badge != null && item.badge > 0 ? (
+                  <span className="ml-1 inline-flex min-w-[1.25rem] justify-center rounded-full bg-fitgo-500 px-1 text-[10px] font-semibold leading-5 text-white">
+                    {item.badge > 99 ? '99+' : item.badge}
+                  </span>
+                ) : null}
+              </Link>
+            );
+          })}
+          {moreItems && moreItems.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setMoreOpen(true)}
+              className={cn(
+                'shrink-0 rounded-xl px-3 py-2 text-center text-sm transition md:hidden',
+                moreActive
+                  ? 'bg-fitgo-500/20 text-fitgo-300'
+                  : 'text-slate-400 hover:text-white',
+              )}
+              aria-haspopup="dialog"
+              aria-expanded={moreOpen}
+            >
+              {moreLabel}
+            </button>
+          ) : null}
         </div>
       </nav>
+
+      {moreOpen && moreItems && moreItems.length > 0 ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center"
+          role="presentation"
+          onClick={() => setMoreOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="app-more-nav-title"
+            className="card w-full max-w-lg space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <h2 id="app-more-nav-title" className="text-lg font-semibold">
+                {moreLabel}
+              </h2>
+              <button
+                type="button"
+                onClick={() => setMoreOpen(false)}
+                className="admin-chrome-btn rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+                aria-label="Закрыть"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <ul className="divide-y divide-slate-800 overflow-hidden rounded-xl border border-slate-800">
+              {moreItems.map((item) => {
+                const active = navItemActive(pathname, item);
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      onClick={() => setMoreOpen(false)}
+                      className={cn(
+                        'flex items-center justify-between px-3 py-3 text-sm transition hover:bg-slate-800/60',
+                        active ? 'text-fitgo-300' : 'text-slate-200',
+                      )}
+                    >
+                      <span>{item.label}</span>
+                      {item.badge != null && item.badge > 0 ? (
+                        <span className="rounded-full bg-fitgo-500 px-2 text-[10px] font-semibold leading-5 text-white">
+                          {item.badge > 99 ? '99+' : item.badge}
+                        </span>
+                      ) : null}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </div>
+      ) : null}
 
       {clubOpen && headerClub && (
         <div

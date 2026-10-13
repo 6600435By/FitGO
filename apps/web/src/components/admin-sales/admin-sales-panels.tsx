@@ -10,6 +10,7 @@ import type {
   AdminSalesOverviewResponse,
   AdminSalesStaffDetailResponse,
 } from '@fitgo/shared-types';
+import { AdminStickyTable } from '@/components/admin/admin-sticky-table';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { DateField } from '@/components/ui/date-field';
@@ -138,13 +139,12 @@ function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
   );
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-800">
-      <table className="min-w-full text-left text-sm">
-        <thead className="bg-slate-900/80 text-slate-400">
+    <AdminStickyTable>
+        <thead className="bg-slate-900/80 text-xs font-medium text-slate-400">
           <tr>
-            <th className="px-3 py-2 font-medium">Клиент</th>
-            <th className="px-3 py-2 font-medium text-right">Продаж</th>
-            <th className="px-3 py-2 font-medium text-right">Сумма</th>
+            <th className="px-3 py-2">Клиент</th>
+            <th className="px-3 py-2 text-right">Продаж</th>
+            <th className="px-3 py-2 text-right">Сумма</th>
           </tr>
         </thead>
         <tbody>
@@ -219,8 +219,7 @@ function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
             );
           })}
         </tbody>
-      </table>
-    </div>
+    </AdminStickyTable>
   );
 }
 
@@ -268,11 +267,11 @@ export function AdminMySalesPanel() {
   }, [load]);
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-6xl space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xl font-semibold">
-          {payment === 'unpaid' ? 'Мои долги' : 'Мои продажи'}
-        </h2>
+        <p className="text-sm text-slate-400">
+          {payment === 'unpaid' ? 'Неоплаченные продажи' : 'Личные продажи за период'}
+        </p>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -298,10 +297,10 @@ export function AdminMySalesPanel() {
           </button>
         </div>
       </div>
-      <div className="card flex flex-wrap gap-3">
+      <div className="card flex flex-wrap items-end gap-3 !p-3">
         <DateField label="С" value={from} onChange={setFrom} />
         <DateField label="По" value={to} onChange={setTo} />
-        <label className="text-sm">
+        <label className="min-w-[8rem] flex-1 text-sm sm:flex-none">
           <span className="mb-1 block text-slate-400">Вид</span>
           <select
             className="input"
@@ -317,7 +316,7 @@ export function AdminMySalesPanel() {
             <option value="shop">Магазин</option>
           </select>
         </label>
-        <label className="text-sm">
+        <label className="min-w-[8rem] flex-1 text-sm sm:flex-none">
           <span className="mb-1 block text-slate-400">Оплата</span>
           <select
             className="input"
@@ -505,17 +504,16 @@ export function SuperAdminSalesPanel() {
         <p className="text-sm text-slate-500">Загрузка…</p>
       ) : null}
       {data ? (
-        <div className="overflow-x-auto rounded-xl border border-slate-800">
-          <table className="min-w-full text-left text-sm">
-            <thead className="bg-slate-900/80 text-slate-400">
+        <AdminStickyTable>
+            <thead className="bg-slate-900/80 text-xs font-medium text-slate-400">
               <tr>
-                <th className="px-3 py-2 font-medium">Админ</th>
-                <th className="px-3 py-2 font-medium text-right">Абонементы</th>
-                <th className="px-3 py-2 font-medium text-right">Массаж</th>
-                <th className="px-3 py-2 font-medium text-right">Солярий</th>
-                <th className="px-3 py-2 font-medium text-right">Магазин</th>
-                <th className="px-3 py-2 font-medium text-right">Неоплачено</th>
-                <th className="px-3 py-2 font-medium text-right">К начислению</th>
+                <th className="px-3 py-2">Админ</th>
+                <th className="px-3 py-2 text-right">Абонементы</th>
+                <th className="px-3 py-2 text-right">Массаж</th>
+                <th className="px-3 py-2 text-right">Солярий</th>
+                <th className="px-3 py-2 text-right">Магазин</th>
+                <th className="px-3 py-2 text-right">Неоплачено</th>
+                <th className="px-3 py-2 text-right">К начислению</th>
               </tr>
             </thead>
             <tbody>
@@ -566,8 +564,7 @@ export function SuperAdminSalesPanel() {
                 </Fragment>
               ))}
             </tbody>
-          </table>
-        </div>
+        </AdminStickyTable>
       ) : null}
     </div>
   );

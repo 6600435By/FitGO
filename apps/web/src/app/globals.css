@@ -59,3 +59,201 @@ body {
     @apply text-sm text-slate-400;
   }
 }
+
+/* Admin light theme — scoped to .admin-app only (see admin-theme.tsx). */
+.admin-app.admin-theme-light {
+  color-scheme: light;
+  background-color: #f3f6f4;
+  color: #14211c;
+}
+
+.admin-app.admin-theme-light .admin-chrome {
+  border-color: #d5e0db !important;
+  background-color: rgba(243, 246, 244, 0.96) !important;
+  color: #14211c;
+}
+
+.admin-app.admin-theme-light .admin-chrome h1,
+.admin-app.admin-theme-light .admin-chrome .font-semibold {
+  color: #14211c;
+}
+
+.admin-app.admin-theme-light .admin-chrome .text-slate-400,
+.admin-app.admin-theme-light .text-slate-400,
+.admin-app.admin-theme-light .stat-label,
+.admin-app.admin-theme-light .text-slate-500 {
+  color: #3d5248 !important;
+}
+
+.admin-app.admin-theme-light .admin-chrome .text-slate-300,
+.admin-app.admin-theme-light .text-slate-300,
+.admin-app.admin-theme-light .text-slate-200 {
+  color: #2a3d35 !important;
+}
+
+.admin-app.admin-theme-light .admin-chrome-btn {
+  border-color: #c5d4cd !important;
+  color: #3d5248 !important;
+}
+
+.admin-app.admin-theme-light .admin-chrome-btn:hover {
+  background-color: #e4ece8 !important;
+  color: #14211c !important;
+}
+
+.admin-app.admin-theme-light .card {
+  border-color: #d5e0db;
+  background-color: #ffffff;
+  color: #14211c;
+  box-shadow: 0 1px 2px rgb(20 33 28 / 0.05);
+}
+
+.admin-app.admin-theme-light .btn-secondary {
+  border-color: #c5d4cd;
+  background-color: #eaf0ed;
+  color: #14211c;
+}
+
+.admin-app.admin-theme-light .btn-secondary:hover {
+  background-color: #dce6e1;
+}
+
+.admin-app.admin-theme-light .input {
+  border-color: #c5d4cd;
+  background-color: #ffffff;
+  color: #14211c;
+}
+
+.admin-app.admin-theme-light .date-field {
+  color-scheme: light;
+}
+
+.admin-app.admin-theme-light .date-field::-webkit-calendar-picker-indicator {
+  filter: none;
+  opacity: 0.55;
+}
+
+.admin-app.admin-theme-light .stat-value,
+.admin-app.admin-theme-light .text-white,
+.admin-app.admin-theme-light .text-slate-100 {
+  color: #14211c !important;
+}
+
+/* Warning / success / danger chips — readable on white */
+.admin-app.admin-theme-light .text-amber-100,
+.admin-app.admin-theme-light .text-amber-200,
+.admin-app.admin-theme-light .text-amber-300,
+.admin-app.admin-theme-light .text-amber-300\/90,
+.admin-app.admin-theme-light .text-amber-400,
+.admin-app.admin-theme-light .text-amber-700,
+.admin-app.admin-theme-light .text-yellow-400 {
+  color: #5c3a00 !important;
+}
+
+.admin-app.admin-theme-light .bg-amber-500\/5,
+.admin-app.admin-theme-light .bg-amber-500\/10,
+.admin-app.admin-theme-light .bg-amber-500\/20,
+.admin-app.admin-theme-light .bg-amber-950\/40 {
+  background-color: #fff4e0 !important;
+}
+
+.admin-app.admin-theme-light .border-amber-500\/20,
+.admin-app.admin-theme-light .border-amber-500\/30,
+.admin-app.admin-theme-light .border-amber-500\/40,
+.admin-app.admin-theme-light .border-amber-700\/50,
+.admin-app.admin-theme-light .border-amber-700\/60 {
+  border-color: #e6c98a !important;
+}
+
+.admin-app.admin-theme-light .text-emerald-300,
+.admin-app.admin-theme-light .text-emerald-400,
+.admin-app.admin-theme-light .text-fitgo-300,
+.admin-app.admin-theme-light .text-fitgo-400 {
+  color: #047857 !important;
+}
+
+.admin-app.admin-theme-light .bg-emerald-500\/20 {
+  background-color: #e7f6ef !important;
+}
+
+.admin-app.admin-theme-light .text-rose-300,
+.admin-app.admin-theme-light .text-red-400 {
+  color: #9f1239 !important;
+}
+
+.admin-app.admin-theme-light .bg-rose-500\/20 {
+  background-color: #fde8ee !important;
+}
+
+.admin-app.admin-theme-light .bg-slate-800,
+.admin-app.admin-theme-light .bg-slate-800\/50,
+.admin-app.admin-theme-light .bg-slate-800\/60,
+.admin-app.admin-theme-light .hover\:bg-slate-800:hover {
+  background-color: #eaf0ed !important;
+}
+
+.admin-app.admin-theme-light .bg-slate-950\/40,
+.admin-app.admin-theme-light .bg-slate-950\/50,
+.admin-app.admin-theme-light .bg-slate-950\/60,
+.admin-app.admin-theme-light .bg-slate-950\/80,
+.admin-app.admin-theme-light .bg-slate-950\/95,
+.admin-app.admin-theme-light .bg-slate-900\/80,
+.admin-app.admin-theme-light .bg-slate-900\/60,
+.admin-app.admin-theme-light .bg-slate-900\/95 {
+  background-color: #ffffff !important;
+}
+
+.admin-app.admin-theme-light .border-slate-800,
+.admin-app.admin-theme-light .border-slate-800\/80,
+.admin-app.admin-theme-light .border-slate-700,
+.admin-app.admin-theme-light .border-slate-700\/50,
+.admin-app.admin-theme-light .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #d5e0db !important;
+}
+
+.admin-app.admin-theme-light .hover\:text-white:hover {
+  color: #14211c !important;
+}
+
+.admin-app.admin-theme-light .hover\:bg-slate-800\/60:hover,
+.admin-app.admin-theme-light .hover\:bg-slate-900\/60:hover {
+  background-color: #eaf0ed !important;
+}
+
+.admin-app.admin-theme-light thead {
+  font-size: 12px;
+  font-weight: 500;
+  color: #3d5248;
+}
+
+.admin-app.admin-theme-light td {
+  font-size: 14px;
+}
+
+.admin-app.admin-theme-light .bg-slate-950 {
+  background-color: #f3f6f4 !important;
+}
+
+.admin-app.admin-theme-light .bg-slate-900 {
+  background-color: #ffffff !important;
+}
+
+.admin-app.admin-theme-light .border-slate-700\/80 {
+  border-color: #d5e0db !important;
+}
+
+/* Schedule / SPA time rail — after solid bg remaps so fill/text win */
+.admin-app.admin-theme-light .admin-time-rail {
+  background-color: #eaf0ed !important;
+  border-color: #c5d4cd !important;
+  color: #14211c;
+}
+
+.admin-app.admin-theme-light .admin-time-rail .text-slate-500 {
+  color: #14211c !important;
+  font-weight: 500;
+}
+
+.admin-app.admin-theme-light .admin-time-rail .text-rose-400 {
+  color: #9f1239 !important;
+}

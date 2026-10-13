@@ -492,10 +492,10 @@ function AdminTasksInner() {
               </div>
             </div>
             {task.status !== AdminTaskStatus.DONE ? (
-              <div className="flex gap-2">
+              <div className="flex flex-wrap justify-end gap-2">
                 <button
                   type="button"
-                  className="btn-secondary text-xs flex-1"
+                  className="btn-secondary px-3 py-2 text-xs"
                   onClick={() =>
                     void updateStatus(task.id, AdminTaskStatus.IN_PROGRESS)
                   }
@@ -504,7 +504,7 @@ function AdminTasksInner() {
                 </button>
                 <button
                   type="button"
-                  className="btn-primary text-xs flex-1"
+                  className="btn-primary px-3 py-2 text-xs"
                   onClick={() =>
                     void updateStatus(
                       task.id,
@@ -524,9 +524,9 @@ function AdminTasksInner() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-5xl space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xl font-semibold">Мои задачи</h2>
+        <p className="text-sm text-slate-400">Очередь и абонементы</p>
         <button
           type="button"
           className="btn-secondary text-xs"
@@ -540,14 +540,16 @@ function AdminTasksInner() {
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex gap-1.5 overflow-x-auto pb-1">
         {filters.map((item) => (
           <button
             key={item.id}
             type="button"
             onClick={() => setTopic(item.id)}
             className={
-              topic === item.id ? 'btn-primary text-xs' : 'btn-secondary text-xs'
+              topic === item.id
+                ? 'btn-primary shrink-0 px-3 py-2 text-xs'
+                : 'btn-secondary shrink-0 px-3 py-2 text-xs'
             }
           >
             {item.label}
@@ -557,7 +559,7 @@ function AdminTasksInner() {
       </div>
 
       {topic === 'today' ? (
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {(
             [
               ['manager', 'От руководителя', counts.manager],
@@ -573,11 +575,11 @@ function AdminTasksInner() {
             <button
               key={id}
               type="button"
-              className="card py-3 text-left transition hover:border-fitgo-500/40"
+              className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2.5 text-left transition hover:border-fitgo-500/40"
               onClick={() => setTopic(id)}
             >
-              <p className="stat-value text-xl">{count}</p>
-              <p className="stat-label">{label}</p>
+              <p className="stat-value text-lg leading-none">{count}</p>
+              <p className="mt-1 text-[11px] text-slate-400">{label}</p>
             </button>
           ))}
         </div>

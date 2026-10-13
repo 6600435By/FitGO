@@ -84,7 +84,7 @@ export function ScheduleDayGrid({
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-700/80 bg-slate-900/40 shadow-lg">
       <div className="flex min-w-[280px]">
-        <div className="sticky left-0 z-20 w-14 shrink-0 border-r border-slate-700/80 bg-slate-900/95">
+        <div className="admin-time-rail sticky left-0 z-20 w-14 shrink-0 border-r border-slate-700/80 bg-slate-900/95">
           <div className="h-[52px] border-b border-slate-700/80" />
           <div className="relative" style={{ height: gridHeight }}>
             {timeLabels.map((m) => (

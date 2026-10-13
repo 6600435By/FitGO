@@ -9,6 +9,7 @@ import {
   type BookingControlStatus,
 } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AdminStickyTable } from '@/components/admin/admin-sticky-table';
 import { DateField } from '@/components/ui/date-field';
 import { formatDateTime } from '@/lib/utils';
 
@@ -518,6 +519,8 @@ export function BookingControlPanel({
     (selected.spaSettlement?.editableInApp === true ||
       selected.source === 'FITGO' ||
       selected.spaSettlement?.status === 'NOT_IN_1C' ||
+      selected.spaSettlement?.status === 'AWAITING_CLIENT_LINK' ||
+      selected.spaSettlement?.status === 'MANUAL_PAID' ||
       selected.spaSettlement?.status === 'DELETED_IN_1C' ||
       selected.spaSettlement?.status === 'CANCELLED_IN_1C');
 
@@ -1155,23 +1158,18 @@ export function BookingControlPanel({
               );
             })}
           </ul>
-          <div className="hidden overflow-x-auto rounded-xl border border-slate-800 md:block">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-900/80 text-slate-400">
+          <AdminStickyTable className="hidden md:block" tableClassName="w-full">
+              <thead className="bg-slate-900/80 text-xs font-medium text-slate-400">
                 <tr>
-                  <th className="whitespace-nowrap px-3 py-2 font-medium">
-                    Дата время
-                  </th>
-                  <th className="px-3 py-2 font-medium">Вид</th>
-                  <th className="px-3 py-2 font-medium">Наименование</th>
-                  <th className="px-3 py-2 font-medium">Сотрудник</th>
-                  <th className="px-3 py-2 text-right font-medium">Записано</th>
-                  <th className="px-3 py-2 text-right font-medium">Прибыло</th>
-                  <th className="px-3 py-2 text-right font-medium">
-                    Не прибыло
-                  </th>
-                  <th className="px-3 py-2 font-medium">Статус</th>
-                  <th className="px-3 py-2 font-medium">Оплата</th>
+                  <th className="whitespace-nowrap px-3 py-2">Дата время</th>
+                  <th className="px-3 py-2">Вид</th>
+                  <th className="px-3 py-2">Наименование</th>
+                  <th className="px-3 py-2">Сотрудник</th>
+                  <th className="px-3 py-2 text-right">Записано</th>
+                  <th className="px-3 py-2 text-right">Прибыло</th>
+                  <th className="px-3 py-2 text-right">Не прибыло</th>
+                  <th className="px-3 py-2">Статус</th>
+                  <th className="px-3 py-2">Оплата</th>
                 </tr>
               </thead>
               <tbody>
@@ -1265,8 +1263,7 @@ export function BookingControlPanel({
                   );
                 })}
               </tbody>
-            </table>
-          </div>
+          </AdminStickyTable>
         </>
       )}
       </>
@@ -1510,10 +1507,13 @@ export function BookingControlPanel({
                   <p
                     className={
                       selected.spaSettlement.status === 'PAID' ||
-                      selected.spaSettlement.status === 'QUOTA_CONSUMED'
+                      selected.spaSettlement.status === 'QUOTA_CONSUMED' ||
+                      selected.spaSettlement.status === 'MANUAL_PAID'
                         ? 'rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200'
                         : selected.spaSettlement.status === 'AWAITING_PAYMENT' ||
                             selected.spaSettlement.status === 'NOT_IN_1C' ||
+                            selected.spaSettlement.status ===
+                              'AWAITING_CLIENT_LINK' ||
                             selected.spaSettlement.status === 'DELETED_IN_1C'
                           ? 'rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200'
                           : selected.spaSettlement.status === 'CANCELLED_IN_1C'

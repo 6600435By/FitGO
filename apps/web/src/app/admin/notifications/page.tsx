@@ -55,9 +55,8 @@ export default function AdminNotificationsPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Сообщения</h2>
+    <div className="mx-auto max-w-4xl space-y-4">
+      <div className="flex items-center justify-end">
         <PushSubscribeButton />
       </div>
 
@@ -127,15 +126,15 @@ export default function AdminNotificationsPage() {
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
             </div>
           ) : notifications.length === 0 ? (
-            <div className="card text-center text-slate-400">
-              <p>Нет уведомлений по выбранному фильтру</p>
-            </div>
+            <p className="card py-3 text-sm text-slate-400">
+              Нет уведомлений по выбранному фильтру
+            </p>
           ) : (
-            <ul className="space-y-2">
+            <ul className="card divide-y divide-slate-800 !p-0 overflow-hidden">
               {notifications.map((n) => (
                 <li
                   key={n.id}
-                  className={`card ${n.read ? 'opacity-80' : 'border-fitgo-500/20'}`}
+                  className={`px-4 py-3 ${n.read ? 'opacity-80' : 'bg-fitgo-500/5'}`}
                 >
                   <div className="mb-2 flex items-start justify-between gap-2">
                     <div>
@@ -160,12 +159,12 @@ export default function AdminNotificationsPage() {
                   <p className="mt-1 text-xs text-slate-500">
                     {formatDateTime(n.createdAt)}
                   </p>
-                  <div className="mt-3 flex gap-2">
+                  <div className="mt-3 flex flex-wrap justify-end gap-2">
                     {!n.read && (
                       <button
                         type="button"
                         onClick={() => markRead(n.id)}
-                        className="btn-secondary flex-1 text-sm"
+                        className="btn-secondary px-3 py-2 text-xs"
                       >
                         Прочитано
                       </button>
@@ -174,7 +173,7 @@ export default function AdminNotificationsPage() {
                       <button
                         type="button"
                         onClick={() => markComplete(n.id)}
-                        className="btn-primary flex-1 text-sm"
+                        className="btn-primary px-3 py-2 text-xs"
                       >
                         Завершить
                       </button>

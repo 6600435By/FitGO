@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { MessagesHomeLink } from '@/components/messages-home-link';
 import { api, type AdminDashboard } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDate } from '@/lib/utils';
@@ -110,241 +109,238 @@ export default function AdminHomePage() {
   const tasks = data.stats.tasks ?? emptyTasks();
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-6xl space-y-4">
       {data.club && (
         <p className="text-sm text-slate-400">
           Клуб <span className="font-medium text-white">{data.club.name}</span>
         </p>
       )}
 
-      <div className="space-y-3">
-        {/* Tasks — featured, full width */}
-        <div className="card !p-3.5 sm:!p-4">
-          <div className="flex items-start gap-3">
-            <ListTodo className="mt-0.5 h-5 w-5 shrink-0 text-fitgo-400" />
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-end justify-between gap-2">
-                <div>
-                  <p className="stat-label">Задачи</p>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="space-y-3 lg:col-span-2">
+          <div className="card !p-3.5 sm:!p-4">
+            <div className="flex items-start gap-3">
+              <ListTodo className="mt-0.5 h-5 w-5 shrink-0 text-fitgo-400" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <p className="stat-label">Задачи</p>
+                    <Link
+                      href="/admin/tasks"
+                      className="stat-value text-3xl leading-none hover:text-fitgo-300"
+                    >
+                      {tasks.total}
+                    </Link>
+                  </div>
                   <Link
                     href="/admin/tasks"
-                    className="stat-value text-3xl leading-none hover:text-fitgo-300"
+                    className="text-xs text-slate-500 hover:text-fitgo-400"
                   >
-                    {tasks.total}
+                    Все задачи →
                   </Link>
                 </div>
-                <Link
-                  href="/admin/tasks"
-                  className="text-xs text-slate-500 hover:text-fitgo-400"
-                >
-                  Все задачи →
-                </Link>
-              </div>
-              <div className="mt-3 grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-                <TaskChip
-                  href="/admin/tasks"
-                  label="Контроль"
-                  value={tasks.bookingControl}
-                />
-                <TaskChip
-                  href="/admin/tasks?topic=membership"
-                  label="Абон."
-                  value={tasks.membership}
-                />
-                <TaskChip
-                  href="/admin/tasks?topic=group_approval"
-                  label="ГП"
-                  value={tasks.group}
-                />
-                <TaskChip
-                  href="/admin/tasks?topic=spa_approval"
-                  label="SPA"
-                  value={tasks.spa}
-                />
-                <TaskChip
-                  href="/admin/tasks?topic=pt_approval"
-                  label="ПТ"
-                  value={tasks.pt}
-                />
-                <TaskChip
-                  href="/admin/tasks?topic=manager"
-                  label="Рук."
-                  value={tasks.manager}
-                />
+                <div className="mt-3 grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+                  <TaskChip
+                    href="/admin/tasks"
+                    label="Контроль"
+                    value={tasks.bookingControl}
+                  />
+                  <TaskChip
+                    href="/admin/tasks?topic=membership"
+                    label="Абон."
+                    value={tasks.membership}
+                  />
+                  <TaskChip
+                    href="/admin/tasks?topic=group_approval"
+                    label="ГП"
+                    value={tasks.group}
+                  />
+                  <TaskChip
+                    href="/admin/tasks?topic=spa_approval"
+                    label="SPA"
+                    value={tasks.spa}
+                  />
+                  <TaskChip
+                    href="/admin/tasks?topic=pt_approval"
+                    label="ПТ"
+                    value={tasks.pt}
+                  />
+                  <TaskChip
+                    href="/admin/tasks?topic=manager"
+                    label="Рук."
+                    value={tasks.manager}
+                  />
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Compact metric row */}
-        <div className="grid grid-cols-2 gap-2.5 md:grid-cols-4 md:gap-3">
-          <Link
-            href={reviewHref}
-            className="card !p-3 block transition hover:border-fitgo-500/40 sm:!p-3.5"
-          >
-            <div className="mb-1.5 flex items-center gap-1.5">
-              <ClipboardCheck className="h-4 w-4 text-fitgo-400" />
-              <p className="stat-label text-xs">Контроль записей</p>
-            </div>
-            <p className="stat-value text-xl sm:text-2xl">
-              {data.stats.needsReviewCount}
-            </p>
-            <p className="mt-0.5 text-[11px] text-slate-500">На проверке →</p>
-          </Link>
-
-          <Link
-            href="/admin/tasks?topic=membership"
-            className="card !p-3 block transition hover:border-amber-500/40 sm:!p-3.5"
-          >
-            <div className="mb-1.5 flex items-center gap-1.5">
-              <Bell className="h-4 w-4 text-amber-400" />
-              <p className="stat-label text-xs">Истекают скоро</p>
-            </div>
-            <p className="stat-value text-xl sm:text-2xl">
-              {data.stats.expiringSoon}
-            </p>
-            <p className="mt-0.5 text-[11px] text-slate-500">7 дней →</p>
-          </Link>
-
-          <div className="card !p-3 sm:!p-3.5">
-            <div className="mb-1.5 flex items-center gap-1.5">
-              <CalendarCheck className="h-4 w-4 text-fitgo-400" />
-              <p className="stat-label text-xs">Занятий сегодня</p>
-            </div>
+          <div className="grid grid-cols-2 gap-2.5 md:grid-cols-4 md:gap-3">
             <Link
-              href={`/admin/booking-control?from=${today}&to=${today}`}
-              className="stat-value text-xl hover:text-fitgo-300 sm:text-2xl"
+              href={reviewHref}
+              className="card !p-3 block transition hover:border-fitgo-500/40 sm:!p-3.5"
             >
-              {data.stats.sessionsToday.total}
-            </Link>
-            <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-slate-400">
-              <Link
-                href={`/admin/booking-control?kind=GROUP&from=${today}&to=${today}`}
-                className="rounded-md px-1 py-0.5 hover:bg-slate-800 hover:text-white"
-              >
-                ГП{' '}
-                <span className="font-medium text-slate-200">
-                  {data.stats.sessionsToday.group}
-                </span>
-              </Link>
-              <Link
-                href={`/admin/booking-control?kind=SPA&from=${today}&to=${today}`}
-                className="rounded-md px-1 py-0.5 hover:bg-slate-800 hover:text-white"
-              >
-                SPA{' '}
-                <span className="font-medium text-slate-200">
-                  {data.stats.sessionsToday.spa}
-                </span>
-              </Link>
-              <Link
-                href={`/admin/booking-control?kind=PT&from=${today}&to=${today}`}
-                className="rounded-md px-1 py-0.5 hover:bg-slate-800 hover:text-white"
-              >
-                ПТ{' '}
-                <span className="font-medium text-slate-200">
-                  {data.stats.sessionsToday.pt}
-                </span>
-              </Link>
-            </div>
-          </div>
-
-          <div className="card !p-3 sm:!p-3.5">
-            <div className="mb-1.5 flex items-center gap-1.5">
-              <Wallet className="h-4 w-4 text-fitgo-400" />
-              <p className="stat-label text-xs">Выручка сегодня</p>
-            </div>
-            <p className="stat-value text-xl sm:text-2xl">
-              {money(data.stats.revenueToday.total, currency)}
-            </p>
-            <p className="mt-1.5 text-[11px] leading-snug text-slate-400">
-              Нал {money(data.stats.revenueToday.cash, currency)}
-              <span className="text-slate-600"> · </span>
-              Карта {money(data.stats.revenueToday.card, currency)}
-              {data.stats.revenueToday.other > 0 ? (
-                <>
-                  <span className="text-slate-600"> · </span>
-                  Проч. {money(data.stats.revenueToday.other, currency)}
-                </>
-              ) : null}
-            </p>
-            {revenueSynced ? (
-              <p className="mt-1 text-[10px] text-slate-500">{revenueSynced}</p>
-            ) : (
-              <p className="mt-1 text-[10px] text-slate-500">
-                синхронизация…
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <ClipboardCheck className="h-4 w-4 text-fitgo-400" />
+                <p className="stat-label text-xs">Контроль записей</p>
+              </div>
+              <p className="stat-value text-xl sm:text-2xl">
+                {data.stats.needsReviewCount}
               </p>
-            )}
-          </div>
-        </div>
-      </div>
+              <p className="mt-0.5 text-[11px] text-slate-500">На проверке →</p>
+            </Link>
 
-      {(data.stats.pendingCrmCount ?? 0) > 0 && (
-        <Link
-          href="/admin/pending-crm"
-          className="card block border border-amber-500/30 bg-amber-500/5"
-        >
-          <p className="font-semibold text-amber-200">
-            Без 1С: {data.stats.pendingCrmCount}
-          </p>
-          <p className="mt-1 text-sm text-slate-400">
-            Клиенты FitGO без карточки CRM — открыть очередь →
-          </p>
-        </Link>
-      )}
-
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="card md:col-span-2">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-400" />
-              <h2 className="font-semibold">Позвонить сегодня</h2>
-            </div>
             <Link
               href="/admin/tasks?topic=membership"
-              className="text-sm text-fitgo-400 hover:underline"
+              className="card !p-3 block transition hover:border-amber-500/40 sm:!p-3.5"
             >
-              Все
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <Bell className="h-4 w-4 text-amber-400" />
+                <p className="stat-label text-xs">Истекают скоро</p>
+              </div>
+              <p className="stat-value text-xl sm:text-2xl">
+                {data.stats.expiringSoon}
+              </p>
+              <p className="mt-0.5 text-[11px] text-slate-500">7 дней →</p>
             </Link>
+
+            <div className="card !p-3 sm:!p-3.5">
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <CalendarCheck className="h-4 w-4 text-fitgo-400" />
+                <p className="stat-label text-xs">Занятий сегодня</p>
+              </div>
+              <Link
+                href={`/admin/booking-control?from=${today}&to=${today}`}
+                className="stat-value text-xl hover:text-fitgo-300 sm:text-2xl"
+              >
+                {data.stats.sessionsToday.total}
+              </Link>
+              <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-slate-400">
+                <Link
+                  href={`/admin/booking-control?kind=GROUP&from=${today}&to=${today}`}
+                  className="rounded-md px-1 py-0.5 hover:bg-slate-800 hover:text-white"
+                >
+                  ГП{' '}
+                  <span className="font-medium text-slate-200">
+                    {data.stats.sessionsToday.group}
+                  </span>
+                </Link>
+                <Link
+                  href={`/admin/booking-control?kind=SPA&from=${today}&to=${today}`}
+                  className="rounded-md px-1 py-0.5 hover:bg-slate-800 hover:text-white"
+                >
+                  SPA{' '}
+                  <span className="font-medium text-slate-200">
+                    {data.stats.sessionsToday.spa}
+                  </span>
+                </Link>
+                <Link
+                  href={`/admin/booking-control?kind=PT&from=${today}&to=${today}`}
+                  className="rounded-md px-1 py-0.5 hover:bg-slate-800 hover:text-white"
+                >
+                  ПТ{' '}
+                  <span className="font-medium text-slate-200">
+                    {data.stats.sessionsToday.pt}
+                  </span>
+                </Link>
+              </div>
+            </div>
+
+            <div className="card !p-3 sm:!p-3.5">
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <Wallet className="h-4 w-4 text-fitgo-400" />
+                <p className="stat-label text-xs">Выручка сегодня</p>
+              </div>
+              <p className="stat-value text-xl sm:text-2xl">
+                {money(data.stats.revenueToday.total, currency)}
+              </p>
+              <p className="mt-1.5 text-[11px] leading-snug text-slate-400">
+                Нал {money(data.stats.revenueToday.cash, currency)}
+                <span className="text-slate-600"> · </span>
+                Карта {money(data.stats.revenueToday.card, currency)}
+                {data.stats.revenueToday.other > 0 ? (
+                  <>
+                    <span className="text-slate-600"> · </span>
+                    Проч. {money(data.stats.revenueToday.other, currency)}
+                  </>
+                ) : null}
+              </p>
+              {revenueSynced ? (
+                <p className="mt-1 text-[10px] text-slate-500">{revenueSynced}</p>
+              ) : (
+                <p className="mt-1 text-[10px] text-slate-500">
+                  синхронизация…
+                </p>
+              )}
+            </div>
           </div>
-          {data.callToday.length === 0 ? (
-            <p className="text-sm text-slate-400">Нет звонков на сегодня</p>
-          ) : (
-            <ul className="space-y-2">
-              {data.callToday.map((item) => (
-                <li key={item.taskId}>
-                  <Link
-                    href={`/admin/tasks?topic=membership&task=${item.taskId}`}
-                    className="flex items-center justify-between rounded-xl bg-slate-800/50 px-3 py-2 text-sm transition hover:bg-slate-800"
-                  >
-                    <div>
-                      <p className="font-medium">{item.clientName}</p>
-                      <p className="text-slate-400">
-                        {item.membership}
-                        {item.phone ? ` · ${item.phone}` : ''}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-amber-400">{item.daysLeft} дн.</p>
-                      <p className="text-slate-500">
-                        {formatDate(item.validUntil)}
-                      </p>
-                    </div>
-                  </Link>
-                </li>
-              ))}
-            </ul>
+
+          {(data.stats.pendingCrmCount ?? 0) > 0 && (
+            <Link
+              href="/admin/pending-crm"
+              className="card block border border-amber-500/30 bg-amber-500/5"
+            >
+              <p className="font-semibold text-amber-200">
+                Без 1С: {data.stats.pendingCrmCount}
+              </p>
+              <p className="mt-1 text-sm text-slate-400">
+                Клиенты FitGO без карточки CRM — открыть очередь →
+              </p>
+            </Link>
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-1">
-          <Link href="/admin/at-risk" className="btn-secondary text-center">
-            Клиенты в зоне риска
-          </Link>
-          <Link href="/admin/reports" className="btn-primary text-center">
-            Дневной отчёт
-          </Link>
-          <div className="col-span-2 md:col-span-1">
-            <MessagesHomeLink href="/admin/notifications" />
+        <div className="space-y-3">
+          <div className="card">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-400" />
+                <h2 className="font-semibold">Позвонить сегодня</h2>
+              </div>
+              <Link
+                href="/admin/tasks?topic=membership"
+                className="text-sm text-fitgo-400 hover:underline"
+              >
+                Все
+              </Link>
+            </div>
+            {data.callToday.length === 0 ? (
+              <p className="text-sm text-slate-400">Нет звонков на сегодня</p>
+            ) : (
+              <ul className="divide-y divide-slate-800">
+                {data.callToday.map((item) => (
+                  <li key={item.taskId}>
+                    <Link
+                      href={`/admin/tasks?topic=membership&task=${item.taskId}`}
+                      className="flex items-center justify-between gap-2 py-2.5 text-sm transition hover:text-fitgo-300"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{item.clientName}</p>
+                        <p className="truncate text-slate-400">
+                          {item.membership}
+                          {item.phone ? ` · ${item.phone}` : ''}
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="text-amber-400">{item.daysLeft} дн.</p>
+                        <p className="text-slate-500">
+                          {formatDate(item.validUntil)}
+                        </p>
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Link href="/admin/at-risk" className="btn-secondary flex-1 text-center sm:flex-none">
+              Зона риска
+            </Link>
+            <Link href="/admin/reports" className="btn-primary flex-1 text-center sm:flex-none">
+              Отчёт
+            </Link>
           </div>
         </div>
       </div>

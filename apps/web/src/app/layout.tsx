@@ -7,6 +7,10 @@ export const metadata: Metadata = {
   title: 'FITGO — Фитнес-клуб',
   description: 'Абонемент, карта доступа, записи и тренировки',
   manifest: '/manifest.json',
+  icons: {
+    icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180' }],
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',

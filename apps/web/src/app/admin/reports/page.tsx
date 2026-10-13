@@ -66,32 +66,32 @@ export default function AdminReportsPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Дневная статистика</h2>
-
-      <form onSubmit={handleSubmit} className="card space-y-4">
-        <DateField
-          label="Дата"
-          value={date}
-          onChange={setDate}
-          required
-        />
-        <div>
-          <label className="mb-2 block text-sm text-slate-400">Выручка (BYN)</label>
-          <input
-            type="number"
-            className="input"
-            value={revenue}
-            onChange={(e) => setRevenue(e.target.value)}
-            min="0"
-            step="0.01"
+    <div className="mx-auto max-w-3xl space-y-4">
+      <form onSubmit={handleSubmit} className="card max-w-xl space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <DateField
+            label="Дата"
+            value={date}
+            onChange={setDate}
             required
           />
+          <div>
+            <label className="mb-2 block text-sm text-slate-400">Выручка (BYN)</label>
+            <input
+              type="number"
+              className="input"
+              value={revenue}
+              onChange={(e) => setRevenue(e.target.value)}
+              min="0"
+              step="0.01"
+              required
+            />
+          </div>
         </div>
         <div>
           <label className="mb-2 block text-sm text-slate-400">Проблемы</label>
           <textarea
-            className="input min-h-[80px]"
+            className="input min-h-[80px] max-h-none h-auto py-2"
             value={problems}
             onChange={(e) => setProblems(e.target.value)}
             placeholder="Что пошло не так сегодня?"
@@ -100,7 +100,7 @@ export default function AdminReportsPage() {
         <div>
           <label className="mb-2 block text-sm text-slate-400">Идеи для улучшения</label>
           <textarea
-            className="input min-h-[80px]"
+            className="input min-h-[80px] max-h-none h-auto py-2"
             value={ideas}
             onChange={(e) => setIdeas(e.target.value)}
             placeholder="Что можно улучшить?"
@@ -111,7 +111,7 @@ export default function AdminReportsPage() {
           <p className="text-sm text-fitgo-400">{message}</p>
         )}
 
-        <button type="submit" className="btn-primary w-full" disabled={loading}>
+        <button type="submit" className="btn-primary px-6" disabled={loading}>
           {loading ? 'Сохранение...' : 'Сохранить отчёт'}
         </button>
       </form>
