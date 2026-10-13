@@ -1632,7 +1632,13 @@ export function BookingControlPanel({
                   </div>
                 )}
                 {selected.kind === 'GROUP' && selected.groupApproval && (
-                  <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/40 p-2 text-xs text-slate-300">
+                  <div
+                    className={
+                      selected.groupApproval.phase === 'APPROVED'
+                        ? 'space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2 text-xs text-slate-300'
+                        : 'space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-slate-300'
+                    }
+                  >
                     {selected.groupApproval.phase === 'APPROVED' ? (
                       <p className="text-emerald-300">
                         Подтверждено
@@ -1676,7 +1682,7 @@ export function BookingControlPanel({
                 selected.status !== 'CANCELLED' &&
                 selected.approvalPhase &&
                 selected.approvalPhase !== 'APPROVED' ? (
-                  <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/40 p-2 text-xs text-slate-300">
+                  <div className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-slate-300">
                     <p className="text-amber-300">
                       {selected.approvalLabel ??
                         (selected.approvalPhase === 'PENDING_ADMIN'

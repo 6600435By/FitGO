@@ -165,6 +165,7 @@ body {
   border-color: #e6c98a !important;
 }
 
+.admin-app.admin-theme-light .text-emerald-200,
 .admin-app.admin-theme-light .text-emerald-300,
 .admin-app.admin-theme-light .text-emerald-400,
 .admin-app.admin-theme-light .text-fitgo-300,
@@ -172,17 +173,30 @@ body {
   color: #047857 !important;
 }
 
+.admin-app.admin-theme-light .bg-emerald-500\/10,
 .admin-app.admin-theme-light .bg-emerald-500\/20 {
   background-color: #e7f6ef !important;
 }
 
+.admin-app.admin-theme-light .border-emerald-500\/30,
+.admin-app.admin-theme-light .border-emerald-500\/40 {
+  border-color: #a7d7c3 !important;
+}
+
+.admin-app.admin-theme-light .text-rose-200,
 .admin-app.admin-theme-light .text-rose-300,
 .admin-app.admin-theme-light .text-red-400 {
   color: #9f1239 !important;
 }
 
+.admin-app.admin-theme-light .bg-rose-500\/10,
 .admin-app.admin-theme-light .bg-rose-500\/20 {
   background-color: #fde8ee !important;
+}
+
+.admin-app.admin-theme-light .border-rose-500\/30,
+.admin-app.admin-theme-light .border-rose-500\/40 {
+  border-color: #f0b8c6 !important;
 }
 
 .admin-app.admin-theme-light .bg-slate-800,
@@ -197,6 +211,8 @@ body {
 .admin-app.admin-theme-light .bg-slate-950\/60,
 .admin-app.admin-theme-light .bg-slate-950\/80,
 .admin-app.admin-theme-light .bg-slate-950\/95,
+.admin-app.admin-theme-light .bg-slate-900\/40,
+.admin-app.admin-theme-light .bg-slate-900\/50,
 .admin-app.admin-theme-light .bg-slate-900\/80,
 .admin-app.admin-theme-light .bg-slate-900\/60,
 .admin-app.admin-theme-light .bg-slate-900\/95 {
@@ -205,6 +221,7 @@ body {
 
 .admin-app.admin-theme-light .border-slate-800,
 .admin-app.admin-theme-light .border-slate-800\/80,
+.admin-app.admin-theme-light .border-slate-900,
 .admin-app.admin-theme-light .border-slate-700,
 .admin-app.admin-theme-light .border-slate-700\/50,
 .admin-app.admin-theme-light .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
@@ -256,4 +273,19 @@ body {
 
 .admin-app.admin-theme-light .admin-time-rail .text-rose-400 {
   color: #9f1239 !important;
+}
+
+.admin-app.admin-theme-light .text-sky-300,
+.admin-app.admin-theme-light .text-sky-400,
+.admin-app.admin-theme-light .text-sky-400\/90,
+.admin-app.admin-theme-light .hover\:text-sky-300:hover {
+  color: #0369a1 !important;
+}
+
+.admin-app.admin-theme-light .hover\:bg-emerald-500\/10:hover {
+  background-color: #e7f6ef !important;
+}
+
+.admin-app.admin-theme-light .hover\:bg-rose-500\/10:hover {
+  background-color: #fde8ee !important;
 }
