@@ -1414,6 +1414,8 @@ export interface SpecialistServiceDebt {
   serviceName: string;
   occurredAt: string;
   amount: number;
+  /** Sale line qty when present (>1 = multi-visit pack). */
+  quantity?: number;
   currency: string;
   employeeCode: string;
   employeeName: string;

@@ -14,10 +14,14 @@ import {
   payProfileForCalculation,
   payProfileSummary,
   isAsdGroupSession,
+  isComplimentarySessionTitle,
+  isMultiVisitPackSale,
   isPtAllSportsSession,
   isSpaAllSportsBioimpedance,
+  parsePackVisitCountFromTitle,
   resolveGroupRoomKey,
   resolveGroupSessionRateMinor,
+  resolvePackageUnitPriceMinor,
   resolvePtPercent,
   sliceForTrack,
   TRAINER_GROUP_TRACK,
@@ -125,6 +129,8 @@ type TrainerPtSaleRow = {
   serviceName?: string;
   occurredAt: string;
   amount: number;
+  /** Line qty from 1C when present (>1 ⇒ multi-visit pack, skipped in payroll). */
+  quantity?: number;
   employeeCode?: string;
   employeeName?: string;
   docRef?: string;
@@ -142,6 +148,57 @@ function saleMatchesTrainer(
   const saleName = (sale.employeeName ?? '').trim().toLowerCase();
   const name = performerName.trim().toLowerCase();
   return Boolean(name && saleName && name === saleName);
+}
+
+/** When class sync has empty packageAmount — unit from matching multi-visit sale. */
+function unitPriceFromMatchingPackSale(
+  sales: TrainerPtSaleRow[],
+  clientName: string,
+  paymentBasis?: string | null,
+  sessionTitle?: string | null,
+): number | undefined {
+  const client = clientName.trim().toLowerCase();
+  if (!client) return undefined;
+  const basis = (paymentBasis ?? '').toLowerCase();
+  const title = (sessionTitle ?? '').toLowerCase();
+  for (const sale of sales) {
+    if (sale.paymentStatus && sale.paymentStatus !== 'PAID') continue;
+    const saleClient = (sale.clientName ?? '').trim().toLowerCase();
+    if (!saleClient || saleClient !== client) continue;
+    const svc = sale.serviceName ?? '';
+    if (!isMultiVisitPackSale(svc, sale.quantity)) continue;
+    const svcLow = svc.toLowerCase();
+    const linked =
+      (basis && (basis.includes(svcLow) || svcLow.includes(basis.slice(0, 20)))) ||
+      (title && (title.includes(svcLow) || svcLow.includes(title))) ||
+      packNamesLikelySame(basis || title, svcLow);
+    if (!linked) continue;
+    const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
+    if (amountMinor <= 0) continue;
+    const qty =
+      (sale.quantity != null && sale.quantity > 1
+        ? sale.quantity
+        : null) ??
+      parsePackVisitCountFromTitle(svc) ??
+      0;
+    if (qty > 1) return Math.round(amountMinor / qty);
+  }
+  return undefined;
+}
+
+function packNamesLikelySame(a: string, b: string): boolean {
+  const qa = parsePackVisitCountFromTitle(a);
+  const qb = parsePackVisitCountFromTitle(b);
+  if (qa != null && qb != null && qa === qb) {
+    if (/пт/.test(a) && /пт/.test(b)) return true;
+    if (/реформер/.test(a) && /реформер/.test(b)) return true;
+    if (/массаж/.test(a) && /массаж/.test(b)) return true;
+  }
+  // «10 ПТ (50р.)» inside «Пакет услуг "10 ПТ (50р.)" …»
+  const compact = (s: string) => s.replace(/[^a-zа-я0-9]+/gi, '');
+  const ca = compact(a);
+  const cb = compact(b);
+  return Boolean(ca && cb && (ca.includes(cb) || cb.includes(ca)));
 }
 
 const SECTION_LABELS: Record<ClubPayrollSectionId, string> = {
@@ -305,8 +362,18 @@ export class PayrollService {
         },
         include: { service: true, client: true },
       });
+      const unitFromPackage = resolvePackageUnitPriceMinor({
+        unitPriceMinor: primary?.unitPriceMinor,
+        packageAmountMinor: primary?.packageAmountMinor,
+        packageQty: primary?.packageQty,
+        paymentBasis: primary?.paymentBasis,
+        sessionTitle: o.title,
+      });
       const priceMinor =
-        matched?.priceMinor ?? matched?.service.priceMinor ?? undefined;
+        unitFromPackage ??
+        matched?.priceMinor ??
+        matched?.service.priceMinor ??
+        undefined;
       const partner =
         payment === 'PARTNER'
           ? 'ALLSPORTS'
@@ -334,8 +401,14 @@ export class PayrollService {
         isSpaAllSportsBioimpedance: bioimpedance,
         sessionId: o.id,
       });
-      // For QUOTA leave price 0 and rely on spaQuotaRates (bioimpedance uses fixed rate).
-      if (payment === 'QUOTA' && units[units.length - 1] && !bioimpedance) {
+      // QUOTA without pack unit price → spaQuotaRates. Pack unit (e.g. курс массажа N)
+      // pays via spaSoldPercent × unit, same as PT pack write-offs.
+      if (
+        payment === 'QUOTA' &&
+        units[units.length - 1] &&
+        !bioimpedance &&
+        !(unitFromPackage != null && unitFromPackage > 0)
+      ) {
         units[units.length - 1].priceMinor = 0;
       }
     }
@@ -354,6 +427,12 @@ export class PayrollService {
       include: { members: true },
       orderBy: { startAt: 'asc' },
     });
+    // Load sales early: skip multi-visit packs in sale pay; also fill unit = sale/N
+    // when class members lack packageAmount (legacy sync).
+    const trainerPtSales =
+      performer && needsPtSales
+        ? await this.loadTrainerPtSalesForPeriod(clubId, from, to)
+        : [];
     const coveredSaleDays = new Set<string>();
     for (const o of onexPt) {
       const key = onexSessionKey(o.externalId);
@@ -371,16 +450,26 @@ export class PayrollService {
         },
         include: { client: true },
       });
-      const isGift = payment === 'GIFT' || matched?.isComplimentary === true;
-      const unitFromPackage =
-        primary?.unitPriceMinor != null && primary.unitPriceMinor > 0
-          ? primary.unitPriceMinor
-          : primary?.packageAmountMinor != null &&
-              primary.packageAmountMinor > 0 &&
-              primary.packageQty != null &&
-              primary.packageQty > 0
-            ? Math.round(primary.packageAmountMinor / primary.packageQty)
-            : undefined;
+      const isGift =
+        payment === 'GIFT' ||
+        matched?.isComplimentary === true ||
+        isComplimentarySessionTitle(o.title) ||
+        isComplimentarySessionTitle(primary?.paymentBasis);
+      let unitFromPackage = resolvePackageUnitPriceMinor({
+        unitPriceMinor: primary?.unitPriceMinor,
+        packageAmountMinor: primary?.packageAmountMinor,
+        packageQty: primary?.packageQty,
+        paymentBasis: primary?.paymentBasis,
+        sessionTitle: o.title,
+      });
+      if (unitFromPackage == null && primary?.clientName) {
+        unitFromPackage = unitPriceFromMatchingPackSale(
+          trainerPtSales,
+          primary.clientName,
+          primary.paymentBasis,
+          o.title,
+        );
+      }
       // Package/block write-offs pay from unit price; one-time cash sales pay via sale lines below
       const isPackage = paySource === 'PACKAGE' || payment === 'QUOTA';
       const trusted =
@@ -451,50 +540,47 @@ export class PayrollService {
     }
 
     // ── One-time PT from 1C sale lines (Исполнитель + сумма) × PT% ───────────
-    // Prefer live for the exact period; fall back to TrainerPtSale cache.
     // Match by employeeCode (1C) — User.externalId is often empty for trainers.
     const ptSaleUnitKeys = new Map<string, string>();
-    if (performer && needsPtSales) {
-      const sales = await this.loadTrainerPtSalesForPeriod(clubId, from, to);
-      for (const sale of sales) {
-        if (!saleMatchesTrainer(sale, performerCodes, performerName)) continue;
-        if (sale.paymentStatus !== 'PAID') continue;
-        const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
-        if (amountMinor <= 0) continue;
-        const day = (sale.occurredAt || '').slice(0, 10);
-        const clientKey = `${day}|${(sale.clientName ?? '').trim().toLowerCase()}`;
-        if (coveredSaleDays.has(clientKey)) continue;
-        const sk = saleSessionKey(
-          'PT',
-          sale.docRef || sale.externalId || `${day}-${sale.clientName}`,
-        );
-        remarkKeys.push(sk);
-        const unitId = `ptsale:${sale.docRef || sale.externalId}`;
-        const isPtAllSports = isPtAllSportsSession({
-          title: sale.serviceName,
-          serviceName: sale.serviceName,
-        });
-        // Sale of ALL SPORTS package is not a conducted session — skip pay here
-        // (fix is paid when the class is conducted). Still track for remarks.
-        if (isPtAllSports) continue;
-        units.push({
-          id: unitId,
-          kind: 'PT',
-          performerId,
-          title: `${sale.serviceName || 'Разовая ПТ'} (продажа)`,
-          occurredAt: sale.occurredAt?.includes('T')
-            ? sale.occurredAt
-            : `${day}T12:00:00.000Z`,
-          quantity: 1,
-          priceMinor: amountMinor,
-          trustBand: 'GREEN',
-          trustResolution: 'NONE',
-          payrollTrusted: true,
-          clientName: sale.clientName,
-          isPtAllSports: false,
-        });
-        ptSaleUnitKeys.set(unitId, sk);
-      }
+    for (const sale of trainerPtSales) {
+      if (!saleMatchesTrainer(sale, performerCodes, performerName)) continue;
+      if (sale.paymentStatus !== 'PAID') continue;
+      const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
+      if (amountMinor <= 0) continue;
+      const day = (sale.occurredAt || '').slice(0, 10);
+      const clientKey = `${day}|${(sale.clientName ?? '').trim().toLowerCase()}`;
+      if (coveredSaleDays.has(clientKey)) continue;
+      const sk = saleSessionKey(
+        'PT',
+        sale.docRef || sale.externalId || `${day}-${sale.clientName}`,
+      );
+      remarkKeys.push(sk);
+      const unitId = `ptsale:${sale.docRef || sale.externalId}`;
+      const isPtAllSports = isPtAllSportsSession({
+        title: sale.serviceName,
+        serviceName: sale.serviceName,
+      });
+      // Sale of ALL SPORTS / multi-visit packs (N ПТ, реформер N, …) is not paid
+      // here — only conducted write-offs (pack amount / N). Still track remarks.
+      if (isPtAllSports) continue;
+      if (isMultiVisitPackSale(sale.serviceName, sale.quantity)) continue;
+      units.push({
+        id: unitId,
+        kind: 'PT',
+        performerId,
+        title: `${sale.serviceName || 'Разовая ПТ'} (продажа)`,
+        occurredAt: sale.occurredAt?.includes('T')
+          ? sale.occurredAt
+          : `${day}T12:00:00.000Z`,
+        quantity: 1,
+        priceMinor: amountMinor,
+        trustBand: 'GREEN',
+        trustResolution: 'NONE',
+        payrollTrusted: true,
+        clientName: sale.clientName,
+        isPtAllSports: false,
+      });
+      ptSaleUnitKeys.set(unitId, sk);
     }
 
     // ── GROUP from journal + Onex fallback (dedupe) ─────────────────────────
@@ -2392,6 +2478,10 @@ export class PayrollService {
         serviceName: r.serviceName,
         occurredAt: r.occurredAt,
         amount: r.amount,
+        quantity:
+          r.quantity != null && Number(r.quantity) > 0
+            ? Math.round(Number(r.quantity))
+            : undefined,
         employeeCode: r.employeeCode,
         employeeName: r.employeeName,
         docRef: r.docRef,

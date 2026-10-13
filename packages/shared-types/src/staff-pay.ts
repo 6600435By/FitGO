@@ -750,3 +750,120 @@ export function resolvePtPercent(
   }
   return pct;
 }
+
+/**
+ * Visit count encoded in pack nomenclature / paymentBasis.
+ * Examples: «10 ПТ (50р.)», «Индивидуальное занятие реформер 8», «Курс массажа 5».
+ * Returns null when the title is not a countable multi/single pack label.
+ */
+export function parsePackVisitCountFromTitle(
+  title: string | null | undefined,
+): number | null {
+  const s = (title ?? '').trim().toLowerCase();
+  if (!s) return null;
+  // Avoid \\b — JS word boundaries ignore Cyrillic letters.
+  let m = s.match(/(?:^|[^\d])(\d{1,3})\s*пт(?![a-zа-яё])/);
+  if (m) {
+    const n = Number(m[1]);
+    return n > 0 ? n : null;
+  }
+  m = s.match(/реформер\s*(\d{1,3})(?![0-9])/);
+  if (m) {
+    const n = Number(m[1]);
+    return n > 0 ? n : null;
+  }
+  m = s.match(/курс\s+массаж[ае]?\s*(\d{1,3})(?![0-9])/);
+  if (m) {
+    const n = Number(m[1]);
+    return n > 0 ? n : null;
+  }
+  m = s.match(/массаж[а]?\s+(\d{1,3})\s*(?:занят|сеанс|визит|шт)?/);
+  if (m) {
+    const n = Number(m[1]);
+    return n > 0 ? n : null;
+  }
+  return null;
+}
+
+/**
+ * Listed per-visit price in major BYN from titles like «10 ПТ (50р.)»
+ * or «Занятие с тренером 35р.».
+ */
+export function parseListedUnitPriceMajor(
+  title: string | null | undefined,
+): number | null {
+  const s = (title ?? '').trim();
+  if (!s) return null;
+  const paren = s.match(/\((\d+(?:[.,]\d+)?)\s*р/i);
+  if (paren) {
+    const n = Number(paren[1].replace(',', '.'));
+    return n > 0 ? n : null;
+  }
+  const trailing = s.match(/(\d+(?:[.,]\d+)?)\s*р\.?\s*$/i);
+  if (trailing) {
+    const n = Number(trailing[1].replace(',', '.'));
+    return n > 0 ? n : null;
+  }
+  return null;
+}
+
+/**
+ * True when a sale line is a multi-visit pack (pay only on conducted write-offs).
+ * Single-visit / one-shot PT sales stay payable at sale time.
+ */
+export function isMultiVisitPackSale(
+  serviceName: string | null | undefined,
+  quantity?: number | null,
+): boolean {
+  if (quantity != null && Number(quantity) > 1) return true;
+  const fromName = parsePackVisitCountFromTitle(serviceName);
+  return fromName != null && fromName > 1;
+}
+
+export function isComplimentarySessionTitle(
+  title: string | null | undefined,
+): boolean {
+  return /подароч|gift|комплимент|бесплат/i.test(title ?? '');
+}
+
+export type PackageUnitPriceInput = {
+  unitPriceMinor?: number | null;
+  packageAmountMinor?: number | null;
+  packageQty?: number | null;
+  /** 1C paymentBasis / package presentation. */
+  paymentBasis?: string | null;
+  /** Conducted session / service title. */
+  sessionTitle?: string | null;
+};
+
+/**
+ * Per-conducted-visit price (minor) for PT / reformer / SPA pack write-offs.
+ * Prefer 1C unit → listed unit in basis/title → packageAmount/qty for countable
+ * packs only («N ПТ», «реформер N», «курс массажа N») — never VIP membership ÷ all quotas.
+ */
+export function resolvePackageUnitPriceMinor(
+  input: PackageUnitPriceInput,
+): number | undefined {
+  const unit = input.unitPriceMinor ?? 0;
+  if (unit > 0) return Math.round(unit);
+
+  const listedMajor =
+    parseListedUnitPriceMajor(input.paymentBasis) ??
+    parseListedUnitPriceMajor(input.sessionTitle);
+  if (listedMajor != null && listedMajor > 0) {
+    return Math.round(listedMajor * 100);
+  }
+
+  const countableQty =
+    parsePackVisitCountFromTitle(input.paymentBasis) ??
+    parsePackVisitCountFromTitle(input.sessionTitle);
+  if (countableQty == null || countableQty <= 0) return undefined;
+
+  const pkgAmt = input.packageAmountMinor ?? 0;
+  const qty =
+    input.packageQty != null && input.packageQty > 0
+      ? input.packageQty
+      : countableQty;
+  if (pkgAmt > 0 && qty > 0) return Math.round(pkgAmt / qty);
+  return undefined;
+}
