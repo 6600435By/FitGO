@@ -21,7 +21,8 @@ import {
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
-import { FitnessService } from '../fitness/fitness.service';
+import { FormaScheduleCacheService } from '../club-schedule/forma-schedule-cache.service';
+import { moscowDayKey } from '../club-sync/moscow-time';
 import { VisitSyncService } from '../engagement/visit-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -59,11 +60,11 @@ export interface WorkSlotInput {
 export class PersonalTrainingService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly fitness: FitnessService,
     private readonly notifications: NotificationsService,
     private readonly roster: TrainerRosterService,
     private readonly visitSync: VisitSyncService,
     private readonly serviceUsage: ServiceUsageService,
+    private readonly formaCache: FormaScheduleCacheService,
   ) {}
 
   async getTrainerWorkSchedule(user: JwtPayload) {
@@ -1427,51 +1428,34 @@ export class PersonalTrainingService {
     return result;
   }
 
-  private isFormaEmployeeId(id: string): boolean {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      id,
-    );
-  }
-
+  /** Group classes from ClubScheduleSlot — no live Forma on calendar load. */
   private async fetchTrainerGroupSchedule(
     user: JwtPayload,
     rangeStart: Date,
     rangeEnd: Date,
   ): Promise<ScheduleSlot[]> {
-    const club = await this.prisma.club.findUnique({
-      where: { id: requireClubId(user) },
-    });
-    if (!club?.externalId) return [];
-
+    const clubId = requireClubId(user);
+    const from = moscowDayKey(rangeStart);
+    const to = moscowDayKey(rangeEnd);
     const externalId = user.externalId ?? '1c-trainer-001';
-    const provider = this.fitness.getProvider();
 
     try {
-      let slots: ScheduleSlot[];
-      if (this.isFormaEmployeeId(externalId)) {
-        slots = await provider.getSchedule(club.externalId, {
-          trainerId: externalId,
-        });
-      } else {
-        const dbTrainer = await this.prisma.user.findUnique({
-          where: { id: user.sub },
-        });
-        const allSlots = await provider.getSchedule(club.externalId);
-        if (!dbTrainer) {
-          slots = allSlots;
-        } else {
-          const first = dbTrainer.firstName.trim();
-          const last = dbTrainer.lastName.trim();
-          slots = allSlots.filter((slot) => {
-            if (slot.trainerId === externalId) return true;
+      const allSlots = await this.formaCache.getClubSchedule(clubId, from, to);
+      const dbTrainer = await this.prisma.user.findUnique({
+        where: { id: user.sub },
+      });
+      const first = dbTrainer?.firstName.trim().toLowerCase() ?? '';
+      const last = dbTrainer?.lastName.trim().toLowerCase() ?? '';
+      const slots = !dbTrainer
+        ? allSlots
+        : allSlots.filter((slot) => {
+            if (slot.trainerId && slot.trainerId === externalId) return true;
             const name = slot.trainerName?.toLowerCase() ?? '';
             return (
-              (first && name.includes(first.toLowerCase())) ||
-              (last && name.includes(last.toLowerCase()))
+              (first.length > 0 && name.includes(first)) ||
+              (last.length > 0 && name.includes(last))
             );
           });
-        }
-      }
 
       return slots.filter(
         (slot) =>

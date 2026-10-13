@@ -36,10 +36,8 @@ const LIGHT_RUN_BUDGET_MS = 3 * 60 * 1000;
 const FULL_RUN_BUDGET_MS = 40 * 60 * 1000;
 /** TODAY profile: classes + visits + slots for one day. */
 const TODAY_RUN_BUDGET_MS = 60 * 1000;
-/** Min gap between AUTO TODAY syncs per club (success or failure). */
-const TODAY_COOLDOWN_MS = 10 * 60 * 1000;
-/** Extra backoff after a FAILED/PARTIAL TODAY run. */
-const TODAY_FAILURE_BACKOFF_MS = 15 * 60 * 1000;
+/** Min gap between AUTO TODAY retries after FAILED/PARTIAL (same Moscow day). */
+const TODAY_FAILURE_COOLDOWN_MS = 25 * 60 * 1000;
 
 export type SyncStepResult = {
   resource: string;
@@ -202,8 +200,9 @@ export class ClubSyncOrchestrator {
 
   /**
    * Fire-and-forget today-only sync for staff screens.
-   * At most one run per club every TODAY_COOLDOWN_MS; skips night window
-   * and when another sync is already RUNNING.
+   * At most one successful AUTO TODAY per club per Moscow day.
+   * Skips night window and when another sync is already RUNNING.
+   * Fast-path checks avoid reclaimOrphan on every list GET.
    */
   ensureFreshToday(clubId: string): void {
     void this.ensureFreshTodayAsync(clubId).catch((err) => {
@@ -216,13 +215,25 @@ export class ClubSyncOrchestrator {
   private async ensureFreshTodayAsync(clubId: string): Promise<void> {
     if (isMoscowNightWindow()) return;
 
-    await this.reclaimOrphan(clubId, { aggressive: true });
-    const running = await this.getRunning(clubId);
-    if (running) return;
+    const today = moscowDayKey();
+    // Fast path: already have a good TODAY run finished on this Moscow day.
+    const lastOk = await this.prisma.clubSyncRun.findFirst({
+      where: {
+        clubId,
+        profile: ClubSyncProfile.TODAY,
+        status: {
+          in: [ClubSyncRunStatus.SUCCESS, ClubSyncRunStatus.PARTIAL],
+        },
+        finishedAt: { not: null },
+      },
+      orderBy: { finishedAt: 'desc' },
+    });
+    if (lastOk?.finishedAt && moscowDayKey(lastOk.finishedAt) === today) {
+      return;
+    }
 
-    // Cooldown from any finished TODAY run (SUCCESS / PARTIAL / FAILED),
-    // so a failing sync does not re-hit 1C on every staff screen open.
-    const last = await this.prisma.clubSyncRun.findFirst({
+    // Fast path: recent FAILED/PARTIAL — do not reclaim on every screen open.
+    const lastAny = await this.prisma.clubSyncRun.findFirst({
       where: {
         clubId,
         profile: ClubSyncProfile.TODAY,
@@ -237,15 +248,18 @@ export class ClubSyncOrchestrator {
       },
       orderBy: { finishedAt: 'desc' },
     });
-    if (last?.finishedAt) {
-      const failed =
-        last.status === ClubSyncRunStatus.FAILED ||
-        last.status === ClubSyncRunStatus.PARTIAL;
-      const cooldown = failed
-        ? TODAY_COOLDOWN_MS + TODAY_FAILURE_BACKOFF_MS
-        : TODAY_COOLDOWN_MS;
-      if (Date.now() < last.finishedAt.getTime() + cooldown) return;
+    if (
+      lastAny?.finishedAt &&
+      (lastAny.status === ClubSyncRunStatus.FAILED ||
+        lastAny.status === ClubSyncRunStatus.PARTIAL) &&
+      Date.now() < lastAny.finishedAt.getTime() + TODAY_FAILURE_COOLDOWN_MS
+    ) {
+      return;
     }
+
+    await this.reclaimOrphan(clubId, { aggressive: true });
+    const running = await this.getRunning(clubId);
+    if (running) return;
 
     await this.start(clubId, {
       trigger: ClubSyncTrigger.AUTO,

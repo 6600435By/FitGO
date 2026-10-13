@@ -10,9 +10,11 @@ import {
   SessionType,
   UserRole,
   classifyVisitKind,
+  type AccessCard,
   type ClientVisitsResponse,
   type ClubCardView,
   type Membership,
+  type ScheduleSlot,
   type Visit,
   type VisitKind,
 } from '@fitgo/shared-types';
@@ -34,8 +36,23 @@ import { requireClubId } from '../auth/require-club-id';
 import { BookingGateway } from '../club-sync/booking-gateway.service';
 import { PrismaService } from '../prisma/prisma.service';
 
+/** Short TTL so home / week-change do not open 3× 1C sessions each load. */
+const CLIENT_LIVE_TTL_MS = 90_000;
+const CLIENT_SCHEDULE_TTL_MS = 60_000;
+
+type TtlEntry<T> = { expiresAt: number; value: T };
+
+type ClientLiveBundle = {
+  membership: Membership | null;
+  visits: Visit[];
+  accessCard: AccessCard | null;
+};
+
 @Injectable()
 export class ClientService {
+  private readonly liveCache = new Map<string, TtlEntry<ClientLiveBundle>>();
+  private readonly scheduleCache = new Map<string, TtlEntry<ScheduleSlot[]>>();
+
   constructor(
     private readonly fitness: FitnessService,
     private readonly prisma: PrismaService,
@@ -49,6 +66,56 @@ export class ClientService {
     private readonly crmLink: ClubCrmLinkService,
     private readonly visitSync: VisitSyncService,
   ) {}
+
+  private readTtl<T>(map: Map<string, TtlEntry<T>>, key: string): T | null {
+    const hit = map.get(key);
+    if (!hit) return null;
+    if (Date.now() >= hit.expiresAt) {
+      map.delete(key);
+      return null;
+    }
+    return hit.value;
+  }
+
+  private writeTtl<T>(
+    map: Map<string, TtlEntry<T>>,
+    key: string,
+    value: T,
+    ttlMs: number,
+  ) {
+    map.set(key, { value, expiresAt: Date.now() + ttlMs });
+  }
+
+  private invalidateClientCaches(userId: string, clubId?: string) {
+    this.liveCache.delete(userId);
+    if (!clubId) return;
+    for (const key of this.scheduleCache.keys()) {
+      if (key.startsWith(`${clubId}|`)) this.scheduleCache.delete(key);
+    }
+  }
+
+  /** Parallel membership + visits + card with per-user TTL. */
+  private async fetchLiveBundle(
+    userId: string,
+    externalId: string | undefined,
+    visitPeriod: { from: string; to: string },
+  ): Promise<ClientLiveBundle> {
+    if (!externalId) {
+      return { membership: null, visits: [], accessCard: null };
+    }
+    const cached = this.readTtl(this.liveCache, userId);
+    if (cached) return cached;
+
+    const provider = this.fitness.getProvider();
+    const [membership, visits, accessCard] = await Promise.all([
+      provider.getMembership(externalId).catch(() => null),
+      provider.getVisits(externalId, visitPeriod).catch(() => [] as Visit[]),
+      provider.getAccessCard(externalId).catch(() => null),
+    ]);
+    const bundle: ClientLiveBundle = { membership, visits, accessCard };
+    this.writeTtl(this.liveCache, userId, bundle, CLIENT_LIVE_TTL_MS);
+    return bundle;
+  }
 
   private async resolveExternalId(user: JwtPayload): Promise<string> {
     const membership = await this.clubMembership.getActiveMembership(user.sub);
@@ -377,7 +444,6 @@ export class ClientService {
             user.externalId ?? dbUser?.externalId,
           )
         : undefined);
-    const provider = this.fitness.getProvider();
     const clubName = clubRecord?.name ?? 'Клуб';
     const osmiEnabled = this.osmiCards.isEnabled();
 
@@ -391,26 +457,18 @@ export class ClientService {
     };
 
     // Skip /client profile: names/phone already in FitGO DB (saves 1 round-trip to 1C).
-    const [membershipResult, visitsResult, cardResult, appVisits] =
-      await Promise.all([
-        externalId
-          ? provider.getMembership(externalId).catch(() => null)
-          : Promise.resolve(null),
-        externalId
-          ? provider.getVisits(externalId, visitPeriod).catch(() => [] as Visit[])
-          : Promise.resolve([] as Visit[]),
-        externalId
-          ? provider.getAccessCard(externalId).catch(() => null)
-          : Promise.resolve(null),
-        this.getAppSessionVisits(user.sub, clubName),
-      ]);
+    // TTL coalesces home + schedule week-change so we do not open 3× 1C each time.
+    const [liveBundle, appVisits] = await Promise.all([
+      this.fetchLiveBundle(user.sub, externalId, visitPeriod),
+      this.getAppSessionVisits(user.sub, clubName),
+    ]);
 
-    const externalVisits = visitsResult;
-    let membership = membershipResult;
+    const externalVisits = liveBundle.visits;
+    let membership = liveBundle.membership;
     let membershipSource: '1c' | 'osmi' | 'derived' | null = membership
       ? '1c'
       : null;
-    let accessCard = cardResult;
+    let accessCard = liveBundle.accessCard;
     let cardSource: ClubCardView['source'] | undefined = accessCard
       ? '1c'
       : undefined;
@@ -575,10 +633,12 @@ export class ClientService {
         activeMembership,
         user.externalId,
       );
-    const provider = this.fitness.getProvider();
-    let membership: Membership | null = externalId
-      ? await provider.getMembership(externalId).catch(() => null)
-      : null;
+    const visitPeriod = {
+      from: new Date(Date.now() - 45 * 86400000).toISOString().slice(0, 10),
+      to: new Date().toISOString().slice(0, 10),
+    };
+    const live = await this.fetchLiveBundle(user.sub, externalId, visitPeriod);
+    let membership: Membership | null = live.membership;
 
     if (!membership && this.osmiCards.isEnabled()) {
       try {
@@ -590,8 +650,7 @@ export class ClientService {
     }
 
     if (!membership && externalId) {
-      const visits = await provider.getVisits(externalId).catch(() => [] as Visit[]);
-      membership = deriveMembershipFromVisits(visits);
+      membership = deriveMembershipFromVisits(live.visits);
     }
 
     return {
@@ -853,9 +912,14 @@ export class ClientService {
       throw new NotFoundException('Клуб не привязан к 1С');
     }
 
-    const slots = await this.fitness
-      .getProvider()
-      .getSchedule(club.externalId, filters);
+    const cacheKey = `${club.id}|${filters?.from ?? ''}|${filters?.to ?? ''}|${filters?.trainerId ?? ''}|${filters?.serviceId ?? ''}`;
+    let slots = this.readTtl(this.scheduleCache, cacheKey);
+    if (!slots) {
+      slots = await this.fitness
+        .getProvider()
+        .getSchedule(club.externalId, filters);
+      this.writeTtl(this.scheduleCache, cacheKey, slots, CLIENT_SCHEDULE_TTL_MS);
+    }
 
     const now = Date.now();
     const filtered = slots
@@ -976,6 +1040,7 @@ export class ClientService {
       origin: 'CLIENT_BOOKED',
       bookedByUserId: user.sub,
     });
+    this.invalidateClientCaches(user.sub, requireClubId(user));
     return {
       success: result.success,
       message: result.message,
@@ -1003,6 +1068,7 @@ export class ClientService {
       return externalResult;
     }
 
+    this.invalidateClientCaches(user.sub, requireClubId(user));
     await this.persistGroupBookingCancellation(user, sessionId, booking);
 
     const cancelledBooking = await this.prisma.groupClassBooking.findFirst({

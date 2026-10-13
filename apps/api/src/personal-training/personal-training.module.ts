@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ClubScheduleModule } from '../club-schedule/club-schedule.module';
 import { EngagementModule } from '../engagement/engagement.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
@@ -12,6 +13,7 @@ import { PersonalTrainingService } from './personal-training.service';
     TrainerRosterModule,
     EngagementModule,
     ServiceUsageModule,
+    ClubScheduleModule,
   ],
   controllers: [PersonalTrainingController],
   providers: [PersonalTrainingService],

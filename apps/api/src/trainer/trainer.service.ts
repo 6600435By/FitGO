@@ -9,8 +9,10 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { ClientProfileService } from '../client/client-profile.service';
 import { ClubMembershipService } from '../common/club-membership.service';
-import { FitnessService } from '../fitness/fitness.service';
+import { FormaScheduleCacheService } from '../club-schedule/forma-schedule-cache.service';
+import { addMoscowDays, moscowDayKey } from '../club-sync/moscow-time';
 import { VisitSyncService } from '../engagement/visit-sync.service';
+import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
@@ -27,42 +29,32 @@ export class TrainerService {
     private readonly clubMembership: ClubMembershipService,
     private readonly clientProfile: ClientProfileService,
     private readonly serviceUsage: ServiceUsageService,
+    private readonly formaCache: FormaScheduleCacheService,
   ) {}
 
-  private isFormaEmployeeId(id: string): boolean {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      id,
-    );
-  }
-
+  /** Group classes from ClubScheduleSlot (filled by club-sync) — no live Forma. */
   private async fetchTrainerGroupSchedule(
-    clubExternalId: string,
+    clubId: string,
     trainerExternalId: string,
     trainerUserId: string,
   ): Promise<ScheduleSlot[]> {
-    const provider = this.fitness.getProvider();
-
     try {
-      if (this.isFormaEmployeeId(trainerExternalId)) {
-        return await provider.getSchedule(clubExternalId, {
-          trainerId: trainerExternalId,
-        });
-      }
-
+      const from = moscowDayKey();
+      const to = addMoscowDays(from, 14);
+      const allSlots = await this.formaCache.getClubSchedule(clubId, from, to);
       const dbTrainer = await this.prisma.user.findUnique({
         where: { id: trainerUserId },
       });
-      const allSlots = await provider.getSchedule(clubExternalId);
       if (!dbTrainer) return allSlots;
 
-      const first = dbTrainer.firstName.trim();
-      const last = dbTrainer.lastName.trim();
+      const first = dbTrainer.firstName.trim().toLowerCase();
+      const last = dbTrainer.lastName.trim().toLowerCase();
       return allSlots.filter((slot) => {
-        if (slot.trainerId === trainerExternalId) return true;
+        if (slot.trainerId && slot.trainerId === trainerExternalId) return true;
         const name = slot.trainerName?.toLowerCase() ?? '';
         return (
-          (first && name.includes(first.toLowerCase())) ||
-          (last && name.includes(last.toLowerCase()))
+          (first.length > 0 && name.includes(first)) ||
+          (last.length > 0 && name.includes(last))
         );
       });
     } catch {
@@ -258,13 +250,9 @@ export class TrainerService {
       ? await this.prisma.club.findUnique({ where: { id: user.clubId } })
       : null);
 
-    const [groupSchedule, personalSchedule] = club?.externalId
+    const [groupSchedule, personalSchedule] = club?.id
       ? await Promise.all([
-          this.fetchTrainerGroupSchedule(
-            club.externalId,
-            externalId,
-            user.sub,
-          ),
+          this.fetchTrainerGroupSchedule(club.id, externalId, user.sub),
           this.fetchTrainerPersonalSchedule(user.sub),
         ])
       : [[], await this.fetchTrainerPersonalSchedule(user.sub)];
