@@ -44,13 +44,9 @@ export function getHomePath(
   if (roles.includes(UserRole.MANAGER)) return '/super-admin';
   if (roles.includes(UserRole.ADMIN)) return '/admin';
   if (roles.includes(UserRole.TRAINER)) {
-    const gpOnly =
-      Boolean(flags?.groupPrograms) &&
-      !flags?.trainerStaff &&
-      !flags?.trainerClub;
-    return gpOnly ? '/trainer/gp-schedule' : '/trainer';
+    return '/trainer';
   }
-  if (roles.includes(UserRole.SPECIALIST)) return '/specialist/schedule';
+  if (roles.includes(UserRole.SPECIALIST)) return '/specialist';
   if (roles.includes(UserRole.TECH)) return '/tech';
   return '/client';
 }

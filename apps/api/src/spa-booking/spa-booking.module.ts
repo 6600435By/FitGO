@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { BookingControlModule } from '../booking-control/booking-control.module';
 import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { FeaturesModule } from '../features/features.module';
+import { FloorHomeModule } from '../floor-home/floor-home.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import { SpaBookingController } from './spa-booking.controller';
@@ -13,6 +14,7 @@ import { SpaBookingService } from './spa-booking.service';
     NotificationsModule,
     ServiceUsageModule,
     BookingControlModule,
+    FloorHomeModule,
   ],
   controllers: [SpaBookingController],
   providers: [SpaBookingService, ClubCrmLinkService],

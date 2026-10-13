@@ -37,13 +37,17 @@ import {
   CreateSpaWaitlistDto,
 } from './dto/spa-waitlist.dto';
 import { UpdateSpaBookingDto } from './dto/update-spa-booking.dto';
+import { FloorStaffHomeService } from '../floor-home/floor-staff-home.service';
 import { SpaBookingService } from './spa-booking.service';
 
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard, ModuleGuard)
 @RequireModule('spa_booking')
 export class SpaBookingController {
-  constructor(private readonly spa: SpaBookingService) {}
+  constructor(
+    private readonly spa: SpaBookingService,
+    private readonly floorHome: FloorStaffHomeService,
+  ) {}
 
   // ─── Client ────────────────────────────────────────────────────────────────
 
@@ -141,6 +145,12 @@ export class SpaBookingController {
   }
 
   // ─── Specialist ────────────────────────────────────────────────────────────
+
+  @Get('specialist/home')
+  @Roles(UserRole.SPECIALIST)
+  specialistHome(@CurrentUser() user: JwtPayload) {
+    return this.floorHome.getSpecialistHome(user);
+  }
 
   @Get('specialist/spa/services')
   @Roles(UserRole.SPECIALIST)

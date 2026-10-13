@@ -4,9 +4,15 @@ import { UserRole } from '@fitgo/shared-types';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { AuthGuard } from '@/components/auth-guard';
+import {
+  AdminThemeProvider,
+  AdminThemeToggle,
+} from '@/components/admin/admin-theme';
 import { AppShell } from '@/components/app-shell';
 import { DataFreshness } from '@/components/data-freshness';
 import { useFeatures } from '@/components/features-provider';
+import { StaffMessagesBadge } from '@/components/staff/staff-messages-badge';
+import { StaffTopNavLinks } from '@/components/staff/staff-top-nav';
 import { StaffTasksInbox } from '@/components/staff-tasks-inbox';
 import { api, type AuthUser } from '@/lib/api';
 import { getToken, getUser, saveAuth } from '@/lib/auth';
@@ -14,6 +20,7 @@ import { getToken, getUser, saveAuth } from '@/lib/auth';
 type NavItem = {
   href: string;
   label: string;
+  exact?: boolean;
   module?: 'trainer_calendar' | 'trainer_crm' | 'messaging';
 };
 
@@ -49,10 +56,10 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     const items: NavItem[] = [];
 
     if (gpCabinet) {
-      // GP trainer: 5 tabs (+ PT extras when combined).
       items.push(
+        { href: '/trainer', label: 'Главная', exact: true },
         { href: '/trainer/gp-schedule', label: 'Расписание' },
-        { href: '/trainer/my-sessions', label: 'Контроль записей' },
+        { href: '/trainer/my-sessions', label: 'Контроль' },
       );
       if (showPt) {
         items.push(
@@ -70,15 +77,15 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
         );
       }
       if (user?.groupPrograms || user?.trainerStaff) {
-        items.push({ href: '/trainer/payroll', label: 'Моя ЗП' });
+        items.push({ href: '/trainer/payroll', label: 'ЗП' });
       }
       items.push(
         { href: '/trainer/messages', label: 'Сообщения', module: 'messaging' },
-        { href: '/trainer/profile', label: 'Мой профиль' },
+        { href: '/trainer/profile', label: 'Профиль' },
       );
     } else {
       // PT-only / legacy (no flags): previous surface.
-      items.push({ href: '/trainer', label: 'Обзор' });
+      items.push({ href: '/trainer', label: 'Обзор', exact: true });
       if (showGp) {
         items.push({
           href: '/trainer/gp-schedule',
@@ -125,6 +132,36 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     user?.groupPrograms,
     user?.trainerStaff,
   ]);
+
+  if (gpCabinet) {
+    return (
+      <AuthGuard allowedRoles={[UserRole.TRAINER]}>
+        <AdminThemeProvider>
+          <AppShell
+            title="Кабинет тренера"
+            navItems={navItems}
+            wide
+            adminChrome
+            hideBottomNav
+            desktopTopNav={<StaffTopNavLinks items={navItems} />}
+            headerActions={
+              <>
+                {isEnabled('messaging') ? (
+                  <StaffMessagesBadge href="/trainer/messages" />
+                ) : null}
+                <AdminThemeToggle />
+              </>
+            }
+          >
+            <div className="mb-4">
+              <DataFreshness canRefresh={false} />
+            </div>
+            {children}
+          </AppShell>
+        </AdminThemeProvider>
+      </AuthGuard>
+    );
+  }
 
   return (
     <AuthGuard allowedRoles={[UserRole.TRAINER]}>

@@ -3,8 +3,8 @@
 import { SessionType } from '@fitgo/shared-types';
 import { Users, Calendar, Target, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { FloorStaffHomePage } from '@/components/staff/floor-staff-home';
 import { MessagesHomeLink } from '@/components/messages-home-link';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -34,22 +34,11 @@ function trainerSessionHref(slot: TrainerDashboard['schedule'][number]): string 
   return `/trainer/sessions/${slot.id}?clientId=${slot.clientId}`;
 }
 
-export default function TrainerHomePage() {
-  const router = useRouter();
-  const user = getUser();
-  const isGpOnly =
-    Boolean(user?.groupPrograms) &&
-    !user?.trainerStaff &&
-    !user?.trainerClub;
-
+function PtTrainerHome() {
   const [data, setData] = useState<TrainerDashboard | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (isGpOnly) {
-      router.replace('/trainer/gp-schedule');
-      return;
-    }
     const token = getToken();
     if (!token) return;
 
@@ -57,15 +46,7 @@ export default function TrainerHomePage() {
       .trainerDashboard(token)
       .then(setData)
       .catch((err) => setError(err.message));
-  }, [isGpOnly, router]);
-
-  if (isGpOnly) {
-    return (
-      <div className="flex justify-center py-12">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
-      </div>
-    );
-  }
+  }, []);
 
   if (error) return <p className="text-red-400">{error}</p>;
 
@@ -168,4 +149,15 @@ export default function TrainerHomePage() {
       <MessagesHomeLink href="/trainer/messages" />
     </div>
   );
+}
+
+export default function TrainerHomePage() {
+  const user = getUser();
+  const isGp = Boolean(user?.groupPrograms);
+
+  if (isGp) {
+    return <FloorStaffHomePage role="gp" />;
+  }
+
+  return <PtTrainerHome />;
 }

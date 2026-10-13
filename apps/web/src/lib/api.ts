@@ -58,6 +58,7 @@ import {
   type StaffAnalyticsReport,
   type AnalyticsCompareMode,
   type AnalyticsDepartment,
+  type FloorStaffHome,
   AdminPermission,
   AdminTaskStatus,
   type ProductModulesState,
@@ -1321,6 +1322,12 @@ export const api = {
 
   trainerDashboard: (token: string) =>
     request<TrainerDashboard>('/trainer/dashboard', {}, token),
+
+  trainerGpHome: (token: string) =>
+    request<FloorStaffHome>('/trainer/gp-home', {}, token),
+
+  specialistHome: (token: string) =>
+    request<FloorStaffHome>('/specialist/home', {}, token),
 
   trainerClients: (token: string) =>
     request<TrainerClientSummary[]>('/trainer/clients', {}, token),

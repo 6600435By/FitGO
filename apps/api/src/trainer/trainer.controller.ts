@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { ClubMembershipService } from '../common/club-membership.service';
+import { FloorStaffHomeService } from '../floor-home/floor-staff-home.service';
 import { GpScheduleService } from './gp-schedule.service';
 import { TrainerService } from './trainer.service';
 import { TrainerRosterService } from './trainer-roster.service';
@@ -25,6 +26,7 @@ export class TrainerController {
     private readonly roster: TrainerRosterService,
     private readonly clubMembership: ClubMembershipService,
     private readonly gpSchedule: GpScheduleService,
+    private readonly floorHome: FloorStaffHomeService,
   ) {}
 
   @Get('gp-schedule')
@@ -34,6 +36,11 @@ export class TrainerController {
     @Query('to') to?: string,
   ) {
     return this.gpSchedule.list(user, from, to);
+  }
+
+  @Get('gp-home')
+  getGpHome(@CurrentUser() user: JwtPayload) {
+    return this.floorHome.getGpTrainerHome(user);
   }
 
   @Get('dashboard')

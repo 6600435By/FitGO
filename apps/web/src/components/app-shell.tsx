@@ -65,7 +65,12 @@ interface AppShellProps {
    * Desktop hides bottom nav; optional desktopTopNav / mobileSubNav slots.
    */
   adminChrome?: boolean;
-  /** Inline section + page links in the sticky bar (md+ only). */
+  /**
+   * Hide bottom nav on all breakpoints (SPA / GP cabinets with top tabs).
+   * When set, desktopTopNav is shown on mobile too.
+   */
+  hideBottomNav?: boolean;
+  /** Inline section + page links in the sticky bar (md+ only, or always if hideBottomNav). */
   desktopTopNav?: ReactNode;
   /** Sticky section chips under the bar (mobile only). */
   mobileSubNav?: ReactNode;
@@ -92,6 +97,7 @@ export function AppShell({
   moreItems,
   moreLabel = 'Ещё',
   adminChrome = false,
+  hideBottomNav = false,
   desktopTopNav,
   mobileSubNav,
 }: AppShellProps) {
@@ -203,9 +209,11 @@ export function AppShell({
         headerH,
         immersiveCard
           ? 'pb-20'
-          : adminChrome
-            ? 'pb-24 md:pb-6'
-            : 'pb-24',
+          : hideBottomNav
+            ? 'pb-6'
+            : adminChrome
+              ? 'pb-24 md:pb-6'
+              : 'pb-24',
       )}
     >
       {adminChrome ? (
@@ -231,7 +239,12 @@ export function AppShell({
               FITGO
             </p>
             {desktopTopNav ? (
-              <div className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto md:flex">
+              <div
+                className={cn(
+                  'min-w-0 flex-1 items-center gap-1 overflow-x-auto',
+                  hideBottomNav ? 'flex' : 'hidden md:flex',
+                )}
+              >
                 {desktopTopNav}
               </div>
             ) : (
@@ -250,7 +263,7 @@ export function AppShell({
               </button>
             </div>
           </div>
-          {mobileSubNav ? (
+          {mobileSubNav && !hideBottomNav ? (
             <div className="border-t border-slate-800/80 px-3 py-1.5 md:hidden">
               {mobileSubNav}
             </div>
@@ -333,7 +346,8 @@ export function AppShell({
       <nav
         className={cn(
           'admin-chrome fixed bottom-0 left-0 right-0 border-t border-slate-800 bg-slate-950/95 backdrop-blur',
-          adminChrome && 'md:hidden',
+          hideBottomNav && 'hidden',
+          !hideBottomNav && adminChrome && 'md:hidden',
         )}
       >
         <div

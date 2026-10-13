@@ -3,6 +3,7 @@ import { ClientModule } from '../client/client.module';
 import { ClubScheduleModule } from '../club-schedule/club-schedule.module';
 import { EngagementModule } from '../engagement/engagement.module';
 import { FitnessModule } from '../fitness/fitness.module';
+import { FloorHomeModule } from '../floor-home/floor-home.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import { TrainerRosterModule } from '../trainer-roster/trainer-roster.module';
@@ -19,6 +20,7 @@ import { TrainerService } from './trainer.service';
     ClientModule,
     ServiceUsageModule,
     ClubScheduleModule,
+    FloorHomeModule,
   ],
   controllers: [TrainerController],
   providers: [TrainerService, GpScheduleService],

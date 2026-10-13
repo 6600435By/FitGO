@@ -613,6 +613,7 @@ export * from './booking-control';
 export * from './club-schedule';
 export * from './hall-class-snapshot';
 export * from './analytics';
+export * from './floor-staff-home';
 export * from './discrepancies';
 
 import type {
