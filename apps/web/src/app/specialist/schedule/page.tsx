@@ -456,12 +456,12 @@ export default function SpecialistSchedulePage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-xl font-semibold">Расписание SPA</h2>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-base font-semibold sm:text-xl">Расписание SPA</h2>
         <button
           type="button"
-          className="btn-primary"
+          className="btn-primary !px-3 !py-1.5 text-sm"
           onClick={() => {
             setAssignDefaults({});
             setShowAssign(true);

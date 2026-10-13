@@ -80,10 +80,12 @@ export default function SuperAdminClubSettingsPage() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl space-y-5 pb-10">
+    <div className="mx-auto max-w-2xl space-y-4 pb-10 sm:space-y-5">
       <header>
-        <h1 className="text-2xl font-semibold text-white">Настройки клуба</h1>
-        <p className="text-sm text-slate-400">
+        <h1 className="text-lg font-semibold text-white sm:text-2xl">
+          Настройки клуба
+        </h1>
+        <p className="text-xs text-slate-400 sm:text-sm">
           Брендинг и часы работы. Часы ограничивают смены в графике и участвуют в
           расчёте ЗП по отработанным часам.
         </p>
@@ -216,7 +218,7 @@ export default function SuperAdminClubSettingsPage() {
           />
           <button
             type="button"
-            className="btn-secondary"
+            className="btn-secondary !px-3 !py-2 text-sm"
             onClick={() => {
               if (!holidayInput) return;
               setHours((prev) => ({
@@ -251,7 +253,11 @@ export default function SuperAdminClubSettingsPage() {
 
       {error && <p className="text-red-400">{error}</p>}
 
-      <button type="button" onClick={handleSave} className="btn-primary w-full">
+      <button
+        type="button"
+        onClick={handleSave}
+        className="btn-primary w-full !py-2.5 text-sm sm:!py-3 sm:text-base"
+      >
         {saved ? 'Сохранено!' : 'Сохранить'}
       </button>
 

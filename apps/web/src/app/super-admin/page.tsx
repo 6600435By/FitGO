@@ -126,14 +126,14 @@ export default function SuperAdminHomePage() {
   const salesHref = `/super-admin/sales?from=${data.revenue.from}&to=${data.revenue.to}`;
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-slate-400">
+    <div className="space-y-2 sm:space-y-4">
+      <p className="text-xs text-slate-400 sm:text-sm">
         Смена на сегодня, выручка и визиты с 1-го числа по {shortDate(data.asOf)}.
       </p>
 
-      <div className="card">
+      <div className="card !p-3 sm:!p-4">
         <div className="mb-2 flex items-baseline justify-between gap-3">
-          <h2 className="font-semibold">Сегодня на смене</h2>
+          <h2 className="text-sm font-semibold sm:text-base">Сегодня на смене</h2>
           <Link href="/super-admin/staff-roster" className="text-sm text-fitgo-400">
             График
           </Link>
@@ -160,10 +160,13 @@ export default function SuperAdminHomePage() {
         )}
       </div>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <Link href={salesHref} className="card block transition hover:border-slate-600">
+      <div className="grid gap-2 sm:gap-3 md:grid-cols-2">
+        <Link
+          href={salesHref}
+          className="card block !p-3 transition hover:border-slate-600 sm:!p-4"
+        >
           <p className="text-xs text-slate-500">Выручка за месяц</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums text-fitgo-300">
+          <p className="mt-1 text-xl font-semibold tabular-nums text-fitgo-300 sm:text-2xl">
             {money(data.revenue.currentMinor)} {data.currency}
           </p>
           <div className="mt-3 space-y-1">

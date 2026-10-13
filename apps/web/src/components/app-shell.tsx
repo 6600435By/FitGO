@@ -70,10 +70,17 @@ interface AppShellProps {
    * When set, desktopTopNav is shown on mobile too.
    */
   hideBottomNav?: boolean;
-  /** Inline section + page links in the sticky bar (md+ only, or always if hideBottomNav). */
+  /**
+   * Bottom nav only from md+ (super-admin / manager). Top nav always visible;
+   * mobile uses mobileSubNav for secondary links.
+   */
+  bottomNavMdOnly?: boolean;
+  /** Inline section + page links in the sticky bar (md+ only, or always if hideBottomNav / bottomNavMdOnly). */
   desktopTopNav?: ReactNode;
   /** Sticky section chips under the bar (mobile only). */
   mobileSubNav?: ReactNode;
+  /** When set, FITGO brand is a link (e.g. overview home). */
+  brandHref?: string;
 }
 
 function navItemActive(pathname: string, item: NavItem): boolean {
@@ -98,9 +105,12 @@ export function AppShell({
   moreLabel = 'Ещё',
   adminChrome = false,
   hideBottomNav = false,
+  bottomNavMdOnly = false,
   desktopTopNav,
   mobileSubNav,
+  brandHref,
 }: AppShellProps) {
+  const topNavAlways = hideBottomNav || bottomNavMdOnly;
   const pathname = usePathname();
   const router = useRouter();
   const user = getUser();
@@ -211,9 +221,11 @@ export function AppShell({
           ? 'pb-20'
           : hideBottomNav
             ? 'pb-6'
-            : adminChrome
-              ? 'pb-24 md:pb-6'
-              : 'pb-24',
+            : bottomNavMdOnly
+              ? 'pb-6 md:pb-24'
+              : adminChrome
+                ? 'pb-24 md:pb-6'
+                : 'pb-24',
       )}
     >
       {adminChrome ? (
@@ -235,14 +247,24 @@ export function AppShell({
                 <ArrowLeft className="h-4 w-4" />
               </button>
             ) : null}
-            <p className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-fitgo-400">
-              FITGO
-            </p>
+            {brandHref ? (
+              <Link
+                href={brandHref}
+                className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-fitgo-400 hover:text-fitgo-300"
+              >
+                FITGO
+              </Link>
+            ) : (
+              <p className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-fitgo-400">
+                FITGO
+              </p>
+            )}
             {desktopTopNav ? (
               <div
                 className={cn(
-                  'min-w-0 flex-1 items-center gap-1 overflow-x-auto',
-                  hideBottomNav ? 'flex' : 'hidden md:flex',
+                  'min-w-0 flex-1 items-center justify-center gap-1',
+                  topNavAlways ? 'flex' : 'hidden md:flex',
+                  !bottomNavMdOnly && 'overflow-x-auto md:justify-start',
                 )}
               >
                 {desktopTopNav}
@@ -263,8 +285,8 @@ export function AppShell({
               </button>
             </div>
           </div>
-          {mobileSubNav && !hideBottomNav ? (
-            <div className="border-t border-slate-800/80 px-3 py-1.5 md:hidden">
+          {mobileSubNav && (!hideBottomNav || bottomNavMdOnly) ? (
+            <div className="border-t border-slate-800/80 px-2 py-1.5 md:hidden">
               {mobileSubNav}
             </div>
           ) : null}
@@ -346,14 +368,16 @@ export function AppShell({
       <nav
         className={cn(
           'admin-chrome fixed bottom-0 left-0 right-0 border-t border-slate-800 bg-slate-950/95 backdrop-blur',
+          'pb-[env(safe-area-inset-bottom)]',
           hideBottomNav && 'hidden',
-          !hideBottomNav && adminChrome && 'md:hidden',
+          bottomNavMdOnly && 'hidden md:block',
+          !hideBottomNav && !bottomNavMdOnly && adminChrome && 'md:hidden',
         )}
       >
         <div
           className={cn(
             navWidth,
-            'flex justify-around gap-1 overflow-x-auto px-2 py-2 md:justify-start md:gap-1',
+            'flex items-stretch gap-0.5 px-1.5 pt-1.5 pb-1.5 md:justify-start md:gap-1 md:overflow-x-auto md:px-2',
           )}
         >
           {navItems.map((item) => {
@@ -363,15 +387,15 @@ export function AppShell({
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  'relative shrink-0 rounded-xl px-3 py-2 text-center text-sm transition',
+                  'relative flex min-h-12 min-w-0 flex-1 items-center justify-center rounded-xl px-1 py-2 text-center text-[11px] font-medium leading-tight transition md:min-h-0 md:flex-none md:shrink-0 md:px-3 md:text-sm',
                   active
                     ? 'bg-fitgo-500/20 text-fitgo-300'
                     : 'text-slate-400 hover:text-white',
                 )}
               >
-                {item.label}
+                <span className="line-clamp-2">{item.label}</span>
                 {item.badge != null && item.badge > 0 ? (
-                  <span className="ml-1 inline-flex min-w-[1.25rem] justify-center rounded-full bg-fitgo-500 px-1 text-[10px] font-semibold leading-5 text-white">
+                  <span className="absolute right-0.5 top-0.5 inline-flex min-w-[1.1rem] justify-center rounded-full bg-fitgo-500 px-1 text-[9px] font-semibold leading-4 text-white">
                     {item.badge > 99 ? '99+' : item.badge}
                   </span>
                 ) : null}
@@ -405,7 +429,7 @@ export function AppShell({
               type="button"
               onClick={() => setMoreOpen(true)}
               className={cn(
-                'shrink-0 rounded-xl px-3 py-2 text-center text-sm transition md:hidden',
+                'flex min-h-12 min-w-0 flex-1 items-center justify-center rounded-xl px-1 py-2 text-center text-[11px] font-medium leading-tight transition md:hidden',
                 moreActive
                   ? 'bg-fitgo-500/20 text-fitgo-300'
                   : 'text-slate-400 hover:text-white',
@@ -454,7 +478,7 @@ export function AppShell({
                       href={item.href}
                       onClick={() => setMoreOpen(false)}
                       className={cn(
-                        'flex items-center justify-between px-3 py-3 text-sm transition hover:bg-slate-800/60',
+                        'flex min-h-11 items-center justify-between px-3 py-3 text-sm transition hover:bg-slate-800/60',
                         active ? 'text-fitgo-300' : 'text-slate-200',
                       )}
                     >

@@ -43,17 +43,21 @@ export function SpaWaitlistPanel({
   const bookable = services.filter((s) => s.active && (s.bookable ?? true));
 
   return (
-    <div className="card space-y-3">
+    <div className="card !p-3 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium">
           Лист ожидания
           {entries.length > 0 ? (
             <span className="ml-2 text-slate-400">· {entries.length}</span>
-          ) : null}
+          ) : (
+            <span className="ml-2 text-xs font-normal text-slate-500">
+              · заявок нет
+            </span>
+          )}
         </h3>
         <button
           type="button"
-          className="btn-secondary text-xs"
+          className="btn-secondary !px-2.5 !py-1 text-xs"
           disabled={busy}
           onClick={() => setShowAdd(true)}
         >
@@ -61,9 +65,7 @@ export function SpaWaitlistPanel({
         </button>
       </div>
 
-      {entries.length === 0 ? (
-        <p className="text-xs text-slate-500">На этот день заявок нет</p>
-      ) : (
+      {entries.length === 0 ? null : (
         <ul className="space-y-2">
           {entries.map((e) => (
             <li

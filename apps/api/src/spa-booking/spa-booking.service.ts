@@ -2699,6 +2699,7 @@ export class SpaBookingService {
       from,
       to,
       viewerSpecialistId: user.sub,
+      specialistIds: [user.sub],
       revealAll: false,
     });
   }

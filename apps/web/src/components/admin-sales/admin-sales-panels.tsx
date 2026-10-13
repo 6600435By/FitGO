@@ -43,13 +43,57 @@ function monthBounds(d = new Date()): { from: string; to: string } {
   return { from, to };
 }
 
+type SalesSegmentKey =
+  | 'membership'
+  | 'massage'
+  | 'solarium'
+  | 'shop'
+  | 'unpaid'
+  | 'accrual';
+
 function TotalsBar({
   totals,
   attributionLabel,
+  activeSegment,
+  onSegmentClick,
 }: {
   totals: AdminMySalesResponse['totals'];
   attributionLabel: string;
+  activeSegment?: SalesSegmentKey | null;
+  onSegmentClick?: (key: SalesSegmentKey) => void;
 }) {
+  const cell = (
+    key: SalesSegmentKey,
+    label: string,
+    value: string,
+    valueClass?: string,
+  ) => {
+    const active = activeSegment === key;
+    const clickable = Boolean(onSegmentClick);
+    const className = `rounded-xl px-2 py-1.5 text-left transition ${
+      clickable ? 'hover:bg-slate-800/80' : ''
+    } ${active ? 'bg-fitgo-500/15 ring-1 ring-fitgo-500/40' : ''}`;
+    if (!clickable) {
+      return (
+        <div key={key} className={className}>
+          <div className="text-slate-500">{label}</div>
+          <div className={`font-semibold ${valueClass ?? ''}`}>{value}</div>
+        </div>
+      );
+    }
+    return (
+      <button
+        key={key}
+        type="button"
+        className={className}
+        onClick={() => onSegmentClick?.(key)}
+      >
+        <div className="text-slate-500">{label}</div>
+        <div className={`font-semibold ${valueClass ?? ''}`}>{value}</div>
+      </button>
+    );
+  };
+
   return (
     <div className="card space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
@@ -58,35 +102,23 @@ function TotalsBar({
           {attributionLabel}
         </span>
       </div>
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 text-sm">
-        <div>
-          <div className="text-slate-500">Абонементы (оплачено)</div>
-          <div className="font-semibold">{money(totals.membershipPaidMinor)}</div>
-        </div>
-        <div>
-          <div className="text-slate-500">Массаж (оплачено)</div>
-          <div className="font-semibold">{money(totals.massagePaidMinor)}</div>
-        </div>
-        <div>
-          <div className="text-slate-500">Солярий (оплачено)</div>
-          <div className="font-semibold">{money(totals.solariumPaidMinor)}</div>
-        </div>
-        <div>
-          <div className="text-slate-500">Магазин (оплачено)</div>
-          <div className="font-semibold">{money(totals.shopPaidMinor)}</div>
-        </div>
-        <div>
-          <div className="text-slate-500">Неоплачено (долг)</div>
-          <div className="font-semibold text-amber-300">
-            {money(totals.unpaidMinor)}
-          </div>
-        </div>
-        <div>
-          <div className="text-slate-500">К начислению</div>
-          <div className="font-semibold text-fitgo-300">
-            {money(totals.accrualTotalMinor)}
-          </div>
-        </div>
+      <div className="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        {cell('membership', 'Абонементы (оплачено)', money(totals.membershipPaidMinor))}
+        {cell('massage', 'Массаж (оплачено)', money(totals.massagePaidMinor))}
+        {cell('solarium', 'Солярий (оплачено)', money(totals.solariumPaidMinor))}
+        {cell('shop', 'Магазин (оплачено)', money(totals.shopPaidMinor))}
+        {cell(
+          'unpaid',
+          'Неоплачено (долг)',
+          money(totals.unpaidMinor),
+          'text-amber-300',
+        )}
+        {cell(
+          'accrual',
+          'К начислению',
+          money(totals.accrualTotalMinor),
+          'text-fitgo-300',
+        )}
       </div>
       <div className="grid gap-1 border-t border-slate-800 pt-2 text-xs text-slate-400 sm:grid-cols-3">
         <span>Абонементы × %: {money(totals.accrualMembershipMinor)}</span>
@@ -238,39 +270,82 @@ export function AdminMySalesPanel() {
     if (p === 'unpaid' || p === 'paid' || p === 'all') return p;
     return 'all';
   });
+  const [activeSegment, setActiveSegment] = useState<SalesSegmentKey | null>(
+    () => {
+      const p = searchParams.get('payment')?.trim()?.toLowerCase();
+      return p === 'unpaid' ? 'unpaid' : null;
+    },
+  );
+  const [listOpen, setListOpen] = useState(() => {
+    const p = searchParams.get('payment')?.trim()?.toLowerCase();
+    return p === 'unpaid' || p === 'paid';
+  });
   const [data, setData] = useState<AdminMySalesResponse | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async () => {
-    const token = getToken();
-    if (!token) return;
-    setLoading(true);
-    setError('');
-    try {
-      const res = await api.adminMySales(token, {
-        from,
-        to,
-        saleType,
-        payment,
-      });
-      setData(res);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка загрузки');
-    } finally {
-      setLoading(false);
-    }
-  }, [from, to, saleType, payment]);
+  const wantLines =
+    listOpen || saleType !== 'all' || payment !== 'all' || Boolean(activeSegment);
+
+  const load = useCallback(
+    async (includeLines: boolean) => {
+      const token = getToken();
+      if (!token) return;
+      setLoading(true);
+      setError('');
+      try {
+        const res = await api.adminMySales(token, {
+          from,
+          to,
+          saleType,
+          payment,
+          includeLines,
+        });
+        setData(res);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Ошибка загрузки');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [from, to, saleType, payment],
+  );
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void load(wantLines);
+  }, [load, wantLines]);
+
+  const onSegmentClick = (key: SalesSegmentKey) => {
+    if (activeSegment === key && listOpen) {
+      setActiveSegment(null);
+      setSaleType('all');
+      setPayment('all');
+      setListOpen(false);
+      return;
+    }
+    setActiveSegment(key);
+    setListOpen(true);
+    if (key === 'unpaid') {
+      setSaleType('all');
+      setPayment('unpaid');
+      return;
+    }
+    if (key === 'accrual') {
+      setSaleType('all');
+      setPayment('paid');
+      return;
+    }
+    setSaleType(key);
+    setPayment('paid');
+  };
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-slate-400">
-          {payment === 'unpaid' ? 'Неоплаченные продажи' : 'Личные продажи за период'}
+          {payment === 'unpaid'
+            ? 'Неоплаченные продажи'
+            : 'Личные продажи за период'}
         </p>
         <div className="flex flex-wrap gap-2">
           <button
@@ -280,7 +355,11 @@ export function AdminMySalesPanel() {
                 ? 'bg-amber-500/20 text-amber-200'
                 : 'border border-slate-700 text-slate-300 hover:bg-slate-800'
             }`}
-            onClick={() => setPayment('unpaid')}
+            onClick={() => {
+              setPayment('unpaid');
+              setActiveSegment('unpaid');
+              setListOpen(true);
+            }}
           >
             Мои долги
           </button>
@@ -291,7 +370,12 @@ export function AdminMySalesPanel() {
                 ? 'bg-fitgo-500/20 text-fitgo-300'
                 : 'border border-slate-700 text-slate-300 hover:bg-slate-800'
             }`}
-            onClick={() => setPayment('all')}
+            onClick={() => {
+              setPayment('all');
+              setSaleType('all');
+              setActiveSegment(null);
+              setListOpen(false);
+            }}
           >
             Все продажи
           </button>
@@ -305,9 +389,14 @@ export function AdminMySalesPanel() {
           <select
             className="input"
             value={saleType}
-            onChange={(e) =>
-              setSaleType(e.target.value as AdminSaleType | 'all')
-            }
+            onChange={(e) => {
+              const next = e.target.value as AdminSaleType | 'all';
+              setSaleType(next);
+              setActiveSegment(
+                next === 'all' ? null : (next as SalesSegmentKey),
+              );
+              setListOpen(next !== 'all' || payment !== 'all');
+            }}
           >
             <option value="all">Все</option>
             <option value="membership">Абонементы</option>
@@ -321,9 +410,17 @@ export function AdminMySalesPanel() {
           <select
             className="input"
             value={payment}
-            onChange={(e) =>
-              setPayment(e.target.value as AdminSalePaymentFilter)
-            }
+            onChange={(e) => {
+              const next = e.target.value as AdminSalePaymentFilter;
+              setPayment(next);
+              if (next === 'unpaid') setActiveSegment('unpaid');
+              else if (next === 'all' && saleType === 'all') {
+                setActiveSegment(null);
+                setListOpen(false);
+              } else {
+                setListOpen(true);
+              }
+            }}
           >
             <option value="all">Все</option>
             <option value="paid">Оплачена</option>
@@ -332,9 +429,6 @@ export function AdminMySalesPanel() {
         </label>
       </div>
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
-      {data?.hint ? (
-        <p className="text-sm text-amber-300">{data.hint}</p>
-      ) : null}
       {loading && !data ? (
         <p className="text-sm text-slate-500">Загрузка…</p>
       ) : data ? (
@@ -342,8 +436,20 @@ export function AdminMySalesPanel() {
           <TotalsBar
             totals={data.totals}
             attributionLabel={data.attributionLabel}
+            activeSegment={activeSegment}
+            onSegmentClick={onSegmentClick}
           />
-          <LinesTable lines={data.lines} />
+          {listOpen ? (
+            loading ? (
+              <p className="text-sm text-slate-500">Загрузка списка…</p>
+            ) : (
+              <LinesTable lines={data.lines} />
+            )
+          ) : (
+            <p className="text-sm text-slate-500">
+              Нажмите сумму, чтобы открыть продажи
+            </p>
+          )}
         </>
       ) : null}
     </div>

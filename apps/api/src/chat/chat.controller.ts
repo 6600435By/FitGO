@@ -19,7 +19,7 @@ import { SendChatMessageDto } from './dto/send-chat-message.dto';
 
 @Controller('chat')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.CLIENT, UserRole.TRAINER, UserRole.ADMIN)
+@Roles(UserRole.CLIENT, UserRole.TRAINER, UserRole.SPECIALIST, UserRole.ADMIN)
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
@@ -46,7 +46,7 @@ export class ChatController {
   }
 
   @Post('conversations/trainer-admin')
-  @Roles(UserRole.TRAINER)
+  @Roles(UserRole.TRAINER, UserRole.SPECIALIST)
   openTrainerAdminChat(@CurrentUser() user: JwtPayload) {
     return this.chatService.getOrCreateTrainerAdminConversation(user);
   }

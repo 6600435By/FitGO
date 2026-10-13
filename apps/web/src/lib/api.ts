@@ -3167,6 +3167,7 @@ export const api = {
       to: string;
       saleType?: string;
       payment?: string;
+      includeLines?: boolean;
     },
   ) => {
     const q = new URLSearchParams({ from: params.from, to: params.to });
@@ -3174,6 +3175,7 @@ export const api = {
       q.set('saleType', params.saleType);
     if (params.payment && params.payment !== 'all')
       q.set('payment', params.payment);
+    if (params.includeLines) q.set('includeLines', '1');
     return request<import('@fitgo/shared-types').AdminMySalesResponse>(
       `/admin/sales/mine?${q}`,
       {},

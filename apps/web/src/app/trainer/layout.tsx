@@ -24,6 +24,40 @@ type NavItem = {
   module?: 'trainer_calendar' | 'trainer_crm' | 'messaging';
 };
 
+const MOBILE_PRIMARY_MAX = 4;
+
+function splitMobileNav(items: NavItem[]): {
+  primary: NavItem[];
+  more: NavItem[];
+} {
+  if (items.length <= MOBILE_PRIMARY_MAX) {
+    return { primary: items, more: [] };
+  }
+  // Prefer: home, main schedule, control, messages in the bar when present.
+  const preferred = [
+    '/trainer',
+    '/trainer/gp-schedule',
+    '/trainer/my-sessions',
+    '/trainer/messages',
+    '/trainer/schedule',
+  ];
+  const primary: NavItem[] = [];
+  const rest: NavItem[] = [];
+  for (const href of preferred) {
+    const hit = items.find((i) => i.href === href);
+    if (hit && primary.length < MOBILE_PRIMARY_MAX && !primary.includes(hit)) {
+      primary.push(hit);
+    }
+  }
+  for (const item of items) {
+    if (!primary.includes(item)) rest.push(item);
+  }
+  while (primary.length < MOBILE_PRIMARY_MAX && rest.length > 0) {
+    primary.push(rest.shift()!);
+  }
+  return { primary, more: rest };
+}
+
 export default function TrainerLayout({ children }: { children: ReactNode }) {
   const { isEnabled } = useFeatures();
   const [user, setUser] = useState<AuthUser | null>(() => getUser());
@@ -52,7 +86,7 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
   const showPt = isPt || (!isGp && !isPt);
   const gpCabinet = isGp;
 
-  const navItems = useMemo(() => {
+  const allNavItems = useMemo(() => {
     const items: NavItem[] = [];
 
     if (gpCabinet) {
@@ -106,7 +140,7 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
       if (showGp) {
         items.push({ href: '/trainer/group-journal', label: 'Журнал групп' });
       }
-      items.push({ href: '/trainer/my-sessions', label: 'Контроль записей' });
+      items.push({ href: '/trainer/my-sessions', label: 'Контроль' });
       if (showPt) {
         items.push({
           href: '/trainer/clients',
@@ -115,7 +149,7 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
         });
       }
       if (user?.groupPrograms || user?.trainerStaff) {
-        items.push({ href: '/trainer/payroll', label: 'Расчёт ЗП' });
+        items.push({ href: '/trainer/payroll', label: 'ЗП' });
       }
       items.push(
         { href: '/trainer/messages', label: 'Сообщения', module: 'messaging' },
@@ -133,17 +167,22 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     user?.trainerStaff,
   ]);
 
+  const { primary, more } = useMemo(
+    () => splitMobileNav(allNavItems),
+    [allNavItems],
+  );
+
   if (gpCabinet) {
     return (
       <AuthGuard allowedRoles={[UserRole.TRAINER]}>
         <AdminThemeProvider>
           <AppShell
             title="Кабинет тренера"
-            navItems={navItems}
+            navItems={primary}
+            moreItems={more.length > 0 ? more : undefined}
             wide
             adminChrome
-            hideBottomNav
-            desktopTopNav={<StaffTopNavLinks items={navItems} />}
+            desktopTopNav={<StaffTopNavLinks items={allNavItems} />}
             headerActions={
               <>
                 {isEnabled('messaging') ? (
@@ -165,7 +204,11 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
 
   return (
     <AuthGuard allowedRoles={[UserRole.TRAINER]}>
-      <AppShell title="Кабинет тренера" navItems={navItems}>
+      <AppShell
+        title="Кабинет тренера"
+        navItems={primary}
+        moreItems={more.length > 0 ? more : undefined}
+      >
         <div className="mb-4">
           <DataFreshness canRefresh={false} />
         </div>

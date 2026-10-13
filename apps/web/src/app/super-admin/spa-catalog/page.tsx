@@ -177,11 +177,11 @@ export default function SuperAdminSpaCatalogPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-3 sm:space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold">Каталог SPA</h2>
-          <p className="text-sm text-slate-400">
+          <h2 className="text-lg font-semibold sm:text-xl">Каталог SPA</h2>
+          <p className="text-xs text-slate-400 sm:text-sm">
             Сегмент 1С «SPA кабинет приложение» → цены и видимость в записи. Новые
             услуги из 1С скрыты, пока не включите «В записи». Если sync не находит
             сегмент — обновите FitGOIntegration (BSL) и переопубликуйте HTTP.
@@ -189,7 +189,7 @@ export default function SuperAdminSpaCatalogPage() {
         </div>
         <button
           type="button"
-          className="btn-primary"
+          className="btn-primary !px-3 !py-1.5 text-sm"
           disabled={busy}
           onClick={syncFrom1c}
         >
@@ -203,7 +203,138 @@ export default function SuperAdminSpaCatalogPage() {
         </p>
       ) : null}
 
-      <div className="card overflow-x-auto">
+      <div className="space-y-2 md:hidden">
+        {services.map((s) => {
+          const d = drafts[s.id];
+          if (!d) return null;
+          return (
+            <div key={s.id} className="card !p-3 space-y-2">
+              <div>
+                <p className="font-medium text-slate-100">{s.name}</p>
+                <p className="text-xs text-slate-500">
+                  {s.kind} · 1С {formatPrice(s.priceFromOneCMinor, s.currency)} ·
+                  эффект. {formatPrice(s.priceMinor, s.currency)}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-xs text-slate-400">
+                  Своя цена
+                  <input
+                    className="input mt-1"
+                    value={d.overrideRub}
+                    placeholder="как в 1С"
+                    onChange={(e) =>
+                      setDrafts((prev) => ({
+                        ...prev,
+                        [s.id]: { ...d, overrideRub: e.target.value },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="text-xs text-slate-400">
+                  Мин
+                  <input
+                    className="input mt-1"
+                    value={d.durationMin}
+                    onChange={(e) =>
+                      setDrafts((prev) => ({
+                        ...prev,
+                        [s.id]: { ...d, durationMin: e.target.value },
+                      }))
+                    }
+                  />
+                </label>
+                <label className="text-xs text-slate-400">
+                  Перерыв
+                  <input
+                    className="input mt-1"
+                    value={d.bufferMin}
+                    onChange={(e) =>
+                      setDrafts((prev) => ({
+                        ...prev,
+                        [s.id]: { ...d, bufferMin: e.target.value },
+                      }))
+                    }
+                  />
+                </label>
+                <div className="flex flex-col justify-end gap-1 text-xs">
+                  <label className="flex items-center gap-2 text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={d.bookable}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [s.id]: { ...d, bookable: e.target.checked },
+                        }))
+                      }
+                    />
+                    В записи
+                  </label>
+                  <label className="flex items-center gap-2 text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={d.active}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [s.id]: { ...d, active: e.target.checked },
+                        }))
+                      }
+                    />
+                    Активна
+                  </label>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {specialists.map((sp) => {
+                  const on = sp.serviceIds.includes(s.id);
+                  return (
+                    <button
+                      key={sp.id}
+                      type="button"
+                      disabled={busy}
+                      className={`rounded-full px-2 py-0.5 text-[11px] ${
+                        on
+                          ? 'bg-fitgo-500/30 text-fitgo-200'
+                          : 'bg-slate-800 text-slate-500'
+                      }`}
+                      onClick={() => toggleSpecialistService(sp.id, s.id)}
+                    >
+                      {sp.lastName}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary flex-1 !px-3 !py-1.5 text-xs"
+                  disabled={busy}
+                  onClick={() => saveRow(s)}
+                >
+                  Сохранить
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary !px-3 !py-1.5 text-xs text-rose-300"
+                  disabled={busy}
+                  onClick={() => void deleteRow(s)}
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        {services.length === 0 ? (
+          <p className="px-1 py-4 text-sm text-slate-400">
+            Каталог пуст — нажмите «Обновить из 1С».
+          </p>
+        ) : null}
+      </div>
+
+      <div className="card hidden overflow-x-auto overscroll-x-contain md:block">
         <table className="w-full min-w-[960px] text-left text-sm">
           <thead className="text-xs uppercase tracking-wide text-slate-500">
             <tr>

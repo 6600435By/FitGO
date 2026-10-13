@@ -263,19 +263,19 @@ export default function SuperAdminStaffPage() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex items-center justify-between gap-3">
+    <div className="mx-auto max-w-5xl space-y-3 sm:space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold md:text-2xl">Персонал</h2>
-          <p className="text-sm text-slate-400">
+          <h2 className="text-lg font-semibold sm:text-xl md:text-2xl">Персонал</h2>
+          <p className="text-xs text-slate-400 sm:text-sm">
             Тренеры делятся на ГП, штат и клуб. Группы и ставки — на карточке,
             оттуда схема копируется на выбранные группы.
           </p>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 flex-wrap gap-2">
           <button
             type="button"
-            className="btn-secondary text-sm"
+            className="btn-secondary !px-3 !py-1.5 text-sm"
             disabled={syncing}
             onClick={async () => {
               const token = getToken();

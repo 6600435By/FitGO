@@ -304,8 +304,11 @@ export class AdminSalesService {
       to: string;
       saleType?: AdminSaleType | 'all';
       payment?: AdminSalePaymentFilter;
+      /** When false/omitted, return totals only (faster first paint). */
+      includeLines?: boolean;
     },
   ): Promise<AdminMySalesResponse> {
+    const includeLines = params.includeLines === true;
     const user = await this.prisma.user.findFirst({
       where: { id: userId, clubId },
       select: { employeeCode: true, firstName: true, lastName: true },
@@ -378,6 +381,39 @@ export class AdminSalesService {
       periodField: 'paidAt',
     });
 
+    // Open seller debt = ClubRevenue unpaid snapshot (1C «Неоплаченные»),
+    // enriched with SaleTransaction seller when cash export left staff empty.
+    const sellerDebt = await this.sellerOpenUnpaid(clubId, userId, params.to);
+
+    let totals: AdminSalesTotals = {
+      ...accrual.totals,
+      unpaidMinor: sellerDebt.unpaidMinor,
+    };
+
+    if (!includeLines) {
+      if (params.payment === 'unpaid') {
+        totals = this.applyAccrual(
+          {
+            ...this.emptyTotals(),
+            unpaidMinor: sellerDebt.unpaidMinor,
+          },
+          profile,
+        );
+      } else if (params.payment === 'paid') {
+        totals = { ...accrual.totals, unpaidMinor: 0 };
+      }
+      return {
+        from: params.from,
+        to: params.to,
+        attribution,
+        attributionLabel: attributionLabel(attribution),
+        totals,
+        lines: [],
+        currency: 'BYN',
+        hint,
+      };
+    }
+
     // Paid sales with soldAt in period (for «all» list). Do NOT pull
     // SaleTransaction unpaid — cache is stale vs 1C debt register.
     const listedPaid =
@@ -388,15 +424,6 @@ export class AdminSalesService {
             payment: 'paid',
             periodField: 'soldAt',
           });
-
-    // Open seller debt = ClubRevenue unpaid snapshot (1C «Неоплаченные»),
-    // enriched with SaleTransaction seller when cash export left staff empty.
-    const sellerDebt = await this.sellerOpenUnpaid(clubId, userId, params.to);
-
-    let totals: AdminSalesTotals = {
-      ...accrual.totals,
-      unpaidMinor: sellerDebt.unpaidMinor,
-    };
 
     let lines = listedPaid.lines;
     if (params.payment === 'unpaid') {
@@ -424,11 +451,6 @@ export class AdminSalesService {
           new Date(b.paidAt ?? b.soldAt).getTime() -
           new Date(a.paidAt ?? a.soldAt).getTime(),
       );
-    }
-
-    if (!hint) {
-      hint =
-        'ЗП — только с оплат в периоде. Долг продавца — из 1С «Неоплаченные продажи» (live Analytics или кэш).';
     }
 
     return {

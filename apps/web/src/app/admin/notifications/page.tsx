@@ -81,7 +81,7 @@ export default function AdminNotificationsPage() {
               : 'bg-slate-800 text-slate-400'
           }`}
         >
-          Тренеры
+          Команда
         </button>
         <button
           type="button"

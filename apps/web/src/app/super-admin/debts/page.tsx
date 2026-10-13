@@ -223,7 +223,7 @@ export default function SpecialistDebtsPage() {
       ) : visible.length === 0 ? (
         <p className="text-slate-400">Нет строк за период / фильтр.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto overscroll-x-contain">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-slate-400 border-b border-slate-800">

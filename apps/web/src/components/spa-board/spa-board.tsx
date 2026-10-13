@@ -831,27 +831,27 @@ export function SpaBoard({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
         <button
           type="button"
-          className="btn-secondary text-xs"
+          className="btn-secondary !px-2.5 !py-1 text-xs"
           onClick={() => onDayChange(addDays(dayStart, -1))}
         >
           ←
         </button>
-        <p className="min-w-[8.5rem] text-center text-sm font-medium capitalize">
+        <p className="min-w-[7.5rem] text-center text-sm font-medium capitalize">
           {formatDayLabel(dayStart)}
         </p>
         <button
           type="button"
-          className="btn-secondary text-xs"
+          className="btn-secondary !px-2.5 !py-1 text-xs"
           onClick={() => onDayChange(addDays(dayStart, 1))}
         >
           →
         </button>
         <button
           type="button"
-          className="btn-secondary text-xs"
+          className="btn-secondary !px-2.5 !py-1 text-xs"
           onClick={() => onDayChange(startOfDay(new Date()))}
         >
           Сегодня
@@ -859,7 +859,7 @@ export function SpaBoard({
         {onEditDayHours ? (
           <button
             type="button"
-            className="btn-secondary text-xs"
+            className="btn-secondary !px-2.5 !py-1 text-xs"
             onClick={() => {
               const id =
                 mode === 'specialist' && viewerSpecialistId

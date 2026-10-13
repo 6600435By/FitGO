@@ -29,6 +29,8 @@ export class ChatService {
         this.listConversations(user, 'admin'),
       ]);
       conversations = [...clients, ...admin];
+    } else if (user.roles.includes(UserRole.SPECIALIST)) {
+      conversations = await this.listConversations(user, 'admin');
     } else {
       conversations = await this.listConversations(user);
     }
@@ -48,7 +50,7 @@ export class ChatService {
     const conversations = await this.prisma.conversation.findMany({
       where,
       include: {
-        client: true,
+        client: { include: { roles: true } },
         trainer: true,
         messages: {
           orderBy: { createdAt: 'desc' },
@@ -174,6 +176,15 @@ export class ChatService {
       }
     }
 
+    if (user.roles.includes(UserRole.SPECIALIST)) {
+      if (
+        conversation.kind !== ConversationKind.TRAINER_ADMIN ||
+        conversation.clientId !== user.sub
+      ) {
+        throw new ForbiddenException('Нет доступа к этому чату');
+      }
+    }
+
     const message = await this.prisma.$transaction(async (tx) => {
       const created = await tx.chatMessage.create({
         data: {
@@ -232,12 +243,18 @@ export class ChatService {
   }
 
   async getOrCreateTrainerAdminConversation(user: JwtPayload) {
-    if (!user.roles.includes(UserRole.TRAINER)) {
-      throw new ForbiddenException('Только тренер может открыть этот чат');
+    const isTrainer = user.roles.includes(UserRole.TRAINER);
+    const isSpecialist = user.roles.includes(UserRole.SPECIALIST);
+    if (!isTrainer && !isSpecialist) {
+      throw new ForbiddenException(
+        'Только тренер или специалист может открыть этот чат',
+      );
     }
 
     const clubId = requireClubId(user);
-    const conversationKey = `trainer-admin:${clubId}:${user.sub}`;
+    const conversationKey = isSpecialist
+      ? `specialist-admin:${clubId}:${user.sub}`
+      : `trainer-admin:${clubId}:${user.sub}`;
     const conversation = await this.prisma.conversation.upsert({
       where: { conversationKey },
       create: {
@@ -248,7 +265,7 @@ export class ChatService {
         conversationKey,
       },
       update: {},
-      include: { client: true, trainer: true },
+      include: { client: { include: { roles: true } }, trainer: true },
     });
 
     return this.toConversationSummary(conversation, user, undefined, 0);
@@ -272,6 +289,13 @@ export class ChatService {
       return { trainerId: user.sub, kind: ConversationKind.TRAINER };
     }
 
+    if (user.roles.includes(UserRole.SPECIALIST)) {
+      return {
+        clientId: user.sub,
+        kind: ConversationKind.TRAINER_ADMIN,
+      };
+    }
+
     if (user.roles.includes(UserRole.ADMIN)) {
       const clubId = requireClubId(user);
       if (scope === 'clients') {
@@ -292,7 +316,7 @@ export class ChatService {
   private async ensureConversationAccess(user: JwtPayload, conversationId: string) {
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
-      include: { client: true, trainer: true },
+      include: { client: { include: { roles: true } }, trainer: true },
     });
 
     if (!conversation) {
@@ -309,13 +333,23 @@ export class ChatService {
       user.roles.includes(UserRole.TRAINER) &&
       conversation.kind === ConversationKind.TRAINER_ADMIN &&
       conversation.clientId === user.sub;
+    const isSpecialistOnAdminChat =
+      user.roles.includes(UserRole.SPECIALIST) &&
+      conversation.kind === ConversationKind.TRAINER_ADMIN &&
+      conversation.clientId === user.sub;
     const isAdmin =
       user.roles.includes(UserRole.ADMIN) &&
       conversation.clubId === user.clubId &&
       (conversation.kind === ConversationKind.ADMIN ||
         conversation.kind === ConversationKind.TRAINER_ADMIN);
 
-    if (!isClient && !isTrainerOnClientChat && !isTrainerOnAdminChat && !isAdmin) {
+    if (
+      !isClient &&
+      !isTrainerOnClientChat &&
+      !isTrainerOnAdminChat &&
+      !isSpecialistOnAdminChat &&
+      !isAdmin
+    ) {
       throw new ForbiddenException('Нет доступа к этому чату');
     }
 
@@ -329,7 +363,11 @@ export class ChatService {
       clientId: string;
       trainerId: string | null;
       lastMessageAt: Date;
-      client: { firstName: string; lastName: string };
+      client: {
+        firstName: string;
+        lastName: string;
+        roles?: Array<{ role: Role }>;
+      };
       trainer: { firstName: string; lastName: string } | null;
     },
     user: JwtPayload,
@@ -354,12 +392,21 @@ export class ChatService {
     }
 
     if (conversation.kind === ConversationKind.TRAINER_ADMIN) {
-      const isTrainer = user.roles.includes(UserRole.TRAINER);
+      const isStaffPeer =
+        user.roles.includes(UserRole.TRAINER) ||
+        user.roles.includes(UserRole.SPECIALIST);
+      const peerIsSpecialist = conversation.client.roles?.some(
+        (r) => r.role === Role.SPECIALIST,
+      );
       return {
         id: conversation.id,
         kind: 'TRAINER_ADMIN' as const,
-        title: isTrainer ? 'Администрация клуба' : clientName,
-        subtitle: isTrainer ? 'Чат с администрацией' : 'Чат с тренером',
+        title: isStaffPeer ? 'Администрация клуба' : clientName,
+        subtitle: isStaffPeer
+          ? 'Чат с администрацией'
+          : peerIsSpecialist
+            ? 'Чат со специалистом'
+            : 'Чат с тренером',
         clientId: conversation.clientId,
         trainerId: conversation.trainerId ?? undefined,
         lastMessage,

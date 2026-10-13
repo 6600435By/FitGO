@@ -50,10 +50,12 @@ function TaskChip({
   return (
     <Link
       href={href}
-      className="flex min-h-10 flex-col justify-center rounded-xl bg-slate-800/60 px-2.5 py-1.5 transition hover:bg-slate-800"
+      className="flex min-h-9 flex-col justify-center rounded-xl bg-slate-800/60 px-2 py-1 transition hover:bg-slate-800 sm:min-h-10 sm:px-2.5 sm:py-1.5"
     >
-      <span className="text-[11px] leading-tight text-slate-500">{label}</span>
-      <span className="text-base font-semibold tabular-nums text-white">
+      <span className="text-[10px] leading-tight text-slate-500 sm:text-[11px]">
+        {label}
+      </span>
+      <span className="text-sm font-semibold tabular-nums text-white sm:text-base">
         {value}
       </span>
     </Link>
@@ -108,26 +110,29 @@ export default function AdminHomePage() {
   const revenueSynced = syncedLabel(data.stats.revenueToday.syncedAt);
   const tasks = data.stats.tasks ?? emptyTasks();
 
+  const callPreview = data.callToday.slice(0, 2);
+  const callExtra = Math.max(0, data.callToday.length - callPreview.length);
+
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
+    <div className="mx-auto max-w-6xl space-y-2 sm:space-y-4">
       {data.club && (
-        <p className="text-sm text-slate-400">
+        <p className="text-xs text-slate-400 sm:text-sm">
           Клуб <span className="font-medium text-white">{data.club.name}</span>
         </p>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="space-y-3 lg:col-span-2">
-          <div className="card !p-3.5 sm:!p-4">
-            <div className="flex items-start gap-3">
-              <ListTodo className="mt-0.5 h-5 w-5 shrink-0 text-fitgo-400" />
+      <div className="grid gap-2 sm:gap-4 lg:grid-cols-3">
+        <div className="space-y-2 sm:space-y-3 lg:col-span-2">
+          <div className="card !p-3 sm:!p-4">
+            <div className="flex items-start gap-2 sm:gap-3">
+              <ListTodo className="mt-0.5 h-4 w-4 shrink-0 text-fitgo-400 sm:h-5 sm:w-5" />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-end justify-between gap-2">
                   <div>
                     <p className="stat-label">Задачи</p>
                     <Link
                       href="/admin/tasks"
-                      className="stat-value text-3xl leading-none hover:text-fitgo-300"
+                      className="stat-value text-2xl leading-none hover:text-fitgo-300 sm:text-3xl"
                     >
                       {tasks.total}
                     </Link>
@@ -139,7 +144,7 @@ export default function AdminHomePage() {
                     Все задачи →
                   </Link>
                 </div>
-                <div className="mt-3 grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+                <div className="mt-2 grid grid-cols-3 gap-1 sm:mt-3 sm:grid-cols-6 sm:gap-1.5">
                   <TaskChip
                     href="/admin/tasks"
                     label="Контроль"
@@ -175,47 +180,51 @@ export default function AdminHomePage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2.5 md:grid-cols-4 md:gap-3">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4 md:gap-3">
             <Link
               href={reviewHref}
-              className="card !p-3 block transition hover:border-fitgo-500/40 sm:!p-3.5"
+              className="card !p-2.5 block transition hover:border-fitgo-500/40 sm:!p-3.5"
             >
-              <div className="mb-1.5 flex items-center gap-1.5">
-                <ClipboardCheck className="h-4 w-4 text-fitgo-400" />
-                <p className="stat-label text-xs">Контроль записей</p>
+              <div className="mb-1 flex items-center gap-1.5">
+                <ClipboardCheck className="h-3.5 w-3.5 text-fitgo-400 sm:h-4 sm:w-4" />
+                <p className="stat-label text-[11px] sm:text-xs">Контроль записей</p>
               </div>
-              <p className="stat-value text-xl sm:text-2xl">
+              <p className="stat-value text-lg sm:text-2xl">
                 {data.stats.needsReviewCount}
               </p>
-              <p className="mt-0.5 text-[11px] text-slate-500">На проверке →</p>
+              <p className="mt-0.5 text-[10px] text-slate-500 sm:text-[11px]">
+                На проверке →
+              </p>
             </Link>
 
             <Link
               href="/admin/tasks?topic=membership"
-              className="card !p-3 block transition hover:border-amber-500/40 sm:!p-3.5"
+              className="card !p-2.5 block transition hover:border-amber-500/40 sm:!p-3.5"
             >
-              <div className="mb-1.5 flex items-center gap-1.5">
-                <Bell className="h-4 w-4 text-amber-400" />
-                <p className="stat-label text-xs">Истекают скоро</p>
+              <div className="mb-1 flex items-center gap-1.5">
+                <Bell className="h-3.5 w-3.5 text-amber-400 sm:h-4 sm:w-4" />
+                <p className="stat-label text-[11px] sm:text-xs">Истекают скоро</p>
               </div>
-              <p className="stat-value text-xl sm:text-2xl">
+              <p className="stat-value text-lg sm:text-2xl">
                 {data.stats.expiringSoon}
               </p>
-              <p className="mt-0.5 text-[11px] text-slate-500">7 дней →</p>
+              <p className="mt-0.5 text-[10px] text-slate-500 sm:text-[11px]">
+                7 дней →
+              </p>
             </Link>
 
-            <div className="card !p-3 sm:!p-3.5">
-              <div className="mb-1.5 flex items-center gap-1.5">
-                <CalendarCheck className="h-4 w-4 text-fitgo-400" />
-                <p className="stat-label text-xs">Занятий сегодня</p>
+            <div className="card !p-2.5 sm:!p-3.5">
+              <div className="mb-1 flex items-center gap-1.5">
+                <CalendarCheck className="h-3.5 w-3.5 text-fitgo-400 sm:h-4 sm:w-4" />
+                <p className="stat-label text-[11px] sm:text-xs">Занятий сегодня</p>
               </div>
               <Link
                 href={`/admin/booking-control?from=${today}&to=${today}`}
-                className="stat-value text-xl hover:text-fitgo-300 sm:text-2xl"
+                className="stat-value text-lg hover:text-fitgo-300 sm:text-2xl"
               >
                 {data.stats.sessionsToday.total}
               </Link>
-              <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-slate-400">
+              <div className="mt-1.5 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-slate-400 sm:mt-2 sm:text-[11px]">
                 <Link
                   href={`/admin/booking-control?kind=GROUP&from=${today}&to=${today}`}
                   className="rounded-md px-1 py-0.5 hover:bg-slate-800 hover:text-white"
@@ -246,15 +255,15 @@ export default function AdminHomePage() {
               </div>
             </div>
 
-            <div className="card !p-3 sm:!p-3.5">
-              <div className="mb-1.5 flex items-center gap-1.5">
-                <Wallet className="h-4 w-4 text-fitgo-400" />
-                <p className="stat-label text-xs">Выручка сегодня</p>
+            <div className="card !p-2.5 sm:!p-3.5">
+              <div className="mb-1 flex items-center gap-1.5">
+                <Wallet className="h-3.5 w-3.5 text-fitgo-400 sm:h-4 sm:w-4" />
+                <p className="stat-label text-[11px] sm:text-xs">Выручка сегодня</p>
               </div>
-              <p className="stat-value text-xl sm:text-2xl">
+              <p className="stat-value text-lg sm:text-2xl">
                 {money(data.stats.revenueToday.total, currency)}
               </p>
-              <p className="mt-1.5 text-[11px] leading-snug text-slate-400">
+              <p className="mt-1 text-[10px] leading-snug text-slate-400 sm:mt-1.5 sm:text-[11px]">
                 Нал {money(data.stats.revenueToday.cash, currency)}
                 <span className="text-slate-600"> · </span>
                 Карта {money(data.stats.revenueToday.card, currency)}
@@ -278,7 +287,7 @@ export default function AdminHomePage() {
           {(data.stats.pendingCrmCount ?? 0) > 0 && (
             <Link
               href="/admin/pending-crm"
-              className="card block border border-amber-500/30 bg-amber-500/5"
+              className="card block border border-amber-500/30 bg-amber-500/5 !p-3"
             >
               <p className="font-semibold text-amber-200">
                 Без 1С: {data.stats.pendingCrmCount}
@@ -290,16 +299,18 @@ export default function AdminHomePage() {
           )}
         </div>
 
-        <div className="space-y-3">
-          <div className="card">
-            <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="space-y-2 sm:space-y-3">
+          <div className="card !p-3 sm:!p-4">
+            <div className="mb-2 flex items-center justify-between gap-2 sm:mb-3">
               <div className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-amber-400" />
-                <h2 className="font-semibold">Позвонить сегодня</h2>
+                <AlertTriangle className="h-4 w-4 text-amber-400 sm:h-5 sm:w-5" />
+                <h2 className="text-sm font-semibold sm:text-base">
+                  Позвонить сегодня
+                </h2>
               </div>
               <Link
                 href="/admin/tasks?topic=membership"
-                className="text-sm text-fitgo-400 hover:underline"
+                className="text-xs text-fitgo-400 hover:underline sm:text-sm"
               >
                 Все
               </Link>
@@ -308,11 +319,11 @@ export default function AdminHomePage() {
               <p className="text-sm text-slate-400">Нет звонков на сегодня</p>
             ) : (
               <ul className="divide-y divide-slate-800">
-                {data.callToday.map((item) => (
+                {callPreview.map((item) => (
                   <li key={item.taskId}>
                     <Link
                       href={`/admin/tasks?topic=membership&task=${item.taskId}`}
-                      className="flex items-center justify-between gap-2 py-2.5 text-sm transition hover:text-fitgo-300"
+                      className="flex items-center justify-between gap-2 py-2 text-sm transition hover:text-fitgo-300 sm:py-2.5"
                     >
                       <div className="min-w-0">
                         <p className="truncate font-medium">{item.clientName}</p>
@@ -332,13 +343,27 @@ export default function AdminHomePage() {
                 ))}
               </ul>
             )}
+            {callExtra > 0 ? (
+              <Link
+                href="/admin/tasks?topic=membership"
+                className="mt-2 block text-center text-xs text-fitgo-400 hover:underline"
+              >
+                ещё {callExtra} →
+              </Link>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Link href="/admin/at-risk" className="btn-secondary flex-1 text-center sm:flex-none">
+            <Link
+              href="/admin/at-risk"
+              className="btn-secondary flex-1 !px-3 !py-2 text-center text-sm sm:flex-none"
+            >
               Зона риска
             </Link>
-            <Link href="/admin/reports" className="btn-primary flex-1 text-center sm:flex-none">
+            <Link
+              href="/admin/reports"
+              className="btn-primary flex-1 !px-3 !py-2 text-center text-sm sm:flex-none"
+            >
               Отчёт
             </Link>
           </div>

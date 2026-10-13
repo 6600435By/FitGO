@@ -59,13 +59,19 @@ export class AdminSalesController {
     @Query('to') to: string,
     @Query('saleType') saleType?: AdminSaleType | 'all',
     @Query('payment') payment?: AdminSalePaymentFilter,
+    @Query('includeLines') includeLines?: string,
   ) {
     assertPeriod(from, to);
+    const wantLines =
+      includeLines === '1' ||
+      includeLines === 'true' ||
+      includeLines === 'yes';
     return this.sales.mySales(requireClubId(user), user.sub, {
       from,
       to,
       saleType,
       payment,
+      includeLines: wantLines,
     });
   }
 }
