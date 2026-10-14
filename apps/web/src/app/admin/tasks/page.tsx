@@ -664,15 +664,35 @@ function AdminTasksInner() {
     );
   };
 
+  const confirmClient = async (
+    taskId: string,
+    clientExternalId: string,
+    confirmed = true,
+  ) => {
+    const token = getToken();
+    if (!token) return;
+    await api.adminConfirmBookingClient(token, taskId, {
+      clientExternalId,
+      confirmed,
+    });
+    load();
+  };
+
   const renderConfirmations = () => {
     if (confirmationTasks.length === 0) {
-      return <p className="text-slate-400">Нет подтверждений на завтра</p>;
+      return (
+        <p className="text-slate-400">
+          Нет подтверждений на завтра (реформеры / SPA)
+        </p>
+      );
     }
     return (
       <ul className="space-y-3">
         {confirmationTasks.map((task) => {
           const sessionKey =
             typeof task.sessionKey === 'string' ? task.sessionKey : undefined;
+          const clients = task.confirmClients ?? [];
+          const doneCount = clients.filter((c) => c.confirmed).length;
           return (
             <li key={task.id} className="card space-y-2">
               <p className="font-medium">
@@ -680,26 +700,86 @@ function AdminTasksInner() {
               </p>
               <p className="text-sm text-slate-400">
                 {task.membershipName ?? 'Запись'}
+                {task.roomTitle ? ` · ${task.roomTitle}` : ''}
                 {task.dueAt ? ` · ${formatDateTime(task.dueAt)}` : ''}
               </p>
-              <CallButton phone={task.phone} />
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="btn-primary flex-1 text-xs"
-                  onClick={() => void updateStatus(task.id, AdminTaskStatus.DONE)}
+              {clients.length > 0 ? (
+                <>
+                  <p className="text-xs text-slate-500">
+                    Проверено {doneCount} из {clients.length}
+                  </p>
+                  <ul className="space-y-2">
+                    {clients.map((client) => (
+                      <li
+                        key={client.externalId}
+                        className={`rounded-lg border px-3 py-2 ${
+                          client.confirmed
+                            ? 'border-emerald-800/60 bg-emerald-950/30'
+                            : 'border-slate-800 bg-slate-950/40'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-medium text-slate-100">
+                              {client.clientName}
+                            </p>
+                            {client.confirmed ? (
+                              <p className="text-[11px] text-emerald-400/90">
+                                Подтверждён
+                              </p>
+                            ) : null}
+                          </div>
+                          <button
+                            type="button"
+                            className={
+                              client.confirmed
+                                ? 'btn-secondary text-[11px]'
+                                : 'btn-primary text-[11px]'
+                            }
+                            onClick={() =>
+                              void confirmClient(
+                                task.id,
+                                client.externalId,
+                                !client.confirmed,
+                              )
+                            }
+                          >
+                            {client.confirmed ? 'Снять' : 'Проверил'}
+                          </button>
+                        </div>
+                        {!client.confirmed ? (
+                          <div className="mt-2">
+                            <CallButton phone={client.phone} />
+                          </div>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <>
+                  <CallButton phone={task.phone} />
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary flex-1 text-xs"
+                      onClick={() =>
+                        void updateStatus(task.id, AdminTaskStatus.DONE)
+                      }
+                    >
+                      Подтвердил
+                    </button>
+                  </div>
+                </>
+              )}
+              {sessionKey ? (
+                <Link
+                  href={`/admin/booking-control?sessionKey=${encodeURIComponent(sessionKey)}`}
+                  className="btn-secondary inline-flex w-full items-center justify-center text-xs"
                 >
-                  Подтвердил
-                </button>
-                {sessionKey ? (
-                  <Link
-                    href={`/admin/booking-control?sessionKey=${encodeURIComponent(sessionKey)}`}
-                    className="btn-secondary inline-flex flex-1 items-center justify-center text-xs"
-                  >
-                    К записи
-                  </Link>
-                ) : null}
-              </div>
+                  К записи
+                </Link>
+              ) : null}
             </li>
           );
         })}
@@ -944,7 +1024,11 @@ function AdminTasksInner() {
         ? renderPendingQueue(gpPending, 'Нет ГП на подтверждении', 'ГП')
         : null}
       {activeTopic === 'spa_approval'
-        ? renderPendingQueue(spaPending, 'Нет SPA на подтверждении', 'SPA')
+        ? renderPendingQueue(
+            spaPending,
+            'Нет SPA после сеанса. Записи на завтра — во вкладке «Подтверждения».',
+            'SPA',
+          )
         : null}
       {activeTopic === 'pt_approval'
         ? renderPendingQueue(ptPending, 'Нет ПТ на контроле', 'ПТ')

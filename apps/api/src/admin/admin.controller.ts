@@ -103,6 +103,18 @@ export class AdminController {
     return this.adminService.applyRenewalAction(user, id, body);
   }
 
+  @Post('tasks/:id/confirm-client')
+  confirmBookingClient(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { clientExternalId?: string; confirmed?: boolean },
+  ) {
+    return this.adminService.confirmBookingClient(user, id, {
+      clientExternalId: body.clientExternalId ?? '',
+      confirmed: body.confirmed,
+    });
+  }
+
   @Patch('tasks/:id')
   updateMyTask(
     @CurrentUser() user: JwtPayload,

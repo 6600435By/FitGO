@@ -1122,6 +1122,18 @@ export interface AdminTaskItem {
   saleNumber?: string;
   /** BOOKING_CONFIRM → booking-control deep link */
   sessionKey?: string;
+  /** BOOKING_CONFIRM aggregated clients (reformer / multi) */
+  confirmClients?: AdminConfirmClient[];
+  roomTitle?: string;
+}
+
+/** Client row inside a BOOKING_CONFIRM checklist task. */
+export interface AdminConfirmClient {
+  externalId: string;
+  clientName: string;
+  phone?: string;
+  confirmed: boolean;
+  confirmedAt?: string;
 }
 
 export interface AdminDebtLine {

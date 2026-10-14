@@ -14,6 +14,7 @@ import {
   AdminTaskStatus as PrismaAdminTaskStatus,
   OnexClassStatus,
   PersonalBookingStatus,
+  Prisma,
   SpaBookingStatus,
 } from '@prisma/client';
 import { adminTaskTopic } from './task-topic';
@@ -583,6 +584,12 @@ export class AdminService {
       await this.tasksScheduler.refreshDebtors(clubId);
     } catch {
       // non-fatal — list whatever we have
+    }
+    // Tomorrow confirmations (reformer hall / SPA) — local schedule, refresh every open.
+    try {
+      await this.tasksScheduler.refreshBookingConfirmations(clubId);
+    } catch {
+      // non-fatal
     }
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
@@ -1429,7 +1436,97 @@ export class AdminService {
         typeof meta.number === 'string' ? meta.number : undefined,
       sessionKey:
         typeof meta.sessionKey === 'string' ? meta.sessionKey : undefined,
+      roomTitle:
+        typeof meta.roomTitle === 'string' ? meta.roomTitle : undefined,
+      confirmClients: Array.isArray(meta.clients)
+        ? (meta.clients as Array<Record<string, unknown>>)
+            .filter((c) => typeof c.externalId === 'string')
+            .map((c) => ({
+              externalId: c.externalId as string,
+              clientName:
+                typeof c.clientName === 'string'
+                  ? c.clientName
+                  : (c.externalId as string),
+              phone:
+                typeof c.phone === 'string' && c.phone ? c.phone : undefined,
+              confirmed: c.confirmed === true,
+              confirmedAt:
+                typeof c.confirmedAt === 'string' ? c.confirmedAt : undefined,
+            }))
+        : undefined,
     };
+  }
+
+  async confirmBookingClient(
+    user: JwtPayload,
+    taskId: string,
+    body: { clientExternalId: string; confirmed?: boolean },
+  ) {
+    const clubId = requireClubId(user);
+    const externalId = body.clientExternalId?.trim();
+    if (!externalId) {
+      throw new BadRequestException('clientExternalId обязателен');
+    }
+    const task = await this.prisma.adminTask.findFirst({
+      where: { id: taskId, clubId, source: 'BOOKING_CONFIRM' },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+    if (
+      task.status === PrismaAdminTaskStatus.DONE ||
+      task.status === PrismaAdminTaskStatus.CANCELLED
+    ) {
+      throw new BadRequestException('Задача уже закрыта');
+    }
+
+    const meta = (task.meta ?? {}) as Record<string, unknown>;
+    const clients = Array.isArray(meta.clients)
+      ? ([...meta.clients] as Array<Record<string, unknown>>)
+      : [];
+    const idx = clients.findIndex((c) => c.externalId === externalId);
+    if (idx < 0) {
+      throw new NotFoundException('Клиент не найден в задаче');
+    }
+    const confirmed = body.confirmed !== false;
+    clients[idx] = {
+      ...clients[idx],
+      confirmed,
+      confirmedAt: confirmed ? new Date().toISOString() : null,
+    };
+    const allDone =
+      clients.length > 0 && clients.every((c) => c.confirmed === true);
+
+    const nextMeta = {
+      ...meta,
+      clients,
+    } as Prisma.InputJsonValue;
+
+    const updated = await this.prisma.adminTask.update({
+      where: { id: taskId },
+      data: {
+        meta: nextMeta,
+        status: allDone
+          ? PrismaAdminTaskStatus.DONE
+          : task.status === PrismaAdminTaskStatus.OPEN
+            ? PrismaAdminTaskStatus.IN_PROGRESS
+            : task.status,
+        completedAt: allDone ? new Date() : null,
+        assigneeId: task.assigneeId ?? user.sub,
+      },
+      include: {
+        assignee: true,
+        createdBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+    await this.prisma.adminTaskEvent.create({
+      data: {
+        taskId,
+        actorId: user.sub,
+        comment: confirmed
+          ? `Подтвердил: ${String(clients[idx].clientName ?? externalId)}`
+          : `Снял подтверждение: ${String(clients[idx].clientName ?? externalId)}`,
+      },
+    });
+    return this.mapTaskItem(updated);
   }
 
   async getPendingCrmClients(user: JwtPayload) {
