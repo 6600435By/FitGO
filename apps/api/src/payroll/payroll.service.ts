@@ -98,6 +98,40 @@ function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   return p;
 }
 
+/**
+ * Club-only trainers (Роль/схема = только «Тренеры клуб») are not paid in FitGO.
+ * Keep them if they also have ГП / штат / реформер or another payroll role.
+ */
+function isClubTrainerOnlyPayrollSkip(user: {
+  roles: readonly { role: Role }[] | readonly string[];
+  groupPrograms?: boolean | null;
+  trainerStaff?: boolean | null;
+  trainerClub?: boolean | null;
+  trainerReformers?: boolean | null;
+  trainerGroupsSet?: boolean | null;
+}): boolean {
+  const roles = user.roles.map((r) =>
+    typeof r === 'string' ? r : r.role,
+  );
+  const flags = trainerPayFlags({
+    roles,
+    groupPrograms: user.groupPrograms,
+    trainerStaff: user.trainerStaff,
+    trainerClub: user.trainerClub,
+    trainerReformers: user.trainerReformers,
+    trainerGroupsSet: user.trainerGroupsSet,
+  });
+  if (!flags.isTrainer) return false;
+  if (!flags.club || flags.gp || flags.staff || flags.reformers) return false;
+  const roleSet = new Set(roles.map(String));
+  const hasOtherPayRole =
+    roleSet.has(Role.ADMIN) ||
+    roleSet.has(Role.MANAGER) ||
+    roleSet.has(Role.SPECIALIST) ||
+    roleSet.has(Role.TECH);
+  return !hasOtherPayRole;
+}
+
 /** 1C employee codes as stored on User (externalId and/or employeeCode). */
 function staffEmployeeCodes(user: {
   externalId?: string | null;
@@ -1801,7 +1835,10 @@ export class PayrollService {
     return { copied, skipped: 0 };
   }
 
-  async listStaffPaySummaries(clubId: string): Promise<StaffPaySummary[]> {
+  async listStaffPaySummaries(
+    clubId: string,
+    opts?: { excludeClubTrainerOnly?: boolean },
+  ): Promise<StaffPaySummary[]> {
     const users = await this.prisma.user.findMany({
       where: {
         clubId,
@@ -1824,15 +1861,18 @@ export class PayrollService {
       include: { roles: true },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
     });
+    const eligible = opts?.excludeClubTrainerOnly
+      ? users.filter((u) => !isClubTrainerOnlyPayrollSkip(u))
+      : users;
     const comps = await this.prisma.staffCompensation.findMany({
-      where: { clubId, userId: { in: users.map((u) => u.id) } },
+      where: { clubId, userId: { in: eligible.map((u) => u.id) } },
       orderBy: { effectiveFrom: 'desc' },
     });
     const latest = new Map<string, (typeof comps)[0]>();
     for (const c of comps) {
       if (!latest.has(c.userId)) latest.set(c.userId, c);
     }
-    return users.map((u) => {
+    return eligible.map((u) => {
       const c = latest.get(u.id);
       const profile = asPayProfile(c?.payProfile);
       const roles = u.roles.map((r) => r.role);
@@ -3022,7 +3062,9 @@ export class PayrollService {
     from: string,
     to: string,
   ): Promise<ClubPayrollReport> {
-    const staff = await this.listStaffPaySummaries(clubId);
+    const staff = await this.listStaffPaySummaries(clubId, {
+      excludeClubTrainerOnly: true,
+    });
     const periodFrom = new Date(`${from}T00:00:00`);
     const periodTo = new Date(`${to}T23:59:59`);
     const rows: ClubPayrollRow[] = await mapPool(

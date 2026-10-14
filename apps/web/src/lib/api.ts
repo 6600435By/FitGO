@@ -68,6 +68,26 @@ import {
 /** Empty / unset = same-origin /api (Next rewrite → Nest). Absolute URL for separate hosts. */
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? '').replace(/\/$/, '');
 
+function xlsxErrorMessage(text: string, status: number): string {
+  const trimmed = text.trim();
+  if (
+    !trimmed ||
+    trimmed.startsWith('<!DOCTYPE') ||
+    trimmed.startsWith('<!doctype') ||
+    trimmed.startsWith('<html')
+  ) {
+    return `Ошибка Excel (HTTP ${status})`;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { message?: unknown };
+    if (typeof parsed.message === 'string') return parsed.message;
+    if (Array.isArray(parsed.message)) return parsed.message.join('; ');
+  } catch {
+    /* plain text body */
+  }
+  return trimmed.length > 200 ? `Ошибка Excel (HTTP ${status})` : trimmed;
+}
+
 export interface AuthUser {
   id: string;
   externalId?: string;
@@ -2161,14 +2181,13 @@ export const api = {
     if (params.department) q.set('department', params.department);
     if (params.userId) q.set('userId', params.userId);
     if (params.includePay) q.set('includePay', '1');
-    const base = API_URL;
     const res = await fetch(
-      `${base}/super-admin/analytics/staff.xlsx?${q}`,
+      `${API_URL}/api/super-admin/analytics/staff.xlsx?${q}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(text || `HTTP ${res.status}`);
+      throw new Error(xlsxErrorMessage(text, res.status));
     }
     return res.blob();
   },
@@ -2954,14 +2973,13 @@ export const api = {
     });
     if (params.department) q.set('department', params.department);
     if (params.picture) q.set('picture', '1');
-    const base = API_URL;
     const res = await fetch(
-      `${base}/super-admin/payroll/club-summary.xlsx?${q}`,
+      `${API_URL}/api/super-admin/payroll/club-summary.xlsx?${q}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(text || `HTTP ${res.status}`);
+      throw new Error(xlsxErrorMessage(text, res.status));
     }
     return res.blob();
   },
