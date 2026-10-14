@@ -29,7 +29,7 @@ export default function SuperAdminPtTimesheetPage() {
     <div className="mx-auto max-w-4xl space-y-5 pb-8">
       <header>
         <h1 className="text-2xl font-semibold text-white">Табели ПТ → ЗП</h1>
-        <p className="text-sm text-slate-400">
+        <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
           Финальная проверка. Неоплаченное не в мотивации, кроме force-pay.
         </p>
       </header>

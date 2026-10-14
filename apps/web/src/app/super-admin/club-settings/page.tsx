@@ -85,7 +85,7 @@ export default function SuperAdminClubSettingsPage() {
         <h1 className="text-lg font-semibold text-white sm:text-2xl">
           Настройки клуба
         </h1>
-        <p className="text-xs text-slate-400 sm:text-sm">
+        <p className="mt-0.5 hidden text-xs text-slate-400 sm:block sm:text-sm">
           Брендинг и часы работы. Часы ограничивают смены в графике и участвуют в
           расчёте ЗП по отработанным часам.
         </p>

@@ -56,7 +56,7 @@ export default function SuperAdminModulesPage() {
     <div className="space-y-4">
       <div>
         <h2 className="text-xl font-semibold">Модули FitGO</h2>
-        <p className="mt-1 text-sm text-slate-400">
+        <p className="mt-1 hidden text-sm text-slate-400 sm:block">
           Включайте и выключайте поверхности по мере готовности. По умолчанию
           почти всё ON; магазин абонементов и wearables — OFF.
         </p>

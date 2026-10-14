@@ -607,7 +607,7 @@ export function AdminSpaWorkspace() {
       {tab === 'services' && (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm text-slate-400">
+            <p className="hidden text-sm text-slate-400 sm:block">
               Показаны только услуги с галочкой «Активна» в Каталоге SPA.
             </p>
             <button

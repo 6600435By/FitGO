@@ -211,9 +211,11 @@ export function AppShell({
     ? 'mx-auto w-full max-w-lg md:max-w-none'
     : 'mx-auto max-w-lg';
 
+  // Include notch / status bar: PWA standalone uses viewport-fit=cover +
+  // apple-mobile-web-app-status-bar-style=black-translucent.
   const headerH = adminChrome
-    ? '[--app-header-h:2.5rem]'
-    : '[--app-header-h:5.5rem]';
+    ? '[--app-header-h:calc(2.5rem+env(safe-area-inset-top,0px))]'
+    : '[--app-header-h:calc(5.5rem+env(safe-area-inset-top,0px))]';
 
   return (
     <div
@@ -234,7 +236,7 @@ export function AppShell({
       {adminChrome ? (
         <header
           className={cn(
-            'admin-chrome admin-chrome-bar sticky top-0 z-30 border-b border-slate-800 bg-slate-950/95 backdrop-blur',
+            'admin-chrome admin-chrome-bar sticky top-0 z-30 border-b border-slate-800 bg-slate-950/95 pt-[env(safe-area-inset-top,0px)] backdrop-blur',
             hideHeader && 'pointer-events-none invisible absolute',
           )}
         >
@@ -265,9 +267,11 @@ export function AppShell({
             {desktopTopNav ? (
               <div
                 className={cn(
-                  'min-w-0 flex-1 items-center justify-center gap-1',
+                  'min-w-0 flex-1 items-center gap-1 overflow-x-auto',
                   topNavAlways ? 'flex' : 'hidden md:flex',
-                  !bottomNavMdOnly && 'overflow-x-auto md:justify-start',
+                  bottomNavMdOnly
+                    ? 'justify-start md:justify-center'
+                    : 'md:justify-start',
                 )}
               >
                 {desktopTopNav}
@@ -302,7 +306,7 @@ export function AppShell({
       ) : (
         <header
           className={cn(
-            'admin-chrome sticky top-0 z-10 min-h-[var(--app-header-h)] border-b border-slate-800 bg-slate-950/90 px-4 py-4 backdrop-blur md:px-6',
+            'admin-chrome sticky top-0 z-10 min-h-[var(--app-header-h)] border-b border-slate-800 bg-slate-950/90 px-4 pb-4 pt-[calc(1rem+env(safe-area-inset-top,0px))] backdrop-blur md:px-6',
             hideHeader && 'pointer-events-none invisible absolute',
           )}
         >

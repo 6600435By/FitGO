@@ -243,15 +243,20 @@ export function DataFreshness({
   }
 
   // Super-admin / manager: date + ops details + compact button.
+  // Mobile: only «Данные на …» + refresh (hints clutter the narrow bar).
   return (
     <div className={`card !px-2 !py-1.5 text-xs leading-tight ${className}`}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className={`font-medium ${freshnessColor}`}>{dataLabel}</span>
+      <div className="flex items-center gap-x-2 gap-y-0.5">
+        <span className={`min-w-0 font-medium ${freshnessColor}`}>
+          {dataLabel}
+        </span>
         {status?.sourceLabel ? (
-          <span className="text-[var(--fg-muted)]">· {status.sourceLabel}</span>
+          <span className="hidden text-[var(--fg-muted)] sm:inline">
+            · {status.sourceLabel}
+          </span>
         ) : null}
         {status?.running ? (
-          <span className="text-sky-700">
+          <span className="hidden text-sky-700 sm:inline">
             Идёт обновление…
             {status.running.triggeredByName
               ? ` (${status.running.triggeredByName}, ${formatTime(status.running.startedAt)})`
@@ -272,7 +277,7 @@ export function DataFreshness({
         ) : null}
       </div>
       <p
-        className="mt-0.5 text-[10px] leading-snug text-[var(--fg-muted)]"
+        className="mt-0.5 hidden text-[10px] leading-snug text-[var(--fg-muted)] sm:block"
         title="Нажимайте, если в 1С только что прошла оплата или запись, а здесь её нет."
       >
         {hint}
@@ -281,7 +286,7 @@ export function DataFreshness({
         <p className="mt-0.5 text-[11px] text-red-600">{formatSyncError(err)}</p>
       ) : null}
       {status?.lastError ? (
-        <p className="mt-0.5 break-words text-[11px] text-red-600">
+        <p className="mt-0.5 hidden break-words text-[11px] text-red-600 sm:block">
           Ошибка: {formatSyncError(status.lastError)}
         </p>
       ) : null}

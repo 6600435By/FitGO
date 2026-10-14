@@ -267,7 +267,7 @@ export default function SuperAdminStaffPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold sm:text-xl md:text-2xl">Персонал</h2>
-          <p className="text-xs text-slate-400 sm:text-sm">
+          <p className="mt-0.5 hidden text-xs text-slate-400 sm:block sm:text-sm">
             Тренеры делятся на ГП, штат и клуб. Группы и ставки — на карточке,
             оттуда схема копируется на выбранные группы.
           </p>

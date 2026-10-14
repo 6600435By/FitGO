@@ -127,7 +127,7 @@ export default function SuperAdminHomePage() {
 
   return (
     <div className="space-y-2 sm:space-y-4">
-      <p className="text-xs text-slate-400 sm:text-sm">
+      <p className="hidden text-xs text-slate-400 sm:block sm:text-sm">
         Смена на сегодня, выручка и визиты с 1-го числа по {shortDate(data.asOf)}.
       </p>
 

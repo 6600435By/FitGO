@@ -307,7 +307,7 @@ export function DiscrepanciesWorkspace() {
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold">Нестыковки</h1>
-        <p className="text-sm text-slate-400">
+        <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
           Сегменты 1С, касса Webkassa, списания с истекающих пакетов и поздние
           записи ГП. Период до {DISCREPANCY_RETENTION_DAYS} дней.
         </p>

@@ -662,7 +662,7 @@ export function PayrollWorkspace({ mode }: Props) {
           <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">
             Расчёт ЗП
           </h1>
-          <p className="max-w-xl text-sm leading-relaxed text-slate-400">
+          <p className="mt-0.5 hidden max-w-xl text-sm leading-relaxed text-slate-400 sm:block">
             {mode === 'admin'
               ? 'Ваш расчёт за период по проверенным работам. Ставки настраивает супер-админ.'
               : 'Итог за период по проверенным работам. Ставки и % — в Staff.'}

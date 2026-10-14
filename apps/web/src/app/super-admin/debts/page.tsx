@@ -116,7 +116,7 @@ export default function SpecialistDebtsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Услуги по специалистам</h1>
-      <p className="text-sm text-slate-400">
+      <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
         Отчёт из 1С только по одному сотруднику. Варианты: один день или любой
         период до {MAX_DAYS} дней — без выгрузки по всему клубу.
       </p>

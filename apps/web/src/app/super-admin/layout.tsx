@@ -120,7 +120,7 @@ function GroupChip({
     <Link
       href={href}
       className={cn(
-        'shrink-0 rounded-lg px-2 py-1 text-[11px] font-medium transition sm:px-2.5 sm:text-xs',
+        'shrink-0 rounded-lg px-1.5 py-1 text-[10px] font-medium transition sm:px-2.5 sm:text-xs',
         active
           ? 'bg-fitgo-500/20 text-fitgo-300'
           : 'text-slate-400 hover:text-white',
@@ -144,13 +144,13 @@ function PageChip({
     <Link
       href={href}
       className={cn(
-        'min-w-0 flex-1 rounded-lg px-1 py-1.5 text-center text-[10px] font-medium leading-tight transition sm:flex-none sm:px-2.5 sm:text-xs',
+        'shrink-0 rounded-lg px-2 py-1.5 text-center text-[10px] font-medium leading-tight transition sm:px-2.5 sm:text-xs',
         active
           ? 'bg-fitgo-500/20 text-fitgo-300'
           : 'text-slate-400 hover:text-white',
       )}
     >
-      <span className="line-clamp-2">{label}</span>
+      <span className="whitespace-nowrap">{label}</span>
     </Link>
   );
 }
@@ -191,7 +191,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
   );
 
   const desktopTopNav = (
-    <div className="flex max-w-md items-center justify-center gap-0.5 sm:gap-1">
+    <div className="flex w-max min-w-0 items-center gap-0.5 sm:gap-1 md:mx-auto md:max-w-md md:justify-center">
       {GROUPS.map((g) => {
         const visible =
           g.id !== 'settings' ||
@@ -215,7 +215,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
 
   const mobileSubNav =
     pathname === '/super-admin' ? null : (
-      <div className="flex gap-0.5 overflow-x-auto md:justify-center">
+      <div className="-mx-0.5 flex gap-0.5 overflow-x-auto px-0.5 md:justify-center">
         {groupPages.map((item) => {
           const active =
             pathname === item.href || pathname.startsWith(`${item.href}/`);

@@ -380,7 +380,7 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-white">График смен</h1>
-          <p className="text-sm text-slate-400">
+          <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
             {mode === 'trainer'
               ? 'Дежурство ставит администратор. Здесь его можно только смотреть. Время до или после дежурства открывается в Расписании: клиенты записываются, но ставка за эти часы не начисляется.'
               : track === 'TRAINER'

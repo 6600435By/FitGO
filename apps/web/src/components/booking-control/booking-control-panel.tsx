@@ -766,7 +766,11 @@ export function BookingControlPanel({
       <>
       <div>
         <h1 className="text-xl font-semibold">{title}</h1>
-        <p className="text-sm text-slate-400">{subtitle}</p>
+        {subtitle ? (
+          <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
+            {subtitle}
+          </p>
+        ) : null}
       </div>
 
       {approvalSegments ? (

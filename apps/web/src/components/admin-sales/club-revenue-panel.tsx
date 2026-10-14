@@ -793,7 +793,7 @@ export function ClubRevenuePanel() {
     <div className="space-y-4">
       <div>
         <h1 className="text-xl font-semibold">Продажи клуба</h1>
-        <p className="text-sm text-slate-400">
+        <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
           Продажи · выручка · лицевые счета. Цифры в карточках — фильтры списка.
           Свежие дни — кнопка «Обновить из 1С» сверху страницы.
         </p>
