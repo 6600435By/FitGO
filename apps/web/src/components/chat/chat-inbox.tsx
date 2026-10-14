@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
 
-type ChatRole = 'client' | 'trainer' | 'admin';
+type ChatRole = 'client' | 'trainer' | 'admin' | 'staff';
 
 interface TrainerOption {
   id: string;
@@ -15,11 +15,20 @@ interface TrainerOption {
   lastName: string;
 }
 
+interface StaffOption {
+  id: string;
+  firstName: string;
+  lastName: string;
+  roleLabel: string;
+}
+
 interface ChatInboxProps {
   role: ChatRole;
   initialClientId?: string;
-  scope?: 'clients' | 'admin' | 'trainers';
+  scope?: 'clients' | 'admin' | 'trainers' | 'staff';
   directThread?: boolean;
+  /** Staff can pick a teammate and start a DM */
+  allowStaffChat?: boolean;
 }
 
 function initials(title: string) {
@@ -52,6 +61,7 @@ export function ChatInbox({
   initialClientId,
   scope,
   directThread = false,
+  allowStaffChat = role !== 'client',
 }: ChatInboxProps) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -65,6 +75,9 @@ export function ChatInbox({
   const [newChatKind, setNewChatKind] = useState<'admin' | 'trainer'>('admin');
   const [trainers, setTrainers] = useState<TrainerOption[]>([]);
   const [selectedTrainerId, setSelectedTrainerId] = useState('');
+  const [staffRecipients, setStaffRecipients] = useState<StaffOption[]>([]);
+  const [staffQuery, setStaffQuery] = useState('');
+  const [selectedStaffId, setSelectedStaffId] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialClientHandled = useRef(false);
 
@@ -136,6 +149,16 @@ export function ChatInbox({
       .then(setTrainers)
       .catch(() => setTrainers([]));
   }, [role]);
+
+  useEffect(() => {
+    if (!allowStaffChat || role === 'client') return;
+    const token = getToken();
+    if (!token) return;
+    api
+      .chatStaffRecipients(token)
+      .then(setStaffRecipients)
+      .catch(() => setStaffRecipients([]));
+  }, [allowStaffChat, role]);
 
   useEffect(() => {
     if (
@@ -241,6 +264,44 @@ export function ChatInbox({
     }
   };
 
+  const handleStartStaffChat = async () => {
+    const token = getToken();
+    if (!token) return;
+    if (!selectedStaffId) {
+      setError('Выберите сотрудника');
+      return;
+    }
+    setSending(true);
+    setError('');
+    try {
+      const conversation = await api.chatOpenStaff(token, selectedStaffId);
+      setShowNewChat(false);
+      setStaffQuery('');
+      setSelectedStaffId('');
+      setConversations((prev) => {
+        const exists = prev.some((c) => c.id === conversation.id);
+        return exists ? prev : [conversation, ...prev];
+      });
+      await openConversation(conversation.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось создать чат');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const filteredStaff = staffRecipients.filter((s) => {
+    if (!staffQuery.trim()) return true;
+    const q = staffQuery.trim().toLowerCase();
+    return (
+      `${s.firstName} ${s.lastName}`.toLowerCase().includes(q) ||
+      s.roleLabel.toLowerCase().includes(q)
+    );
+  });
+
+  const isClientRole = role === 'client';
+  const canStartNew = isClientRole || allowStaffChat;
+
   const activeConversation = conversations.find((c) => c.id === activeId);
 
   if (loading && !activeId && !directThread) {
@@ -265,7 +326,7 @@ export function ChatInbox({
         <>
           <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
             <h3 className="font-semibold">Чаты</h3>
-            {role === 'client' && (
+            {canStartNew ? (
               <button
                 type="button"
                 onClick={() => setShowNewChat((v) => !v)}
@@ -274,10 +335,10 @@ export function ChatInbox({
               >
                 <Plus className="h-5 w-5" />
               </button>
-            )}
+            ) : null}
           </div>
 
-          {showNewChat && role === 'client' && (
+          {showNewChat && isClientRole && (
             <div className="space-y-3 border-b border-slate-800 bg-slate-900/80 px-4 py-3">
               <div className="flex gap-2">
                 <button
@@ -321,6 +382,49 @@ export function ChatInbox({
                 type="button"
                 onClick={handleStartChat}
                 disabled={sending}
+                className="btn-primary w-full text-sm disabled:opacity-50"
+              >
+                Начать чат
+              </button>
+            </div>
+          )}
+
+          {showNewChat && allowStaffChat && !isClientRole && (
+            <div className="space-y-3 border-b border-slate-800 bg-slate-900/80 px-4 py-3">
+              <p className="text-sm text-slate-300">Написать сотруднику</p>
+              <input
+                className="input w-full text-sm"
+                placeholder="Поиск по имени или роли"
+                value={staffQuery}
+                onChange={(e) => setStaffQuery(e.target.value)}
+              />
+              <div className="max-h-48 space-y-1 overflow-y-auto">
+                {filteredStaff.length === 0 ? (
+                  <p className="text-xs text-slate-500">Никого не найдено</p>
+                ) : (
+                  filteredStaff.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setSelectedStaffId(s.id)}
+                      className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm ${
+                        selectedStaffId === s.id
+                          ? 'bg-fitgo-500/20 text-fitgo-200'
+                          : 'bg-slate-800/60 text-slate-200'
+                      }`}
+                    >
+                      <span>
+                        {s.firstName} {s.lastName}
+                      </span>
+                      <span className="text-xs text-slate-400">{s.roleLabel}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleStartStaffChat()}
+                disabled={sending || !selectedStaffId}
                 className="btn-primary w-full text-sm disabled:opacity-50"
               >
                 Начать чат

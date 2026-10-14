@@ -48,6 +48,7 @@ const ALL_NAV: SaNavItem[] = [
   },
   { href: '/super-admin/spa', label: 'SPA', group: 'club' },
   { href: '/super-admin/tasks', label: 'Задачи', group: 'control' },
+  { href: '/super-admin/messages', label: 'Сообщения', group: 'control' },
   {
     href: '/super-admin/review-queue',
     label: 'Контроль записей',

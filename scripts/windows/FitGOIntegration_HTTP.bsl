@@ -22,6 +22,7 @@
 //   GET  /v1/segments/config              → SegmentsConfigGET
 //   GET  /v1/segments/members             → SegmentsMembersGET (?key= | ?uuid=)
 //   GET  /v1/memberships/expiring         → MembershipsExpiringGET (?days=14)
+//   GET  /v1/clients/birthdays            → ClientsBirthdaysGET (?uuid= сегмент контрагентов)
 //
 // Продажи админов для ЗП: ночной sync FitGO читает FitGOAnalytics GET /sales
 // (FORMA_ANALYTICS_URL), не этот HTTP-сервис. Не вызывать FFS_ПродажиАдминов.erf.
@@ -29,15 +30,15 @@
 // В конфигураторе (пример freeze; consume/sale/debts — аналогично):
 //   Имя шаблона: freeze | consume-service | spa-service-sale | cleanup-broken-visits | SpecialistServiceDebts
 //                | group-session-roster | class-sessions | segments-config | segments-members
-//                | memberships-expiring | packages
+//                | memberships-expiring | packages | clients-birthdays
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
 //                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
 //                | /v1/group-session-roster | /v1/class-sessions | /v1/class-sessions/attendance
 //                | /v1/trainer-pt-sales | /v1/segments/config | /v1/segments/members
-//                | /v1/memberships/expiring | /v1/packages
+//                | /v1/memberships/expiring | /v1/packages | /v1/clients/birthdays
 //   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | ClassSessionsGET
 //                | TrainerPtSalesGET | SegmentsConfigGET | SegmentsMembersGET
-//                | MembershipsExpiringGET | PackagesGET
+//                | MembershipsExpiringGET | PackagesGET | ClientsBirthdaysGET
 //   Метод POST → ClassSessionAttendancePOST (шаблон /v1/class-sessions/attendance)
 //
 // У расширения снять флаг «Защита от опасных действий»: проведение документов
@@ -773,6 +774,22 @@
     КонецПопытки;
 
     Данные = FitGOIntegrationКлиенты.ИстекающиеАбонементыJSON(Дней);
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
+КонецФункции
+
+// GET /v1/clients/birthdays?uuid=<СегментыКонтрагентов>
+Функция ClientsBirthdaysGET(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    UuidСтр = "";
+    Попытка
+        UuidСтр = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("uuid")));
+    Исключение
+    КонецПопытки;
+
+    Данные = FitGOIntegrationКлиенты.ДниРожденияСегментаJSON(UuidСтр);
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
 КонецФункции
 

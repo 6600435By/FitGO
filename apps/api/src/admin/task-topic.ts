@@ -6,6 +6,8 @@ export type AdminTaskTopic =
   | 'membership'
   | 'installment'
   | 'manager'
+  | 'birthday'
+  | 'confirmation'
   | 'other';
 
 /** Display filter for auto / manager tasks. Legacy MANUAL stays in «Все». */
@@ -19,6 +21,8 @@ export function adminTaskTopic(input: {
   const client = input.clientName ?? '';
   if (source === 'MEMBERSHIP_EXPIRING') return 'membership';
   if (source === 'INSTALLMENT_PAYMENT') return 'installment';
+  if (source === 'BIRTHDAY') return 'birthday';
+  if (source === 'BOOKING_CONFIRM') return 'confirmation';
   if (source === 'MANAGER' || source === 'DISCREPANCY') return 'manager';
   if (
     source === 'STAFF_DEBT' ||

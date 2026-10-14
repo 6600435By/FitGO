@@ -13,6 +13,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { RenewalTaskSheet } from '@/components/admin/renewal-task-sheet';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { phoneTelHref } from '@/lib/phone';
 import { formatDate, formatDateTime } from '@/lib/utils';
 
 const STAGE_LABEL: Record<string, string> = {
@@ -24,16 +25,18 @@ const STAGE_LABEL: Record<string, string> = {
   LOST: 'Отказ',
 };
 
+type Group = 'all' | 'clients' | 'staff' | 'manager' | 'control';
+
 type Topic =
-  | 'today'
-  | 'manager'
-  | 'client_debt'
-  | 'staff_debt'
-  | 'installment'
   | 'membership'
+  | 'birthday'
+  | 'client_debt'
+  | 'installment'
+  | 'staff_debt'
   | 'group_approval'
   | 'spa_approval'
-  | 'pt_approval';
+  | 'pt_approval'
+  | 'confirmation';
 
 function isDueTodayOrOverdue(task: AdminTaskItem): boolean {
   if (task.status === AdminTaskStatus.DONE || task.status === AdminTaskStatus.CANCELLED) {
@@ -45,9 +48,20 @@ function isDueTodayOrOverdue(task: AdminTaskItem): boolean {
   return new Date(ref).getTime() <= now + 24 * 60 * 60 * 1000;
 }
 
+function CallButton({ phone }: { phone?: string }) {
+  const href = phoneTelHref(phone);
+  if (!href || !phone) return null;
+  return (
+    <a href={href} className="btn-primary flex w-full items-center justify-center text-center text-xs">
+      Позвонить {phone}
+    </a>
+  );
+}
+
 function AdminTasksInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const initialGroup = searchParams.get('group');
   const initialTopic = searchParams.get('topic');
   const initialTask = searchParams.get('task');
 
@@ -56,19 +70,50 @@ function AdminTasksInner() {
   const [spaPending, setSpaPending] = useState<GroupApprovalPendingTask[]>([]);
   const [ptPending, setPtPending] = useState<GroupApprovalPendingTask[]>([]);
   const [counters, setCounters] = useState<AdminRenewalCounters | null>(null);
-  const [topic, setTopic] = useState<Topic>(
+  const [skippedBirthdays, setSkippedBirthdays] = useState(0);
+  const resolvedTopic: Topic | null =
     initialTopic === 'membership' ||
-      initialTopic === 'staff_debt' ||
-      initialTopic === 'client_debt' ||
-      initialTopic === 'group_approval' ||
-      initialTopic === 'spa_approval' ||
-      initialTopic === 'pt_approval' ||
-      initialTopic === 'installment' ||
-      initialTopic === 'manager' ||
-      initialTopic === 'today'
+    initialTopic === 'birthday' ||
+    initialTopic === 'staff_debt' ||
+    initialTopic === 'client_debt' ||
+    initialTopic === 'group_approval' ||
+    initialTopic === 'spa_approval' ||
+    initialTopic === 'pt_approval' ||
+    initialTopic === 'installment' ||
+    initialTopic === 'confirmation'
       ? (initialTopic as Topic)
-      : 'today',
+      : null;
+  const groupFromTopic = (t: Topic | null): Group | null => {
+    if (!t) return null;
+    if (t === 'staff_debt') return 'staff';
+    if (
+      t === 'membership' ||
+      t === 'birthday' ||
+      t === 'client_debt' ||
+      t === 'installment'
+    ) {
+      return 'clients';
+    }
+    if (
+      t === 'group_approval' ||
+      t === 'spa_approval' ||
+      t === 'pt_approval' ||
+      t === 'confirmation'
+    ) {
+      return 'control';
+    }
+    return null;
+  };
+  const [group, setGroup] = useState<Group>(
+    initialGroup === 'clients' ||
+      initialGroup === 'staff' ||
+      initialGroup === 'manager' ||
+      initialGroup === 'control' ||
+      initialGroup === 'all'
+      ? (initialGroup as Group)
+      : (groupFromTopic(resolvedTopic) ?? 'all'),
   );
+  const [topic, setTopic] = useState<Topic | null>(resolvedTopic);
   const [openTaskId, setOpenTaskId] = useState<string | null>(initialTask);
   const [expandedDebtId, setExpandedDebtId] = useState<string | null>(null);
   const [debtLines, setDebtLines] = useState<Record<string, AdminDebtLine[]>>({});
@@ -95,6 +140,10 @@ function AdminTasksInner() {
       .adminRenewalCounters(token)
       .then(setCounters)
       .catch(() => setCounters(null));
+    api
+      .adminBirthdaySkipped(token)
+      .then((r) => setSkippedBirthdays(r.skipped ?? 0))
+      .catch(() => setSkippedBirthdays(0));
   };
 
   useEffect(() => {
@@ -103,13 +152,26 @@ function AdminTasksInner() {
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
-    if (topic === 'today') params.delete('topic');
-    else params.set('topic', topic);
+    if (group === 'all') params.delete('group');
+    else params.set('group', group);
+    if (topic) params.set('topic', topic);
+    else params.delete('topic');
     if (openTaskId) params.set('task', openTaskId);
     else params.delete('task');
     const qs = params.toString();
     router.replace(qs ? `/admin/tasks?${qs}` : '/admin/tasks', { scroll: false });
-  }, [topic, openTaskId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [group, topic, openTaskId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selectGroup = (next: Group) => {
+    setGroup(next);
+    setTopic(null);
+    setOpenTaskId(null);
+  };
+
+  const selectTopic = (next: Topic) => {
+    setTopic(next);
+    setOpenTaskId(null);
+  };
 
   const updateStatus = async (
     id: string,
@@ -222,6 +284,26 @@ function AdminTasksInner() {
     () => tasks.filter((t) => t.source === 'MEMBERSHIP_EXPIRING'),
     [tasks],
   );
+  const birthdayTasks = useMemo(
+    () =>
+      tasks.filter(
+        (t) =>
+          t.source === 'BIRTHDAY' &&
+          t.status !== AdminTaskStatus.DONE &&
+          t.status !== AdminTaskStatus.CANCELLED,
+      ),
+    [tasks],
+  );
+  const confirmationTasks = useMemo(
+    () =>
+      tasks.filter(
+        (t) =>
+          t.source === 'BOOKING_CONFIRM' &&
+          t.status !== AdminTaskStatus.DONE &&
+          t.status !== AdminTaskStatus.CANCELLED,
+      ),
+    [tasks],
+  );
 
   const counts = {
     manager: managerTasks.filter(isDueTodayOrOverdue).length,
@@ -229,21 +311,39 @@ function AdminTasksInner() {
     staff_debt: staffDebt.length,
     installment: installmentTasks.length,
     membership: counters?.callToday ?? membershipTasks.filter(isDueTodayOrOverdue).length,
+    birthday: birthdayTasks.length,
     group_approval: gpPending.length,
     spa_approval: spaPending.length,
     pt_approval: ptPending.length,
+    confirmation: confirmationTasks.length,
   };
 
-  const filters: { id: Topic; label: string; count?: number }[] = [
-    { id: 'today', label: 'Сегодня' },
-    { id: 'manager', label: 'От руководителя', count: counts.manager },
-    { id: 'client_debt', label: 'Долги клиентов', count: counts.client_debt },
-    { id: 'staff_debt', label: 'Долги сотрудников', count: counts.staff_debt },
+  const clientsTotal =
+    counts.membership + counts.birthday + counts.client_debt + counts.installment;
+  const controlTotal =
+    counts.group_approval + counts.spa_approval + counts.pt_approval + counts.confirmation;
+  const allTotal = clientsTotal + counts.staff_debt + counts.manager + controlTotal;
+
+  const groupFilters: { id: Group; label: string; count: number }[] = [
+    { id: 'all', label: 'Все', count: allTotal },
+    { id: 'clients', label: 'Клиенты', count: clientsTotal },
+    { id: 'staff', label: 'Персонал', count: counts.staff_debt },
+    { id: 'manager', label: 'Руководитель', count: counts.manager },
+    { id: 'control', label: 'Контроль', count: controlTotal },
+  ];
+
+  const clientSub: { id: Topic; label: string; count: number }[] = [
+    { id: 'membership', label: 'По сроку', count: counts.membership },
+    { id: 'birthday', label: 'Дни рождения', count: counts.birthday },
+    { id: 'client_debt', label: 'Долги', count: counts.client_debt },
     { id: 'installment', label: 'Рассрочки', count: counts.installment },
-    { id: 'membership', label: 'Абонементы', count: counts.membership },
+  ];
+
+  const controlSub: { id: Topic; label: string; count: number }[] = [
     { id: 'group_approval', label: 'ГП', count: counts.group_approval },
-    { id: 'spa_approval', label: 'SPA', count: counts.spa_approval },
     { id: 'pt_approval', label: 'ПТ', count: counts.pt_approval },
+    { id: 'spa_approval', label: 'SPA', count: counts.spa_approval },
+    { id: 'confirmation', label: 'Подтверждения', count: counts.confirmation },
   ];
 
   const renderPendingQueue = (
@@ -325,6 +425,7 @@ function AdminTasksInner() {
                 </div>
               </div>
             </button>
+            <CallButton phone={task.phone} />
             {expandedDebtId === task.id ? (
               <div className="space-y-2 border-t border-slate-700/50 pt-2">
                 {debtLoadingId === task.id ? (
@@ -419,9 +520,7 @@ function AdminTasksInner() {
             ) : (
               <p className="text-xs text-slate-500">Срок сегодня</p>
             )}
-            {task.phone ? (
-              <p className="text-xs text-slate-500">{task.phone}</p>
-            ) : null}
+            <CallButton phone={task.phone} />
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
@@ -523,10 +622,228 @@ function AdminTasksInner() {
     );
   };
 
+  const renderBirthdays = () => {
+    if (birthdayTasks.length === 0) {
+      return (
+        <div className="space-y-2">
+          <p className="text-slate-400">Нет дней рождения на сегодня</p>
+          {skippedBirthdays > 0 ? (
+            <p className="text-xs text-slate-500">
+              Ещё {skippedBirthdays} сегодня, не были в клубе больше 2 лет
+            </p>
+          ) : null}
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-3">
+        {skippedBirthdays > 0 ? (
+          <p className="text-xs text-slate-500">
+            Ещё {skippedBirthdays} сегодня, не были в клубе больше 2 лет
+          </p>
+        ) : null}
+        <ul className="space-y-3">
+          {birthdayTasks.map((task) => (
+            <li key={task.id} className="card space-y-2">
+              <p className="font-medium">
+                {task.title.replace(/^День рождения:\s*/i, '')}
+              </p>
+              <p className="text-sm text-slate-400">Поздравить сегодня</p>
+              <CallButton phone={task.phone} />
+              <button
+                type="button"
+                className="btn-primary w-full text-xs"
+                onClick={() => void updateStatus(task.id, AdminTaskStatus.DONE)}
+              >
+                Поздравили
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  };
+
+  const renderConfirmations = () => {
+    if (confirmationTasks.length === 0) {
+      return <p className="text-slate-400">Нет подтверждений на завтра</p>;
+    }
+    return (
+      <ul className="space-y-3">
+        {confirmationTasks.map((task) => {
+          const sessionKey =
+            typeof task.sessionKey === 'string' ? task.sessionKey : undefined;
+          return (
+            <li key={task.id} className="card space-y-2">
+              <p className="font-medium">
+                {task.title.replace(/^Подтверждение:\s*/i, '')}
+              </p>
+              <p className="text-sm text-slate-400">
+                {task.membershipName ?? 'Запись'}
+                {task.dueAt ? ` · ${formatDateTime(task.dueAt)}` : ''}
+              </p>
+              <CallButton phone={task.phone} />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-primary flex-1 text-xs"
+                  onClick={() => void updateStatus(task.id, AdminTaskStatus.DONE)}
+                >
+                  Подтвердил
+                </button>
+                {sessionKey ? (
+                  <Link
+                    href={`/admin/booking-control?sessionKey=${encodeURIComponent(sessionKey)}`}
+                    className="btn-secondary inline-flex flex-1 items-center justify-center text-xs"
+                  >
+                    К записи
+                  </Link>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  };
+
+  const renderMembership = () => (
+    <>
+      {counters ? (
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          <div className="card py-3">
+            <p className="stat-value text-xl">{counters.callToday}</p>
+            <p className="stat-label">К звонку сегодня</p>
+          </div>
+          <div className="card py-3">
+            <p className="stat-value text-xl">{counters.inProgress}</p>
+            <p className="stat-label">В работе</p>
+          </div>
+          <div className="card py-3">
+            <p className="stat-value text-xl">{counters.renewed}</p>
+            <p className="stat-label">Продлили (мес.)</p>
+          </div>
+          <div className="card py-3">
+            <p className="stat-value text-xl">{counters.lost}</p>
+            <p className="stat-label">Отказ (мес.)</p>
+          </div>
+        </div>
+      ) : null}
+      {membershipTasks.length === 0 ? (
+        <p className="text-slate-400">Нет задач по абонементам</p>
+      ) : (
+        <ul className="space-y-3">
+          {membershipTasks.map((task) => (
+            <li key={task.id}>
+              <button
+                type="button"
+                className="card w-full text-left transition hover:border-fitgo-500/40"
+                onClick={() => setOpenTaskId(task.id)}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-medium">
+                      {task.title.replace(/^Абонемент истекает:\s*/i, '')}
+                    </p>
+                    <p className="text-sm text-slate-400">
+                      {task.membershipName ?? 'Абонемент'}
+                      {task.validUntil
+                        ? ` · до ${formatDate(task.validUntil)}`
+                        : ''}
+                      {task.phone ? ` · ${task.phone}` : ''}
+                    </p>
+                    <p className="mt-1 text-xs text-amber-300/90">
+                      {STAGE_LABEL[task.stage ?? 'NEW'] ?? task.stage}
+                      {task.stage === 'WILL_RENEW' ? ' · ждём покупку' : ''}
+                      {task.assignee
+                        ? ` · ${task.assignee.firstName}`
+                        : ' · свободна'}
+                    </p>
+                  </div>
+                  <div className="text-right text-sm">
+                    {task.daysLeft != null ? (
+                      <p className="text-amber-400">{task.daysLeft} дн.</p>
+                    ) : null}
+                    <p className="text-slate-500">открыть ›</p>
+                  </div>
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+
+  const renderAllHub = () => (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {(
+        [
+          [
+            'clients' as const,
+            'Клиенты',
+            clientsTotal,
+            `По сроку ${counts.membership} · ДР ${counts.birthday} · Долги ${counts.client_debt} · Рассрочки ${counts.installment}`,
+          ],
+          [
+            'staff' as const,
+            'Персонал',
+            counts.staff_debt,
+            `Долги сотрудников ${counts.staff_debt}`,
+          ],
+          [
+            'manager' as const,
+            'Руководитель',
+            counts.manager,
+            `Задач ${counts.manager}`,
+          ],
+          [
+            'control' as const,
+            'Контроль',
+            controlTotal,
+            `ГП ${counts.group_approval} · ПТ ${counts.pt_approval} · SPA ${counts.spa_approval} · Подтв. ${counts.confirmation}`,
+          ],
+        ] as const
+      ).map(([id, label, count, detail]) => (
+        <button
+          key={id}
+          type="button"
+          className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-3 text-left transition hover:border-fitgo-500/40"
+          onClick={() => selectGroup(id)}
+        >
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="font-medium">{label}</p>
+            <p className="stat-value text-lg leading-none">{count}</p>
+          </div>
+          <p className="mt-1 text-[11px] text-slate-400">{detail}</p>
+        </button>
+      ))}
+    </div>
+  );
+
+  const showSub =
+    group === 'clients'
+      ? clientSub
+      : group === 'control'
+        ? controlSub
+        : group === 'staff'
+          ? ([{ id: 'staff_debt' as Topic, label: 'Долги', count: counts.staff_debt }] as const)
+          : null;
+
+  const activeTopic =
+    topic ??
+    (group === 'staff'
+      ? 'staff_debt'
+      : group === 'clients'
+        ? null
+        : group === 'control'
+          ? null
+          : null);
+
   return (
     <div className="mx-auto max-w-5xl space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-slate-400">Очередь и абонементы</p>
+        <p className="text-sm text-slate-400">Очередь на сегодня</p>
         <button
           type="button"
           className="btn-secondary text-xs"
@@ -541,142 +858,95 @@ function AdminTasksInner() {
       </div>
 
       <div className="flex gap-1.5 overflow-x-auto pb-1">
-        {filters.map((item) => (
+        {groupFilters.map((item) => (
           <button
             key={item.id}
             type="button"
-            onClick={() => setTopic(item.id)}
+            onClick={() => selectGroup(item.id)}
             className={
-              topic === item.id
+              group === item.id
                 ? 'btn-primary shrink-0 px-3 py-2 text-xs'
                 : 'btn-secondary shrink-0 px-3 py-2 text-xs'
             }
           >
             {item.label}
-            {item.count != null && item.count > 0 ? ` (${item.count})` : ''}
+            {item.count > 0 ? ` (${item.count})` : ''}
           </button>
         ))}
       </div>
 
-      {topic === 'today' ? (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {(
-            [
-              ['manager', 'От руководителя', counts.manager],
-              ['client_debt', 'Долги клиентов', counts.client_debt],
-              ['staff_debt', 'Долги сотрудников', counts.staff_debt],
-              ['installment', 'Рассрочки', counts.installment],
-              ['membership', 'Абонементы', counts.membership],
-              ['group_approval', 'ГП', counts.group_approval],
-              ['spa_approval', 'SPA', counts.spa_approval],
-              ['pt_approval', 'ПТ', counts.pt_approval],
-            ] as const
-          ).map(([id, label, count]) => (
+      {showSub ? (
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          {showSub.map((item) => (
             <button
-              key={id}
+              key={item.id}
               type="button"
-              className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2.5 text-left transition hover:border-fitgo-500/40"
-              onClick={() => setTopic(id)}
+              onClick={() => selectTopic(item.id)}
+              className={
+                activeTopic === item.id
+                  ? 'btn-primary shrink-0 px-3 py-2 text-xs'
+                  : 'btn-secondary shrink-0 px-3 py-2 text-xs'
+              }
             >
-              <p className="stat-value text-lg leading-none">{count}</p>
-              <p className="mt-1 text-[11px] text-slate-400">{label}</p>
+              {item.label}
+              {item.count > 0 ? ` (${item.count})` : ''}
             </button>
           ))}
         </div>
       ) : null}
 
-      {topic === 'manager' ? renderManager() : null}
-      {topic === 'client_debt'
-        ? renderDebtList(clientDebt, 'Нет долгов клиентов')
+      {group === 'all' ? renderAllHub() : null}
+      {group === 'manager' ? renderManager() : null}
+      {group === 'staff' || activeTopic === 'staff_debt'
+        ? group === 'staff' && (!topic || topic === 'staff_debt')
+          ? renderDebtList(staffDebt, 'Нет долгов сотрудников')
+          : null
         : null}
-      {topic === 'staff_debt'
-        ? renderDebtList(staffDebt, 'Нет долгов сотрудников')
-        : null}
-      {topic === 'installment' ? renderInstallments() : null}
 
-      {topic === 'membership' ? (
-        <>
-          {counters ? (
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              <div className="card py-3">
-                <p className="stat-value text-xl">{counters.callToday}</p>
-                <p className="stat-label">К звонку сегодня</p>
-              </div>
-              <div className="card py-3">
-                <p className="stat-value text-xl">{counters.inProgress}</p>
-                <p className="stat-label">В работе</p>
-              </div>
-              <div className="card py-3">
-                <p className="stat-value text-xl">{counters.renewed}</p>
-                <p className="stat-label">Продлили (мес.)</p>
-              </div>
-              <div className="card py-3">
-                <p className="stat-value text-xl">{counters.lost}</p>
-                <p className="stat-label">Отказ (мес.)</p>
-              </div>
-            </div>
-          ) : null}
-          {membershipTasks.length === 0 ? (
-            <p className="text-slate-400">Нет задач по абонементам</p>
-          ) : (
-            <ul className="space-y-3">
-              {membershipTasks.map((task) => (
-                <li key={task.id}>
-                  <button
-                    type="button"
-                    className="card w-full text-left transition hover:border-fitgo-500/40"
-                    onClick={() => setOpenTaskId(task.id)}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="font-medium">
-                          {task.title.replace(/^Абонемент истекает:\s*/i, '')}
-                        </p>
-                        <p className="text-sm text-slate-400">
-                          {task.membershipName ?? 'Абонемент'}
-                          {task.validUntil
-                            ? ` · до ${formatDate(task.validUntil)}`
-                            : ''}
-                          {task.phone ? ` · ${task.phone}` : ''}
-                        </p>
-                        <p className="mt-1 text-xs text-amber-300/90">
-                          {STAGE_LABEL[task.stage ?? 'NEW'] ?? task.stage}
-                          {task.stage === 'WILL_RENEW' ? ' · ждём покупку' : ''}
-                          {task.assignee
-                            ? ` · ${task.assignee.firstName}`
-                            : ' · свободна'}
-                        </p>
-                      </div>
-                      <div className="text-right text-sm">
-                        {task.daysLeft != null ? (
-                          <p className="text-amber-400">{task.daysLeft} дн.</p>
-                        ) : null}
-                        <p className="text-slate-500">открыть ›</p>
-                      </div>
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </>
+      {group === 'clients' && !activeTopic ? (
+        <div className="grid grid-cols-2 gap-2">
+          {clientSub.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2.5 text-left transition hover:border-fitgo-500/40"
+              onClick={() => selectTopic(item.id)}
+            >
+              <p className="stat-value text-lg leading-none">{item.count}</p>
+              <p className="mt-1 text-[11px] text-slate-400">{item.label}</p>
+            </button>
+          ))}
+        </div>
       ) : null}
 
-      {topic === 'group_approval'
-        ? renderPendingQueue(
-            gpPending,
-            'Нет ГП на подтверждении',
-            'ГП',
-          )
+      {group === 'control' && !activeTopic ? (
+        <div className="grid grid-cols-2 gap-2">
+          {controlSub.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2.5 text-left transition hover:border-fitgo-500/40"
+              onClick={() => selectTopic(item.id)}
+            >
+              <p className="stat-value text-lg leading-none">{item.count}</p>
+              <p className="mt-1 text-[11px] text-slate-400">{item.label}</p>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {activeTopic === 'client_debt' ? renderDebtList(clientDebt, 'Нет долгов клиентов') : null}
+      {activeTopic === 'installment' ? renderInstallments() : null}
+      {activeTopic === 'membership' ? renderMembership() : null}
+      {activeTopic === 'birthday' ? renderBirthdays() : null}
+      {activeTopic === 'confirmation' ? renderConfirmations() : null}
+      {activeTopic === 'group_approval'
+        ? renderPendingQueue(gpPending, 'Нет ГП на подтверждении', 'ГП')
         : null}
-      {topic === 'spa_approval'
-        ? renderPendingQueue(
-            spaPending,
-            'Нет SPA на подтверждении',
-            'SPA',
-          )
+      {activeTopic === 'spa_approval'
+        ? renderPendingQueue(spaPending, 'Нет SPA на подтверждении', 'SPA')
         : null}
-      {topic === 'pt_approval'
+      {activeTopic === 'pt_approval'
         ? renderPendingQueue(ptPending, 'Нет ПТ на контроле', 'ПТ')
         : null}
 

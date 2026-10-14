@@ -97,9 +97,19 @@ export default function AdminNotificationsPage() {
       </div>
 
       {tab === 'clients' ? (
-        <ChatInbox key="clients" role="admin" scope="clients" />
+        <ChatInbox
+          key="clients"
+          role="admin"
+          scope="clients"
+          allowStaffChat={false}
+        />
       ) : tab === 'trainers' ? (
-        <ChatInbox key="trainers" role="admin" scope="trainers" />
+        <ChatInbox
+          key="trainers"
+          role="admin"
+          scope="trainers"
+          allowStaffChat
+        />
       ) : error ? (
         <p className="text-red-400">{error}</p>
       ) : (

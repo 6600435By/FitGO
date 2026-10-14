@@ -1508,7 +1508,10 @@ export const api = {
       token,
     ),
 
-  chatConversations: (token: string, scope?: 'clients' | 'admin' | 'trainers') => {
+  chatConversations: (
+    token: string,
+    scope?: 'clients' | 'admin' | 'trainers' | 'staff',
+  ) => {
     const query = scope ? `?scope=${scope}` : '';
     return request<ConversationSummary[]>(
       `/chat/conversations${query}`,
@@ -1520,12 +1523,28 @@ export const api = {
   chatUnreadCount: (token: string) =>
     request<{ chat: number }>('/chat/unread-count', {}, token),
 
+  chatStaffRecipients: (token: string) =>
+    request<
+      Array<{
+        id: string;
+        firstName: string;
+        lastName: string;
+        roleLabel: string;
+      }>
+    >('/chat/staff-recipients', {}, token),
+
   chatOpenTrainerAdmin: (token: string) =>
     request<ConversationSummary>(
       '/chat/conversations/trainer-admin',
       { method: 'POST' },
       token,
     ),
+
+  chatOpenStaff: (token: string, peerId: string) =>
+    request<ConversationSummary>('/chat/conversations/staff', {
+      method: 'POST',
+      body: JSON.stringify({ peerId }),
+    }, token),
 
   chatCreateConversation: (
     token: string,
@@ -1814,6 +1833,13 @@ export const api = {
 
   adminRenewalCounters: (token: string) =>
     request<AdminRenewalCounters>('/admin/tasks/renewals/counters', {}, token),
+
+  adminBirthdaySkipped: (token: string) =>
+    request<{ skipped: number; dayKey: string }>(
+      '/admin/tasks/birthdays/skipped',
+      {},
+      token,
+    ),
 
   adminRefreshRenewals: (token: string) =>
     request<{ created: number; closedRenewed: number; closedLost: number }>(

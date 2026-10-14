@@ -51,6 +51,11 @@ export class AdminController {
     return this.adminService.getRenewalCounters(user);
   }
 
+  @Get('tasks/birthdays/skipped')
+  getBirthdaySkipped(@CurrentUser() user: JwtPayload) {
+    return this.adminService.getBirthdaySkipped(user);
+  }
+
   @Post('tasks/renewals/refresh')
   refreshRenewals(@CurrentUser() user: JwtPayload) {
     return this.adminService.refreshRenewals(user);

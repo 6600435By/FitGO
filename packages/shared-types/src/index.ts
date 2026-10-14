@@ -794,7 +794,7 @@ export interface NotificationItem {
 
 export interface ConversationSummary {
   id: string;
-  kind: 'ADMIN' | 'TRAINER' | 'TRAINER_ADMIN';
+  kind: 'ADMIN' | 'TRAINER' | 'TRAINER_ADMIN' | 'STAFF';
   title: string;
   subtitle?: string;
   clientId: string;
@@ -802,6 +802,14 @@ export interface ConversationSummary {
   lastMessage?: string;
   lastMessageAt: string;
   unreadCount: number;
+}
+
+export interface ChatStaffRecipient {
+  id: string;
+  firstName: string;
+  lastName: string;
+  /** ADMIN | TRAINER | SPECIALIST | MANAGER | SUPER_ADMIN | TECH */
+  roleLabel: string;
 }
 
 export interface ChatMessageItem {
@@ -1064,7 +1072,7 @@ export interface AdminTaskItem {
   status: AdminTaskStatus;
   dueAt?: string;
   completedAt?: string;
-  /** MANUAL | MANAGER | CLIENT_DEBT | STAFF_DEBT | DEBT_OVERDUE | MEMBERSHIP_EXPIRING | INSTALLMENT_PAYMENT */
+  /** MANUAL | MANAGER | CLIENT_DEBT | STAFF_DEBT | DEBT_OVERDUE | MEMBERSHIP_EXPIRING | INSTALLMENT_PAYMENT | BIRTHDAY | BOOKING_CONFIRM */
   source?: string;
   /** Display filter */
   topic?:
@@ -1073,6 +1081,8 @@ export interface AdminTaskItem {
     | 'membership'
     | 'installment'
     | 'manager'
+    | 'birthday'
+    | 'confirmation'
     | 'other';
   assignee?: { id: string; firstName: string; lastName: string };
   createdBy?: { id: string; firstName: string; lastName: string };
@@ -1110,6 +1120,8 @@ export interface AdminTaskItem {
   overdueDays?: number;
   templateName?: string;
   saleNumber?: string;
+  /** BOOKING_CONFIRM → booking-control deep link */
+  sessionKey?: string;
 }
 
 export interface AdminDebtLine {

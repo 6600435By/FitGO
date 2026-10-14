@@ -7,7 +7,7 @@ import { getToken, getUser } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
 import { ChatInbox } from '@/components/chat/chat-inbox';
 
-type MessagesTab = 'clients' | 'alerts' | 'admin';
+type MessagesTab = 'clients' | 'alerts' | 'admin' | 'team';
 
 const CANCELLATION_TITLES = new Set([
   'Отмена группового занятия',
@@ -90,7 +90,18 @@ export default function TrainerMessagesPage() {
               : 'bg-slate-800 text-slate-400'
           }`}
         >
-          Чат с админом
+          Админ
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('team')}
+          className={`flex-1 rounded-full px-2 py-2 text-sm ${
+            tab === 'team'
+              ? 'bg-fitgo-500 text-white'
+              : 'bg-slate-800 text-slate-400'
+          }`}
+        >
+          Команда
         </button>
         <button
           type="button"
@@ -111,9 +122,18 @@ export default function TrainerMessagesPage() {
           role="trainer"
           scope="clients"
           initialClientId={initialClientId}
+          allowStaffChat={false}
         />
       ) : tab === 'admin' ? (
-        <ChatInbox key="admin" role="trainer" scope="admin" directThread />
+        <ChatInbox
+          key="admin"
+          role="trainer"
+          scope="admin"
+          directThread
+          allowStaffChat={false}
+        />
+      ) : tab === 'team' ? (
+        <ChatInbox key="team" role="trainer" scope="staff" allowStaffChat />
       ) : error ? (
         <p className="text-red-400">{error}</p>
       ) : alertItems.length === 0 ? (

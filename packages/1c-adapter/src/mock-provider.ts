@@ -409,6 +409,19 @@ export class Mock1CProvider implements IFitnessClubProvider {
     };
   }
 
+  async getSegmentBirthdays(_uuid?: string) {
+    return [
+      {
+        externalId: 'mock-bday-1',
+        firstName: 'Анна',
+        lastName: 'Иванова',
+        phone: '375291112233',
+        lastVisitAt: new Date().toISOString().slice(0, 10),
+        hasActiveMembership: true,
+      },
+    ];
+  }
+
   async getSegmentMembers(input: { key?: string; uuid?: string }) {
     const key = input.key ?? '';
     if (key.startsWith('nom.')) {

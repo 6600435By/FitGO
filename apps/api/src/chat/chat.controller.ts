@@ -15,11 +15,22 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { ChatService } from './chat.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
+import { CreateStaffConversationDto } from './dto/create-staff-conversation.dto';
 import { SendChatMessageDto } from './dto/send-chat-message.dto';
+
+const CHAT_ROLES = [
+  UserRole.CLIENT,
+  UserRole.TRAINER,
+  UserRole.SPECIALIST,
+  UserRole.ADMIN,
+  UserRole.MANAGER,
+  UserRole.SUPER_ADMIN,
+  UserRole.TECH,
+] as const;
 
 @Controller('chat')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.CLIENT, UserRole.TRAINER, UserRole.SPECIALIST, UserRole.ADMIN)
+@Roles(...CHAT_ROLES)
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
@@ -31,9 +42,14 @@ export class ChatController {
   @Get('conversations')
   listConversations(
     @CurrentUser() user: JwtPayload,
-    @Query('scope') scope?: 'clients' | 'admin' | 'trainers',
+    @Query('scope') scope?: 'clients' | 'admin' | 'trainers' | 'staff',
   ) {
     return this.chatService.listConversations(user, scope);
+  }
+
+  @Get('staff-recipients')
+  listStaffRecipients(@CurrentUser() user: JwtPayload) {
+    return this.chatService.listStaffRecipients(user);
   }
 
   @Post('conversations')
@@ -43,6 +59,22 @@ export class ChatController {
     @Body() dto: CreateConversationDto,
   ) {
     return this.chatService.createConversation(user, dto.kind, dto.trainerId);
+  }
+
+  @Post('conversations/staff')
+  @Roles(
+    UserRole.TRAINER,
+    UserRole.SPECIALIST,
+    UserRole.ADMIN,
+    UserRole.MANAGER,
+    UserRole.SUPER_ADMIN,
+    UserRole.TECH,
+  )
+  openStaffChat(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateStaffConversationDto,
+  ) {
+    return this.chatService.getOrCreateStaffConversation(user, dto.peerId);
   }
 
   @Post('conversations/trainer-admin')

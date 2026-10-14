@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { phoneTelHref } from '@/lib/phone';
 import { formatDate, formatDateTime } from '@/lib/utils';
 
 const STAGE_LABEL: Record<string, string> = {
@@ -21,12 +22,6 @@ const STAGE_LABEL: Record<string, string> = {
   RENEWED: 'Продлил',
   LOST: 'Не продлевает',
 };
-
-function phoneHref(phone?: string) {
-  if (!phone) return undefined;
-  const digits = phone.replace(/\D/g, '');
-  return digits ? `tel:+${digits}` : undefined;
-}
 
 function daysFromNow(n: number) {
   const d = new Date();
@@ -119,7 +114,7 @@ export function RenewalTaskSheet({
   }
 
   const closed = detail.stage === 'RENEWED' || detail.stage === 'LOST';
-  const tel = phoneHref(detail.phone);
+  const tel = phoneTelHref(detail.phone);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end md:items-stretch md:justify-end bg-black/50">

@@ -446,6 +446,8 @@ enum ConversationKind {
   ADMIN
   TRAINER
   TRAINER_ADMIN
+  /// Staff↔staff DM (clientId + trainerId = the two participants, ordered by id)
+  STAFF
 }
 
 model Club {

@@ -184,6 +184,10 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     return this.fitgo.getSegmentMembers?.(input) ?? Promise.resolve(null);
   }
 
+  getSegmentBirthdays(uuid?: string) {
+    return this.fitgo.getSegmentBirthdays?.(uuid) ?? Promise.resolve([]);
+  }
+
   getVisits(externalId: string, period?: VisitPeriod): Promise<Visit[]> {
     return this.fitgo.getVisits(externalId, period);
   }

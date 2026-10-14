@@ -592,6 +592,8 @@ export class AdminService {
         'CLIENT_DEBT',
         'STAFF_DEBT',
         'INSTALLMENT_PAYMENT',
+        'BIRTHDAY',
+        'BOOKING_CONFIRM',
       ] as string[],
     };
 
@@ -856,6 +858,25 @@ export class AdminService {
       });
     }
     return this.getTaskDetail(user, taskId);
+  }
+
+  async getBirthdaySkipped(user: JwtPayload) {
+    const clubId = requireClubId(user);
+    const dayKey = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Minsk',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+    const skipped = await this.prisma.adminTask.count({
+      where: {
+        clubId,
+        source: 'BIRTHDAY',
+        status: PrismaAdminTaskStatus.CANCELLED,
+        dedupeKey: { startsWith: `birthday-skip:`, endsWith: `:${dayKey}` },
+      },
+    });
+    return { skipped, dayKey };
   }
 
   async getRenewalCounters(user: JwtPayload) {
@@ -1195,6 +1216,8 @@ export class AdminService {
                 'CLIENT_DEBT',
                 'STAFF_DEBT',
                 'INSTALLMENT_PAYMENT',
+                'BIRTHDAY',
+                'BOOKING_CONFIRM',
               ],
             },
           },
@@ -1404,6 +1427,8 @@ export class AdminService {
         typeof meta.templateName === 'string' ? meta.templateName : undefined,
       saleNumber:
         typeof meta.number === 'string' ? meta.number : undefined,
+      sessionKey:
+        typeof meta.sessionKey === 'string' ? meta.sessionKey : undefined,
     };
   }
 

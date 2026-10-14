@@ -651,6 +651,42 @@ export class FitgoHttpProvider {
     }
   }
 
+  async getSegmentBirthdays(uuid?: string): Promise<
+    import('./types').FitgoBirthdayRow[]
+  > {
+    const q = new URLSearchParams();
+    if (uuid?.trim()) q.set('uuid', uuid.trim());
+    try {
+      const data = await this.request<{
+        found?: boolean;
+        data?: Array<{
+          externalId?: string;
+          firstName?: string;
+          lastName?: string;
+          phone?: string;
+          lastVisitAt?: string;
+          hasActiveMembership?: boolean;
+        }>;
+      }>(
+        `/clients/birthdays${q.toString() ? `?${q.toString()}` : ''}`,
+        { timeoutMs: 60_000 },
+      );
+      if (!data || !Array.isArray(data.data)) return [];
+      return data.data
+        .filter((row) => row.externalId)
+        .map((row) => ({
+          externalId: String(row.externalId),
+          firstName: row.firstName ?? '',
+          lastName: row.lastName ?? '',
+          phone: row.phone || undefined,
+          lastVisitAt: row.lastVisitAt || undefined,
+          hasActiveMembership: row.hasActiveMembership === true,
+        }));
+    } catch {
+      return [];
+    }
+  }
+
   async getExpiringMemberships(days = 14): Promise<
     import('./types').FitgoExpiringMembershipRow[]
   > {

@@ -1,11 +1,21 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AdminTaskStatus, Prisma, Role } from '@prisma/client';
+import {
+  AdminTaskStatus,
+  OnexClassKind,
+  OnexClassMemberAttendance,
+  OnexClassStatus,
+  Prisma,
+  Role,
+  SpaBookingStatus,
+} from '@prisma/client';
 import {
   FitgoAnalyticsHttpProvider,
+  type FitgoBirthdayRow,
   type FitgoExpiringMembershipRow,
   type FitgoInstallmentSale,
 } from '@fitgo/1c-adapter';
+import { fitgoSessionKey, onexSessionKey } from '@fitgo/shared-types';
 import {
   isCollectibleClientDebt,
   isStaffDebtorName,
@@ -23,6 +33,8 @@ const MAX_NO_ANSWER = 2;
 const NO_ANSWER_RETRY_DAYS = 2;
 const LOST_AFTER_DAYS = 7;
 const REFRESH_MIN_MS = 30 * 60 * 1000;
+const BIRTHDAY_SEGMENT_UUID = '81167085-c20c-362e-11eb-03e61ea82c5b';
+const BIRTHDAY_ACTIVE_MONTHS = 24;
 
 /** @deprecated use MAX_NO_ANSWER — kept for imports during transition */
 const MAX_CALL_ATTEMPTS = MAX_NO_ANSWER;
@@ -108,9 +120,15 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       clubExternalId,
       systemUser.id,
     );
+    const birthdays = await this.syncBirthdays(clubId, systemUser.id, dayKey);
+    const confirmations = await this.syncBookingConfirmations(
+      clubId,
+      systemUser.id,
+      dayKey,
+    );
 
     this.logger.log(
-      `Club ${clubId}: debt +${debtCreated}, installment +${installment}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}`,
+      `Club ${clubId}: debt +${debtCreated}, installment +${installment}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}, birthday +${birthdays.created} skip ${birthdays.skipped}, confirm +${confirmations.created}`,
     );
     return {
       debt: debtCreated,
@@ -118,7 +136,338 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       membership: membership.created,
       closedRenewed: membership.closedRenewed,
       closedLost: membership.closedLost,
+      birthday: birthdays.created,
+      birthdaySkipped: birthdays.skipped,
+      confirmation: confirmations.created,
     };
+  }
+
+  private addClubDays(isoDate: string, days: number): string {
+    const [y, m, d] = isoDate.split('-').map(Number);
+    const utc = Date.UTC(y, m - 1, d + days);
+    return new Date(utc).toISOString().slice(0, 10);
+  }
+
+  private async syncBirthdays(
+    clubId: string,
+    systemUserId: string,
+    dayKey: string,
+  ) {
+    let created = 0;
+    let skipped = 0;
+    const provider = this.fitness.getProvider();
+    if (!provider.getSegmentBirthdays) {
+      return { created, skipped };
+    }
+
+    let rows: FitgoBirthdayRow[] = [];
+    try {
+      rows = await provider.getSegmentBirthdays(BIRTHDAY_SEGMENT_UUID);
+    } catch (err) {
+      this.logger.warn(
+        `Birthday scan failed: ${err instanceof Error ? err.message : err}`,
+      );
+      return { created, skipped };
+    }
+
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - BIRTHDAY_ACTIVE_MONTHS);
+
+    // Close yesterday's open birthday tasks
+    const yesterday = this.addClubDays(dayKey, -1);
+    const stale = await this.prisma.adminTask.findMany({
+      where: {
+        clubId,
+        source: 'BIRTHDAY',
+        status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
+        dedupeKey: { startsWith: 'birthday:' },
+        NOT: { dedupeKey: { endsWith: `:${dayKey}` } },
+      },
+      take: 200,
+    });
+    for (const task of stale) {
+      if (task.dedupeKey?.endsWith(`:${yesterday}`) || !task.dedupeKey?.endsWith(`:${dayKey}`)) {
+        await this.prisma.adminTask.update({
+          where: { id: task.id },
+          data: {
+            status: AdminTaskStatus.DONE,
+            completedAt: new Date(),
+          },
+        });
+        await this.prisma.adminTaskEvent.create({
+          data: {
+            taskId: task.id,
+            actorId: systemUserId,
+            comment: 'Авто: день рождения прошёл',
+          },
+        });
+      }
+    }
+
+    for (const row of rows) {
+      const lastVisit = row.lastVisitAt
+        ? new Date(row.lastVisitAt.slice(0, 10))
+        : null;
+      const activeVisit =
+        lastVisit != null &&
+        !Number.isNaN(lastVisit.getTime()) &&
+        lastVisit.getTime() >= cutoff.getTime();
+      const include = activeVisit || row.hasActiveMembership === true;
+      const name =
+        `${row.lastName} ${row.firstName}`.trim() || row.externalId;
+      const dedupeKey = include
+        ? `birthday:${row.externalId}:${dayKey}`
+        : `birthday-skip:${row.externalId}:${dayKey}`;
+
+      if (!include) {
+        skipped += 1;
+        await this.prisma.adminTask.upsert({
+          where: { clubId_dedupeKey: { clubId, dedupeKey } },
+          create: {
+            clubId,
+            createdById: systemUserId,
+            title: `День рождения: ${name}`,
+            description: 'Не звоним — нет визита более 2 лет и нет абонемента',
+            dueAt: new Date(`${dayKey}T10:00:00+03:00`),
+            status: AdminTaskStatus.CANCELLED,
+            completedAt: new Date(),
+            source: 'BIRTHDAY',
+            dedupeKey,
+            clientExternalId: row.externalId,
+            meta: {
+              phone: row.phone ?? null,
+              clientName: name,
+              skippedInactive: true,
+              lastVisitAt: row.lastVisitAt ?? null,
+            },
+          },
+          update: {},
+        });
+        continue;
+      }
+
+      const existing = await this.prisma.adminTask.findUnique({
+        where: { clubId_dedupeKey: { clubId, dedupeKey } },
+      });
+      if (existing) continue;
+
+      await this.prisma.adminTask.create({
+        data: {
+          clubId,
+          createdById: systemUserId,
+          title: `День рождения: ${name}`,
+          description: 'Поздравить клиента',
+          dueAt: new Date(`${dayKey}T10:00:00+03:00`),
+          status: AdminTaskStatus.OPEN,
+          source: 'BIRTHDAY',
+          dedupeKey,
+          clientExternalId: row.externalId,
+          meta: {
+            phone: row.phone ?? null,
+            clientName: name,
+            lastVisitAt: row.lastVisitAt ?? null,
+            hasActiveMembership: row.hasActiveMembership === true,
+          },
+        },
+      });
+      created += 1;
+    }
+
+    return { created, skipped };
+  }
+
+  private async syncBookingConfirmations(
+    clubId: string,
+    systemUserId: string,
+    dayKey: string,
+  ) {
+    let created = 0;
+    const tomorrow = this.addClubDays(dayKey, 1);
+    const start = new Date(`${tomorrow}T00:00:00+03:00`);
+    const end = new Date(`${tomorrow}T23:59:59.999+03:00`);
+
+    // Cancel confirmations that are no longer for tomorrow / cancelled sessions
+    const openConfirm = await this.prisma.adminTask.findMany({
+      where: {
+        clubId,
+        source: 'BOOKING_CONFIRM',
+        status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
+      },
+      take: 500,
+    });
+    for (const task of openConfirm) {
+      const meta = (task.meta ?? {}) as Record<string, unknown>;
+      const sessionDate =
+        typeof meta.sessionDate === 'string' ? meta.sessionDate : '';
+      if (sessionDate && sessionDate !== tomorrow) {
+        await this.prisma.adminTask.update({
+          where: { id: task.id },
+          data: {
+            status: AdminTaskStatus.CANCELLED,
+            completedAt: new Date(),
+          },
+        });
+        await this.prisma.adminTaskEvent.create({
+          data: {
+            taskId: task.id,
+            actorId: systemUserId,
+            comment: 'Авто: занятие уже не завтра',
+          },
+        });
+      }
+    }
+
+    const sessions = await this.prisma.onexClassSession.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        status: {
+          in: [OnexClassStatus.SCHEDULED, OnexClassStatus.IN_PROGRESS],
+        },
+        startAt: { gte: start, lte: end },
+        OR: [
+          { kind: OnexClassKind.SPA },
+          {
+            kind: OnexClassKind.GROUP,
+            title: { contains: 'реформер', mode: 'insensitive' },
+          },
+        ],
+      },
+      include: {
+        members: {
+          where: {
+            cancelled: false,
+            attendance: {
+              not: OnexClassMemberAttendance.CANCELLED,
+            },
+          },
+        },
+      },
+    });
+
+    const externalIds = [
+      ...new Set(sessions.flatMap((s) => s.members.map((m) => m.externalId))),
+    ];
+    const users = externalIds.length
+      ? await this.prisma.user.findMany({
+          where: { clubId, externalId: { in: externalIds } },
+          select: { externalId: true, phone: true, firstName: true, lastName: true },
+        })
+      : [];
+    const phoneByExt = new Map(
+      users
+        .filter((u) => u.externalId)
+        .map((u) => [u.externalId as string, u.phone ?? '']),
+    );
+
+    const spaRefs = sessions
+      .filter((s) => s.kind === OnexClassKind.SPA && s.fitgoBookingRef)
+      .map((s) => s.fitgoBookingRef as string);
+    const spaBookings = spaRefs.length
+      ? await this.prisma.spaBooking.findMany({
+          where: {
+            clubId,
+            id: { in: spaRefs },
+            status: { not: SpaBookingStatus.CANCELLED },
+          },
+          select: {
+            id: true,
+            guestPhone: true,
+            guestName: true,
+            clientExternalId: true,
+            client: { select: { phone: true, firstName: true, lastName: true } },
+          },
+        })
+      : [];
+    const spaById = new Map(spaBookings.map((b) => [b.id, b]));
+
+    // Optional roster phones for reformer groups missing local phones
+    const needRoster = sessions.filter(
+      (s) =>
+        s.kind === OnexClassKind.GROUP &&
+        s.members.some((m) => !phoneByExt.get(m.externalId)),
+    );
+    const rosterPhone = new Map<string, string>();
+    const provider = this.fitness.getProvider();
+    if (provider.getGroupSessionRoster && needRoster.length) {
+      for (const s of needRoster.slice(0, 30)) {
+        try {
+          const roster = await provider.getGroupSessionRoster(s.externalId);
+          for (const m of roster?.data ?? []) {
+            if (m.externalId && m.phone) {
+              rosterPhone.set(m.externalId, m.phone);
+            }
+          }
+        } catch {
+          // non-fatal
+        }
+      }
+    }
+
+    for (const session of sessions) {
+      const sessionKey =
+        session.kind === OnexClassKind.SPA && session.fitgoBookingRef
+          ? fitgoSessionKey('SPA', session.fitgoBookingRef)
+          : onexSessionKey(session.externalId);
+
+      for (const member of session.members) {
+        const spa =
+          session.kind === OnexClassKind.SPA && session.fitgoBookingRef
+            ? spaById.get(session.fitgoBookingRef)
+            : undefined;
+        const phone =
+          phoneByExt.get(member.externalId) ||
+          spa?.client?.phone ||
+          spa?.guestPhone ||
+          rosterPhone.get(member.externalId) ||
+          '';
+        const clientName =
+          member.clientName ||
+          (spa?.client
+            ? `${spa.client.lastName} ${spa.client.firstName}`.trim()
+            : spa?.guestName) ||
+          member.externalId;
+        const dedupeKey = `confirm:${session.externalId}:${member.externalId}:${tomorrow}`;
+        const existing = await this.prisma.adminTask.findUnique({
+          where: { clubId_dedupeKey: { clubId, dedupeKey } },
+        });
+        if (existing) {
+          if (
+            existing.status === AdminTaskStatus.CANCELLED ||
+            existing.status === AdminTaskStatus.DONE
+          ) {
+            continue;
+          }
+          continue;
+        }
+
+        await this.prisma.adminTask.create({
+          data: {
+            clubId,
+            createdById: systemUserId,
+            title: `Подтверждение: ${clientName}`,
+            description: `${session.title} · ${tomorrow}`,
+            dueAt: session.startAt,
+            status: AdminTaskStatus.OPEN,
+            source: 'BOOKING_CONFIRM',
+            dedupeKey,
+            clientExternalId: member.externalId,
+            meta: {
+              phone: phone || null,
+              clientName,
+              membershipName: session.title,
+              sessionKey,
+              sessionDate: tomorrow,
+              sessionExternalId: session.externalId,
+              kind: session.kind,
+            },
+          },
+        });
+        created += 1;
+      }
+    }
+
+    return { created };
   }
 
   private readonly lastDebtRefreshAt = new Map<string, number>();

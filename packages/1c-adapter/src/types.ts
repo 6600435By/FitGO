@@ -319,6 +319,21 @@ export interface IFitnessClubProvider {
    * Includes `nextMembership` when the client already bought a future/pending one.
    */
   getExpiringMemberships?(days?: number): Promise<FitgoExpiringMembershipRow[]>;
+  /**
+   * Clients with birthday today from a counterparty segment
+   * (GET /clients/birthdays?uuid=…).
+   */
+  getSegmentBirthdays?(uuid?: string): Promise<FitgoBirthdayRow[]>;
+}
+
+export interface FitgoBirthdayRow {
+  externalId: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  /** ISO date of last club visit, if known */
+  lastVisitAt?: string;
+  hasActiveMembership?: boolean;
 }
 
 export interface FitgoExpiringMembershipNext {
