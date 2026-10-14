@@ -10,7 +10,8 @@ import type {
   StaffPaySummary,
 } from '@fitgo/shared-types';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -20,6 +21,10 @@ function isoDate(d: Date) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+function isIsoDay(s: string | null): s is string {
+  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
 function money(minor: number, currency: string) {
@@ -234,14 +239,22 @@ type Props = {
 
 export function PayrollWorkspace({ mode }: Props) {
   const today = useMemo(() => new Date(), []);
+  const searchParams = useSearchParams();
+  const urlUserId = searchParams.get('userId')?.trim() || '';
+  const urlFrom = searchParams.get('from');
+  const urlTo = searchParams.get('to');
+  const urlHydrated = useRef(false);
   const [staff, setStaff] = useState<StaffPaySummary[]>([]);
-  const [userId, setUserId] = useState('');
+  const [userId, setUserId] = useState(urlUserId);
   const [from, setFrom] = useState(() => {
+    if (isIsoDay(urlFrom)) return urlFrom;
     const d = new Date(today);
     d.setDate(1);
     return isoDate(d);
   });
-  const [to, setTo] = useState(isoDate(today));
+  const [to, setTo] = useState(() =>
+    isIsoDay(urlTo) ? urlTo : isoDate(today),
+  );
   const [summary, setSummary] = useState<PayrollPeriodSummary | null>(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -330,23 +343,35 @@ export function PayrollWorkspace({ mode }: Props) {
     loadStaff
       .then((list) => {
         setStaff(list);
-        if (list[0]) setUserId(list[0].userId);
+        if (urlUserId && list.some((s) => s.userId === urlUserId)) {
+          setUserId(urlUserId);
+          urlHydrated.current = true;
+        } else if (!urlUserId && list[0] && !userId) {
+          setUserId(list[0].userId);
+        }
       })
       .catch((e) => setMessage(e.message || 'Ошибка загрузки сотрудников'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate once from URL on staff load
   }, [mode]);
 
   useEffect(() => {
     if (!canEdit) return;
     if (filteredStaff.length === 0) {
-      setUserId('');
-      setSummary(null);
+      if (!urlUserId) {
+        setUserId('');
+        setSummary(null);
+      }
       return;
     }
     if (!filteredStaff.some((s) => s.userId === userId)) {
+      if (urlUserId && staff.some((s) => s.userId === urlUserId)) {
+        // URL employee is outside current dept filter — keep id, show in full list.
+        return;
+      }
       setUserId(filteredStaff[0]!.userId);
       setSummary(null);
     }
-  }, [canEdit, filteredStaff, userId]);
+  }, [canEdit, filteredStaff, userId, urlUserId, staff]);
 
   const load = async () => {
     const token = getToken();

@@ -34,8 +34,13 @@ function monthBounds(ref = new Date()) {
   return { from: isoDate(from), to: isoDate(to) };
 }
 
-function staffCacheKey(from: string, to: string, includePay: boolean) {
-  return `${from}|${to}|pay:${includePay ? 1 : 0}`;
+function staffCacheKey(
+  from: string,
+  to: string,
+  includePay: boolean,
+  department: AnalyticsDepartment,
+) {
+  return `${from}|${to}|pay:${includePay ? 1 : 0}|dept:${department}`;
 }
 
 function clubCacheKey(
@@ -130,7 +135,8 @@ function AnalyticsInner() {
     [pathname, router, searchParams],
   );
 
-  // Club / staff report: reload on period / pay / tab — NOT on department.
+  // Club / staff report: reload on period / pay / tab / department.
+  // Department is sent to API so collectors for other tracks are skipped.
   useEffect(() => {
     const token = getToken();
     if (!token) return;
@@ -161,7 +167,7 @@ function AnalyticsInner() {
             setClub(data);
           }
         } else {
-          const key = staffCacheKey(from, to, showPay);
+          const key = staffCacheKey(from, to, showPay, department);
           const hit = staffCache.current.get(key);
           if (hit) {
             if (!cancelled) {
@@ -171,11 +177,11 @@ function AnalyticsInner() {
             return;
           }
           setLoading(true);
-          // Always fetch ALL — department is filtered client-side.
           const data = await api.analyticsStaff(token, {
             from,
             to,
             includePay: showPay,
+            department: department === 'ALL' ? undefined : department,
           });
           if (!cancelled) {
             staffCache.current.set(key, data);
@@ -196,7 +202,7 @@ function AnalyticsInner() {
     return () => {
       cancelled = true;
     };
-  }, [tab, from, to, compare, showPay]);
+  }, [tab, from, to, compare, showPay, department]);
 
   // Manager efficiency: only when staff tab + ALL or MANAGER.
   useEffect(() => {

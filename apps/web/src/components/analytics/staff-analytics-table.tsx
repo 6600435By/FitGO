@@ -58,9 +58,18 @@ function ManagerEfficiencyPanel({
             {ind.compareValue != null && ind.compareValue !== '' && (
               <p className="text-xs text-slate-500">было: {ind.compareValue}</p>
             )}
+            {ind.hint && (
+              <p className="mt-1 text-[11px] text-slate-500">{ind.hint}</p>
+            )}
           </div>
         ))}
       </div>
+      {block.oldestPendingApprovalHours != null && (
+        <p className="text-xs text-slate-500">
+          Самое старое занятие без подтверждения ждёт{' '}
+          {block.oldestPendingApprovalHours} ч
+        </p>
+      )}
     </div>
   );
 }
@@ -169,15 +178,11 @@ function kpiCells(
             href={controlHref('GROUP')}
           />
         </td>
-        <td className="px-2 py-2 text-right">{k.avgAttendees}</td>
-        <td className="px-2 py-2 text-right">
-          {k.avgFillPct != null ? `${k.avgFillPct}%` : '—'}
-        </td>
+        <td className="px-2 py-2 text-right">{k.cancelledSessions}</td>
+        <td className="px-2 py-2 text-right">{k.bookedTotal}</td>
+        <td className="px-2 py-2 text-right">{k.attendedTotal}</td>
         <td className="px-2 py-2 text-right">
           {k.cancelRatePct != null ? `${k.cancelRatePct}%` : '—'}
-        </td>
-        <td className="px-2 py-2 text-right">
-          {k.noShowPct != null ? `${k.noShowPct}%` : '—'}
         </td>
       </>
     );
@@ -274,7 +279,7 @@ function kpiHeaders(dept: AnalyticsDepartment) {
     return ['Продажи', 'Прод./час', 'Задачи %', 'Просроч.', 'Контроль'];
   }
   if (dept === 'GROUP_TRAINER') {
-    return ['Занятия', 'Ср. чел.', 'Заполн.', 'Отмены', 'Неявки'];
+    return ['Занятия', 'Отменено', 'Записалось', 'Пришло', 'Отмены'];
   }
   if (dept === 'PT_TRAINER') {
     return ['ПТ', 'Новые', 'Конв.', 'Удерж.90', 'Активн.', 'Продажи'];
@@ -401,7 +406,6 @@ export function StaffAnalyticsTable({
           <thead className="sticky top-0 bg-slate-900 text-xs text-slate-400">
             <tr>
               <th className="sticky left-0 bg-slate-900 px-3 py-2">ФИО</th>
-              <th className="px-2 py-2">Подр.</th>
               <th className="px-2 py-2 text-right">Часы</th>
               {department !== 'ALL' &&
                 headers.map((h) => (
@@ -439,14 +443,16 @@ export function StaffAnalyticsTable({
                 return (
                   <Fragment key={rowKey}>
                     <tr
-                      className="border-t border-slate-800 hover:bg-slate-800/40"
+                      className="cursor-pointer border-t border-slate-800 hover:bg-slate-800/40"
                       onClick={() => setExpanded(open ? null : rowKey)}
                     >
                       <td className="sticky left-0 bg-slate-900/95 px-3 py-2 font-medium">
                         {r.name}
-                      </td>
-                      <td className="px-2 py-2 text-slate-400">
-                        {r.department}
+                        {department === 'ALL' && (
+                          <span className="mt-0.5 block text-[11px] font-normal text-slate-500">
+                            {r.department}
+                          </span>
+                        )}
                       </td>
                       <td className="px-2 py-2 text-right">
                         {Math.round(r.hours * 10) / 10}
@@ -516,6 +522,17 @@ export function StaffAnalyticsTable({
   );
 }
 
+function payrollHrefForUser(userId: string) {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const from = `${y}-${m}-01`;
+  const to = `${y}-${m}-${day}`;
+  const q = new URLSearchParams({ userId, from, to });
+  return `/super-admin/payroll?${q.toString()}`;
+}
+
 function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
   const k = row.kpi;
   return (
@@ -530,6 +547,39 @@ function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
           {k.bookingApprovalsSession}
           {k.approvalSharePct != null ? ` (${k.approvalSharePct}% клуба)` : ''}.
         </p>
+      )}
+      {k.kind === 'GROUP_TRAINER' && k.programs.length > 0 && (
+        <div className="overflow-x-auto">
+          <p className="mb-1 text-xs font-medium text-slate-400">
+            Групповые программы
+          </p>
+          <table className="w-full min-w-[480px] text-left text-xs">
+            <thead className="text-slate-500">
+              <tr>
+                <th className="py-1 pr-2">Программа</th>
+                <th className="px-2 py-1 text-right">Занятия</th>
+                <th className="px-2 py-1 text-right">Отменено</th>
+                <th className="px-2 py-1 text-right">Записалось</th>
+                <th className="px-2 py-1 text-right">Пришло</th>
+                <th className="px-2 py-1 text-right">Отмены</th>
+              </tr>
+            </thead>
+            <tbody>
+              {k.programs.map((p) => (
+                <tr key={p.title} className="border-t border-slate-700/60">
+                  <td className="py-1 pr-2">{p.title}</td>
+                  <td className="px-2 py-1 text-right">{p.sessionsConducted}</td>
+                  <td className="px-2 py-1 text-right">{p.cancelledSessions}</td>
+                  <td className="px-2 py-1 text-right">{p.bookedTotal}</td>
+                  <td className="px-2 py-1 text-right">{p.attendedTotal}</td>
+                  <td className="px-2 py-1 text-right">
+                    {p.cancelRatePct != null ? `${p.cancelRatePct}%` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {k.kind === 'PT_TRAINER' && (
         <p>
@@ -555,7 +605,7 @@ function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
         <p>Исключений ЗП: {row.openExceptions}</p>
       )}
       <Link
-        href={`/super-admin/payroll?userId=${row.userId}`}
+        href={payrollHrefForUser(row.userId)}
         className="text-fitgo-400 hover:underline"
         onClick={(e) => e.stopPropagation()}
       >

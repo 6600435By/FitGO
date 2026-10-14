@@ -248,7 +248,8 @@ export class FitgoAnalyticsHttpProvider {
         error?: string | { message?: string };
       }>(`/sales?${q.toString()}`, 20_000);
       if (!data) return null;
-      if (data.error && data.active == null) return null;
+      // BSL always seeds active:0 even on error — treat any error as unavailable.
+      if (data.error) return null;
       return {
         active: Number(data.active) || 0,
         frozen: Number(data.frozen) || 0,

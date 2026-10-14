@@ -14,6 +14,7 @@ import type {
 import {
   DEFAULT_CLUB_WORKING_HOURS,
   DAY_OF_WEEK_KEYS,
+  inferPaymentFromBasis,
 } from '@fitgo/shared-types';
 import {
   OnexClassKind,
@@ -192,18 +193,12 @@ export class ClubAnalyticsService {
       this.debtSnapshot(clubId),
     ]);
 
-    // Wave 2: booking-control lists are connection-heavy — run sequentially
-    // so Prisma pool (often limit 5–10) is not exhausted under cron load.
-    const servicesCur = await this.servicesBlock(
-      clubId,
-      params.from,
-      params.to,
-    );
-    const servicesCmp = await this.servicesBlock(
-      clubId,
-      compareFrom,
-      compareTo,
-    );
+    // Wave 2: services are a single OnexClassSession query; rankings still use
+    // booking-control PT list — run sequentially to spare the Prisma pool.
+    const [servicesCur, servicesCmp] = await Promise.all([
+      this.servicesBlock(clubId, params.from, params.to),
+      this.servicesBlock(clubId, compareFrom, compareTo),
+    ]);
     const trainerRankings = await this.trainerRankings(
       clubId,
       params.from,
@@ -235,8 +230,13 @@ export class ClubAnalyticsService {
       installments,
     };
 
+    const stockHint = 'Нет сводки абонементов — опубликуйте scope=members';
     const members = {
-      active: metric(membersCur.active, membersCmp.active, { unit: 'count' }),
+      active: metric(membersCur.active, membersCmp.active, {
+        unit: 'count',
+        unavailable: !membersCur.stockAvailable,
+        hint: !membersCur.stockAvailable ? stockHint : undefined,
+      }),
       newClients: metric(membersCur.newClients, membersCmp.newClients, {
         unit: 'count',
         hint: dataSince
@@ -248,14 +248,30 @@ export class ClubAnalyticsService {
       }),
       renewalRate: metric(membersCur.renewalRatePct, membersCmp.renewalRatePct, {
         unit: 'percent',
+        unavailable: !membersCur.renewalRateAvailable,
+        hint: !membersCur.renewalRateAvailable
+          ? 'Нет закончившихся абонементов за период'
+          : undefined,
       }),
-      churn: metric(membersCur.churn, membersCmp.churn, { unit: 'count' }),
-      frozen: metric(membersCur.frozen, membersCmp.frozen, { unit: 'count' }),
+      churn: metric(membersCur.churn, membersCmp.churn, {
+        unit: 'count',
+        unavailable: !membersCur.churnAvailable,
+        hint: !membersCur.churnAvailable ? stockHint : undefined,
+      }),
+      frozen: metric(membersCur.frozen, membersCmp.frozen, {
+        unit: 'count',
+        unavailable: !membersCur.stockAvailable,
+        hint: !membersCur.stockAvailable ? stockHint : undefined,
+      }),
       expiring7: metric(membersCur.expiring7, membersCmp.expiring7, {
         unit: 'count',
+        unavailable: !membersCur.stockAvailable,
+        hint: !membersCur.stockAvailable ? stockHint : undefined,
       }),
       expiring30: metric(membersCur.expiring30, membersCmp.expiring30, {
         unit: 'count',
+        unavailable: !membersCur.stockAvailable,
+        hint: !membersCur.stockAvailable ? stockHint : undefined,
       }),
     };
 
@@ -270,10 +286,20 @@ export class ClubAnalyticsService {
       avgPerActiveMembership: metric(
         visitsCur.avgPerActive,
         visitsCmp.avgPerActive,
-        { unit: 'count' },
+        {
+          unit: 'count',
+          unavailable: !visitsCur.avgPerActiveAvailable,
+          hint: !visitsCur.avgPerActiveAvailable
+            ? 'Нет числа активных абонементов'
+            : undefined,
+        },
       ),
       sleeping: metric(visitsCur.sleeping, visitsCmp.sleeping, {
         unit: 'count',
+        unavailable: !visitsCur.sleepingAvailable,
+        hint: !visitsCur.sleepingAvailable
+          ? 'Нет снимков активных абонементов'
+          : undefined,
       }),
       heatmap: visitsCur.heatmap,
       heatmapHours: visitsCur.heatmapHours,
@@ -629,7 +655,12 @@ export class ClubAnalyticsService {
       }));
   }
 
-  private async membersBlock(clubId: string, from: string, to: string) {
+  /**
+   * Stock counters: ClubMembersSummary when present and non-empty;
+   * otherwise ClubMembershipSnapshot (ACTIVE/FROZEN as in СтатусЧленстваJSON).
+   * Zero-all summary rows (failed/unpublished scope=members) do not block fallback.
+   */
+  private async resolveMembersStock(clubId: string, from: string, to: string) {
     let summary = await this.prisma.clubMembersSummary.findUnique({
       where: { clubId_asOfDate: { clubId, asOfDate: to } },
     });
@@ -640,60 +671,107 @@ export class ClubAnalyticsService {
       });
     }
 
+    const summaryEmpty =
+      !!summary &&
+      summary.active === 0 &&
+      summary.frozen === 0 &&
+      summary.expiring7 === 0 &&
+      summary.expiring30 === 0 &&
+      summary.endedInPeriod === 0;
+
+    if (summary && !summaryEmpty) {
+      const ids = Array.isArray(summary.endedClientIds)
+        ? (summary.endedClientIds as string[])
+        : [];
+      return {
+        available: true as const,
+        active: summary.active,
+        frozen: summary.frozen,
+        expiring7: summary.expiring7,
+        expiring30: summary.expiring30,
+        expiredInPeriod: summary.endedInPeriod,
+        expiredClients: new Set(ids.filter(Boolean)),
+        source: 'summary' as const,
+      };
+    }
+
+    const snapshots = await this.prisma.clubMembershipSnapshot.findMany({
+      where: { clubId },
+      select: {
+        clientExternalId: true,
+        status: true,
+        endDate: true,
+      },
+    });
+    if (!snapshots.length) {
+      return {
+        available: false as const,
+        active: 0,
+        frozen: 0,
+        expiring7: 0,
+        expiring30: 0,
+        expiredInPeriod: 0,
+        expiredClients: new Set<string>(),
+        source: 'none' as const,
+      };
+    }
+
     let active = 0;
     let frozen = 0;
     let expiring7 = 0;
     let expiring30 = 0;
     let expiredInPeriod = 0;
     const expiredClients = new Set<string>();
-
-    if (summary) {
-      active = summary.active;
-      frozen = summary.frozen;
-      expiring7 = summary.expiring7;
-      expiring30 = summary.expiring30;
-      expiredInPeriod = summary.endedInPeriod;
-      const ids = Array.isArray(summary.endedClientIds)
-        ? (summary.endedClientIds as string[])
-        : [];
-      for (const id of ids) expiredClients.add(id);
-    } else {
-      const snapshots = await this.prisma.clubMembershipSnapshot.findMany({
-        where: { clubId },
-        select: {
-          clientExternalId: true,
-          status: true,
-          startDate: true,
-          endDate: true,
-        },
-      });
-
-      const statusNorm = (s: string | null | undefined) =>
-        (s ?? '').toUpperCase();
-
-      for (const s of snapshots) {
-        const st = statusNorm(s.status);
-        if (st === 'ACTIVE' || st === 'АКТИВНЫЙ' || st.includes('ACTIVE')) {
-          active++;
-          if (s.endDate) {
-            const end = s.endDate.slice(0, 10);
-            if (end >= to && end <= addDaysLocal(to, 7)) expiring7++;
-            if (end >= to && end <= addDaysLocal(to, 30)) expiring30++;
-          }
-        }
-        if (st.includes('FREEZ') || st.includes('ЗАМОРОЗ')) frozen++;
+    for (const s of snapshots) {
+      const st = (s.status ?? '').toUpperCase();
+      const isFrozen = st.includes('FREEZ') || st.includes('ЗАМОРОЗ');
+      const isExpired =
+        st.includes('EXPIRED') ||
+        st.includes('ИСТЕК') ||
+        st.includes('ЗАКРЫТ') ||
+        st.includes('ПРОСРОЧ') ||
+        st.includes('АРХИВ') ||
+        st.includes('НЕДЕЙСТВ');
+      const isActive =
+        !isFrozen &&
+        !isExpired &&
+        (st === 'ACTIVE' ||
+          st.includes('ACTIVE') ||
+          st.includes('АКТИВ') ||
+          st.includes('ДЕЙСТВ'));
+      if (isFrozen) frozen++;
+      else if (isActive) {
+        active++;
         if (s.endDate) {
           const end = s.endDate.slice(0, 10);
-          if (end >= from && end <= to) {
-            expiredInPeriod++;
-            expiredClients.add(s.clientExternalId);
-          }
+          if (end >= to && end <= addDaysLocal(to, 7)) expiring7++;
+          if (end >= to && end <= addDaysLocal(to, 30)) expiring30++;
+        }
+      }
+      if (s.endDate) {
+        const end = s.endDate.slice(0, 10);
+        if (end >= from && end <= to) {
+          expiredInPeriod++;
+          expiredClients.add(s.clientExternalId);
         }
       }
     }
+    return {
+      available: true as const,
+      active,
+      frozen,
+      expiring7,
+      expiring30,
+      expiredInPeriod,
+      expiredClients,
+      source: 'snapshots' as const,
+    };
+  }
+
+  private async membersBlock(clubId: string, from: string, to: string) {
+    const stock = await this.resolveMembersStock(clubId, from, to);
 
     const { start, end } = rangeBounds(from, to);
-    // Prefer segment classification (saleType from 1C is often a UUID / code).
     const payrollSegs = await loadPayrollSegmentSets(this.config);
     const memSales = await this.membershipSalesViaSegments(
       clubId,
@@ -741,7 +819,6 @@ export class ClubAnalyticsService {
       } else {
         const gapDays =
           (sale.soldAt.getTime() - prior.getTime()) / 86400000;
-        // Renewal if previous sale within ~14 months (typical membership) and gap ≤ 60d after end approx via soldAt gap
         if (gapDays <= 400) {
           renewals++;
           renewedClients.add(cid);
@@ -752,26 +829,29 @@ export class ClubAnalyticsService {
     }
 
     let churn = 0;
-    for (const cid of expiredClients) {
+    for (const cid of stock.expiredClients) {
       if (!renewedClients.has(cid)) churn++;
     }
 
-    const renewalRatePct =
-      expiredInPeriod > 0
-        ? Math.round(
-            (renewedClients.size / expiredInPeriod) * 1000,
-          ) / 10
-        : 0;
+    const renewalRateAvailable = stock.available && stock.expiredInPeriod > 0;
+    const renewalRatePct = renewalRateAvailable
+      ? Math.round(
+          (renewedClients.size / stock.expiredInPeriod) * 1000,
+        ) / 10
+      : 0;
 
     return {
-      active,
-      frozen,
-      expiring7,
-      expiring30,
+      active: stock.active,
+      frozen: stock.frozen,
+      expiring7: stock.expiring7,
+      expiring30: stock.expiring30,
       newClients,
       renewals,
       renewalRatePct,
       churn,
+      stockAvailable: stock.available,
+      renewalRateAvailable,
+      churnAvailable: stock.available,
     };
   }
 
@@ -818,14 +898,32 @@ export class ClubAnalyticsService {
     to: string,
     workingHours: ClubWorkingHours,
   ) {
-    const hall = await this.prisma.clubHallVisit.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        visitDate: { gte: from, lte: to },
-      },
-      select: { clientExternalId: true, visitDate: true, checkIn: true },
-    });
+    const [hall, stock, activeSnaps] = await Promise.all([
+      this.prisma.clubHallVisit.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          visitDate: { gte: from, lte: to },
+        },
+        select: { clientExternalId: true, visitDate: true, checkIn: true },
+      }),
+      this.resolveMembersStock(clubId, from, to),
+      this.prisma.clubMembershipSnapshot.findMany({
+        where: {
+          clubId,
+          OR: [
+            { status: { equals: 'ACTIVE', mode: 'insensitive' } },
+            { status: { contains: 'ACTIVE', mode: 'insensitive' } },
+            { status: { contains: 'актив', mode: 'insensitive' } },
+          ],
+          NOT: [
+            { status: { contains: 'не актив', mode: 'insensitive' } },
+            { status: { contains: 'неактив', mode: 'insensitive' } },
+          ],
+        },
+        select: { clientExternalId: true },
+      }),
+    ]);
 
     const byDay = new Map<string, number>();
     const unique = new Set<string>();
@@ -859,38 +957,44 @@ export class ClubAnalyticsService {
       heatmap,
     );
 
-    const activeSnaps = await this.prisma.clubMembershipSnapshot.findMany({
-      where: {
-        clubId,
-        OR: [
-          { status: { contains: 'ACTIVE', mode: 'insensitive' } },
-          { status: { contains: 'актив', mode: 'insensitive' } },
-        ],
-      },
-      select: { clientExternalId: true },
-    });
     const activeIds = new Set(activeSnaps.map((s) => s.clientExternalId));
+    const sleepingAvailable = activeIds.size > 0;
     const visitedRecently = new Set(
-      hall
-        .filter((v) => v.visitDate >= addDaysLocal(to, -14) && v.clientExternalId)
-        .map((v) => v.clientExternalId!),
+      (
+        await this.prisma.clubHallVisit.findMany({
+          where: {
+            clubId,
+            isActive: true,
+            visitDate: { gte: addDaysLocal(to, -14), lte: to },
+            clientExternalId: { not: null },
+          },
+          select: { clientExternalId: true },
+          distinct: ['clientExternalId'],
+        })
+      )
+        .map((v) => v.clientExternalId)
+        .filter((id): id is string => Boolean(id)),
     );
     let sleeping = 0;
-    for (const id of activeIds) {
-      if (!visitedRecently.has(id)) sleeping++;
+    if (sleepingAvailable) {
+      for (const id of activeIds) {
+        if (!visitedRecently.has(id)) sleeping++;
+      }
     }
 
     const total = hall.length;
-    const avgPerActive =
-      activeIds.size > 0
-        ? Math.round((total / activeIds.size) * 10) / 10
-        : 0;
+    const avgPerActiveAvailable = stock.available && stock.active > 0;
+    const avgPerActive = avgPerActiveAvailable
+      ? Math.round((total / stock.active) * 10) / 10
+      : 0;
 
     return {
       total,
       unique: unique.size,
       avgPerActive,
+      avgPerActiveAvailable,
       sleeping,
+      sleepingAvailable,
       heatmap,
       heatmapHours,
       heatmapDays,
@@ -901,42 +1005,46 @@ export class ClubAnalyticsService {
   private async servicesBlock(clubId: string, from: string, to: string) {
     const { start, end } = rangeBounds(from, to);
 
-    const [groupSessions, scheduleSlots, controlItems] = await Promise.all([
+    const [sessions, scheduleSlots] = await Promise.all([
       this.prisma.onexClassSession.findMany({
         where: {
           clubId,
           isActive: true,
-          kind: OnexClassKind.GROUP,
+          kind: {
+            in: [OnexClassKind.GROUP, OnexClassKind.PT, OnexClassKind.SPA],
+          },
           startAt: { gte: start, lte: end },
           status: {
             in: [OnexClassStatus.COMPLETED, OnexClassStatus.CANCELLED],
           },
         },
         select: {
+          kind: true,
           title: true,
           status: true,
           attendedCount: true,
           bookedCount: true,
-          startAt: true,
           externalId: true,
           capacity: true,
+          members: {
+            select: {
+              cancelled: true,
+              paymentBasis: true,
+              paySource: true,
+            },
+          },
         },
       }),
       this.prisma.clubScheduleSlot.findMany({
         where: { clubId, startAt: { gte: start, lte: end } },
-        select: { externalId: true, capacity: true, title: true },
-      }),
-      this.bookingControl.list(clubId, {
-        from,
-        to,
-        kind: 'ALL',
-        skipExternal: true,
+        select: { externalId: true, capacity: true },
       }),
     ]);
 
     const capByExternal = new Map(
       scheduleSlots.map((s) => [s.externalId, s.capacity]),
     );
+    const groupSessions = sessions.filter((s) => s.kind === OnexClassKind.GROUP);
     const completed = groupSessions.filter(
       (s) => s.status === OnexClassStatus.COMPLETED,
     );
@@ -984,27 +1092,36 @@ export class ClubAnalyticsService {
       .sort((a, b) => a.fillPct - b.fillPct)
       .slice(0, 5);
 
-    const ptCompleted = controlItems.filter(
-      (i) => i.kind === 'PT' && i.status === 'COMPLETED',
+    const ptCompleted = sessions.filter(
+      (s) =>
+        s.kind === OnexClassKind.PT && s.status === OnexClassStatus.COMPLETED,
     );
-    const gift = ptCompleted.filter((i) => i.payment === 'GIFT').length;
+    let gift = 0;
+    for (const s of ptCompleted) {
+      const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
+      if (inferPaymentFromBasis(primary?.paymentBasis) === 'GIFT') gift++;
+    }
     const giftSharePct =
       ptCompleted.length > 0
         ? Math.round((gift / ptCompleted.length) * 1000) / 10
         : 0;
 
-    const spaCompleted = controlItems.filter(
-      (i) => i.kind === 'SPA' && i.status === 'COMPLETED',
+    const spaCompleted = sessions.filter(
+      (s) =>
+        s.kind === OnexClassKind.SPA && s.status === OnexClassStatus.COMPLETED,
     );
     let quota = 0;
     let paid = 0;
     let allsports = 0;
     for (const s of spaCompleted) {
-      if (s.payment === 'PARTNER') {
+      const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
+      const payment = inferPaymentFromBasis(primary?.paymentBasis);
+      const paySource = (primary?.paySource ?? '').toUpperCase();
+      if (payment === 'PARTNER') {
         allsports++;
-      } else if (s.payment === 'QUOTA' || s.payTag === 'PACKAGE') {
+      } else if (payment === 'QUOTA' || paySource === 'PACKAGE') {
         quota++;
-      } else if (s.payment === 'PAID' || s.payTag === 'SALE') {
+      } else if (payment === 'PAID' || paySource === 'SALE') {
         paid++;
       }
     }
@@ -1163,7 +1280,11 @@ export class ClubAnalyticsService {
         body: `Выручка +${revDelta}% к сравниваемому периоду.`,
       });
     }
-    if ((input.members.renewalRate.value ?? 0) < 60 && input.members.renewals.compareValue != null) {
+    if (
+      !input.members.renewalRate.unavailable &&
+      (input.members.renewalRate.value ?? 0) < 60 &&
+      input.members.renewals.compareValue != null
+    ) {
       out.push({
         severity: 'warning',
         title: 'Низкий % продлений',
@@ -1171,7 +1292,10 @@ export class ClubAnalyticsService {
         action: 'Проверьте воронку задач на продление',
       });
     }
-    if ((input.visits.sleeping.deltaPct ?? 0) > 20) {
+    if (
+      !input.visits.sleeping.unavailable &&
+      (input.visits.sleeping.deltaPct ?? 0) > 20
+    ) {
       out.push({
         severity: 'warning',
         title: 'Рост «спящих»',
@@ -1190,7 +1314,10 @@ export class ClubAnalyticsService {
         body: `Визиты +${input.visits.total.deltaPct}% к сравниваемому периоду.`,
       });
     }
-    if ((input.members.expiring7.value ?? 0) >= 5) {
+    if (
+      !input.members.expiring7.unavailable &&
+      (input.members.expiring7.value ?? 0) >= 5
+    ) {
       out.push({
         severity: 'warning',
         title: 'Истекают абонементы',

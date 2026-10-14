@@ -197,15 +197,30 @@ export interface AdminStaffKpi {
   avgApprovalLagHours: number | null;
 }
 
+export interface GroupTrainerProgramKpi {
+  title: string;
+  sessionsConducted: number;
+  cancelledSessions: number;
+  bookedTotal: number;
+  attendedTotal: number;
+  cancelRatePct: number | null;
+}
+
 export interface GroupTrainerStaffKpi {
   kind: 'GROUP_TRAINER';
   sessionsConducted: number;
+  /** Sum of bookedCount on completed sessions (1C «Записано»). */
+  bookedTotal: number;
+  /** Sum of attendedCount on completed sessions (confirmed arrivals). */
+  attendedTotal: number;
   avgAttendees: number;
   avgFillPct: number | null;
   cancelRatePct: number | null;
   noShowPct: number | null;
   cancelledSessions: number;
   topDirections: Array<{ title: string; count: number }>;
+  /** Per-program breakdown for expandable staff row. */
+  programs: GroupTrainerProgramKpi[];
 }
 
 export interface PtTrainerStaffKpi {

@@ -7,14 +7,17 @@ import type {
   StaffKpiRow,
   StaffPayColumns,
 } from '@fitgo/shared-types';
-import { UserRole } from '@fitgo/shared-types';
+import {
+  UserRole,
+  inferPaymentFromBasis,
+  isComplimentarySessionTitle,
+} from '@fitgo/shared-types';
 import {
   AdminTaskStatus,
   OnexClassKind,
   OnexClassMemberAttendance,
   OnexClassStatus,
   PersonalBookingStatus,
-  PtSessionPayKind,
   Role,
   SessionRemarkStatus,
   SpaBookingStatus,
@@ -40,6 +43,35 @@ type StaffUser = {
   trainerClub: boolean;
   roles: { role: Role }[];
 };
+
+/** Same code set as payroll — match Onex/TrainerPtSale employee ids. */
+function staffEmployeeCodes(user: {
+  externalId?: string | null;
+  employeeCode?: string | null;
+}): string[] {
+  const out = new Set<string>();
+  for (const raw of [user.externalId, user.employeeCode]) {
+    const t = raw?.trim();
+    if (!t) continue;
+    out.add(t);
+    const stripped = t.replace(/^0+/, '');
+    if (stripped) out.add(stripped);
+  }
+  return [...out];
+}
+
+function codesMatch(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const x = (a ?? '').trim();
+  const y = (b ?? '').trim();
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const xs = x.replace(/^0+/, '');
+  const ys = y.replace(/^0+/, '');
+  return Boolean(xs && ys && xs === ys);
+}
 
 @Injectable()
 export class StaffAnalyticsService {
@@ -275,20 +307,13 @@ export class StaffAnalyticsService {
     const { start, end } = rangeBounds(params.from, params.to);
     const [paySummary, adminTasks] = await Promise.all([
       this.payroll.getClubSummary(clubId, params.from, params.to),
+      // Denominator = tasks created in the selected period (not all-time open).
       this.prisma.adminTask.findMany({
         where: {
           clubId,
-          OR: [
-            { createdAt: { gte: start, lte: end } },
-            { completedAt: { gte: start, lte: end } },
-            {
-              status: {
-                in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS],
-              },
-            },
-          ],
+          createdAt: { gte: start, lte: end },
         },
-        select: { status: true, assigneeId: true },
+        select: { status: true },
       }),
     ]);
     const payrollExceptions = paySummary.sections
@@ -404,7 +429,7 @@ export class StaffAnalyticsService {
   }
 
   private xlsxHeaders(dept: StaffKpiRow['department'], includePay: boolean) {
-    const base = ['ФИО', 'Подразделение', 'Часы', 'Замечания', 'Флаги'];
+    const base = ['ФИО', 'Часы', 'Замечания', 'Флаги'];
     const pay = includePay
       ? ['Начислено', 'Аванс', 'ЗП 15', 'Выплачено', 'К выдаче']
       : [];
@@ -419,7 +444,13 @@ export class StaffAnalyticsService {
             'Подтв. ПТ/СПА',
           ]
         : dept === 'GROUP_TRAINER'
-          ? ['Занятия', 'Ср. чел.', 'Заполн. %', 'Отмены %', 'Неявки %']
+          ? [
+              'Занятия',
+              'Отменено',
+              'Записалось',
+              'Пришло',
+              'Отмены %',
+            ]
           : dept === 'PT_TRAINER'
             ? [
                 'ПТ',
@@ -451,7 +482,6 @@ export class StaffAnalyticsService {
     const flags = r.flags.map((f) => f.label).join(', ');
     const base: (string | number)[] = [
       r.name,
-      r.department,
       Math.round(r.hours * 10) / 10,
       r.openRemarks,
       flags,
@@ -470,10 +500,10 @@ export class StaffAnalyticsService {
     } else if (k.kind === 'GROUP_TRAINER') {
       kpi = [
         k.sessionsConducted,
-        k.avgAttendees,
-        k.avgFillPct ?? '',
+        k.cancelledSessions,
+        k.bookedTotal,
+        k.attendedTotal,
         k.cancelRatePct ?? '',
-        k.noShowPct ?? '',
       ];
     } else if (k.kind === 'PT_TRAINER') {
       kpi = [
@@ -544,12 +574,15 @@ export class StaffAnalyticsService {
         return {
           kind: 'GROUP_TRAINER',
           sessionsConducted: 0,
+          bookedTotal: 0,
+          attendedTotal: 0,
           avgAttendees: 0,
           avgFillPct: null,
           cancelRatePct: null,
           noShowPct: null,
           cancelledSessions: 0,
           topDirections: [],
+          programs: [],
         };
       case 'PT_TRAINER':
         return {
@@ -918,7 +951,11 @@ export class StaffAnalyticsService {
     );
     const byExternal = new Map<string, string>();
     for (const t of trainers) {
-      if (t.externalId) byExternal.set(t.externalId, t.id);
+      for (const code of staffEmployeeCodes(t)) {
+        byExternal.set(code, t.id);
+        const stripped = code.replace(/^0+/, '');
+        if (stripped) byExternal.set(stripped, t.id);
+      }
     }
 
     const sessions = await this.prisma.onexClassSession.findMany({
@@ -947,16 +984,12 @@ export class StaffAnalyticsService {
     const cap = new Map(slots.map((s) => [s.externalId, s.capacity]));
 
     const map = new Map<string, StaffDepartmentKpi>();
-    const buckets = new Map<
-      string,
-      {
-        sessions: typeof sessions;
-      }
-    >();
+    const buckets = new Map<string, { sessions: typeof sessions }>();
     for (const s of sessions) {
-      const uid = s.employeeExternalId
-        ? byExternal.get(s.employeeExternalId)
-        : undefined;
+      const raw = s.employeeExternalId?.trim();
+      if (!raw) continue;
+      const uid =
+        byExternal.get(raw) ?? byExternal.get(raw.replace(/^0+/, ''));
       if (!uid) continue;
       const b = buckets.get(uid) ?? { sessions: [] };
       b.sessions.push(s);
@@ -968,7 +1001,7 @@ export class StaffAnalyticsService {
       const completed = list.filter(
         (s) => s.status === OnexClassStatus.COMPLETED,
       );
-      const cancelled = list.filter(
+      const cancelledSessions = list.filter(
         (s) => s.status === OnexClassStatus.CANCELLED,
       ).length;
       let attendedSum = 0;
@@ -977,7 +1010,29 @@ export class StaffAnalyticsService {
       let booked = 0;
       let memberCancelled = 0;
       let noShow = 0;
-      const byTitle = new Map<string, number>();
+      type ProgAcc = {
+        sessionsConducted: number;
+        cancelledSessions: number;
+        bookedTotal: number;
+        attendedTotal: number;
+        memberCancelled: number;
+        memberTotal: number;
+      };
+      const byTitle = new Map<string, ProgAcc>();
+      for (const s of list) {
+        if (s.status === OnexClassStatus.CANCELLED) {
+          const cur = byTitle.get(s.title) ?? {
+            sessionsConducted: 0,
+            cancelledSessions: 0,
+            bookedTotal: 0,
+            attendedTotal: 0,
+            memberCancelled: 0,
+            memberTotal: 0,
+          };
+          cur.cancelledSessions++;
+          byTitle.set(s.title, cur);
+        }
+      }
       for (const s of completed) {
         attendedSum += s.attendedCount;
         booked += s.bookedCount;
@@ -986,23 +1041,61 @@ export class StaffAnalyticsService {
           fillSum += (s.attendedCount / c) * 100;
           fillN++;
         }
-        byTitle.set(s.title, (byTitle.get(s.title) ?? 0) + 1);
+        let sessMemberCancelled = 0;
         for (const m of s.members) {
           if (m.cancelled || m.attendance === OnexClassMemberAttendance.CANCELLED) {
             memberCancelled++;
+            sessMemberCancelled++;
           }
           if (m.attendance === OnexClassMemberAttendance.NO_SHOW) noShow++;
         }
+        const cur = byTitle.get(s.title) ?? {
+          sessionsConducted: 0,
+          cancelledSessions: 0,
+          bookedTotal: 0,
+          attendedTotal: 0,
+          memberCancelled: 0,
+          memberTotal: 0,
+        };
+        cur.sessionsConducted++;
+        cur.bookedTotal += s.bookedCount;
+        cur.attendedTotal += s.attendedCount;
+        cur.memberCancelled += sessMemberCancelled;
+        cur.memberTotal += s.members.length;
+        byTitle.set(s.title, cur);
       }
       const memberTotal = completed.reduce((a, s) => a + s.members.length, 0);
-      const topDirections = [...byTitle.entries()]
-        .sort((a, b) => b[1] - a[1])
+      const programs = [...byTitle.entries()]
+        .map(([title, v]) => ({
+          title,
+          sessionsConducted: v.sessionsConducted,
+          cancelledSessions: v.cancelledSessions,
+          bookedTotal: v.bookedTotal,
+          attendedTotal: v.attendedTotal,
+          cancelRatePct:
+            v.bookedTotal + v.memberCancelled > 0
+              ? Math.round(
+                  (v.memberCancelled /
+                    Math.max(v.bookedTotal, v.memberTotal, 1)) *
+                    1000,
+                ) / 10
+              : null,
+        }))
+        .sort(
+          (a, b) =>
+            b.sessionsConducted - a.sessionsConducted ||
+            a.title.localeCompare(b.title, 'ru'),
+        );
+      const topDirections = programs
+        .filter((p) => p.sessionsConducted > 0)
         .slice(0, 3)
-        .map(([title, count]) => ({ title, count }));
+        .map((p) => ({ title: p.title, count: p.sessionsConducted }));
 
       map.set(t.id, {
         kind: 'GROUP_TRAINER',
         sessionsConducted: completed.length,
+        bookedTotal: booked,
+        attendedTotal: attendedSum,
         avgAttendees:
           completed.length > 0
             ? Math.round((attendedSum / completed.length) * 10) / 10
@@ -1018,8 +1111,9 @@ export class StaffAnalyticsService {
           memberTotal > 0
             ? Math.round((noShow / memberTotal) * 1000) / 10
             : null,
-        cancelledSessions: cancelled,
+        cancelledSessions,
         topDirections,
+        programs,
       });
     }
     return map;
@@ -1038,7 +1132,6 @@ export class StaffAnalyticsService {
         s.roles.some((r) => r.role === Role.TRAINER) &&
         (s.trainerStaff || s.trainerClub || !s.groupPrograms),
     );
-    // Also include groupPrograms trainers who also do PT
     const ptTrainers = staff.filter(
       (s) =>
         s.roles.some((r) => r.role === Role.TRAINER) &&
@@ -1047,80 +1140,162 @@ export class StaffAnalyticsService {
     const all = new Map<string, StaffUser>();
     for (const t of [...trainers, ...ptTrainers]) all.set(t.id, t);
 
-    const trainerIds = [...all.keys()];
     const map = new Map<string, StaffDepartmentKpi>();
-    if (!trainerIds.length) return map;
+    if (!all.size) return map;
 
-    // All PT for these trainers (need history for first-session detection)
+    const byExternal = new Map<string, string>();
+    for (const t of all.values()) {
+      for (const code of staffEmployeeCodes(t)) {
+        byExternal.set(code, t.id);
+        const stripped = code.replace(/^0+/, '');
+        if (stripped) byExternal.set(stripped, t.id);
+      }
+    }
+
     const historyStart = addDaysIso(from, -150);
     const historyStartDate = rangeBounds(historyStart, to).start;
-    const bookings = await this.prisma.personalTrainingBooking.findMany({
-      where: {
-        trainerId: { in: trainerIds },
-        status: {
-          in: [PersonalBookingStatus.COMPLETED, PersonalBookingStatus.CONFIRMED],
-        },
-        startAt: { gte: historyStartDate, lte: end },
-      },
-      select: {
-        trainerId: true,
-        clientId: true,
-        startAt: true,
-        status: true,
-        isComplimentary: true,
-        payKind: true,
-      },
-      orderBy: { startAt: 'asc' },
-    });
-
-    const sales = await this.prisma.trainerPtSale.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        occurredAt: { gte: start, lte: end },
-      },
-      select: { employeeCode: true, amount: true },
-    });
-    const salesByCode = new Map<string, number>();
-    for (const s of sales) {
-      if (!s.employeeCode) continue;
-      salesByCode.set(
-        s.employeeCode,
-        (salesByCode.get(s.employeeCode) ?? 0) +
-          Math.round((Number(s.amount) || 0) * 100),
-      );
-    }
-
-    const firstByPair = new Map<string, Date>();
-    for (const b of bookings) {
-      const key = `${b.trainerId}:${b.clientId}`;
-      if (!firstByPair.has(key)) firstByPair.set(key, b.startAt);
-    }
-
     const cohortFrom = addDaysIso(from, -150);
     const cohortTo = addDaysIso(to, -60);
 
-    for (const t of all.values()) {
-      const mine = bookings.filter((b) => b.trainerId === t.id);
-      const inPeriod = mine.filter(
-        (b) =>
-          b.startAt >= start &&
-          b.startAt <= end &&
-          b.status === PersonalBookingStatus.COMPLETED,
-      );
-      const gift = inPeriod.filter(
-        (b) => b.isComplimentary || b.payKind === PtSessionPayKind.GIFT,
-      ).length;
-      const paid = inPeriod.filter(
-        (b) =>
-          !b.isComplimentary &&
-          b.payKind !== PtSessionPayKind.GIFT &&
-          (b.payKind === PtSessionPayKind.PAID ||
-            b.payKind === PtSessionPayKind.BLOCK ||
-            b.payKind === PtSessionPayKind.UNKNOWN),
-      ).length;
+    const [onexPt, fitgoBookings, sales] = await Promise.all([
+      this.prisma.onexClassSession.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          kind: OnexClassKind.PT,
+          status: OnexClassStatus.COMPLETED,
+          startAt: { gte: historyStartDate, lte: end },
+        },
+        select: {
+          externalId: true,
+          number: true,
+          title: true,
+          startAt: true,
+          employeeExternalId: true,
+          employeeName: true,
+          members: {
+            select: {
+              externalId: true,
+              cancelled: true,
+              paymentBasis: true,
+              paySource: true,
+            },
+          },
+        },
+        orderBy: { startAt: 'asc' },
+      }),
+      this.prisma.personalTrainingBooking.findMany({
+        where: {
+          trainerId: { in: [...all.keys()] },
+          status: PersonalBookingStatus.COMPLETED,
+          startAt: { gte: historyStartDate, lte: end },
+          crmDocRef: { not: null },
+        },
+        select: {
+          trainerId: true,
+          clientId: true,
+          startAt: true,
+          crmDocRef: true,
+          isComplimentary: true,
+        },
+        orderBy: { startAt: 'asc' },
+      }),
+      this.prisma.trainerPtSale.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          occurredAt: { gte: start, lte: end },
+        },
+        select: { employeeCode: true, employeeName: true, amount: true },
+      }),
+    ]);
 
-      // New clients: first PT of pair falls in period
+    type PtEvt = {
+      trainerId: string;
+      clientKey: string;
+      startAt: Date;
+      isGift: boolean;
+      externalId: string;
+    };
+    const events: PtEvt[] = [];
+    const coveredCrm = new Set<string>();
+
+    for (const s of onexPt) {
+      const raw = s.employeeExternalId?.trim();
+      let uid = raw
+        ? byExternal.get(raw) ?? byExternal.get(raw.replace(/^0+/, ''))
+        : undefined;
+      if (!uid && s.employeeName) {
+        const name = s.employeeName.trim().toLowerCase();
+        for (const t of all.values()) {
+          const full = `${t.firstName} ${t.lastName}`.trim().toLowerCase();
+          if (full && full === name) {
+            uid = t.id;
+            break;
+          }
+        }
+      }
+      if (!uid) continue;
+      const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
+      const clientKey = primary?.externalId?.trim() || `sess:${s.externalId}`;
+      const payment = inferPaymentFromBasis(primary?.paymentBasis);
+      const isGift =
+        payment === 'GIFT' ||
+        isComplimentarySessionTitle(s.title) ||
+        isComplimentarySessionTitle(primary?.paymentBasis);
+      events.push({
+        trainerId: uid,
+        clientKey,
+        startAt: s.startAt,
+        isGift,
+        externalId: s.externalId,
+      });
+      coveredCrm.add(s.externalId);
+      if (s.number) coveredCrm.add(s.number);
+    }
+
+    // FitGO-only PT not already counted via 1C class doc (avoid double count).
+    for (const b of fitgoBookings) {
+      const ref = b.crmDocRef?.trim();
+      if (ref && coveredCrm.has(ref)) continue;
+      events.push({
+        trainerId: b.trainerId,
+        clientKey: b.clientId,
+        startAt: b.startAt,
+        isGift: b.isComplimentary,
+        externalId: ref || `fitgo:${b.trainerId}:${b.startAt.toISOString()}`,
+      });
+    }
+    events.sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
+
+    const firstByPair = new Map<string, Date>();
+    for (const e of events) {
+      const key = `${e.trainerId}:${e.clientKey}`;
+      if (!firstByPair.has(key)) firstByPair.set(key, e.startAt);
+    }
+
+    for (const t of all.values()) {
+      const codes = staffEmployeeCodes(t);
+      const performerName = `${t.firstName} ${t.lastName}`.trim();
+      let ptSalesMinor = 0;
+      for (const s of sales) {
+        if (
+          (s.employeeCode && codes.some((c) => codesMatch(c, s.employeeCode))) ||
+          (performerName &&
+            (s.employeeName ?? '').trim().toLowerCase() ===
+              performerName.toLowerCase())
+        ) {
+          ptSalesMinor += Math.round((Number(s.amount) || 0) * 100);
+        }
+      }
+
+      const mine = events.filter((e) => e.trainerId === t.id);
+      const inPeriod = mine.filter(
+        (e) => e.startAt >= start && e.startAt <= end,
+      );
+      const gift = inPeriod.filter((e) => e.isGift).length;
+      const paid = inPeriod.length - gift;
+
       const newClientIds: string[] = [];
       for (const [key, first] of firstByPair) {
         if (!key.startsWith(`${t.id}:`)) continue;
@@ -1134,13 +1309,11 @@ export class StaffAnalyticsService {
         const first = firstByPair.get(`${t.id}:${clientId}`)!;
         const windowEnd = new Date(first.getTime() + 30 * 86400000);
         const hasPaid = mine.some(
-          (b) =>
-            b.clientId === clientId &&
-            b.startAt > first &&
-            b.startAt <= windowEnd &&
-            b.status === PersonalBookingStatus.COMPLETED &&
-            !b.isComplimentary &&
-            b.payKind !== PtSessionPayKind.GIFT,
+          (e) =>
+            e.clientKey === clientId &&
+            e.startAt > first &&
+            e.startAt <= windowEnd &&
+            !e.isGift,
         );
         if (hasPaid) converted++;
       }
@@ -1149,7 +1322,6 @@ export class StaffAnalyticsService {
           ? Math.round((converted / newClientIds.length) * 1000) / 10
           : null;
 
-      // Retention 90d cohort: first PT between cohortFrom..cohortTo
       const cohortClients: string[] = [];
       const cohortStart = rangeBounds(cohortFrom, cohortTo).start;
       const cohortEnd = rangeBounds(cohortFrom, cohortTo).end;
@@ -1165,11 +1337,10 @@ export class StaffAnalyticsService {
         const winStart = new Date(first.getTime() + 60 * 86400000);
         const winEnd = new Date(first.getTime() + 90 * 86400000);
         const has = mine.some(
-          (b) =>
-            b.clientId === clientId &&
-            b.startAt >= winStart &&
-            b.startAt <= winEnd &&
-            b.status === PersonalBookingStatus.COMPLETED,
+          (e) =>
+            e.clientKey === clientId &&
+            e.startAt >= winStart &&
+            e.startAt <= winEnd,
         );
         if (has) retained++;
       }
@@ -1181,13 +1352,8 @@ export class StaffAnalyticsService {
       const activeSince = new Date(end.getTime() - 30 * 86400000);
       const activeClients30d = new Set(
         mine
-          .filter(
-            (b) =>
-              b.startAt >= activeSince &&
-              b.startAt <= end &&
-              b.status === PersonalBookingStatus.COMPLETED,
-          )
-          .map((b) => b.clientId),
+          .filter((e) => e.startAt >= activeSince && e.startAt <= end)
+          .map((e) => e.clientKey),
       ).size;
 
       map.set(t.id, {
@@ -1201,9 +1367,7 @@ export class StaffAnalyticsService {
         retentionCohortFrom: cohortClients.length ? cohortFrom : null,
         retentionCohortTo: cohortClients.length ? cohortTo : null,
         activeClients30d,
-        ptSalesMinor: t.employeeCode
-          ? (salesByCode.get(t.employeeCode) ?? 0)
-          : 0,
+        ptSalesMinor,
       });
     }
     return map;
@@ -1352,6 +1516,7 @@ export class StaffAnalyticsService {
     to: string,
     extras: { payrollExceptions: number; adminTasksDonePct: number | null },
   ): Promise<ManagerEfficiencyBlock> {
+    const { start, end } = rangeBounds(from, to);
     const clubReport = await this.clubAnalytics.getClubReport(user, {
       from,
       to,
@@ -1359,30 +1524,44 @@ export class StaffAnalyticsService {
       includePay: true,
     });
 
-    const pendingGroup = await this.prisma.onexClassSession.count({
+    const completedGroup = await this.prisma.onexClassSession.findMany({
       where: {
         clubId,
         isActive: true,
         kind: OnexClassKind.GROUP,
         status: OnexClassStatus.COMPLETED,
-        startAt: { gte: rangeBounds(from, to).start, lte: rangeBounds(from, to).end },
-        // rough: sessions without admin approval — left as count of completed
+        startAt: { gte: start, lte: end },
       },
+      select: { externalId: true, startAt: true },
+      orderBy: { startAt: 'asc' },
     });
-    const approvals = await this.prisma.groupClassApproval.count({
-      where: {
-        clubId,
-        OR: [
-          { adminApprovedAt: { not: null } },
-          { overrideApprovedAt: { not: null } },
-        ],
-        createdAt: {
-          gte: rangeBounds(from, to).start,
-          lte: rangeBounds(from, to).end,
-        },
-      },
-    });
-    const openBookingControl = Math.max(0, pendingGroup - approvals);
+    const sessionKeys = completedGroup.map((s) => `1c:${s.externalId}`);
+    const approved =
+      sessionKeys.length === 0
+        ? []
+        : await this.prisma.groupClassApproval.findMany({
+            where: {
+              clubId,
+              sessionKey: { in: sessionKeys },
+              OR: [
+                { adminApprovedAt: { not: null } },
+                { overrideApprovedAt: { not: null } },
+              ],
+            },
+            select: { sessionKey: true },
+          });
+    const approvedKeys = new Set(approved.map((a) => a.sessionKey));
+    const pendingSessions = completedGroup.filter(
+      (s) => !approvedKeys.has(`1c:${s.externalId}`),
+    );
+    const openBookingControl = pendingSessions.length;
+    const oldestPending = pendingSessions[0]?.startAt ?? null;
+    const oldestPendingApprovalHours =
+      oldestPending != null
+        ? Math.round(
+            ((Date.now() - oldestPending.getTime()) / 3600000) * 10,
+          ) / 10
+        : null;
 
     const openRemarks = await this.prisma.sessionRemark.count({
       where: { clubId, status: SessionRemarkStatus.OPEN },
@@ -1390,7 +1569,9 @@ export class StaffAnalyticsService {
     const { payrollExceptions, adminTasksDonePct } = extras;
 
     const revDelta = clubReport.money.revenue.deltaPct;
+    const renewalUnavailable = clubReport.members.renewalRate.unavailable;
     const renewal = clubReport.members.renewalRate.value;
+    const churnUnavailable = clubReport.members.churn.unavailable;
     const churn = clubReport.members.churn.value;
     const fotShare = clubReport.fot?.fotShareOfRevenuePct.value ?? null;
 
@@ -1413,15 +1594,29 @@ export class StaffAnalyticsService {
       {
         id: 'renewal',
         label: '% продлений',
-        status: renewal >= 60 ? 'green' : renewal >= 40 ? 'yellow' : 'red',
-        value: renewal,
-        hint: 'Цель ≥ 60%',
+        status: renewalUnavailable
+          ? 'yellow'
+          : renewal >= 60
+            ? 'green'
+            : renewal >= 40
+              ? 'yellow'
+              : 'red',
+        value: renewalUnavailable ? 'н/д' : renewal,
+        hint: renewalUnavailable
+          ? 'Нет закончившихся абонементов за период'
+          : 'Цель ≥ 60%',
       },
       {
         id: 'churn',
         label: 'Отток',
-        status: churn <= 5 ? 'green' : churn <= 15 ? 'yellow' : 'red',
-        value: churn,
+        status: churnUnavailable
+          ? 'yellow'
+          : churn <= 5
+            ? 'green'
+            : churn <= 15
+              ? 'yellow'
+              : 'red',
+        value: churnUnavailable ? 'н/д' : churn,
       },
       {
         id: 'fot',
@@ -1447,6 +1642,10 @@ export class StaffAnalyticsService {
               ? 'yellow'
               : 'red',
         value: openBookingControl,
+        hint:
+          oldestPendingApprovalHours != null
+            ? `Самое старое ожидание: ${oldestPendingApprovalHours} ч`
+            : undefined,
       },
       {
         id: 'tasks',
@@ -1459,7 +1658,9 @@ export class StaffAnalyticsService {
               : adminTasksDonePct >= 60
                 ? 'yellow'
                 : 'red',
-        value: adminTasksDonePct ?? '—',
+        value:
+          adminTasksDonePct == null ? '—' : `${adminTasksDonePct}%`,
+        hint: 'Доля закрытых из созданных за период',
       },
       {
         id: 'remarks',
@@ -1484,7 +1685,7 @@ export class StaffAnalyticsService {
     return {
       indicators,
       openBookingControl,
-      oldestPendingApprovalHours: null,
+      oldestPendingApprovalHours,
       adminTasksDonePct,
       openRemarks,
       payrollExceptions,
