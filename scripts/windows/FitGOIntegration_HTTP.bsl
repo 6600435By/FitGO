@@ -22,6 +22,7 @@
 //   GET  /v1/segments/config              → SegmentsConfigGET
 //   GET  /v1/segments/members             → SegmentsMembersGET (?key= | ?uuid=)
 //   GET  /v1/memberships/expiring         → MembershipsExpiringGET (?days=14)
+//   POST /v1/memberships/renewal-coverage → MembershipsRenewalCoveragePOST (пачка coverage)
 //   GET  /v1/clients/birthdays            → ClientsBirthdaysGET (?uuid= сегмент контрагентов)
 //
 // Продажи админов для ЗП: ночной sync FitGO читает FitGOAnalytics GET /sales
@@ -30,16 +31,17 @@
 // В конфигураторе (пример freeze; consume/sale/debts — аналогично):
 //   Имя шаблона: freeze | consume-service | spa-service-sale | cleanup-broken-visits | SpecialistServiceDebts
 //                | group-session-roster | class-sessions | segments-config | segments-members
-//                | memberships-expiring | packages | clients-birthdays
+//                | memberships-expiring | memberships-renewal-coverage | packages | clients-birthdays
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
 //                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
 //                | /v1/group-session-roster | /v1/class-sessions | /v1/class-sessions/attendance
 //                | /v1/trainer-pt-sales | /v1/segments/config | /v1/segments/members
-//                | /v1/memberships/expiring | /v1/packages | /v1/clients/birthdays
+//                | /v1/memberships/expiring | /v1/memberships/renewal-coverage
+//                | /v1/packages | /v1/clients/birthdays
 //   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | ClassSessionsGET
 //                | TrainerPtSalesGET | SegmentsConfigGET | SegmentsMembersGET
 //                | MembershipsExpiringGET | PackagesGET | ClientsBirthdaysGET
-//   Метод POST → ClassSessionAttendancePOST (шаблон /v1/class-sessions/attendance)
+//   Метод POST → ClassSessionAttendancePOST | MembershipsRenewalCoveragePOST
 //
 // У расширения снять флаг «Защита от опасных действий»: проведение документов
 // создаёт COM-объект WinHttp (рассылки), иначе в HTTP-сервисе будет 500 «Предупреждение безопасности».
@@ -756,7 +758,7 @@
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
 КонецФункции
 
-// Абонементы, истекающие в ближайшие N дней (+ nextMembership, если уже куплен следующий).
+// Абонементы, истекающие в ближайшие N дней (+ lookback 7 дн., nextMembership, renewed).
 // Query: days=14 (1..60).
 Функция MembershipsExpiringGET(Запрос)
     Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
@@ -775,6 +777,49 @@
 
     Данные = FitGOIntegrationКлиенты.ИстекающиеАбонементыJSON(Дней);
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
+КонецФункции
+
+// Пачка coverage для открытых задач продления вне окна скана.
+// Body: { "items": [ { "externalId", "docId", "validUntil" } ] }
+// Ответ data[]: covered, reason (next_sold|next_active|marked|extended|""), nextMembership, currentValidUntil.
+Функция MembershipsRenewalCoveragePOST(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    ТелоСтрока = Запрос.ПолучитьТелоКакСтроку();
+    Чтение = Новый ЧтениеJSON;
+    Чтение.УстановитьСтроку(ТелоСтрока);
+    Данные = Неопределено;
+    Попытка
+        Данные = ПрочитатьJSON(Чтение);
+    Исключение
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "Invalid JSON body");
+    КонецПопытки;
+    Чтение.Закрыть();
+
+    Элементы = Неопределено;
+    Если ТипЗнч(Данные) = Тип("Структура") Тогда
+        Если Данные.Свойство("items") Тогда
+            Элементы = Данные.items;
+        ИначеЕсли Данные.Свойство("data") Тогда
+            Элементы = Данные.data;
+        КонецЕсли;
+    ИначеЕсли ТипЗнч(Данные) = Тип("Соответствие") Тогда
+        Элементы = Данные.Получить("items");
+        Если Элементы = Неопределено Тогда
+            Элементы = Данные.Получить("data");
+        КонецЕсли;
+    ИначеЕсли ТипЗнч(Данные) = Тип("Массив") Тогда
+        Элементы = Данные;
+    КонецЕсли;
+
+    Если ТипЗнч(Элементы) <> Тип("Массив") Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "items array required");
+    КонецЕсли;
+
+    Ответ = FitGOIntegrationКлиенты.ПокрытиеПродленийПачкаJSON(Элементы);
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Ответ);
 КонецФункции
 
 // GET /v1/clients/birthdays?uuid=<СегментыКонтрагентов>

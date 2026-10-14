@@ -228,4 +228,11 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     if (!this.fitgo.getExpiringMemberships) return Promise.resolve([]);
     return this.fitgo.getExpiringMemberships(days);
   }
+
+  getRenewalCoverage(
+    items: import('./types').FitgoRenewalCoverageRequestItem[],
+  ) {
+    if (!this.fitgo.getRenewalCoverage) return Promise.resolve([]);
+    return this.fitgo.getRenewalCoverage(items);
+  }
 }

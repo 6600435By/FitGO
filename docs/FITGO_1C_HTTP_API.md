@@ -120,7 +120,9 @@ Query: `phone` или `externalId`.
 
 Query: `days` (1…60, default 14).
 
-Список абонементов со `СрокДействия` в окне `[сегодня; сегодня+days]`. Для каждого клиента — один текущий (ближайший срок) и опционально `nextMembership`, если уже куплен следующий / неактивированный абонемент.
+Список абонементов со `СрокДействия` в окне **`[сегодня−7; сегодня+days]`** (lookback 7 дней — чтобы открытые задачи продления ещё видели уже купленный следующий абонемент после окончания срока). Для каждого клиента — один текущий (ближайший срок), опционально `nextMembership` и флаг `renewed`.
+
+Статус «Продан» / неактивированный → `PENDING`. Lookback допускает `EXPIRED`/`CLOSED`; вперёд по окну — только `ACTIVE`/`FROZEN`.
 
 ```json
 {
@@ -140,6 +142,7 @@ Query: `days` (1…60, default 14).
       "termDays": 365,
       "totalUnits": null,
       "oneOff": false,
+      "renewed": false,
       "nextMembership": null
     },
     {
@@ -156,6 +159,7 @@ Query: `days` (1…60, default 14).
       "termDays": 183,
       "totalUnits": null,
       "oneOff": false,
+      "renewed": true,
       "nextMembership": {
         "docId": "membership-b",
         "name": "Безлимит 12 мес",
@@ -175,12 +179,63 @@ Query: `days` (1…60, default 14).
 | `termDays` | Срок действия в днях (из `СрокДействия`+тип или `validUntil − validFrom`) |
 | `totalUnits` | Сумма квот `СоставУслуг.Количество`, если нет безлимита; иначе `null` |
 | `oneOff` | `true` если `termDays ≤ 1` или `totalUnits = 1` — такие строки 1С **не отдаёт** (фильтр на стороне сервиса) |
-| `nextMembership` | Уже купленный следующий абонемент или `null`. Клиентов с `nextMembership != null` FitGO не ставит в задачи продления |
+| `nextMembership` | Уже купленный следующий абонемент (тот же `kind`) или `null`. В т.ч. статус «Продан» без даты активации |
+| `renewed` | `true` если есть `nextMembership` или колонка «Продлено» на документе. FitGO не создаёт задачу и закрывает открытую как `RENEWED` |
 | `phone` | Телефон для звонка админом |
 
-Разовые услуги / пакеты / членства (1 день или 1 посещение) в ответ не входят. Nest дополнительно отфильтровывает `oneOff` на случай старой публикации BSL.
+Разовые услуги / пакеты / членства (1 день или 1 посещение) в ответ не входят. Nest дополнительно отфильтровывает `oneOff` на случай старой публикации BSL. Новые задачи создаются только при `daysLeft ≥ 0` (lookback-строки служат для закрытия уже открытых).
 
 В конфигураторе: шаблон `/v1/memberships/expiring`, метод GET → `MembershipsExpiringGET`.
+
+### POST `/memberships/renewal-coverage`
+
+Пачка проверки покрытия для открытых задач продления, чей документ уже вышел из окна `expiring` (даже с lookback). FitGO вызывает один раз за sync.
+
+Body:
+
+```json
+{
+  "items": [
+    {
+      "externalId": "client-uuid",
+      "docId": "membership-doc-uuid",
+      "validUntil": "2026-10-09"
+    }
+  ]
+}
+```
+
+Ответ:
+
+```json
+{
+  "data": [
+    {
+      "externalId": "client-uuid",
+      "docId": "membership-doc-uuid",
+      "covered": true,
+      "reason": "next_sold",
+      "currentValidUntil": "2026-10-09",
+      "nextMembership": {
+        "docId": "membership-next",
+        "name": "Безлимит (1 месяц)",
+        "status": "PENDING",
+        "validFrom": "",
+        "validUntil": ""
+      }
+    }
+  ]
+}
+```
+
+| Поле | Описание |
+|------|----------|
+| `covered` | `true` → закрыть задачу стадией `RENEWED` (`next_sold` / `next_active` / `marked`) |
+| `reason` | `next_sold` — куплен следующий (Продан/не активирован); `next_active` — следующий уже активен с более поздним сроком; `marked` — колонка «Продлено»; `extended` — тот же документ с более поздним `СрокДействия` (заморозка/сдвиг: Nest обновляет `validUntil`, задачу не закрывает); пусто — не покрыт |
+| `currentValidUntil` | Живой срок документа задачи (календарный `yyyy-MM-dd`) |
+| `nextMembership` | Кратко о следующем документе или `null` |
+
+В конфигураторе: шаблон `/v1/memberships/renewal-coverage`, метод POST → `MembershipsRenewalCoveragePOST`.
 
 ### GET `/memberships` (planned — bulk snapshots)
 

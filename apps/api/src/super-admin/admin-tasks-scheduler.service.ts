@@ -14,6 +14,7 @@ import {
   type FitgoBirthdayRow,
   type FitgoExpiringMembershipRow,
   type FitgoInstallmentSale,
+  type FitgoRenewalCoverageRow,
 } from '@fitgo/1c-adapter';
 import {
   fitgoSessionKey,
@@ -1216,11 +1217,43 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       },
     });
 
+    // Batch coverage for tasks whose membership left the expiring (+lookback) feed
+    const coverageItems: Array<{
+      externalId: string;
+      docId: string;
+      validUntil?: string;
+    }> = [];
+    for (const task of openRenewals) {
+      const meta = (task.meta ?? {}) as Record<string, unknown>;
+      const docId = typeof meta.docId === 'string' ? meta.docId : null;
+      if (!docId || byDocId.has(docId)) continue;
+      if (!task.clientExternalId) continue;
+      coverageItems.push({
+        externalId: task.clientExternalId,
+        docId,
+        validUntil:
+          typeof meta.validUntil === 'string' ? meta.validUntil : undefined,
+      });
+    }
+    const coverageByKey = new Map<string, FitgoRenewalCoverageRow>();
+    if (coverageItems.length && provider.getRenewalCoverage) {
+      try {
+        const coverage = await provider.getRenewalCoverage(coverageItems);
+        for (const c of coverage) {
+          coverageByKey.set(`${c.externalId}:${c.docId}`, c);
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Renewal coverage batch failed: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
     for (const task of openRenewals) {
       const meta = (task.meta ?? {}) as Record<string, unknown>;
       const docId = typeof meta.docId === 'string' ? meta.docId : null;
       const row = docId ? byDocId.get(docId) : undefined;
-      const validUntilStr =
+      let validUntilStr =
         typeof meta.validUntil === 'string' ? meta.validUntil : null;
       const termDays =
         typeof meta.termDays === 'number'
@@ -1251,42 +1284,106 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         continue;
       }
 
-      if (row?.nextMembership) {
+      if (row?.renewed || row?.nextMembership) {
         await this.closeAsRenewed(
           task.id,
           systemUserId,
-          'Авто: куплен следующий абонемент',
+          row.renewed && !row.nextMembership
+            ? 'Авто: абонемент продлён в 1С'
+            : 'Авто: куплен следующий абонемент',
         );
         closedRenewed += 1;
         continue;
       }
 
-      // Doc left the 14-day window — check live membership for renewal after expiry
-      if (!row && task.clientExternalId && provider.getMembership) {
-        try {
-          const live = await provider.getMembership(task.clientExternalId);
-          const oldUntil = validUntilStr?.slice(0, 10);
-          const newUntil = live?.validUntil?.slice(0, 10);
-          const newId = live?.id;
-          if (
-            live &&
-            newId &&
-            docId &&
-            newId !== docId &&
-            newUntil &&
-            oldUntil &&
-            newUntil > oldUntil
-          ) {
-            await this.closeAsRenewed(
-              task.id,
-              systemUserId,
-              'Авто: новый абонемент в 1С после окончания',
-            );
-            closedRenewed += 1;
-            continue;
+      // Same doc, later end date in feed (freeze / term shift) — move due, keep open
+      if (row?.validUntil && validUntilStr) {
+        const liveUntil = row.validUntil.slice(0, 10);
+        const taskUntil = validUntilStr.slice(0, 10);
+        if (liveUntil > taskUntil) {
+          const until = new Date(liveUntil);
+          const nextAction = new Date(today);
+          const daysLeft = Math.floor(
+            (until.getTime() - today.getTime()) / 86400000,
+          );
+          if (daysLeft > callLead) {
+            nextAction.setTime(until.getTime() - callLead * 86400000);
           }
-        } catch {
-          // ignore per-client probe failures
+          await this.prisma.adminTask.update({
+            where: { id: task.id },
+            data: {
+              meta: { ...meta, validUntil: liveUntil },
+              dueAt: until,
+              nextActionAt: nextAction,
+            },
+          });
+          validUntilStr = liveUntil;
+        }
+      }
+
+      // Doc left the scan window — batch coverage (next sold / marked / extended)
+      if (!row && docId && task.clientExternalId) {
+        const cov = coverageByKey.get(`${task.clientExternalId}:${docId}`);
+        if (cov?.covered) {
+          await this.closeAsRenewed(
+            task.id,
+            systemUserId,
+            this.renewalCoverageComment(cov.reason),
+          );
+          closedRenewed += 1;
+          continue;
+        }
+        if (
+          cov?.reason === 'extended' &&
+          cov.currentValidUntil &&
+          validUntilStr &&
+          cov.currentValidUntil > validUntilStr.slice(0, 10)
+        ) {
+          const liveUntil = cov.currentValidUntil.slice(0, 10);
+          const until = new Date(liveUntil);
+          const nextAction = new Date(today);
+          const daysLeft = Math.floor(
+            (until.getTime() - today.getTime()) / 86400000,
+          );
+          if (daysLeft > callLead) {
+            nextAction.setTime(until.getTime() - callLead * 86400000);
+          }
+          await this.prisma.adminTask.update({
+            where: { id: task.id },
+            data: {
+              meta: { ...meta, validUntil: liveUntil },
+              dueAt: until,
+              nextActionAt: nextAction,
+            },
+          });
+          validUntilStr = liveUntil;
+        } else if (!cov && provider.getMembership) {
+          // Legacy fallback when coverage endpoint not published yet
+          try {
+            const live = await provider.getMembership(task.clientExternalId);
+            const oldUntil = validUntilStr?.slice(0, 10);
+            const newUntil = live?.validUntil?.slice(0, 10);
+            const newId = live?.id;
+            if (
+              live &&
+              newId &&
+              docId &&
+              newId !== docId &&
+              newUntil &&
+              oldUntil &&
+              newUntil > oldUntil
+            ) {
+              await this.closeAsRenewed(
+                task.id,
+                systemUserId,
+                'Авто: новый абонемент в 1С после окончания',
+              );
+              closedRenewed += 1;
+              continue;
+            }
+          } catch {
+            // ignore per-client probe failures
+          }
         }
       }
 
@@ -1309,7 +1406,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         }
       }
 
-      // Auto-close T+7 for ALL open stages
+      // Auto-close T+7 for ALL open stages (after coverage check)
       if (validUntilStr) {
         const until = new Date(validUntilStr.slice(0, 10));
         const daysPast = (today.getTime() - until.getTime()) / 86400000;
@@ -1364,7 +1461,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     }
 
     for (const row of rows) {
-      if (row.nextMembership) continue;
+      if (row.renewed || row.nextMembership) continue;
       if (!row.docId || !row.validUntil) continue;
 
       const bucket = this.termBucket(row.termDays);
@@ -1477,6 +1574,14 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       totalUnits: row.totalUnits ?? null,
       oneOff: false,
     };
+  }
+
+  private renewalCoverageComment(reason: string | undefined): string {
+    if (reason === 'marked') return 'Авто: абонемент продлён в 1С';
+    if (reason === 'next_sold' || reason === 'next_active') {
+      return 'Авто: куплен следующий абонемент';
+    }
+    return 'Авто: куплен следующий абонемент';
   }
 
   private async closeAsRenewed(

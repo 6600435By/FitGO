@@ -316,9 +316,16 @@ export interface IFitnessClubProvider {
   }>>;
   /**
    * Memberships expiring within `days` (FitGO HTTP GET /memberships/expiring).
-   * Includes `nextMembership` when the client already bought a future/pending one.
+   * Includes lookback (~7d), `nextMembership`, and `renewed` when already covered.
    */
   getExpiringMemberships?(days?: number): Promise<FitgoExpiringMembershipRow[]>;
+  /**
+   * Batch coverage for open renewal tasks whose docs left the expiring window
+   * (POST /memberships/renewal-coverage).
+   */
+  getRenewalCoverage?(
+    items: FitgoRenewalCoverageRequestItem[],
+  ): Promise<FitgoRenewalCoverageRow[]>;
   /**
    * Clients with birthday today from a counterparty segment
    * (GET /clients/birthdays?uuid=…).
@@ -364,6 +371,32 @@ export interface FitgoExpiringMembershipRow {
   /** true if termDays ≤ 1 or totalUnits === 1 (one-off; Nest skips) */
   oneOff?: boolean;
   nextMembership?: FitgoExpiringMembershipNext | null;
+  /** true when nextMembership or 1C «Продлено» — do not create / close as RENEWED */
+  renewed?: boolean;
+}
+
+export interface FitgoRenewalCoverageRequestItem {
+  externalId: string;
+  docId: string;
+  validUntil?: string;
+}
+
+export type FitgoRenewalCoverageReason =
+  | 'next_sold'
+  | 'next_active'
+  | 'marked'
+  | 'extended'
+  | '';
+
+export interface FitgoRenewalCoverageRow {
+  externalId: string;
+  docId: string;
+  /** Close task as RENEWED (next purchase or marked renewed) */
+  covered: boolean;
+  reason: FitgoRenewalCoverageReason | string;
+  nextMembership?: FitgoExpiringMembershipNext | null;
+  /** Live end date of the task's membership document */
+  currentValidUntil?: string | null;
 }
 
 export interface OneCConfig {

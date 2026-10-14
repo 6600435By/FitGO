@@ -637,7 +637,21 @@ export class Mock1CProvider implements IFitnessClubProvider {
         totalUnits: null as null,
         oneOff: false,
         nextMembership: null as null,
+        renewed: false,
       }));
+  }
+
+  async getRenewalCoverage(
+    items: import('./types').FitgoRenewalCoverageRequestItem[],
+  ) {
+    return items.map((item) => ({
+      externalId: item.externalId,
+      docId: item.docId,
+      covered: false,
+      reason: '',
+      nextMembership: null as null,
+      currentValidUntil: item.validUntil?.slice(0, 10) ?? null,
+    }));
   }
 
   async createPayment(externalId: string, productId: string): Promise<PaymentResult> {

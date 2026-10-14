@@ -708,6 +708,7 @@ export class FitgoHttpProvider {
           termDays?: number;
           totalUnits?: number | null;
           oneOff?: boolean;
+          renewed?: boolean;
           nextMembership?: {
             docId?: string;
             name?: string;
@@ -745,6 +746,15 @@ export class FitgoHttpProvider {
             row.oneOff === true ||
             (termDays != null && termDays > 0 && termDays <= 1) ||
             totalUnits === 1;
+          const nextMembership = row.nextMembership?.docId
+            ? {
+                docId: String(row.nextMembership.docId),
+                name: row.nextMembership.name ?? 'Абонемент',
+                status: row.nextMembership.status,
+                validFrom: row.nextMembership.validFrom,
+                validUntil: row.nextMembership.validUntil,
+              }
+            : null;
           return {
             externalId: String(row.externalId),
             firstName: row.firstName ?? '',
@@ -760,18 +770,62 @@ export class FitgoHttpProvider {
             termDays,
             totalUnits,
             oneOff,
-            nextMembership: row.nextMembership?.docId
-              ? {
-                  docId: String(row.nextMembership.docId),
-                  name: row.nextMembership.name ?? 'Абонемент',
-                  status: row.nextMembership.status,
-                  validFrom: row.nextMembership.validFrom,
-                  validUntil: row.nextMembership.validUntil,
-                }
-              : null,
+            nextMembership,
+            renewed: row.renewed === true || nextMembership != null,
           };
         })
         .filter((row) => !row.oneOff);
+    } catch {
+      return [];
+    }
+  }
+
+  async getRenewalCoverage(
+    items: import('./types').FitgoRenewalCoverageRequestItem[],
+  ): Promise<import('./types').FitgoRenewalCoverageRow[]> {
+    if (!items.length) return [];
+    try {
+      const data = await this.request<{
+        data?: Array<{
+          externalId?: string;
+          docId?: string;
+          covered?: boolean;
+          reason?: string;
+          currentValidUntil?: string | null;
+          nextMembership?: {
+            docId?: string;
+            name?: string;
+            status?: string;
+            validFrom?: string;
+            validUntil?: string;
+          } | null;
+        }>;
+      }>('/memberships/renewal-coverage', {
+        method: 'POST',
+        body: { items },
+        timeoutMs: 60_000,
+      });
+      if (!data || !Array.isArray(data.data)) return [];
+      return data.data
+        .filter((row) => row.externalId && row.docId)
+        .map((row) => ({
+          externalId: String(row.externalId),
+          docId: String(row.docId),
+          covered: row.covered === true,
+          reason: row.reason ?? '',
+          currentValidUntil: row.currentValidUntil
+            ? String(row.currentValidUntil).slice(0, 10)
+            : null,
+          nextMembership: row.nextMembership?.docId
+            ? {
+                docId: String(row.nextMembership.docId),
+                name: row.nextMembership.name ?? 'Абонемент',
+                status: row.nextMembership.status,
+                validFrom: row.nextMembership.validFrom,
+                validUntil: row.nextMembership.validUntil,
+              }
+            : null,
+        }));
     } catch {
       return [];
     }
