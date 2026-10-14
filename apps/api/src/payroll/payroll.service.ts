@@ -32,6 +32,7 @@ import {
   paymentCountsForMoney,
   paymentCountsForVolume,
   saleSessionKey,
+  sameSlicePreviousMonth,
   type ClubPayrollReport,
   type ClubPayrollRow,
   type ClubPayrollSectionId,
@@ -3006,33 +3007,8 @@ export class PayrollService {
     department?: ClubPayrollSectionId | 'ALL' | 'MANAGER',
   ): ClubPayrollReport {
     if (!department || department === 'ALL') return report;
-    const retotal = (
-      rows: ClubPayrollRow[],
-    ): ClubPayrollReport['sections'][number]['totals'] => ({
-      baseSalaryMinor: rows.reduce((a, r) => a + r.baseSalaryMinor, 0),
-      motivationMinor: rows.reduce((a, r) => a + r.motivationMinor, 0),
-      bonusMinor: rows.reduce((a, r) => a + r.bonusMinor, 0),
-      fineMinor: rows.reduce((a, r) => a + r.fineMinor, 0),
-      totalEarnedMinor: rows.reduce((a, r) => a + r.totalEarnedMinor, 0),
-      toPayMinor: rows.reduce((a, r) => a + r.toPayMinor, 0),
-    });
-    const sections =
-      department === 'MANAGER'
-        ? report.sections
-            .map((s) => {
-              const rows = s.rows.filter((r) => r.roles.includes('MANAGER'));
-              return { ...s, rows, totals: retotal(rows) };
-            })
-            .filter((s) => s.rows.length > 0)
-        : department === 'ADMIN'
-          ? report.sections
-              .filter((s) => s.id === 'ADMIN')
-              .map((s) => {
-                const rows = s.rows.filter((r) => !r.roles.includes('MANAGER'));
-                return { ...s, rows, totals: retotal(rows) };
-              })
-              .filter((s) => s.rows.length > 0)
-          : report.sections.filter((s) => s.id === department);
+    // MANAGER and ADMIN are distinct sections (managers no longer hide inside ADMIN).
+    const sections = report.sections.filter((s) => s.id === department);
     const rows = sections.flatMap((s) => s.rows);
     return {
       ...report,
@@ -3124,6 +3100,9 @@ export class PayrollService {
         payChips: summary.payChips,
         anomalyHints: summary.anomalyHints,
         sales,
+        ...(summary.motivationBreakdown
+          ? { motivationBreakdown: summary.motivationBreakdown }
+          : {}),
         workUnitCounts: {
           spa: summary.workUnits.filter(
             (u) => u.kind === 'SPA' && u.payrollTrusted,
@@ -3144,6 +3123,7 @@ export class PayrollService {
     );
 
     const sectionIds: ClubPayrollSectionId[] = [
+      'MANAGER',
       'ADMIN',
       'TRAINER',
       'SPECIALIST',
@@ -3193,7 +3173,11 @@ export class PayrollService {
     from: string,
     to: string,
     department?: ClubPayrollSectionId | 'ALL' | 'MANAGER',
+    picture = false,
   ): Promise<Buffer> {
+    if (picture) {
+      return this.exportClubPictureXlsx(clubId, from, to, department);
+    }
     const ExcelJS = await import('exceljs');
     const report = await this.getClubSummary(clubId, from, to, department);
     const wb = new ExcelJS.Workbook();
@@ -3256,6 +3240,213 @@ export class PayrollService {
     }
     ws.addRow([]);
     ws.addRow(['Всего начислено', report.grandTotalMinor / 100]);
+    const buf = await wb.xlsx.writeBuffer();
+    return Buffer.from(buf);
+  }
+
+  private sectionPaidMinor(rows: ClubPayrollRow[]): number {
+    return rows.reduce((a, r) => a + r.periodPaidTotalMinor, 0);
+  }
+
+  private deltaPct(current: number, previous: number): number | null {
+    if (previous === 0) return current === 0 ? 0 : null;
+    return Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
+  }
+
+  async exportClubPictureXlsx(
+    clubId: string,
+    from: string,
+    to: string,
+    department?: ClubPayrollSectionId | 'ALL' | 'MANAGER',
+  ): Promise<Buffer> {
+    const ExcelJS = await import('exceljs');
+    const cmp = sameSlicePreviousMonth(from, to);
+    const [cur, prev] = await Promise.all([
+      this.getClubSummary(clubId, from, to, department),
+      this.getClubSummary(clubId, cmp.from, cmp.to, department),
+    ]);
+    const wb = new ExcelJS.Workbook();
+    const prevBySection = new Map(prev.sections.map((s) => [s.id, s]));
+    const prevByUser = new Map(
+      prev.sections.flatMap((s) => s.rows.map((r) => [r.userId, r] as const)),
+    );
+
+    const wsSummary = wb.addWorksheet('Сводка');
+    wsSummary.addRow([
+      'Период',
+      `${from} — ${to}`,
+      'Сравнение',
+      `${cmp.from} — ${cmp.to}`,
+    ]);
+    wsSummary.addRow([]);
+    wsSummary.addRow([
+      'Подразделение',
+      'Люди',
+      'База',
+      'Мотивация',
+      'Премии',
+      'Штрафы',
+      'Начислено',
+      'Выплачено',
+      'К выдаче',
+      'База прошл.',
+      'Мотивация прошл.',
+      'Премии прошл.',
+      'Штрафы прошл.',
+      'Начислено прошл.',
+      'Выплачено прошл.',
+      'К выдаче прошл.',
+      'Δ% начислено',
+    ]);
+    for (const section of cur.sections) {
+      const p = prevBySection.get(section.id);
+      const paid = this.sectionPaidMinor(section.rows);
+      const paidPrev = p ? this.sectionPaidMinor(p.rows) : 0;
+      const earnedPrev = p?.totals.totalEarnedMinor ?? 0;
+      wsSummary.addRow([
+        section.label,
+        section.rows.length,
+        section.totals.baseSalaryMinor / 100,
+        section.totals.motivationMinor / 100,
+        section.totals.bonusMinor / 100,
+        section.totals.fineMinor / 100,
+        section.totals.totalEarnedMinor / 100,
+        paid / 100,
+        section.totals.toPayMinor / 100,
+        (p?.totals.baseSalaryMinor ?? 0) / 100,
+        (p?.totals.motivationMinor ?? 0) / 100,
+        (p?.totals.bonusMinor ?? 0) / 100,
+        (p?.totals.fineMinor ?? 0) / 100,
+        earnedPrev / 100,
+        paidPrev / 100,
+        (p?.totals.toPayMinor ?? 0) / 100,
+        this.deltaPct(section.totals.totalEarnedMinor, earnedPrev) ?? '',
+      ]);
+    }
+    const paidCur = this.sectionPaidMinor(cur.sections.flatMap((s) => s.rows));
+    const paidPrev = this.sectionPaidMinor(prev.sections.flatMap((s) => s.rows));
+    const toPayCur = cur.sections.reduce((a, s) => a + s.totals.toPayMinor, 0);
+    const toPayPrev = prev.sections.reduce((a, s) => a + s.totals.toPayMinor, 0);
+    wsSummary.addRow([
+      'Всего',
+      cur.sections.reduce((a, s) => a + s.rows.length, 0),
+      '',
+      '',
+      '',
+      '',
+      cur.grandTotalMinor / 100,
+      paidCur / 100,
+      toPayCur / 100,
+      '',
+      '',
+      '',
+      '',
+      prev.grandTotalMinor / 100,
+      paidPrev / 100,
+      toPayPrev / 100,
+      this.deltaPct(cur.grandTotalMinor, prev.grandTotalMinor) ?? '',
+    ]);
+
+    const wsStaff = wb.addWorksheet('Сотрудники');
+    wsStaff.addRow([
+      'Подразделение',
+      'ФИО',
+      'ПТ шт',
+      'ПТ %',
+      'ГП',
+      'SPA',
+      'Часы смены',
+      'База',
+      'Мотивация',
+      'Премии',
+      'Штрафы',
+      'Начислено',
+      'Выплачено',
+      'К выдаче',
+      'Начислено прошл.',
+      'Δ% начислено',
+    ]);
+    for (const section of cur.sections) {
+      for (const r of section.rows) {
+        const p = prevByUser.get(r.userId);
+        const earnedPrev = p?.totalEarnedMinor ?? 0;
+        wsStaff.addRow([
+          section.label,
+          r.name,
+          r.ptStats?.sessionCount ?? r.workUnitCounts.pt,
+          r.ptStats?.percent ?? '',
+          r.workUnitCounts.group,
+          r.workUnitCounts.spa,
+          r.workUnitCounts.shiftHours,
+          r.baseSalaryMinor / 100,
+          r.motivationMinor / 100,
+          r.bonusMinor / 100,
+          r.fineMinor / 100,
+          r.totalEarnedMinor / 100,
+          r.periodPaidTotalMinor / 100,
+          r.toPayMinor / 100,
+          earnedPrev / 100,
+          this.deltaPct(r.totalEarnedMinor, earnedPrev) ?? '',
+        ]);
+      }
+    }
+
+    const wsSales = wb.addWorksheet('Продажи');
+    wsSales.addRow([
+      'Подразделение',
+      'ФИО',
+      'Абон. база',
+      'Абон. мотивация',
+      'SPA база',
+      'SPA мотивация',
+      'Солярий база',
+      'Солярий мотивация',
+      'Магазин база',
+      'Магазин мотивация',
+      'Корпо база',
+      'Корпо мотивация',
+      'Абон. база прошл.',
+      'Абон. мотивация прошл.',
+      'SPA база прошл.',
+      'SPA мотивация прошл.',
+      'Солярий база прошл.',
+      'Солярий мотивация прошл.',
+      'Магазин база прошл.',
+      'Магазин мотивация прошл.',
+      'Корпо база прошл.',
+      'Корпо мотивация прошл.',
+    ]);
+    for (const section of cur.sections) {
+      if (section.id !== 'MANAGER' && section.id !== 'ADMIN') continue;
+      for (const r of section.rows) {
+        const p = prevByUser.get(r.userId);
+        wsSales.addRow([
+          section.label,
+          r.name,
+          (r.sales?.membershipMinor ?? 0) / 100,
+          (r.motivationBreakdown?.membershipMinor ?? 0) / 100,
+          (r.sales?.massageMinor ?? 0) / 100,
+          (r.motivationBreakdown?.spaMinor ?? 0) / 100,
+          (r.sales?.solariumMinor ?? 0) / 100,
+          (r.motivationBreakdown?.solariumMinor ?? 0) / 100,
+          (r.sales?.shopMinor ?? 0) / 100,
+          (r.motivationBreakdown?.shopMinor ?? 0) / 100,
+          (r.sales?.corporateMinor ?? 0) / 100,
+          (r.motivationBreakdown?.corporateMinor ?? 0) / 100,
+          (p?.sales?.membershipMinor ?? 0) / 100,
+          (p?.motivationBreakdown?.membershipMinor ?? 0) / 100,
+          (p?.sales?.massageMinor ?? 0) / 100,
+          (p?.motivationBreakdown?.spaMinor ?? 0) / 100,
+          (p?.sales?.solariumMinor ?? 0) / 100,
+          (p?.motivationBreakdown?.solariumMinor ?? 0) / 100,
+          (p?.sales?.shopMinor ?? 0) / 100,
+          (p?.motivationBreakdown?.shopMinor ?? 0) / 100,
+          (p?.sales?.corporateMinor ?? 0) / 100,
+          (p?.motivationBreakdown?.corporateMinor ?? 0) / 100,
+        ]);
+      }
+    }
+
     const buf = await wb.xlsx.writeBuffer();
     return Buffer.from(buf);
   }

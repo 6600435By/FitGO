@@ -45,6 +45,55 @@ function escapeHtml(s: string) {
     .replace(/"/g, '&quot;');
 }
 
+const PAYSLIP_SALE_SEGMENTS: Array<{
+  label: string;
+  sold: (s: PayrollPeriodSummary) => number;
+  contrib: (s: PayrollPeriodSummary) => number;
+}> = [
+  {
+    label: 'Абонементы',
+    sold: (s) => s.sales?.membershipMinor ?? 0,
+    contrib: (s) => s.motivationBreakdown?.membershipMinor ?? 0,
+  },
+  {
+    label: 'SPA',
+    sold: (s) => s.sales?.massageMinor ?? 0,
+    contrib: (s) => s.motivationBreakdown?.spaMinor ?? 0,
+  },
+  {
+    label: 'Солярий',
+    sold: (s) => s.sales?.solariumMinor ?? 0,
+    contrib: (s) => s.motivationBreakdown?.solariumMinor ?? 0,
+  },
+  {
+    label: 'Магазин',
+    sold: (s) => s.sales?.shopMinor ?? 0,
+    contrib: (s) => s.motivationBreakdown?.shopMinor ?? 0,
+  },
+  {
+    label: 'Корпо',
+    sold: (s) => s.sales?.corporateMinor ?? 0,
+    contrib: (s) => s.motivationBreakdown?.corporateMinor ?? 0,
+  },
+];
+
+function hasPayslipSalesSegments(summary: PayrollPeriodSummary): boolean {
+  return summary.sales != null || summary.motivationBreakdown != null;
+}
+
+function payslipSalesSegmentHtml(
+  summary: PayrollPeriodSummary,
+  cur: string,
+): string | null {
+  if (!hasPayslipSalesSegments(summary)) return null;
+  const rows = PAYSLIP_SALE_SEGMENTS.map((seg) => {
+    const sold = money(seg.sold(summary), cur);
+    const contrib = money(seg.contrib(summary), cur);
+    return `<tr><td>${escapeHtml(seg.label)}</td><td class="num">${escapeHtml(sold)}</td><td class="num">${escapeHtml(contrib)}</td></tr>`;
+  }).join('');
+  return `<h2>Продажи по сегментам</h2><table><thead><tr><th>Сегмент</th><th class="num">Продано</th><th class="num">В мотивацию</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 function payslipHtmlFromSummary(
   summary: PayrollPeriodSummary,
   fields: PayslipFields,
@@ -75,6 +124,8 @@ function payslipHtmlFromSummary(
     parts.push(
       `<p class="chips">${chips.map((c) => escapeHtml(c)).join(' · ')}</p>`,
     );
+    const salesBlock = payslipSalesSegmentHtml(summary, cur);
+    if (salesBlock) parts.push(salesBlock);
   }
   if (fields.bonus) {
     parts.push('<h2>Премии</h2>');
@@ -147,8 +198,9 @@ function printHtmlPayslips(sections: Array<{ name: string; html: string }>) {
   h1{font-size:18px;margin:0 0 12px;letter-spacing:-0.02em}
   h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#555;margin:16px 0 6px}
   table{width:100%;border-collapse:collapse}
+  th{padding:4px 0;border-bottom:1px solid #ccc;font-size:11px;text-align:left;font-weight:600;color:#555}
+  th.num,td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
   td{padding:4px 0;border-bottom:1px solid #e5e7eb;vertical-align:top}
-  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
   .meta{margin:4px 0;color:#333}
   .chips{font-size:11px;color:#666;margin-top:6px}
   .empty{color:#999;margin:0}
@@ -271,7 +323,7 @@ export function PayrollWorkspace({ mode }: Props) {
   const canEdit = mode === 'super';
 
   const [employeeReportOpen, setEmployeeReportOpen] = useState(mode === 'admin');
-  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(true);
   const [payoutsOpen, setPayoutsOpen] = useState(false);
 
   const filteredStaff = useMemo(() => {
@@ -514,6 +566,15 @@ export function PayrollWorkspace({ mode }: Props) {
       for (const c of chips) lines.push(`  · ${c}`);
       lines.push(`  Оклад / часы: ${money(summary.baseSalaryMinor, cur)}`);
       lines.push(`  Мотивация: ${money(summary.motivationMinor, cur)}`);
+      if (hasPayslipSalesSegments(summary)) {
+        lines.push('');
+        lines.push('Продажи по сегментам (продано → в мотивацию):');
+        for (const seg of PAYSLIP_SALE_SEGMENTS) {
+          lines.push(
+            `  ${seg.label}: ${money(seg.sold(summary), cur)} → ${money(seg.contrib(summary), cur)}`,
+          );
+        }
+      }
     }
     if (fields.bonus) {
       lines.push('');

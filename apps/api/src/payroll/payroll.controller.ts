@@ -140,13 +140,16 @@ export class PayrollController {
     @Query('from') from: string,
     @Query('to') to: string,
     @Query('department') department?: ClubPayrollSectionId | 'ALL' | 'MANAGER',
+    @Query('picture') picture?: string,
     @Res({ passthrough: true }) res?: { setHeader: (k: string, v: string) => void },
   ) {
+    const asPicture = picture === '1' || picture === 'true';
     const buf = await this.payroll.exportClubSummaryXlsx(
       requireClubId(user),
       from,
       to,
       department ?? 'ALL',
+      asPicture,
     );
     res?.setHeader(
       'Content-Type',
@@ -154,7 +157,7 @@ export class PayrollController {
     );
     res?.setHeader(
       'Content-Disposition',
-      `attachment; filename="ZP_${from}_${to}.xlsx"`,
+      `attachment; filename="${asPicture ? 'ZP_picture' : 'ZP'}_${from}_${to}.xlsx"`,
     );
     return new StreamableFile(buf);
   }

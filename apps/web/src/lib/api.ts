@@ -2941,13 +2941,19 @@ export const api = {
 
   payrollClubSummaryXlsx: async (
     token: string,
-    params: { from: string; to: string; department?: string },
+    params: {
+      from: string;
+      to: string;
+      department?: string;
+      picture?: boolean;
+    },
   ) => {
     const q = new URLSearchParams({
       from: params.from,
       to: params.to,
     });
     if (params.department) q.set('department', params.department);
+    if (params.picture) q.set('picture', '1');
     const base = API_URL;
     const res = await fetch(
       `${base}/super-admin/payroll/club-summary.xlsx?${q}`,

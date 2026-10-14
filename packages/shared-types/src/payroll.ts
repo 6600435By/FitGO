@@ -344,6 +344,8 @@ export interface ClubPayrollRow {
   payChips: string[];
   anomalyHints: string[];
   sales?: StaffSalesBreakdown;
+  /** ADMIN/MANAGER: how motivationMinor splits across categories. */
+  motivationBreakdown?: MotivationCategoryBreakdown;
   workUnitCounts: {
     spa: number;
     pt: number;
@@ -372,4 +374,31 @@ export interface ClubPayrollReport {
     };
   }>;
   grandTotalMinor: number;
+}
+
+/**
+ * Same calendar day-of-month range one month earlier.
+ * Day is clamped to the previous month's length (31 Mar → 28/29 Feb).
+ */
+export function sameSlicePreviousMonth(
+  from: string,
+  to: string,
+): { from: string; to: string } {
+  const shift = (iso: string): string => {
+    const [y, m, d] = iso.split('-').map(Number);
+    const year = y ?? 1970;
+    const month = m ?? 1;
+    const day = d ?? 1;
+    const prevMonthIndex = month - 2; // 0-based, may be -1
+    const anchor = new Date(Date.UTC(year, prevMonthIndex, 1));
+    const last = new Date(
+      Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 0),
+    ).getUTCDate();
+    const clamped = Math.min(day, last);
+    const yy = anchor.getUTCFullYear();
+    const mm = String(anchor.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(clamped).padStart(2, '0');
+    return `${yy}-${mm}-${dd}`;
+  };
+  return { from: shift(from), to: shift(to) };
 }
