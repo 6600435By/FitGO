@@ -7,6 +7,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { PayrollModule } from '../payroll/payroll.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import { AdminTasksSchedulerService } from './admin-tasks-scheduler.service';
+import { BackupStatusService } from './backup-status.service';
 import { SuperAdminAnalyticsService } from './super-admin-analytics.service';
 import { SuperAdminController } from './super-admin.controller';
 import { SuperAdminService } from './super-admin.service';
@@ -26,6 +27,7 @@ import { SuperAdminService } from './super-admin.service';
     SuperAdminService,
     SuperAdminAnalyticsService,
     AdminTasksSchedulerService,
+    BackupStatusService,
   ],
   exports: [AdminTasksSchedulerService],
 })

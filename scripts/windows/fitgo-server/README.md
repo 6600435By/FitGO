@@ -11,7 +11,10 @@
 | Файл | Назначение |
 |------|------------|
 | [Install-FitGO.ps1](./Install-FitGO.ps1) | Первая установка: Node, pnpm, NSSM, build, `db push` + minimal seed, службы |
-| [Update-FitGO.ps1](./Update-FitGO.ps1) | Апдейт кода; **не** трогает Postgres и `.env` |
+| [Update-FitGO.ps1](./Update-FitGO.ps1) | Апдейт кода; перед апдейтом — бэкап; **не** трогает Postgres и `.env` при успехе |
+| [Backup-FitGO.ps1](./Backup-FitGO.ps1) | Ночной / ручной комплект: `pg_dump` + `.env` + uploads + статус для UI |
+| [Restore-FitGO.ps1](./Restore-FitGO.ps1) | Восстановление Data / Release из комплекта |
+| [Register-FitGOBackupTask.ps1](./Register-FitGOBackupTask.ps1) | Task Scheduler: 01:30 daily + Sun 06:15 verify |
 | [Uninstall-FitGO.ps1](./Uninstall-FitGO.ps1) | Снимает службы; БД по умолчанию остаётся |
 | [fitgo-api.env.example](./fitgo-api.env.example) | Шаблон `apps/api/.env` |
 | [apache-fitgo-proxy.conf.template](./apache-fitgo-proxy.conf.template) | Прокси HTTPS → API |
@@ -47,7 +50,9 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 .\Update-FitGO.ps1
 ```
 
-Не нужно Uninstall → Install. Update = `git pull` (или подложить код) → build → restart служб.
+Перед апдейтом скрипт вызывает `Backup-FitGO.ps1`. Если бэкап упал — Update останавливается (схема не пушится). Аварийный повтор без дампа: `.\Update-FitGO.ps1 -SkipBackup`.
+
+Не нужно Uninstall → Install. Update = бэкап → `git pull` (или подложить код) → build → restart служб.
 
 Если **`git` не найден** (часто на S2016 без Git for Windows):
 
@@ -73,17 +78,47 @@ Web build: пустой `NEXT_PUBLIC_API_URL`, `FITGO_API_PROXY_TARGET=http://12
 
 В `CORS_ORIGIN` добавьте `https://app.ffs.by` (и при необходимости URL specialist-web) через запятую.
 
-## Бэкапы
+## Бэкапы и восстановление
 
-С первого дня после настройки staff:
+Бэкап покрывает **Postgres FitGO** + `apps/api/.env` + uploads + зеркало снимков зала. **Базу 1С не трогает.** Службы FitGO во время ночного бэкапа не останавливаются.
 
-```text
-pg_dump -U fitgo fitgo > fitgo-YYYYMMDD.sql
+### Разовая настройка (после staff)
+
+```powershell
+cd C:\FitGO\FitGO\scripts\windows\fitgo-server
+# пароль postgres — один раз выдаёт CREATEDB роли fitgo (в задачу не пишется)
+.\Register-FitGOBackupTask.ps1 -PostgresSuperPassword 'YOUR_POSTGRES_PASSWORD'
+# опционально второй диск/шара:
+# .\Register-FitGOBackupTask.ps1 -OffsitePath E:\FitGO-Offsite -PostgresSuperPassword '...'
+.\Backup-FitGO.ps1   # первая копия сразу
 ```
 
-Храните вне диска `S2016` (или хотя бы другой том).
+Задачи: `FitGO-Backup` (ежедневно **01:30**), `FitGO-Backup-Verify` (вс **06:15**, подъём в `fitgo_backup_check`).
 
-## Запрещено
+Каталог по умолчанию: `D:\FitGO-Backups` (если нет D: — `C:\FitGO-Backups`): `daily\`, `weekly\`, `files-mirror\`, `LAST_OK.txt`. Храните 14 дневных + 8 недельных. Offsite — дамп + `.env`, без 14 копий hall.
+
+Статус для UI: `C:\FitGO\FitGO\apps\api\var\backup-status.json` (переопределение `FITGO_BACKUP_STATUS_PATH` в `.env`).
+
+### SUPER_ADMIN в приложении
+
+Если последний бэкап с ошибкой, файла нет, или успех старше **36 часов** — в шапке супер-админа жёлтое предупреждение. Если всё ок — полоски нет. Кнопки «сделать бэкап» в UI нет.
+
+### Восстановление
+
+1С не останавливать. FitGO недоступен на время restore (обычно 5–15 мин).
+
+```powershell
+# Обычный сбой данных (тот же git SHA):
+.\Restore-FitGO.ps1 -Mode Data
+
+# После плохого Update (откат кода по SHA из манифеста):
+.\Restore-FitGO.ps1 -Mode Release -BundleId 2026-10-14_0130
+```
+
+Порядок: stop FitGO → страховочный дамп в `pre-restore\` → `fitgo_restore` → rename → файлы/`.env` → start. Режим Data блокируется, если SHA комплекта ≠ текущий код (нужен Release или `-Force`).
+
+### Запрещено
 
 - Переносить `pg_dump` со стенда Mac/VPS в СП.
 - Коммитить `apps/api/.env` с ключами.
+- Запускать бэкап вручную в 03:00–06:00 (ночь FULL sync) без нужды.

@@ -11,6 +11,7 @@ import {
   AdminThemeToggle,
 } from '@/components/admin/admin-theme';
 import { AppShell } from '@/components/app-shell';
+import { BackupStatusBanner } from '@/components/admin/backup-status-banner';
 import { DataFreshness } from '@/components/data-freshness';
 import { PushBridge } from '@/components/push-bridge';
 import { StaffMessagesBadge } from '@/components/staff/staff-messages-badge';
@@ -255,6 +256,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
         >
           <div className="mb-3 space-y-3 sm:mb-4">
             <DataFreshness />
+            <BackupStatusBanner />
             <PushBridge />
           </div>
           {children}

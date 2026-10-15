@@ -2261,6 +2261,16 @@ export const api = {
   superAdminAuditLog: (token: string) =>
     request<StaffAuditLogItem[]>('/super-admin/audit-log', {}, token),
 
+  superAdminBackupStatus: (token: string) =>
+    request<{
+      warn: boolean;
+      reason?: 'failed' | 'stale' | 'missing';
+      message?: string;
+      finishedAt?: string | null;
+      ok?: boolean;
+      bundleId?: string | null;
+    }>('/super-admin/backup-status', {}, token),
+
   superAdminModules: (token: string) =>
     request<{
       modules: ProductModulesState;

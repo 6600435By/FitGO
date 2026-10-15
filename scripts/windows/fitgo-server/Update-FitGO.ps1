@@ -5,10 +5,14 @@
 [CmdletBinding()]
 param(
   [string]$InstallRoot = 'C:\FitGO',
-  [switch]$SkipPull
+  [switch]$SkipPull,
+  [switch]$SkipBackup,
+  [string]$BackupRoot = '',
+  [string]$OffsitePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $FitGoRoot = Join-Path $InstallRoot 'FitGO'
 $NssmExe = Join-Path $InstallRoot 'tools\nssm\nssm.exe'
 
@@ -31,6 +35,23 @@ function Resolve-GitExe {
 }
 
 Write-Host '=== FitGO СП Update (keeps Postgres + .env) ===' -ForegroundColor Cyan
+
+if (-not $SkipBackup) {
+  $backupScript = Join-Path $ScriptDir 'Backup-FitGO.ps1'
+  if (-not (Test-Path $backupScript)) {
+    throw ("Backup-FitGO.ps1 not found at " + $backupScript + " — refuse Update without backup")
+  }
+  Write-Host 'Pre-update backup...' -ForegroundColor Cyan
+  $backupArgs = @{
+    InstallRoot = $InstallRoot
+    Mode = 'Backup'
+  }
+  if ($BackupRoot) { $backupArgs['BackupRoot'] = $BackupRoot }
+  if ($OffsitePath) { $backupArgs['OffsitePath'] = $OffsitePath }
+  & $backupScript @backupArgs
+} else {
+  Write-Host 'SkipBackup: continuing without pre-update dump.' -ForegroundColor Yellow
+}
 
 Stop-Service FitGO-Web -ErrorAction SilentlyContinue
 Stop-Service FitGO-API -ErrorAction SilentlyContinue

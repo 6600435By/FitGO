@@ -24,6 +24,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { ApplyPresetDto, SetPermissionsDto } from './dto/permissions.dto';
 import { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 import { CreateAdminTaskDto, UpdateAdminTaskDto } from './dto/task.dto';
+import { BackupStatusService } from './backup-status.service';
 import { SuperAdminAnalyticsService } from './super-admin-analytics.service';
 import { SuperAdminService } from './super-admin.service';
 import { FeaturesService } from '../features/features.service';
@@ -40,6 +41,7 @@ export class SuperAdminController {
     private readonly analytics: SuperAdminAnalyticsService,
     private readonly features: FeaturesService,
     private readonly serviceUsage: ServiceUsageService,
+    private readonly backupStatus: BackupStatusService,
   ) {}
 
   @Get('staff')
@@ -163,6 +165,12 @@ export class SuperAdminController {
   async integrationHealth(@CurrentUser() user: JwtPayload) {
     const data = await this.analytics.getAnalytics(user, 7);
     return data.integrationHealth;
+  }
+
+  @Get('backup-status')
+  @Roles(UserRole.SUPER_ADMIN)
+  getBackupStatus() {
+    return this.backupStatus.getStatus();
   }
 
   @Get('modules')
