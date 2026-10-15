@@ -95,7 +95,7 @@ cd C:\FitGO\FitGO\scripts\windows\fitgo-server
 
 Задачи: `FitGO-Backup` (ежедневно **01:30**), `FitGO-Backup-Verify` (вс **06:15**, подъём в `fitgo_backup_check`).
 
-Каталог по умолчанию: `E:\FitGO-Backups` (если нет E: — `D:\`, иначе `C:\FitGO-Backups`): `daily\`, `weekly\`, `files-mirror\`, `LAST_OK.txt`. Храните 14 дневных + 8 недельных. Offsite — дамп + `.env`, без 14 копий hall.
+Каталог по умолчанию: параметр `-BackupRoot` = `E:\FitGO-Backups` (fallback: E → D → C). Папки: `daily\`, `weekly\`, `files-mirror\`, `LAST_OK.txt`. Храните 14 дневных + 8 недельных. Offsite — дамп + `.env`, без 14 копий hall. После смены диска перерегистрируйте задачу: `.\Register-FitGOBackupTask.ps1 -BackupRoot E:\FitGO-Backups`.
 
 Статус для UI: `C:\FitGO\FitGO\apps\api\var\backup-status.json` (переопределение `FITGO_BACKUP_STATUS_PATH` в `.env`).
 

@@ -14,7 +14,7 @@
 [CmdletBinding()]
 param(
   [string]$InstallRoot = 'C:\FitGO',
-  [string]$BackupRoot = '',
+  [string]$BackupRoot = 'E:\FitGO-Backups',
   [string]$BundleId = '',
   [ValidateSet('Data', 'Release')]
   [string]$Mode = 'Data',
@@ -131,9 +131,11 @@ function Parse-DatabaseUrl([string]$Url) {
 }
 
 function Resolve-BackupRoot([string]$Preferred) {
-  if ($Preferred) { return $Preferred }
-  if (Test-Path 'E:\') { return 'E:\FitGO-Backups' }
-  if (Test-Path 'D:\') { return 'D:\FitGO-Backups' }
+  if ($Preferred -and $Preferred.Trim()) { return $Preferred.Trim() }
+  $e = Get-PSDrive -Name 'E' -ErrorAction SilentlyContinue
+  if ($e -and $e.Provider.Name -eq 'FileSystem') { return 'E:\FitGO-Backups' }
+  $d = Get-PSDrive -Name 'D' -ErrorAction SilentlyContinue
+  if ($d -and $d.Provider.Name -eq 'FileSystem') { return 'D:\FitGO-Backups' }
   return 'C:\FitGO-Backups'
 }
 

@@ -15,7 +15,8 @@
 [CmdletBinding()]
 param(
   [string]$InstallRoot = 'C:\FitGO',
-  [string]$BackupRoot = '',
+  # Club SP: backups live on E: (D: is often full). Override with -BackupRoot if needed.
+  [string]$BackupRoot = 'E:\FitGO-Backups',
   [string]$OffsitePath = '',
   [ValidateSet('Backup', 'VerifyLast')]
   [string]$Mode = 'Backup',
@@ -141,9 +142,12 @@ function Parse-DatabaseUrl([string]$Url) {
 }
 
 function Resolve-BackupRoot([string]$Preferred) {
-  if ($Preferred) { return $Preferred }
-  if (Test-Path 'E:\') { return 'E:\FitGO-Backups' }
-  if (Test-Path 'D:\') { return 'D:\FitGO-Backups' }
+  if ($Preferred -and $Preferred.Trim()) { return $Preferred.Trim() }
+  # Prefer E: (data disk). Avoid D: when full — only fall back if E: missing.
+  $e = Get-PSDrive -Name 'E' -ErrorAction SilentlyContinue
+  if ($e -and $e.Provider.Name -eq 'FileSystem') { return 'E:\FitGO-Backups' }
+  $d = Get-PSDrive -Name 'D' -ErrorAction SilentlyContinue
+  if ($d -and $d.Provider.Name -eq 'FileSystem') { return 'D:\FitGO-Backups' }
   return 'C:\FitGO-Backups'
 }
 
@@ -247,6 +251,7 @@ if ($envMap['FITGO_BACKUP_STATUS_PATH']) {
 }
 
 $backupRoot = Resolve-BackupRoot $BackupRoot
+Write-Host ("Backup root: " + $backupRoot) -ForegroundColor DarkGray
 $dailyRoot = Join-Path $backupRoot 'daily'
 $weeklyRoot = Join-Path $backupRoot 'weekly'
 $mirrorRoot = Join-Path $backupRoot 'files-mirror'

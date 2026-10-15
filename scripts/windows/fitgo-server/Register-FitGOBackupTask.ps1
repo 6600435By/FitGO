@@ -9,7 +9,7 @@
 [CmdletBinding()]
 param(
   [string]$InstallRoot = 'C:\FitGO',
-  [string]$BackupRoot = '',
+  [string]$BackupRoot = 'E:\FitGO-Backups',
   [string]$OffsitePath = '',
   [string]$PostgresSuperPassword = ''
 )

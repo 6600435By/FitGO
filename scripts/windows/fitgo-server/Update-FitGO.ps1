@@ -8,7 +8,7 @@ param(
   [string]$InstallRoot = 'C:\FitGO',
   [switch]$SkipPull,
   [switch]$SkipBackup,
-  [string]$BackupRoot = '',
+  [string]$BackupRoot = 'E:\FitGO-Backups',
   [string]$OffsitePath = ''
 )
 
