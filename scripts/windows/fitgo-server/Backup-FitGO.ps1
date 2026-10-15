@@ -142,6 +142,7 @@ function Parse-DatabaseUrl([string]$Url) {
 
 function Resolve-BackupRoot([string]$Preferred) {
   if ($Preferred) { return $Preferred }
+  if (Test-Path 'E:\') { return 'E:\FitGO-Backups' }
   if (Test-Path 'D:\') { return 'D:\FitGO-Backups' }
   return 'C:\FitGO-Backups'
 }
