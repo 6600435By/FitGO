@@ -32,13 +32,17 @@ body {
     -webkit-text-security: disc;
   }
 
-  /* Native date/select: lock to same box as text search (macOS/WebKit quirks) */
+  /* Native date: lock to same box as text search (macOS/WebKit quirks).
+   * Do not strip appearance on type=time — Chrome/Safari then block segment edit. */
   .date-field {
     @apply tabular-nums;
     color-scheme: dark;
+    display: block;
+  }
+
+  input.date-field:not([type='time']) {
     -webkit-appearance: none;
     appearance: none;
-    display: block;
   }
 
   .date-field::-webkit-calendar-picker-indicator {
@@ -49,6 +53,11 @@ body {
 
   .date-field::-webkit-calendar-picker-indicator:hover {
     opacity: 1;
+  }
+
+  input.date-field[type='time']::-webkit-calendar-picker-indicator {
+    filter: invert(0.85);
+    opacity: 0.7;
   }
 
   select.input {

@@ -244,14 +244,16 @@ export class SpaBookingService {
             bookingRef: b.id,
           });
           if (st.found && st.cancelled) {
-            await this.prisma.spaBooking.update({
+            const updated = await this.prisma.spaBooking.update({
               where: { id: b.id },
               data: {
                 status: SpaBookingStatus.CANCELLED,
                 cancelledBy: SpaCancelledBy.CRM_ADMIN,
                 cancelledAt: new Date(),
               },
+              include: { client: true, service: true },
             });
+            await this.notifySpecialistSpaRemoved(updated);
             return;
           }
           // Документ удалён / пометён на удаление / не найден — снять блокировку CRM.
@@ -685,6 +687,29 @@ export class SpaBookingService {
       if (name) return name;
     }
     return guestName?.trim() || 'Гость';
+  }
+
+  /** Notify specialist when booking was cancelled/deleted by someone else. */
+  private async notifySpecialistSpaRemoved(booking: {
+    specialistId: string;
+    startAt: Date;
+    guestName?: string | null;
+    clientId?: string | null;
+    client?: { firstName: string; lastName: string } | null;
+    service?: { name: string } | null;
+    serviceName?: string | null;
+  }, senderId?: string | null) {
+    const serviceName =
+      booking.service?.name ?? booking.serviceName ?? 'Услуга';
+    await this.notifications
+      .notifySpaSpecialistBookingCancelled({
+        specialistId: booking.specialistId,
+        clientName: this.spaClientName(booking.client, booking.guestName),
+        serviceName,
+        startAt: booking.startAt,
+        senderId: senderId ?? booking.clientId ?? undefined,
+      })
+      .catch(() => undefined);
   }
 
   /**
@@ -2127,6 +2152,10 @@ export class SpaBookingService {
       const refreshed = await this.prisma.spaBooking.findUniqueOrThrow({
         where: { id: bookingId },
       });
+      if (refreshed.status === SpaBookingStatus.CANCELLED) {
+        // Cancelled in 1C during sync — specialist already notified.
+        return { ok: true };
+      }
       if (refreshed.consumedInCrmAt) {
         throw new BadRequestException(
           'Запись проведена в 1С — удаление только после отмены/удаления документа в 1С',
@@ -2141,6 +2170,7 @@ export class SpaBookingService {
         cancelledAt: new Date(),
       },
     });
+    // Self-cancel: no specialist notification.
     return { ok: true };
   }
 
@@ -2148,7 +2178,7 @@ export class SpaBookingService {
     const clubId = requireClubId(user);
     const booking = await this.prisma.spaBooking.findFirst({
       where: { id: bookingId, clubId },
-      include: { client: true },
+      include: { client: true, service: true },
     });
     if (!booking) throw new NotFoundException('Запись не найдена');
     if (booking.status === SpaBookingStatus.CANCELLED) {
@@ -2159,6 +2189,10 @@ export class SpaBookingService {
       const refreshed = await this.prisma.spaBooking.findUniqueOrThrow({
         where: { id: bookingId },
       });
+      if (refreshed.status === SpaBookingStatus.CANCELLED) {
+        // Already cancelled via 1C sync (specialist was notified there).
+        return { ok: true };
+      }
       if (refreshed.consumedInCrmAt) {
         throw new BadRequestException(
           'Запись проведена в 1С — удаление только после отмены/удаления документа в 1С',
@@ -2173,6 +2207,7 @@ export class SpaBookingService {
         cancelledAt: new Date(),
       },
     });
+    await this.notifySpecialistSpaRemoved(booking, user.sub);
     return { ok: true };
   }
 

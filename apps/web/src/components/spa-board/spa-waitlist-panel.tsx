@@ -459,7 +459,7 @@ function SpaWaitlistAddDialog({
             <input
               type="time"
               className="input date-field"
-              step={300}
+              step={60}
               value={timePart}
               onChange={(e) => {
                 const date =

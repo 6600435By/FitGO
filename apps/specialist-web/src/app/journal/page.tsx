@@ -8,7 +8,7 @@ import type {
 } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
-import { formatDateTime, getToken } from '@/lib/auth';
+import { formatDateTime, getToken, toDatetimeLocalValue } from '@/lib/auth';
 
 const DAY_LABELS = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
@@ -293,7 +293,7 @@ export default function JournalPage() {
                 className="field"
                 value={
                   assignForm.startAt
-                    ? new Date(assignForm.startAt).toISOString().slice(0, 16)
+                    ? toDatetimeLocalValue(assignForm.startAt)
                     : ''
                 }
                 onChange={(e) =>

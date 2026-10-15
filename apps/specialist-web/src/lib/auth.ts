@@ -30,6 +30,16 @@ export function getUser(): AuthUser | null {
   }
 }
 
+/** Merge fields into the cached session user (e.g. name refresh from /auth/me). */
+export function patchStoredUser(patch: Partial<AuthUser>): AuthUser | null {
+  if (typeof window === 'undefined') return null;
+  const prev = getUser();
+  if (!prev) return null;
+  const next = { ...prev, ...patch };
+  localStorage.setItem(USER_KEY, JSON.stringify(next));
+  return next;
+}
+
 export function requireSpecialist(user: AuthUser | null): boolean {
   return Boolean(user?.roles.includes(UserRole.SPECIALIST));
 }
@@ -45,4 +55,12 @@ export function formatDateTime(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/** ISO / Date → value for `<input type="datetime-local">` in local TZ. */
+export function toDatetimeLocalValue(isoOrDate: string | Date): string {
+  const d = typeof isoOrDate === 'string' ? new Date(isoOrDate) : isoOrDate;
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

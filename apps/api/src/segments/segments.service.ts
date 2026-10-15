@@ -149,7 +149,8 @@ export class SegmentsService {
       );
     }
 
-    // Add-only: never prune, never wipe stubs, never overwrite existing cards.
+    // Add-only for accounts: never prune or recreate. Same externalId may
+    // refresh firstName/lastName/phone from 1C; login stays unchanged.
     const results: SegmentSyncResult[] = [];
     const credentials: Array<{ email: string; password: string; name: string }> =
       [];
@@ -323,10 +324,41 @@ export class SegmentsService {
       const existing = byExternal ?? byCode;
 
       if (existing) {
-        // Same 1C person (externalId) — leave card alone (add-only).
+        // Same 1C person (externalId) — refresh name/phone; never touch login.
         if (existing.externalId === externalId) {
-          skipped += 1;
-          unchanged += 1;
+          const staleName = `${existing.lastName} ${existing.firstName}`.trim();
+          const namesDiffer = !staffNamesMatch(staleName, oneCName);
+          const phone = m.phone?.trim() || null;
+          if (!namesDiffer && !phone) {
+            skipped += 1;
+            unchanged += 1;
+            continue;
+          }
+          try {
+            await this.prisma.user.update({
+              where: { id: existing.id },
+              data: {
+                ...(namesDiffer ? { firstName, lastName } : {}),
+                ...(phone ? { phone } : {}),
+              },
+            });
+            if (namesDiffer) {
+              updated += 1;
+              if (reclaimNotes.length < 5) {
+                reclaimNotes.push(`${staleName} → ${oneCName}`);
+              }
+              this.logger.log(
+                `Staff sync renamed ${externalId}: "${staleName}" → "${oneCName}"`,
+              );
+            } else {
+              unchanged += 1;
+            }
+          } catch (err) {
+            failed += 1;
+            const msg = err instanceof Error ? err.message : String(err);
+            this.logger.warn(`Staff rename failed for ${externalId}: ${msg}`);
+            if (failNotes.length < 5) failNotes.push(`${m.name}: ${msg}`);
+          }
           continue;
         }
         // Code reused / stale card: FitGO has another name on this employeeCode

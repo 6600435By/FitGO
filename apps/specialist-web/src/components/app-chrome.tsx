@@ -5,7 +5,14 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { DataFreshness } from '@/components/data-freshness';
-import { clearAuth, getToken, getUser, requireSpecialist } from '@/lib/auth';
+import { api } from '@/lib/api';
+import {
+  clearAuth,
+  getToken,
+  getUser,
+  patchStoredUser,
+  requireSpecialist,
+} from '@/lib/auth';
 
 const NAV = [
   { href: '/journal', label: 'Журнал' },
@@ -33,6 +40,20 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
     }
     setName(`${user!.firstName} ${user!.lastName}`.trim());
     setReady(true);
+    api
+      .me(token)
+      .then((me) => {
+        const next = patchStoredUser({
+          firstName: me.firstName,
+          lastName: me.lastName,
+          email: me.email,
+          roles: me.roles,
+        });
+        if (next) {
+          setName(`${next.firstName} ${next.lastName}`.trim());
+        }
+      })
+      .catch(() => undefined);
   }, [pathname, router]);
 
   if (!ready) {

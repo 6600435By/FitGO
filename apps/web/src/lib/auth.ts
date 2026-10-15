@@ -32,6 +32,16 @@ export function getUser(): AuthUser | null {
   }
 }
 
+/** Merge fields into the cached session user (e.g. name refresh from /auth/me). */
+export function patchStoredUser(patch: Partial<AuthUser>): AuthUser | null {
+  if (typeof window === 'undefined') return null;
+  const prev = getUser();
+  if (!prev) return null;
+  const next = { ...prev, ...patch };
+  localStorage.setItem(USER_KEY, JSON.stringify(next));
+  return next;
+}
+
 export function getHomePath(
   roles: UserRole[],
   flags?: {

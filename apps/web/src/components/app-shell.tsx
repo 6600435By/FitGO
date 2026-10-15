@@ -12,7 +12,9 @@ import {
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { type ReactNode, useEffect, useState } from 'react';
-import { clearAuth, getUser } from '@/lib/auth';
+import { api } from '@/lib/api';
+import type { AuthUser } from '@/lib/api';
+import { clearAuth, getToken, getUser, patchStoredUser } from '@/lib/auth';
 import {
   locationKey,
   navStackDepth,
@@ -116,7 +118,7 @@ export function AppShell({
   const topNavAlways = hideBottomNav || bottomNavMdOnly;
   const pathname = usePathname();
   const router = useRouter();
-  const user = getUser();
+  const [user, setUser] = useState<AuthUser | null>(() => getUser());
   const [timerChrome, setTimerChrome] = useState<WorkoutTimerDockChrome | null>(
     null,
   );
@@ -136,6 +138,30 @@ export function AppShell({
       }),
     [],
   );
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    api
+      .me(token)
+      .then((me) => {
+        const next = patchStoredUser({
+          firstName: me.firstName,
+          lastName: me.lastName,
+          phone: me.phone,
+          email: me.email,
+          roles: me.roles,
+          groupPrograms: me.groupPrograms,
+          trainerStaff: me.trainerStaff,
+          trainerClub: me.trainerClub,
+          trainerReformers: me.trainerReformers,
+          club: me.club,
+          clubId: me.clubId,
+        });
+        if (next) setUser(next);
+      })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const sync = () => {

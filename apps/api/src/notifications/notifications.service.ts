@@ -499,6 +499,33 @@ export class NotificationsService implements OnModuleInit {
       month: 'long',
       hour: '2-digit',
       minute: '2-digit',
+      timeZone: 'Europe/Minsk',
+    });
+  }
+
+  /**
+   * Specialist alert when someone else cancelled/deleted their SPA booking.
+   * Do not call when the specialist cancelled themselves.
+   */
+  async notifySpaSpecialistBookingCancelled(params: {
+    specialistId: string;
+    clientName: string;
+    serviceName: string;
+    startAt: Date;
+    senderId?: string | null;
+  }) {
+    if (!params.specialistId) return;
+    const when = this.formatCancellationWhen(params.startAt);
+    const body = when
+      ? `Запись отменена: ${when} · ${params.clientName} · ${params.serviceName}.`
+      : `Запись отменена: ${params.clientName} · ${params.serviceName}.`;
+
+    await this.createNotification({
+      userId: params.specialistId,
+      title: 'Отмена записи в спа-кабинет',
+      body,
+      senderId: params.senderId ?? undefined,
+      status: NotificationStatus.PENDING,
     });
   }
 
@@ -616,12 +643,21 @@ export class NotificationsService implements OnModuleInit {
 
     if (!trainerId) return;
 
+    if (params.sessionType === 'spa') {
+      await this.notifySpaSpecialistBookingCancelled({
+        specialistId: trainerId,
+        clientName: params.clientName,
+        serviceName: params.sessionTitle,
+        startAt: params.startAt ?? new Date(),
+        senderId: params.clientId,
+      });
+      return;
+    }
+
     const title =
       params.sessionType === 'personal'
         ? 'Отмена персональной тренировки'
-        : params.sessionType === 'spa'
-          ? 'Отмена записи в спа-кабинет'
-          : 'Отмена группового занятия';
+        : 'Отмена группового занятия';
 
     await this.createNotification({
       userId: trainerId,
