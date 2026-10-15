@@ -49,6 +49,7 @@ export class MembersSummarySyncService {
 
     const provider = this.provider();
     if (!provider?.getMembersSummary) {
+      await this.purgeEmptySummaries(clubId);
       await this.mark(clubId, 'skipped', 'Analytics URL / getMembersSummary unavailable');
       return { from, to, upserted: 0 };
     }
@@ -56,6 +57,9 @@ export class MembersSummarySyncService {
     try {
       const snap = await provider.getMembersSummary({ from, to });
       if (!snap) {
+        // Drop stale all-zero rows from earlier BSL errors so analytics
+        // does not treat them as a real empty stock snapshot.
+        await this.purgeEmptySummaries(clubId);
         await this.mark(
           clubId,
           'skipped',
@@ -117,5 +121,24 @@ export class MembersSummarySyncService {
         lastSuccessAt: status === 'ok' ? new Date() : undefined,
       },
     });
+  }
+
+  /** Remove all-zero ClubMembersSummary rows (failed scope=members writes). */
+  private async purgeEmptySummaries(clubId: string) {
+    const deleted = await this.prisma.clubMembersSummary.deleteMany({
+      where: {
+        clubId,
+        active: 0,
+        frozen: 0,
+        expiring7: 0,
+        expiring30: 0,
+        endedInPeriod: 0,
+      },
+    });
+    if (deleted.count > 0) {
+      this.logger.log(
+        `Purged ${deleted.count} empty members summary row(s) for ${clubId}`,
+      );
+    }
   }
 }
