@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
+import { PasswordField } from '@/components/ui/password-field';
 import { api } from '@/lib/api';
 import { getHomePath, saveAuth } from '@/lib/auth';
 
@@ -59,8 +60,7 @@ export default function LoginPage() {
           </div>
           <div>
             <label className="mb-2 block text-sm text-slate-400">Пароль</label>
-            <input
-              type="password"
+            <PasswordField
               className="input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}

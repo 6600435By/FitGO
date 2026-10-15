@@ -3,9 +3,10 @@
 import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
 import Link from 'next/link';
+import { TrainerOnboarding } from '@/components/client/trainer-onboarding';
+import { PasswordField } from '@/components/ui/password-field';
 import { api } from '@/lib/api';
 import { getHomePath, saveAuth } from '@/lib/auth';
-import { TrainerOnboarding } from '@/components/client/trainer-onboarding';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -97,7 +98,13 @@ export default function RegisterPage() {
           </div>
           <div>
             <label className="mb-2 block text-sm text-slate-400">Пароль</label>
-            <input name="password" type="password" className="input" minLength={6} required />
+            <PasswordField
+              name="password"
+              className="input"
+              isNew
+              minLength={6}
+              required
+            />
           </div>
 
           {error && (

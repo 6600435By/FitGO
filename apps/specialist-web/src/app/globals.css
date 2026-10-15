@@ -78,6 +78,11 @@ body {
     color: var(--fg);
   }
 
+  /* type=password locks non-Latin IME on macOS; mask a text field instead */
+  .field-password-mask {
+    -webkit-text-security: disc;
+  }
+
   .field:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);

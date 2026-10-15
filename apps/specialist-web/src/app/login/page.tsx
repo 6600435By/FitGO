@@ -3,6 +3,7 @@
 import { UserRole } from '@fitgo/shared-types';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
+import { PasswordField } from '@/components/password-field';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { api } from '@/lib/api';
 import { requireSpecialist, saveAuth } from '@/lib/auth';
@@ -64,10 +65,8 @@ export default function LoginPage() {
         </label>
         <label className="block space-y-1.5 text-sm">
           <span style={{ color: 'var(--muted)' }}>Пароль</span>
-          <input
+          <PasswordField
             className="field"
-            type="password"
-            autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
