@@ -1,47 +1,70 @@
-# FitGO public web via Apache :8445 (NameVirtualHost) — applied on club WS2016.
+# FitGO public web via Apache NameVirtualHost — club WS2016.
 #
 # Context (branch A — no VPS, WordPress 2 on hoster.by):
 #   Phone → https://app.ffs.by (hoster SSL + PHP proxy)
-#        → https://app.ffs.by:8445 resolved to 86.57.152.242 (whitelist)
+#        → https://app.ffs.by:444 resolved to 86.57.152.242 (whitelist)
 #        → this vhost → http://127.0.0.1:3000 (Next)
 #        → Next rewrite /api → http://127.0.0.1:3001 (Nest)
 #
-# 1C publications stay on the FIRST vhost for *:8445
-# (httpd-ahssl.conf _default_:8445 / ServerName localhost:8445).
-# Requests without Host app.ffs.by (Nest → 127.0.0.1:8445, site Forma on :444)
-# never hit this block.
+# Why :444 (not :8445): hoster WordPress shared hosting often cannot open
+# outbound TCP to :8445 (curl error 28 connect timeout). Site schedule already
+# reaches Forma on :444 from the same egress IP 87.232.64.100.
 #
-# Prerequisites in httpd.conf (uncomment if needed):
-#   LoadModule proxy_module modules/mod_proxy.so
-#   LoadModule proxy_http_module modules/mod_proxy_http.so
-#   LoadModule ssl_module modules/mod_ssl.so
+# 1C publications stay on the FIRST vhost for *:444
+# (httpd-ahssl.conf _default_:444 / ServerName localhost:444).
+# Nest → 127.0.0.1:8445 and site /forma without Host app.ffs.by stay on default.
 #
-# Install:
-#   1. Save as C:\Apache24\conf\extra\fitgo-app-8445.conf
+# Maintenance page (when FitGO-Web is stopped during Update-FitGO.ps1):
+#   Copy deploy/hoster-wp-proxy/maintenance.html →
+#     C:\Apache24\htdocs\fitgo-maintenance.html
+#   ProxyErrorOverride + ErrorDocument replace stock English 503.
+#
+# Prerequisites in httpd.conf:
+#   LoadModule proxy_module / proxy_http_module / ssl_module
+#
+# Install (PREFERRED — port 444):
+#   1. Save as C:\Apache24\conf\extra\fitgo-app-444.conf
 #   2. In httpd.conf AFTER: Include conf/extra/httpd-ahssl.conf
-#      add: Include conf/extra/fitgo-app-8445.conf
+#      add: Include conf/extra/fitgo-app-444.conf
 #   3. httpd.exe -t && httpd.exe -S
-#      Expect: *:8445 default server localhost (httpd-ahssl.conf)
+#      Expect: *:444 default server localhost (httpd-ahssl.conf)
 #              then namevhost app.ffs.by (this file)
 #   4. Restart-Service Apache2.4
+#   5. Optional: keep or remove old fitgo-app-8445.conf Include
 
-<VirtualHost *:8445>
+<VirtualHost *:444>
   ServerName app.ffs.by
   SSLEngine on
   SSLCertificateFile "${SRVROOT}/conf/ssl/server.crt"
   SSLCertificateKeyFile "${SRVROOT}/conf/ssl/server.key"
+  DocumentRoot "${SRVROOT}/htdocs"
   ProxyPreserveHost On
   ProxyTimeout 180
   # Global Alias /forma and /fitgo (httpd.conf) — never send to Next
   ProxyPass        /forma !
   ProxyPass        /fitgo !
+  # Local 503 page while Next (:3000) is down — must not ProxyPass to Next
+  ProxyPass        /fitgo-maintenance.html !
+  ProxyErrorOverride On
+  ErrorDocument 503 /fitgo-maintenance.html
   ProxyPass        /  http://127.0.0.1:3000/
   ProxyPassReverse /  http://127.0.0.1:3000/
 </VirtualHost>
 
-# --- Optional legacy (NOT used for branch A) ---
-# Separate trusted cert on :443 + MikroTik DNAT (needs router password):
-# <VirtualHost *:443>
-#   ServerName fitgo-api.ffs.by
-#   ...
+# --- Optional: same app on :8445 (LAN / non-hoster clients only) ---
+# <VirtualHost *:8445>
+#   ServerName app.ffs.by
+#   SSLEngine on
+#   SSLCertificateFile "${SRVROOT}/conf/ssl/server.crt"
+#   SSLCertificateKeyFile "${SRVROOT}/conf/ssl/server.key"
+#   DocumentRoot "${SRVROOT}/htdocs"
+#   ProxyPreserveHost On
+#   ProxyTimeout 180
+#   ProxyPass        /forma !
+#   ProxyPass        /fitgo !
+#   ProxyPass        /fitgo-maintenance.html !
+#   ProxyErrorOverride On
+#   ErrorDocument 503 /fitgo-maintenance.html
+#   ProxyPass        /  http://127.0.0.1:3000/
+#   ProxyPassReverse /  http://127.0.0.1:3000/
 # </VirtualHost>

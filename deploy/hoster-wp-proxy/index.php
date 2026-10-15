@@ -2,15 +2,18 @@
 /**
  * FitGO — thin reverse proxy for WordPress shared hosting (hoster.by).
  *
- * Browser → https://app.ffs.by → this script → https://app.ffs.by:8445
+ * Browser → https://app.ffs.by → this script → https://app.ffs.by:444
  * (resolved to club public IP via CURLOPT_RESOLVE so Apache NameVirtualHost
  * matches ServerName app.ffs.by; MikroTik whitelist already allows hoster egress).
  *
- * Do NOT put WordPress in this docroot. Copy only this file + .htaccess.
+ * Port 444 (not 8445): shared WordPress hosting often blocks outbound :8445;
+ * Forma schedule already uses :444 from the same hoster IP.
+ *
+ * Do NOT put WordPress in this docroot. Copy index.php + .htaccess + maintenance.html.
  *
  * Env overrides (optional, via putenv / .user.ini / panel):
  *   FITGO_UPSTREAM_HOST   default app.ffs.by
- *   FITGO_UPSTREAM_PORT   default 8445
+ *   FITGO_UPSTREAM_PORT   default 444
  *   FITGO_UPSTREAM_IP     default 86.57.152.242
  *   FITGO_PROXY_TIMEOUT   default 180 (seconds)
  */
@@ -18,7 +21,7 @@
 declare(strict_types=1);
 
 $upstreamHost = getenv('FITGO_UPSTREAM_HOST') ?: 'app.ffs.by';
-$upstreamPort = (int) (getenv('FITGO_UPSTREAM_PORT') ?: '8445');
+$upstreamPort = (int) (getenv('FITGO_UPSTREAM_PORT') ?: '444');
 $upstreamIp = getenv('FITGO_UPSTREAM_IP') ?: '86.57.152.242';
 $timeout = (int) (getenv('FITGO_PROXY_TIMEOUT') ?: '180');
 
@@ -30,6 +33,43 @@ if ($query !== null && $query !== '') {
 }
 
 $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+
+/**
+ * Browser document navigations get the Russian maintenance page on 502/503.
+ * API / JSON clients keep status + original (or short plain) body.
+ */
+function fitgo_wants_maintenance_html(string $path): bool
+{
+    if ($path === '/api' || strncmp($path, '/api/', 5) === 0) {
+        return false;
+    }
+    $accept = strtolower($_SERVER['HTTP_ACCEPT'] ?? '');
+    if ($accept !== ''
+        && strpos($accept, 'application/json') !== false
+        && strpos($accept, 'text/html') === false
+    ) {
+        return false;
+    }
+    return true;
+}
+
+function fitgo_send_maintenance(int $status, string $method): void
+{
+    $file = __DIR__ . '/maintenance.html';
+    http_response_code($status);
+    header('Cache-Control: no-store');
+    header('Content-Type: text/html; charset=utf-8');
+    if ($method === 'HEAD') {
+        return;
+    }
+    if (is_readable($file)) {
+        readfile($file);
+        return;
+    }
+    echo '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
+        . '<meta http-equiv="refresh" content="12"><title>FitGO</title></head>'
+        . '<body><p>FitGO обновляется. Подождите и откройте снова.</p></body></html>';
+}
 
 $hopByHop = [
     'host' => true,
@@ -69,8 +109,13 @@ if (!in_array($method, ['GET', 'HEAD'], true)) {
 
 $ch = curl_init($target);
 if ($ch === false) {
+    if (fitgo_wants_maintenance_html($path)) {
+        fitgo_send_maintenance(502, $method);
+        exit;
+    }
     http_response_code(502);
     header('Content-Type: text/plain; charset=utf-8');
+    header('Cache-Control: no-store');
     echo 'FitGO proxy: curl_init failed';
     exit;
 }
@@ -81,7 +126,7 @@ $opts = [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_HEADER => true,
     CURLOPT_FOLLOWLOCATION => false,
-    CURLOPT_CONNECTTIMEOUT => 15,
+    CURLOPT_CONNECTTIMEOUT => 20,
     CURLOPT_TIMEOUT => $timeout,
     CURLOPT_SSL_VERIFYPEER => false,
     CURLOPT_SSL_VERIFYHOST => 0,
@@ -106,10 +151,15 @@ $headerSize = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
 curl_close($ch);
 
 if ($response === false) {
+    if (fitgo_wants_maintenance_html($path)) {
+        fitgo_send_maintenance(502, $method);
+        exit;
+    }
     http_response_code(502);
     header('Content-Type: text/plain; charset=utf-8');
     header('Cache-Control: no-store');
-    echo 'FitGO proxy upstream error (' . $curlErrno . '): ' . $curlErr;
+    echo 'FitGO proxy upstream error (' . $curlErrno . '): ' . $curlErr
+        . ' → ' . $upstreamHost . ':' . $upstreamPort . ' @ ' . $upstreamIp;
     exit;
 }
 
@@ -119,6 +169,12 @@ $rawBody = substr($response, $headerSize);
 if ($status < 100) {
     $status = 502;
 }
+
+if (($status === 502 || $status === 503) && fitgo_wants_maintenance_html($path)) {
+    fitgo_send_maintenance($status === 503 ? 503 : 502, $method);
+    exit;
+}
+
 http_response_code($status);
 header('Cache-Control: no-store');
 
@@ -136,7 +192,6 @@ foreach (explode("\r\n", $rawHeaders) as $line) {
     if (isset($hopByHop[$lower]) || $lower === 'content-encoding') {
         continue;
     }
-    // Let PHP set Content-Length for the proxied body.
     if ($lower === 'content-length') {
         continue;
     }

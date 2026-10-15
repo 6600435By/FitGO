@@ -10,13 +10,16 @@ MikroTik **не меняем**. Канал hoster → клуб уже в whiteli
 ```text
 Телефон ──HTTPS──► app.ffs.by (hoster, Let's Encrypt)
                       │  PHP proxy (deploy/hoster-wp-proxy)
-                      │  CURLOPT_RESOLVE app.ffs.by:8445 → 86.57.152.242
+                      │  CURLOPT_RESOLVE app.ffs.by:444 → 86.57.152.242
                       ▼
-               Apache *:8445  NameVirtualHost
+               Apache *:444  NameVirtualHost
                  ├─ Host: app.ffs.by  → Next :3000  → Nest :3001
-                 └─ иначе (default)   → 1С /fitgo, /forma (без изменений)
-Nest / сайт ──► 127.0.0.1:8445 или :444 ──► default vhost (localhost)
+                 └─ иначе (default)   → 1С /forma (без изменений)
+Nest / FitGO HS ──► 127.0.0.1:8445 ──► default vhost на :8445
+Сайт ffs.by ──► :444 /forma (как сейчас)
 ```
+
+**Почему порт 444, не 8445:** на тарифе WordPress 2 исходящие на `:8445` часто блокируются (ошибка прокси `Connection timed out after 15001 milliseconds` / curl 28). Расписание сайта уже ходит на `:444` с того же IP `87.232.64.100`.
 
 Один адрес для сотрудников: **`https://app.ffs.by`**.  
 Запасной вход в LAN без интернета: `http://192.168.1.20:3000` (сессия браузера отдельная).
@@ -25,17 +28,15 @@ Nest / сайт ──► 127.0.0.1:8445 или :444 ──► default vhost (lo
 
 ## Уже сделано на сервере 1С (WS2016)
 
-Проверено 2026-10-04:
+Проверено 2026-10-04 (блок на `:8445`); **прод-прокси hoster → порт `:444`** (см. ниже).
 
 | Шаг | Статус |
 |-----|--------|
 | `proxy_module` / `proxy_http_module` включены в `httpd.conf` | OK |
-| `C:\Apache24\conf\extra\fitgo-app-8445.conf` | OK (шаблон в [apache-fitgo-proxy.conf.template](../scripts/windows/fitgo-server/apache-fitgo-proxy.conf.template)) |
-| `Include` **после** `httpd-ahssl.conf` | OK |
-| `httpd -S`: default `localhost` на `:8445`, затем `namevhost app.ffs.by` | OK |
-| `/login` с Host `app.ffs.by` → FitGO `200` | OK |
-| `/fitgo/hs/...` без Host app → 1С `401` (ключ) | OK |
-| `/forma` на `:444` → 1С `401` | OK |
+| NameVirtualHost `app.ffs.by` на **`:444`** (`fitgo-app-444.conf`) | нужно на сервере (см. § Apache) |
+| Опционально: тот же блок на `:8445` | для LAN/отладки |
+| `/login` с Host `app.ffs.by` на `:444` → FitGO | после Include + restart |
+| `/forma` на `:444` без Host app → 1С | не ломать (default vhost первым) |
 
 Публикации в `httpd.conf` (глобально):
 
@@ -66,15 +67,29 @@ Nest / сайт ──► 127.0.0.1:8445 или :444 ──► default vhost (lo
 
 - [deploy/hoster-wp-proxy/index.php](../deploy/hoster-wp-proxy/index.php)
 - [deploy/hoster-wp-proxy/.htaccess](../deploy/hoster-wp-proxy/.htaccess)
+- [deploy/hoster-wp-proxy/maintenance.html](../deploy/hoster-wp-proxy/maintenance.html)
 
 WordPress в эту папку **не** ставить.
+
+При остановке Next (`Update-FitGO.ps1`) пользователи видят русскую страницу «Идёт обновление» с автоповтором (удобно для PWA на домашнем экране без кнопки «Обновить»). PHP подменяет тело при upstream `502`/`503` для браузера; `/api/*` не трогает.
+
+### 2a. Apache на клубе — своя 503-страница
+
+Чтобы на `:444` (и без PHP) не было английского «Service Unavailable»:
+
+1. Скопировать `maintenance.html` → `C:\Apache24\htdocs\fitgo-maintenance.html`
+2. Обновить vhost из [apache-fitgo-proxy.conf.template](../scripts/windows/fitgo-server/apache-fitgo-proxy.conf.template) (`ProxyErrorOverride`, `ErrorDocument 503`, `ProxyPass /fitgo-maintenance.html !`)
+3. `httpd.exe -t` → `Restart-Service Apache2.4`
 
 Опционально (если сменится публичный IP клуба) задать в панели / `.user.ini`:
 
 ```text
 FITGO_UPSTREAM_IP=86.57.152.242
+FITGO_UPSTREAM_PORT=444
 FITGO_PROXY_TIMEOUT=180
 ```
+
+Если снова увидите `Connection timed out` на `:8445` — убедитесь, что на hoster лежит свежий `index.php` с портом **444** по умолчанию.
 
 ### 3. Лимиты PHP на тарифе
 

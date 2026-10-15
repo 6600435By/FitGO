@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta http-equiv="refresh" content="12" />
+  <meta name="robots" content="noindex" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>FitGO обновляется</title>
+  <style>
+    :root {
+      --bg0: #0f172a;
+      --bg1: #132337;
+      --accent: #14b88a;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      min-height: 100dvh;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background:
+        radial-gradient(120% 80% at 20% 0%, #1a3a32 0%, transparent 55%),
+        radial-gradient(90% 60% at 100% 100%, #1e293b 0%, transparent 50%),
+        linear-gradient(160deg, var(--bg0), var(--bg1));
+      color: var(--text);
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: max(24px, env(safe-area-inset-top)) 24px max(32px, env(safe-area-inset-bottom));
+    }
+    main {
+      width: min(100%, 22rem);
+      text-align: center;
+    }
+    .mark {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 1.25rem;
+    }
+    h1 {
+      margin: 0 0 0.75rem;
+      font-size: 1.5rem;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+    p {
+      margin: 0 0 1rem;
+      font-size: 1rem;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+    .countdown {
+      margin: 1.25rem 0 1.5rem;
+      font-size: 0.95rem;
+      color: var(--text);
+    }
+    .countdown strong {
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+    }
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 12px;
+      width: 100%;
+      min-height: 3.25rem;
+      padding: 0.9rem 1.25rem;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #042f24;
+      background: var(--accent);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button:active { filter: brightness(0.92); }
+    .hint {
+      margin-top: 1.75rem;
+      font-size: 0.8rem;
+      line-height: 1.4;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark">FitGO</div>
+    <h1>Идёт обновление</h1>
+    <p>Сервис временно недоступен. Обычно это занимает несколько минут — оставайтесь на этом экране.</p>
+    <p class="countdown">Повторная попытка через <strong id="sec">12</strong> с</p>
+    <button type="button" id="retry">Попробовать снова</button>
+    <p class="hint">
+      Если через 5 минут экран не меняется — полностью закройте FitGO в списке приложений
+      и откройте снова с иконки. Удалять и переустанавливать не нужно.
+    </p>
+  </main>
+  <script>
+    (function () {
+      var TOTAL = 12;
+      var left = TOTAL;
+      var el = document.getElementById('sec');
+      var btn = document.getElementById('retry');
+      function reload() {
+        location.reload();
+      }
+      btn.addEventListener('click', reload);
+      setInterval(function () {
+        left -= 1;
+        if (left <= 0) {
+          reload();
+          return;
+        }
+        if (el) el.textContent = String(left);
+      }, 1000);
+    })();
+  </script>
+</body>
+</html>
