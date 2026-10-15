@@ -77,8 +77,9 @@ WordPress в эту папку **не** ставить.
 
 Чтобы на `:444` (и без PHP) не было английского «Service Unavailable»:
 
-1. Скопировать `maintenance.html` → `C:\Apache24\htdocs\fitgo-maintenance.html`
-2. Обновить vhost из [apache-fitgo-proxy.conf.template](../scripts/windows/fitgo-server/apache-fitgo-proxy.conf.template) (`ProxyErrorOverride`, `ErrorDocument 503`, `ProxyPass /fitgo-maintenance.html !`)
+1. Скопировать `maintenance.html` → `C:\Apache24\htdocs\app-maintenance.html`  
+   (**не** `fitgo-maintenance.html` — global `Alias /fitgo` ловит префикс и отдаёт в 1С VRS JSON 404)
+2. Обновить vhost из [apache-fitgo-proxy.conf.template](../scripts/windows/fitgo-server/apache-fitgo-proxy.conf.template) (`ProxyErrorOverride`, `ErrorDocument 503`, `ProxyPass /app-maintenance.html !`)
 3. `httpd.exe -t` → `Restart-Service Apache2.4`
 
 Опционально (если сменится публичный IP клуба) задать в панели / `.user.ini`:

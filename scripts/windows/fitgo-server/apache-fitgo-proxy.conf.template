@@ -16,7 +16,9 @@
 #
 # Maintenance page (when FitGO-Web is stopped during Update-FitGO.ps1):
 #   Copy deploy/hoster-wp-proxy/maintenance.html →
-#     C:\Apache24\htdocs\fitgo-maintenance.html
+#     C:\Apache24\htdocs\app-maintenance.html
+#   Do NOT name it fitgo-maintenance.html — global Alias /fitgo (1C) is a
+#   prefix match and would send that path to 1C VRS (404 JSON).
 #   ProxyErrorOverride + ErrorDocument replace stock English 503.
 #
 # Prerequisites in httpd.conf:
@@ -44,9 +46,10 @@
   ProxyPass        /forma !
   ProxyPass        /fitgo !
   # Local 503 page while Next (:3000) is down — must not ProxyPass to Next
-  ProxyPass        /fitgo-maintenance.html !
+  # Name must NOT start with /fitgo (Alias /fitgo → 1C)
+  ProxyPass        /app-maintenance.html !
   ProxyErrorOverride On
-  ErrorDocument 503 /fitgo-maintenance.html
+  ErrorDocument 503 /app-maintenance.html
   ProxyPass        /  http://127.0.0.1:3000/
   ProxyPassReverse /  http://127.0.0.1:3000/
 </VirtualHost>
@@ -62,9 +65,9 @@
 #   ProxyTimeout 180
 #   ProxyPass        /forma !
 #   ProxyPass        /fitgo !
-#   ProxyPass        /fitgo-maintenance.html !
+#   ProxyPass        /app-maintenance.html !
 #   ProxyErrorOverride On
-#   ErrorDocument 503 /fitgo-maintenance.html
+#   ErrorDocument 503 /app-maintenance.html
 #   ProxyPass        /  http://127.0.0.1:3000/
 #   ProxyPassReverse /  http://127.0.0.1:3000/
 # </VirtualHost>
