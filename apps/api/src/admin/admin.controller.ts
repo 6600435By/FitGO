@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
   Post,
+  Put,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -128,6 +130,28 @@ export class AdminController {
   @RequirePermission(AdminPermission.DASHBOARD_VIEW)
   getDashboard(@CurrentUser() user: JwtPayload) {
     return this.adminService.getDashboard(user);
+  }
+
+  @Get('home-layout')
+  @RequirePermission(AdminPermission.DASHBOARD_VIEW)
+  getHomeLayout(@CurrentUser() user: JwtPayload) {
+    return this.adminService.getHomeLayout(user);
+  }
+
+  @Put('home-layout')
+  @RequirePermission(AdminPermission.DASHBOARD_VIEW)
+  putHomeLayout(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { widgets?: unknown; pins?: unknown },
+  ) {
+    return this.adminService.putHomeLayout(user, body);
+  }
+
+  @Delete('home-layout')
+  @RequirePermission(AdminPermission.DASHBOARD_VIEW)
+  async resetHomeLayout(@CurrentUser() user: JwtPayload) {
+    await this.adminService.resetHomeLayout(user);
+    return this.adminService.getHomeLayout(user);
   }
 
   @Get('funnel')

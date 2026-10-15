@@ -6,10 +6,19 @@ import {
 import {
   AdminTaskStatus,
   MembershipStatus,
+  filterAdminHomePins,
+  filterAdminHomeWidgets,
+  isAdminHomePinId,
+  isAdminHomeWidgetId,
+  type AdminHomeLayoutValue,
+  type AdminHomePinId,
+  type AdminHomeWidgetId,
   type AdminRenewalActionBody,
   type AdminDashboard,
   type RenewalStage,
 } from '@fitgo/shared-types';
+import { AdminPermissionsService } from '../auth/admin-permissions.service';
+import { FeaturesService } from '../features/features.service';
 import {
   AdminTaskStatus as PrismaAdminTaskStatus,
   OnexClassStatus,
@@ -45,6 +54,8 @@ export class AdminService {
     private readonly clubRevenue: ClubRevenueService,
     private readonly clubRevenueSync: ClubRevenueSyncService,
     private readonly tasksScheduler: AdminTasksSchedulerService,
+    private readonly adminPermissions: AdminPermissionsService,
+    private readonly features: FeaturesService,
   ) {}
 
   async getDashboard(user: JwtPayload): Promise<AdminDashboard> {
@@ -67,6 +78,9 @@ export class AdminService {
     // WordpressUserAPI / Analytics sessions on every tab revisit).
     const now = new Date();
     const dueSoon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const openTaskStatus = {
+      in: [PrismaAdminTaskStatus.OPEN, PrismaAdminTaskStatus.IN_PROGRESS],
+    };
 
     const [
       reviewItems,
@@ -82,6 +96,11 @@ export class AdminService {
       groupApprovalCount,
       spaApprovalCount,
       ptApprovalCount,
+      birthdayCount,
+      clientDebtCount,
+      staffDebtCount,
+      installmentDueCount,
+      confirmationCount,
     ] = await Promise.all([
       this.bookingControl
         .list(clubId, {
@@ -224,6 +243,46 @@ export class AdminService {
         .listPendingAdminApprovals(clubId, from30Str, today, 'PT')
         .then((rows) => rows.length)
         .catch(() => 0),
+      this.prisma.adminTask.count({
+        where: {
+          clubId,
+          source: 'BIRTHDAY',
+          status: openTaskStatus,
+        },
+      }),
+      this.prisma.adminTask.count({
+        where: {
+          clubId,
+          source: 'CLIENT_DEBT',
+          status: openTaskStatus,
+        },
+      }),
+      this.prisma.adminTask.count({
+        where: {
+          clubId,
+          source: 'STAFF_DEBT',
+          status: openTaskStatus,
+        },
+      }),
+      this.prisma.adminTask.count({
+        where: {
+          clubId,
+          source: 'INSTALLMENT_PAYMENT',
+          status: openTaskStatus,
+          OR: [
+            { nextActionAt: null, dueAt: null },
+            { nextActionAt: { lte: dueSoon } },
+            { nextActionAt: null, dueAt: { lte: dueSoon } },
+          ],
+        },
+      }),
+      this.prisma.adminTask.count({
+        where: {
+          clubId,
+          source: 'BOOKING_CONFIRM',
+          status: openTaskStatus,
+        },
+      }),
     ]);
 
     const group = groupCount;
@@ -231,6 +290,12 @@ export class AdminService {
     const pt = ptCount;
     const bookingControlTasks =
       groupApprovalCount + spaApprovalCount + ptApprovalCount;
+    const clientsTotal =
+      membershipDueCount +
+      birthdayCount +
+      clientDebtCount +
+      installmentDueCount;
+    const controlTotal = bookingControlTasks + confirmationCount;
     const tasksStats = {
       bookingControl: bookingControlTasks,
       membership: membershipDueCount,
@@ -238,10 +303,22 @@ export class AdminService {
       spa: spaApprovalCount,
       pt: ptApprovalCount,
       manager: managerDueCount,
+      birthday: birthdayCount,
+      clientDebt: clientDebtCount,
+      staffDebt: staffDebtCount,
+      installment: installmentDueCount,
+      confirmation: confirmationCount,
+      clients: clientsTotal,
+      control: controlTotal,
       total:
         bookingControlTasks +
         membershipDueCount +
-        managerDueCount,
+        managerDueCount +
+        birthdayCount +
+        clientDebtCount +
+        staffDebtCount +
+        installmentDueCount +
+        confirmationCount,
     };
 
     const callToday = callTodayTasks.map((task) => {
@@ -297,6 +374,90 @@ export class AdminService {
       },
       callToday,
     };
+  }
+
+  async getHomeLayout(user: JwtPayload): Promise<AdminHomeLayoutValue> {
+    requireClubId(user);
+    const [row, permissions, modules] = await Promise.all([
+      this.prisma.adminHomeLayout.findUnique({ where: { userId: user.sub } }),
+      this.adminPermissions.getPermissions(user),
+      this.features.getModules(),
+    ]);
+    const isEnabled = (m: string) =>
+      modules[m as keyof typeof modules] !== false;
+    const permStrs = permissions as string[];
+
+    const widgetsRaw = this.parseWidgetIds(row?.widgets);
+    const pinsRaw = this.parsePinIds(row?.pins);
+
+    return {
+      widgets: filterAdminHomeWidgets(widgetsRaw, permStrs, isEnabled),
+      pins: filterAdminHomePins(pinsRaw, permStrs, isEnabled),
+    };
+  }
+
+  async resetHomeLayout(user: JwtPayload): Promise<void> {
+    requireClubId(user);
+    await this.prisma.adminHomeLayout.deleteMany({
+      where: { userId: user.sub },
+    });
+  }
+
+  async putHomeLayout(
+    user: JwtPayload,
+    body: { widgets?: unknown; pins?: unknown },
+  ): Promise<AdminHomeLayoutValue> {
+    requireClubId(user);
+    const [permissions, modules] = await Promise.all([
+      this.adminPermissions.getPermissions(user),
+      this.features.getModules(),
+    ]);
+    const isEnabled = (m: string) =>
+      modules[m as keyof typeof modules] !== false;
+    const permStrs = permissions as string[];
+
+    const widgetsIn = Array.isArray(body.widgets)
+      ? body.widgets.filter(
+          (id): id is AdminHomeWidgetId =>
+            typeof id === 'string' && isAdminHomeWidgetId(id),
+        )
+      : [];
+    const pinsIn = Array.isArray(body.pins)
+      ? body.pins.filter(
+          (id): id is AdminHomePinId =>
+            typeof id === 'string' && isAdminHomePinId(id),
+        )
+      : [];
+
+    const widgets =
+      filterAdminHomeWidgets(widgetsIn, permStrs, isEnabled) ?? [];
+    const pins = filterAdminHomePins(pinsIn, permStrs, isEnabled) ?? [];
+
+    await this.prisma.adminHomeLayout.upsert({
+      where: { userId: user.sub },
+      create: { userId: user.sub, widgets, pins },
+      update: { widgets, pins },
+    });
+
+    return { widgets, pins };
+  }
+
+  private parseWidgetIds(raw: unknown): AdminHomeWidgetId[] | null {
+    if (raw == null) return null;
+    if (!Array.isArray(raw)) return null;
+    return raw.filter(
+      (id): id is AdminHomeWidgetId =>
+        typeof id === 'string' && isAdminHomeWidgetId(id),
+    );
+  }
+
+  private parsePinIds(raw: unknown): AdminHomePinId[] | null {
+    if (raw == null) return null;
+    if (!Array.isArray(raw)) return null;
+    return raw.filter(
+      (id): id is AdminHomePinId =>
+        typeof id === 'string' && isAdminHomePinId(id),
+    );
   }
 
   private async loadRevenueToday(clubId: string, today: string) {

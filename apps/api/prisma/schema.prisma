@@ -674,11 +674,24 @@ model User {
   sessionApprovalsOverride SessionApproval[]      @relation("SessionApprovalOverride")
   defaultSpaRoom          SpaRoom?                @relation("SpaRoomDefaultSpecialist", fields: [defaultSpaRoomId], references: [id], onDelete: SetNull)
   defaultSpaRoomId        String?
+  adminHomeLayout         AdminHomeLayout?
 
   @@unique([clubId, gamificationNickname])
   @@unique([clubId, employeeCode])
   @@index([externalId])
   @@index([clubId, employeeCode])
+}
+
+/// Per-admin personal /admin home: which data cards and pins to show.
+model AdminHomeLayout {
+  userId    String   @id
+  /// AdminHomeWidgetId[] — null = never customized (default layout).
+  widgets   Json?
+  /// AdminHomePinId[] — task chips + nav buttons.
+  pins      Json?
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 /// Public bio + photo for trainers / SPA specialists (editable by staff).

@@ -63,6 +63,9 @@ import {
   AdminTaskStatus,
   type ProductModulesState,
   type ProductModuleDefinition,
+  type AdminHomeLayoutValue,
+  type AdminHomePinId,
+  type AdminHomeWidgetId,
 } from '@fitgo/shared-types';
 
 /** Empty / unset = same-origin /api (Next rewrite → Nest). Absolute URL for separate hosts. */
@@ -209,6 +212,13 @@ export interface AdminDashboard {
       spa: number;
       pt: number;
       manager: number;
+      birthday?: number;
+      clientDebt?: number;
+      staffDebt?: number;
+      installment?: number;
+      confirmation?: number;
+      clients?: number;
+      control?: number;
     };
     expiringSoon: number;
     pendingCrmCount?: number;
@@ -1432,6 +1442,26 @@ export const api = {
 
   adminDashboard: (token: string) =>
     request<AdminDashboard>('/admin/dashboard', {}, token),
+
+  adminHomeLayout: (token: string) =>
+    request<AdminHomeLayoutValue>('/admin/home-layout', {}, token),
+
+  adminPutHomeLayout: (
+    token: string,
+    body: { widgets: AdminHomeWidgetId[]; pins: AdminHomePinId[] },
+  ) =>
+    request<AdminHomeLayoutValue>(
+      '/admin/home-layout',
+      { method: 'PUT', body: JSON.stringify(body) },
+      token,
+    ),
+
+  adminResetHomeLayout: (token: string) =>
+    request<AdminHomeLayoutValue>(
+      '/admin/home-layout',
+      { method: 'DELETE' },
+      token,
+    ),
 
   adminFunnel: (token: string) =>
     request<{ funnel: Array<{ stage: string; count: number }> }>('/admin/funnel', {}, token),

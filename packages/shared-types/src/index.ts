@@ -527,6 +527,15 @@ export interface AdminDashboardTasks {
   spa: number;
   pt: number;
   manager: number;
+  birthday?: number;
+  clientDebt?: number;
+  staffDebt?: number;
+  installment?: number;
+  confirmation?: number;
+  /** Clients group: membership + birthday + clientDebt + installment. */
+  clients?: number;
+  /** Control group: bookingControl + confirmation. */
+  control?: number;
 }
 
 export interface AdminDashboardCallTodayItem {
@@ -615,6 +624,7 @@ export * from './hall-class-snapshot';
 export * from './analytics';
 export * from './floor-staff-home';
 export * from './discrepancies';
+export * from './admin-home-layout';
 
 import type {
   ServiceControlLevel,
