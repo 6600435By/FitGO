@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { api, type NotificationItem } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -17,8 +18,17 @@ const FILTERS: { id: MessageFilter; label: string }[] = [
   { id: 'completed', label: 'Обработанные' },
 ];
 
+function tabFromQuery(raw: string | null): PageTab {
+  if (raw === 'trainers' || raw === 'staff' || raw === 'team') return 'trainers';
+  if (raw === 'alerts') return 'alerts';
+  return 'clients';
+}
+
 export default function AdminNotificationsPage() {
-  const [tab, setTab] = useState<PageTab>('clients');
+  const searchParams = useSearchParams();
+  const [tab, setTab] = useState<PageTab>(() =>
+    tabFromQuery(searchParams.get('tab')),
+  );
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [filter, setFilter] = useState<MessageFilter>('all');
   const [error, setError] = useState('');

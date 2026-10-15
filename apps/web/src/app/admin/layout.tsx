@@ -358,7 +358,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           headerActions={
             <>
               <AdminQuickLinks taskCount={taskBadge} />
-              <AdminThemeToggle />
+              <AdminThemeToggle className="hidden md:flex" />
             </>
           }
           wide

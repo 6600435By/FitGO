@@ -92,7 +92,7 @@ export function AdminQuickLinks({ taskCount }: { taskCount: number }) {
   return (
     <div className="flex shrink-0 items-center gap-1.5">
       <IconBadgeLink
-        href="/admin/notifications"
+        href="/admin/notifications?tab=trainers"
         label="Сообщения"
         title={msgTitle}
         badge={unread}

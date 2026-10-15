@@ -27,7 +27,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminHomeSettings } from '@/components/admin/admin-home-settings';
 import { useFeatures } from '@/components/features-provider';
 import { api, type AdminDashboard } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { cn, formatDate } from '@/lib/utils';
 
 /** Keep last dashboard while remounting tabs — avoid full-page spinner. */
@@ -358,12 +358,28 @@ export default function AdminHomePage() {
     ? 'grid gap-2 sm:gap-4 lg:grid-cols-3'
     : 'grid gap-2 sm:gap-4';
 
+  const accountUser = getUser();
+  const accountFio = [accountUser?.lastName, accountUser?.firstName]
+    .filter(Boolean)
+    .join(' ');
+
   return (
     <div className="mx-auto max-w-6xl space-y-2 sm:space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        {data.club ? (
-          <p className="text-xs text-slate-400 sm:text-sm">
-            Клуб <span className="font-medium text-white">{data.club.name}</span>
+        {data.club || accountFio ? (
+          <p className="min-w-0 text-xs text-slate-400 sm:text-sm">
+            {data.club ? (
+              <>
+                Клуб{' '}
+                <span className="font-medium text-white">{data.club.name}</span>
+              </>
+            ) : null}
+            {data.club && accountFio ? (
+              <span className="text-slate-600"> · </span>
+            ) : null}
+            {accountFio ? (
+              <span className="font-medium text-white">{accountFio}</span>
+            ) : null}
           </p>
         ) : (
           <span />

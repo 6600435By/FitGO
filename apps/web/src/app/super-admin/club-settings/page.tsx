@@ -6,6 +6,7 @@ import {
   DEFAULT_CLUB_WORKING_HOURS,
 } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
+import { AdminThemeSettingRow } from '@/components/admin/admin-theme';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -90,6 +91,11 @@ export default function SuperAdminClubSettingsPage() {
           расчёте ЗП по отработанным часам.
         </p>
       </header>
+
+      <div className="card space-y-4">
+        <h2 className="text-lg font-medium text-white">Оформление кабинета</h2>
+        <AdminThemeSettingRow />
+      </div>
 
       <div className="card space-y-4">
         <h2 className="text-lg font-medium text-white">Профиль и брендинг</h2>

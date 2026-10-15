@@ -12,6 +12,7 @@ import {
 } from '@/components/admin/admin-theme';
 import { AppShell } from '@/components/app-shell';
 import { DataFreshness } from '@/components/data-freshness';
+import { StaffMessagesBadge } from '@/components/staff/staff-messages-badge';
 import { getUser } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
@@ -244,7 +245,12 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
           brandHref="/super-admin"
           desktopTopNav={desktopTopNav}
           mobileSubNav={mobileSubNav}
-          headerActions={<AdminThemeToggle />}
+          headerActions={
+            <>
+              <StaffMessagesBadge href="/super-admin/messages" />
+              <AdminThemeToggle className="hidden md:flex" />
+            </>
+          }
         >
           <div className="mb-3 sm:mb-4">
             <DataFreshness />

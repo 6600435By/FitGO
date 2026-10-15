@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 
 type Overview = Awaited<ReturnType<typeof api.superAdminOverview>>;
 
@@ -124,9 +124,29 @@ export default function SuperAdminHomePage() {
   }
 
   const salesHref = `/super-admin/sales?from=${data.revenue.from}&to=${data.revenue.to}`;
+  const accountUser = getUser();
+  const clubName = accountUser?.club?.name;
+  const accountFio = [accountUser?.lastName, accountUser?.firstName]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <div className="space-y-2 sm:space-y-4">
+      {clubName || accountFio ? (
+        <p className="text-xs text-slate-400 sm:text-sm">
+          {clubName ? (
+            <>
+              Клуб <span className="font-medium text-white">{clubName}</span>
+            </>
+          ) : null}
+          {clubName && accountFio ? (
+            <span className="text-slate-600"> · </span>
+          ) : null}
+          {accountFio ? (
+            <span className="font-medium text-white">{accountFio}</span>
+          ) : null}
+        </p>
+      ) : null}
       <p className="hidden text-xs text-slate-400 sm:block sm:text-sm">
         Смена на сегодня, выручка и визиты с 1-го числа по {shortDate(data.asOf)}.
       </p>
