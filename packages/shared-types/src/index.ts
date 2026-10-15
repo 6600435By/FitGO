@@ -804,14 +804,27 @@ export interface NotificationItem {
 
 export interface ConversationSummary {
   id: string;
-  kind: 'ADMIN' | 'TRAINER' | 'TRAINER_ADMIN' | 'STAFF';
+  kind: 'ADMIN' | 'TRAINER' | 'TRAINER_ADMIN' | 'STAFF' | 'GROUP';
   title: string;
   subtitle?: string;
   clientId: string;
   trainerId?: string;
+  /** GROUP: member user ids */
+  memberIds?: string[];
   lastMessage?: string;
   lastMessageAt: string;
   unreadCount: number;
+}
+
+export interface CreateGroupConversationInput {
+  title: string;
+  memberIds: string[];
+}
+
+export interface UpdateGroupConversationInput {
+  title?: string;
+  addMemberIds?: string[];
+  removeMemberIds?: string[];
 }
 
 export interface ChatStaffRecipient {

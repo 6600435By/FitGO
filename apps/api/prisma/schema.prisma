@@ -448,6 +448,8 @@ enum ConversationKind {
   TRAINER_ADMIN
   /// Staff↔staff DM (clientId + trainerId = the two participants, ordered by id)
   STAFF
+  /// Named staff group (members via ConversationMember; clientId = creator)
+  GROUP
 }
 
 model Club {
@@ -634,6 +636,7 @@ model User {
   sentNotifications       Notification[]          @relation("NotificationSender")
   clientConversations     Conversation[]          @relation("ClientConversations")
   trainerConversations    Conversation[]          @relation("TrainerConversations")
+  conversationMemberships ConversationMember[]
   chatMessages            ChatMessage[]           @relation("ChatMessageSender")
   clubVisits              ClubVisit[]
   clubVisitEvents         ClubVisitEvent[]
@@ -1223,18 +1226,36 @@ model Conversation {
   clientId      String
   kind          ConversationKind
   trainerId     String?
+  /// Display name for GROUP chats
+  title         String?
   conversationKey String         @unique
   lastMessageAt DateTime         @default(now())
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
 
-  client   User          @relation("ClientConversations", fields: [clientId], references: [id], onDelete: Cascade)
-  trainer  User?         @relation("TrainerConversations", fields: [trainerId], references: [id], onDelete: Cascade)
+  client   User                 @relation("ClientConversations", fields: [clientId], references: [id], onDelete: Cascade)
+  trainer  User?                @relation("TrainerConversations", fields: [trainerId], references: [id], onDelete: Cascade)
+  members  ConversationMember[]
   messages ChatMessage[]
 
   @@index([clubId, lastMessageAt])
   @@index([clientId])
   @@index([trainerId])
+}
+
+model ConversationMember {
+  id             String    @id @default(cuid())
+  conversationId String
+  userId         String
+  /// Per-member unread cursor for GROUP chats (shared ChatMessage.readAt would clear for everyone)
+  lastReadAt     DateTime?
+  joinedAt       DateTime  @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
 }
 
 model ChatMessage {

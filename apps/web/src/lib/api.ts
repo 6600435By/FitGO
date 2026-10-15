@@ -1596,6 +1596,33 @@ export const api = {
       body: JSON.stringify({ peerId }),
     }, token),
 
+  chatCreateGroup: (
+    token: string,
+    data: { title: string; memberIds: string[] },
+  ) =>
+    request<ConversationSummary>('/chat/conversations/group', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, token),
+
+  chatUpdateGroup: (
+    token: string,
+    conversationId: string,
+    data: {
+      title?: string;
+      addMemberIds?: string[];
+      removeMemberIds?: string[];
+    },
+  ) =>
+    request<ConversationSummary>(
+      `/chat/conversations/${conversationId}/group`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      },
+      token,
+    ),
+
   chatCreateConversation: (
     token: string,
     data: { kind: 'admin' | 'trainer'; trainerId?: string },

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -29,6 +30,22 @@ const ROLE_LABEL: Partial<Record<Role, string>> = {
   [Role.TECH]: 'Техник',
 };
 
+const conversationListInclude = {
+  client: { include: { roles: true as const } },
+  trainer: true as const,
+  members: {
+    include: {
+      user: {
+        select: { id: true, firstName: true, lastName: true },
+      },
+    },
+  },
+  messages: {
+    orderBy: { createdAt: 'desc' as const },
+    take: 1,
+  },
+};
+
 @Injectable()
 export class ChatService {
   constructor(
@@ -41,6 +58,28 @@ export class ChatService {
     return user.roles.some((r) =>
       STAFF_CHAT_ROLES.includes(r as Role),
     );
+  }
+
+  private isGroupManager(user: JwtPayload) {
+    return (
+      user.roles.includes(UserRole.MANAGER) ||
+      user.roles.includes(UserRole.SUPER_ADMIN)
+    );
+  }
+
+  private staffAndGroupListWhere(userId: string) {
+    return {
+      OR: [
+        {
+          kind: ConversationKind.STAFF,
+          OR: [{ clientId: userId }, { trainerId: userId }],
+        },
+        {
+          kind: ConversationKind.GROUP,
+          members: { some: { userId } },
+        },
+      ],
+    };
   }
 
   async getUnreadCount(user: JwtPayload) {
@@ -86,27 +125,13 @@ export class ChatService {
     const where = this.buildConversationListWhere(user, scope);
     const conversations = await this.prisma.conversation.findMany({
       where,
-      include: {
-        client: { include: { roles: true } },
-        trainer: true,
-        messages: {
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-        },
-      },
+      include: conversationListInclude,
       orderBy: { lastMessageAt: 'desc' },
     });
 
     const summaries = await Promise.all(
       conversations.map(async (conversation) => {
-        const unreadCount = await this.prisma.chatMessage.count({
-          where: {
-            conversationId: conversation.id,
-            senderId: { not: user.sub },
-            readAt: null,
-          },
-        });
-
+        const unreadCount = await this.countUnread(conversation, user.sub);
         const lastMessage = conversation.messages[0];
         return this.toConversationSummary(
           conversation,
@@ -118,6 +143,40 @@ export class ChatService {
     );
 
     return summaries;
+  }
+
+  private async countUnread(
+    conversation: { id: string; kind: ConversationKind },
+    userId: string,
+  ) {
+    if (conversation.kind === ConversationKind.GROUP) {
+      const membership = await this.prisma.conversationMember.findUnique({
+        where: {
+          conversationId_userId: {
+            conversationId: conversation.id,
+            userId,
+          },
+        },
+        select: { lastReadAt: true },
+      });
+      return this.prisma.chatMessage.count({
+        where: {
+          conversationId: conversation.id,
+          senderId: { not: userId },
+          ...(membership?.lastReadAt
+            ? { createdAt: { gt: membership.lastReadAt } }
+            : {}),
+        },
+      });
+    }
+
+    return this.prisma.chatMessage.count({
+      where: {
+        conversationId: conversation.id,
+        senderId: { not: userId },
+        readAt: null,
+      },
+    });
   }
 
   async createConversation(user: JwtPayload, kind: 'admin' | 'trainer', trainerId?: string) {
@@ -173,14 +232,24 @@ export class ChatService {
       take: 200,
     });
 
-    await this.prisma.chatMessage.updateMany({
-      where: {
-        conversationId,
-        senderId: { not: user.sub },
-        readAt: null,
-      },
-      data: { readAt: new Date() },
-    });
+    if (conversation.kind === ConversationKind.GROUP) {
+      await this.prisma.conversationMember.updateMany({
+        where: {
+          conversationId,
+          userId: user.sub,
+        },
+        data: { lastReadAt: new Date() },
+      });
+    } else {
+      await this.prisma.chatMessage.updateMany({
+        where: {
+          conversationId,
+          senderId: { not: user.sub },
+          readAt: null,
+        },
+        data: { readAt: new Date() },
+      });
+    }
 
     return {
       conversation: this.toConversationSummary(conversation, user, undefined, 0),
@@ -203,8 +272,11 @@ export class ChatService {
 
     const conversation = await this.ensureConversationAccess(user, conversationId);
 
-    if (conversation.kind === ConversationKind.STAFF) {
-      // access already checked in ensureConversationAccess
+    if (
+      conversation.kind === ConversationKind.STAFF ||
+      conversation.kind === ConversationKind.GROUP
+    ) {
+      // membership already checked in ensureConversationAccess
     } else if (user.roles.includes(UserRole.TRAINER)) {
       if (conversation.kind === ConversationKind.TRAINER_ADMIN) {
         if (conversation.clientId !== user.sub) {
@@ -296,6 +368,166 @@ export class ChatService {
         roleLabel: ROLE_LABEL[role] ?? String(role),
       };
     });
+  }
+
+  async createGroupConversation(
+    user: JwtPayload,
+    title: string,
+    memberIds: string[],
+  ) {
+    if (!this.isGroupManager(user)) {
+      throw new ForbiddenException(
+        'Только управляющий может создать групповой чат',
+      );
+    }
+    const clubId = requireClubId(user);
+    const trimmed = title.trim();
+    if (!trimmed || trimmed.length > 80) {
+      throw new BadRequestException('Название группы: 1–80 символов');
+    }
+
+    const uniqueMemberIds = [...new Set(memberIds.filter((id) => id !== user.sub))];
+    if (uniqueMemberIds.length === 0) {
+      throw new BadRequestException('Добавьте хотя бы одного сотрудника');
+    }
+
+    const staff = await this.prisma.user.findMany({
+      where: {
+        id: { in: uniqueMemberIds },
+        clubId,
+        isActive: true,
+        archivedAt: null,
+        roles: { some: { role: { in: STAFF_CHAT_ROLES } } },
+      },
+      select: { id: true },
+    });
+    if (staff.length !== uniqueMemberIds.length) {
+      throw new NotFoundException('Не все сотрудники найдены в клубе');
+    }
+
+    const allMemberIds = [user.sub, ...uniqueMemberIds];
+    const conversation = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.conversation.create({
+        data: {
+          clubId,
+          clientId: user.sub,
+          kind: ConversationKind.GROUP,
+          title: trimmed,
+          conversationKey: `group:${clubId}:tmp-${user.sub}-${Date.now()}`,
+          members: {
+            create: allMemberIds.map((userId) => ({ userId })),
+          },
+        },
+      });
+      return tx.conversation.update({
+        where: { id: created.id },
+        data: { conversationKey: `group:${clubId}:${created.id}` },
+        include: conversationListInclude,
+      });
+    });
+
+    return this.toConversationSummary(conversation, user, undefined, 0);
+  }
+
+  async updateGroupConversation(
+    user: JwtPayload,
+    conversationId: string,
+    input: {
+      title?: string;
+      addMemberIds?: string[];
+      removeMemberIds?: string[];
+    },
+  ) {
+    if (!this.isGroupManager(user)) {
+      throw new ForbiddenException(
+        'Только управляющий может изменить групповой чат',
+      );
+    }
+
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: conversationListInclude,
+    });
+    if (!conversation || conversation.kind !== ConversationKind.GROUP) {
+      throw new NotFoundException('Групповой чат не найден');
+    }
+    if (conversation.clubId !== user.clubId) {
+      throw new ForbiddenException('Нет доступа к этому чату');
+    }
+
+    const isMember = conversation.members.some((m) => m.userId === user.sub);
+    if (!isMember) {
+      throw new ForbiddenException('Нет доступа к этому чату');
+    }
+
+    const clubId = requireClubId(user);
+    const data: { title?: string } = {};
+    if (input.title !== undefined) {
+      const trimmed = input.title.trim();
+      if (!trimmed || trimmed.length > 80) {
+        throw new BadRequestException('Название группы: 1–80 символов');
+      }
+      data.title = trimmed;
+    }
+
+    const addIds = [
+      ...new Set((input.addMemberIds ?? []).filter((id) => id !== user.sub)),
+    ];
+    const removeIds = [
+      ...new Set((input.removeMemberIds ?? []).filter((id) => id !== user.sub)),
+    ];
+
+    if (addIds.length > 0) {
+      const staff = await this.prisma.user.findMany({
+        where: {
+          id: { in: addIds },
+          clubId,
+          isActive: true,
+          archivedAt: null,
+          roles: { some: { role: { in: STAFF_CHAT_ROLES } } },
+        },
+        select: { id: true },
+      });
+      if (staff.length !== addIds.length) {
+        throw new NotFoundException('Не все сотрудники найдены в клубе');
+      }
+    }
+
+    const existingIds = new Set(conversation.members.map((m) => m.userId));
+    const toAdd = addIds.filter((id) => !existingIds.has(id));
+    const toRemove = removeIds.filter((id) => existingIds.has(id));
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (Object.keys(data).length > 0) {
+        await tx.conversation.update({
+          where: { id: conversationId },
+          data,
+        });
+      }
+      if (toAdd.length > 0) {
+        await tx.conversationMember.createMany({
+          data: toAdd.map((userId) => ({
+            conversationId,
+            userId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+      if (toRemove.length > 0) {
+        await tx.conversationMember.deleteMany({
+          where: {
+            conversationId,
+            userId: { in: toRemove },
+          },
+        });
+      }
+      return tx.conversation.findUniqueOrThrow({
+        where: { id: conversationId },
+        include: conversationListInclude,
+      });
+    });
+
+    return this.toConversationSummary(updated, user, undefined, 0);
   }
 
   async getOrCreateStaffConversation(user: JwtPayload, peerId: string) {
@@ -403,17 +635,14 @@ export class ChatService {
       return { clientId: user.sub };
     }
 
-    const staffWhere = {
-      kind: ConversationKind.STAFF,
-      OR: [{ clientId: user.sub }, { trainerId: user.sub }],
-    };
+    const staffAndGroup = this.staffAndGroupListWhere(user.sub);
 
     if (
       user.roles.includes(UserRole.MANAGER) ||
       user.roles.includes(UserRole.SUPER_ADMIN) ||
       user.roles.includes(UserRole.TECH)
     ) {
-      return staffWhere;
+      return staffAndGroup;
     }
 
     if (user.roles.includes(UserRole.TRAINER)) {
@@ -424,14 +653,14 @@ export class ChatService {
         };
       }
       if (scope === 'staff') {
-        return staffWhere;
+        return staffAndGroup;
       }
       return { trainerId: user.sub, kind: ConversationKind.TRAINER };
     }
 
     if (user.roles.includes(UserRole.SPECIALIST)) {
       if (scope === 'staff') {
-        return staffWhere;
+        return staffAndGroup;
       }
       return {
         clientId: user.sub,
@@ -449,18 +678,14 @@ export class ChatService {
           clubId,
           OR: [
             { kind: ConversationKind.TRAINER_ADMIN },
-            {
-              kind: ConversationKind.STAFF,
-              OR: [{ clientId: user.sub }, { trainerId: user.sub }],
-            },
+            ...staffAndGroup.OR,
           ],
         };
       }
       if (scope === 'staff') {
         return {
           clubId,
-          kind: ConversationKind.STAFF,
-          OR: [{ clientId: user.sub }, { trainerId: user.sub }],
+          ...staffAndGroup,
         };
       }
       return {
@@ -471,10 +696,7 @@ export class ChatService {
               in: [ConversationKind.ADMIN, ConversationKind.TRAINER_ADMIN],
             },
           },
-          {
-            kind: ConversationKind.STAFF,
-            OR: [{ clientId: user.sub }, { trainerId: user.sub }],
-          },
+          ...staffAndGroup.OR,
         ],
       };
     }
@@ -485,7 +707,17 @@ export class ChatService {
   private async ensureConversationAccess(user: JwtPayload, conversationId: string) {
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
-      include: { client: { include: { roles: true } }, trainer: true },
+      include: {
+        client: { include: { roles: true } },
+        trainer: true,
+        members: {
+          include: {
+            user: {
+              select: { id: true, firstName: true, lastName: true },
+            },
+          },
+        },
+      },
     });
 
     if (!conversation) {
@@ -518,6 +750,11 @@ export class ChatService {
       conversation.clubId === user.clubId &&
       (conversation.clientId === user.sub ||
         conversation.trainerId === user.sub);
+    const isGroupMember =
+      conversation.kind === ConversationKind.GROUP &&
+      this.isStaffMessenger(user) &&
+      conversation.clubId === user.clubId &&
+      conversation.members.some((m) => m.userId === user.sub);
 
     if (
       !isClient &&
@@ -525,7 +762,8 @@ export class ChatService {
       !isTrainerOnAdminChat &&
       !isSpecialistOnAdminChat &&
       !isAdmin &&
-      !isStaffPeer
+      !isStaffPeer &&
+      !isGroupMember
     ) {
       throw new ForbiddenException('Нет доступа к этому чату');
     }
@@ -539,6 +777,7 @@ export class ChatService {
       kind: ConversationKind;
       clientId: string;
       trainerId: string | null;
+      title?: string | null;
       lastMessageAt: Date;
       client: {
         firstName: string;
@@ -546,6 +785,10 @@ export class ChatService {
         roles?: Array<{ role: Role }>;
       };
       trainer: { firstName: string; lastName: string } | null;
+      members?: Array<{
+        userId: string;
+        user: { id: string; firstName: string; lastName: string };
+      }>;
     },
     user: JwtPayload,
     lastMessage?: string,
@@ -613,6 +856,28 @@ export class ChatService {
       };
     }
 
+    if (conversation.kind === ConversationKind.GROUP) {
+      const members = conversation.members ?? [];
+      const memberNames = members
+        .map((m) => `${m.user.firstName} ${m.user.lastName}`.trim())
+        .filter(Boolean);
+      const subtitle =
+        memberNames.length <= 3
+          ? memberNames.join(', ')
+          : `${memberNames.slice(0, 2).join(', ')} и ещё ${memberNames.length - 2}`;
+      return {
+        id: conversation.id,
+        kind: 'GROUP' as const,
+        title: conversation.title?.trim() || 'Группа',
+        subtitle: subtitle || 'Групповой чат',
+        clientId: conversation.clientId,
+        memberIds: members.map((m) => m.userId),
+        lastMessage,
+        lastMessageAt: conversation.lastMessageAt.toISOString(),
+        unreadCount,
+      };
+    }
+
     const trainerName = conversation.trainer
       ? `${conversation.trainer.firstName} ${conversation.trainer.lastName}`.trim()
       : 'Тренер';
@@ -633,6 +898,7 @@ export class ChatService {
 
   private async notifyChatPeers(
     conversation: {
+      id?: string;
       kind: ConversationKind;
       clientId: string;
       trainerId: string | null;
@@ -645,6 +911,27 @@ export class ChatService {
     const preview = body.length > 120 ? `${body.slice(0, 117)}…` : body;
     const title = `Сообщение: ${senderName}`;
     try {
+      if (conversation.kind === ConversationKind.GROUP && conversation.id) {
+        const members = await this.prisma.conversationMember.findMany({
+          where: {
+            conversationId: conversation.id,
+            userId: { not: senderId },
+          },
+          select: { userId: true },
+        });
+        await Promise.all(
+          members.map((m) =>
+            this.notifications.sendDirectMessage(
+              m.userId,
+              title,
+              preview,
+              senderId,
+            ),
+          ),
+        );
+        return;
+      }
+
       if (conversation.kind === ConversationKind.STAFF) {
         const peerId =
           conversation.clientId === senderId

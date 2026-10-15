@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -15,8 +16,10 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { ChatService } from './chat.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
+import { CreateGroupConversationDto } from './dto/create-group-conversation.dto';
 import { CreateStaffConversationDto } from './dto/create-staff-conversation.dto';
 import { SendChatMessageDto } from './dto/send-chat-message.dto';
+import { UpdateGroupConversationDto } from './dto/update-group-conversation.dto';
 
 const CHAT_ROLES = [
   UserRole.CLIENT,
@@ -75,6 +78,29 @@ export class ChatController {
     @Body() dto: CreateStaffConversationDto,
   ) {
     return this.chatService.getOrCreateStaffConversation(user, dto.peerId);
+  }
+
+  @Post('conversations/group')
+  @Roles(UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  createGroupChat(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateGroupConversationDto,
+  ) {
+    return this.chatService.createGroupConversation(
+      user,
+      dto.title,
+      dto.memberIds,
+    );
+  }
+
+  @Patch('conversations/:id/group')
+  @Roles(UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  updateGroupChat(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdateGroupConversationDto,
+  ) {
+    return this.chatService.updateGroupConversation(user, id, dto);
   }
 
   @Post('conversations/trainer-admin')

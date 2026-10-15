@@ -29,6 +29,8 @@ interface ChatInboxProps {
   directThread?: boolean;
   /** Staff can pick a teammate and start a DM */
   allowStaffChat?: boolean;
+  /** Manager / super-admin can create named group chats */
+  allowGroupChat?: boolean;
 }
 
 function initials(title: string) {
@@ -62,6 +64,7 @@ export function ChatInbox({
   scope,
   directThread = false,
   allowStaffChat = role !== 'client',
+  allowGroupChat = false,
 }: ChatInboxProps) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -72,12 +75,19 @@ export function ChatInbox({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const [showNewChat, setShowNewChat] = useState(false);
+  const [staffComposeMode, setStaffComposeMode] = useState<'dm' | 'group'>('dm');
   const [newChatKind, setNewChatKind] = useState<'admin' | 'trainer'>('admin');
   const [trainers, setTrainers] = useState<TrainerOption[]>([]);
   const [selectedTrainerId, setSelectedTrainerId] = useState('');
   const [staffRecipients, setStaffRecipients] = useState<StaffOption[]>([]);
   const [staffQuery, setStaffQuery] = useState('');
   const [selectedStaffId, setSelectedStaffId] = useState('');
+  const [groupTitle, setGroupTitle] = useState('');
+  const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<string[]>(
+    [],
+  );
+  const [showGroupEdit, setShowGroupEdit] = useState(false);
+  const [editGroupTitle, setEditGroupTitle] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialClientHandled = useRef(false);
 
@@ -96,7 +106,9 @@ export function ChatInbox({
     setMessages(data.messages);
     setConversations((prev) =>
       prev.map((c) =>
-        c.id === conversationId ? { ...c, unreadCount: 0 } : c,
+        c.id === conversationId
+          ? { ...c, ...data.conversation, unreadCount: 0 }
+          : c,
       ),
     );
   }, []);
@@ -151,14 +163,14 @@ export function ChatInbox({
   }, [role]);
 
   useEffect(() => {
-    if (!allowStaffChat || role === 'client') return;
+    if ((!allowStaffChat && !allowGroupChat) || role === 'client') return;
     const token = getToken();
     if (!token) return;
     api
       .chatStaffRecipients(token)
       .then(setStaffRecipients)
       .catch(() => setStaffRecipients([]));
-  }, [allowStaffChat, role]);
+  }, [allowStaffChat, allowGroupChat, role]);
 
   useEffect(() => {
     if (
@@ -215,6 +227,7 @@ export function ChatInbox({
     setMessages([]);
     setDraft('');
     setError('');
+    setShowGroupEdit(false);
   };
 
   const handleSend = async () => {
@@ -290,6 +303,49 @@ export function ChatInbox({
     }
   };
 
+  const toggleGroupMember = (id: string) => {
+    setSelectedGroupMemberIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
+
+  const handleStartGroupChat = async () => {
+    const token = getToken();
+    if (!token) return;
+    if (!groupTitle.trim()) {
+      setError('Укажите название группы');
+      return;
+    }
+    if (selectedGroupMemberIds.length === 0) {
+      setError('Добавьте хотя бы одного сотрудника');
+      return;
+    }
+    setSending(true);
+    setError('');
+    try {
+      const conversation = await api.chatCreateGroup(token, {
+        title: groupTitle.trim(),
+        memberIds: selectedGroupMemberIds,
+      });
+      setShowNewChat(false);
+      setStaffComposeMode('dm');
+      setGroupTitle('');
+      setSelectedGroupMemberIds([]);
+      setStaffQuery('');
+      setConversations((prev) => {
+        const exists = prev.some((c) => c.id === conversation.id);
+        return exists ? prev : [conversation, ...prev];
+      });
+      await openConversation(conversation.id);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Не удалось создать группу',
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+
   const filteredStaff = staffRecipients.filter((s) => {
     if (!staffQuery.trim()) return true;
     const q = staffQuery.trim().toLowerCase();
@@ -300,9 +356,51 @@ export function ChatInbox({
   });
 
   const isClientRole = role === 'client';
-  const canStartNew = isClientRole || allowStaffChat;
+  const canStartNew = isClientRole || allowStaffChat || allowGroupChat;
 
   const activeConversation = conversations.find((c) => c.id === activeId);
+  const isActiveGroup = activeConversation?.kind === 'GROUP';
+
+  const handleSaveGroupEdit = async () => {
+    const token = getToken();
+    const current = conversations.find((c) => c.id === activeId);
+    if (!token || !activeId || !current || current.kind !== 'GROUP') return;
+    const currentIds = new Set(current.memberIds ?? []);
+    const desiredIds = new Set(selectedGroupMemberIds);
+    const addMemberIds = [...desiredIds].filter((id) => !currentIds.has(id));
+    const removeMemberIds = [...currentIds].filter(
+      (id) => !desiredIds.has(id),
+    );
+
+    setSending(true);
+    setError('');
+    try {
+      const updated = await api.chatUpdateGroup(token, activeId, {
+        title: editGroupTitle.trim() || undefined,
+        addMemberIds: addMemberIds.length ? addMemberIds : undefined,
+        removeMemberIds: removeMemberIds.length ? removeMemberIds : undefined,
+      });
+      setConversations((prev) =>
+        prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)),
+      );
+      setShowGroupEdit(false);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Не удалось сохранить группу',
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const openGroupEdit = () => {
+    const current = conversations.find((c) => c.id === activeId);
+    if (!current || current.kind !== 'GROUP') return;
+    setEditGroupTitle(current.title);
+    setSelectedGroupMemberIds((current.memberIds ?? []).filter(Boolean));
+    setStaffQuery('');
+    setShowGroupEdit(true);
+  };
 
   if (loading && !activeId && !directThread) {
     return (
@@ -389,46 +487,139 @@ export function ChatInbox({
             </div>
           )}
 
-          {showNewChat && allowStaffChat && !isClientRole && (
+          {showNewChat &&
+            (allowStaffChat || allowGroupChat) &&
+            !isClientRole && (
             <div className="space-y-3 border-b border-slate-800 bg-slate-900/80 px-4 py-3">
-              <p className="text-sm text-slate-300">Написать сотруднику</p>
-              <input
-                className="input w-full text-sm"
-                placeholder="Поиск по имени или роли"
-                value={staffQuery}
-                onChange={(e) => setStaffQuery(e.target.value)}
-              />
-              <div className="max-h-48 space-y-1 overflow-y-auto">
-                {filteredStaff.length === 0 ? (
-                  <p className="text-xs text-slate-500">Никого не найдено</p>
-                ) : (
-                  filteredStaff.map((s) => (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => setSelectedStaffId(s.id)}
-                      className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm ${
-                        selectedStaffId === s.id
-                          ? 'bg-fitgo-500/20 text-fitgo-200'
-                          : 'bg-slate-800/60 text-slate-200'
-                      }`}
-                    >
-                      <span>
-                        {s.firstName} {s.lastName}
-                      </span>
-                      <span className="text-xs text-slate-400">{s.roleLabel}</span>
-                    </button>
-                  ))
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleStartStaffChat()}
-                disabled={sending || !selectedStaffId}
-                className="btn-primary w-full text-sm disabled:opacity-50"
-              >
-                Начать чат
-              </button>
+              {allowGroupChat ? (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setStaffComposeMode('dm')}
+                    className={`flex-1 rounded-full px-3 py-2 text-sm ${
+                      staffComposeMode === 'dm'
+                        ? 'bg-fitgo-500 text-white'
+                        : 'bg-slate-800 text-slate-300'
+                    }`}
+                  >
+                    Личное
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStaffComposeMode('group')}
+                    className={`flex-1 rounded-full px-3 py-2 text-sm ${
+                      staffComposeMode === 'group'
+                        ? 'bg-fitgo-500 text-white'
+                        : 'bg-slate-800 text-slate-300'
+                    }`}
+                  >
+                    Группа
+                  </button>
+                </div>
+              ) : null}
+
+              {staffComposeMode === 'group' && allowGroupChat ? (
+                <>
+                  <p className="text-sm text-slate-300">Новая группа</p>
+                  <input
+                    className="input w-full text-sm"
+                    placeholder="Название группы"
+                    value={groupTitle}
+                    onChange={(e) => setGroupTitle(e.target.value)}
+                    maxLength={80}
+                  />
+                  <input
+                    className="input w-full text-sm"
+                    placeholder="Поиск по имени или роли"
+                    value={staffQuery}
+                    onChange={(e) => setStaffQuery(e.target.value)}
+                  />
+                  <div className="max-h-48 space-y-1 overflow-y-auto">
+                    {filteredStaff.length === 0 ? (
+                      <p className="text-xs text-slate-500">Никого не найдено</p>
+                    ) : (
+                      filteredStaff.map((s) => {
+                        const selected = selectedGroupMemberIds.includes(s.id);
+                        return (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => toggleGroupMember(s.id)}
+                            className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm ${
+                              selected
+                                ? 'bg-fitgo-500/20 text-fitgo-200'
+                                : 'bg-slate-800/60 text-slate-200'
+                            }`}
+                          >
+                            <span>
+                              {s.firstName} {s.lastName}
+                            </span>
+                            <span className="text-xs text-slate-400">
+                              {selected ? '✓ ' : ''}
+                              {s.roleLabel}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleStartGroupChat()}
+                    disabled={
+                      sending ||
+                      !groupTitle.trim() ||
+                      selectedGroupMemberIds.length === 0
+                    }
+                    className="btn-primary w-full text-sm disabled:opacity-50"
+                  >
+                    Создать группу
+                  </button>
+                </>
+              ) : allowStaffChat ? (
+                <>
+                  <p className="text-sm text-slate-300">Написать сотруднику</p>
+                  <input
+                    className="input w-full text-sm"
+                    placeholder="Поиск по имени или роли"
+                    value={staffQuery}
+                    onChange={(e) => setStaffQuery(e.target.value)}
+                  />
+                  <div className="max-h-48 space-y-1 overflow-y-auto">
+                    {filteredStaff.length === 0 ? (
+                      <p className="text-xs text-slate-500">Никого не найдено</p>
+                    ) : (
+                      filteredStaff.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setSelectedStaffId(s.id)}
+                          className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm ${
+                            selectedStaffId === s.id
+                              ? 'bg-fitgo-500/20 text-fitgo-200'
+                              : 'bg-slate-800/60 text-slate-200'
+                          }`}
+                        >
+                          <span>
+                            {s.firstName} {s.lastName}
+                          </span>
+                          <span className="text-xs text-slate-400">
+                            {s.roleLabel}
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleStartStaffChat()}
+                    disabled={sending || !selectedStaffId}
+                    className="btn-primary w-full text-sm disabled:opacity-50"
+                  >
+                    Начать чат
+                  </button>
+                </>
+              ) : null}
             </div>
           )}
 
@@ -485,32 +676,95 @@ export function ChatInbox({
         </>
       ) : (
         <>
-          <div className="flex items-center gap-3 border-b border-slate-800 px-3 py-2">
-            {!directThread && (
-              <button
-                type="button"
-                onClick={closeConversation}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-fitgo-400 transition hover:bg-slate-800"
-                aria-label="Назад к списку"
-              >
-                <ArrowLeft className="h-5 w-5" />
-              </button>
-            )}
-            <div className="flex min-w-0 flex-1 items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fitgo-500/20 text-sm font-semibold text-fitgo-300">
-                {initials(activeConversation?.title ?? '?')}
-              </div>
-              <div className="min-w-0">
-                <p className="truncate font-semibold">
-                  {activeConversation?.title}
-                </p>
-                {activeConversation?.subtitle && (
-                  <p className="truncate text-xs text-slate-500">
-                    {activeConversation.subtitle}
+          <div className="border-b border-slate-800">
+            <div className="flex items-center gap-3 px-3 py-2">
+              {!directThread && (
+                <button
+                  type="button"
+                  onClick={closeConversation}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-fitgo-400 transition hover:bg-slate-800"
+                  aria-label="Назад к списку"
+                >
+                  <ArrowLeft className="h-5 w-5" />
+                </button>
+              )}
+              <div className="flex min-w-0 flex-1 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fitgo-500/20 text-sm font-semibold text-fitgo-300">
+                  {initials(activeConversation?.title ?? '?')}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-semibold">
+                    {activeConversation?.title}
                   </p>
-                )}
+                  {activeConversation?.subtitle && (
+                    <p className="truncate text-xs text-slate-500">
+                      {activeConversation.subtitle}
+                    </p>
+                  )}
+                </div>
+                {allowGroupChat && isActiveGroup ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      showGroupEdit ? setShowGroupEdit(false) : openGroupEdit()
+                    }
+                    className="shrink-0 rounded-full bg-slate-800 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-slate-700"
+                  >
+                    {showGroupEdit ? 'Закрыть' : 'Участники'}
+                  </button>
+                ) : null}
               </div>
             </div>
+            {showGroupEdit && allowGroupChat && isActiveGroup ? (
+              <div className="space-y-3 border-t border-slate-800 bg-slate-900/80 px-4 py-3">
+                <input
+                  className="input w-full text-sm"
+                  placeholder="Название группы"
+                  value={editGroupTitle}
+                  onChange={(e) => setEditGroupTitle(e.target.value)}
+                  maxLength={80}
+                />
+                <input
+                  className="input w-full text-sm"
+                  placeholder="Поиск сотрудников"
+                  value={staffQuery}
+                  onChange={(e) => setStaffQuery(e.target.value)}
+                />
+                <div className="max-h-40 space-y-1 overflow-y-auto">
+                  {filteredStaff.map((s) => {
+                    const selected = selectedGroupMemberIds.includes(s.id);
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => toggleGroupMember(s.id)}
+                        className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm ${
+                          selected
+                            ? 'bg-fitgo-500/20 text-fitgo-200'
+                            : 'bg-slate-800/60 text-slate-200'
+                        }`}
+                      >
+                        <span>
+                          {s.firstName} {s.lastName}
+                        </span>
+                        <span className="text-xs text-slate-400">
+                          {selected ? '✓ ' : ''}
+                          {s.roleLabel}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveGroupEdit()}
+                  disabled={sending || !editGroupTitle.trim()}
+                  className="btn-primary w-full text-sm disabled:opacity-50"
+                >
+                  Сохранить
+                </button>
+              </div>
+            ) : null}
           </div>
 
           <div className="flex-1 overflow-y-auto px-3 py-4">
