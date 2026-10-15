@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { FeaturesModule } from '../features/features.module';
 import { FitnessModule } from '../fitness/fitness.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { PayrollModule } from '../payroll/payroll.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import { AdminTasksSchedulerService } from './admin-tasks-scheduler.service';
 import { SuperAdminAnalyticsService } from './super-admin-analytics.service';
@@ -18,6 +19,7 @@ import { SuperAdminService } from './super-admin.service';
     FeaturesModule,
     AdminSalesModule,
     NotificationsModule,
+    PayrollModule,
   ],
   controllers: [SuperAdminController],
   providers: [

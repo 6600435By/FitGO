@@ -107,6 +107,7 @@ export function StaffPayProfileEditor({
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [templateBusy, setTemplateBusy] = useState(false);
 
   const profileRef = useRef(profile);
   const byTrackRef = useRef(byTrack);
@@ -383,6 +384,97 @@ export function StaffPayProfileEditor({
     }
   };
 
+  const tracksToTemplate = (): StaffPayTrack[] => {
+    const groups = trainerGroupsRef.current;
+    if (groups) {
+      const active = activeTrainerTracks(groups);
+      if (active.length) return active;
+    }
+    return [profileRef.current.track];
+  };
+
+  const saveAsTemplate = async () => {
+    const token = getToken();
+    if (!token) return;
+    flushDrafts();
+    const tracks = tracksToTemplate();
+    const labels = tracks.map(
+      (t) =>
+        TRACKS.find((x) => x.id === t)?.label ??
+        (t === 'CLUB' ? 'Тренеры клуб' : t === 'PT' ? 'Тренеры штат' : t),
+    );
+    if (
+      !window.confirm(
+        `Сохранить схему как шаблон клуба для: ${labels.join(', ')}?\n\nШаблон применяется только к новым сотрудникам и по кнопке «Применить шаблон». Остальных не меняет.`,
+      )
+    ) {
+      return;
+    }
+    setTemplateBusy(true);
+    setMessage('');
+    try {
+      const { payProfile, baseSalaryMinor } = assembleProfile();
+      await api.payrollSaveStaffProfile(token, userId, {
+        baseSalaryMinor,
+        payProfile,
+      });
+      setByTrack(payProfile.byTrack ?? {});
+      setProfile(sliceForTrack(payProfile, payProfile.track));
+      for (const track of tracks) {
+        await api.payrollSavePayTemplate(token, {
+          track,
+          baseSalaryMinor,
+          payProfile,
+        });
+      }
+      setMessage(
+        `Шаблон сохранён (${labels.join(', ')}). При добавлении нового сотрудника схема подставится автоматически.`,
+      );
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка шаблона');
+    } finally {
+      setTemplateBusy(false);
+    }
+  };
+
+  const applyTemplate = async () => {
+    const token = getToken();
+    if (!token) return;
+    const tracks = tracksToTemplate();
+    const labels = tracks.map(
+      (t) =>
+        TRACKS.find((x) => x.id === t)?.label ??
+        (t === 'CLUB' ? 'Тренеры клуб' : t === 'PT' ? 'Тренеры штат' : t),
+    );
+    if (
+      !window.confirm(
+        `Применить шаблон клуба к этому сотруднику (${labels.join(', ')})?\n\nТолько его мотивация. Остальных сотрудников не трогаем.`,
+      )
+    ) {
+      return;
+    }
+    setTemplateBusy(true);
+    setMessage('');
+    try {
+      const row = await api.payrollApplyPayTemplate(token, userId, { tracks });
+      if (row?.payProfile) {
+        const packed = row.payProfile;
+        const map: Partial<Record<StaffPayTrack, StaffPayTrackSlice>> = {
+          ...(packed.byTrack ?? {}),
+        };
+        map[packed.track] = sliceForTrack(packed, packed.track);
+        setByTrack(map);
+        setProfile(sliceForTrack(packed, packed.track));
+        setBaseSalary(formatMinor(row.baseSalaryMinor));
+      }
+      setMessage('Шаблон применён к этому сотруднику');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка применения шаблона');
+    } finally {
+      setTemplateBusy(false);
+    }
+  };
+
   const visibleTracks = TRACKS.filter((t) =>
     stacked
       ? allowed.includes(t.id) && !TRAINER_PAY_TRACKS.includes(t.id)
@@ -415,8 +507,8 @@ export function StaffPayProfileEditor({
         <h3 className="text-lg font-semibold text-white">Мотивация и ставки</h3>
         <p className="mt-1 text-sm text-slate-400">
           {stacked
-            ? 'Поля открываются по группам тренера. Копирование переносит каждую схему только в свою группу. Дробные ставки — через точку или запятую.'
-            : 'Можно задать несколько схем, если сотрудник в нескольких подразделениях. Дробные ставки — через точку или запятую (например 2,5).'}
+            ? 'Поля открываются по группам тренера. Шаблон — для новых сотрудников; «Скопировать» — массово на группу. Дробные ставки — через точку или запятую.'
+            : 'Шаблон сохраняет схему клуба для новых сотрудников. «Скопировать на подразделение» меняет уже существующих. Дробные ставки — через точку или запятую (например 2,5).'}
         </p>
       </div>
 
@@ -872,20 +964,38 @@ export function StaffPayProfileEditor({
         <button
           type="button"
           className="btn-primary"
-          disabled={saving || copying}
+          disabled={saving || copying || templateBusy}
           onClick={save}
         >
           {saving ? 'Сохранение…' : 'Сохранить мотивацию'}
         </button>
         {stacked && trainerTracks.length === 0 ? null : (
-          <button
-            type="button"
-            className="btn-secondary"
-            disabled={saving || copying}
-            onClick={copyToDepartment}
-          >
-            {copying ? 'Копирование…' : copyLabel}
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={saving || copying || templateBusy}
+              onClick={saveAsTemplate}
+            >
+              {templateBusy ? 'Шаблон…' : 'Сохранить как шаблон'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={saving || copying || templateBusy}
+              onClick={applyTemplate}
+            >
+              Применить шаблон
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={saving || copying || templateBusy}
+              onClick={copyToDepartment}
+            >
+              {copying ? 'Копирование…' : copyLabel}
+            </button>
+          </>
         )}
       </div>
       {message && <p className="text-sm text-fitgo-300">{message}</p>}

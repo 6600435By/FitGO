@@ -479,6 +479,7 @@ model Club {
   spaWaitlistEntries   SpaWaitlistEntry[]
   groupClassSessions   GroupClassSession[]
   staffCompensations   StaffCompensation[]
+  staffPayTemplates    StaffPayTemplate[]
   motivationRates      MotivationRate[]
   payrollAdjustments   PayrollAdjustment[]
   payrollPeriodLocks   PayrollPeriodLock[]
@@ -1843,6 +1844,25 @@ model StaffCompensation {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([clubId, userId, effectiveFrom])
+}
+
+/// Club default motivation scheme per pay track (apply on new staff only).
+model StaffPayTemplate {
+  id              String   @id @default(cuid())
+  clubId          String
+  /// StaffPayTrack: ADMIN | MANAGER | PT | CLUB | GROUP_TRAINER | REFORMER | SPA | TECH
+  track           String
+  label           String?
+  baseSalaryMinor Int      @default(0)
+  /// JSON StaffPayTrackSlice for this track.
+  payProfile      Json
+  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, track])
+  @@index([clubId])
 }
 
 model MotivationRate {

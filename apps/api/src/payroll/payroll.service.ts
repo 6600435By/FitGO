@@ -50,6 +50,7 @@ import {
   type StaffEmploymentKind,
   type StaffPayProfile,
   type StaffPaySummary,
+  type StaffPayTemplateDto,
   type StaffPayTrack,
   type MotivationCategoryBreakdown,
   type StaffPayTrackSlice,
@@ -244,6 +245,32 @@ const SECTION_LABELS: Record<ClubPayrollSectionId, string> = {
   TECH: 'Техперсонал',
   EXTERNAL: 'Сторонние специалисты',
 };
+
+const PAY_TRACK_LABELS: Record<StaffPayTrack, string> = {
+  ADMIN: 'Админы',
+  MANAGER: 'Управляющие',
+  GROUP_TRAINER: 'Тренеры ГП',
+  SPA: 'SPA',
+  TECH: 'Техперсонал',
+  PT: 'Тренеры штат',
+  CLUB: 'Тренеры клуб',
+  REFORMER: 'Реформеры',
+};
+
+const ALL_PAY_TRACKS: StaffPayTrack[] = [
+  'ADMIN',
+  'MANAGER',
+  'GROUP_TRAINER',
+  'SPA',
+  'TECH',
+  'PT',
+  'CLUB',
+  'REFORMER',
+];
+
+function isPayTrack(value: string): value is StaffPayTrack {
+  return (ALL_PAY_TRACKS as string[]).includes(value);
+}
 
 /** Overlay selected track slices from source onto target (multi-role safe). */
 function mergePayTracks(
@@ -1698,6 +1725,233 @@ export class PayrollService {
       effectiveFrom,
       payProfile,
     });
+  }
+
+  async listPayTemplates(clubId: string): Promise<StaffPayTemplateDto[]> {
+    const rows = await this.prisma.staffPayTemplate.findMany({
+      where: { clubId },
+      orderBy: { track: 'asc' },
+    });
+    return rows
+      .filter((row) => isPayTrack(row.track))
+      .map((row) => this.mapPayTemplate(row));
+  }
+
+  /**
+   * Save club default for one track from a staff card.
+   * Does not change other employees — only the template used on new hires.
+   */
+  async savePayTemplate(
+    actor: JwtPayload,
+    input: {
+      track: StaffPayTrack;
+      baseSalaryMinor?: number;
+      payProfile: StaffPayProfile | StaffPayTrackSlice;
+      label?: string;
+    },
+  ): Promise<StaffPayTemplateDto> {
+    const clubId = requireClubId(actor);
+    if (!isPayTrack(input.track)) {
+      throw new BadRequestException('Неизвестная схема мотивации');
+    }
+    const slice = sliceForTrack(
+      'byTrack' in input.payProfile
+        ? (input.payProfile as StaffPayProfile)
+        : { ...(input.payProfile as StaffPayTrackSlice), track: input.track },
+      input.track,
+    );
+    const { byTrack: _b, ...flat } = slice as StaffPayProfile;
+    const paySlice: StaffPayTrackSlice = { ...flat, track: input.track };
+    const includeSalary =
+      input.track === 'PT' ||
+      input.track === 'ADMIN' ||
+      input.track === 'MANAGER';
+    const baseSalaryMinor = includeSalary
+      ? Math.max(0, Math.round(input.baseSalaryMinor ?? 0))
+      : 0;
+    const row = await this.prisma.staffPayTemplate.upsert({
+      where: { clubId_track: { clubId, track: input.track } },
+      create: {
+        clubId,
+        track: input.track,
+        label: input.label?.trim() || PAY_TRACK_LABELS[input.track],
+        baseSalaryMinor,
+        payProfile: paySlice as object,
+      },
+      update: {
+        label: input.label?.trim() || PAY_TRACK_LABELS[input.track],
+        baseSalaryMinor,
+        payProfile: paySlice as object,
+      },
+    });
+    return this.mapPayTemplate(row);
+  }
+
+  /**
+   * Apply club templates to one user (merge tracks). Does not touch other staff.
+   */
+  async applyPayTemplatesToUser(
+    actor: JwtPayload,
+    userId: string,
+    tracks?: StaffPayTrack[],
+  ): Promise<StaffCompensationDto> {
+    const clubId = requireClubId(actor);
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+      include: { roles: true },
+    });
+    if (!user) throw new NotFoundException('Сотрудник не найден');
+
+    const wanted =
+      tracks?.length && tracks.every(isPayTrack)
+        ? tracks
+        : this.defaultTracksForUser(user);
+    if (!wanted.length) {
+      throw new BadRequestException('Нет схем для применения шаблона');
+    }
+
+    const templates = await this.prisma.staffPayTemplate.findMany({
+      where: { clubId, track: { in: wanted } },
+    });
+    if (!templates.length) {
+      throw new BadRequestException(
+        'Нет сохранённых шаблонов для выбранных схем. Сохраните шаблон на карточке сотрудника.',
+      );
+    }
+
+    const existing = await this.getStaffPayProfile(clubId, userId);
+    let merged: StaffPayProfile | undefined = existing?.payProfile;
+    let baseSalaryMinor = existing?.baseSalaryMinor ?? 0;
+    for (const row of templates) {
+      if (!isPayTrack(row.track)) continue;
+      const slice = row.payProfile as unknown as StaffPayTrackSlice;
+      const asProfile: StaffPayProfile = { ...slice, track: row.track };
+      merged = mergePayTracks(merged, asProfile, [row.track]);
+      if (
+        row.track === 'PT' ||
+        row.track === 'ADMIN' ||
+        row.track === 'MANAGER'
+      ) {
+        baseSalaryMinor = row.baseSalaryMinor;
+      }
+    }
+    if (!merged) {
+      throw new BadRequestException('Шаблон пуст');
+    }
+    return this.upsertCompensation(actor, {
+      userId,
+      baseSalaryMinor,
+      effectiveFrom: new Date().toISOString().slice(0, 10),
+      payProfile: merged,
+    });
+  }
+
+  /** Tracks to seed for a newly created / synced user. */
+  defaultTracksForUser(user: {
+    roles: Array<{ role: Role }>;
+    groupPrograms?: boolean | null;
+    trainerStaff?: boolean | null;
+    trainerClub?: boolean | null;
+    trainerReformers?: boolean | null;
+    trainerGroupsSet?: boolean | null;
+  }): StaffPayTrack[] {
+    const roles = user.roles.map((r) => r.role);
+    const tracks: StaffPayTrack[] = [];
+    if (roles.includes(Role.MANAGER)) tracks.push('MANAGER');
+    if (roles.includes(Role.ADMIN)) tracks.push('ADMIN');
+    if (roles.includes(Role.SPECIALIST)) tracks.push('SPA');
+    if (roles.includes(Role.TECH)) tracks.push('TECH');
+    if (roles.includes(Role.TRAINER)) {
+      const flags = trainerPayFlags({
+        roles: roles.map(String),
+        groupPrograms: user.groupPrograms,
+        trainerStaff: user.trainerStaff,
+        trainerClub: user.trainerClub,
+        trainerReformers: user.trainerReformers,
+        trainerGroupsSet: user.trainerGroupsSet,
+      });
+      if (flags.gp) tracks.push('GROUP_TRAINER');
+      if (flags.staff) tracks.push('PT');
+      if (flags.club) tracks.push('CLUB');
+      if (flags.reformers) tracks.push('REFORMER');
+    }
+    return tracks;
+  }
+
+  /**
+   * Apply templates after sync/create without JWT actor (system path).
+   * No-op when no templates match.
+   */
+  async applyPayTemplatesForNewUser(
+    clubId: string,
+    userId: string,
+    tracks?: StaffPayTrack[],
+  ): Promise<boolean> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+      include: { roles: true },
+    });
+    if (!user) return false;
+    const wanted = tracks?.length
+      ? tracks.filter(isPayTrack)
+      : this.defaultTracksForUser(user);
+    if (!wanted.length) return false;
+    const templates = await this.prisma.staffPayTemplate.findMany({
+      where: { clubId, track: { in: wanted } },
+    });
+    if (!templates.length) return false;
+
+    let merged: StaffPayProfile | undefined;
+    let baseSalaryMinor = 0;
+    for (const row of templates) {
+      if (!isPayTrack(row.track)) continue;
+      const slice = row.payProfile as unknown as StaffPayTrackSlice;
+      const asProfile: StaffPayProfile = { ...slice, track: row.track };
+      merged = mergePayTracks(merged, asProfile, [row.track]);
+      if (
+        row.track === 'PT' ||
+        row.track === 'ADMIN' ||
+        row.track === 'MANAGER'
+      ) {
+        baseSalaryMinor = row.baseSalaryMinor;
+      }
+    }
+    if (!merged) return false;
+    const effectiveFrom = new Date();
+    effectiveFrom.setHours(0, 0, 0, 0);
+    await this.prisma.staffCompensation.create({
+      data: {
+        clubId,
+        userId,
+        baseSalaryMinor,
+        currency: 'BYN',
+        effectiveFrom,
+        payProfile: merged as object,
+      },
+    });
+    return true;
+  }
+
+  private mapPayTemplate(row: {
+    track: string;
+    label: string | null;
+    baseSalaryMinor: number;
+    payProfile: unknown;
+    updatedAt: Date;
+  }): StaffPayTemplateDto {
+    const track = isPayTrack(row.track) ? row.track : 'PT';
+    const slice = {
+      ...(row.payProfile as StaffPayTrackSlice),
+      track,
+    };
+    return {
+      track,
+      label: row.label?.trim() || PAY_TRACK_LABELS[track],
+      baseSalaryMinor: row.baseSalaryMinor,
+      payProfile: slice,
+      payChips: payProfileSummary({ ...slice, track }),
+      updatedAt: row.updatedAt.toISOString(),
+    };
   }
 
   /**

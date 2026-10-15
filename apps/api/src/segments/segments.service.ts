@@ -12,6 +12,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { allocateStaffLogin } from '../auth/staff-login';
 import { FitnessService } from '../fitness/fitness.service';
+import { PayrollService } from '../payroll/payroll.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 const STAFF_KEYS = [
@@ -44,6 +45,8 @@ export type SegmentSyncResult = {
   credentials: Array<{ email: string; password: string; name: string }>;
   lastSyncedAt: string | null;
   error?: string;
+  /** Info (e.g. reclaimed wrong name on employeeCode). */
+  notes?: string;
 };
 
 @Injectable()
@@ -54,6 +57,7 @@ export class SegmentsService {
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
     private readonly config: ConfigService,
+    private readonly payroll: PayrollService,
   ) {}
 
   private assertLiveFitgo() {
@@ -273,6 +277,7 @@ export class SegmentsService {
     let skipped = 0;
     let failed = 0;
     const failNotes: string[] = [];
+    const reclaimNotes: string[] = [];
     const credentials: SegmentSyncResult['credentials'] = [];
     const groupPrograms = key === 'staff.groupTrainers';
     const fetched = members.data.length;
@@ -287,24 +292,95 @@ export class SegmentsService {
       const nameParts = (m.name || '').trim().split(/\s+/);
       const lastName = nameParts[0] || 'Сотрудник';
       const firstName = nameParts.slice(1).join(' ') || '1С';
+      const oneCName = `${lastName} ${firstName}`.trim();
 
-      const existing =
+      const byExternal =
         (await this.prisma.user.findFirst({
-          where: {
-            clubId,
-            OR: [
-              { externalId },
-              ...(code ? [{ employeeCode: code }] : []),
-            ],
-          },
+          where: { clubId, externalId },
           select: {
             id: true,
             archivedAt: true,
+            externalId: true,
+            employeeCode: true,
+            firstName: true,
+            lastName: true,
           },
         })) ?? null;
+      const byCode =
+        !byExternal && code
+          ? ((await this.prisma.user.findFirst({
+              where: { clubId, employeeCode: code },
+              select: {
+                id: true,
+                archivedAt: true,
+                externalId: true,
+                employeeCode: true,
+                firstName: true,
+                lastName: true,
+              },
+            })) ?? null)
+          : null;
+      const existing = byExternal ?? byCode;
 
-      // Already in FitGO (including archived) — never overwrite; never re-create.
       if (existing) {
+        // Same 1C person (externalId) — leave card alone (add-only).
+        if (existing.externalId === externalId) {
+          skipped += 1;
+          unchanged += 1;
+          continue;
+        }
+        // Code reused / stale card: FitGO has another name on this employeeCode
+        // (e.g. Аниковец on 000000163 while 1C has Алешкович). Reclaim for 1C.
+        const staleName = `${existing.lastName} ${existing.firstName}`.trim();
+        const namesDiffer = !staffNamesMatch(staleName, oneCName);
+        const canReclaim =
+          !existing.archivedAt &&
+          namesDiffer &&
+          (!existing.externalId || existing.externalId !== externalId);
+        if (canReclaim) {
+          try {
+            await this.prisma.user.update({
+              where: { id: existing.id },
+              data: {
+                firstName,
+                lastName,
+                phone: m.phone?.trim() || null,
+                externalId,
+                employeeCode: code,
+                ...(role === Role.TRAINER
+                  ? {
+                      groupPrograms,
+                      trainerStaff: !groupPrograms,
+                      trainerClub: false,
+                      trainerGroupsSet: true,
+                    }
+                  : {}),
+              },
+            });
+            const hasRole = await this.prisma.userRole.findFirst({
+              where: { userId: existing.id, role },
+            });
+            if (!hasRole) {
+              await this.prisma.userRole.create({
+                data: { userId: existing.id, role },
+              });
+            }
+            updated += 1;
+            if (reclaimNotes.length < 5) {
+              reclaimNotes.push(`${staleName} → ${oneCName} (код ${code})`);
+            }
+            this.logger.warn(
+              `Staff sync reclaimed code ${code}: "${staleName}" → "${oneCName}" (${externalId})`,
+            );
+          } catch (err) {
+            failed += 1;
+            const msg = err instanceof Error ? err.message : String(err);
+            this.logger.warn(`Staff reclaim failed for ${externalId}: ${msg}`);
+            if (failNotes.length < 5) failNotes.push(`${m.name}: ${msg}`);
+          }
+          continue;
+        }
+        // Already in FitGO (including archived) — never overwrite; never re-create.
         skipped += 1;
         unchanged += 1;
         continue;
@@ -314,7 +390,7 @@ export class SegmentsService {
       const email = await allocateStaffLogin(this.prisma, lastName);
       const passwordHash = await bcrypt.hash(plainPassword, 10);
       try {
-        await this.prisma.user.create({
+        const created = await this.prisma.user.create({
           data: {
             clubId,
             email,
@@ -338,6 +414,13 @@ export class SegmentsService {
           password: plainPassword,
           name: `${lastName} ${firstName}`.trim(),
         });
+        try {
+          await this.payroll.applyPayTemplatesForNewUser(clubId, created.id);
+        } catch (err) {
+          this.logger.warn(
+            `Pay template for ${created.id}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
       } catch (err) {
         failed += 1;
         const msg = err instanceof Error ? err.message : String(err);
@@ -350,12 +433,15 @@ export class SegmentsService {
       failed > 0
         ? `Не удалось записать ${failed} из ${fetched}. ${failNotes.join('; ')}`
         : undefined;
+    const notes = reclaimNotes.length
+      ? `Обновлены карточки: ${reclaimNotes.join('; ')}`
+      : undefined;
 
     await this.saveState(clubId, key, {
-      lastStatus: failed > 0 && added === 0 ? 'error' : 'ok',
+      lastStatus: failed > 0 && added === 0 && updated === 0 ? 'error' : 'ok',
       lastError: error ?? null,
       lastAdded: added,
-      lastUnchanged: unchanged,
+      lastUnchanged: unchanged + updated,
     });
 
     return {
@@ -370,6 +456,7 @@ export class SegmentsService {
       credentials,
       lastSyncedAt: new Date().toISOString(),
       error,
+      notes,
     };
   }
 
@@ -620,4 +707,15 @@ function inferSpaKind(name: string): SpaServiceKind {
     return SpaServiceKind.WRAP;
   }
   return SpaServiceKind.MASSAGE;
+}
+
+/** Normalized full-name compare for staff sync reclaim. */
+function staffNamesMatch(a: string, b: string): boolean {
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .replace(/\s+/g, ' ')
+      .trim();
+  return norm(a) === norm(b);
 }

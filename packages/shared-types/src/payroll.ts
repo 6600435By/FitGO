@@ -59,6 +59,16 @@ export interface StaffCompensationDto {
   payChips?: string[];
 }
 
+/** Club-wide default motivation scheme for one pay track (new hires). */
+export interface StaffPayTemplateDto {
+  track: import('./staff-pay').StaffPayTrack;
+  label: string;
+  baseSalaryMinor: number;
+  payProfile: import('./staff-pay').StaffPayTrackSlice;
+  payChips: string[];
+  updatedAt: string;
+}
+
 export interface StaffPaySummary {
   userId: string;
   name: string;

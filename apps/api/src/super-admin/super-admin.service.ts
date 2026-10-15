@@ -32,6 +32,7 @@ import {
   isValidStaffAppPassword,
 } from '../auth/staff-app-password';
 import { allocateStaffLogin, isCodeStubEmail } from '../auth/staff-login';
+import { PayrollService } from '../payroll/payroll.service';
 
 const STAFF_ROLES: Role[] = [
   Role.ADMIN,
@@ -95,6 +96,7 @@ export class SuperAdminService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly adminPermissions: AdminPermissionsService,
     private readonly tasksScheduler: AdminTasksSchedulerService,
+    private readonly payroll: PayrollService,
   ) {}
 
   async onModuleInit() {
@@ -312,6 +314,16 @@ export class SuperAdminService implements OnModuleInit {
         AdminPermission.DASHBOARD_VIEW,
         AdminPermission.CLIENTS_VIEW,
       ]);
+    }
+
+    try {
+      await this.payroll.applyPayTemplatesForNewUser(clubId, created.id);
+    } catch (err) {
+      this.logger.warn(
+        `Pay template for new staff ${created.id}: ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
     }
 
     await this.logAudit(user, 'STAFF_CREATED', created.id, {

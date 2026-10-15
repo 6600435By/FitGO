@@ -1958,6 +1958,7 @@ export const api = {
         fetched?: number;
         pruned?: number;
         error?: string;
+        notes?: string;
       }>;
       credentials: Array<{ email: string; password: string; name: string }>;
       removed?: number;
@@ -2907,6 +2908,41 @@ export const api = {
     request<{ copied: number; skipped: number }>(
       `/super-admin/payroll/staff/${userId}/profile/copy`,
       { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  payrollPayTemplates: (token: string) =>
+    request<import('@fitgo/shared-types').StaffPayTemplateDto[]>(
+      '/super-admin/payroll/pay-templates',
+      {},
+      token,
+    ),
+
+  payrollSavePayTemplate: (
+    token: string,
+    body: {
+      track: import('@fitgo/shared-types').StaffPayTrack;
+      baseSalaryMinor?: number;
+      payProfile: import('@fitgo/shared-types').StaffPayProfile;
+      label?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').StaffPayTemplateDto>(
+      '/super-admin/payroll/pay-templates',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  payrollApplyPayTemplate: (
+    token: string,
+    userId: string,
+    body?: {
+      tracks?: import('@fitgo/shared-types').StaffPayTrack[];
+    },
+  ) =>
+    request<import('@fitgo/shared-types').StaffCompensationDto>(
+      `/super-admin/payroll/staff/${userId}/profile/apply-template`,
+      { method: 'POST', body: JSON.stringify(body ?? {}) },
       token,
     ),
 

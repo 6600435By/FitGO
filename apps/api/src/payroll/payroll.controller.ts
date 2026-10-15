@@ -92,6 +92,40 @@ export class PayrollController {
     );
   }
 
+  @Get('pay-templates')
+  listPayTemplates(@CurrentUser() user: JwtPayload) {
+    return this.payroll.listPayTemplates(requireClubId(user));
+  }
+
+  @Post('pay-templates')
+  savePayTemplate(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      track: StaffPayProfile['track'];
+      baseSalaryMinor?: number;
+      payProfile: StaffPayProfile;
+      label?: string;
+    },
+  ) {
+    if (!body?.track || !body?.payProfile) {
+      throw new BadRequestException('track и payProfile обязательны');
+    }
+    return this.payroll.savePayTemplate(user, body);
+  }
+
+  @Post('staff/:userId/profile/apply-template')
+  applyPayTemplate(
+    @CurrentUser() user: JwtPayload,
+    @Param('userId') userId: string,
+    @Body()
+    body?: {
+      tracks?: Array<StaffPayProfile['track']>;
+    },
+  ) {
+    return this.payroll.applyPayTemplatesToUser(user, userId, body?.tracks);
+  }
+
   @Patch('staff/:userId/employment')
   setEmployment(
     @CurrentUser() user: JwtPayload,

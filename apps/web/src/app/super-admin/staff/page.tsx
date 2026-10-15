@@ -272,8 +272,8 @@ export default function SuperAdminStaffPage() {
         <div>
           <h2 className="text-lg font-semibold sm:text-xl md:text-2xl">Персонал</h2>
           <p className="mt-0.5 hidden text-xs text-slate-400 sm:block sm:text-sm">
-            Тренеры делятся на ГП, штат и клуб. Группы и ставки — на карточке,
-            оттуда схема копируется на выбранные группы.
+            Тренеры: ГП, штат, клуб. Мотивация — на карточке; «Сохранить как
+            шаблон» задаёт схему для новых, без изменения остальных.
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
@@ -290,6 +290,10 @@ export default function SuperAdminStaffPage() {
               try {
                 const res = await api.superAdminSyncStaffFrom1C(token);
                 const added = res.results.reduce((s, r) => s + r.added, 0);
+                const updated = res.results.reduce(
+                  (s, r) => s + (r.updated ?? 0),
+                  0,
+                );
                 const skipped = res.results.reduce(
                   (s, r) => s + (r.skipped ?? r.unchanged ?? 0),
                   0,
@@ -302,8 +306,15 @@ export default function SuperAdminStaffPage() {
                   .filter((r) => r.error)
                   .map((r) => `${r.key}: ${r.error}`)
                   .join('; ');
+                const notes = res.results
+                  .filter((r) => r.notes)
+                  .map((r) => r.notes)
+                  .join('; ');
                 setSyncMsg(
-                  `Из 1С: получено ${fetched}, добавлено ${added} новых, пропущено ${skipped} (уже есть или в архиве)` +
+                  `Из 1С: получено ${fetched}, добавлено ${added} новых` +
+                    (updated ? `, обновлено ${updated}` : '') +
+                    `, пропущено ${skipped} (уже есть или в архиве)` +
+                    (notes ? `. ${notes}` : '') +
                     (errs ? `. ${errs}` : ''),
                 );
                 if (res.credentials[0]) {
@@ -516,7 +527,8 @@ export default function SuperAdminStaffPage() {
             </p>
           )}
           <p className="text-xs text-slate-500">
-            Ставки и мотивация задаются после создания — откройте карточку сотрудника.
+            Если для роли есть шаблон мотивации (кнопка на карточке сотрудника),
+            он подставится при создании. Иначе ставки задайте на карточке.
           </p>
           <button onClick={create} className="btn-primary w-full">
             Создать
