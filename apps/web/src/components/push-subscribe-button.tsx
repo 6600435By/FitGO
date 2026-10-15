@@ -1,49 +1,20 @@
 'use client';
 
 import { useState } from 'react';
-import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { pushSupported, requestAndSubscribePush } from '@/lib/push';
 
 export function PushSubscribeButton() {
   const [status, setStatus] = useState<'idle' | 'done' | 'error'>('idle');
 
   const subscribe = async () => {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    if (!pushSupported()) {
       setStatus('error');
       return;
     }
 
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js');
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') {
-        setStatus('error');
-        return;
-      }
-
-      const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-      if (!vapidKey) {
-        setStatus('error');
-        return;
-      }
-
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidKey),
-      });
-
-      const json = subscription.toJSON();
-      const token = getToken();
-      if (!token || !json.endpoint || !json.keys) return;
-
-      await api.subscribePush(token, {
-        endpoint: json.endpoint,
-        keys: {
-          p256dh: json.keys.p256dh!,
-          auth: json.keys.auth!,
-        },
-      });
-      setStatus('done');
+      const result = await requestAndSubscribePush();
+      setStatus(result === 'subscribed' ? 'done' : 'error');
     } catch {
       setStatus('error');
     }
@@ -54,19 +25,8 @@ export function PushSubscribeButton() {
   }
 
   return (
-    <button onClick={subscribe} className="btn-secondary text-xs px-3 py-1">
+    <button onClick={() => void subscribe()} className="btn-secondary text-xs px-3 py-1">
       {status === 'error' ? 'Push недоступен' : 'Включить push'}
     </button>
   );
-}
-
-function urlBase64ToUint8Array(base64String: string) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
 }

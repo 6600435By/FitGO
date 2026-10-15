@@ -10,6 +10,7 @@ import {
 import { AppShell } from '@/components/app-shell';
 import { DataFreshness } from '@/components/data-freshness';
 import { useFeatures } from '@/components/features-provider';
+import { PushBridge } from '@/components/push-bridge';
 import { StaffMessagesBadge } from '@/components/staff/staff-messages-badge';
 import { StaffTopNavLinks } from '@/components/staff/staff-top-nav';
 
@@ -59,8 +60,9 @@ export default function SpecialistLayout({ children }: { children: ReactNode }) 
             </>
           }
         >
-          <div className="mb-4">
+          <div className="mb-4 space-y-3">
             <DataFreshness canRefresh={false} />
+            <PushBridge />
           </div>
           {children}
         </AppShell>

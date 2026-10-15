@@ -86,19 +86,23 @@ export class ChatService {
     if (user.roles.includes(UserRole.ADMIN)) {
       await this.ensureAdminCanMessage(user);
     }
+    return { chat: await this.sumUnreadConversations(user) };
+  }
 
+  /** Unread total for push badge — skips admin permission gate. */
+  private async sumUnreadConversations(user: JwtPayload) {
     let conversations;
     if (user.roles.includes(UserRole.TRAINER)) {
       const [clients, admin, staff] = await Promise.all([
-        this.listConversations(user, 'clients'),
-        this.listConversations(user, 'admin'),
-        this.listConversations(user, 'staff'),
+        this.listConversationsSkippingAdminGate(user, 'clients'),
+        this.listConversationsSkippingAdminGate(user, 'admin'),
+        this.listConversationsSkippingAdminGate(user, 'staff'),
       ]);
       conversations = [...clients, ...admin, ...staff];
     } else if (user.roles.includes(UserRole.SPECIALIST)) {
       const [admin, staff] = await Promise.all([
-        this.listConversations(user, 'admin'),
-        this.listConversations(user, 'staff'),
+        this.listConversationsSkippingAdminGate(user, 'admin'),
+        this.listConversationsSkippingAdminGate(user, 'staff'),
       ]);
       conversations = [...admin, ...staff];
     } else if (
@@ -106,12 +110,39 @@ export class ChatService {
       user.roles.includes(UserRole.SUPER_ADMIN) ||
       user.roles.includes(UserRole.TECH)
     ) {
-      conversations = await this.listConversations(user, 'staff');
+      conversations = await this.listConversationsSkippingAdminGate(
+        user,
+        'staff',
+      );
     } else {
-      conversations = await this.listConversations(user);
+      conversations = await this.listConversationsSkippingAdminGate(user);
     }
-    const chat = conversations.reduce((sum, c) => sum + c.unreadCount, 0);
-    return { chat };
+    return conversations.reduce((sum, c) => sum + c.unreadCount, 0);
+  }
+
+  private async listConversationsSkippingAdminGate(
+    user: JwtPayload,
+    scope?: 'clients' | 'admin' | 'trainers' | 'staff',
+  ) {
+    const where = this.buildConversationListWhere(user, scope);
+    const conversations = await this.prisma.conversation.findMany({
+      where,
+      include: conversationListInclude,
+      orderBy: { lastMessageAt: 'desc' },
+    });
+
+    return Promise.all(
+      conversations.map(async (conversation) => {
+        const unreadCount = await this.countUnread(conversation, user.sub);
+        const lastMessage = conversation.messages[0];
+        return this.toConversationSummary(
+          conversation,
+          user,
+          lastMessage?.body,
+          unreadCount,
+        );
+      }),
+    );
   }
 
   async listConversations(
@@ -896,6 +927,66 @@ export class ChatService {
     };
   }
 
+  private chatInboxPath(roles: UserRole[], conversationId?: string) {
+    let base = '/client/notifications';
+    if (
+      roles.includes(UserRole.SUPER_ADMIN) ||
+      roles.includes(UserRole.MANAGER)
+    ) {
+      base = '/super-admin/messages';
+    } else if (roles.includes(UserRole.ADMIN)) {
+      base = '/admin/notifications';
+    } else if (roles.includes(UserRole.TRAINER)) {
+      base = '/trainer/messages';
+    } else if (roles.includes(UserRole.SPECIALIST)) {
+      base = '/specialist/messages';
+    } else if (roles.includes(UserRole.TECH)) {
+      base = '/tech';
+    }
+
+    if (conversationId && base !== '/tech') {
+      return `${base}?c=${encodeURIComponent(conversationId)}`;
+    }
+    return base;
+  }
+
+  private async notifyChatRecipient(
+    userId: string,
+    senderId: string,
+    title: string,
+    preview: string,
+    conversationId?: string,
+  ) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        email: true,
+        clubId: true,
+        roles: { select: { role: true } },
+      },
+    });
+    if (!user) return;
+
+    const roles = user.roles.map((r) => r.role as UserRole);
+    let badge = 0;
+    try {
+      badge = await this.sumUnreadConversations({
+        sub: userId,
+        email: user.email,
+        clubId: user.clubId ?? undefined,
+        roles,
+      });
+    } catch {
+      badge = 0;
+    }
+
+    await this.notifications.sendDirectMessage(userId, title, preview, senderId, {
+      url: this.chatInboxPath(roles, conversationId),
+      badge,
+      tag: conversationId ? `chat:${conversationId}` : undefined,
+    });
+  }
+
   private async notifyChatPeers(
     conversation: {
       id?: string;
@@ -910,6 +1001,7 @@ export class ChatService {
   ) {
     const preview = body.length > 120 ? `${body.slice(0, 117)}…` : body;
     const title = `Сообщение: ${senderName}`;
+    const conversationId = conversation.id;
     try {
       if (conversation.kind === ConversationKind.GROUP && conversation.id) {
         const members = await this.prisma.conversationMember.findMany({
@@ -921,11 +1013,12 @@ export class ChatService {
         });
         await Promise.all(
           members.map((m) =>
-            this.notifications.sendDirectMessage(
+            this.notifyChatRecipient(
               m.userId,
+              senderId,
               title,
               preview,
-              senderId,
+              conversationId,
             ),
           ),
         );
@@ -938,11 +1031,12 @@ export class ChatService {
             ? conversation.trainerId
             : conversation.clientId;
         if (peerId) {
-          await this.notifications.sendDirectMessage(
+          await this.notifyChatRecipient(
             peerId,
+            senderId,
             title,
             preview,
-            senderId,
+            conversationId,
           );
         }
         return;
@@ -954,11 +1048,12 @@ export class ChatService {
             ? conversation.trainerId
             : conversation.clientId;
         if (peerId) {
-          await this.notifications.sendDirectMessage(
+          await this.notifyChatRecipient(
             peerId,
+            senderId,
             title,
             preview,
-            senderId,
+            conversationId,
           );
         }
         return;
@@ -977,20 +1072,22 @@ export class ChatService {
           });
           await Promise.all(
             admins.map((a) =>
-              this.notifications.sendDirectMessage(
+              this.notifyChatRecipient(
                 a.id,
+                senderId,
                 title,
                 preview,
-                senderId,
+                conversationId,
               ),
             ),
           );
         } else {
-          await this.notifications.sendDirectMessage(
+          await this.notifyChatRecipient(
             conversation.clientId,
+            senderId,
             title,
             preview,
-            senderId,
+            conversationId,
           );
         }
         return;
@@ -1009,20 +1106,22 @@ export class ChatService {
           });
           await Promise.all(
             admins.map((a) =>
-              this.notifications.sendDirectMessage(
+              this.notifyChatRecipient(
                 a.id,
+                senderId,
                 title,
                 preview,
-                senderId,
+                conversationId,
               ),
             ),
           );
         } else {
-          await this.notifications.sendDirectMessage(
+          await this.notifyChatRecipient(
             conversation.clientId,
+            senderId,
             title,
             preview,
-            senderId,
+            conversationId,
           );
         }
       }

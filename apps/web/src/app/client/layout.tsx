@@ -8,6 +8,7 @@ import { AppShell } from '@/components/app-shell';
 import { ClientOnboarding } from '@/components/client-onboarding';
 import { useFeatures } from '@/components/features-provider';
 import { ProfileGate } from '@/components/profile-gate';
+import { PushBridge } from '@/components/push-bridge';
 import { useClubTheme } from '@/components/club-theme-provider';
 
 const ALL_NAV: Array<{
@@ -60,6 +61,9 @@ export default function ClientLayout({ children }: { children: ReactNode }) {
         navItems={navItems}
       >
         <ClientOnboarding />
+        <div className="mb-3">
+          <PushBridge />
+        </div>
         <ProfileGate>{children}</ProfileGate>
       </AppShell>
     </AuthGuard>

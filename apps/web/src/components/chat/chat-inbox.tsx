@@ -5,6 +5,7 @@ import { ArrowLeft, Plus, Send } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { syncAppBadgeFromUnread } from '@/lib/push';
 import { formatDateTime } from '@/lib/utils';
 
 type ChatRole = 'client' | 'trainer' | 'admin' | 'staff';
@@ -90,6 +91,11 @@ export function ChatInbox({
   const [editGroupTitle, setEditGroupTitle] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const initialClientHandled = useRef(false);
+  const deepLinkHandled = useRef(false);
+  const [deepLinkConversationId] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    return new URLSearchParams(window.location.search).get('c');
+  });
 
   const loadConversations = useCallback(async () => {
     const token = getToken();
@@ -111,6 +117,7 @@ export function ChatInbox({
           : c,
       ),
     );
+    void syncAppBadgeFromUnread();
   }, []);
 
   const refresh = useCallback(async () => {
@@ -196,6 +203,25 @@ export function ChatInbox({
       )
       .finally(() => setLoadingThread(false));
   }, [role, initialClientId, loadMessages]);
+
+  useEffect(() => {
+    if (
+      directThread ||
+      !deepLinkConversationId ||
+      deepLinkHandled.current ||
+      loading
+    ) {
+      return;
+    }
+    deepLinkHandled.current = true;
+    setActiveId(deepLinkConversationId);
+    setLoadingThread(true);
+    void loadMessages(deepLinkConversationId)
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'Ошибка загрузки'),
+      )
+      .finally(() => setLoadingThread(false));
+  }, [deepLinkConversationId, directThread, loadMessages, loading]);
 
   useEffect(() => {
     const interval = setInterval(() => {

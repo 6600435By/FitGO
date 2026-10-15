@@ -18,6 +18,7 @@ import { AdminQuickLinks } from '@/components/admin/admin-quick-links';
 import { AppShell } from '@/components/app-shell';
 import { DataFreshness } from '@/components/data-freshness';
 import { useFeatures } from '@/components/features-provider';
+import { PushBridge } from '@/components/push-bridge';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { cn } from '@/lib/utils';
@@ -366,8 +367,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           desktopTopNav={desktopTopNav}
           mobileSubNav={mobileSubNav}
         >
-          <div className="mb-4">
+          <div className="mb-4 space-y-3">
             <DataFreshness />
+            <PushBridge />
           </div>
           {children}
         </AppShell>

@@ -280,7 +280,12 @@ export class NotificationsService implements OnModuleInit {
     return notification;
   }
 
-  private async sendWebPush(userId: string, title: string, body: string) {
+  private async sendWebPush(
+    userId: string,
+    title: string,
+    body: string,
+    options?: { url?: string; badge?: number; tag?: string },
+  ) {
     const vapidPublic = this.config.get('VAPID_PUBLIC_KEY');
     const vapidPrivate = this.config.get('VAPID_PRIVATE_KEY');
     if (!vapidPublic || !vapidPrivate) return;
@@ -297,6 +302,14 @@ export class NotificationsService implements OnModuleInit {
         where: { userId },
       });
 
+      const payload = JSON.stringify({
+        title,
+        body,
+        ...(options?.url ? { url: options.url } : {}),
+        ...(typeof options?.badge === 'number' ? { badge: options.badge } : {}),
+        ...(options?.tag ? { tag: options.tag } : {}),
+      });
+
       await Promise.all(
         subs.map((sub) =>
           webpush
@@ -305,9 +318,16 @@ export class NotificationsService implements OnModuleInit {
                 endpoint: sub.endpoint,
                 keys: { p256dh: sub.p256dh, auth: sub.auth },
               },
-              JSON.stringify({ title, body }),
+              payload,
             )
-            .catch(() => {
+            .catch(async (err: { statusCode?: number }) => {
+              const status = err?.statusCode;
+              if (status === 404 || status === 410) {
+                await this.prisma.pushSubscription.deleteMany({
+                  where: { userId, endpoint: sub.endpoint },
+                });
+                return;
+              }
               this.logger.warn(`Push failed for user ${userId}`);
             }),
         ),
@@ -423,14 +443,22 @@ export class NotificationsService implements OnModuleInit {
     title: string,
     body: string,
     senderId?: string,
-    status: NotificationStatus = NotificationStatus.PENDING,
+    options?: {
+      status?: NotificationStatus;
+      url?: string;
+      badge?: number;
+      tag?: string;
+    },
   ) {
     return this.createNotification({
       userId,
       title,
       body,
       senderId,
-      status,
+      status: options?.status,
+      url: options?.url,
+      badge: options?.badge,
+      tag: options?.tag,
     });
   }
 
@@ -441,6 +469,9 @@ export class NotificationsService implements OnModuleInit {
     senderId?: string;
     status?: NotificationStatus;
     type?: NotificationType;
+    url?: string;
+    badge?: number;
+    tag?: string;
   }) {
     const notification = await this.prisma.notification.create({
       data: {
@@ -453,7 +484,11 @@ export class NotificationsService implements OnModuleInit {
       },
     });
 
-    await this.sendWebPush(params.userId, params.title, params.body);
+    await this.sendWebPush(params.userId, params.title, params.body, {
+      url: params.url,
+      badge: params.badge,
+      tag: params.tag,
+    });
     return notification;
   }
 

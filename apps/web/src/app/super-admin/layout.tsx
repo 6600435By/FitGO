@@ -12,6 +12,7 @@ import {
 } from '@/components/admin/admin-theme';
 import { AppShell } from '@/components/app-shell';
 import { DataFreshness } from '@/components/data-freshness';
+import { PushBridge } from '@/components/push-bridge';
 import { StaffMessagesBadge } from '@/components/staff/staff-messages-badge';
 import { getUser } from '@/lib/auth';
 import { cn } from '@/lib/utils';
@@ -252,8 +253,9 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
             </>
           }
         >
-          <div className="mb-3 sm:mb-4">
+          <div className="mb-3 space-y-3 sm:mb-4">
             <DataFreshness />
+            <PushBridge />
           </div>
           {children}
         </AppShell>
