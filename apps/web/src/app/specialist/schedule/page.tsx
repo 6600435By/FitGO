@@ -121,6 +121,20 @@ export default function SpecialistSchedulePage() {
     setWaitlist(wl);
   }, [boardPeriod.end, boardPeriod.start, publishPeriod.end, publishPeriod.start]);
 
+  /** Light poll so bookings from other accounts appear without page reload. */
+  const refreshLive = useCallback(async () => {
+    const token = getToken();
+    if (!token) return;
+    const [brd, wl, bks] = await Promise.all([
+      api.specialistSpaBoard(token, boardPeriod.start, boardPeriod.end),
+      api.specialistSpaWaitlist(token, boardPeriod.start, boardPeriod.end),
+      api.specialistSpaBookings(token),
+    ]);
+    setBoard(brd);
+    setWaitlist(wl);
+    setBookings(bks);
+  }, [boardPeriod.end, boardPeriod.start]);
+
   const matchingWaitlist = useCallback(
     (specialistId: string, startAt: string, endAt?: string) => {
       const start = new Date(startAt).getTime();
@@ -165,6 +179,23 @@ export default function SpecialistSchedulePage() {
       setMessage(err instanceof Error ? err.message : 'Ошибка загрузки'),
     );
   }, [reload]);
+
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      if (busy) return;
+      void refreshLive().catch(() => undefined);
+    };
+    const interval = window.setInterval(tick, 8_000);
+    const onVis = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [busy, refreshLive]);
 
   const dayHoursForMe = useMemo(() => {
     if (!board || !me?.id) return null;

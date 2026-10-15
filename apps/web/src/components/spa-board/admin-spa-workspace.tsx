@@ -144,6 +144,20 @@ export function AdminSpaWorkspace() {
     period.start,
   ]);
 
+  /** Light poll so other admins/specialists' bookings appear without full page reload. */
+  const refreshLive = useCallback(async () => {
+    const token = getToken();
+    if (!token) return;
+    const [brd, wl, bks] = await Promise.all([
+      api.adminSpaBoard(token, boardPeriod.start, boardPeriod.end),
+      api.adminSpaWaitlist(token, boardPeriod.start, boardPeriod.end),
+      api.adminSpaCalendar(token, period.start, period.end),
+    ]);
+    setBoard(brd);
+    setWaitlist(wl);
+    setBookings(bks);
+  }, [boardPeriod.end, boardPeriod.start, period.end, period.start]);
+
   const matchingWaitlist = useCallback(
     (specialistId: string, startAt: string, endAt?: string) => {
       const start = new Date(startAt).getTime();
@@ -190,6 +204,24 @@ export function AdminSpaWorkspace() {
       setMessage(err instanceof Error ? err.message : 'Ошибка загрузки'),
     );
   }, [reload]);
+
+  useEffect(() => {
+    if (tab !== 'calendar') return;
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      if (busy) return;
+      void refreshLive().catch(() => undefined);
+    };
+    const interval = window.setInterval(tick, 8_000);
+    const onVis = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [tab, busy, refreshLive]);
 
   useEffect(() => {
     if (!canEditQuotaRules && tab === 'rules') setTab('calendar');

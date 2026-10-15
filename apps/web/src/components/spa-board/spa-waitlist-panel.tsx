@@ -1,7 +1,7 @@
 'use client';
 
 import type { SpaService, SpaWaitlistEntry } from '@fitgo/shared-types';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { toDatetimeLocalValue } from '@/components/spa-board/spa-booking-dialog';
@@ -11,6 +11,26 @@ function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString('ru-RU', {
     hour: '2-digit',
     minute: '2-digit',
+  });
+}
+
+function buildWeeklyDates(startLocal: string, weeks: number): string[] {
+  const base = new Date(startLocal);
+  if (Number.isNaN(base.getTime()) || weeks < 1) return [];
+  const out: string[] = [];
+  for (let i = 0; i < weeks; i++) {
+    const d = new Date(base);
+    d.setDate(d.getDate() + i * 7);
+    out.push(d.toISOString());
+  }
+  return out;
+}
+
+function formatDateShort(iso: string) {
+  return new Date(iso).toLocaleDateString('ru-RU', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
   });
 }
 
@@ -131,9 +151,9 @@ export function SpaWaitlistPanel({
           defaultStartAt={defaultStartAt}
           allowPickSpecialist={allowPickSpecialist}
           busy={busy}
-          onCreated={async () => {
+          onCreated={async (summary) => {
             setShowAdd(false);
-            onMessage('Добавлено в лист ожидания');
+            onMessage(summary ?? 'Добавлено в лист ожидания');
             await onReload();
           }}
           onError={onMessage}
@@ -165,12 +185,16 @@ function SpaWaitlistAddDialog({
   defaultStartAt?: string;
   allowPickSpecialist?: boolean;
   busy?: boolean;
-  onCreated: () => Promise<void>;
+  onCreated: (summary?: string) => Promise<void>;
   onError: (msg: string) => void;
 }) {
   const [mode, setMode] = useState<'base' | 'phone'>('phone');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [periodMode, setPeriodMode] = useState(false);
+  const [periodWeeks, setPeriodWeeks] = useState(4);
+  const [periodDates, setPeriodDates] = useState<string[]>([]);
+  const [extraDate, setExtraDate] = useState('');
   const [form, setForm] = useState({
     specialistId: defaultSpecialistId ?? '',
     clientId: '',
@@ -184,6 +208,9 @@ function SpaWaitlistAddDialog({
     if (!open) return;
     setError('');
     setMode('phone');
+    setPeriodMode(false);
+    setPeriodWeeks(4);
+    setExtraDate('');
     setForm({
       specialistId: defaultSpecialistId ?? '',
       clientId: '',
@@ -195,9 +222,48 @@ function SpaWaitlistAddDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaultSpecialistId, defaultStartAt]);
 
+  const suggestedDates = useMemo(
+    () => (periodMode ? buildWeeklyDates(form.startAt, periodWeeks) : []),
+    [form.startAt, periodMode, periodWeeks],
+  );
+
+  useEffect(() => {
+    if (!periodMode) {
+      setPeriodDates([]);
+      return;
+    }
+    setPeriodDates(suggestedDates);
+  }, [periodMode, suggestedDates]);
+
   if (!open) return null;
 
   const { datePart, timePart } = splitLocal(form.startAt);
+
+  const createOne = async (
+    token: string,
+    desiredStartAt: string,
+  ) => {
+    const payload = {
+      serviceId: form.serviceId,
+      desiredStartAt,
+      ...(mode === 'base'
+        ? { clientId: form.clientId }
+        : form.clientId
+          ? { clientId: form.clientId, guestPhone: form.guestPhone }
+          : {
+              guestName: form.guestName,
+              guestPhone: form.guestPhone,
+            }),
+    };
+    if (allowPickSpecialist) {
+      await api.adminCreateSpaWaitlist(token, {
+        ...payload,
+        specialistId: form.specialistId,
+      });
+    } else {
+      await api.specialistCreateSpaWaitlist(token, payload);
+    }
+  };
 
   const submit = async () => {
     setError('');
@@ -222,31 +288,40 @@ function SpaWaitlistAddDialog({
       setError('Некорректная дата');
       return;
     }
+    const dates = periodMode
+      ? periodDates
+      : [startIso];
+    if (dates.length === 0) {
+      setError('Выберите хотя бы одну дату');
+      return;
+    }
     const token = getToken();
     if (!token) return;
     setSaving(true);
     try {
-      const payload = {
-        serviceId: form.serviceId,
-        desiredStartAt: startIso,
-        ...(mode === 'base'
-          ? { clientId: form.clientId }
-          : form.clientId
-            ? { clientId: form.clientId, guestPhone: form.guestPhone }
-            : {
-                guestName: form.guestName,
-                guestPhone: form.guestPhone,
-              }),
-      };
-      if (allowPickSpecialist) {
-        await api.adminCreateSpaWaitlist(token, {
-          ...payload,
-          specialistId: form.specialistId,
-        });
-      } else {
-        await api.specialistCreateSpaWaitlist(token, payload);
+      let ok = 0;
+      let lastErr = '';
+      for (const iso of dates) {
+        try {
+          await createOne(token, iso);
+          ok += 1;
+        } catch (err) {
+          lastErr = err instanceof Error ? err.message : 'Ошибка';
+        }
       }
-      await onCreated();
+      if (ok === 0) {
+        const msg = lastErr || 'Не удалось добавить';
+        setError(msg);
+        onError(msg);
+        return;
+      }
+      await onCreated(
+        ok < dates.length
+          ? `Добавлено ${ok} из ${dates.length}. ${lastErr}`
+          : dates.length > 1
+            ? `Добавлено в лист: ${ok} заявок`
+            : undefined,
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка';
       setError(msg);
@@ -400,6 +475,77 @@ function SpaWaitlistAddDialog({
           </label>
         </div>
 
+        <div className="space-y-2 rounded-xl border border-white/5 bg-slate-900/40 p-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={periodMode}
+              onChange={(e) => setPeriodMode(e.target.checked)}
+            />
+            <span>Запись на период</span>
+          </label>
+          {periodMode ? (
+            <div className="space-y-2">
+              <label className="block space-y-1 text-sm">
+                <span className="text-slate-400">Недель (тот же день)</span>
+                <input
+                  type="number"
+                  className="input"
+                  min={1}
+                  max={26}
+                  value={periodWeeks}
+                  onChange={(e) =>
+                    setPeriodWeeks(
+                      Math.max(1, Math.min(26, Number(e.target.value) || 1)),
+                    )
+                  }
+                />
+              </label>
+              <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
+                {periodDates.map((iso) => (
+                  <li key={iso}>
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked
+                        onChange={() =>
+                          setPeriodDates((prev) =>
+                            prev.filter((d) => d !== iso),
+                          )
+                        }
+                      />
+                      <span>{formatDateShort(iso)}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex flex-wrap items-end gap-2">
+                <DateField
+                  label="Добавить дату"
+                  value={extraDate}
+                  onChange={setExtraDate}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary text-xs"
+                  onClick={() => {
+                    if (!extraDate || !timePart) return;
+                    const local = `${extraDate}T${timePart}`;
+                    const iso = new Date(local).toISOString();
+                    if (Number.isNaN(new Date(iso).getTime())) return;
+                    setPeriodDates((prev) =>
+                      prev.includes(iso) ? prev : [...prev, iso].sort(),
+                    );
+                    setExtraDate('');
+                  }}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
         {error ? (
           <p className="rounded-xl bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {error}
@@ -414,7 +560,11 @@ function SpaWaitlistAddDialog({
             void submit();
           }}
         >
-          {saving ? 'Сохраняем…' : 'Добавить'}
+          {saving
+            ? 'Сохраняем…'
+            : periodMode
+              ? `Добавить ${periodDates.length || 0} заявок`
+              : 'Добавить'}
         </button>
       </div>
     </div>
