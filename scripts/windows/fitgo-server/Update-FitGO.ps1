@@ -1,6 +1,7 @@
-<#
+﻿<#
 .SYNOPSIS
-  Update FitGO СП code without wiping Postgres or .env
+  Update FitGO SP code without wiping Postgres or .env
+  ASCII-only strings for Windows PowerShell 5.1 (Server 2016) encoding safety.
 #>
 [CmdletBinding()]
 param(
@@ -34,12 +35,12 @@ function Resolve-GitExe {
   return $null
 }
 
-Write-Host '=== FitGO СП Update (keeps Postgres + .env) ===' -ForegroundColor Cyan
+Write-Host '=== FitGO SP Update (keeps Postgres + .env) ===' -ForegroundColor Cyan
 
 if (-not $SkipBackup) {
   $backupScript = Join-Path $ScriptDir 'Backup-FitGO.ps1'
   if (-not (Test-Path $backupScript)) {
-    throw ("Backup-FitGO.ps1 not found at " + $backupScript + " — refuse Update without backup")
+    throw ("Backup-FitGO.ps1 not found at " + $backupScript + " - refuse Update without backup")
   }
   Write-Host 'Pre-update backup...' -ForegroundColor Cyan
   $backupArgs = @{
@@ -78,8 +79,8 @@ try {
   pnpm --filter @fitgo/1c-adapter build
   pnpm --filter @fitgo/osmi-adapter build
   pnpm --filter @fitgo/api exec prisma generate
-  # Schema evolves; never drop data. Prefer migrate in future; push is OK for early СП.
-  # --accept-data-loss: только предупреждения про новые unique (не дроп таблиц); без флага Update зависает на y/N.
+  # Schema evolves; never drop data. Prefer migrate later; push OK for early SP.
+  # --accept-data-loss: only for new unique warnings (not table drops); without it Update hangs on y/N.
   pnpm --filter @fitgo/api exec prisma db push --skip-generate --accept-data-loss
   pnpm --filter @fitgo/api build
   pnpm --filter @fitgo/web build

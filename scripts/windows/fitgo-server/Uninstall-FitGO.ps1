@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Remove FitGO Windows services. Does NOT drop Postgres by default.
 #>
@@ -22,12 +22,12 @@ function Remove-Svc($Name) {
   }
 }
 
-Write-Host '=== FitGO СП Uninstall ===' -ForegroundColor Yellow
+Write-Host '=== FitGO SP Uninstall ===' -ForegroundColor Yellow
 Remove-Svc 'FitGO-Web'
 Remove-Svc 'FitGO-API'
 
 if ($DropDatabase) {
-  Write-Host 'DropDatabase requested — run manually in psql if needed:' -ForegroundColor Red
+  Write-Host 'DropDatabase requested - run manually in psql if needed:' -ForegroundColor Red
   Write-Host '  DROP DATABASE fitgo; DROP USER fitgo;'
 }
 

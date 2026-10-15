@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Restore FitGO SP from a backup bundle (Data or Release mode).
 
@@ -221,7 +221,7 @@ $mirrorHall = Join-Path $backupRoot 'files-mirror\hall-snapshots'
 
 if (-not $BundleId) {
   if (-not (Test-Path $lastOkPath)) {
-    throw 'No BundleId and LAST_OK.txt missing — specify -BundleId'
+    throw 'No BundleId and LAST_OK.txt missing - specify -BundleId'
   }
   $BundleId = ([System.IO.File]::ReadAllText($lastOkPath)).Trim()
 }
@@ -242,7 +242,7 @@ if (-not (Test-Path $bundleEnv)) { throw ("Missing api.env in bundle") }
 
 $manifest = Read-Manifest $manifestPath
 if ($manifest -and $manifest.ok -ne $true) {
-  throw 'manifest.json ok != true — refuse to restore this bundle'
+  throw 'manifest.json ok != true - refuse to restore this bundle'
 }
 
 $currentSha = Get-GitSha $FitGoRoot
@@ -362,7 +362,7 @@ $rCount = Invoke-Native -FilePath $psql -ArgumentList @(
 if ($rCount.Code -ne 0) { throw ("User count failed: " + $rCount.Output) }
 $userCount = ($rCount.Output | Out-String).Trim()
 if (-not $userCount -or $userCount -eq '0') {
-  throw 'Restored database has 0 users — abort rename'
+  throw 'Restored database has 0 users - abort rename'
 }
 
 # Swap: terminate live, rename live -> broken, restore -> live

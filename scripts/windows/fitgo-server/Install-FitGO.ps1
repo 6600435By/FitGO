@@ -170,7 +170,7 @@ function Install-NodeLts {
     Refresh-Path
     return
   }
-  # Server 2016 often has no winget — silent MSI from nodejs.org
+  # Server 2016 often has no winget - silent MSI from nodejs.org
   $msiUrl = 'https://nodejs.org/dist/v20.18.1/node-v20.18.1-x64.msi'
   $msi = Join-Path $env:TEMP 'node-v20-x64.msi'
   Write-Host 'Downloading Node.js 20 LTS MSI (no winget)...' -ForegroundColor Yellow

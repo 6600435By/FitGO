@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Register Windows Scheduled Tasks for FitGO backup (01:30 daily) and Sunday verify (06:15).
 
@@ -54,7 +54,7 @@ if ($PostgresSuperPassword) {
     if ($LASTEXITCODE -eq 0) {
       Write-Host 'Granted CREATEDB to role fitgo (for backup verify / restore).' -ForegroundColor DarkGray
     } else {
-      Write-Host 'WARNING: could not ALTER ROLE fitgo CREATEDB — pass -PostgresSuperPassword to Backup-FitGO -Mode VerifyLast / Restore manually.' -ForegroundColor Yellow
+      Write-Host 'WARNING: could not ALTER ROLE fitgo CREATEDB - pass -PostgresSuperPassword to Backup-FitGO -Mode VerifyLast / Restore manually.' -ForegroundColor Yellow
     }
   }
 }
@@ -103,7 +103,7 @@ function Register-FitGoTask {
   Write-Host ("Registered " + $TaskName) -ForegroundColor Green
 }
 
-# Daily 01:30 (local server time — club uses Europe/Minsk / +03)
+# Daily 01:30 (local server time - club uses Europe/Minsk / +03)
 $dailyTrigger = New-ScheduledTaskTrigger -Daily -At '01:30'
 Register-FitGoTask `
   -TaskName 'FitGO-Backup' `

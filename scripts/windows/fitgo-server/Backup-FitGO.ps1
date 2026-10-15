@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Build a FitGO SP backup bundle (Postgres + .env + uploads) and write backup-status.json.
 
@@ -260,7 +260,7 @@ if ($Mode -eq 'VerifyLast') {
   Write-Host '=== FitGO Backup VerifyLast ===' -ForegroundColor Cyan
   if (-not (Test-Path $lastOkPath)) {
     Write-BackupStatus -StatusPath $statusPath -Ok $false -ErrorText 'VerifyLast: LAST_OK.txt missing' -BundleId $null -DumpBytes $null -DurationSec ([int]((Get-Date) - $started).TotalSeconds)
-    throw 'LAST_OK.txt not found — no successful backup yet'
+    throw 'LAST_OK.txt not found - no successful backup yet'
   }
   $bundleId = ([System.IO.File]::ReadAllText($lastOkPath)).Trim()
   $bundlePath = Join-Path $dailyRoot $bundleId
@@ -390,7 +390,7 @@ try {
     $ErrorActionPreference = $prev
   }
 
-  # Hall snapshots — shared mirror
+  # Hall snapshots - shared mirror
   $hallSrc = $envMap['HALL_SNAPSHOT_DIR']
   if (-not $hallSrc) {
     $hallSrc = Join-Path $FitGoRoot 'apps\api\var\hall-snapshots'
