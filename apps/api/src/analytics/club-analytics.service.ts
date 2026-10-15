@@ -15,6 +15,7 @@ import {
   DEFAULT_CLUB_WORKING_HOURS,
   DAY_OF_WEEK_KEYS,
   inferPaymentFromBasis,
+  isComplimentarySessionTitle,
 } from '@fitgo/shared-types';
 import {
   OnexClassKind,
@@ -34,6 +35,7 @@ import { requireClubId } from '../auth/require-club-id';
 import { BookingControlService } from '../booking-control/booking-control.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollService } from '../payroll/payroll.service';
+import { buildCapacityResolver } from './capacity-resolve';
 import {
   assertPeriod,
   metric,
@@ -1026,6 +1028,7 @@ export class ClubAnalyticsService {
           bookedCount: true,
           externalId: true,
           capacity: true,
+          startAt: true,
           members: {
             select: {
               cancelled: true,
@@ -1037,13 +1040,16 @@ export class ClubAnalyticsService {
       }),
       this.prisma.clubScheduleSlot.findMany({
         where: { clubId, startAt: { gte: start, lte: end } },
-        select: { externalId: true, capacity: true },
+        select: {
+          externalId: true,
+          capacity: true,
+          startAt: true,
+          title: true,
+        },
       }),
     ]);
 
-    const capByExternal = new Map(
-      scheduleSlots.map((s) => [s.externalId, s.capacity]),
-    );
+    const resolveCapacity = buildCapacityResolver(scheduleSlots);
     const groupSessions = sessions.filter((s) => s.kind === OnexClassKind.GROUP);
     const completed = groupSessions.filter(
       (s) => s.status === OnexClassStatus.COMPLETED,
@@ -1055,9 +1061,7 @@ export class ClubAnalyticsService {
       { sessions: number; attended: number; fill: number; fillN: number }
     >();
     for (const s of completed) {
-      const cap = (s.capacity && s.capacity > 0
-        ? s.capacity
-        : capByExternal.get(s.externalId)) ?? 0;
+      const cap = resolveCapacity(s);
       const fill = cap > 0 ? (s.attendedCount / cap) * 100 : 0;
       if (cap > 0) {
         fillSum += fill;
@@ -1099,7 +1103,14 @@ export class ClubAnalyticsService {
     let gift = 0;
     for (const s of ptCompleted) {
       const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
-      if (inferPaymentFromBasis(primary?.paymentBasis) === 'GIFT') gift++;
+      const payment = inferPaymentFromBasis(primary?.paymentBasis);
+      if (
+        payment === 'GIFT' ||
+        isComplimentarySessionTitle(s.title) ||
+        isComplimentarySessionTitle(primary?.paymentBasis)
+      ) {
+        gift++;
+      }
     }
     const giftSharePct =
       ptCompleted.length > 0

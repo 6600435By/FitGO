@@ -28,6 +28,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollService } from '../payroll/payroll.service';
+import { buildCapacityResolver } from './capacity-resolve';
 import { addDaysIso, assertPeriod, rangeBounds } from './analytics-period';
 import { applyStaffFlags } from './staff-analytics.rules';
 import { ClubAnalyticsService } from './club-analytics.service';
@@ -972,6 +973,8 @@ export class StaffAnalyticsService {
         attendedCount: true,
         bookedCount: true,
         externalId: true,
+        capacity: true,
+        startAt: true,
         members: {
           select: { attendance: true, cancelled: true },
         },
@@ -979,9 +982,14 @@ export class StaffAnalyticsService {
     });
     const slots = await this.prisma.clubScheduleSlot.findMany({
       where: { clubId, startAt: { gte: start, lte: end } },
-      select: { externalId: true, capacity: true },
+      select: {
+        externalId: true,
+        capacity: true,
+        startAt: true,
+        title: true,
+      },
     });
-    const cap = new Map(slots.map((s) => [s.externalId, s.capacity]));
+    const resolveCapacity = buildCapacityResolver(slots);
 
     const map = new Map<string, StaffDepartmentKpi>();
     const buckets = new Map<string, { sessions: typeof sessions }>();
@@ -1036,7 +1044,7 @@ export class StaffAnalyticsService {
       for (const s of completed) {
         attendedSum += s.attendedCount;
         booked += s.bookedCount;
-        const c = cap.get(s.externalId) ?? 0;
+        const c = resolveCapacity(s);
         if (c > 0) {
           fillSum += (s.attendedCount / c) * 100;
           fillN++;

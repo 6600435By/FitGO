@@ -107,10 +107,20 @@ export class ScheduleSlotsSyncService {
             syncedAt: now,
           },
         });
-        // Mirror capacity onto matching class session (same appointment UUID).
+        // Mirror capacity onto class sessions. Forma schedule id ≠ 1C
+        // ИдентификаторЗанятия, so also match by startAt + title.
         if (capacity > 0) {
           await this.prisma.onexClassSession.updateMany({
             where: { clubId, externalId: slot.id },
+            data: { capacity },
+          });
+          await this.prisma.onexClassSession.updateMany({
+            where: {
+              clubId,
+              startAt,
+              title: slot.title,
+              OR: [{ capacity: null }, { capacity: 0 }],
+            },
             data: { capacity },
           });
         }
