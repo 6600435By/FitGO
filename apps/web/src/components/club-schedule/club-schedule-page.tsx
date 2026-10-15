@@ -312,6 +312,13 @@ export function ClubSchedulePage({
           canMarkAttendance={!isTrainer}
           canTrainerSeen={isTrainer}
           canApproveGroup
+          approvalActor={
+            apiBase === 'super-admin'
+              ? 'override'
+              : isTrainer
+                ? 'performer'
+                : 'admin'
+          }
           canBulkApprove={apiBase === 'super-admin'}
           canReturnApproval={!isTrainer}
           canViewHallPhotos

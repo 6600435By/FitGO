@@ -70,6 +70,7 @@ function SpecialistMySessionsInner() {
       title="Контроль записей"
       subtitle="Ваши SPA-записи. Подтвердите выполнение — затем админ допустит в ЗП."
       canApproveGroup
+      approvalActor="performer"
       initialFrom={initialFrom}
       initialTo={initialTo}
       initialNeedsReview={initialNeedsReview}

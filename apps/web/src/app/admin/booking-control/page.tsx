@@ -35,6 +35,7 @@ function AdminBookingControlInner() {
       canResolve
       canMarkAttendance
       canApproveGroup
+      approvalActor="admin"
       canReturnApproval
       canViewHallPhotos
       initialSessionKey={initialSessionKey}

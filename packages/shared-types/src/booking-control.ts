@@ -126,6 +126,8 @@ export interface SpaSettlementInfo {
   source: 'visit' | 'debt' | 'local' | 'onex';
   visitPosted?: boolean;
   visitNum?: string;
+  /** Human package / membership title when quota was consumed. */
+  membershipName?: string;
   /**
    * True when FitGO may cancel/edit freely (not an alive 1C document).
    * False when posted & found in 1C — only time/date edit, no delete.
@@ -133,12 +135,34 @@ export interface SpaSettlementInfo {
   editableInApp?: boolean;
 }
 
+/**
+ * Pull the package title from 1C paymentBasis
+ * (e.g. `Членство "Курс массажа 5 (удален)" 72102 от 03.10.2025`).
+ */
+export function membershipNameFromPaymentBasis(
+  basis?: string | null,
+): string | undefined {
+  if (!basis?.trim()) return undefined;
+  const quoted = basis.match(/[«"„]([^»"“]+)[»"“]/);
+  if (quoted?.[1]?.trim()) return quoted[1].trim();
+  const m = basis.match(
+    /членство\s+(.+?)(?:\s+\d{4,}(?:\s+от|\s*$)|$)/i,
+  );
+  if (m?.[1]?.trim()) {
+    return m[1].trim().replace(/^["«]|["»]$/g, '');
+  }
+  return undefined;
+}
+
 export function spaSettlementLabelRu(
   status: SpaSettlementStatus | undefined,
+  membershipName?: string | null,
 ): string {
   switch (status) {
     case 'QUOTA_CONSUMED':
-      return 'Списано с абонемента';
+      return membershipName?.trim()
+        ? `Списано с абонемента · ${membershipName.trim()}`
+        : 'Списано с абонемента';
     case 'AWAITING_PAYMENT':
       return 'Ждёт оплаты в 1С';
     case 'PAID':

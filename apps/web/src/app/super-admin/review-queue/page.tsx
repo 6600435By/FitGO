@@ -49,6 +49,7 @@ function SuperAdminBookingControlInner() {
       canResolve
       canMarkAttendance
       canApproveGroup
+      approvalActor="override"
       canBulkApprove
       canReturnApproval
       canViewHallPhotos

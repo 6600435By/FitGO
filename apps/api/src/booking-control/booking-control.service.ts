@@ -32,6 +32,7 @@ import {
   saleSessionKey,
   sessionApprovalLabelRu,
   sessionApprovalPhase,
+  membershipNameFromPaymentBasis,
   spaSettlementLabelRu,
   type BookingControlDetail,
   type BookingControlHistoryEvent,
@@ -1038,6 +1039,7 @@ export class BookingControlService {
           clientExternalId: b.clientExternalId,
           oneCLinkStatus: b.oneCLinkStatus,
           manualPaymentConfirmedAt: b.manualPaymentConfirmedAt,
+          membershipServiceName: b.membershipServiceName,
           specialist: b.specialist,
         },
       });
@@ -3043,6 +3045,7 @@ export class BookingControlService {
       clientExternalId?: string | null;
       oneCLinkStatus?: string | null;
       manualPaymentConfirmedAt?: Date | null;
+      membershipServiceName?: string | null;
       client?: { externalId: string | null } | null;
       specialist?: {
         externalId: string | null;
@@ -3065,6 +3068,10 @@ export class BookingControlService {
   }> {
     const booking = input.booking;
     const onex = input.onex;
+    const membershipName =
+      membershipNameFromPaymentBasis(input.paymentBasis) ||
+      booking?.membershipServiceName?.trim() ||
+      undefined;
     const partner =
       booking?.partnerSource?.toUpperCase() === 'ALLSPORTS';
     if (partner) {
@@ -3209,10 +3216,11 @@ export class BookingControlService {
         return {
           settlement: {
             status: 'QUOTA_CONSUMED',
-            label: spaSettlementLabelRu('QUOTA_CONSUMED'),
+            label: spaSettlementLabelRu('QUOTA_CONSUMED', membershipName),
             source: visit?.found ? 'visit' : onex ? 'onex' : 'local',
             visitPosted: true,
             visitNum: visit?.num ?? onex?.number ?? undefined,
+            membershipName,
             editableInApp: false,
           },
           payment: 'QUOTA',

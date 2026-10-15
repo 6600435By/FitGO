@@ -33,6 +33,7 @@ function TrainerMySessionsInner() {
       }
       canTrainerSeen
       canApproveGroup
+      approvalActor="performer"
       canViewHallPhotos
       fixedKind={isGp ? 'GROUP' : undefined}
       approvalSegments={isGp}

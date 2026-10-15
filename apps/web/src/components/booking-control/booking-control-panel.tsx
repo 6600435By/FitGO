@@ -87,8 +87,13 @@ type Props = {
   canMarkAttendance?: boolean;
   /** Trainer: checkboxes for who was present */
   canTrainerSeen?: boolean;
-  /** Confirm GROUP (trainer / admin / SA) */
+  /** Confirm GROUP / SPA / PT (trainer / specialist / admin / SA) */
   canApproveGroup?: boolean;
+  /**
+   * Who this surface confirms as in the dual-approval chain.
+   * performer = specialist/trainer; admin = club admin; override = manager/SA.
+   */
+  approvalActor?: 'performer' | 'admin' | 'override';
   /** Admin/SA: return to trainer */
   canReturnApproval?: boolean;
   /** Manager / super-admin: bulk confirm unapproved GROUP in the period */
@@ -194,6 +199,7 @@ export function BookingControlPanel({
   canMarkAttendance = false,
   canTrainerSeen = false,
   canApproveGroup = false,
+  approvalActor = 'admin',
   canReturnApproval = false,
   canBulkApprove = false,
   canViewHallPhotos = false,
@@ -681,10 +687,14 @@ export function BookingControlPanel({
       );
       setSelected(updated);
       setComment('');
+      const phase =
+        updated.groupApproval?.phase ?? updated.approvalPhase;
       setMessage(
-        updated.groupApproval?.phase === 'APPROVED'
+        phase === 'APPROVED'
           ? 'Подтверждено — занятие в ЗП'
-          : 'Подтверждено тренером — ждёт администратора',
+          : selected.kind === 'SPA'
+            ? 'Подтверждено. Ждёт администратора.'
+            : 'Подтверждено тренером — ждёт администратора',
       );
       load();
     } catch (e) {
@@ -693,6 +703,27 @@ export function BookingControlPanel({
       setApproveBusy(false);
     }
   };
+
+  const canConfirmSelected = (() => {
+    if (!canApproveGroup || !api.approveGroup || !selected) return false;
+    if (selected.kind === 'SPA') {
+      const phase = selected.approvalPhase;
+      if (!phase || phase === 'APPROVED') return false;
+      if (approvalActor === 'override') return true;
+      if (approvalActor === 'performer') return phase === 'PENDING_PERFORMER';
+      return phase === 'PENDING_ADMIN';
+    }
+    if (selected.kind === 'GROUP' && selected.source === '1C') {
+      const phase = selected.groupApproval?.phase;
+      if (!phase || phase === 'APPROVED' || selected.groupApproval?.locked) {
+        return false;
+      }
+      if (approvalActor === 'override') return true;
+      if (approvalActor === 'performer') return phase === 'PENDING_TRAINER';
+      return phase === 'PENDING_ADMIN';
+    }
+    return false;
+  })();
 
   const returnApproval = async () => {
     if (!selected || !api.returnGroupApproval) return;
@@ -1073,7 +1104,9 @@ export function BookingControlPanel({
         </div>
       ) : null}
 
-      {message && <p className="text-sm text-fitgo-300">{message}</p>}
+      {message && !selected ? (
+        <p className="text-sm text-fitgo-300">{message}</p>
+      ) : null}
       {!loading && !fixedKind && saleCount === 0 && (kind === 'ALL' || kind === 'PT') ? (
         <p className="text-xs text-slate-500">
           Разовых ПТ из продаж за период нет. Нажмите «Обновить из 1С» (ждёт до
@@ -1273,14 +1306,14 @@ export function BookingControlPanel({
       </>
       )}
 
-      {detailOnly && message ? (
+      {detailOnly && message && !selected ? (
         <p className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300 shadow-lg">
           {message}
         </p>
       ) : null}
 
       {(selected || detailLoading || detailError) && (
-        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/60 p-4 pb-8 sm:items-center">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 pb-[max(2rem,env(safe-area-inset-bottom))] sm:items-center">
           <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl">
             {detailLoading || !selected ? (
               <div className="space-y-3">
@@ -1301,6 +1334,18 @@ export function BookingControlPanel({
               </div>
             ) : (
               <div className="space-y-3">
+                {message ? (
+                  <p
+                    className={
+                      /ошибк|нет прав|чуж|не законч|сначала/i.test(message)
+                        ? 'rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200'
+                        : 'rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200'
+                    }
+                    role="status"
+                  >
+                    {message}
+                  </p>
+                ) : null}
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-xs text-slate-500">
@@ -1526,10 +1571,12 @@ export function BookingControlPanel({
                     }
                   >
                     {selected.spaSettlement.label}
-                    {selected.spaSettlement.visitNum
+                    {!selected.spaSettlement.membershipName &&
+                    selected.spaSettlement.visitNum
                       ? ` · док. ${selected.spaSettlement.visitNum}`
                       : ''}
-                    {selected.crmDocRef &&
+                    {!selected.spaSettlement.membershipName &&
+                    selected.crmDocRef &&
                     selected.crmDocRef !== selected.spaSettlement.visitNum
                       ? ` · ref ${selected.crmDocRef}`
                       : ''}
@@ -1693,14 +1740,14 @@ export function BookingControlPanel({
                           ? 'Ждёт администратора'
                           : 'Ждёт специалиста')}
                     </p>
-                    {canApproveGroup && api.approveGroup ? (
+                    {canConfirmSelected ? (
                       <button
                         type="button"
                         className="btn-primary w-full text-sm"
-                        onClick={approveGroup}
+                        onClick={() => void approveGroup()}
                         disabled={approveBusy}
                       >
-                        Подтвердить
+                        {approveBusy ? 'Подтверждаем…' : 'Подтвердить'}
                       </button>
                     ) : null}
                   </div>
@@ -1708,7 +1755,7 @@ export function BookingControlPanel({
                 {selected.kind === 'GROUP' &&
                 selected.source === '1C' &&
                 !selected.groupApproval?.locked &&
-                (canApproveGroup || canReturnApproval) ? (
+                (canConfirmSelected || canReturnApproval) ? (
                   <div className="space-y-2">
                     <textarea
                       className="input min-h-[3rem] w-full text-sm"
@@ -1717,14 +1764,14 @@ export function BookingControlPanel({
                       onChange={(e) => setComment(e.target.value)}
                     />
                     <div className="flex flex-col gap-2">
-                      {canApproveGroup && api.approveGroup ? (
+                      {canConfirmSelected ? (
                         <button
                           type="button"
                           className="btn-primary w-full text-sm"
-                          onClick={approveGroup}
+                          onClick={() => void approveGroup()}
                           disabled={approveBusy}
                         >
-                          Подтвердить
+                          {approveBusy ? 'Подтверждаем…' : 'Подтвердить'}
                         </button>
                       ) : null}
                       {canReturnApproval && api.returnGroupApproval ? (

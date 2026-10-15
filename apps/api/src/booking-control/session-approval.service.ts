@@ -187,10 +187,22 @@ export class SessionApprovalService {
 
     const booking = await this.prisma.spaBooking.findFirst({
       where: { id: bookingId, clubId },
+      include: { specialist: { select: { externalId: true } } },
     });
     if (!booking) throw new NotFoundException('Запись не найдена');
-    if (booking.specialistId !== actor.sub) {
-      throw new ForbiddenException('Чужая запись');
+    if (booking.specialistId === actor.sub) return;
+    // 1C-matched bookings may point at another FitGO user id; allow by employee externalId.
+    const user = await this.prisma.user.findFirst({
+      where: { id: actor.sub, clubId },
+      select: { externalId: true },
+    });
+    if (
+      user?.externalId &&
+      booking.specialist.externalId &&
+      user.externalId === booking.specialist.externalId
+    ) {
+      return;
     }
+    throw new ForbiddenException('Чужая запись');
   }
 }
