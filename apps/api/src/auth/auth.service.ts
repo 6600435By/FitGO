@@ -8,6 +8,7 @@ import { UserRole as SharedUserRole } from '@fitgo/shared-types';
 import * as bcrypt from 'bcryptjs';
 import { AccountStatus, Role } from '@prisma/client';
 import { normalizePhone } from '../common/phone.util';
+import { AppPresenceService } from '../app-presence/app-presence.service';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
@@ -31,6 +32,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly roster: TrainerRosterService,
     private readonly clubMembership: ClubMembershipService,
+    private readonly appPresence: AppPresenceService,
   ) {}
 
   private formatUserResponse(user: {
@@ -143,6 +145,11 @@ export class AuthService {
     }
 
     const { accessToken } = await this.signToken(user);
+
+    void this.appPresence.recordLogin(
+      user.id,
+      user.roles.map((r) => r.role),
+    );
 
     return {
       accessToken,

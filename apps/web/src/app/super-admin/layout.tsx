@@ -13,6 +13,7 @@ import {
 import { AppShell } from '@/components/app-shell';
 import { BackupStatusBanner } from '@/components/admin/backup-status-banner';
 import { DataFreshness } from '@/components/data-freshness';
+import { AppPresenceBridge } from '@/components/app-presence-bridge';
 import { PushBridge } from '@/components/push-bridge';
 import { StaffMessagesBadge } from '@/components/staff/staff-messages-badge';
 import { getUser } from '@/lib/auth';
@@ -80,6 +81,12 @@ const ALL_NAV: SaNavItem[] = [
   {
     href: '/super-admin/modules',
     label: 'Модули',
+    group: 'settings',
+    superOnly: true,
+  },
+  {
+    href: '/super-admin/app-usage',
+    label: 'Приложение',
     group: 'settings',
     superOnly: true,
   },
@@ -258,6 +265,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
             <DataFreshness />
             <BackupStatusBanner />
             <PushBridge />
+            <AppPresenceBridge />
           </div>
           {children}
         </AppShell>

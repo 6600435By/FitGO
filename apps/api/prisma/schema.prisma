@@ -681,6 +681,8 @@ model User {
   defaultSpaRoom          SpaRoom?                @relation("SpaRoomDefaultSpecialist", fields: [defaultSpaRoomId], references: [id], onDelete: SetNull)
   defaultSpaRoomId        String?
   adminHomeLayout         AdminHomeLayout?
+  appPresence             AppPresence?
+  appPresenceDays         AppPresenceDay[]
 
   @@unique([clubId, gamificationNickname])
   @@unique([clubId, employeeCode])
@@ -1550,6 +1552,31 @@ model StaffAuditLog {
 
   @@index([clubId, createdAt])
   @@index([actorId])
+}
+
+/// Lightweight staff app presence (last login / last seen). Clients are not written here for day minutes.
+model AppPresence {
+  userId      String    @id
+  lastLoginAt DateTime?
+  lastSeenAt  DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Approximate active minutes per calendar day (Europe/Minsk) for staff only.
+model AppPresenceDay {
+  id            String   @id @default(cuid())
+  userId        String
+  /// YYYY-MM-DD in Europe/Minsk
+  day           String
+  activeMinutes Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, day])
+  @@index([userId, day])
 }
 
 // ─── Spa booking ─────────────────────────────────────────────────────────────

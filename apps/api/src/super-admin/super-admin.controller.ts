@@ -24,6 +24,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { ApplyPresetDto, SetPermissionsDto } from './dto/permissions.dto';
 import { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 import { CreateAdminTaskDto, UpdateAdminTaskDto } from './dto/task.dto';
+import { AppPresenceService } from '../app-presence/app-presence.service';
 import { BackupStatusService } from './backup-status.service';
 import { SuperAdminAnalyticsService } from './super-admin-analytics.service';
 import { SuperAdminService } from './super-admin.service';
@@ -42,6 +43,7 @@ export class SuperAdminController {
     private readonly features: FeaturesService,
     private readonly serviceUsage: ServiceUsageService,
     private readonly backupStatus: BackupStatusService,
+    private readonly appPresence: AppPresenceService,
   ) {}
 
   @Get('staff')
@@ -145,6 +147,15 @@ export class SuperAdminController {
   @Roles(UserRole.SUPER_ADMIN)
   auditLog(@CurrentUser() user: JwtPayload) {
     return this.superAdmin.listAuditLog(user);
+  }
+
+  @Get('app-usage')
+  @Roles(UserRole.SUPER_ADMIN)
+  appUsage(
+    @CurrentUser() user: JwtPayload,
+    @Query('days') days?: string,
+  ) {
+    return this.appPresence.getAppUsage(user, days);
   }
 
   @Get('overview')

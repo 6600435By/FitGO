@@ -53,6 +53,7 @@ import {
   type AdminRenewalCounters,
   type SuperAdminAnalytics,
   type StaffAuditLogItem,
+  type AppUsageReport,
   type ClubAnalyticsReport,
   type ManagerEfficiencyBlock,
   type StaffAnalyticsReport,
@@ -327,6 +328,9 @@ export const api = {
     }),
 
   me: (token: string) => request<AuthUser>('/auth/me', {}, token),
+
+  authPresence: (token: string) =>
+    request<{ ok: true }>('/auth/presence', { method: 'POST' }, token),
 
   getStaffSyncStatus: (token: string) =>
     request<{
@@ -2260,6 +2264,13 @@ export const api = {
 
   superAdminAuditLog: (token: string) =>
     request<StaffAuditLogItem[]>('/super-admin/audit-log', {}, token),
+
+  superAdminAppUsage: (token: string, days: 7 | 30 = 7) =>
+    request<AppUsageReport>(
+      `/super-admin/app-usage?days=${days}`,
+      {},
+      token,
+    ),
 
   superAdminBackupStatus: (token: string) =>
     request<{

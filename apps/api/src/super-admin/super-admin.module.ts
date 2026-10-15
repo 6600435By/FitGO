@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdminSalesModule } from '../admin-sales/admin-sales.module';
+import { AppPresenceModule } from '../app-presence/app-presence.module';
 import { AuthModule } from '../auth/auth.module';
 import { FeaturesModule } from '../features/features.module';
 import { FitnessModule } from '../fitness/fitness.module';
@@ -15,6 +16,7 @@ import { SuperAdminService } from './super-admin.service';
 @Module({
   imports: [
     AuthModule,
+    AppPresenceModule,
     FitnessModule,
     ServiceUsageModule,
     FeaturesModule,

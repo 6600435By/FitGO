@@ -11,6 +11,7 @@ import {
 import { AppShell } from '@/components/app-shell';
 import { DataFreshness } from '@/components/data-freshness';
 import { useFeatures } from '@/components/features-provider';
+import { AppPresenceBridge } from '@/components/app-presence-bridge';
 import { PushBridge } from '@/components/push-bridge';
 import { StaffMessagesBadge } from '@/components/staff/staff-messages-badge';
 import { StaffTopNavLinks } from '@/components/staff/staff-top-nav';
@@ -196,6 +197,7 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
             <div className="mb-4 space-y-3">
               <DataFreshness canRefresh={false} />
               <PushBridge />
+              <AppPresenceBridge />
             </div>
             {children}
           </AppShell>
@@ -214,6 +216,7 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
         <div className="mb-4 space-y-3">
           <DataFreshness canRefresh={false} />
           <PushBridge />
+          <AppPresenceBridge />
         </div>
         <StaffTasksInbox />
         {children}

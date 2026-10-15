@@ -1246,6 +1246,34 @@ export interface StaffAuditLogItem {
   createdAt: string;
 }
 
+export interface AppUsageStaffRow {
+  userId: string;
+  name: string;
+  role: string;
+  loginEnabled: boolean;
+  lastLoginAt: string | null;
+  lastSeenAt: string | null;
+  activeMinutes: number;
+  online: boolean;
+}
+
+export interface AppUsageReport {
+  days: 7 | 30;
+  asOf: string;
+  staffSummary: {
+    onlineNow: number;
+    activeToday: number;
+    silent7d: number;
+    total: number;
+  };
+  clients: {
+    activeAccounts: number;
+    shadowAccounts: number;
+    withPush: number;
+  };
+  staff: AppUsageStaffRow[];
+}
+
 export const ADMIN_PERMISSION_LABELS: Record<AdminPermission, string> = {
   [AdminPermission.DASHBOARD_VIEW]: 'Дашборд',
   [AdminPermission.CLIENTS_VIEW]: 'Клиенты',

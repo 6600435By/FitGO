@@ -18,6 +18,7 @@ import { AdminQuickLinks } from '@/components/admin/admin-quick-links';
 import { AppShell } from '@/components/app-shell';
 import { DataFreshness } from '@/components/data-freshness';
 import { useFeatures } from '@/components/features-provider';
+import { AppPresenceBridge } from '@/components/app-presence-bridge';
 import { PushBridge } from '@/components/push-bridge';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -370,6 +371,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           <div className="mb-4 space-y-3">
             <DataFreshness />
             <PushBridge />
+            <AppPresenceBridge />
           </div>
           {children}
         </AppShell>
