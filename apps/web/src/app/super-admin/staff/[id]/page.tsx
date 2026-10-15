@@ -33,10 +33,6 @@ const TRAINER_GROUP_OPTIONS: {
   { id: 'reformers', label: 'Реформеры' },
 ];
 
-function randomPassword() {
-  return `Fit${Math.random().toString(36).slice(2, 10)}!`;
-}
-
 function canHaveAppLogin(roles: UserRole[]): boolean {
   return !roles.every((r) => r === UserRole.TECH || r === UserRole.CLIENT);
 }
@@ -44,7 +40,7 @@ function canHaveAppLogin(roles: UserRole[]): boolean {
 export default function SuperAdminStaffDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [member, setMember] = useState<StaffMember | null>(null);
-  const [password, setPassword] = useState(randomPassword);
+  const [password, setPassword] = useState('');
   const [login, setLogin] = useState('');
   const [credentials, setCredentials] = useState<{
     email: string;
@@ -53,6 +49,13 @@ export default function SuperAdminStaffDetailPage() {
   const [message, setMessage] = useState('');
   const [rolesBusy, setRolesBusy] = useState(false);
   const [accessBusy, setAccessBusy] = useState(false);
+
+  const suggestPassword = async () => {
+    const token = getToken();
+    if (!token) return '';
+    const res = await api.superAdminSuggestedPassword(token);
+    return res.password;
+  };
 
   const load = () => {
     const token = getToken();
@@ -66,7 +69,20 @@ export default function SuperAdminStaffDetailPage() {
         archived.find((s) => s.id === id) ??
         null;
       setMember(next);
-      if (next) setLogin(next.email);
+      if (!next) return;
+      setLogin(next.email);
+      if (next.appPassword) {
+        setPassword(next.appPassword);
+        return;
+      }
+      // Keep typed value; auto-fill only when the field is still empty.
+      setPassword((prev) => {
+        if (prev || !canHaveAppLogin(next.roles)) return prev;
+        void suggestPassword()
+          .then((p) => setPassword((cur) => cur || p))
+          .catch(() => undefined);
+        return prev;
+      });
     });
   };
 
@@ -107,9 +123,11 @@ export default function SuperAdminStaffDetailPage() {
     setMessage('');
     try {
       const result = await api.superAdminUpdateStaff(token, id, { password });
-      if (result.credentials) setCredentials(result.credentials);
-      setPassword(randomPassword());
-      setMessage('Пароль обновлён');
+      if (result.credentials) {
+        setCredentials(result.credentials);
+        setPassword(result.credentials.password);
+      }
+      setMessage('Пароль сохранён');
       load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
@@ -137,8 +155,10 @@ export default function SuperAdminStaffDetailPage() {
         loginEnabled: true,
         password,
       });
-      if (result.credentials) setCredentials(result.credentials);
-      setPassword(randomPassword());
+      if (result.credentials) {
+        setCredentials(result.credentials);
+        setPassword(result.credentials.password);
+      }
       setMessage('Вход открыт');
       load();
     } catch (e) {
@@ -440,17 +460,42 @@ export default function SuperAdminStaffDetailPage() {
           </div>
 
           <div className="space-y-2">
-            <p className="text-sm font-medium">
-              {member.loginEnabled === false ? 'Пароль' : 'Новый пароль'}
+            <p className="text-sm font-medium">Пароль для входа</p>
+            <p className="text-xs text-slate-400">
+              {member.appPassword
+                ? 'Текущий пароль ниже. Можно оставить или задать новый.'
+                : member.loginEnabled === false
+                  ? 'Сгенерирован простой пароль (слово из 5 букв + 2 цифры). Можно заменить.'
+                  : 'Старый пароль не сохранён — задайте новый и сохраните.'}
             </p>
-            <input
-              className="input w-full"
-              type="text"
-              autoComplete="new-password"
-              placeholder="Не короче 6 символов"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <div className="flex gap-2">
+              <input
+                className="input w-full"
+                type="text"
+                autoComplete="off"
+                lang="ru"
+                placeholder="например книга42"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn-secondary shrink-0"
+                disabled={accessBusy}
+                onClick={async () => {
+                  setAccessBusy(true);
+                  try {
+                    setPassword(await suggestPassword());
+                  } catch (e) {
+                    setMessage(e instanceof Error ? e.message : 'Ошибка');
+                  } finally {
+                    setAccessBusy(false);
+                  }
+                }}
+              >
+                Сгенерировать
+              </button>
+            </div>
             {member.loginEnabled === false ? (
               <button
                 type="button"
@@ -465,7 +510,10 @@ export default function SuperAdminStaffDetailPage() {
                 <button
                   type="button"
                   onClick={resetPassword}
-                  disabled={accessBusy}
+                  disabled={
+                    accessBusy ||
+                    (!!member.appPassword && password === member.appPassword)
+                  }
                   className="btn-primary w-full"
                 >
                   Сохранить пароль
@@ -488,7 +536,7 @@ export default function SuperAdminStaffDetailPage() {
               <p>Логин: {credentials.email}</p>
               <p>Пароль: {credentials.password}</p>
               <p className="text-xs text-slate-400">
-                Сохраните и передайте сотруднику — пароль больше не покажется.
+                Пароль сохранён в карточке — его можно снова посмотреть здесь.
               </p>
             </div>
           )}

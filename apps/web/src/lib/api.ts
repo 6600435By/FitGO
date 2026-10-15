@@ -2029,6 +2029,13 @@ export const api = {
 
   superAdminStaffExportUrl: () => `${API_URL}/api/super-admin/staff/export.csv`,
 
+  superAdminSuggestedPassword: (token: string) =>
+    request<{ password: string }>(
+      '/super-admin/staff/suggested-password',
+      {},
+      token,
+    ),
+
   superAdminPermissions: (token: string, adminId: string) =>
     request<{ permissions: AdminPermission[] }>(
       `/super-admin/admins/${adminId}/permissions`,

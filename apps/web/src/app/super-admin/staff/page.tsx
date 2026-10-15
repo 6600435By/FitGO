@@ -8,10 +8,6 @@ import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
-function randomPassword() {
-  return `Fit${Math.random().toString(36).slice(2, 10)}!`;
-}
-
 type DeptFilter =
   | 'ALL'
   | 'MANAGER'
@@ -105,7 +101,7 @@ export default function SuperAdminStaffPage() {
     phone: '',
     email: '',
     loginTouched: false,
-    password: randomPassword(),
+    password: '',
     roles: ['TRAINER'] as StaffRoleId[],
     trainerGp: false,
     trainerStaff: true,
@@ -115,6 +111,13 @@ export default function SuperAdminStaffPage() {
   const [error, setError] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
+
+  const suggestPassword = async () => {
+    const token = getToken();
+    if (!token) return '';
+    const res = await api.superAdminSuggestedPassword(token);
+    return res.password;
+  };
 
   const load = (archived = filter === 'ARCHIVED') => {
     const token = getToken();
@@ -226,6 +229,7 @@ export default function SuperAdminStaffPage() {
       });
       if (result.credentials) setCredentials(result.credentials);
       setShowForm(false);
+      const nextPassword = await suggestPassword().catch(() => '');
       setForm({
         firstName: '',
         lastName: '',
@@ -233,7 +237,7 @@ export default function SuperAdminStaffPage() {
         phone: '',
         email: '',
         loginTouched: false,
-        password: randomPassword(),
+        password: nextPassword,
         roles: ['TRAINER'],
         trainerGp: false,
         trainerStaff: true,
@@ -319,7 +323,15 @@ export default function SuperAdminStaffPage() {
             {syncing ? 'Обновляем…' : 'Обновить из 1С'}
           </button>
           <button
-            onClick={() => setShowForm(!showForm)}
+            onClick={async () => {
+              if (showForm) {
+                setShowForm(false);
+                return;
+              }
+              const password = await suggestPassword().catch(() => '');
+              setForm((prev) => ({ ...prev, password }));
+              setShowForm(true);
+            }}
             className="btn-primary text-sm"
           >
             {showForm ? 'Отмена' : '+ Добавить'}
@@ -473,6 +485,9 @@ export default function SuperAdminStaffPage() {
               </label>
               <label className="block text-xs text-slate-400">
                 Пароль
+                <span className="mt-0.5 block font-normal text-slate-500">
+                  Русское слово из 5 букв + 2 цифры, без повторов у других сотрудников
+                </span>
                 <div className="mt-1 flex gap-2">
                   <input
                     className="input flex-1"
@@ -483,9 +498,10 @@ export default function SuperAdminStaffPage() {
                   />
                   <button
                     type="button"
-                    onClick={() =>
-                      setForm({ ...form, password: randomPassword() })
-                    }
+                    onClick={async () => {
+                      const password = await suggestPassword().catch(() => '');
+                      setForm((prev) => ({ ...prev, password }));
+                    }}
                     className="btn-secondary shrink-0"
                   >
                     Сгенерировать

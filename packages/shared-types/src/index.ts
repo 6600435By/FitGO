@@ -1052,6 +1052,8 @@ export interface StaffMember {
   employeeCode?: string;
   /** false — пароль входа ещё не выдан. */
   loginEnabled?: boolean;
+  /** Current app login password (SA/manager only; null if never stored). */
+  appPassword?: string | null;
   /** Тренер группы «Тренеры ГП». */
   groupPrograms?: boolean;
   /** Тренер группы «Тренеры штат». */

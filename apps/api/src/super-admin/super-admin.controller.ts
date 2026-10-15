@@ -83,6 +83,11 @@ export class SuperAdminController {
     return this.superAdmin.exportStaffCsv(user);
   }
 
+  @Get('staff/suggested-password')
+  suggestStaffPassword(@CurrentUser() user: JwtPayload) {
+    return this.superAdmin.suggestStaffPassword(user);
+  }
+
   @Get('admins/:id/permissions')
   getPermissions(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.superAdmin.getAdminPermissions(user, id);

@@ -571,6 +571,8 @@ model User {
   trainerGroupsSet Boolean @default(false)
   /// false — учётка есть, пароль входа ещё не выдан.
   loginEnabled Boolean @default(true)
+  /// Recoverable staff app password for SA/manager display (hash stays in `password`).
+  appPasswordPlain String? @unique
   referralCode String? @unique
   gender        Gender?
   dateOfBirth   DateTime? @db.Date

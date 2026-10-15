@@ -27,6 +27,10 @@ import { ackDiscrepancyFromTask } from '../discrepancies/discrepancy-task-ack';
 import type { CreateAdminTaskDto } from './dto/task.dto';
 import type { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 import { randomBytes } from 'crypto';
+import {
+  allocateStaffAppPassword,
+  isValidStaffAppPassword,
+} from '../auth/staff-app-password';
 import { allocateStaffLogin, isCodeStubEmail } from '../auth/staff-login';
 
 const STAFF_ROLES: Role[] = [
@@ -252,9 +256,11 @@ export class SuperAdminService implements OnModuleInit {
         : await allocateStaffLogin(this.prisma, dto.lastName)
       : techPlaceholderEmail(dto.firstName.trim(), dto.lastName.trim());
     const plainPassword = needsLogin
-      ? dto.password
+      ? await allocateStaffAppPassword(this.prisma, {
+          preferred: dto.password,
+        })
       : randomBytes(24).toString('hex');
-    if (needsLogin && (!plainPassword || plainPassword.length < 6)) {
+    if (needsLogin && !isValidStaffAppPassword(plainPassword)) {
       throw new BadRequestException('Пароль не меньше 6 символов');
     }
 
@@ -282,6 +288,7 @@ export class SuperAdminService implements OnModuleInit {
         clubId,
         email,
         password: passwordHash,
+        appPasswordPlain: needsLogin ? plainPassword! : null,
         firstName: dto.firstName.trim(),
         lastName: dto.lastName.trim(),
         phone: dto.phone?.trim() || null,
@@ -331,6 +338,7 @@ export class SuperAdminService implements OnModuleInit {
       dateOfBirth?: Date | null;
       isActive?: boolean;
       password?: string;
+      appPasswordPlain?: string | null;
       loginEnabled?: boolean;
       employmentKind?: 'STAFF' | 'EXTERNAL';
       email?: string;
@@ -387,13 +395,20 @@ export class SuperAdminService implements OnModuleInit {
       member.roles.map((r) => r.role).filter(isStaffRoleLabel)) as StaffRoleLabel[];
     const canHaveAppLogin = needsAppLogin(rolesAfter);
 
+    let plainPasswordForResult: string | undefined;
     if (dto.password) {
       if (!canHaveAppLogin) {
         throw new BadRequestException(
           'У техперсонала нет входа в приложение — пароль не задаётся',
         );
       }
-      data.password = await bcrypt.hash(dto.password, 10);
+      const plain = await allocateStaffAppPassword(this.prisma, {
+        excludeUserId: staffId,
+        preferred: dto.password,
+      });
+      data.password = await bcrypt.hash(plain, 10);
+      data.appPasswordPlain = plain;
+      plainPasswordForResult = plain;
     }
 
     if (dto.loginEnabled === true) {
@@ -402,7 +417,7 @@ export class SuperAdminService implements OnModuleInit {
           'У техперсонала нет входа в приложение',
         );
       }
-      if (!dto.password || dto.password.length < 6) {
+      if (!dto.password || !isValidStaffAppPassword(dto.password)) {
         throw new BadRequestException(
           'Чтобы открыть вход, задайте пароль не короче 6 символов',
         );
@@ -481,11 +496,19 @@ export class SuperAdminService implements OnModuleInit {
       credentials?: { email: string; password: string };
     } = this.mapStaff(updated);
 
-    if (dto.password) {
-      result.credentials = { email: updated.email, password: dto.password };
+    if (plainPasswordForResult) {
+      result.credentials = {
+        email: updated.email,
+        password: plainPasswordForResult,
+      };
     }
 
     return result;
+  }
+
+  async suggestStaffPassword(_user: JwtPayload) {
+    const password = await allocateStaffAppPassword(this.prisma);
+    return { password };
   }
 
   async getAdminPermissions(user: JwtPayload, adminId: string) {
@@ -828,6 +851,7 @@ export class SuperAdminService implements OnModuleInit {
     dateOfBirth: Date | null;
     employeeCode: string | null;
     loginEnabled: boolean;
+    appPasswordPlain?: string | null;
     groupPrograms?: boolean;
     trainerStaff?: boolean;
     trainerClub?: boolean;
@@ -857,6 +881,7 @@ export class SuperAdminService implements OnModuleInit {
       dateOfBirth: member.dateOfBirth?.toISOString().slice(0, 10),
       employeeCode: member.employeeCode ?? undefined,
       loginEnabled: member.loginEnabled,
+      appPassword: member.appPasswordPlain ?? null,
       groupPrograms: member.groupPrograms ?? false,
       trainerStaff: member.trainerStaff ?? false,
       trainerClub: member.trainerClub ?? false,
