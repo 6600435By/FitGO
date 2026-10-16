@@ -1662,24 +1662,40 @@ export function BookingControlPanel({
                           selected.source === '1C' &&
                           m.attendance !== 'CANCELLED' &&
                           !selected.groupApproval?.locked ? (
-                            <span className="flex shrink-0 gap-1">
+                            <span
+                              className="inline-flex shrink-0 overflow-hidden rounded border border-slate-700"
+                              role="group"
+                              aria-label="Явка клиента"
+                            >
                               <button
                                 type="button"
-                                className="rounded border border-emerald-500/40 px-1.5 py-0.5 text-[11px] text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40"
-                                disabled={attendanceBusyId === m.externalId}
-                                onClick={() =>
-                                  markAttendance(m.externalId, 'ATTENDED')
+                                className={
+                                  m.attendance === 'ATTENDED'
+                                    ? 'bg-emerald-500/25 px-1.5 py-0.5 text-[11px] font-medium text-emerald-200'
+                                    : 'px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-300'
                                 }
+                                disabled={attendanceBusyId === m.externalId}
+                                aria-pressed={m.attendance === 'ATTENDED'}
+                                onClick={() => {
+                                  if (m.attendance === 'ATTENDED') return;
+                                  void markAttendance(m.externalId, 'ATTENDED');
+                                }}
                               >
                                 Прибыл
                               </button>
                               <button
                                 type="button"
-                                className="rounded border border-rose-500/40 px-1.5 py-0.5 text-[11px] text-rose-300 hover:bg-rose-500/10 disabled:opacity-40"
-                                disabled={attendanceBusyId === m.externalId}
-                                onClick={() =>
-                                  markAttendance(m.externalId, 'NO_SHOW')
+                                className={
+                                  m.attendance === 'NO_SHOW'
+                                    ? 'border-l border-slate-700 bg-rose-500/25 px-1.5 py-0.5 text-[11px] font-medium text-rose-200'
+                                    : 'border-l border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-rose-500/10 hover:text-rose-300'
                                 }
+                                disabled={attendanceBusyId === m.externalId}
+                                aria-pressed={m.attendance === 'NO_SHOW'}
+                                onClick={() => {
+                                  if (m.attendance === 'NO_SHOW') return;
+                                  void markAttendance(m.externalId, 'NO_SHOW');
+                                }}
                               >
                                 Не прибыл
                               </button>

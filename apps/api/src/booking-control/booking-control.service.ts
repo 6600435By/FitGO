@@ -3155,7 +3155,8 @@ export class BookingControlService {
     if (headerAttendedCount <= 0) return;
     if (headerAttendedCount < active.length) return;
     for (const m of active) {
-      if (m.attendance === 'EXPECTED' || m.attendance === 'NO_SHOW') {
+      // Keep NO_SHOW from admin mark — do not promote back to ATTENDED.
+      if (m.attendance === 'EXPECTED') {
         m.attendance = 'ATTENDED';
       }
     }
