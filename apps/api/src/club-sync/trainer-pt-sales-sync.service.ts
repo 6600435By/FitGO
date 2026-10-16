@@ -50,7 +50,8 @@ export class TrainerPtSalesSyncService {
       const seen = new Set<string>();
 
       for (const row of rows) {
-        const externalId = row.externalId || row.docRef;
+        // Prefer sale-line key (docRef); client UUID in externalId collapses rows.
+        const externalId = row.docRef || row.externalId;
         if (!externalId) continue;
         seen.add(externalId);
         const occurredAt = new Date(row.occurredAt);

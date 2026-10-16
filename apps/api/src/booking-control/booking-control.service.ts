@@ -1110,7 +1110,8 @@ export class BookingControlService {
       if (live.length) {
         const now = new Date();
         for (const row of live) {
-          const externalId = row.externalId || row.docRef;
+          // Prefer sale-line key (docRef); client UUID in externalId collapses rows.
+          const externalId = row.docRef || row.externalId;
           if (!externalId) continue;
           const occurredAt = new Date(row.occurredAt);
           if (Number.isNaN(occurredAt.getTime())) continue;
