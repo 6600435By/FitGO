@@ -7,6 +7,7 @@ import {
   type BookingControlKind,
   type BookingControlListItem,
   type BookingControlStatus,
+  type GroupApprovalNoteItem,
 } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminStickyTable } from '@/components/admin/admin-sticky-table';
@@ -155,6 +156,10 @@ function formatClock(iso: string) {
   });
 }
 
+function approvalNoteActionRu(action: GroupApprovalNoteItem['action']) {
+  return action === 'RETURN' ? 'на доработку' : 'подтвердил';
+}
+
 function statusRu(s: BookingControlStatus) {
   if (s === 'COMPLETED') return 'Выполнено';
   if (s === 'CANCELLED') return 'Отменено';
@@ -275,6 +280,7 @@ export function BookingControlPanel({
   const [photosError, setPhotosError] = useState('');
   const [localSeen, setLocalSeen] = useState<Set<string>>(new Set());
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [approvalNotesOpen, setApprovalNotesOpen] = useState(false);
 
   const load = useCallback(() => {
     if (detailOnly) {
@@ -442,6 +448,7 @@ export function BookingControlPanel({
     setComment('');
     setAdminComment('');
     setHistoryOpen(false);
+    setApprovalNotesOpen(false);
     setDetailError('');
     closePhotos();
     const listItem = items.find((i) => i.sessionKey === sessionKey);
@@ -513,6 +520,7 @@ export function BookingControlPanel({
   const closeDetail = () => {
     closePhotos();
     setHistoryOpen(false);
+    setApprovalNotesOpen(false);
     setDetailError('');
     setSelected(null);
     onDetailClose?.();
@@ -1719,13 +1727,66 @@ export function BookingControlPanel({
                         {selected.groupApproval.returnedByName
                           ? ` · ${selected.groupApproval.returnedByName}`
                           : ''}
-                        {selected.groupApproval.returnComment
+                        {!selected.groupApproval.approvalNotes?.length &&
+                        selected.groupApproval.returnComment
                           ? `: ${selected.groupApproval.returnComment}`
                           : ''}
                       </p>
                     ) : null}
                     {selected.groupApproval.locked ? (
                       <p className="text-slate-500">Период ЗП закрыт — только просмотр</p>
+                    ) : null}
+                    {selected.groupApproval.approvalNotes?.length ? (
+                      <div className="space-y-1 border-t border-slate-700/60 pt-2">
+                        {(() => {
+                          const notes = selected.groupApproval.approvalNotes!;
+                          const last = notes[notes.length - 1]!;
+                          const older = notes.length - 1;
+                          return (
+                            <>
+                              <p className="truncate text-slate-300">
+                                <span className="text-slate-400">
+                                  {last.authorName} ·{' '}
+                                  {approvalNoteActionRu(last.action)}:{' '}
+                                </span>
+                                {last.text}
+                              </p>
+                              {older > 0 ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="text-[11px] text-sky-400/90 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-300"
+                                    aria-expanded={approvalNotesOpen}
+                                    onClick={() =>
+                                      setApprovalNotesOpen((v) => !v)
+                                    }
+                                  >
+                                    {approvalNotesOpen
+                                      ? 'свернуть'
+                                      : `ещё ${older}`}
+                                  </button>
+                                  {approvalNotesOpen ? (
+                                    <ul className="max-h-36 space-y-1.5 overflow-y-auto text-[11px] leading-snug text-slate-400">
+                                      {notes.slice(0, -1).map((n, i) => (
+                                        <li key={`${n.createdAt}-${i}`}>
+                                          <span className="text-slate-500">
+                                            {formatDateTime(n.createdAt)} ·{' '}
+                                            {n.authorName} ·{' '}
+                                            {approvalNoteActionRu(n.action)}:{' '}
+                                          </span>
+                                          <span className="text-slate-300">
+                                            {n.text}
+                                          </span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  ) : null}
+                                </>
+                              ) : null}
+                            </>
+                          );
+                        })()}
+                      </div>
                     ) : null}
                   </div>
                 )}

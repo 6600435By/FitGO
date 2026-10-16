@@ -39,6 +39,18 @@ export type GroupApprovalPhase =
   | 'PENDING_ADMIN'
   | 'APPROVED';
 
+export type GroupApprovalNoteRole = 'TRAINER' | 'ADMIN' | 'OVERRIDE';
+export type GroupApprovalNoteAction = 'CONFIRM' | 'RETURN';
+
+/** One reply in the GROUP approval comment thread. */
+export interface GroupApprovalNoteItem {
+  authorName: string;
+  authorRole: GroupApprovalNoteRole;
+  action: GroupApprovalNoteAction;
+  text: string;
+  createdAt: string;
+}
+
 export interface GroupClassApprovalInfo {
   trainerSeenClientIds: string[];
   trainerName?: string;
@@ -53,6 +65,8 @@ export interface GroupClassApprovalInfo {
   returnedByName?: string;
   returnedAt?: string;
   returnComment?: string;
+  /** Chronological comment thread (trainer ↔ admin). */
+  approvalNotes?: GroupApprovalNoteItem[];
   phase: GroupApprovalPhase;
   /** Trainer checkmark count vs 1C arrived — shown when they differ. */
   trainerSeenCount: number;

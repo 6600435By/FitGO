@@ -502,6 +502,7 @@ model Club {
   sessionRemarks       SessionRemark[]
   hallClassSnapshots   HallClassSnapshot[]
   groupClassApprovals  GroupClassApproval[]
+  groupApprovalNotes   GroupApprovalNote[]
   sessionApprovals     SessionApproval[]
   spaRooms             SpaRoom[]
   clubSyncRuns         ClubSyncRun[]
@@ -675,6 +676,7 @@ model User {
   groupApprovalsAdmin     GroupClassApproval[]    @relation("GroupApprovalAdmin")
   groupApprovalsOverride  GroupClassApproval[]    @relation("GroupApprovalOverride")
   groupApprovalsReturned  GroupClassApproval[]    @relation("GroupApprovalReturnedBy")
+  groupApprovalNotes      GroupApprovalNote[]     @relation("GroupApprovalNoteAuthor")
   staffProfile            StaffProfile?
   sessionApprovalsAdmin   SessionApproval[]       @relation("SessionApprovalAdmin")
   sessionApprovalsOverride SessionApproval[]      @relation("SessionApprovalOverride")
@@ -2527,6 +2529,35 @@ model GroupClassApproval {
   @@index([clubId, trainerApprovedAt])
   @@index([clubId, adminApprovedAt])
   @@index([clubId, overrideApprovedAt])
+}
+
+enum GroupApprovalNoteRole {
+  TRAINER
+  ADMIN
+  OVERRIDE
+}
+
+enum GroupApprovalNoteAction {
+  CONFIRM
+  RETURN
+}
+
+/// Append-only comment thread for GROUP approval (trainer ↔ admin).
+model GroupApprovalNote {
+  id         String                   @id @default(cuid())
+  clubId     String
+  sessionKey String
+  authorId   String?
+  authorName String
+  authorRole GroupApprovalNoteRole
+  action     GroupApprovalNoteAction
+  text       String
+  createdAt  DateTime                 @default(now())
+
+  club   Club  @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  author User? @relation("GroupApprovalNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([clubId, sessionKey, createdAt])
 }
 
 /// Staff/admin remark on a register session (holds payroll while OPEN).

@@ -1390,6 +1390,7 @@ export class BookingControlService {
     const existing = await this.prisma.groupClassApproval.findUnique({
       where: { clubId_sessionKey: { clubId, sessionKey } },
     });
+    await this.ensureApprovalNotesMigrated(clubId, sessionKey, existing);
 
     if (isOverride) {
       await this.prisma.groupClassApproval.upsert({
@@ -1400,22 +1401,27 @@ export class BookingControlService {
           overrideUserId: actor.sub,
           overrideName: actorName,
           overrideApprovedAt: now,
-          overrideComment: note,
+          ...(note ? { overrideComment: note } : {}),
           returnedByUserId: null,
           returnedByName: null,
           returnedAt: null,
-          returnComment: null,
         },
         update: {
           overrideUserId: actor.sub,
           overrideName: actorName,
           overrideApprovedAt: now,
-          overrideComment: note,
+          ...(note ? { overrideComment: note } : {}),
           returnedByUserId: null,
           returnedByName: null,
           returnedAt: null,
-          returnComment: null,
         },
+      });
+      await this.appendApprovalNote(clubId, sessionKey, {
+        authorId: actor.sub,
+        authorName: actorName,
+        authorRole: 'OVERRIDE',
+        action: 'CONFIRM',
+        text: note,
       });
     } else if (isAdmin) {
       if (!existing?.trainerApprovedAt) {
@@ -1429,12 +1435,18 @@ export class BookingControlService {
           adminUserId: actor.sub,
           adminName: actorName,
           adminApprovedAt: now,
-          adminComment: note,
+          ...(note ? { adminComment: note } : {}),
           returnedByUserId: null,
           returnedByName: null,
           returnedAt: null,
-          returnComment: null,
         },
+      });
+      await this.appendApprovalNote(clubId, sessionKey, {
+        authorId: actor.sub,
+        authorName: actorName,
+        authorRole: 'ADMIN',
+        action: 'CONFIRM',
+        text: note,
       });
     } else {
       // Trainer
@@ -1446,28 +1458,32 @@ export class BookingControlService {
           trainerUserId: actor.sub,
           trainerName: actorName,
           trainerApprovedAt: now,
-          trainerComment: note,
+          ...(note ? { trainerComment: note } : {}),
           trainerSeenClientIds: existing?.trainerSeenClientIds ?? [],
         },
         update: {
           trainerUserId: actor.sub,
           trainerName: actorName,
           trainerApprovedAt: now,
-          trainerComment: note,
-          // Re-confirm after rework clears prior admin/override
+          ...(note ? { trainerComment: note } : {}),
+          // Re-confirm after rework clears prior admin/override stamps
           adminUserId: null,
           adminName: null,
           adminApprovedAt: null,
-          adminComment: null,
           overrideUserId: null,
           overrideName: null,
           overrideApprovedAt: null,
-          overrideComment: null,
           returnedByUserId: null,
           returnedByName: null,
           returnedAt: null,
-          returnComment: null,
         },
+      });
+      await this.appendApprovalNote(clubId, sessionKey, {
+        authorId: actor.sub,
+        authorName: actorName,
+        authorRole: 'TRAINER',
+        action: 'CONFIRM',
+        text: note,
       });
     }
 
@@ -1826,6 +1842,16 @@ export class BookingControlService {
     const actorName = await this.actorDisplayName(clubId, actor.sub);
     const note = comment?.trim() || null;
     const now = new Date();
+    const roles = actor.roles ?? [];
+    const authorRole =
+      roles.includes(UserRole.SUPER_ADMIN) || roles.includes(UserRole.MANAGER)
+        ? ('OVERRIDE' as const)
+        : ('ADMIN' as const);
+
+    const existing = await this.prisma.groupClassApproval.findUnique({
+      where: { clubId_sessionKey: { clubId, sessionKey } },
+    });
+    await this.ensureApprovalNotesMigrated(clubId, sessionKey, existing);
 
     await this.prisma.groupClassApproval.upsert({
       where: { clubId_sessionKey: { clubId, sessionKey } },
@@ -1835,26 +1861,31 @@ export class BookingControlService {
         returnedByUserId: actor.sub,
         returnedByName: actorName,
         returnedAt: now,
-        returnComment: note,
+        ...(note ? { returnComment: note } : {}),
       },
       update: {
+        // Reset approval stamps; keep prior comment slots for fallback display
         trainerUserId: null,
         trainerName: null,
         trainerApprovedAt: null,
-        trainerComment: null,
         adminUserId: null,
         adminName: null,
         adminApprovedAt: null,
-        adminComment: null,
         overrideUserId: null,
         overrideName: null,
         overrideApprovedAt: null,
-        overrideComment: null,
         returnedByUserId: actor.sub,
         returnedByName: actorName,
         returnedAt: now,
-        returnComment: note,
+        ...(note ? { returnComment: note } : {}),
       },
+    });
+    await this.appendApprovalNote(clubId, sessionKey, {
+      authorId: actor.sub,
+      authorName: actorName,
+      authorRole,
+      action: 'RETURN',
+      text: note,
     });
 
     return this.detail(clubId, sessionKey);
@@ -2385,6 +2416,7 @@ export class BookingControlService {
       adminApprovedAt: row?.adminApprovedAt?.toISOString() ?? null,
       overrideApprovedAt: row?.overrideApprovedAt?.toISOString() ?? null,
     });
+    const approvalNotes = await this.loadApprovalNotes(clubId, sessionKey, row);
     return {
       trainerSeenClientIds: seenIds,
       trainerName: row?.trainerName ?? undefined,
@@ -2399,6 +2431,7 @@ export class BookingControlService {
       returnedByName: row?.returnedByName ?? undefined,
       returnedAt: row?.returnedAt?.toISOString(),
       returnComment: row?.returnComment ?? undefined,
+      approvalNotes: approvalNotes.length ? approvalNotes : undefined,
       phase,
       trainerSeenCount: seenIds.length,
       payrollEligible: groupApprovalPayrollEligible({
@@ -2407,6 +2440,206 @@ export class BookingControlService {
       }),
       locked: payrollLocked,
     };
+  }
+
+  private async appendApprovalNote(
+    clubId: string,
+    sessionKey: string,
+    input: {
+      authorId: string;
+      authorName: string;
+      authorRole: 'TRAINER' | 'ADMIN' | 'OVERRIDE';
+      action: 'CONFIRM' | 'RETURN';
+      text: string | null;
+    },
+  ) {
+    const text = input.text?.trim();
+    if (!text) return;
+    await this.prisma.groupApprovalNote.create({
+      data: {
+        clubId,
+        sessionKey,
+        authorId: input.authorId,
+        authorName: input.authorName,
+        authorRole: input.authorRole,
+        action: input.action,
+        text,
+      },
+    });
+  }
+
+  /** One-time copy of legacy slot comments into the append-only thread. */
+  private async ensureApprovalNotesMigrated(
+    clubId: string,
+    sessionKey: string,
+    row: {
+      trainerUserId: string | null;
+      trainerName: string | null;
+      trainerApprovedAt: Date | null;
+      trainerComment: string | null;
+      adminUserId: string | null;
+      adminName: string | null;
+      adminApprovedAt: Date | null;
+      adminComment: string | null;
+      overrideUserId: string | null;
+      overrideName: string | null;
+      overrideApprovedAt: Date | null;
+      overrideComment: string | null;
+      returnedByUserId: string | null;
+      returnedByName: string | null;
+      returnedAt: Date | null;
+      returnComment: string | null;
+    } | null,
+  ) {
+    if (!row) return;
+    const existing = await this.prisma.groupApprovalNote.count({
+      where: { clubId, sessionKey },
+    });
+    if (existing > 0) return;
+
+    const candidates = this.slotNotesFromApproval(row);
+    if (!candidates.length) return;
+    await this.prisma.groupApprovalNote.createMany({
+      data: candidates.map((n) => ({
+        clubId,
+        sessionKey,
+        authorId: n.authorId,
+        authorName: n.authorName,
+        authorRole: n.authorRole,
+        action: n.action,
+        text: n.text,
+        createdAt: n.createdAt,
+      })),
+    });
+  }
+
+  private slotNotesFromApproval(row: {
+    trainerUserId: string | null;
+    trainerName: string | null;
+    trainerApprovedAt: Date | null;
+    trainerComment: string | null;
+    adminUserId: string | null;
+    adminName: string | null;
+    adminApprovedAt: Date | null;
+    adminComment: string | null;
+    overrideUserId: string | null;
+    overrideName: string | null;
+    overrideApprovedAt: Date | null;
+    overrideComment: string | null;
+    returnedByUserId: string | null;
+    returnedByName: string | null;
+    returnedAt: Date | null;
+    returnComment: string | null;
+  }): Array<{
+    authorId: string | null;
+    authorName: string;
+    authorRole: 'TRAINER' | 'ADMIN' | 'OVERRIDE';
+    action: 'CONFIRM' | 'RETURN';
+    text: string;
+    createdAt: Date;
+  }> {
+    const out: Array<{
+      authorId: string | null;
+      authorName: string;
+      authorRole: 'TRAINER' | 'ADMIN' | 'OVERRIDE';
+      action: 'CONFIRM' | 'RETURN';
+      text: string;
+      createdAt: Date;
+    }> = [];
+    const trainerText = row.trainerComment?.trim();
+    if (trainerText && row.trainerApprovedAt) {
+      out.push({
+        authorId: row.trainerUserId,
+        authorName: row.trainerName?.trim() || 'Тренер',
+        authorRole: 'TRAINER',
+        action: 'CONFIRM',
+        text: trainerText,
+        createdAt: row.trainerApprovedAt,
+      });
+    }
+    const adminText = row.adminComment?.trim();
+    if (adminText && row.adminApprovedAt) {
+      out.push({
+        authorId: row.adminUserId,
+        authorName: row.adminName?.trim() || 'Администратор',
+        authorRole: 'ADMIN',
+        action: 'CONFIRM',
+        text: adminText,
+        createdAt: row.adminApprovedAt,
+      });
+    }
+    const overrideText = row.overrideComment?.trim();
+    if (overrideText && row.overrideApprovedAt) {
+      out.push({
+        authorId: row.overrideUserId,
+        authorName: row.overrideName?.trim() || 'Руководитель',
+        authorRole: 'OVERRIDE',
+        action: 'CONFIRM',
+        text: overrideText,
+        createdAt: row.overrideApprovedAt,
+      });
+    }
+    const returnText = row.returnComment?.trim();
+    if (returnText && row.returnedAt) {
+      out.push({
+        authorId: row.returnedByUserId,
+        authorName: row.returnedByName?.trim() || 'Администратор',
+        authorRole: 'ADMIN',
+        action: 'RETURN',
+        text: returnText,
+        createdAt: row.returnedAt,
+      });
+    }
+    out.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    return out;
+  }
+
+  private async loadApprovalNotes(
+    clubId: string,
+    sessionKey: string,
+    row: {
+      trainerUserId: string | null;
+      trainerName: string | null;
+      trainerApprovedAt: Date | null;
+      trainerComment: string | null;
+      adminUserId: string | null;
+      adminName: string | null;
+      adminApprovedAt: Date | null;
+      adminComment: string | null;
+      overrideUserId: string | null;
+      overrideName: string | null;
+      overrideApprovedAt: Date | null;
+      overrideComment: string | null;
+      returnedByUserId: string | null;
+      returnedByName: string | null;
+      returnedAt: Date | null;
+      returnComment: string | null;
+    } | null,
+  ): Promise<
+    NonNullable<GroupClassApprovalInfo['approvalNotes']>
+  > {
+    const rows = await this.prisma.groupApprovalNote.findMany({
+      where: { clubId, sessionKey },
+      orderBy: { createdAt: 'asc' },
+      take: 30,
+    });
+    if (rows.length) {
+      return rows.map((n) => ({
+        authorName: n.authorName,
+        authorRole: n.authorRole,
+        action: n.action,
+        text: n.text,
+        createdAt: n.createdAt.toISOString(),
+      }));
+    }
+    if (!row) return [];
+    return this.slotNotesFromApproval(row).map((n) => ({
+      authorName: n.authorName,
+      authorRole: n.authorRole,
+      action: n.action,
+      text: n.text,
+      createdAt: n.createdAt.toISOString(),
+    }));
   }
 
   private mapRemark(r: {
