@@ -21,6 +21,25 @@ if (-not (Test-Path (Join-Path $FitGoRoot 'pnpm-workspace.yaml'))) {
   throw "FitGO not found at $FitGoRoot"
 }
 
+function Deploy-AppMaintenancePage {
+  param(
+    [string]$RepoRoot,
+    [string]$Htdocs = 'C:\Apache24\htdocs'
+  )
+  $src = Join-Path $RepoRoot 'deploy\hoster-wp-proxy\maintenance.html'
+  if (-not (Test-Path $src)) {
+    Write-Host "WARNING: maintenance.html not found at $src - skip Apache 503 page." -ForegroundColor Yellow
+    return
+  }
+  if (-not (Test-Path $Htdocs)) {
+    Write-Host "WARNING: Apache htdocs not found at $Htdocs - skip app-maintenance.html." -ForegroundColor Yellow
+    return
+  }
+  $dest = Join-Path $Htdocs 'app-maintenance.html'
+  Copy-Item -Path $src -Destination $dest -Force
+  Write-Host "Apache 503 page: $dest" -ForegroundColor Green
+}
+
 function Resolve-GitExe {
   $cmd = Get-Command git -ErrorAction SilentlyContinue
   if ($cmd) { return $cmd.Source }
@@ -53,6 +72,11 @@ if (-not $SkipBackup) {
 } else {
   Write-Host 'SkipBackup: continuing without pre-update dump.' -ForegroundColor Yellow
 }
+
+# Russian "updating" page for Apache ErrorDocument while Web is stopped.
+# Install before Stop-Service so :444 never falls through to 1C VRS JSON.
+# Name must NOT start with fitgo (Alias /fitgo → 1C).
+Deploy-AppMaintenancePage -RepoRoot $FitGoRoot
 
 Stop-Service FitGO-Web -ErrorAction SilentlyContinue
 Stop-Service FitGO-API -ErrorAction SilentlyContinue
@@ -87,6 +111,9 @@ try {
 } finally {
   Pop-Location
 }
+
+# Re-copy after git pull in case maintenance.html changed on this update.
+Deploy-AppMaintenancePage -RepoRoot $FitGoRoot
 
 Start-Service FitGO-API
 Start-Service FitGO-Web

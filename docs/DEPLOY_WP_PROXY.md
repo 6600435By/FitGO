@@ -75,12 +75,17 @@ WordPress в эту папку **не** ставить.
 
 ### 2a. Apache на клубе — своя 503-страница
 
-Чтобы на `:444` (и без PHP) не было английского «Service Unavailable»:
+Чтобы на `:444` (и без PHP) не было английского «Service Unavailable» / JSON 1С:
 
-1. Скопировать `maintenance.html` → `C:\Apache24\htdocs\app-maintenance.html`  
-   (**не** `fitgo-maintenance.html` — global `Alias /fitgo` ловит префикс и отдаёт в 1С VRS JSON 404)
-2. Обновить vhost из [apache-fitgo-proxy.conf.template](../scripts/windows/fitgo-server/apache-fitgo-proxy.conf.template) (`ProxyErrorOverride`, `ErrorDocument 503`, `ProxyPass /app-maintenance.html !`)
+1. На клубе один раз (или после каждого pull):  
+   [`Deploy-AppMaintenance.ps1`](../scripts/windows/fitgo-server/Deploy-AppMaintenance.ps1)  
+   → `C:\Apache24\htdocs\app-maintenance.html`  
+   (**не** `fitgo-maintenance.html` — global `Alias /fitgo` ловит префикс и отдаёт в 1С VRS JSON 404).  
+   `Update-FitGO.ps1` копирует этот файл сам при каждом обновлении.
+2. Обновить vhost из [apache-fitgo-proxy.conf.template](../scripts/windows/fitgo-server/apache-fitgo-proxy.conf.template)  
+   (`Alias /app-maintenance.html`, `ProxyPass … !`, `ProxyErrorOverride`, `ErrorDocument 502/503`)
 3. `httpd.exe -t` → `Restart-Service Apache2.4`
+4. Smoke: `curl.exe -sk https://127.0.0.1:444/app-maintenance.html -H "Host: app.ffs.by"` — HTML «Идёт обновление», не JSON `#exception`
 
 Опционально (если сменится публичный IP клуба) задать в панели / `.user.ini`:
 

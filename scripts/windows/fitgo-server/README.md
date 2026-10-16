@@ -12,6 +12,7 @@
 |------|------------|
 | [Install-FitGO.ps1](./Install-FitGO.ps1) | Первая установка: Node, pnpm, NSSM, build, `db push` + minimal seed, службы |
 | [Update-FitGO.ps1](./Update-FitGO.ps1) | Апдейт кода; перед апдейтом — бэкап; **не** трогает Postgres и `.env` при успехе |
+| [Deploy-AppMaintenance.ps1](./Deploy-AppMaintenance.ps1) | Страница «Идёт обновление» → `C:\Apache24\htdocs\app-maintenance.html` (без остановки служб) |
 | [Backup-FitGO.ps1](./Backup-FitGO.ps1) | Ночной / ручной комплект: `pg_dump` + `.env` + uploads + статус для UI |
 | [Restore-FitGO.ps1](./Restore-FitGO.ps1) | Восстановление Data / Release из комплекта |
 | [Register-FitGOBackupTask.ps1](./Register-FitGOBackupTask.ps1) | Task Scheduler: 01:30 daily + Sun 06:15 verify |

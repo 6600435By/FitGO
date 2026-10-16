@@ -402,6 +402,16 @@ Register-FitGoService -Name 'FitGO-Web' -AppDir $webDir -App $nodeExe -AppParams
 Start-Service FitGO-API
 Start-Service FitGO-Web
 
+# Apache ErrorDocument page (Update-FitGO also refreshes this on each update).
+$maintSrc = Join-Path $FitGoRoot 'deploy\hoster-wp-proxy\maintenance.html'
+$maintDest = 'C:\Apache24\htdocs\app-maintenance.html'
+if ((Test-Path $maintSrc) -and (Test-Path 'C:\Apache24\htdocs')) {
+  Copy-Item -Path $maintSrc -Destination $maintDest -Force
+  Write-Host ("Apache 503 page: " + $maintDest) -ForegroundColor Green
+} else {
+  Write-Host 'WARNING: could not install app-maintenance.html (missing source or C:\Apache24\htdocs).' -ForegroundColor Yellow
+}
+
 Write-Host ''
 Write-Host '=== Install complete (variant C) ===' -ForegroundColor Green
 Write-Host 'Admin web:  http://127.0.0.1:3000'
@@ -412,3 +422,4 @@ Write-Host ''
 Write-Host 'Next (on-site checklist): see README.md in this folder.'
 Write-Host 'Fill FORMA_* in apps\api\.env, then: Restart-Service FitGO-API'
 Write-Host 'Do NOT dump/restore Mac/VPS Postgres into this install.'
+Write-Host 'Ensure fitgo-app-444.conf has Alias + ErrorDocument for /app-maintenance.html (see apache-fitgo-proxy.conf.template).'

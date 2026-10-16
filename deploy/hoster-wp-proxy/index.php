@@ -71,6 +71,12 @@ function fitgo_send_maintenance(int $status, string $method): void
         . '<body><p>FitGO обновляется. Подождите и откройте снова.</p></body></html>';
 }
 
+/** Club misconfig: ErrorDocument /app-maintenance.html hits 1C VRS → JSON 404. */
+function fitgo_is_1c_vrs_body(string $body): bool
+{
+    return strpos($body, 'v8.1c.ru/8.2/virtual-resource-system') !== false;
+}
+
 $hopByHop = [
     'host' => true,
     'connection' => true,
@@ -170,9 +176,22 @@ if ($status < 100) {
     $status = 502;
 }
 
-if (($status === 502 || $status === 503) && fitgo_wants_maintenance_html($path)) {
-    fitgo_send_maintenance($status === 503 ? 503 : 502, $method);
-    exit;
+if (fitgo_wants_maintenance_html($path)) {
+    if ($status === 502 || $status === 503) {
+        fitgo_send_maintenance($status === 503 ? 503 : 502, $method);
+        exit;
+    }
+    // ErrorDocument target missing on club, or fell through Alias /fitgo → 1C.
+    if ($path === '/app-maintenance.html'
+        && ($status === 404 || $status >= 500)
+    ) {
+        fitgo_send_maintenance(503, $method);
+        exit;
+    }
+    if (($status === 404 || $status >= 500) && fitgo_is_1c_vrs_body($rawBody)) {
+        fitgo_send_maintenance(503, $method);
+        exit;
+    }
 }
 
 http_response_code($status);

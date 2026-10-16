@@ -24,4 +24,6 @@ Do **not** set port to `8445` on WordPress 2 unless support confirms outbound 84
 
 When the club Next/API is down (typical during `Update-FitGO.ps1`), browser navigations get `maintenance.html` instead of Apache’s English “Service Unavailable”. API paths (`/api/*`) keep raw status codes.
 
-On the club Apache, also deploy the same HTML as `C:\Apache24\htdocs\app-maintenance.html` (not `fitgo-*` — Alias `/fitgo` is a prefix) and enable `ErrorDocument 503` in the FitGO vhost (see template + DEPLOY_WP_PROXY §2a).
+On the club Apache, also deploy the same HTML as `C:\Apache24\htdocs\app-maintenance.html` (not `fitgo-*` — Alias `/fitgo` is a prefix) and enable `ErrorDocument 502/503` in the FitGO vhost (see template + DEPLOY_WP_PROXY §2a). `Update-FitGO.ps1` / `Deploy-AppMaintenance.ps1` copy the file automatically.
+
+This `.htaccess` maps `/app-maintenance.html` → local `maintenance.html` so a broken club ErrorDocument never proxies that path to 1C VRS.

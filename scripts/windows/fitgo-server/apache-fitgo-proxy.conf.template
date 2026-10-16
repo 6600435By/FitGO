@@ -15,11 +15,13 @@
 # Nest → 127.0.0.1:8445 and site /forma without Host app.ffs.by stay on default.
 #
 # Maintenance page (when FitGO-Web is stopped during Update-FitGO.ps1):
-#   Copy deploy/hoster-wp-proxy/maintenance.html →
+#   Update-FitGO.ps1 / Install-FitGO.ps1 copy
+#     deploy/hoster-wp-proxy/maintenance.html →
 #     C:\Apache24\htdocs\app-maintenance.html
 #   Do NOT name it fitgo-maintenance.html — global Alias /fitgo (1C) is a
 #   prefix match and would send that path to 1C VRS (404 JSON).
-#   ProxyErrorOverride + ErrorDocument replace stock English 503.
+#   Explicit Alias + ProxyPass ! so a missing file never falls through to 1C.
+#   ProxyErrorOverride + ErrorDocument replace stock English 502/503.
 #
 # Prerequisites in httpd.conf:
 #   LoadModule proxy_module / proxy_http_module / ssl_module
@@ -47,8 +49,10 @@
   ProxyPass        /fitgo !
   # Local 503 page while Next (:3000) is down — must not ProxyPass to Next
   # Name must NOT start with /fitgo (Alias /fitgo → 1C)
+  Alias            /app-maintenance.html "${SRVROOT}/htdocs/app-maintenance.html"
   ProxyPass        /app-maintenance.html !
   ProxyErrorOverride On
+  ErrorDocument 502 /app-maintenance.html
   ErrorDocument 503 /app-maintenance.html
   ProxyPass        /  http://127.0.0.1:3000/
   ProxyPassReverse /  http://127.0.0.1:3000/
@@ -65,8 +69,10 @@
 #   ProxyTimeout 180
 #   ProxyPass        /forma !
 #   ProxyPass        /fitgo !
+#   Alias            /app-maintenance.html "${SRVROOT}/htdocs/app-maintenance.html"
 #   ProxyPass        /app-maintenance.html !
 #   ProxyErrorOverride On
+#   ErrorDocument 502 /app-maintenance.html
 #   ErrorDocument 503 /app-maintenance.html
 #   ProxyPass        /  http://127.0.0.1:3000/
 #   ProxyPassReverse /  http://127.0.0.1:3000/
