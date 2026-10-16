@@ -213,14 +213,48 @@ function mergeTrainerPtSaleRows(
     const svc = (r.serviceName ?? '').trim().toLowerCase();
     return `${day}|${client}|${svc}|${emp}|${r.externalId || ''}`;
   };
+  // TrainerPtSale docRef is «Номер#строка», revenue doc is UUID — same sale,
+  // different keys. Fallback: day+client+trainer, one primary row per extra row.
+  const looseKeys = (r: TrainerPtSaleRow): string[] => {
+    const day = (r.occurredAt || '').slice(0, 10);
+    const client = (r.clientName ?? '').trim().toLowerCase();
+    if (!day || !client) return [];
+    const ks: string[] = [];
+    const code = (r.employeeCode ?? '').trim().replace(/^0+/, '');
+    if (code) ks.push(`${day}|${client}|c:${code}`);
+    const name = (r.employeeName ?? '').trim().toLowerCase();
+    if (name) ks.push(`${day}|${client}|n:${name}`);
+    return ks;
+  };
+  const looseIndex = new Map<string, number[]>();
+  const consumed = new Set<number>();
   for (const r of primary) {
     keys.add(keyOf(r));
+    const idx = out.length;
     out.push(r);
+    for (const lk of looseKeys(r)) {
+      const list = looseIndex.get(lk) ?? [];
+      list.push(idx);
+      looseIndex.set(lk, list);
+    }
   }
   for (const r of extra) {
     const k = keyOf(r);
     if (keys.has(k)) continue;
+    let matchIdx: number | undefined;
+    for (const lk of looseKeys(r)) {
+      matchIdx = (looseIndex.get(lk) ?? []).find((i) => !consumed.has(i));
+      if (matchIdx != null) break;
+    }
     keys.add(k);
+    if (matchIdx != null) {
+      consumed.add(matchIdx);
+      // Оплата с ЛС: Integration often reports DEBT, cash register shows paid.
+      if (r.paymentStatus === 'PAID' && out[matchIdx].paymentStatus !== 'PAID') {
+        out[matchIdx] = { ...out[matchIdx], paymentStatus: 'PAID' };
+      }
+      continue;
+    }
     out.push(r);
   }
   return out;

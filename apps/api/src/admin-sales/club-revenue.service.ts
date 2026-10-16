@@ -1061,16 +1061,13 @@ function buildStaffBySaleDoc(
   return map;
 }
 
-function isTrainingRow(row: Row): boolean {
-  if ((row.saleType ?? '').toLowerCase() === 'training') return true;
-  const p = (row.productName ?? '').toLowerCase();
-  if (!p) return false;
-  if (p.includes('занятие с тренер') || p.includes('занятие с трен')) return true;
-  if (p.includes('персональн') && p.includes('трен')) return true;
-  if (p.includes('парное занятие')) return true;
-  return false;
+function sameStaffCode(a?: string | null, b?: string | null): boolean {
+  const x = (a ?? '').trim().replace(/^0+/, '');
+  const y = (b ?? '').trim().replace(/^0+/, '');
+  return Boolean(x && y && x === y);
 }
 
+/** Fill sale author (admin) from SaleTransaction; trainer stays in performer*. */
 function attachEmployee(
   row: Row,
   staffBySaleDoc: Map<
@@ -1079,11 +1076,10 @@ function attachEmployee(
   >,
 ): Row {
   if (row.employeeExternalId?.trim()) return row;
-  // PT: seller from SaleTransaction ≠ Исполнитель; wait for Analytics employee*.
-  if (isTrainingRow(row)) return row;
   for (const saleDoc of saleDocIdsForRow(row)) {
     const hit = staffBySaleDoc.get(saleDoc);
-    if (hit) {
+    // SaleTransaction synced by an older Analytics build may hold the trainer.
+    if (hit && !sameStaffCode(hit.employeeExternalId, row.performerExternalId)) {
       return {
         ...row,
         employeeExternalId: hit.employeeExternalId,

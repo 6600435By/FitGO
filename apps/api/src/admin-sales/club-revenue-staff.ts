@@ -1,25 +1,18 @@
 /**
- * Map ClubRevenue unpaid rows → 1C seller via SaleTransaction sale-doc keys.
- * Cash/debt exports often leave employeeExternalId empty on unpaid lines.
+ * Map ClubRevenue rows → 1C sale author via SaleTransaction sale-doc keys.
+ * Cash/debt exports often leave employeeExternalId empty (unpaid lines, оплата с ЛС:
+ * регистратор = сама Реализация без Автора/Кассира в шапке).
  *
- * Do not backfill PT / training lines from SaleTransaction: register «Сотрудник»
- * is the seller/manager; trainer is 1C «Исполнитель» (Analytics employee* after publish).
+ * employee* = автор продажи (админ); trainer lives in performer* (Исполнитель).
  */
 
 export { saleDocIdsForRevenueRow } from './payment-basis-products';
 import { saleDocIdsForRevenueRow } from './payment-basis-products';
 
-function isTrainingRevenueRow(row: {
-  saleType?: string | null;
-  productName?: string | null;
-}): boolean {
-  if ((row.saleType ?? '').toLowerCase() === 'training') return true;
-  const p = (row.productName ?? '').toLowerCase();
-  if (!p) return false;
-  if (p.includes('занятие с тренер') || p.includes('занятие с трен')) return true;
-  if (p.includes('персональн') && p.includes('трен')) return true;
-  if (p.includes('парное занятие')) return true;
-  return false;
+function sameStaffCode(a?: string | null, b?: string | null): boolean {
+  const x = (a ?? '').trim().replace(/^0+/, '');
+  const y = (b ?? '').trim().replace(/^0+/, '');
+  return Boolean(x && y && x === y);
 }
 
 export function buildStaffBySaleDoc(
@@ -52,8 +45,7 @@ export function attachEmployeeToRevenueRow<
     employeeName: string | null;
     externalId: string;
     documentId: string | null;
-    saleType?: string | null;
-    productName?: string | null;
+    performerExternalId?: string | null;
   },
 >(
   row: T,
@@ -63,18 +55,16 @@ export function attachEmployeeToRevenueRow<
   >,
 ): T {
   if (row.employeeExternalId?.trim()) return row;
-  // PT paid from ЛС often has empty employee in cash export; SaleTransaction
-  // seller is the manager (Гилева…), not Исполнитель — do not invent attribution.
-  if (isTrainingRevenueRow(row)) return row;
   for (const saleDoc of saleDocIdsForRevenueRow(row)) {
     const hit = staffBySaleDoc.get(saleDoc);
-    if (hit) {
-      return {
-        ...row,
-        employeeExternalId: hit.employeeExternalId,
-        employeeName: hit.employeeName,
-      };
-    }
+    if (!hit) continue;
+    // SaleTransaction synced by an older Analytics build may hold the trainer.
+    if (sameStaffCode(hit.employeeExternalId, row.performerExternalId)) continue;
+    return {
+      ...row,
+      employeeExternalId: hit.employeeExternalId,
+      employeeName: hit.employeeName,
+    };
   }
   return row;
 }
