@@ -88,6 +88,7 @@ import {
   fetchStaffSalesFromAnalytics,
 } from './payroll-sales.helper';
 import {
+  isLikelyTrainingProductName,
   isReformerPersonalNomenclature,
   loadPayrollSegmentSets,
 } from '../admin-sales/admin-sales-segments';
@@ -184,6 +185,33 @@ function saleMatchesTrainer(
   const saleName = (sale.employeeName ?? '').trim().toLowerCase();
   const name = performerName.trim().toLowerCase();
   return Boolean(name && saleName && name === saleName);
+}
+
+/** Prefer TrainerPtSale rows; add revenue-only PT lines not already present. */
+function mergeTrainerPtSaleRows(
+  primary: TrainerPtSaleRow[],
+  extra: TrainerPtSaleRow[],
+): TrainerPtSaleRow[] {
+  const keys = new Set<string>();
+  const out: TrainerPtSaleRow[] = [];
+  const keyOf = (r: TrainerPtSaleRow) => {
+    const day = (r.occurredAt || '').slice(0, 10);
+    const client = (r.clientName ?? '').trim().toLowerCase();
+    const svc = (r.serviceName ?? '').trim().toLowerCase();
+    const emp = (r.employeeCode || r.employeeName || '').trim().toLowerCase();
+    return `${day}|${client}|${svc}|${emp}|${r.docRef || r.externalId || ''}`;
+  };
+  for (const r of primary) {
+    keys.add(keyOf(r));
+    out.push(r);
+  }
+  for (const r of extra) {
+    const k = keyOf(r);
+    if (keys.has(k)) continue;
+    keys.add(k);
+    out.push(r);
+  }
+  return out;
 }
 
 /** When class sync has empty packageAmount — unit from matching multi-visit sale. */
@@ -2830,7 +2858,7 @@ export class PayrollService {
       },
       orderBy: { occurredAt: 'asc' },
     });
-    return rows.map((r) => ({
+    const fromPt: TrainerPtSaleRow[] = rows.map((r) => ({
       externalId: r.externalId,
       clientName: r.clientName ?? undefined,
       serviceName: r.serviceName ?? undefined,
@@ -2841,6 +2869,69 @@ export class PayrollService {
       docRef: r.docRef ?? undefined,
       paymentStatus: r.paymentStatus ?? undefined,
     }));
+    // Analytics cash sales: Исполнитель written into employee* for PT lines.
+    // Merge so motivation works even if /trainer-pt-sales is stale.
+    const fromRevenue = await this.loadTrainerPtSalesFromRevenue(
+      clubId,
+      fromD,
+      toD,
+    );
+    return mergeTrainerPtSaleRows(fromPt, fromRevenue);
+  }
+
+  /** PT one-shots from ClubRevenueEntry (employee = 1C Исполнитель after Analytics fix). */
+  private async loadTrainerPtSalesFromRevenue(
+    clubId: string,
+    fromD: Date,
+    toD: Date,
+  ): Promise<TrainerPtSaleRow[]> {
+    const entries = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        OR: [
+          { occurredAt: { gte: fromD, lte: toD } },
+          { paidAt: { gte: fromD, lte: toD } },
+        ],
+      },
+      orderBy: { occurredAt: 'asc' },
+    });
+    const out: TrainerPtSaleRow[] = [];
+    for (const e of entries) {
+      const product = e.productName ?? '';
+      const isPt =
+        (e.saleType ?? '').toLowerCase() === 'training' ||
+        isLikelyTrainingProductName(product);
+      if (!isPt) continue;
+      if (isMultiVisitPackSale(product)) continue;
+      const paid =
+        (Number(e.paidAmount) || 0) > 0.01 ||
+        (Number(e.personalAccount) || 0) > 0.01 ||
+        (Number(e.cash) || 0) + (Number(e.card) || 0) > 0.01;
+      if (!paid) continue;
+      const amount =
+        Number(e.paidAmount) ||
+        Number(e.personalAccount) ||
+        Number(e.amount) ||
+        0;
+      if (amount <= 0) continue;
+      const empCode = e.employeeExternalId?.trim();
+      const empName = e.employeeName?.trim();
+      if (!empCode && !empName) continue;
+      const when = e.paidAt ?? e.occurredAt;
+      out.push({
+        externalId: e.externalId,
+        clientName: e.clientName ?? undefined,
+        serviceName: product || undefined,
+        occurredAt: when.toISOString(),
+        amount,
+        employeeCode: empCode || undefined,
+        employeeName: empName || undefined,
+        docRef: e.documentId ?? e.externalId,
+        paymentStatus: 'PAID',
+      });
+    }
+    return out;
   }
 
   private calcMotivation(

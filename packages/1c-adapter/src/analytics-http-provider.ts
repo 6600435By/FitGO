@@ -29,6 +29,9 @@ interface FitgoAnalyticsSalesItem {
   clientName?: string;
   employeeExternalId?: string;
   employeeName?: string;
+  /** 1C Исполнитель on PT sale line (when published). */
+  performerExternalId?: string;
+  performerName?: string;
   paymentMethod?: string;
   countsTowardIncome?: boolean;
   countsTowardMotivation?: boolean;
