@@ -411,6 +411,14 @@ function DetailPanel({
             <dt className="text-slate-500">Сотрудник</dt>
             <dd>{employeeLabel(line.employeeName, line.employeeExternalId)}</dd>
           </div>
+          {line.performerName?.trim() || line.performerExternalId?.trim() ? (
+            <div>
+              <dt className="text-slate-500">Исполнитель</dt>
+              <dd>
+                {employeeLabel(line.performerName, line.performerExternalId)}
+              </dd>
+            </div>
+          ) : null}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <dt className="text-slate-500">Дата</dt>

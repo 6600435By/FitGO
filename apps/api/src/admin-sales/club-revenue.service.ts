@@ -57,6 +57,8 @@ type Row = {
   clientExternalId: string | null;
   employeeName: string | null;
   employeeExternalId: string | null;
+  performerName?: string | null;
+  performerExternalId?: string | null;
   countsTowardIncome: boolean;
   countsTowardMotivation: boolean;
 };
@@ -1025,6 +1027,8 @@ export class ClubRevenueService {
       clientExternalId: row.clientExternalId,
       employeeName: row.employeeName ?? SYSTEM_EMPLOYEE_NAME,
       employeeExternalId: row.employeeExternalId ?? SYSTEM_EMPLOYEE_ID,
+      performerName: row.performerName?.trim() || null,
+      performerExternalId: row.performerExternalId?.trim() || null,
       countsTowardIncome: row.countsTowardIncome,
       countsTowardMotivation: row.countsTowardMotivation,
       statusLabel: priorDebt ? `${baseLabel} · прошлый период` : baseLabel,

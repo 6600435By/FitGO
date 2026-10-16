@@ -63,6 +63,9 @@ export interface ClubRevenueLineDto {
   clientExternalId: string | null;
   employeeName: string | null;
   employeeExternalId: string | null;
+  /** 1C Исполнитель (тренер); author stays in employee* */
+  performerName: string | null;
+  performerExternalId: string | null;
   countsTowardIncome: boolean;
   countsTowardMotivation: boolean;
   statusLabel: string;

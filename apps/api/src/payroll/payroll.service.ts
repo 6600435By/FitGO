@@ -187,6 +187,15 @@ function saleMatchesTrainer(
   return Boolean(name && saleName && name === saleName);
 }
 
+/** Sale document UUID: explicit docRef, else first segment of cash/sales externalId. */
+function trainerPtSaleDocKey(r: TrainerPtSaleRow): string {
+  const doc = (r.docRef || '').trim();
+  if (doc) return doc.toLowerCase();
+  const ext = (r.externalId || '').trim();
+  if (!ext) return '';
+  return (ext.split(':')[0] || ext).toLowerCase();
+}
+
 /** Prefer TrainerPtSale rows; add revenue-only PT lines not already present. */
 function mergeTrainerPtSaleRows(
   primary: TrainerPtSaleRow[],
@@ -194,12 +203,15 @@ function mergeTrainerPtSaleRows(
 ): TrainerPtSaleRow[] {
   const keys = new Set<string>();
   const out: TrainerPtSaleRow[] = [];
+  // One paid PT sale → one payroll line (cash :cash: id ≠ sales id; doc+client+day).
   const keyOf = (r: TrainerPtSaleRow) => {
     const day = (r.occurredAt || '').slice(0, 10);
     const client = (r.clientName ?? '').trim().toLowerCase();
-    const svc = (r.serviceName ?? '').trim().toLowerCase();
     const emp = (r.employeeCode || r.employeeName || '').trim().toLowerCase();
-    return `${day}|${client}|${svc}|${emp}|${r.docRef || r.externalId || ''}`;
+    const doc = trainerPtSaleDocKey(r);
+    if (doc && client) return `${day}|${client}|${emp}|${doc}`;
+    const svc = (r.serviceName ?? '').trim().toLowerCase();
+    return `${day}|${client}|${svc}|${emp}|${r.externalId || ''}`;
   };
   for (const r of primary) {
     keys.add(keyOf(r));
@@ -632,6 +644,7 @@ export class PayrollService {
     // ── One-time PT from 1C sale lines (Исполнитель + сумма) × PT% ───────────
     // Match by employeeCode (1C) — User.externalId is often empty for trainers.
     const ptSaleUnitKeys = new Map<string, string>();
+    const seenPtSaleUnits = new Set<string>();
     for (const sale of trainerPtSales) {
       if (!saleMatchesTrainer(sale, performerCodes, performerName)) continue;
       if (sale.paymentStatus !== 'PAID') continue;
@@ -640,12 +653,15 @@ export class PayrollService {
       const day = (sale.occurredAt || '').slice(0, 10);
       const clientKey = `${day}|${(sale.clientName ?? '').trim().toLowerCase()}`;
       if (coveredSaleDays.has(clientKey)) continue;
-      const sk = saleSessionKey(
-        'PT',
-        sale.docRef || sale.externalId || `${day}-${sale.clientName}`,
-      );
+      const docKey =
+        trainerPtSaleDocKey(sale) ||
+        sale.externalId ||
+        `${day}-${sale.clientName}`;
+      const unitId = `ptsale:${docKey}`;
+      if (seenPtSaleUnits.has(unitId)) continue;
+      seenPtSaleUnits.add(unitId);
+      const sk = saleSessionKey('PT', docKey);
       remarkKeys.push(sk);
-      const unitId = `ptsale:${sale.docRef || sale.externalId}`;
       const isPtAllSports = isPtAllSportsSession({
         title: sale.serviceName,
         serviceName: sale.serviceName,
@@ -2879,7 +2895,10 @@ export class PayrollService {
     return mergeTrainerPtSaleRows(fromPt, fromRevenue);
   }
 
-  /** PT one-shots from ClubRevenueEntry (employee = 1C Исполнитель after Analytics fix). */
+  /**
+   * PT one-shots from ClubRevenueEntry.
+   * Match trainer by performer* (Исполнитель); employee* is sale author (admin).
+   */
   private async loadTrainerPtSalesFromRevenue(
     clubId: string,
     fromD: Date,
@@ -2915,19 +2934,31 @@ export class PayrollService {
         Number(e.amount) ||
         0;
       if (amount <= 0) continue;
+      // Prefer Исполнитель; legacy rows may still have trainer in employee*.
+      const perfCode = e.performerExternalId?.trim();
+      const perfName = e.performerName?.trim();
       const empCode = e.employeeExternalId?.trim();
       const empName = e.employeeName?.trim();
-      if (!empCode && !empName) continue;
+      const trainerCode = perfCode || (!perfName ? empCode : undefined);
+      const trainerName = perfName || (!perfCode ? empName : undefined);
+      if (!trainerCode && !trainerName) continue;
+      if (e.countsTowardMotivation === false && !perfCode && !perfName) {
+        continue;
+      }
       const when = e.paidAt ?? e.occurredAt;
+      const doc =
+        e.documentId?.trim() ||
+        e.externalId.split(':')[0] ||
+        e.externalId;
       out.push({
         externalId: e.externalId,
         clientName: e.clientName ?? undefined,
         serviceName: product || undefined,
         occurredAt: when.toISOString(),
         amount,
-        employeeCode: empCode || undefined,
-        employeeName: empName || undefined,
-        docRef: e.documentId ?? e.externalId,
+        employeeCode: trainerCode || undefined,
+        employeeName: trainerName || undefined,
+        docRef: doc,
         paymentStatus: 'PAID',
       });
     }

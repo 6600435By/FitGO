@@ -2161,6 +2161,9 @@ model ClubRevenueEntry {
   clientName           String?
   employeeExternalId   String?
   employeeName         String?
+  /// 1C Запасы.Сотрудник (синоним Исполнитель) — тренер, не автор продажи
+  performerExternalId  String?
+  performerName        String?
   countsTowardIncome   Boolean   @default(true)
   countsTowardMotivation Boolean @default(false)
   isActive             Boolean   @default(true)
@@ -2173,6 +2176,7 @@ model ClubRevenueEntry {
   @@index([clubId, paidAt])
   @@index([clubId, operationType, occurredAt])
   @@index([clubId, employeeExternalId, occurredAt])
+  @@index([clubId, performerExternalId, occurredAt])
   @@index([clubId, isActive, occurredAt])
   @@index([clubId, productExternalId])
 }

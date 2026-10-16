@@ -176,6 +176,8 @@ type RevenueRow = {
   clientName: string | null;
   employeeExternalId: string | null;
   employeeName: string | null;
+  performerExternalId: string | null;
+  performerName: string | null;
   countsTowardIncome: boolean;
   countsTowardMotivation: boolean;
 };
@@ -200,6 +202,7 @@ export async function upsertRevenueRows(
           ${r.productExternalId}, ${r.productCode}, ${r.productGroupName},
           ${r.clientExternalId}, ${r.clientName},
           ${r.employeeExternalId}, ${r.employeeName},
+          ${r.performerExternalId}, ${r.performerName},
           ${r.countsTowardIncome}, ${r.countsTowardMotivation},
           ${true}, ${sqlUtcTimestamp(now)}
         )`,
@@ -212,6 +215,7 @@ export async function upsertRevenueRows(
         "paymentMethod", "saleType", "productName",
         "productExternalId", "productCode", "productGroupName",
         "clientExternalId", "clientName", "employeeExternalId", "employeeName",
+        "performerExternalId", "performerName",
         "countsTowardIncome", "countsTowardMotivation", "isActive", "syncedAt"
       )
       VALUES ${Prisma.join(values)}
@@ -238,6 +242,8 @@ export async function upsertRevenueRows(
         "clientName" = EXCLUDED."clientName",
         "employeeExternalId" = EXCLUDED."employeeExternalId",
         "employeeName" = EXCLUDED."employeeName",
+        "performerExternalId" = EXCLUDED."performerExternalId",
+        "performerName" = EXCLUDED."performerName",
         "countsTowardIncome" = EXCLUDED."countsTowardIncome",
         "countsTowardMotivation" = EXCLUDED."countsTowardMotivation",
         "isActive" = true,
