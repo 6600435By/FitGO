@@ -34,10 +34,24 @@ export function DataFreshness({ className = '' }: { className?: string }) {
     void load();
   }, [load]);
 
+  // Poll for all roles: 5s while sync runs, 20s idle. Refresh on tab focus.
   useEffect(() => {
-    if (!status?.running) return;
-    const id = setInterval(() => void load(), 5000);
-    return () => clearInterval(id);
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void load();
+    };
+    const intervalMs = status?.running ? 5000 : 20_000;
+    const id = setInterval(tick, intervalMs);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        tick();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [status?.running, load]);
 
   const color =

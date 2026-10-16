@@ -748,7 +748,7 @@ export function StaffPayProfileEditor({
               />
             )}
             <MoneyField
-              label="Фикс аванс 25-е, BYN"
+              label="Выплата аванса на карту, BYN"
               value={formatMinor(profile.fixedAdvanceMinor)}
               onChange={(v) =>
                 setProfile({
@@ -766,7 +766,8 @@ export function StaffPayProfileEditor({
           <p className="text-xs leading-relaxed text-slate-500">
             ЗП = оклад + % от оплаченных продаж всего клуба (абонементы и доп.
             услуги) + % от корпо. Безнал не входит. Премии и штрафы — отдельными
-            корректировками в расчёте ЗП.
+            корректировками в расчёте ЗП. 25-го — аванс на карту из поля ниже;
+            15-го эта сумма вычитается из итога за месяц.
           </p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <PercentField
@@ -799,6 +800,16 @@ export function StaffPayProfileEditor({
                 })
               }
             />
+            <MoneyField
+              label="Выплата аванса на карту, BYN"
+              value={formatMinor(profile.fixedAdvanceMinor)}
+              onChange={(v) =>
+                setProfile({
+                  ...profile,
+                  fixedAdvanceMinor: parseMoneyToMinor(v),
+                })
+              }
+            />
           </div>
         </div>
       )}
@@ -818,7 +829,8 @@ export function StaffPayProfileEditor({
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
             % от оплаченных услуг + фикс из абонемента + фикс за услугу
-            «Allsports БИОИМПЕДАНС» (по номенклатуре 1С).
+            «Allsports БИОИМПЕДАНС» (по номенклатуре 1С). 25-го — аванс на
+            карту из поля ниже; 15-го эта сумма вычитается из итога за месяц.
           </p>
           <PercentField
             label="% от проведённых / оплаченных платных услуг"
@@ -834,6 +846,16 @@ export function StaffPayProfileEditor({
               setProfile({
                 ...profile,
                 spaPartnerRateMinor: parseMoneyToMinor(v),
+              })
+            }
+          />
+          <MoneyField
+            label="Выплата аванса на карту, BYN"
+            value={formatMinor(profile.fixedAdvanceMinor)}
+            onChange={(v) =>
+              setProfile({
+                ...profile,
+                fixedAdvanceMinor: parseMoneyToMinor(v),
               })
             }
           />
@@ -863,13 +885,24 @@ export function StaffPayProfileEditor({
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
             Оплата по часам смены из графика. Премии и штрафы — отдельными
-            корректировками в разделе расчёта ЗП (не в этой схеме).
+            корректировками в разделе расчёта ЗП (не в этой схеме). 25-го —
+            аванс на карту из поля ниже; 15-го эта сумма вычитается из итога.
           </p>
           <MoneyField
             label="Ставка за час, BYN"
             value={formatMinor(profile.hourlyRateMinor)}
             onChange={(v) =>
               setProfile({ ...profile, hourlyRateMinor: parseMoneyToMinor(v) })
+            }
+          />
+          <MoneyField
+            label="Выплата аванса на карту, BYN"
+            value={formatMinor(profile.fixedAdvanceMinor)}
+            onChange={(v) =>
+              setProfile({
+                ...profile,
+                fixedAdvanceMinor: parseMoneyToMinor(v),
+              })
             }
           />
         </div>
@@ -879,8 +912,8 @@ export function StaffPayProfileEditor({
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
             % от оплаченной ПТ. Подарочные идут в количество, но не в оплату.
-            Часы дежурства — по ставке за час. Штатные: 25-го — фикс аванс;
-            15-го — остаток (часть на карту, остальное из кассы).
+            Часы дежурства — по ставке за час. Штатные: 25-го — аванс на карту;
+            15-го — остаток за месяц минус этот аванс.
           </p>
           <MoneyField
             label="Ставка за час смены, BYN"
@@ -890,7 +923,7 @@ export function StaffPayProfileEditor({
             }
           />
           <MoneyField
-            label="Фикс аванс 25-е, BYN"
+            label="Выплата аванса на карту, BYN"
             value={formatMinor(profile.fixedAdvanceMinor)}
             onChange={(v) =>
               setProfile({
@@ -1016,7 +1049,7 @@ function PtPercentFields({
     <div className="space-y-3">
       <p className="text-xs leading-relaxed text-slate-500">
         {showShift
-          ? '% от оплаченной ПТ. Подарочные идут в количество, но не в оплату. Часы дежурства — по ставке за час. 25-го — фикс аванс; 15-го — остаток.'
+          ? '% от оплаченной ПТ. Подарочные идут в количество, но не в оплату. Часы дежурства — по ставке за час. 25-го — аванс на карту; 15-го — остаток за месяц минус этот аванс.'
           : '% от оплаченной ПТ. Подарочные идут в количество, но не в оплату.'}
       </p>
       {showShift ? (
@@ -1029,7 +1062,7 @@ function PtPercentFields({
             }
           />
           <MoneyField
-            label="Фикс аванс 25-е, BYN"
+            label="Выплата аванса на карту, BYN"
             value={formatMinor(profile.fixedAdvanceMinor)}
             onChange={(v) =>
               onChange({ ...profile, fixedAdvanceMinor: parseMoneyToMinor(v) })

@@ -551,6 +551,8 @@ export class SpaBookingService {
       where: {
         clubId,
         roles: { some: { role: Role.SPECIALIST } },
+        archivedAt: null,
+        isActive: true,
         ...(specialistIds ? { id: { in: specialistIds } } : {}),
         specialistServices: { some: { serviceId } },
       },
@@ -2647,6 +2649,8 @@ export class SpaBookingService {
       where: {
         clubId,
         roles: { some: { role: Role.SPECIALIST } },
+        archivedAt: null,
+        isActive: true,
       },
       include: { specialistServices: true },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],

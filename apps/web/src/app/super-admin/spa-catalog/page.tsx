@@ -10,6 +10,12 @@ function formatPrice(minor: number | null | undefined, currency = 'BYN') {
   return `${(minor / 100).toFixed(2)} ${currency}`;
 }
 
+/** Placeholder for empty override — show 1C amount so staff see the synced price. */
+function oneCPricePlaceholder(minor: number | null | undefined) {
+  if (minor == null) return '—';
+  return (minor / 100).toFixed(2);
+}
+
 export default function SuperAdminSpaCatalogPage() {
   const [services, setServices] = useState<SpaService[]>([]);
   const [specialists, setSpecialists] = useState<SpaSpecialistSummary[]>([]);
@@ -222,7 +228,7 @@ export default function SuperAdminSpaCatalogPage() {
                   <input
                     className="input mt-1"
                     value={d.overrideRub}
-                    placeholder="как в 1С"
+                    placeholder={oneCPricePlaceholder(s.priceFromOneCMinor)}
                     onChange={(e) =>
                       setDrafts((prev) => ({
                         ...prev,
@@ -367,7 +373,7 @@ export default function SuperAdminSpaCatalogPage() {
                     <input
                       className="input w-24"
                       value={d.overrideRub}
-                      placeholder="как в 1С"
+                      placeholder={oneCPricePlaceholder(s.priceFromOneCMinor)}
                       onChange={(e) =>
                         setDrafts((prev) => ({
                           ...prev,

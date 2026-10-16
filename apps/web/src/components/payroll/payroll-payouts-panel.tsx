@@ -127,9 +127,14 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
       const next: Record<string, RowDraft> = {};
       for (const p of list) {
         const suggested = Math.max(0, p.payableMinor);
+        // 25th fixed advance: prefill card from motivation; cash = remainder.
+        const cardMinor =
+          p.usesFixedAdvance && p.fixedAdvanceMinor > 0
+            ? Math.min(p.fixedAdvanceMinor, suggested)
+            : 0;
         next[p.performerId] = {
-          card: '0',
-          cash: String((suggested / 100).toFixed(2)),
+          card: String((cardMinor / 100).toFixed(2)),
+          cash: String(((suggested - cardMinor) / 100).toFixed(2)),
           selected: p.existingPayout?.status !== 'PAID' && p.payableMinor !== 0,
         };
       }

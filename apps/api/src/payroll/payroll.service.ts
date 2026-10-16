@@ -1169,9 +1169,6 @@ export class PayrollService {
     if (!user) throw new NotFoundException('Сотрудник не найден');
 
     const roles = user.roles.map((r) => r.role);
-    const usesFixedAdvance =
-      kind === 'ADVANCE_HALF' &&
-      (roles.includes(Role.ADMIN) || roles.includes(Role.TRAINER));
 
     const defaultRange =
       kind === 'ADVANCE_HALF'
@@ -1201,9 +1198,20 @@ export class PayrollService {
         trainerGroupsSet: user.trainerGroupsSet,
       }),
     );
-    const fixedAdvanceMinor = usesFixedAdvance
-      ? this.resolveFixedAdvance(profile, roles)
-      : 0;
+    const resolvedFixedAdvance = this.resolveFixedAdvance(profile, roles, {
+      trainerStaff: Boolean(user.trainerStaff),
+    });
+    // ADMIN / any TRAINER: always fixed path on 25th (0 = pay nothing).
+    // MANAGER / SPA / TECH: fixed path only when the card-advance field is set.
+    const usesFixedAdvance =
+      kind === 'ADVANCE_HALF' &&
+      (roles.includes(Role.ADMIN) ||
+        roles.includes(Role.TRAINER) ||
+        (resolvedFixedAdvance > 0 &&
+          (roles.includes(Role.MANAGER) ||
+            roles.includes(Role.SPECIALIST) ||
+            roles.includes(Role.TECH))));
+    const fixedAdvanceMinor = usesFixedAdvance ? resolvedFixedAdvance : 0;
 
     const hints: string[] = [];
     let earnedMinor = 0;
@@ -1221,11 +1229,11 @@ export class PayrollService {
       earnedMinor = fixedAdvanceMinor;
       if (fixedAdvanceMinor <= 0) {
         hints.push(
-          'Фикс аванса 25-е не задан в мотивации сотрудника — сумма 0',
+          'Выплата аванса на карту не задана в мотивации — сумма 0',
         );
       } else {
         hints.push(
-          'Админ / штатный тренер: 25-е — фиксированная сумма из оклада',
+          '25-е: фиксированный аванс на карту из мотивации (вычитается 15-го)',
         );
       }
     } else {
@@ -1553,22 +1561,39 @@ export class PayrollService {
     return rows.map((r) => this.mapPayout(r));
   }
 
+  /**
+   * First non-zero card advance in order: MANAGER → ADMIN → SPA → TECH → staff PT.
+   * Sums are never combined across tracks.
+   */
   private resolveFixedAdvance(
     profile: StaffPayProfile | undefined,
     roles: Role[],
+    opts?: { trainerStaff?: boolean },
   ): number {
     if (!profile) return 0;
-    if (roles.includes(Role.ADMIN)) {
-      const n = sliceForTrack(profile, 'ADMIN').fixedAdvanceMinor ?? 0;
-      if (n > 0) return n;
-    }
+    const pick = (track: 'MANAGER' | 'ADMIN' | 'SPA' | 'TECH' | 'PT' | 'GROUP_TRAINER') =>
+      sliceForTrack(profile, track).fixedAdvanceMinor ?? 0;
+
+    const ordered: number[] = [];
+    if (roles.includes(Role.MANAGER)) ordered.push(pick('MANAGER'));
+    if (roles.includes(Role.ADMIN)) ordered.push(pick('ADMIN'));
+    if (roles.includes(Role.SPECIALIST)) ordered.push(pick('SPA'));
+    if (roles.includes(Role.TECH)) ordered.push(pick('TECH'));
     if (roles.includes(Role.TRAINER)) {
-      return (
-        sliceForTrack(profile, 'PT').fixedAdvanceMinor ??
-        sliceForTrack(profile, 'GROUP_TRAINER').fixedAdvanceMinor ??
-        0
-      );
+      if (opts?.trainerStaff) {
+        ordered.push(pick('PT'));
+      } else {
+        // Club / GP trainers: keep prior PT → GROUP_TRAINER lookup.
+        ordered.push(pick('PT') || pick('GROUP_TRAINER'));
+      }
     }
+
+    const firstPositive = ordered.find((n) => n > 0);
+    if (firstPositive != null) return firstPositive;
+
+    // ADMIN / staff trainer with explicit 0 still use the fixed path (earned = 0).
+    if (roles.includes(Role.ADMIN) || opts?.trainerStaff) return 0;
+    if (roles.includes(Role.TRAINER)) return 0;
     return profile.fixedAdvanceMinor ?? 0;
   }
 

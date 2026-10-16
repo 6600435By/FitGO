@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { UserRole } from '@fitgo/shared-types';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -130,6 +130,7 @@ export function DataFreshness({
   const [status, setStatus] = useState<ClubSyncStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const wasRunningRef = useRef(false);
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -151,19 +152,33 @@ export function DataFreshness({
     void load();
   }, [load]);
 
+  // Poll for all roles: 5s while sync runs, 20s idle. Catch night/other-user syncs
+  // without waiting for a full page reload. Skip ticks while the tab is hidden.
   useEffect(() => {
-    if (!status?.running || !canRefresh) return;
-    const id = setInterval(() => {
+    const tick = () => {
       if (typeof document !== 'undefined' && document.hidden) return;
       void (async () => {
         const s = await load();
-        if (s && !s.running) {
+        if (!s) return;
+        if (wasRunningRef.current && !s.running) {
           onSynced?.();
         }
+        wasRunningRef.current = Boolean(s.running);
       })();
-    }, 5000);
-    return () => clearInterval(id);
-  }, [status?.running, load, onSynced, canRefresh]);
+    };
+    const intervalMs = status?.running ? 5000 : 20_000;
+    const id = setInterval(tick, intervalMs);
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        tick();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [status?.running, load, onSynced]);
 
   const refresh = async () => {
     const token = getToken();

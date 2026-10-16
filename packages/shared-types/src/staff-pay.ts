@@ -199,7 +199,10 @@ export interface StaffPayProfile {
    * Does not enter PT % ladder.
    */
   ptAllSportsRateMinor?: number;
-  /** ADMIN / штатный PT: fixed advance paid on the 25th (days 1–15), minor units. */
+  /**
+   * Fixed advance to card on the 25th (days 1–15), minor units.
+   * Tracks: ADMIN, MANAGER, SPA, TECH, staff PT. Deducted once on the 15th via priorPaid.
+   */
   fixedAdvanceMinor?: number;
   notes?: string;
   /**
@@ -518,6 +521,7 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         membershipSalesPercent: 0,
         extraSalesPercent: 0,
         corporateSalesPercent: 0,
+        fixedAdvanceMinor: 0,
       };
     case 'GROUP_TRAINER':
       return {
@@ -540,11 +544,13 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         spaSoldPercent: 0,
         spaQuotaRates: DEFAULT_SPA_QUOTA_RATES.map((r) => ({ ...r })),
         spaPartnerRateMinor: 0,
+        fixedAdvanceMinor: 0,
       };
     case 'TECH':
       return {
         track,
         hourlyRateMinor: 0,
+        fixedAdvanceMinor: 0,
         notes: 'Премии и штрафы — отдельными корректировками в расчёте ЗП',
       };
     case 'PT':
@@ -613,7 +619,7 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           );
         if (slice.fixedAdvanceMinor)
           chips.push(
-            `${tag}аванс 25-е ${money(slice.fixedAdvanceMinor)}`,
+            `${tag}аванс на карту 25-е ${money(slice.fixedAdvanceMinor)}`,
           );
         break;
       case 'MANAGER':
@@ -628,6 +634,10 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
         if (slice.corporateSalesPercent)
           chips.push(
             `${tag}корпо ${formatPercent(slice.corporateSalesPercent)}%`,
+          );
+        if (slice.fixedAdvanceMinor)
+          chips.push(
+            `${tag}аванс на карту 25-е ${money(slice.fixedAdvanceMinor)}`,
           );
         chips.push(`${tag}± премия/штраф`);
         break;
@@ -697,11 +707,19 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           chips.push(
             `${tag}биоимпеданс ${money(slice.spaPartnerRateMinor)}`,
           );
+        if (slice.fixedAdvanceMinor)
+          chips.push(
+            `${tag}аванс на карту 25-е ${money(slice.fixedAdvanceMinor)}`,
+          );
         break;
       case 'TECH':
         if (slice.hourlyRateMinor)
           chips.push(`${tag}${money(slice.hourlyRateMinor)}/ч`);
         else chips.push(`${tag}часы`);
+        if (slice.fixedAdvanceMinor)
+          chips.push(
+            `${tag}аванс на карту 25-е ${money(slice.fixedAdvanceMinor)}`,
+          );
         chips.push(`${tag}± премия/штраф`);
         break;
       case 'PT':
@@ -709,7 +727,7 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           chips.push(`${tag}${money(slice.hourlyRateMinor)}/ч смены`);
         if (slice.fixedAdvanceMinor)
           chips.push(
-            `${tag}аванс 25-е ${money(slice.fixedAdvanceMinor)}`,
+            `${tag}аванс на карту 25-е ${money(slice.fixedAdvanceMinor)}`,
           );
         if (slice.ptSessionPriceMinor)
           chips.push(`${tag}ПТ ${money(slice.ptSessionPriceMinor)}`);
