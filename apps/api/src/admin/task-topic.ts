@@ -8,6 +8,7 @@ export type AdminTaskTopic =
   | 'manager'
   | 'birthday'
   | 'confirmation'
+  | 'pt_sale_check'
   | 'other';
 
 /** Display filter for auto / manager tasks. Legacy MANUAL stays in «Все». */
@@ -23,6 +24,7 @@ export function adminTaskTopic(input: {
   if (source === 'INSTALLMENT_PAYMENT') return 'installment';
   if (source === 'BIRTHDAY') return 'birthday';
   if (source === 'BOOKING_CONFIRM') return 'confirmation';
+  if (source === 'TRAINING_SALE_NO_PERFORMER') return 'pt_sale_check';
   if (source === 'MANAGER' || source === 'DISCREPANCY') return 'manager';
   if (
     source === 'STAFF_DEBT' ||

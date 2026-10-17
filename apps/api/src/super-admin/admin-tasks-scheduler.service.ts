@@ -18,9 +18,15 @@ import {
 } from '@fitgo/1c-adapter';
 import {
   fitgoSessionKey,
+  isMultiVisitPackSale,
   onexSessionKey,
   resolveGroupRoomKey,
 } from '@fitgo/shared-types';
+import {
+  classifySaleType,
+  isLikelyTrainingProductName,
+  loadPayrollSegmentSets,
+} from '../admin-sales/admin-sales-segments';
 import {
   isCollectibleClientDebt,
   isStaffDebtorName,
@@ -139,9 +145,13 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       systemUser.id,
       dayKey,
     );
+    const ptNoPerformer = await this.syncTrainingSalesNoPerformer(
+      clubId,
+      systemUser.id,
+    );
 
     this.logger.log(
-      `Club ${clubId}: debt +${debtCreated}, installment +${installment}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}, birthday +${birthdays.created} skip ${birthdays.skipped}, confirm +${confirmations.created}`,
+      `Club ${clubId}: debt +${debtCreated}, installment +${installment}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}, birthday +${birthdays.created} skip ${birthdays.skipped}, confirm +${confirmations.created}, ptNoPerformer +${ptNoPerformer}`,
     );
     return {
       debt: debtCreated,
@@ -152,6 +162,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       birthday: birthdays.created,
       birthdaySkipped: birthdays.skipped,
       confirmation: confirmations.created,
+      ptNoPerformer,
     };
   }
 
@@ -856,6 +867,218 @@ export class AdminTasksSchedulerService implements OnModuleInit {
    * Do not use SaleTransaction unpaid: that cache is not cleared when debt
    * leaves the register outside the sales sync window.
    */
+  /**
+   * One-shot PT (сегмент «Тренировки») sold without Исполнитель → admin queue.
+   * Packs «N ПТ» skipped. Auto-closes when performer appears on revenue sync.
+   */
+  private async syncTrainingSalesNoPerformer(
+    clubId: string,
+    systemUserId: string,
+  ): Promise<number> {
+    const segments = await loadPayrollSegmentSets(this.config);
+    const fromD = new Date();
+    fromD.setDate(fromD.getDate() - SCAN_DAYS);
+    fromD.setHours(0, 0, 0, 0);
+
+    const entries = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        occurredAt: { gte: fromD },
+        operationType: { in: ['payment', 'sale', 'unpaid'] },
+      },
+      take: 5000,
+      orderBy: { occurredAt: 'desc' },
+      select: {
+        id: true,
+        documentId: true,
+        externalId: true,
+        productName: true,
+        productExternalId: true,
+        saleType: true,
+        clientName: true,
+        clientExternalId: true,
+        employeeName: true,
+        employeeExternalId: true,
+        performerExternalId: true,
+        performerName: true,
+        amount: true,
+        paidAmount: true,
+        saleAmount: true,
+        occurredAt: true,
+      },
+    });
+
+    type Missing = {
+      dedupeKey: string;
+      productName: string;
+      clientName: string;
+      clientExternalId: string | null;
+      authorName: string;
+      amount: number;
+      occurredAt: Date;
+      documentId: string;
+    };
+    const missing = new Map<string, Missing>();
+
+    for (const e of entries) {
+      const product = e.productName ?? '';
+      // Glued cash «занятие, вода» — check PT segment of the name.
+      const ptProbe = product.includes(',')
+        ? product
+            .split(',')
+            .map((p) => p.trim())
+            .find(
+              (p) =>
+                isLikelyTrainingProductName(p) ||
+                classifySaleType(
+                  e.saleType ?? undefined,
+                  p,
+                  segments,
+                  e.productExternalId,
+                ) === 'training',
+            ) ?? product
+        : product;
+      const bucket = classifySaleType(
+        e.saleType ?? undefined,
+        ptProbe,
+        segments,
+        e.productExternalId,
+      );
+      const isTraining =
+        bucket === 'training' || isLikelyTrainingProductName(ptProbe);
+      if (!isTraining) continue;
+      if (isMultiVisitPackSale(ptProbe) || isMultiVisitPackSale(product)) {
+        continue;
+      }
+      if (!isLikelyTrainingProductName(ptProbe)) {
+        // Segment hit but not a one-shot name (e.g. odd pack) — skip.
+        continue;
+      }
+      const hasPerf = Boolean(
+        e.performerExternalId?.trim() || e.performerName?.trim(),
+      );
+      if (hasPerf) continue;
+
+      const documentId =
+        e.documentId?.trim() ||
+        e.externalId.split(':')[0] ||
+        e.externalId;
+      if (!documentId) continue;
+      const dedupeKey = `training-sale:${documentId}`;
+      if (missing.has(dedupeKey)) continue;
+
+      const amount =
+        Number(e.paidAmount) ||
+        Number(e.saleAmount) ||
+        Number(e.amount) ||
+        0;
+      missing.set(dedupeKey, {
+        dedupeKey,
+        productName: ptProbe || product || 'ПТ',
+        clientName: (e.clientName ?? '').trim() || 'клиент',
+        clientExternalId: e.clientExternalId?.trim() || null,
+        authorName:
+          (e.employeeName ?? '').trim() ||
+          (e.employeeExternalId ?? '').trim() ||
+          '—',
+        amount,
+        occurredAt: e.occurredAt,
+        documentId,
+      });
+    }
+
+    const openTasks = await this.prisma.adminTask.findMany({
+      where: {
+        clubId,
+        source: 'TRAINING_SALE_NO_PERFORMER',
+        status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
+        dedupeKey: { startsWith: 'training-sale:' },
+      },
+    });
+    const byDedupe = new Map(
+      openTasks
+        .filter((t) => t.dedupeKey)
+        .map((t) => [t.dedupeKey as string, t]),
+    );
+
+    let created = 0;
+    const toCreate: Prisma.AdminTaskCreateManyInput[] = [];
+    const now = new Date();
+    for (const row of missing.values()) {
+      const amountStr = row.amount.toFixed(2);
+      const whenIso = row.occurredAt.toISOString().slice(0, 10);
+      const title = `Проверить продажу: ${row.productName} · ${row.clientName}`;
+      const description = `Нет исполнителя на разовом занятии ПТ. Автор: ${row.authorName}. Сумма: ${amountStr} BYN. Дата: ${whenIso}. Документ: ${row.documentId}.`;
+      const meta = {
+        documentId: row.documentId,
+        productName: row.productName,
+        clientName: row.clientName,
+        authorName: row.authorName,
+        amount: row.amount,
+        occurredAt: row.occurredAt.toISOString(),
+      };
+      const existing = byDedupe.get(row.dedupeKey);
+      if (existing) {
+        await this.prisma.adminTask.update({
+          where: { id: existing.id },
+          data: {
+            title,
+            description,
+            meta,
+            clientExternalId: row.clientExternalId,
+            dueAt: row.occurredAt,
+            relatedSaleId: null,
+          },
+        });
+        continue;
+      }
+      toCreate.push({
+        clubId,
+        assigneeId: null,
+        createdById: systemUserId,
+        title,
+        description,
+        dueAt: row.occurredAt,
+        status: AdminTaskStatus.OPEN,
+        source: 'TRAINING_SALE_NO_PERFORMER',
+        dedupeKey: row.dedupeKey,
+        relatedSaleId: null,
+        clientExternalId: row.clientExternalId,
+        meta,
+        nextActionAt: now,
+      });
+    }
+    if (toCreate.length) {
+      const res = await this.prisma.adminTask.createMany({
+        data: toCreate,
+        skipDuplicates: true,
+      });
+      created += res.count;
+    }
+
+    for (const task of openTasks) {
+      if (!task.dedupeKey || missing.has(task.dedupeKey)) continue;
+      await this.prisma.adminTask.update({
+        where: { id: task.id },
+        data: {
+          status: AdminTaskStatus.DONE,
+          completedAt: new Date(),
+          nextActionAt: null,
+        },
+      });
+      await this.prisma.adminTaskEvent.create({
+        data: {
+          taskId: task.id,
+          actorId: systemUserId,
+          comment: 'Авто: исполнитель проставлен',
+        },
+      });
+    }
+
+    return created;
+  }
+
   private async syncDebtors(clubId: string, systemUserId: string) {
     let created = 0;
     const unpaid = await this.prisma.clubRevenueEntry.findMany({

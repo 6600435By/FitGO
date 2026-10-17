@@ -18,6 +18,7 @@ import {
   isMultiVisitPackSale,
   isPtAllSportsSession,
   isSpaAllSportsBioimpedance,
+  parseListedUnitPriceMajor,
   parsePackVisitCountFromTitle,
   resolveGroupRoomKey,
   resolveGroupSessionRateMinor,
@@ -194,6 +195,40 @@ function trainerPtSaleDocKey(r: TrainerPtSaleRow): string {
   const ext = (r.externalId || '').trim();
   if (!ext) return '';
   return (ext.split(':')[0] || ext).toLowerCase();
+}
+
+/**
+ * Cash-scope Analytics may glue «Занятие…, Вода…» into one productName with
+ * the full card total. For trainer motivation use only the PT listed price.
+ */
+function ptAmountFromPossiblyGluedProduct(
+  product: string,
+  rawAmount: number,
+): number {
+  if (!product.includes(',')) return rawAmount;
+  const parts = product
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  for (const part of parts) {
+    if (
+      !isLikelyTrainingProductName(part) &&
+      !/тренер|персональн|\bпт\b|занятие с/i.test(part)
+    ) {
+      continue;
+    }
+    const listed = parseListedUnitPriceMajor(part);
+    if (listed != null && listed > 0) return listed;
+  }
+  const listedWhole = parseListedUnitPriceMajor(product);
+  if (
+    listedWhole != null &&
+    listedWhole > 0 &&
+    listedWhole + 0.01 < rawAmount
+  ) {
+    return listedWhole;
+  }
+  return rawAmount;
 }
 
 /** Prefer TrainerPtSale rows; add revenue-only PT lines not already present. */
@@ -2960,14 +2995,17 @@ export class PayrollService {
       const paid =
         (Number(e.paidAmount) || 0) > 0.01 ||
         (Number(e.personalAccount) || 0) > 0.01 ||
-        (Number(e.cash) || 0) + (Number(e.card) || 0) > 0.01;
+        (Number(e.cash) || 0) +
+          (Number(e.card) || 0) +
+          (Number(e.cashless) || 0) >
+          0.01;
       if (!paid) continue;
-      const amount =
+      const rawAmount =
         Number(e.paidAmount) ||
         Number(e.personalAccount) ||
         Number(e.amount) ||
         0;
-      if (amount <= 0) continue;
+      if (rawAmount <= 0) continue;
       // Prefer Исполнитель; legacy rows may still have trainer in employee*.
       const perfCode = e.performerExternalId?.trim();
       const perfName = e.performerName?.trim();
@@ -2979,15 +3017,29 @@ export class PayrollService {
       if (e.countsTowardMotivation === false && !perfCode && !perfName) {
         continue;
       }
+      const amount = ptAmountFromPossiblyGluedProduct(product, rawAmount);
       const when = e.paidAt ?? e.occurredAt;
       const doc =
         e.documentId?.trim() ||
         e.externalId.split(':')[0] ||
         e.externalId;
+      // Service name: PT segment only when cash glued several SKUs.
+      let serviceName = product || undefined;
+      if (product.includes(',')) {
+        const ptPart = product
+          .split(',')
+          .map((p) => p.trim())
+          .find(
+            (p) =>
+              isLikelyTrainingProductName(p) ||
+              /тренер|персональн|\bпт\b|занятие с/i.test(p),
+          );
+        if (ptPart) serviceName = ptPart;
+      }
       out.push({
         externalId: e.externalId,
         clientName: e.clientName ?? undefined,
-        serviceName: product || undefined,
+        serviceName,
         occurredAt: when.toISOString(),
         amount,
         employeeCode: trainerCode || undefined,

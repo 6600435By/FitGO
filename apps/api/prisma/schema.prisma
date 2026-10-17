@@ -1491,9 +1491,9 @@ model AdminTask {
   dueAt       DateTime?
   status      AdminTaskStatus @default(OPEN)
   completedAt DateTime?
-  /// MANUAL | MANAGER | CLIENT_DEBT | STAFF_DEBT | DEBT_OVERDUE | MEMBERSHIP_EXPIRING | INSTALLMENT_PAYMENT
+  /// MANUAL | MANAGER | CLIENT_DEBT | STAFF_DEBT | DEBT_OVERDUE | MEMBERSHIP_EXPIRING | INSTALLMENT_PAYMENT | TRAINING_SALE_NO_PERFORMER
   source      String          @default("MANUAL")
-  /// Idempotency key for auto tasks (e.g. debtor:client:{id} | membership:{docId} | installment:{sale}:{n})
+  /// Idempotency key for auto tasks (e.g. debtor:client:{id} | membership:{docId} | installment:{sale}:{n} | training-sale:{docId})
   dedupeKey   String?
   relatedSaleId String?
   relatedUserId String?

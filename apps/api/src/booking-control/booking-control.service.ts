@@ -53,6 +53,9 @@ import {
   UserRole,
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import {
+  isLikelyTrainingProductName,
+} from '../admin-sales/admin-sales-segments';
 import { sessionMatchesFlag } from '../discrepancies/discrepancies-predicates';
 import { FitnessService } from '../fitness/fitness.service';
 import { SessionApprovalService } from './session-approval.service';
@@ -2750,7 +2753,7 @@ export class BookingControlService {
       },
       orderBy: { occurredAt: 'desc' },
     });
-    return rows.map((r) => ({
+    const mapped: SpecialistServiceDebt[] = rows.map((r) => ({
       externalId: r.externalId,
       clientName: r.clientName ?? '—',
       serviceName: r.serviceName ?? 'Разовая ПТ (продажа)',
@@ -2763,6 +2766,115 @@ export class BookingControlService {
       paymentStatus: r.paymentStatus === 'DEBT' ? 'DEBT' : 'PAID',
       bookingRef: r.bookingRef ?? undefined,
     }));
+    // Integration often leaves ЛС/card composite sales as DEBT; cash register
+    // (ClubRevenue) already shows paid. Same merge idea as payroll.
+    return this.overlayPtSalePaidFromRevenue(clubId, fromD, toD, mapped);
+  }
+
+  /**
+   * Upgrade TrainerPtSale DEBT → PAID when ClubRevenue has card/cash/cashless/ЛС
+   * for the same day+client+trainer (or same sale document). Keeps line amount.
+   */
+  private async overlayPtSalePaidFromRevenue(
+    clubId: string,
+    fromD: Date,
+    toD: Date,
+    sales: SpecialistServiceDebt[],
+  ): Promise<SpecialistServiceDebt[]> {
+    const unpaidIdx = sales
+      .map((s, i) => (s.paymentStatus === 'DEBT' ? i : -1))
+      .filter((i) => i >= 0);
+    if (unpaidIdx.length === 0) return sales;
+
+    const entries = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        OR: [
+          { occurredAt: { gte: fromD, lte: toD } },
+          { paidAt: { gte: fromD, lte: toD } },
+        ],
+      },
+      select: {
+        documentId: true,
+        externalId: true,
+        productName: true,
+        saleType: true,
+        clientName: true,
+        performerExternalId: true,
+        performerName: true,
+        employeeExternalId: true,
+        employeeName: true,
+        paidAmount: true,
+        personalAccount: true,
+        cash: true,
+        card: true,
+        cashless: true,
+        occurredAt: true,
+        paidAt: true,
+      },
+    });
+
+    const paidKeys = new Set<string>();
+    for (const e of entries) {
+      const product = e.productName ?? '';
+      const isPt =
+        (e.saleType ?? '').toLowerCase() === 'training' ||
+        isLikelyTrainingProductName(product);
+      if (!isPt) continue;
+      const paid =
+        (Number(e.paidAmount) || 0) > 0.01 ||
+        (Number(e.personalAccount) || 0) > 0.01 ||
+        (Number(e.cash) || 0) +
+          (Number(e.card) || 0) +
+          (Number(e.cashless) || 0) >
+          0.01;
+      if (!paid) continue;
+      const when = e.paidAt ?? e.occurredAt;
+      const day = when.toISOString().slice(0, 10);
+      const client = (e.clientName ?? '').trim().toLowerCase();
+      if (!day || !client) continue;
+      const perfCode = e.performerExternalId?.trim();
+      const perfName = e.performerName?.trim();
+      const empCode = e.employeeExternalId?.trim();
+      const empName = e.employeeName?.trim();
+      const trainerCode = perfCode || (!perfName ? empCode : undefined);
+      const trainerName = perfName || (!perfCode ? empName : undefined);
+      if (trainerCode) {
+        paidKeys.add(
+          `${day}|${client}|c:${trainerCode.replace(/^0+/, '')}`,
+        );
+      }
+      if (trainerName) {
+        paidKeys.add(`${day}|${client}|n:${trainerName.toLowerCase()}`);
+      }
+      const doc =
+        e.documentId?.trim() ||
+        e.externalId.split(':')[0] ||
+        e.externalId;
+      if (doc) paidKeys.add(`doc:${doc.toLowerCase()}`);
+    }
+
+    if (paidKeys.size === 0) return sales;
+
+    return sales.map((s) => {
+      if (s.paymentStatus !== 'DEBT') return s;
+      const day = (s.occurredAt || '').slice(0, 10);
+      const client = (s.clientName ?? '').trim().toLowerCase();
+      const code = (s.employeeCode ?? '').trim().replace(/^0+/, '');
+      const name = (s.employeeName ?? '').trim().toLowerCase();
+      const doc = (s.docRef || '').trim().toLowerCase();
+      const extRoot = (s.externalId || '').split(/[:#]/)[0]?.trim().toLowerCase();
+      const docRoot = doc.includes('#') ? doc.split('#')[0]! : doc;
+      const hit =
+        (code && paidKeys.has(`${day}|${client}|c:${code}`)) ||
+        (name && paidKeys.has(`${day}|${client}|n:${name}`)) ||
+        (doc && paidKeys.has(`doc:${doc}`)) ||
+        (docRoot && paidKeys.has(`doc:${docRoot}`)) ||
+        (extRoot && paidKeys.has(`doc:${extRoot}`));
+      if (!hit) return s;
+      return { ...s, paymentStatus: 'PAID' as const };
+    });
   }
 
   private async fetchTrainerPtSalesLive(

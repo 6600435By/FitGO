@@ -36,6 +36,7 @@ type Topic =
   | 'group_approval'
   | 'spa_approval'
   | 'pt_approval'
+  | 'pt_sale_check'
   | 'confirmation';
 
 function isDueTodayOrOverdue(task: AdminTaskItem): boolean {
@@ -80,6 +81,7 @@ function AdminTasksInner() {
     initialTopic === 'spa_approval' ||
     initialTopic === 'pt_approval' ||
     initialTopic === 'installment' ||
+    initialTopic === 'pt_sale_check' ||
     initialTopic === 'confirmation'
       ? (initialTopic as Topic)
       : null;
@@ -98,6 +100,7 @@ function AdminTasksInner() {
       t === 'group_approval' ||
       t === 'spa_approval' ||
       t === 'pt_approval' ||
+      t === 'pt_sale_check' ||
       t === 'confirmation'
     ) {
       return 'control';
@@ -304,6 +307,16 @@ function AdminTasksInner() {
       ),
     [tasks],
   );
+  const ptSaleCheckTasks = useMemo(
+    () =>
+      tasks.filter(
+        (t) =>
+          t.source === 'TRAINING_SALE_NO_PERFORMER' &&
+          t.status !== AdminTaskStatus.DONE &&
+          t.status !== AdminTaskStatus.CANCELLED,
+      ),
+    [tasks],
+  );
 
   const counts = {
     manager: managerTasks.filter(isDueTodayOrOverdue).length,
@@ -315,13 +328,18 @@ function AdminTasksInner() {
     group_approval: gpPending.length,
     spa_approval: spaPending.length,
     pt_approval: ptPending.length,
+    pt_sale_check: ptSaleCheckTasks.length,
     confirmation: confirmationTasks.length,
   };
 
   const clientsTotal =
     counts.membership + counts.birthday + counts.client_debt + counts.installment;
   const controlTotal =
-    counts.group_approval + counts.spa_approval + counts.pt_approval + counts.confirmation;
+    counts.group_approval +
+    counts.spa_approval +
+    counts.pt_approval +
+    counts.pt_sale_check +
+    counts.confirmation;
   const allTotal = clientsTotal + counts.staff_debt + counts.manager + controlTotal;
 
   const groupFilters: { id: Group; label: string; count: number }[] = [
@@ -342,6 +360,7 @@ function AdminTasksInner() {
   const controlSub: { id: Topic; label: string; count: number }[] = [
     { id: 'group_approval', label: 'ГП', count: counts.group_approval },
     { id: 'pt_approval', label: 'ПТ', count: counts.pt_approval },
+    { id: 'pt_sale_check', label: 'Продажи ПТ', count: counts.pt_sale_check },
     { id: 'spa_approval', label: 'SPA', count: counts.spa_approval },
     { id: 'confirmation', label: 'Подтверждения', count: counts.confirmation },
   ];
@@ -540,6 +559,53 @@ function AdminTasksInner() {
                 type="button"
                 className="btn-primary text-xs"
                 onClick={() => void updateStatus(task.id, AdminTaskStatus.DONE)}
+              >
+                Готово
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    );
+  };
+
+  const renderPtSaleChecks = () => {
+    if (ptSaleCheckTasks.length === 0) {
+      return (
+        <p className="text-slate-400">
+          Нет продаж разовых ПТ без исполнителя
+        </p>
+      );
+    }
+    return (
+      <ul className="space-y-3">
+        {ptSaleCheckTasks.map((task) => (
+          <li key={task.id} className="card space-y-2">
+            <p className="font-medium">{task.title}</p>
+            {task.description ? (
+              <p className="whitespace-pre-line text-sm text-slate-400">
+                {task.description}
+              </p>
+            ) : null}
+            {task.dueAt ? (
+              <p className="text-xs text-slate-500">
+                Продажа: {formatDateTime(task.dueAt)}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-secondary text-xs"
+                onClick={() => void claim(task.id)}
+              >
+                Взять себе
+              </button>
+              <button
+                type="button"
+                className="btn-primary text-xs"
+                onClick={() =>
+                  void updateStatus(task.id, AdminTaskStatus.DONE)
+                }
               >
                 Готово
               </button>
@@ -881,7 +947,7 @@ function AdminTasksInner() {
             'control' as const,
             'Контроль',
             controlTotal,
-            `ГП ${counts.group_approval} · ПТ ${counts.pt_approval} · SPA ${counts.spa_approval} · Подтв. ${counts.confirmation}`,
+            `ГП ${counts.group_approval} · ПТ ${counts.pt_approval} · Продажи ${counts.pt_sale_check} · SPA ${counts.spa_approval} · Подтв. ${counts.confirmation}`,
           ],
         ] as const
       ).map(([id, label, count, detail]) => (
@@ -1020,6 +1086,7 @@ function AdminTasksInner() {
       {activeTopic === 'membership' ? renderMembership() : null}
       {activeTopic === 'birthday' ? renderBirthdays() : null}
       {activeTopic === 'confirmation' ? renderConfirmations() : null}
+      {activeTopic === 'pt_sale_check' ? renderPtSaleChecks() : null}
       {activeTopic === 'group_approval'
         ? renderPendingQueue(gpPending, 'Нет ГП на подтверждении', 'ГП')
         : null}

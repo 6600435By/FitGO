@@ -1097,7 +1097,7 @@ export interface AdminTaskItem {
   status: AdminTaskStatus;
   dueAt?: string;
   completedAt?: string;
-  /** MANUAL | MANAGER | CLIENT_DEBT | STAFF_DEBT | DEBT_OVERDUE | MEMBERSHIP_EXPIRING | INSTALLMENT_PAYMENT | BIRTHDAY | BOOKING_CONFIRM */
+  /** MANUAL | MANAGER | CLIENT_DEBT | STAFF_DEBT | DEBT_OVERDUE | MEMBERSHIP_EXPIRING | INSTALLMENT_PAYMENT | BIRTHDAY | BOOKING_CONFIRM | TRAINING_SALE_NO_PERFORMER */
   source?: string;
   /** Display filter */
   topic?:
@@ -1108,6 +1108,7 @@ export interface AdminTaskItem {
     | 'manager'
     | 'birthday'
     | 'confirmation'
+    | 'pt_sale_check'
     | 'other';
   assignee?: { id: string; firstName: string; lastName: string };
   createdBy?: { id: string; firstName: string; lastName: string };
