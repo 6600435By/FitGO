@@ -26,6 +26,8 @@ function AdminBookingControlInner() {
     kindRaw === 'SOLARIUM'
       ? kindRaw
       : undefined;
+  const initialPerformerId =
+    searchParams.get('performerId')?.trim() || undefined;
 
   const panelApi = useMemo(() => createBookingControlApi('admin'), []);
 
@@ -44,6 +46,7 @@ function AdminBookingControlInner() {
       initialNeedsReview={initialNeedsReview}
       initialPayment={initialPayment}
       initialKind={initialKind}
+      initialPerformerId={initialPerformerId}
       cancelSpaBooking={async (bookingId) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');

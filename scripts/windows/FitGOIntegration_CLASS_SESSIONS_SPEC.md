@@ -50,7 +50,7 @@ Response `200`:
 
 Payroll uses `attendedCount` when `status=COMPLETED` (prefer ATTENDED members; fall back to `headerAttendedCount` / шапка «посетило»).
 
-`capacity` — макс. мест ГП (`Емкость` / `КоличествоОказываемыхУслуг` / помещение / номенклатура). `0` или отсутствие поля = без лимита / неизвестно (аналитика тогда считает заполняемость по Forma schedule или н/д).
+`capacity` — макс. мест ГП (`ЕмкостьГруппы` на Документ.Занятие / ГруппыКлиентов, иначе `Емкость` / `КоличествоОказываемыхУслуг` / помещение / номенклатура). `0` или отсутствие поля = без лимита / неизвестно (аналитика тогда считает заполняемость по Forma schedule или н/д).
 
 Attendance mapping reads `СтатусПрибытия` (and aliases / boolean); if members stay EXPECTED but header «посетило» covers all active rows, they are treated as ATTENDED.
 

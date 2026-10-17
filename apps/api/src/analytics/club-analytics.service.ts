@@ -202,11 +202,8 @@ export class ClubAnalyticsService {
       this.servicesBlock(clubId, params.from, params.to),
       this.servicesBlock(clubId, compareFrom, compareTo),
     ]);
-    const trainerRankings = await this.trainerRankings(
-      clubId,
-      params.from,
-      params.to,
-    );
+    const { trainerRankings, trainerRankingsPt, trainerRankingsGroup } =
+      await this.trainerRankings(clubId, params.from, params.to);
 
     const money: ClubAnalyticsMoney = {
       revenue: metric(moneyCur.revenueMinor, moneyCmp.revenueMinor, {
@@ -376,6 +373,8 @@ export class ClubAnalyticsService {
       fot,
       insights,
       trainerRankings,
+      trainerRankingsPt,
+      trainerRankingsGroup,
       integrationHealth: {
         provider: process.env.FITNESS_PROVIDER ?? 'mock',
         clubExternalId: club?.externalId ?? null,
@@ -1223,69 +1222,187 @@ export class ClubAnalyticsService {
   }
 
   private async trainerRankings(clubId: string, from: string, to: string) {
-    // PT + GROUP completed — «Проведено» matches dual-role trainers vs ЗП volume.
     const items = await this.bookingControl.list(clubId, {
       from,
       to,
       kind: 'ALL',
-      status: 'COMPLETED',
+      status: 'ALL',
       skipExternal: true,
     });
 
-    type Acc = {
+    const { start: fromD, end: toD } = rangeBounds(from, to);
+    const slots = await this.prisma.clubScheduleSlot.findMany({
+      where: {
+        clubId,
+        startAt: { gte: fromD, lte: toD },
+        capacity: { gt: 0 },
+      },
+      select: {
+        externalId: true,
+        capacity: true,
+        startAt: true,
+        title: true,
+      },
+    });
+    const resolveCap = buildCapacityResolver(slots);
+    const groupSessions = await this.prisma.onexClassSession.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        kind: OnexClassKind.GROUP,
+        startAt: { gte: fromD, lte: toD },
+      },
+      select: {
+        externalId: true,
+        capacity: true,
+        startAt: true,
+        title: true,
+        employeeExternalId: true,
+        employeeName: true,
+        status: true,
+      },
+    });
+    const capByExt = new Map<string, number>();
+    for (const s of groupSessions) {
+      const cap = resolveCap(s);
+      if (cap > 0) capByExt.set(s.externalId, cap);
+    }
+
+    type PtAcc = {
       trainerId: string;
       name: string;
-      completedPt: number;
-      paidPt: number;
-      debtPt: number;
+      completed: number;
+      paid: number;
+      debt: number;
+      gift: number;
       clients: Set<string>;
       amountMinor: number;
     };
-    const byKey = new Map<string, Acc>();
+    type GpAcc = {
+      trainerId: string;
+      name: string;
+      sessions: number;
+      cancelled: number;
+      bookedTotal: number;
+      arrivedTotal: number;
+      fillSum: number;
+      fillN: number;
+      clients: Set<string>;
+    };
+    const ptByKey = new Map<string, PtAcc>();
+    const gpByKey = new Map<string, GpAcc>();
+
+    const trainerKey = (performerId?: string, performerName?: string) =>
+      performerId || performerName || 'unknown';
 
     for (const i of items) {
-      if (i.kind !== 'PT' && i.kind !== 'GROUP') continue;
-      const key = i.performerId || i.performerName || 'unknown';
-      const cur = byKey.get(key) ?? {
-        trainerId: i.performerId || key,
-        name: i.performerName || '—',
-        completedPt: 0,
-        paidPt: 0,
-        debtPt: 0,
-        clients: new Set<string>(),
-        amountMinor: 0,
-      };
-      cur.completedPt++;
-      // Paid/debt only for PT (GROUP is N_A).
-      if (i.kind === 'PT') {
-        if (
-          i.payment === 'PAID' ||
-          i.payment === 'QUOTA' ||
-          i.payment === 'GIFT'
-        ) {
-          cur.paidPt++;
-        } else if (i.payment === 'DEBT' || i.payment === 'UNKNOWN') {
-          cur.debtPt++;
+      if (i.kind === 'PT' && i.status === 'COMPLETED') {
+        const key = trainerKey(i.performerId, i.performerName);
+        const cur = ptByKey.get(key) ?? {
+          trainerId: i.performerId || key,
+          name: i.performerName || '—',
+          completed: 0,
+          paid: 0,
+          debt: 0,
+          gift: 0,
+          clients: new Set<string>(),
+          amountMinor: 0,
+        };
+        cur.completed++;
+        if (i.payment === 'GIFT') cur.gift++;
+        else if (i.payment === 'PAID' || i.payment === 'QUOTA') cur.paid++;
+        else if (i.payment === 'DEBT' || i.payment === 'UNKNOWN') cur.debt++;
+        if (i.clientName) cur.clients.add(i.clientName);
+        cur.amountMinor += i.priceMinor ?? 0;
+        ptByKey.set(key, cur);
+      } else if (i.kind === 'GROUP') {
+        const key = trainerKey(i.performerId, i.performerName);
+        const cur = gpByKey.get(key) ?? {
+          trainerId: i.performerId || key,
+          name: i.performerName || '—',
+          sessions: 0,
+          cancelled: 0,
+          bookedTotal: 0,
+          arrivedTotal: 0,
+          fillSum: 0,
+          fillN: 0,
+          clients: new Set<string>(),
+        };
+        if (i.status === 'CANCELLED') {
+          cur.cancelled++;
+        } else if (i.status === 'COMPLETED') {
+          cur.sessions++;
+          cur.bookedTotal += i.bookedCount ?? 0;
+          cur.arrivedTotal += i.arrivedCount ?? i.attendeeCount ?? 0;
+          const ext = i.sessionKey.startsWith('1c:')
+            ? i.sessionKey.slice(3)
+            : i.sessionKey;
+          const cap = capByExt.get(ext) ?? 0;
+          if (cap > 0) {
+            const arrived = i.arrivedCount ?? i.attendeeCount ?? 0;
+            cur.fillSum += Math.min(100, Math.round((arrived / cap) * 100));
+            cur.fillN++;
+          }
+          if (i.clientName) cur.clients.add(i.clientName);
         }
+        gpByKey.set(key, cur);
       }
-      if (i.clientName) cur.clients.add(i.clientName);
-      cur.amountMinor += i.priceMinor ?? 0;
-      byKey.set(key, cur);
     }
 
-    return [...byKey.values()]
+    const trainerRankingsPt = [...ptByKey.values()]
       .map((t) => ({
         trainerId: t.trainerId,
         name: t.name,
-        score: t.completedPt * 2 + t.clients.size,
-        completedPt: t.completedPt,
-        paidPt: t.paidPt,
-        debtPt: t.debtPt,
+        score: t.completed * 2 + t.clients.size,
+        completed: t.completed,
+        paid: t.paid,
+        debt: t.debt,
+        gift: t.gift,
         activeClients: t.clients.size,
         amountMinor: t.amountMinor,
       }))
-      .sort((a, b) => b.completedPt - a.completedPt || b.amountMinor - a.amountMinor)
+      .sort(
+        (a, b) =>
+          b.completed - a.completed || b.amountMinor - a.amountMinor,
+      )
       .slice(0, 10);
+
+    const trainerRankingsGroup = [...gpByKey.values()]
+      .map((t) => {
+        const denom = t.sessions + t.cancelled;
+        return {
+          trainerId: t.trainerId,
+          name: t.name,
+          score: t.sessions * 2 + (t.fillN > 0 ? t.fillSum / t.fillN : 0),
+          sessions: t.sessions,
+          bookedTotal: t.bookedTotal,
+          arrivedTotal: t.arrivedTotal,
+          avgFillPct: t.fillN > 0 ? Math.round(t.fillSum / t.fillN) : null,
+          cancelRatePct:
+            denom > 0 ? Math.round((t.cancelled / denom) * 100) : null,
+          activeClients: t.clients.size,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.sessions - a.sessions ||
+          (b.avgFillPct ?? 0) - (a.avgFillPct ?? 0),
+      )
+      .slice(0, 10);
+
+    // Legacy combined shape (PT-only metrics) for older clients.
+    const trainerRankings = trainerRankingsPt.map((t) => ({
+      trainerId: t.trainerId,
+      name: t.name,
+      score: t.score,
+      completedPt: t.completed,
+      paidPt: t.paid,
+      debtPt: t.debt,
+      activeClients: t.activeClients,
+      amountMinor: t.amountMinor,
+    }));
+
+    return { trainerRankings, trainerRankingsPt, trainerRankingsGroup };
   }
 
   private buildInsights(input: {

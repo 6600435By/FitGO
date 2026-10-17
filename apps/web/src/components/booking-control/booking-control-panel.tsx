@@ -142,6 +142,14 @@ function daysAgoIso(n: number) {
   return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
 }
 
+/** First calendar day of the current month (local), ISO yyyy-mm-dd. */
+function monthStartIso() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}-01`;
+}
+
 function formatDay(iso: string) {
   return new Date(iso).toLocaleDateString('ru-RU', {
     day: 'numeric',
@@ -227,7 +235,7 @@ export function BookingControlPanel({
   approvalSegments = false,
 }: Props) {
   const [from, setFrom] = useState(
-    initialFrom?.trim() || daysAgoIso(approvalSegments ? 14 : 7),
+    initialFrom?.trim() || todayIso(),
   );
   const [to, setTo] = useState(initialTo?.trim() || todayIso());
   const [kind, setKind] = useState<string>(
@@ -257,7 +265,6 @@ export function BookingControlPanel({
   const [needsReview, setNeedsReview] = useState(Boolean(initialNeedsReview));
   const [items, setItems] = useState<BookingControlListItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [syncing1c, setSyncing1c] = useState(false);
   const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
   const [seenBusy, setSeenBusy] = useState(false);
   const [approveBusy, setApproveBusy] = useState(false);
@@ -394,8 +401,24 @@ export function BookingControlPanel({
     } else if (sourceFilter === '1C') {
       rows = rows.filter((i) => i.source !== 'SALE');
     }
+    // API already filters by performer (code/name/UUID). Do not re-filter with
+    // strict === — SALE rows may keep a raw 1C code while the dropdown uses UUID.
     if (performerId) {
-      rows = rows.filter((i) => i.performerId === performerId);
+      const selectedName = (
+        performerOptions.find((p) => p.id === performerId)?.name ?? ''
+      )
+        .trim()
+        .toLowerCase();
+      rows = rows.filter((i) => {
+        if (i.performerId === performerId) return true;
+        if (
+          selectedName &&
+          (i.performerName ?? '').trim().toLowerCase() === selectedName
+        ) {
+          return true;
+        }
+        return false;
+      });
     }
     if (approvalSegments) {
       rows = rows.filter((i) => {
@@ -416,6 +439,7 @@ export function BookingControlPanel({
     items,
     sourceFilter,
     performerId,
+    performerOptions,
     approvalSegments,
     approvalSegment,
     nowMs,
@@ -611,24 +635,6 @@ export function BookingControlPanel({
     }
   };
 
-  const refreshFrom1c = async () => {
-    if (!api.refreshFrom1c) return;
-    setSyncing1c(true);
-    setMessage('');
-    try {
-      const res = await api.refreshFrom1c(from, to);
-      setMessage(res.message);
-      load();
-      if (selected) {
-        await openDetail(selected.sessionKey);
-      }
-    } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Ошибка обновления из 1С');
-    } finally {
-      setSyncing1c(false);
-    }
-  };
-
   const markAttendance = async (
     clientExternalId: string,
     attendance: 'ATTENDED' | 'NO_SHOW',
@@ -760,6 +766,16 @@ export function BookingControlPanel({
     const d = todayIso();
     setFrom(d);
     setTo(d);
+  };
+
+  const setWeek = () => {
+    setFrom(daysAgoIso(6));
+    setTo(todayIso());
+  };
+
+  const setMonth = () => {
+    setFrom(monthStartIso());
+    setTo(todayIso());
   };
 
   const toggleBulk = (sessionKey: string) => {
@@ -982,20 +998,17 @@ export function BookingControlPanel({
             <button
               type="button"
               className="btn-secondary px-3 py-2 text-sm"
-              onClick={load}
+              onClick={setWeek}
             >
-              Обновить
+              Неделя
             </button>
-            {canMarkAttendance && api.refreshFrom1c ? (
-              <button
-                type="button"
-                className="btn-primary px-3 py-2 text-sm"
-                onClick={refreshFrom1c}
-                disabled={syncing1c || loading}
-              >
-                {syncing1c ? 'Обновляем 1С…' : 'Обновить из 1С'}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="btn-secondary px-3 py-2 text-sm"
+              onClick={setMonth}
+            >
+              Месяц
+            </button>
           </div>
         </div>
       </div>
@@ -1117,8 +1130,9 @@ export function BookingControlPanel({
       ) : null}
       {!loading && !fixedKind && saleCount === 0 && (kind === 'ALL' || kind === 'PT') ? (
         <p className="text-xs text-slate-500">
-          Разовых ПТ из продаж за период нет. Нажмите «Обновить из 1С» (ждёт до
-          ~45 с) или проверьте на API: FITNESS_PROVIDER=forma и FORMA_FITGO_URL.
+          Разовых ПТ из продаж за период нет. Обновите данные кнопкой «Обновить
+          из 1С» сверху у статуса данных, расширьте период (Неделя / Месяц) или
+          проверьте FITNESS_PROVIDER=forma и FORMA_FITGO_URL.
         </p>
       ) : null}
 

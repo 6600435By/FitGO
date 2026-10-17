@@ -143,18 +143,42 @@ export interface ClubAnalyticsReport {
   /** Present only when includePay=true and viewer may see payroll. */
   fot?: ClubAnalyticsPayrollFot | null;
   insights: AnalyticInsight[];
+  /** @deprecated Prefer trainerRankingsPt + trainerRankingsGroup. */
   trainerRankings: Array<{
     trainerId: string;
     name: string;
     score: number;
-    /** Completed PT + GROUP sessions (field name kept for API compat). */
+    /** Completed PT sessions (legacy name). */
     completedPt: number;
-    /** Paid PT only (GROUP has no payment). */
     paidPt: number;
-    /** Debt/unknown PT only. */
     debtPt: number;
     activeClients: number;
     amountMinor: number;
+  }>;
+  /** Top PT trainers for the period. */
+  trainerRankingsPt: Array<{
+    trainerId: string;
+    name: string;
+    score: number;
+    completed: number;
+    paid: number;
+    debt: number;
+    gift: number;
+    activeClients: number;
+    amountMinor: number;
+  }>;
+  /** Top group-program trainers for the period. */
+  trainerRankingsGroup: Array<{
+    trainerId: string;
+    name: string;
+    score: number;
+    sessions: number;
+    bookedTotal: number;
+    arrivedTotal: number;
+    /** Mean attended/capacity × 100 for sessions with capacity > 0. */
+    avgFillPct: number | null;
+    cancelRatePct: number | null;
+    activeClients: number;
   }>;
   integrationHealth?: {
     provider: string;
@@ -207,6 +231,8 @@ export interface GroupTrainerProgramKpi {
   bookedTotal: number;
   attendedTotal: number;
   cancelRatePct: number | null;
+  /** Mean attended/capacity × 100 when capacity known. */
+  fillPct: number | null;
 }
 
 export interface GroupTrainerStaffKpi {

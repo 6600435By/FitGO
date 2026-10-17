@@ -56,6 +56,12 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import {
   isLikelyTrainingProductName,
 } from '../admin-sales/admin-sales-segments';
+import {
+  isExcludedFromPtBookingControl,
+  loadTrainerPtSalesFromRevenue,
+  mergeTrainerPtSaleRows,
+  type TrainerPtSaleRow,
+} from '../admin-sales/trainer-pt-sales-from-revenue';
 import { sessionMatchesFlag } from '../discrepancies/discrepancies-predicates';
 import { FitnessService } from '../fitness/fitness.service';
 import { SessionApprovalService } from './session-approval.service';
@@ -215,6 +221,10 @@ export class BookingControlService {
 
     for (const s of onex) {
       const kind = s.kind as BookingControlKind;
+      // Солярий / тренажёрный зал не смешиваем с ПТ (отдельный kind SOLARIUM остаётся).
+      if (kind === 'PT' && isExcludedFromPtBookingControl(s.title)) {
+        continue;
+      }
       const sessionKey = onexSessionKey(s.externalId);
       const status = mapOnexStatusToControl(s.status);
       const performerId =
@@ -312,6 +322,9 @@ export class BookingControlService {
     if (wantPtSales) {
       this.indexTrainerPtSales(ptSales);
       for (const sale of ptSales) {
+        if (isExcludedFromPtBookingControl(sale.serviceName)) {
+          continue;
+        }
         if (
           !this.saleMatchesPerformerFilter(
             sale,
@@ -2753,21 +2766,42 @@ export class BookingControlService {
       },
       orderBy: { occurredAt: 'desc' },
     });
-    const mapped: SpecialistServiceDebt[] = rows.map((r) => ({
-      externalId: r.externalId,
+    const fromPt: TrainerPtSaleRow[] = rows
+      .filter((r) => !isExcludedFromPtBookingControl(r.serviceName))
+      .map((r) => ({
+        externalId: r.externalId,
+        clientName: r.clientName ?? '—',
+        serviceName: r.serviceName ?? 'Разовая ПТ (продажа)',
+        occurredAt: r.occurredAt.toISOString(),
+        amount: r.amount,
+        employeeCode: r.employeeCode ?? '',
+        employeeName: r.employeeName ?? '—',
+        docRef: r.docRef ?? r.externalId,
+        paymentStatus: r.paymentStatus === 'DEBT' ? 'DEBT' : 'PAID',
+      }));
+    // Same universe as ЗП: TrainerPtSale ∪ ClubRevenue (Исполнитель).
+    const fromRevenue = await loadTrainerPtSalesFromRevenue(
+      this.prisma,
+      clubId,
+      fromD,
+      toD,
+      { excludeSolariumAndGym: true },
+    );
+    const merged = mergeTrainerPtSaleRows(fromPt, fromRevenue);
+    const mapped: SpecialistServiceDebt[] = merged.map((r) => ({
+      externalId: r.externalId || r.docRef || '',
       clientName: r.clientName ?? '—',
       serviceName: r.serviceName ?? 'Разовая ПТ (продажа)',
-      occurredAt: r.occurredAt.toISOString(),
+      occurredAt: r.occurredAt,
       amount: r.amount,
-      currency: r.currency ?? 'BYN',
+      currency: 'BYN',
       employeeCode: r.employeeCode ?? '',
       employeeName: r.employeeName ?? '—',
-      docRef: r.docRef ?? r.externalId,
+      docRef: r.docRef ?? r.externalId ?? '',
       paymentStatus: r.paymentStatus === 'DEBT' ? 'DEBT' : 'PAID',
-      bookingRef: r.bookingRef ?? undefined,
     }));
     // Integration often leaves ЛС/card composite sales as DEBT; cash register
-    // (ClubRevenue) already shows paid. Same merge idea as payroll.
+    // (ClubRevenue) already shows paid.
     return this.overlayPtSalePaidFromRevenue(clubId, fromD, toD, mapped);
   }
 

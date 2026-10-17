@@ -386,79 +386,177 @@ export function ClubAnalyticsPanel({
         </section>
       )}
 
-      {report.trainerRankings.length > 0 && (
-        <div className="card overflow-x-auto">
-          <h3 className="mb-3 font-semibold">Рейтинг тренеров (ПТ+ГТ)</h3>
-          <table className="w-full min-w-[480px] text-sm">
-            <thead className="text-left text-xs text-slate-500">
-              <tr>
-                <th className="pb-2 pr-2">Тренер</th>
-                <th className="pb-2 pr-2 text-right">Проведено</th>
-                <th className="pb-2 pr-2 text-right">Оплачено</th>
-                <th className="pb-2 pr-2 text-right">Не оплачено</th>
-                <th className="pb-2 pr-2 text-right">Клиентов</th>
-                <th className="pb-2 text-right">Сумма</th>
-              </tr>
-            </thead>
-            <tbody>
-              {report.trainerRankings.map((t, i) => (
-                <tr key={t.trainerId} className="border-t border-slate-800">
-                  <td className="py-2 pr-2">
-                    <Link
-                      href={controlHref(from, to, {
-                        performerId: t.trainerId,
-                        status: 'COMPLETED',
-                      })}
-                      className="text-fitgo-400 hover:underline"
-                    >
-                      {i + 1}. {t.name}
-                    </Link>
-                  </td>
-                  <td className="py-2 pr-2 text-right">
-                    <Link
-                      href={controlHref(from, to, {
-                        performerId: t.trainerId,
-                        status: 'COMPLETED',
-                      })}
-                      className="text-fitgo-400 hover:underline"
-                    >
-                      {t.completedPt}
-                    </Link>
-                  </td>
-                  <td className="py-2 pr-2 text-right">
-                    <Link
-                      href={controlHref(from, to, {
-                        kind: 'PT',
-                        performerId: t.trainerId,
-                        payment: 'PAID',
-                        status: 'COMPLETED',
-                      })}
-                      className="text-fitgo-400 hover:underline"
-                    >
-                      {t.paidPt}
-                    </Link>
-                  </td>
-                  <td className="py-2 pr-2 text-right">
-                    <Link
-                      href={controlHref(from, to, {
-                        kind: 'PT',
-                        performerId: t.trainerId,
-                        payment: 'DEBT',
-                        status: 'COMPLETED',
-                      })}
-                      className="text-fitgo-400 hover:underline"
-                    >
-                      {t.debtPt}
-                    </Link>
-                  </td>
-                  <td className="py-2 pr-2 text-right">{t.activeClients}</td>
-                  <td className="py-2 text-right text-slate-400">
-                    {money(t.amountMinor, currency)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {((report.trainerRankingsPt?.length ?? 0) > 0 ||
+        (report.trainerRankingsGroup?.length ?? 0) > 0 ||
+        report.trainerRankings.length > 0) && (
+        <div className="space-y-4">
+          {(report.trainerRankingsPt?.length
+            ? report.trainerRankingsPt
+            : report.trainerRankings.map((t) => ({
+                trainerId: t.trainerId,
+                name: t.name,
+                completed: t.completedPt,
+                paid: t.paidPt,
+                debt: t.debtPt,
+                gift: 0,
+                activeClients: t.activeClients,
+                amountMinor: t.amountMinor,
+              }))
+          ).length > 0 && (
+            <div className="card overflow-x-auto">
+              <h3 className="mb-1 font-semibold">Рейтинг ПТ</h3>
+              <p className="mb-3 text-xs text-slate-500">
+                Занятия и продажи по исполнителю (без солярия и зала)
+              </p>
+              <table className="w-full min-w-[560px] text-sm">
+                <thead className="text-left text-xs text-slate-500">
+                  <tr>
+                    <th className="pb-2 pr-2">Тренер</th>
+                    <th className="pb-2 pr-2 text-right">Проведено</th>
+                    <th className="pb-2 pr-2 text-right">Оплачено</th>
+                    <th className="pb-2 pr-2 text-right">Долг</th>
+                    <th className="pb-2 pr-2 text-right">Подарок</th>
+                    <th className="pb-2 pr-2 text-right">Клиентов</th>
+                    <th className="pb-2 text-right">Сумма</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(report.trainerRankingsPt?.length
+                    ? report.trainerRankingsPt
+                    : report.trainerRankings.map((t) => ({
+                        trainerId: t.trainerId,
+                        name: t.name,
+                        completed: t.completedPt,
+                        paid: t.paidPt,
+                        debt: t.debtPt,
+                        gift: 0,
+                        activeClients: t.activeClients,
+                        amountMinor: t.amountMinor,
+                      }))
+                  ).map((t, i) => (
+                    <tr key={t.trainerId} className="border-t border-slate-800">
+                      <td className="py-2 pr-2">
+                        <Link
+                          href={controlHref(from, to, {
+                            kind: 'PT',
+                            performerId: t.trainerId,
+                            status: 'COMPLETED',
+                          })}
+                          className="text-fitgo-400 hover:underline"
+                        >
+                          {i + 1}. {t.name}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-2 text-right">
+                        <Link
+                          href={controlHref(from, to, {
+                            kind: 'PT',
+                            performerId: t.trainerId,
+                            status: 'COMPLETED',
+                          })}
+                          className="text-fitgo-400 hover:underline"
+                        >
+                          {t.completed}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-2 text-right">
+                        <Link
+                          href={controlHref(from, to, {
+                            kind: 'PT',
+                            performerId: t.trainerId,
+                            payment: 'PAID',
+                            status: 'COMPLETED',
+                          })}
+                          className="text-fitgo-400 hover:underline"
+                        >
+                          {t.paid}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-2 text-right">
+                        <Link
+                          href={controlHref(from, to, {
+                            kind: 'PT',
+                            performerId: t.trainerId,
+                            payment: 'DEBT',
+                            status: 'COMPLETED',
+                          })}
+                          className="text-fitgo-400 hover:underline"
+                        >
+                          {t.debt}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-2 text-right">{t.gift}</td>
+                      <td className="py-2 pr-2 text-right">{t.activeClients}</td>
+                      <td className="py-2 text-right text-slate-400">
+                        {money(t.amountMinor, currency)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {(report.trainerRankingsGroup?.length ?? 0) > 0 && (
+            <div className="card overflow-x-auto">
+              <h3 className="mb-1 font-semibold">Рейтинг ГП</h3>
+              <p className="mb-3 text-xs text-slate-500">
+                Заполняемость = пришло / ёмкость занятия
+              </p>
+              <table className="w-full min-w-[560px] text-sm">
+                <thead className="text-left text-xs text-slate-500">
+                  <tr>
+                    <th className="pb-2 pr-2">Тренер</th>
+                    <th className="pb-2 pr-2 text-right">Занятия</th>
+                    <th className="pb-2 pr-2 text-right">Записалось</th>
+                    <th className="pb-2 pr-2 text-right">Пришло</th>
+                    <th className="pb-2 pr-2 text-right">Заполн.%</th>
+                    <th className="pb-2 pr-2 text-right">Отмены%</th>
+                    <th className="pb-2 text-right">Клиентов</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.trainerRankingsGroup!.map((t, i) => (
+                    <tr key={t.trainerId} className="border-t border-slate-800">
+                      <td className="py-2 pr-2">
+                        <Link
+                          href={controlHref(from, to, {
+                            kind: 'GROUP',
+                            performerId: t.trainerId,
+                            status: 'COMPLETED',
+                          })}
+                          className="text-fitgo-400 hover:underline"
+                        >
+                          {i + 1}. {t.name}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-2 text-right">
+                        <Link
+                          href={controlHref(from, to, {
+                            kind: 'GROUP',
+                            performerId: t.trainerId,
+                            status: 'COMPLETED',
+                          })}
+                          className="text-fitgo-400 hover:underline"
+                        >
+                          {t.sessions}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-2 text-right">{t.bookedTotal}</td>
+                      <td className="py-2 pr-2 text-right">{t.arrivedTotal}</td>
+                      <td className="py-2 pr-2 text-right">
+                        {t.avgFillPct != null ? `${t.avgFillPct}%` : '—'}
+                      </td>
+                      <td className="py-2 pr-2 text-right">
+                        {t.cancelRatePct != null ? `${t.cancelRatePct}%` : '—'}
+                      </td>
+                      <td className="py-2 text-right">{t.activeClients}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

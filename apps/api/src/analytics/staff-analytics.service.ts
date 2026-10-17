@@ -450,6 +450,8 @@ export class StaffAnalyticsService {
               'Отменено',
               'Записалось',
               'Пришло',
+              'Заполн. %',
+              'Неявка %',
               'Отмены %',
             ]
           : dept === 'PT_TRAINER'
@@ -504,6 +506,8 @@ export class StaffAnalyticsService {
         k.cancelledSessions,
         k.bookedTotal,
         k.attendedTotal,
+        k.avgFillPct ?? '',
+        k.noShowPct ?? '',
         k.cancelRatePct ?? '',
       ];
     } else if (k.kind === 'PT_TRAINER') {
@@ -1025,18 +1029,23 @@ export class StaffAnalyticsService {
         attendedTotal: number;
         memberCancelled: number;
         memberTotal: number;
+        fillSum: number;
+        fillN: number;
       };
+      const emptyProg = (): ProgAcc => ({
+        sessionsConducted: 0,
+        cancelledSessions: 0,
+        bookedTotal: 0,
+        attendedTotal: 0,
+        memberCancelled: 0,
+        memberTotal: 0,
+        fillSum: 0,
+        fillN: 0,
+      });
       const byTitle = new Map<string, ProgAcc>();
       for (const s of list) {
         if (s.status === OnexClassStatus.CANCELLED) {
-          const cur = byTitle.get(s.title) ?? {
-            sessionsConducted: 0,
-            cancelledSessions: 0,
-            bookedTotal: 0,
-            attendedTotal: 0,
-            memberCancelled: 0,
-            memberTotal: 0,
-          };
+          const cur = byTitle.get(s.title) ?? emptyProg();
           cur.cancelledSessions++;
           byTitle.set(s.title, cur);
         }
@@ -1057,19 +1066,16 @@ export class StaffAnalyticsService {
           }
           if (m.attendance === OnexClassMemberAttendance.NO_SHOW) noShow++;
         }
-        const cur = byTitle.get(s.title) ?? {
-          sessionsConducted: 0,
-          cancelledSessions: 0,
-          bookedTotal: 0,
-          attendedTotal: 0,
-          memberCancelled: 0,
-          memberTotal: 0,
-        };
+        const cur = byTitle.get(s.title) ?? emptyProg();
         cur.sessionsConducted++;
         cur.bookedTotal += s.bookedCount;
         cur.attendedTotal += s.attendedCount;
         cur.memberCancelled += sessMemberCancelled;
         cur.memberTotal += s.members.length;
+        if (c > 0) {
+          cur.fillSum += (s.attendedCount / c) * 100;
+          cur.fillN++;
+        }
         byTitle.set(s.title, cur);
       }
       const memberTotal = completed.reduce((a, s) => a + s.members.length, 0);
@@ -1088,6 +1094,7 @@ export class StaffAnalyticsService {
                     1000,
                 ) / 10
               : null,
+          fillPct: v.fillN > 0 ? Math.round(v.fillSum / v.fillN) : null,
         }))
         .sort(
           (a, b) =>

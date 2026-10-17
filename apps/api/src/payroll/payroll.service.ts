@@ -18,7 +18,6 @@ import {
   isMultiVisitPackSale,
   isPtAllSportsSession,
   isSpaAllSportsBioimpedance,
-  parseListedUnitPriceMajor,
   parsePackVisitCountFromTitle,
   resolveGroupRoomKey,
   resolveGroupSessionRateMinor,
@@ -84,16 +83,20 @@ import { BookingControlService } from '../booking-control/booking-control.servic
 import { FitnessService } from '../fitness/fitness.service';
 import { normalizePhone } from '../common/phone.util';
 import { isCollectibleClientDebt } from '../admin-sales/club-revenue-debt';
-import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
 import {
   createAnalyticsProvider,
   fetchStaffSalesFromAnalytics,
 } from './payroll-sales.helper';
 import {
-  isLikelyTrainingProductName,
   isReformerPersonalNomenclature,
   loadPayrollSegmentSets,
 } from '../admin-sales/admin-sales-segments';
+import {
+  loadTrainerPtSalesFromRevenue,
+  mergeTrainerPtSaleRows,
+  trainerPtSaleDocKey,
+  type TrainerPtSaleRow,
+} from '../admin-sales/trainer-pt-sales-from-revenue';
 
 function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -162,20 +165,6 @@ function codesMatch(a: string | null | undefined, b: string | null | undefined):
   return Boolean(xs && ys && xs === ys);
 }
 
-type TrainerPtSaleRow = {
-  externalId?: string;
-  clientName?: string;
-  serviceName?: string;
-  occurredAt: string;
-  amount: number;
-  /** Line qty from 1C when present (>1 ⇒ multi-visit pack, skipped in payroll). */
-  quantity?: number;
-  employeeCode?: string;
-  employeeName?: string;
-  docRef?: string;
-  paymentStatus?: string;
-};
-
 function saleMatchesTrainer(
   sale: TrainerPtSaleRow,
   codes: string[],
@@ -187,126 +176,6 @@ function saleMatchesTrainer(
   const saleName = (sale.employeeName ?? '').trim().toLowerCase();
   const name = performerName.trim().toLowerCase();
   return Boolean(name && saleName && name === saleName);
-}
-
-/** Sale document UUID: explicit docRef, else first segment of cash/sales externalId. */
-function trainerPtSaleDocKey(r: TrainerPtSaleRow): string {
-  const doc = (r.docRef || '').trim();
-  if (doc) return doc.toLowerCase();
-  const ext = (r.externalId || '').trim();
-  if (!ext) return '';
-  return (ext.split(':')[0] || ext).toLowerCase();
-}
-
-/**
- * Cash-scope Analytics may glue «Занятие…, Вода…» into one productName with
- * the full card total. For trainer motivation use only the PT listed price.
- */
-function ptAmountFromPossiblyGluedProduct(
-  product: string,
-  rawAmount: number,
-): number {
-  if (!product.includes(',')) return rawAmount;
-  const parts = product
-    .split(',')
-    .map((p) => p.trim())
-    .filter(Boolean);
-  for (const part of parts) {
-    if (
-      !isLikelyTrainingProductName(part) &&
-      !/тренер|персональн|\bпт\b|занятие с/i.test(part)
-    ) {
-      continue;
-    }
-    const listed = parseListedUnitPriceMajor(part);
-    if (listed != null && listed > 0) return listed;
-  }
-  const listedWhole = parseListedUnitPriceMajor(product);
-  if (
-    listedWhole != null &&
-    listedWhole > 0 &&
-    listedWhole + 0.01 < rawAmount
-  ) {
-    return listedWhole;
-  }
-  return rawAmount;
-}
-
-/** Prefer TrainerPtSale rows; add revenue-only PT lines not already present. */
-function mergeTrainerPtSaleRows(
-  primary: TrainerPtSaleRow[],
-  extra: TrainerPtSaleRow[],
-): TrainerPtSaleRow[] {
-  const keys = new Set<string>();
-  const out: TrainerPtSaleRow[] = [];
-  // One paid PT sale → one payroll line (cash :cash: id ≠ sales id; doc+client+day).
-  const keyOf = (r: TrainerPtSaleRow) => {
-    const day = (r.occurredAt || '').slice(0, 10);
-    const client = (r.clientName ?? '').trim().toLowerCase();
-    const emp = (r.employeeCode || r.employeeName || '').trim().toLowerCase();
-    const doc = trainerPtSaleDocKey(r);
-    if (doc && client) return `${day}|${client}|${emp}|${doc}`;
-    const svc = (r.serviceName ?? '').trim().toLowerCase();
-    return `${day}|${client}|${svc}|${emp}|${r.externalId || ''}`;
-  };
-  // TrainerPtSale docRef is «Номер#строка», revenue doc is UUID — same sale,
-  // different keys. Fallback: day+client+trainer, one primary row per extra row.
-  const looseKeys = (r: TrainerPtSaleRow): string[] => {
-    const day = (r.occurredAt || '').slice(0, 10);
-    const client = (r.clientName ?? '').trim().toLowerCase();
-    if (!day || !client) return [];
-    const ks: string[] = [];
-    const code = (r.employeeCode ?? '').trim().replace(/^0+/, '');
-    if (code) ks.push(`${day}|${client}|c:${code}`);
-    const name = (r.employeeName ?? '').trim().toLowerCase();
-    if (name) ks.push(`${day}|${client}|n:${name}`);
-    return ks;
-  };
-  const looseIndex = new Map<string, number[]>();
-  const consumed = new Set<number>();
-  /** Loose keys already merged to a primary — drop surplus payment slices. */
-  const looseMatched = new Set<string>();
-  for (const r of primary) {
-    keys.add(keyOf(r));
-    const idx = out.length;
-    out.push(r);
-    for (const lk of looseKeys(r)) {
-      const list = looseIndex.get(lk) ?? [];
-      list.push(idx);
-      looseIndex.set(lk, list);
-    }
-  }
-  for (const r of extra) {
-    const k = keyOf(r);
-    if (keys.has(k)) continue;
-    let matchIdx: number | undefined;
-    for (const lk of looseKeys(r)) {
-      matchIdx = (looseIndex.get(lk) ?? []).find((i) => !consumed.has(i));
-      if (matchIdx != null) break;
-    }
-    if (matchIdx != null) {
-      consumed.add(matchIdx);
-      for (const lk of looseKeys(r)) looseMatched.add(lk);
-      // Оплата с ЛС: Integration often reports DEBT, cash register shows paid.
-      if (r.paymentStatus === 'PAID' && out[matchIdx].paymentStatus !== 'PAID') {
-        out[matchIdx] = { ...out[matchIdx], paymentStatus: 'PAID' };
-      }
-      continue;
-    }
-    // Second cash slice for a sale already matched via loose key — do not push.
-    if (looseKeys(r).some((lk) => looseMatched.has(lk))) {
-      continue;
-    }
-    keys.add(k);
-    const idx = out.length;
-    out.push(r);
-    for (const lk of looseKeys(r)) {
-      const list = looseIndex.get(lk) ?? [];
-      list.push(idx);
-      looseIndex.set(lk, list);
-    }
-  }
-  return out;
 }
 
 /** When class sync has empty packageAmount — unit from matching multi-visit sale. */
@@ -2968,149 +2837,15 @@ export class PayrollService {
       docRef: r.docRef ?? undefined,
       paymentStatus: r.paymentStatus ?? undefined,
     }));
-    // Analytics cash sales: Исполнитель written into employee* for PT lines.
-    // Merge so motivation works even if /trainer-pt-sales is stale.
-    const fromRevenue = await this.loadTrainerPtSalesFromRevenue(
+    // Analytics cash sales: Исполнитель → performer*. Merge so motivation
+    // works even if /trainer-pt-sales is stale.
+    const fromRevenue = await loadTrainerPtSalesFromRevenue(
+      this.prisma,
       clubId,
       fromD,
       toD,
     );
     return mergeTrainerPtSaleRows(fromPt, fromRevenue);
-  }
-
-  /**
-   * PT one-shots from ClubRevenueEntry.
-   * Match trainer by performer* (Исполнитель); employee* is sale author (admin).
-   */
-  private async loadTrainerPtSalesFromRevenue(
-    clubId: string,
-    fromD: Date,
-    toD: Date,
-  ): Promise<TrainerPtSaleRow[]> {
-    const entries = await this.prisma.clubRevenueEntry.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        OR: [
-          { occurredAt: { gte: fromD, lte: toD } },
-          { paidAt: { gte: fromD, lte: toD } },
-        ],
-      },
-      orderBy: { occurredAt: 'asc' },
-    });
-    // One PT sale (cash multi-pay / SKU split) → one payroll row: group by
-    // sale-basis + product + trainer, SUM paid slices.
-    type Agg = {
-      externalId: string;
-      clientName?: string;
-      serviceName?: string;
-      occurredAt: string;
-      amount: number;
-      employeeCode?: string;
-      employeeName?: string;
-      docRef: string;
-    };
-    const byKey = new Map<string, Agg>();
-    for (const e of entries) {
-      const product = e.productName ?? '';
-      const isPt =
-        (e.saleType ?? '').toLowerCase() === 'training' ||
-        isLikelyTrainingProductName(product);
-      if (!isPt) continue;
-      if (isMultiVisitPackSale(product)) continue;
-      const paid =
-        (Number(e.paidAmount) || 0) > 0.01 ||
-        (Number(e.personalAccount) || 0) > 0.01 ||
-        (Number(e.cash) || 0) +
-          (Number(e.card) || 0) +
-          (Number(e.cashless) || 0) >
-          0.01;
-      if (!paid) continue;
-      const rawAmount =
-        Number(e.paidAmount) ||
-        Number(e.personalAccount) ||
-        Number(e.amount) ||
-        0;
-      if (rawAmount <= 0) continue;
-      // Prefer Исполнитель; legacy rows may still have trainer in employee*.
-      const perfCode = e.performerExternalId?.trim();
-      const perfName = e.performerName?.trim();
-      const empCode = e.employeeExternalId?.trim();
-      const empName = e.employeeName?.trim();
-      const trainerCode = perfCode || (!perfName ? empCode : undefined);
-      const trainerName = perfName || (!perfCode ? empName : undefined);
-      if (!trainerCode && !trainerName) continue;
-      if (e.countsTowardMotivation === false && !perfCode && !perfName) {
-        continue;
-      }
-      const amount = ptAmountFromPossiblyGluedProduct(product, rawAmount);
-      const when = e.paidAt ?? e.occurredAt;
-      const basis = preferredSaleBasisId({
-        externalId: e.externalId,
-        documentId: e.documentId,
-      });
-      // Service name: PT segment only when cash glued several SKUs.
-      let serviceName = product || undefined;
-      if (product.includes(',')) {
-        const ptPart = product
-          .split(',')
-          .map((p) => p.trim())
-          .find(
-            (p) =>
-              isLikelyTrainingProductName(p) ||
-              /тренер|персональн|\bпт\b|занятие с/i.test(p),
-          );
-        if (ptPart) serviceName = ptPart;
-      }
-      const productKey = (
-        e.productExternalId?.trim() ||
-        serviceName ||
-        product ||
-        ''
-      )
-        .trim()
-        .toLowerCase();
-      const trainerKey = (
-        trainerCode ||
-        trainerName ||
-        ''
-      )
-        .trim()
-        .toLowerCase();
-      const groupKey = `${basis}|${productKey}|${trainerKey}`;
-      const whenIso = when.toISOString();
-      const prev = byKey.get(groupKey);
-      if (!prev) {
-        byKey.set(groupKey, {
-          externalId: e.externalId,
-          clientName: e.clientName ?? undefined,
-          serviceName,
-          occurredAt: whenIso,
-          amount,
-          employeeCode: trainerCode || undefined,
-          employeeName: trainerName || undefined,
-          docRef: basis,
-        });
-      } else {
-        prev.amount = Math.round((prev.amount + amount) * 100) / 100;
-        if (whenIso < prev.occurredAt) prev.occurredAt = whenIso;
-        if (!prev.clientName && e.clientName) {
-          prev.clientName = e.clientName;
-        }
-        if (!prev.serviceName && serviceName) prev.serviceName = serviceName;
-      }
-    }
-    return [...byKey.values()].map((a) => ({
-      externalId: a.externalId,
-      clientName: a.clientName,
-      serviceName: a.serviceName,
-      occurredAt: a.occurredAt,
-      amount: a.amount,
-      employeeCode: a.employeeCode,
-      employeeName: a.employeeName,
-      docRef: a.docRef,
-      paymentStatus: 'PAID' as const,
-    }));
   }
 
   private calcMotivation(

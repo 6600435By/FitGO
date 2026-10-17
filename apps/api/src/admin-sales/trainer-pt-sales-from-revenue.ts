@@ -1,0 +1,279 @@
+import { isMultiVisitPackSale, parseListedUnitPriceMajor } from '@fitgo/shared-types';
+import type { PrismaService } from '../prisma/prisma.service';
+import { preferredSaleBasisId } from './payment-basis-products';
+import { isLikelyTrainingProductName } from './admin-sales-segments';
+
+/** Row shape shared by payroll and booking-control PT sales. */
+export type TrainerPtSaleRow = {
+  externalId?: string;
+  clientName?: string;
+  serviceName?: string;
+  occurredAt: string;
+  amount: number;
+  quantity?: number;
+  employeeCode?: string;
+  employeeName?: string;
+  docRef?: string;
+  paymentStatus?: string;
+};
+
+/**
+ * Солярий / тренажёрный зал — не в Контроле записей (ПТ) и не в merge рейтинга.
+ * Kind SOLARIUM в Onex не трогаем отдельно.
+ */
+export function isExcludedFromPtBookingControl(
+  name: string | null | undefined,
+): boolean {
+  const s = (name ?? '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return false;
+  if (s.includes('соляр')) return true;
+  if (s.includes('тренажер')) return true;
+  if (/\bзал\b/.test(s) && /тренаж/.test(s)) return true;
+  return false;
+}
+
+/**
+ * Cash-scope Analytics may glue «Занятие…, Вода…» into one productName with
+ * the full card total. For trainer PT use only the listed PT price.
+ */
+export function ptAmountFromPossiblyGluedProduct(
+  product: string,
+  rawAmount: number,
+): number {
+  if (!product.includes(',')) return rawAmount;
+  const parts = product
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  for (const part of parts) {
+    if (
+      !isLikelyTrainingProductName(part) &&
+      !/тренер|персональн|\bпт\b|занятие с/i.test(part)
+    ) {
+      continue;
+    }
+    const listed = parseListedUnitPriceMajor(part);
+    if (listed != null && listed > 0) return listed;
+  }
+  const listedWhole = parseListedUnitPriceMajor(product);
+  if (
+    listedWhole != null &&
+    listedWhole > 0 &&
+    listedWhole + 0.01 < rawAmount
+  ) {
+    return listedWhole;
+  }
+  return rawAmount;
+}
+
+export function trainerPtSaleDocKey(r: TrainerPtSaleRow): string {
+  const doc = (r.docRef || '').trim();
+  if (doc) return doc.toLowerCase();
+  const ext = (r.externalId || '').trim();
+  if (!ext) return '';
+  return (ext.split(':')[0] || ext).toLowerCase();
+}
+
+/** Prefer TrainerPtSale rows; add revenue-only PT lines not already present. */
+export function mergeTrainerPtSaleRows(
+  primary: TrainerPtSaleRow[],
+  extra: TrainerPtSaleRow[],
+): TrainerPtSaleRow[] {
+  const keys = new Set<string>();
+  const out: TrainerPtSaleRow[] = [];
+  const keyOf = (r: TrainerPtSaleRow) => {
+    const day = (r.occurredAt || '').slice(0, 10);
+    const client = (r.clientName ?? '').trim().toLowerCase();
+    const emp = (r.employeeCode || r.employeeName || '').trim().toLowerCase();
+    const doc = trainerPtSaleDocKey(r);
+    if (doc && client) return `${day}|${client}|${emp}|${doc}`;
+    const svc = (r.serviceName ?? '').trim().toLowerCase();
+    return `${day}|${client}|${svc}|${emp}|${r.externalId || ''}`;
+  };
+  const looseKeys = (r: TrainerPtSaleRow): string[] => {
+    const day = (r.occurredAt || '').slice(0, 10);
+    const client = (r.clientName ?? '').trim().toLowerCase();
+    if (!day || !client) return [];
+    const ks: string[] = [];
+    const code = (r.employeeCode ?? '').trim().replace(/^0+/, '');
+    if (code) ks.push(`${day}|${client}|c:${code}`);
+    const name = (r.employeeName ?? '').trim().toLowerCase();
+    if (name) ks.push(`${day}|${client}|n:${name}`);
+    return ks;
+  };
+  const looseIndex = new Map<string, number[]>();
+  const consumed = new Set<number>();
+  const looseMatched = new Set<string>();
+  for (const r of primary) {
+    keys.add(keyOf(r));
+    const idx = out.length;
+    out.push(r);
+    for (const lk of looseKeys(r)) {
+      const list = looseIndex.get(lk) ?? [];
+      list.push(idx);
+      looseIndex.set(lk, list);
+    }
+  }
+  for (const r of extra) {
+    const k = keyOf(r);
+    if (keys.has(k)) continue;
+    let matchIdx: number | undefined;
+    for (const lk of looseKeys(r)) {
+      matchIdx = (looseIndex.get(lk) ?? []).find((i) => !consumed.has(i));
+      if (matchIdx != null) break;
+    }
+    if (matchIdx != null) {
+      consumed.add(matchIdx);
+      for (const lk of looseKeys(r)) looseMatched.add(lk);
+      if (r.paymentStatus === 'PAID' && out[matchIdx].paymentStatus !== 'PAID') {
+        out[matchIdx] = { ...out[matchIdx], paymentStatus: 'PAID' };
+      }
+      continue;
+    }
+    if (looseKeys(r).some((lk) => looseMatched.has(lk))) {
+      continue;
+    }
+    keys.add(k);
+    const idx = out.length;
+    out.push(r);
+    for (const lk of looseKeys(r)) {
+      const list = looseIndex.get(lk) ?? [];
+      list.push(idx);
+      looseIndex.set(lk, list);
+    }
+  }
+  return out;
+}
+
+/**
+ * PT one-shots from ClubRevenueEntry.
+ * Match trainer by performer* (Исполнитель); employee* is sale author (admin).
+ */
+export async function loadTrainerPtSalesFromRevenue(
+  prisma: PrismaService,
+  clubId: string,
+  fromD: Date,
+  toD: Date,
+  opts?: { excludeSolariumAndGym?: boolean },
+): Promise<TrainerPtSaleRow[]> {
+  const exclude = opts?.excludeSolariumAndGym ?? false;
+  const entries = await prisma.clubRevenueEntry.findMany({
+    where: {
+      clubId,
+      isActive: true,
+      OR: [
+        { occurredAt: { gte: fromD, lte: toD } },
+        { paidAt: { gte: fromD, lte: toD } },
+      ],
+    },
+    orderBy: { occurredAt: 'asc' },
+  });
+
+  type Agg = {
+    externalId: string;
+    clientName?: string;
+    serviceName?: string;
+    occurredAt: string;
+    amount: number;
+    employeeCode?: string;
+    employeeName?: string;
+    docRef: string;
+  };
+  const byKey = new Map<string, Agg>();
+  for (const e of entries) {
+    const product = e.productName ?? '';
+    if (exclude && isExcludedFromPtBookingControl(product)) continue;
+    const isPt =
+      (e.saleType ?? '').toLowerCase() === 'training' ||
+      isLikelyTrainingProductName(product);
+    if (!isPt) continue;
+    if (isMultiVisitPackSale(product)) continue;
+    const paid =
+      (Number(e.paidAmount) || 0) > 0.01 ||
+      (Number(e.personalAccount) || 0) > 0.01 ||
+      (Number(e.cash) || 0) + (Number(e.card) || 0) + (Number(e.cashless) || 0) >
+        0.01;
+    if (!paid) continue;
+    const rawAmount =
+      Number(e.paidAmount) ||
+      Number(e.personalAccount) ||
+      Number(e.amount) ||
+      0;
+    if (rawAmount <= 0) continue;
+    const perfCode = e.performerExternalId?.trim();
+    const perfName = e.performerName?.trim();
+    const empCode = e.employeeExternalId?.trim();
+    const empName = e.employeeName?.trim();
+    const trainerCode = perfCode || (!perfName ? empCode : undefined);
+    const trainerName = perfName || (!perfCode ? empName : undefined);
+    if (!trainerCode && !trainerName) continue;
+    if (e.countsTowardMotivation === false && !perfCode && !perfName) {
+      continue;
+    }
+    const amount = ptAmountFromPossiblyGluedProduct(product, rawAmount);
+    const when = e.paidAt ?? e.occurredAt;
+    const basis = preferredSaleBasisId({
+      externalId: e.externalId,
+      documentId: e.documentId,
+    });
+    let serviceName = product || undefined;
+    if (product.includes(',')) {
+      const ptPart = product
+        .split(',')
+        .map((p) => p.trim())
+        .find(
+          (p) =>
+            isLikelyTrainingProductName(p) ||
+            /тренер|персональн|\bпт\b|занятие с/i.test(p),
+        );
+      if (ptPart) serviceName = ptPart;
+    }
+    if (exclude && isExcludedFromPtBookingControl(serviceName)) continue;
+    const productKey = (
+      e.productExternalId?.trim() ||
+      serviceName ||
+      product ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    const trainerKey = (trainerCode || trainerName || '').trim().toLowerCase();
+    const groupKey = `${basis}|${productKey}|${trainerKey}`;
+    const whenIso = when.toISOString();
+    const prev = byKey.get(groupKey);
+    if (!prev) {
+      byKey.set(groupKey, {
+        externalId: e.externalId,
+        clientName: e.clientName ?? undefined,
+        serviceName,
+        occurredAt: whenIso,
+        amount,
+        employeeCode: trainerCode || undefined,
+        employeeName: trainerName || undefined,
+        docRef: basis,
+      });
+    } else {
+      prev.amount = Math.round((prev.amount + amount) * 100) / 100;
+      if (whenIso < prev.occurredAt) prev.occurredAt = whenIso;
+      if (!prev.clientName && e.clientName) {
+        prev.clientName = e.clientName;
+      }
+      if (!prev.serviceName && serviceName) prev.serviceName = serviceName;
+    }
+  }
+  return [...byKey.values()].map((a) => ({
+    externalId: a.externalId,
+    clientName: a.clientName,
+    serviceName: a.serviceName,
+    occurredAt: a.occurredAt,
+    amount: a.amount,
+    employeeCode: a.employeeCode,
+    employeeName: a.employeeName,
+    docRef: a.docRef,
+    paymentStatus: 'PAID' as const,
+  }));
+}
