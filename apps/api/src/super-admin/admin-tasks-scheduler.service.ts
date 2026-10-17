@@ -27,6 +27,7 @@ import {
   isLikelyTrainingProductName,
   loadPayrollSegmentSets,
 } from '../admin-sales/admin-sales-segments';
+import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
 import {
   isCollectibleClientDebt,
   isStaffDebtorName,
@@ -960,10 +961,10 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       );
       if (hasPerf) continue;
 
-      const documentId =
-        e.documentId?.trim() ||
-        e.externalId.split(':')[0] ||
-        e.externalId;
+      const documentId = preferredSaleBasisId({
+        externalId: e.externalId,
+        documentId: e.documentId,
+      });
       if (!documentId) continue;
       const dedupeKey = `training-sale:${documentId}`;
       if (missing.has(dedupeKey)) continue;

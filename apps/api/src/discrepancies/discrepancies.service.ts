@@ -39,6 +39,7 @@ import {
   isGenericPaymentProduct,
   loadBasisProductsBySaleDoc,
   pickBasisLinesForRevenueRow,
+  preferredSaleBasisId,
   saleDocIdsForRevenueRow,
   type BasisProductLine,
 } from '../admin-sales/payment-basis-products';
@@ -1317,16 +1318,20 @@ export class DiscrepanciesService {
       if (u.employeeCode) known.add(u.employeeCode);
     }
 
-    const [saleEmps, sessionEmps] = await Promise.all([
-      this.prisma.clubRevenueEntry.groupBy({
-        by: ['employeeExternalId', 'employeeName'],
+    const [saleRows, sessionEmps] = await Promise.all([
+      this.prisma.clubRevenueEntry.findMany({
         where: {
           clubId,
           isActive: true,
           occurredAt: { gte: fromD, lte: toD },
           employeeExternalId: { not: null },
         },
-        _count: true,
+        select: {
+          employeeExternalId: true,
+          employeeName: true,
+          externalId: true,
+          documentId: true,
+        },
       }),
       this.prisma.onexClassSession.groupBy({
         by: ['employeeExternalId', 'employeeName'],
@@ -1344,13 +1349,29 @@ export class DiscrepanciesService {
       string,
       { externalId: string; name: string; salesCount: number; sessionsCount: number }
     >();
-    for (const s of saleEmps) {
+    // Distinct sale-basis per employee (not CRE row fan-out).
+    const saleDocsByEmp = new Map<string, Set<string>>();
+    const saleNameByEmp = new Map<string, string>();
+    for (const s of saleRows) {
       const id = s.employeeExternalId?.trim();
       if (!id || known.has(id)) continue;
+      const docs = saleDocsByEmp.get(id) ?? new Set<string>();
+      docs.add(
+        preferredSaleBasisId({
+          externalId: s.externalId,
+          documentId: s.documentId,
+        }),
+      );
+      saleDocsByEmp.set(id, docs);
+      if (!saleNameByEmp.has(id) && s.employeeName?.trim()) {
+        saleNameByEmp.set(id, s.employeeName.trim());
+      }
+    }
+    for (const [id, docs] of saleDocsByEmp) {
       map.set(id, {
         externalId: id,
-        name: s.employeeName?.trim() || id,
-        salesCount: s._count,
+        name: saleNameByEmp.get(id) || id,
+        salesCount: docs.size,
         sessionsCount: 0,
       });
     }

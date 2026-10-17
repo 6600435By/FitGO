@@ -93,6 +93,27 @@ export function saleDocIdsForRevenueRow(row: {
 }
 
 /**
+ * Prefer cash-key «основание» (sale doc) over payment registrar UUID.
+ * Use for session/tender counts so multi-pay / SKU slices collapse to one sale.
+ */
+export function preferredSaleBasisId(row: {
+  externalId: string;
+  documentId: string | null;
+}): string {
+  const parts = row.externalId.split(':');
+  const cashIdx = parts.indexOf('cash');
+  if (cashIdx >= 0) {
+    const basis = (parts[cashIdx + 3] ?? '').trim();
+    if (basis && DOC_UUID_RE.test(basis)) return basis.toLowerCase();
+  }
+  const ids = saleDocIdsForRevenueRow(row);
+  if (ids[0]) return ids[0]!.toLowerCase();
+  const doc = row.documentId?.trim();
+  if (doc) return doc.toLowerCase();
+  return (parts[0] || row.externalId).trim().toLowerCase();
+}
+
+/**
  * Pick SaleTransaction lines for a revenue row.
  * Prefer Регистратор (documentId) when it has nomenclature — PA shop sales —
  * otherwise cash/debt основание.

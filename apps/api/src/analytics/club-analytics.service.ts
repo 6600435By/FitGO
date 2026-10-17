@@ -30,6 +30,7 @@ import {
   isStaffDebtorName,
 } from '../admin-sales/club-revenue-debt';
 import { ClubRevenueService } from '../admin-sales/club-revenue.service';
+import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { BookingControlService } from '../booking-control/booking-control.service';
@@ -530,7 +531,8 @@ export class ClubAnalyticsService {
     let cashless = 0;
     let personalAccount = 0;
     let refunds = 0;
-    let paymentCount = 0;
+    /** Distinct sale-basis docs — not CRE row count (multi-pay / SKU fan-out). */
+    const paymentDocs = new Set<string>();
     const byDay = new Map<string, number>();
 
     for (const r of receipts) {
@@ -550,7 +552,14 @@ export class ClubAnalyticsService {
       cashless += cashlessR;
       personalAccount += paR;
       const line = cashR + cardR + cashlessR + paR;
-      if (line > 0) paymentCount++;
+      if (line > 0) {
+        paymentDocs.add(
+          preferredSaleBasisId({
+            externalId: r.externalId,
+            documentId: r.documentId,
+          }),
+        );
+      }
       byDay.set(day, (byDay.get(day) ?? 0) + line);
     }
 
@@ -562,6 +571,7 @@ export class ClubAnalyticsService {
     }
 
     const bySegment = await this.salesMix(clubId, from, to);
+    const paymentCount = paymentDocs.size;
     const avgCheckMinor =
       paymentCount > 0 ? Math.round(revenueMinor / paymentCount) : 0;
 
@@ -1213,10 +1223,11 @@ export class ClubAnalyticsService {
   }
 
   private async trainerRankings(clubId: string, from: string, to: string) {
+    // PT + GROUP completed — «Проведено» matches dual-role trainers vs ЗП volume.
     const items = await this.bookingControl.list(clubId, {
       from,
       to,
-      kind: 'PT',
+      kind: 'ALL',
       status: 'COMPLETED',
       skipExternal: true,
     });
@@ -1233,6 +1244,7 @@ export class ClubAnalyticsService {
     const byKey = new Map<string, Acc>();
 
     for (const i of items) {
+      if (i.kind !== 'PT' && i.kind !== 'GROUP') continue;
       const key = i.performerId || i.performerName || 'unknown';
       const cur = byKey.get(key) ?? {
         trainerId: i.performerId || key,
@@ -1244,10 +1256,17 @@ export class ClubAnalyticsService {
         amountMinor: 0,
       };
       cur.completedPt++;
-      if (i.payment === 'PAID' || i.payment === 'QUOTA' || i.payment === 'GIFT') {
-        cur.paidPt++;
-      } else if (i.payment === 'DEBT' || i.payment === 'UNKNOWN') {
-        cur.debtPt++;
+      // Paid/debt only for PT (GROUP is N_A).
+      if (i.kind === 'PT') {
+        if (
+          i.payment === 'PAID' ||
+          i.payment === 'QUOTA' ||
+          i.payment === 'GIFT'
+        ) {
+          cur.paidPt++;
+        } else if (i.payment === 'DEBT' || i.payment === 'UNKNOWN') {
+          cur.debtPt++;
+        }
       }
       if (i.clientName) cur.clients.add(i.clientName);
       cur.amountMinor += i.priceMinor ?? 0;

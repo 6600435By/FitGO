@@ -388,7 +388,7 @@ export function ClubAnalyticsPanel({
 
       {report.trainerRankings.length > 0 && (
         <div className="card overflow-x-auto">
-          <h3 className="mb-3 font-semibold">Рейтинг тренеров ПТ</h3>
+          <h3 className="mb-3 font-semibold">Рейтинг тренеров (ПТ+ГТ)</h3>
           <table className="w-full min-w-[480px] text-sm">
             <thead className="text-left text-xs text-slate-500">
               <tr>
@@ -406,21 +406,32 @@ export function ClubAnalyticsPanel({
                   <td className="py-2 pr-2">
                     <Link
                       href={controlHref(from, to, {
-                        kind: 'PT',
                         performerId: t.trainerId,
+                        status: 'COMPLETED',
                       })}
                       className="text-fitgo-400 hover:underline"
                     >
                       {i + 1}. {t.name}
                     </Link>
                   </td>
-                  <td className="py-2 pr-2 text-right">{t.completedPt}</td>
+                  <td className="py-2 pr-2 text-right">
+                    <Link
+                      href={controlHref(from, to, {
+                        performerId: t.trainerId,
+                        status: 'COMPLETED',
+                      })}
+                      className="text-fitgo-400 hover:underline"
+                    >
+                      {t.completedPt}
+                    </Link>
+                  </td>
                   <td className="py-2 pr-2 text-right">
                     <Link
                       href={controlHref(from, to, {
                         kind: 'PT',
                         performerId: t.trainerId,
                         payment: 'PAID',
+                        status: 'COMPLETED',
                       })}
                       className="text-fitgo-400 hover:underline"
                     >
@@ -433,6 +444,7 @@ export function ClubAnalyticsPanel({
                         kind: 'PT',
                         performerId: t.trainerId,
                         payment: 'DEBT',
+                        status: 'COMPLETED',
                       })}
                       className="text-fitgo-400 hover:underline"
                     >

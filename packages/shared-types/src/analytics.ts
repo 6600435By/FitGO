@@ -147,8 +147,11 @@ export interface ClubAnalyticsReport {
     trainerId: string;
     name: string;
     score: number;
+    /** Completed PT + GROUP sessions (field name kept for API compat). */
     completedPt: number;
+    /** Paid PT only (GROUP has no payment). */
     paidPt: number;
+    /** Debt/unknown PT only. */
     debtPt: number;
     activeClients: number;
     amountMinor: number;

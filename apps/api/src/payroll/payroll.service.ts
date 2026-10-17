@@ -84,6 +84,7 @@ import { BookingControlService } from '../booking-control/booking-control.servic
 import { FitnessService } from '../fitness/fitness.service';
 import { normalizePhone } from '../common/phone.util';
 import { isCollectibleClientDebt } from '../admin-sales/club-revenue-debt';
+import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
 import {
   createAnalyticsProvider,
   fetchStaffSalesFromAnalytics,
@@ -263,6 +264,8 @@ function mergeTrainerPtSaleRows(
   };
   const looseIndex = new Map<string, number[]>();
   const consumed = new Set<number>();
+  /** Loose keys already merged to a primary — drop surplus payment slices. */
+  const looseMatched = new Set<string>();
   for (const r of primary) {
     keys.add(keyOf(r));
     const idx = out.length;
@@ -281,16 +284,27 @@ function mergeTrainerPtSaleRows(
       matchIdx = (looseIndex.get(lk) ?? []).find((i) => !consumed.has(i));
       if (matchIdx != null) break;
     }
-    keys.add(k);
     if (matchIdx != null) {
       consumed.add(matchIdx);
+      for (const lk of looseKeys(r)) looseMatched.add(lk);
       // Оплата с ЛС: Integration often reports DEBT, cash register shows paid.
       if (r.paymentStatus === 'PAID' && out[matchIdx].paymentStatus !== 'PAID') {
         out[matchIdx] = { ...out[matchIdx], paymentStatus: 'PAID' };
       }
       continue;
     }
+    // Second cash slice for a sale already matched via loose key — do not push.
+    if (looseKeys(r).some((lk) => looseMatched.has(lk))) {
+      continue;
+    }
+    keys.add(k);
+    const idx = out.length;
     out.push(r);
+    for (const lk of looseKeys(r)) {
+      const list = looseIndex.get(lk) ?? [];
+      list.push(idx);
+      looseIndex.set(lk, list);
+    }
   }
   return out;
 }
@@ -2984,7 +2998,19 @@ export class PayrollService {
       },
       orderBy: { occurredAt: 'asc' },
     });
-    const out: TrainerPtSaleRow[] = [];
+    // One PT sale (cash multi-pay / SKU split) → one payroll row: group by
+    // sale-basis + product + trainer, SUM paid slices.
+    type Agg = {
+      externalId: string;
+      clientName?: string;
+      serviceName?: string;
+      occurredAt: string;
+      amount: number;
+      employeeCode?: string;
+      employeeName?: string;
+      docRef: string;
+    };
+    const byKey = new Map<string, Agg>();
     for (const e of entries) {
       const product = e.productName ?? '';
       const isPt =
@@ -3019,10 +3045,10 @@ export class PayrollService {
       }
       const amount = ptAmountFromPossiblyGluedProduct(product, rawAmount);
       const when = e.paidAt ?? e.occurredAt;
-      const doc =
-        e.documentId?.trim() ||
-        e.externalId.split(':')[0] ||
-        e.externalId;
+      const basis = preferredSaleBasisId({
+        externalId: e.externalId,
+        documentId: e.documentId,
+      });
       // Service name: PT segment only when cash glued several SKUs.
       let serviceName = product || undefined;
       if (product.includes(',')) {
@@ -3036,19 +3062,55 @@ export class PayrollService {
           );
         if (ptPart) serviceName = ptPart;
       }
-      out.push({
-        externalId: e.externalId,
-        clientName: e.clientName ?? undefined,
-        serviceName,
-        occurredAt: when.toISOString(),
-        amount,
-        employeeCode: trainerCode || undefined,
-        employeeName: trainerName || undefined,
-        docRef: doc,
-        paymentStatus: 'PAID',
-      });
+      const productKey = (
+        e.productExternalId?.trim() ||
+        serviceName ||
+        product ||
+        ''
+      )
+        .trim()
+        .toLowerCase();
+      const trainerKey = (
+        trainerCode ||
+        trainerName ||
+        ''
+      )
+        .trim()
+        .toLowerCase();
+      const groupKey = `${basis}|${productKey}|${trainerKey}`;
+      const whenIso = when.toISOString();
+      const prev = byKey.get(groupKey);
+      if (!prev) {
+        byKey.set(groupKey, {
+          externalId: e.externalId,
+          clientName: e.clientName ?? undefined,
+          serviceName,
+          occurredAt: whenIso,
+          amount,
+          employeeCode: trainerCode || undefined,
+          employeeName: trainerName || undefined,
+          docRef: basis,
+        });
+      } else {
+        prev.amount = Math.round((prev.amount + amount) * 100) / 100;
+        if (whenIso < prev.occurredAt) prev.occurredAt = whenIso;
+        if (!prev.clientName && e.clientName) {
+          prev.clientName = e.clientName;
+        }
+        if (!prev.serviceName && serviceName) prev.serviceName = serviceName;
+      }
     }
-    return out;
+    return [...byKey.values()].map((a) => ({
+      externalId: a.externalId,
+      clientName: a.clientName,
+      serviceName: a.serviceName,
+      occurredAt: a.occurredAt,
+      amount: a.amount,
+      employeeCode: a.employeeCode,
+      employeeName: a.employeeName,
+      docRef: a.docRef,
+      paymentStatus: 'PAID' as const,
+    }));
   }
 
   private calcMotivation(
