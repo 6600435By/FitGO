@@ -581,19 +581,26 @@ export function ClubRevenuePanel() {
     if (nextEmp !== employeeExternalId) setEmployeeExternalId(nextEmp);
     if (nextSeg !== segment) setSegment(nextSeg);
     if (nextDebtor !== debtor) setDebtor(nextDebtor);
-    if (nextQ !== qInput) setQInput(nextQ);
-    if (nextQ !== q) setQ(nextQ);
+    // Only sync search draft when applied query in URL changed (deep-link /
+    // external nav). Do not overwrite unfinished typing when other filters
+    // rewrite the URL.
+    if (nextQ !== q) {
+      setQ(nextQ);
+      setQInput(nextQ);
+    }
     if (nextProductId !== productId) setProductId(nextProductId);
     if (nextExact !== productExact) setProductExact(nextExact);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- URL is source on external nav
   }, [search]);
 
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      setQ((prev) => (prev === qInput ? prev : qInput));
-    }, 400);
-    return () => window.clearTimeout(id);
-  }, [qInput]);
+  const applySearch = useCallback(() => {
+    const next = qInput.trim();
+    if (next === q.trim()) return;
+    setProductId('');
+    setProductExact(false);
+    setQ(next);
+    if (qInput !== next) setQInput(next);
+  }, [qInput, q]);
 
   useEffect(() => {
     const next = new URLSearchParams();
@@ -882,19 +889,30 @@ export function ClubRevenuePanel() {
             ))}
           </select>
         </label>
-        <label className="min-w-0 text-sm">
+        <div className="min-w-0 text-sm">
           <span className="mb-1 block h-4 text-slate-400">Поиск</span>
-          <input
-            className="input"
-            placeholder="Клиент или товар"
-            value={qInput}
-            onChange={(e) => {
-              setQInput(e.target.value);
-              setProductId('');
-              setProductExact(false);
-            }}
-          />
-        </label>
+          <div className="flex items-center gap-2">
+            <input
+              className="input min-w-0 flex-1"
+              placeholder="Клиент или товар"
+              value={qInput}
+              onChange={(e) => setQInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  applySearch();
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="btn-secondary h-11 shrink-0 px-3 py-0 text-sm"
+              onClick={applySearch}
+            >
+              Найти
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2">
