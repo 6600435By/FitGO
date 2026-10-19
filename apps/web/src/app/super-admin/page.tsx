@@ -265,9 +265,21 @@ export default function SuperAdminHomePage() {
         </div>
       </div>
 
-      <Link href="/super-admin/tasks" className="card block text-sm">
-        Открытых задач: <span className="font-semibold text-white">{data.openTasks}</span>
-      </Link>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Link href="/super-admin/tasks" className="card block text-sm">
+          Открытых задач:{' '}
+          <span className="font-semibold text-white">{data.openTasks}</span>
+        </Link>
+        <Link
+          href="/super-admin/tasks?topic=birthday"
+          className="card block text-sm"
+        >
+          Дни рождения сегодня:{' '}
+          <span className="font-semibold text-white">
+            {data.birthdayToday ?? 0}
+          </span>
+        </Link>
+      </div>
     </div>
   );
 }

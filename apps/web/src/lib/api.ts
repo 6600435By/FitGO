@@ -1916,7 +1916,7 @@ export const api = {
     request<AdminRenewalCounters>('/admin/tasks/renewals/counters', {}, token),
 
   adminBirthdaySkipped: (token: string) =>
-    request<{ skipped: number; dayKey: string }>(
+    request<{ skipped: number; dayKey: string; scanError?: string }>(
       '/admin/tasks/birthdays/skipped',
       {},
       token,
@@ -2139,6 +2139,8 @@ export const api = {
         endAt: string;
       }>;
       openTasks: number;
+      /** Open BIRTHDAY tasks for today (DB only). */
+      birthdayToday: number;
       revenue: {
         currentMinor: number;
         prevMonthMinor: number;

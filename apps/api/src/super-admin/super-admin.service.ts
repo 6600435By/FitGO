@@ -552,6 +552,11 @@ export class SuperAdminService implements OnModuleInit {
     } catch {
       // non-fatal
     }
+    try {
+      await this.tasksScheduler.refreshBirthdays(clubId);
+    } catch {
+      // non-fatal
+    }
 
     // Default: active queue only (otherwise CANCELLED legacy floods the UI).
     const statusFilter = status

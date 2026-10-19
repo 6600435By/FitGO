@@ -2,12 +2,63 @@
 
 import type { AdminTaskItem, StaffMember } from '@fitgo/shared-types';
 import { AdminTaskStatus, UserRole } from '@fitgo/shared-types';
-import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { phoneTelHref } from '@/lib/phone';
 import { formatDateTime } from '@/lib/utils';
 
-export default function SuperAdminTasksPage() {
+function CallButton({ phone }: { phone?: string }) {
+  const href = phoneTelHref(phone);
+  if (!href || !phone) return null;
+  return (
+    <a
+      href={href}
+      className="btn-primary flex items-center justify-center text-center text-xs"
+    >
+      Позвонить {phone}
+    </a>
+  );
+}
+
+type TopicFilter =
+  | 'all'
+  | 'manager'
+  | 'staff_debt'
+  | 'client_debt'
+  | 'membership'
+  | 'installment'
+  | 'birthday';
+
+function sourceLabel(source: string): string {
+  if (source === 'STAFF_DEBT') return 'авто: долг сотрудника';
+  if (source === 'CLIENT_DEBT' || source === 'DEBT_OVERDUE') {
+    return 'авто: долг клиента';
+  }
+  if (source === 'MEMBERSHIP_EXPIRING') return 'авто: абонемент';
+  if (source === 'INSTALLMENT_PAYMENT') return 'авто: рассрочка';
+  if (source === 'BIRTHDAY') return 'авто: день рождения';
+  if (source === 'MANAGER') return 'от руководителя';
+  return source;
+}
+
+function parseTopic(raw: string | null): TopicFilter {
+  if (
+    raw === 'manager' ||
+    raw === 'staff_debt' ||
+    raw === 'client_debt' ||
+    raw === 'membership' ||
+    raw === 'installment' ||
+    raw === 'birthday'
+  ) {
+    return raw;
+  }
+  return 'all';
+}
+
+function SuperAdminTasksInner() {
+  const searchParams = useSearchParams();
   const [tasks, setTasks] = useState<AdminTaskItem[]>([]);
   const [admins, setAdmins] = useState<StaffMember[]>([]);
   const [form, setForm] = useState({
@@ -18,9 +69,9 @@ export default function SuperAdminTasksPage() {
     completionMode: 'INDIVIDUAL' as 'SHARED' | 'INDIVIDUAL',
   });
   const [showForm, setShowForm] = useState(false);
-  const [topic, setTopic] = useState<
-    'all' | 'manager' | 'staff_debt' | 'client_debt' | 'membership' | 'installment'
-  >('all');
+  const [topic, setTopic] = useState<TopicFilter>(() =>
+    parseTopic(searchParams.get('topic')),
+  );
 
   const load = () => {
     const token = getToken();
@@ -76,17 +127,23 @@ export default function SuperAdminTasksPage() {
     load();
   };
 
-  const filters = [
-    { id: 'all' as const, label: 'Все' },
-    { id: 'manager' as const, label: 'От руководителя' },
-    { id: 'staff_debt' as const, label: 'Долги сотрудников' },
-    { id: 'client_debt' as const, label: 'Долги клиентов' },
-    { id: 'installment' as const, label: 'Рассрочки' },
-    { id: 'membership' as const, label: 'Абонементы' },
+  const filters: { id: TopicFilter; label: string }[] = [
+    { id: 'all', label: 'Все' },
+    { id: 'manager', label: 'От руководителя' },
+    { id: 'staff_debt', label: 'Долги сотрудников' },
+    { id: 'client_debt', label: 'Долги клиентов' },
+    { id: 'installment', label: 'Рассрочки' },
+    { id: 'membership', label: 'Абонементы' },
+    { id: 'birthday', label: 'Дни рождения' },
   ];
   const visible = tasks.filter((task) => {
     if (topic === 'all') return true;
-    if (topic === 'manager') return task.source === 'MANAGER' || task.topic === 'manager';
+    if (topic === 'manager') {
+      return task.source === 'MANAGER' || task.topic === 'manager';
+    }
+    if (topic === 'birthday') {
+      return task.source === 'BIRTHDAY' || task.topic === 'birthday';
+    }
     return task.topic === topic;
   });
 
@@ -197,86 +254,94 @@ export default function SuperAdminTasksPage() {
         {visible.length === 0 && (
           <li className="text-sm text-slate-400">Нет задач в этом фильтре</li>
         )}
-        {visible.map((task) => (
-          <li key={task.id} className="card">
-            <div className="flex justify-between gap-2">
-              <div>
-                <p className="font-medium">{task.title}</p>
-                <p className="text-sm text-slate-400">
-                  {task.assignee
-                    ? `${task.assignee.firstName} ${task.assignee.lastName}`
-                    : 'Общая очередь'}
-                  {task.source && task.source !== 'MANUAL' ? (
-                    <span className="ml-2 text-xs text-amber-300/90">
-                      ·{' '}
-                      {task.source === 'STAFF_DEBT' ||
-                      task.source === 'CLIENT_DEBT'
-                        ? task.source === 'STAFF_DEBT'
-                          ? 'авто: долг сотрудника'
-                          : 'авто: долг клиента'
-                        : task.source === 'DEBT_OVERDUE'
-                          ? 'авто: долг клиента'
-                          : task.source === 'MEMBERSHIP_EXPIRING'
-                            ? 'авто: абонемент'
-                            : task.source === 'INSTALLMENT_PAYMENT'
-                              ? 'авто: рассрочка'
-                              : task.source === 'MANAGER'
-                                ? 'от руководителя'
-                                : task.source}
-                    </span>
+        {visible.map((task) => {
+          const isBirthday =
+            task.source === 'BIRTHDAY' || task.topic === 'birthday';
+          return (
+            <li key={task.id} className="card space-y-2">
+              <div className="flex justify-between gap-2">
+                <div>
+                  <p className="font-medium">{task.title}</p>
+                  <p className="text-sm text-slate-400">
+                    {task.assignee
+                      ? `${task.assignee.firstName} ${task.assignee.lastName}`
+                      : 'Общая очередь'}
+                    {task.source && task.source !== 'MANUAL' ? (
+                      <span className="ml-2 text-xs text-amber-300/90">
+                        · {sourceLabel(task.source)}
+                      </span>
+                    ) : null}
+                  </p>
+                  {isBirthday ? (
+                    <p className="text-sm text-slate-400">Поздравить сегодня</p>
                   ) : null}
-                </p>
-                {task.groupProgress ? (
-                  <p className="text-xs text-slate-500">
-                    {task.completionMode === 'SHARED' ? 'Общее' : 'Раздельно'} ·{' '}
-                    {task.groupProgress.done}/{task.groupProgress.total}
-                    {task.groupProgress.assignees.length
-                      ? ` · ${task.groupProgress.assignees.join(', ')}`
-                      : ''}
-                  </p>
-                ) : null}
-                {task.dueAt && (
-                  <p className="text-xs text-slate-500">
-                    До: {formatDateTime(task.dueAt)}
-                  </p>
-                )}
-              </div>
-              <span className="text-xs text-slate-400">
-                {statusLabel[task.status]}
-              </span>
-            </div>
-            {task.status !== AdminTaskStatus.DONE &&
-              task.status !== AdminTaskStatus.CANCELLED && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    onClick={() =>
-                      void setStatus(task.id, AdminTaskStatus.IN_PROGRESS)
-                    }
-                    className="btn-secondary text-xs"
-                  >
-                    В работу
-                  </button>
-                  <button
-                    onClick={() =>
-                      void setStatus(task.id, AdminTaskStatus.DONE)
-                    }
-                    className="btn-primary text-xs"
-                  >
-                    Выполнена
-                  </button>
-                  <button
-                    onClick={() =>
-                      void setStatus(task.id, AdminTaskStatus.CANCELLED)
-                    }
-                    className="btn-secondary text-xs"
-                  >
-                    Отмена
-                  </button>
+                  {task.groupProgress ? (
+                    <p className="text-xs text-slate-500">
+                      {task.completionMode === 'SHARED'
+                        ? 'Общее'
+                        : 'Раздельно'}{' '}
+                      · {task.groupProgress.done}/{task.groupProgress.total}
+                      {task.groupProgress.assignees.length
+                        ? ` · ${task.groupProgress.assignees.join(', ')}`
+                        : ''}
+                    </p>
+                  ) : null}
+                  {task.dueAt && !isBirthday ? (
+                    <p className="text-xs text-slate-500">
+                      До: {formatDateTime(task.dueAt)}
+                    </p>
+                  ) : null}
                 </div>
-              )}
-          </li>
-        ))}
+                <span className="text-xs text-slate-400">
+                  {statusLabel[task.status]}
+                </span>
+              </div>
+              {isBirthday ? <CallButton phone={task.phone} /> : null}
+              {task.status !== AdminTaskStatus.DONE &&
+                task.status !== AdminTaskStatus.CANCELLED && (
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    {!isBirthday ? (
+                      <button
+                        onClick={() =>
+                          void setStatus(task.id, AdminTaskStatus.IN_PROGRESS)
+                        }
+                        className="btn-secondary text-xs"
+                      >
+                        В работу
+                      </button>
+                    ) : null}
+                    <button
+                      onClick={() =>
+                        void setStatus(task.id, AdminTaskStatus.DONE)
+                      }
+                      className="btn-primary text-xs"
+                    >
+                      {isBirthday ? 'Поздравили' : 'Выполнена'}
+                    </button>
+                    {!isBirthday ? (
+                      <button
+                        onClick={() =>
+                          void setStatus(task.id, AdminTaskStatus.CANCELLED)
+                        }
+                        className="btn-secondary text-xs"
+                      >
+                        Отмена
+                      </button>
+                    ) : null}
+                  </div>
+                )}
+            </li>
+          );
+        })}
       </ul>
     </div>
+  );
+}
+
+export default function SuperAdminTasksPage() {
+  return (
+    <Suspense fallback={<p className="text-slate-400">Загрузка…</p>}>
+      <SuperAdminTasksInner />
+    </Suspense>
   );
 }

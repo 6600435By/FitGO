@@ -70,6 +70,9 @@ export class AdminTasksSchedulerService implements OnModuleInit {
   private readonly logger = new Logger(AdminTasksSchedulerService.name);
   private lastDayKey = '';
   private readonly lastRefreshAt = new Map<string, number>();
+  private readonly lastBirthdayRefreshAt = new Map<string, number>();
+  /** Last birthday scan error per club (cleared on success). */
+  private readonly lastBirthdayScanError = new Map<string, string>();
 
   constructor(
     private readonly config: ConfigService,
@@ -175,6 +178,66 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     return new Date(utc).toISOString().slice(0, 10);
   }
 
+  /** Last scan error for admin empty-state hint (null if last scan ok). */
+  getBirthdayScanError(clubId: string): string | null {
+    return this.lastBirthdayScanError.get(clubId) ?? null;
+  }
+
+  /**
+   * Refresh birthday tasks from 1C. Safe for admin / super-admin inbox open.
+   * At most once per 30 min per club unless force.
+   */
+  async refreshBirthdays(clubId: string, force = false) {
+    const last = this.lastBirthdayRefreshAt.get(clubId) ?? 0;
+    if (!force && Date.now() - last < REFRESH_MIN_MS) {
+      return {
+        created: 0,
+        skipped: 0,
+        skippedThrottle: true as const,
+        scanError: this.lastBirthdayScanError.get(clubId) ?? null,
+      };
+    }
+
+    const systemUser =
+      (await this.prisma.user.findFirst({
+        where: {
+          clubId,
+          roles: { some: { role: Role.SUPER_ADMIN } },
+          isActive: true,
+        },
+        select: { id: true },
+      })) ??
+      (await this.prisma.user.findFirst({
+        where: {
+          clubId,
+          roles: { some: { role: Role.ADMIN } },
+          isActive: true,
+        },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' },
+      }));
+    if (!systemUser) {
+      return {
+        created: 0,
+        skipped: 0,
+        skippedThrottle: false as const,
+        scanError: this.lastBirthdayScanError.get(clubId) ?? null,
+      };
+    }
+
+    this.lastBirthdayRefreshAt.set(clubId, Date.now());
+    const result = await this.syncBirthdays(
+      clubId,
+      systemUser.id,
+      localDayKey(),
+    );
+    return {
+      ...result,
+      skippedThrottle: false as const,
+      scanError: this.lastBirthdayScanError.get(clubId) ?? null,
+    };
+  }
+
   private async syncBirthdays(
     clubId: string,
     systemUserId: string,
@@ -184,18 +247,22 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     let skipped = 0;
     const provider = this.fitness.getProvider();
     if (!provider.getSegmentBirthdays) {
-      return { created, skipped };
+      const msg = 'Провайдер 1С не поддерживает дни рождения';
+      this.lastBirthdayScanError.set(clubId, msg);
+      return { created, skipped, scanError: msg };
     }
 
     let rows: FitgoBirthdayRow[] = [];
     try {
       rows = await provider.getSegmentBirthdays(BIRTHDAY_SEGMENT_UUID);
     } catch (err) {
-      this.logger.warn(
-        `Birthday scan failed: ${err instanceof Error ? err.message : err}`,
-      );
-      return { created, skipped };
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Birthday scan failed: ${msg}`);
+      this.lastBirthdayScanError.set(clubId, msg);
+      return { created, skipped, scanError: msg };
     }
+
+    this.lastBirthdayScanError.delete(clubId);
 
     const cutoff = new Date();
     cutoff.setMonth(cutoff.getMonth() - BIRTHDAY_ACTIVE_MONTHS);
@@ -307,7 +374,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       created += 1;
     }
 
-    return { created, skipped };
+    return { created, skipped, scanError: null as string | null };
   }
 
   /** Public refresh used by admin tasks inbox (local DB — cheap). */

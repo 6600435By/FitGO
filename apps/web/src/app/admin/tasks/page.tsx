@@ -72,6 +72,9 @@ function AdminTasksInner() {
   const [ptPending, setPtPending] = useState<GroupApprovalPendingTask[]>([]);
   const [counters, setCounters] = useState<AdminRenewalCounters | null>(null);
   const [skippedBirthdays, setSkippedBirthdays] = useState(0);
+  const [birthdayScanError, setBirthdayScanError] = useState<string | null>(
+    null,
+  );
   const resolvedTopic: Topic | null =
     initialTopic === 'membership' ||
     initialTopic === 'birthday' ||
@@ -145,8 +148,14 @@ function AdminTasksInner() {
       .catch(() => setCounters(null));
     api
       .adminBirthdaySkipped(token)
-      .then((r) => setSkippedBirthdays(r.skipped ?? 0))
-      .catch(() => setSkippedBirthdays(0));
+      .then((r) => {
+        setSkippedBirthdays(r.skipped ?? 0);
+        setBirthdayScanError(r.scanError?.trim() || null);
+      })
+      .catch(() => {
+        setSkippedBirthdays(0);
+        setBirthdayScanError(null);
+      });
   };
 
   useEffect(() => {
@@ -693,6 +702,11 @@ function AdminTasksInner() {
       return (
         <div className="space-y-2">
           <p className="text-slate-400">Нет дней рождения на сегодня</p>
+          {birthdayScanError ? (
+            <p className="text-xs text-amber-300/90">
+              1С не отдала дни рождения: {birthdayScanError}
+            </p>
+          ) : null}
           {skippedBirthdays > 0 ? (
             <p className="text-xs text-slate-500">
               Ещё {skippedBirthdays} сегодня, не были в клубе больше 2 лет

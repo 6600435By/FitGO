@@ -752,6 +752,12 @@ export class AdminService {
     } catch {
       // non-fatal
     }
+    // Birthdays from 1C (throttled) — otherwise only FULL sync creates them.
+    try {
+      await this.tasksScheduler.refreshBirthdays(clubId);
+    } catch {
+      // non-fatal — scanError surfaced via getBirthdaySkipped
+    }
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
     const sharedOpen = {
@@ -1036,6 +1042,12 @@ export class AdminService {
       month: '2-digit',
       day: '2-digit',
     }).format(new Date());
+    // Ensure a recent scan so scanError is current when the inbox opens.
+    try {
+      await this.tasksScheduler.refreshBirthdays(clubId);
+    } catch {
+      // non-fatal
+    }
     const skipped = await this.prisma.adminTask.count({
       where: {
         clubId,
@@ -1044,7 +1056,12 @@ export class AdminService {
         dedupeKey: { startsWith: `birthday-skip:`, endsWith: `:${dayKey}` },
       },
     });
-    return { skipped, dayKey };
+    const scanError = this.tasksScheduler.getBirthdayScanError(clubId);
+    return {
+      skipped,
+      dayKey,
+      scanError: scanError ?? undefined,
+    };
   }
 
   async getRenewalCounters(user: JwtPayload) {

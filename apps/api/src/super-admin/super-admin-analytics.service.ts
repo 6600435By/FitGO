@@ -356,6 +356,7 @@ export class SuperAdminAnalyticsService {
       salesMix,
       onShift,
       openTasks,
+      birthdayToday,
       club,
     ] = await Promise.all([
       safe('revenueCurrent', () => this.revenue.cashRevenueMinor(clubId, current.from, current.to), 0),
@@ -376,6 +377,20 @@ export class SuperAdminAnalyticsService {
         0,
       ),
       safe(
+        'birthdayToday',
+        () =>
+          this.prisma.adminTask.count({
+            where: {
+              clubId,
+              source: 'BIRTHDAY',
+              status: {
+                in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS],
+              },
+            },
+          }),
+        0,
+      ),
+      safe(
         'club',
         () =>
           this.prisma.club.findUnique({
@@ -391,6 +406,7 @@ export class SuperAdminAnalyticsService {
       currency: club?.currency ?? 'BYN',
       onShift,
       openTasks,
+      birthdayToday,
       revenue: {
         currentMinor: revenueCurrent,
         prevMonthMinor: revenuePrevMonth,
