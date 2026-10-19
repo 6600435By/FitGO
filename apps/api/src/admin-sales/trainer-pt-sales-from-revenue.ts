@@ -1,7 +1,16 @@
-import { isMultiVisitPackSale, parseListedUnitPriceMajor } from '@fitgo/shared-types';
+import {
+  extractPackDateIsoFromBasis,
+  extractQuotedPackNameFromBasis,
+  isMultiVisitPackSale,
+  parseListedUnitPriceMajor,
+  parsePackVisitCountFromTitle,
+} from '@fitgo/shared-types';
 import type { PrismaService } from '../prisma/prisma.service';
 import { preferredSaleBasisId } from './payment-basis-products';
-import { isLikelyTrainingProductName } from './admin-sales-segments';
+import {
+  isLikelyTrainingProductName,
+  isReformerPersonalTitle,
+} from './admin-sales-segments';
 
 /** Row shape shared by payroll and booking-control PT sales. */
 export type TrainerPtSaleRow = {
@@ -15,6 +24,19 @@ export type TrainerPtSaleRow = {
   employeeName?: string;
   docRef?: string;
   paymentStatus?: string;
+};
+
+/**
+ * Multi-visit pack / debt sale lines used only to recover unit = amount/N
+ * when class members lack packageAmount (legacy sync).
+ */
+export type PackSaleForUnitPrice = {
+  clientName?: string;
+  serviceName?: string;
+  occurredAt: string;
+  /** Major currency (BYN). Prefer paid, else sale/document amount. */
+  amount: number;
+  quantity?: number;
 };
 
 /**
@@ -276,4 +298,172 @@ export async function loadTrainerPtSalesFromRevenue(
     docRef: a.docRef,
     paymentStatus: 'PAID' as const,
   }));
+}
+
+const PACK_UNIT_LOOKBACK_DAYS = 120;
+
+/**
+ * Pack sales (incl. unpaid debt rows) for payroll unit = amount/N.
+ * Lookback covers packs sold before the payroll period (e.g. Aug pack, Oct write-offs).
+ */
+export async function loadPackSalesForUnitPrice(
+  prisma: PrismaService,
+  clubId: string,
+  fromD: Date,
+  toD: Date,
+  lookbackDays = PACK_UNIT_LOOKBACK_DAYS,
+): Promise<PackSaleForUnitPrice[]> {
+  const lookbackFrom = new Date(fromD);
+  lookbackFrom.setDate(lookbackFrom.getDate() - lookbackDays);
+  const entries = await prisma.clubRevenueEntry.findMany({
+    where: {
+      clubId,
+      isActive: true,
+      OR: [
+        { occurredAt: { gte: lookbackFrom, lte: toD } },
+        { paidAt: { gte: lookbackFrom, lte: toD } },
+      ],
+    },
+    orderBy: { occurredAt: 'asc' },
+  });
+
+  const out: PackSaleForUnitPrice[] = [];
+  for (const e of entries) {
+    const product = (e.productName ?? '').trim();
+    const saleAmt = Number(e.saleAmount) || 0;
+    const paidAmt =
+      Number(e.paidAmount) ||
+      Number(e.personalAccount) ||
+      Number(e.cash) ||
+      0;
+    const cardCashless =
+      (Number(e.card) || 0) + (Number(e.cashless) || 0);
+    const paid =
+      paidAmt > 0.01 ||
+      (Number(e.cash) || 0) + cardCashless > 0.01;
+    const rawAmount = paid
+      ? paidAmt || Number(e.amount) || saleAmt
+      : saleAmt || Number(e.amount) || 0;
+    if (rawAmount <= 0) continue;
+
+    const qtyFromName = parsePackVisitCountFromTitle(product);
+    const isPack =
+      isMultiVisitPackSale(product, qtyFromName) ||
+      isReformerPersonalTitle(product) ||
+      isLikelyTrainingProductName(product) ||
+      // Debt stub «Продажа 30907…» — still usable with basis date + client match.
+      (/^продажа\s+\d+/i.test(product) && saleAmt > 0);
+
+    if (!isPack) continue;
+    // One-shot PT (qty 1, no pack marker) — not needed for pack unit recovery.
+    if (
+      qtyFromName == null &&
+      !isReformerPersonalTitle(product) &&
+      !/^продажа\s+\d+/i.test(product) &&
+      !isMultiVisitPackSale(product)
+    ) {
+      continue;
+    }
+
+    const when = e.paidAt ?? e.occurredAt;
+    out.push({
+      clientName: e.clientName ?? undefined,
+      serviceName: product || undefined,
+      occurredAt: when.toISOString(),
+      amount: Math.round(rawAmount * 100) / 100,
+      quantity: qtyFromName && qtyFromName > 1 ? qtyFromName : undefined,
+    });
+  }
+  return out;
+}
+
+/**
+ * Per-visit price (minor) from a matching client pack sale.
+ * Visit count comes from paymentBasis / quoted pack name — not from
+ * conducted session title («реформер 1»).
+ */
+export function unitPriceFromMatchingPackSale(
+  sales: PackSaleForUnitPrice[],
+  clientName: string,
+  paymentBasis?: string | null,
+  sessionTitle?: string | null,
+): number | undefined {
+  const client = clientName.trim().toLowerCase();
+  if (!client) return undefined;
+  const basis = (paymentBasis ?? '').toLowerCase();
+  const title = (sessionTitle ?? '').toLowerCase();
+  const quoted = (extractQuotedPackNameFromBasis(paymentBasis) ?? '')
+    .trim()
+    .toLowerCase();
+  const packQty =
+    parsePackVisitCountFromTitle(paymentBasis) ??
+    parsePackVisitCountFromTitle(quoted) ??
+    null;
+  const packDateIso = extractPackDateIsoFromBasis(paymentBasis);
+
+  type Cand = { amountMinor: number; score: number };
+  const cands: Cand[] = [];
+
+  for (const sale of sales) {
+    const saleClient = (sale.clientName ?? '').trim().toLowerCase();
+    if (!saleClient || saleClient !== client) continue;
+    const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
+    if (amountMinor <= 0) continue;
+    const svc = (sale.serviceName ?? '').toLowerCase();
+    const svcQty =
+      sale.quantity && sale.quantity > 1
+        ? sale.quantity
+        : parsePackVisitCountFromTitle(svc);
+    const day = (sale.occurredAt || '').slice(0, 10);
+
+    let score = 0;
+    if (quoted && svc && (svc.includes(quoted) || quoted.includes(svc))) {
+      score = 100;
+    } else if (basis && svc && basis.includes(svc)) {
+      score = 90;
+    } else if (
+      packQty != null &&
+      svcQty != null &&
+      packQty === svcQty &&
+      ((/реформер/.test(basis) && /реформер/.test(svc)) ||
+        (/пт/.test(basis) && /пт/.test(svc)) ||
+        (/массаж/.test(basis) && /массаж/.test(svc)))
+    ) {
+      score = 80;
+    } else if (
+      packDateIso &&
+      day === packDateIso &&
+      (svcQty == null || (packQty != null && svcQty === packQty)) &&
+      // Avoid grabbing a different pack sold same day (реформер 4 vs 8).
+      !(svcQty != null && packQty != null && svcQty !== packQty)
+    ) {
+      // Debt stub «Продажа N» or unnamed row on pack document day.
+      score = /^продажа\s+\d+/.test(svc) || !svc ? 50 : 40;
+    } else if (
+      title &&
+      svc &&
+      (title.includes(svc) || svc.includes(title)) &&
+      packQty != null &&
+      svcQty != null &&
+      packQty === svcQty
+    ) {
+      score = 30;
+    }
+
+    if (score <= 0) continue;
+    // Prefer exact visit-count match when known.
+    if (packQty != null && svcQty != null && packQty === svcQty) score += 10;
+    if (packQty != null && svcQty != null && packQty !== svcQty) continue;
+    cands.push({ amountMinor, score });
+  }
+
+  if (!cands.length) return undefined;
+  cands.sort((a, b) => b.score - a.score || b.amountMinor - a.amountMinor);
+  const best = cands[0];
+  const qty =
+    packQty && packQty > 0
+      ? packQty
+      : parsePackVisitCountFromTitle(quoted) ?? 0;
+  if (qty > 1) return Math.round(best.amountMinor / qty);
+  return undefined;
 }

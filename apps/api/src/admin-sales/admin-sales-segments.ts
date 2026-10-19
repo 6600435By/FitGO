@@ -218,16 +218,24 @@ export async function loadPayrollSegmentSets(
   }
 }
 
+/** Title match for individual reformer (conducted session or pack SKU). */
+export function isReformerPersonalTitle(
+  productName: string | null | undefined,
+): boolean {
+  return /индивидуальн.*реформер|реформер.*индивидуальн/i.test(
+    productName ?? '',
+  );
+}
+
 /** Match nomenclature against «Индивидуальные Реформер» segment. */
 export function isReformerPersonalNomenclature(
   productName: string | null | undefined,
   productExternalId: string | null | undefined,
   segments: PayrollSegmentSets | null,
 ): boolean {
-  if (!segments?.reformerPersonal?.size) {
-    const title = (productName ?? '').toLowerCase();
-    return /индивидуальн.*реформер|реформер.*индивидуальн/i.test(title);
-  }
+  // Title always wins — segment members can lag behind new SKUs in 1C.
+  if (isReformerPersonalTitle(productName)) return true;
+  if (!segments?.reformerPersonal?.size) return false;
   const key = normNom(productName ?? '');
   const uuid = (productExternalId ?? '').trim().toLowerCase().replace(/-/g, '');
   for (const entry of segments.reformerPersonal) {
@@ -257,6 +265,8 @@ export function isLikelyTrainingProductName(
   if (name.includes('парное занятие')) return true;
   if (/\d+\s*пт/.test(name)) return true;
   if (name.includes('персональн') && name.includes('трен')) return true;
+  // «Индивидуальное занятие реформер N» — pack / write-off, not admin membership.
+  if (isReformerPersonalTitle(name)) return true;
   return false;
 }
 

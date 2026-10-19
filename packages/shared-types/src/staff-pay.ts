@@ -804,6 +804,36 @@ export function parsePackVisitCountFromTitle(
 }
 
 /**
+ * Pack SKU inside paymentBasis like
+ * `Пакет услуг "Индивидуальное занятие реформер 8" 73437 от 08.10.2026`.
+ */
+export function extractQuotedPackNameFromBasis(
+  paymentBasis: string | null | undefined,
+): string | null {
+  const s = (paymentBasis ?? '').trim();
+  if (!s) return null;
+  const m = s.match(/"([^"]+)"/);
+  const name = m?.[1]?.trim();
+  return name || null;
+}
+
+/** Pack document date from basis (`от 08.10.2026` / `от 08.10.26`). */
+export function extractPackDateIsoFromBasis(
+  paymentBasis: string | null | undefined,
+): string | null {
+  const s = (paymentBasis ?? '').trim();
+  if (!s) return null;
+  const m = s.match(/от\s+(\d{1,2})\.(\d{1,2})\.(\d{2,4})/i);
+  if (!m) return null;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  let yyyy = Number(m[3]);
+  if (yyyy < 100) yyyy += 2000;
+  if (!dd || !mm || !yyyy) return null;
+  return `${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+}
+
+/**
  * Listed per-visit price in major BYN from titles like «10 ПТ (50р.)»
  * or «Занятие с тренером 35р.».
  */

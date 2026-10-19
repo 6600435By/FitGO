@@ -18,7 +18,6 @@ import {
   isMultiVisitPackSale,
   isPtAllSportsSession,
   isSpaAllSportsBioimpedance,
-  parsePackVisitCountFromTitle,
   resolveGroupRoomKey,
   resolveGroupSessionRateMinor,
   resolvePackageUnitPriceMinor,
@@ -92,9 +91,11 @@ import {
   loadPayrollSegmentSets,
 } from '../admin-sales/admin-sales-segments';
 import {
+  loadPackSalesForUnitPrice,
   loadTrainerPtSalesFromRevenue,
   mergeTrainerPtSaleRows,
   trainerPtSaleDocKey,
+  unitPriceFromMatchingPackSale,
   type TrainerPtSaleRow,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
 
@@ -176,57 +177,6 @@ function saleMatchesTrainer(
   const saleName = (sale.employeeName ?? '').trim().toLowerCase();
   const name = performerName.trim().toLowerCase();
   return Boolean(name && saleName && name === saleName);
-}
-
-/** When class sync has empty packageAmount — unit from matching multi-visit sale. */
-function unitPriceFromMatchingPackSale(
-  sales: TrainerPtSaleRow[],
-  clientName: string,
-  paymentBasis?: string | null,
-  sessionTitle?: string | null,
-): number | undefined {
-  const client = clientName.trim().toLowerCase();
-  if (!client) return undefined;
-  const basis = (paymentBasis ?? '').toLowerCase();
-  const title = (sessionTitle ?? '').toLowerCase();
-  for (const sale of sales) {
-    if (sale.paymentStatus && sale.paymentStatus !== 'PAID') continue;
-    const saleClient = (sale.clientName ?? '').trim().toLowerCase();
-    if (!saleClient || saleClient !== client) continue;
-    const svc = sale.serviceName ?? '';
-    if (!isMultiVisitPackSale(svc, sale.quantity)) continue;
-    const svcLow = svc.toLowerCase();
-    const linked =
-      (basis && (basis.includes(svcLow) || svcLow.includes(basis.slice(0, 20)))) ||
-      (title && (title.includes(svcLow) || svcLow.includes(title))) ||
-      packNamesLikelySame(basis || title, svcLow);
-    if (!linked) continue;
-    const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
-    if (amountMinor <= 0) continue;
-    const qty =
-      (sale.quantity != null && sale.quantity > 1
-        ? sale.quantity
-        : null) ??
-      parsePackVisitCountFromTitle(svc) ??
-      0;
-    if (qty > 1) return Math.round(amountMinor / qty);
-  }
-  return undefined;
-}
-
-function packNamesLikelySame(a: string, b: string): boolean {
-  const qa = parsePackVisitCountFromTitle(a);
-  const qb = parsePackVisitCountFromTitle(b);
-  if (qa != null && qb != null && qa === qb) {
-    if (/пт/.test(a) && /пт/.test(b)) return true;
-    if (/реформер/.test(a) && /реформер/.test(b)) return true;
-    if (/массаж/.test(a) && /массаж/.test(b)) return true;
-  }
-  // «10 ПТ (50р.)» inside «Пакет услуг "10 ПТ (50р.)" …»
-  const compact = (s: string) => s.replace(/[^a-zа-я0-9]+/gi, '');
-  const ca = compact(a);
-  const cb = compact(b);
-  return Boolean(ca && cb && (ca.includes(cb) || cb.includes(ca)));
 }
 
 const SECTION_LABELS: Record<ClubPayrollSectionId, string> = {
@@ -372,6 +322,9 @@ export class PayrollService {
       : null;
     const needsPtSales =
       !!payFlags?.isTrainer && (!!payFlags.staff || !!payFlags.club);
+    // Pack unit = sale/N for ALL trainers (incl. GP/reformer) when class sync
+    // left packageAmount empty — not gated on staff/club.
+    const needsPackUnitSales = !!payFlags?.isTrainer;
     const payrollSegments = await loadPayrollSegmentSets(this.config);
 
     const performerOr =
@@ -487,6 +440,15 @@ export class PayrollService {
       performer && needsPtSales
         ? await this.loadTrainerPtSalesForPeriod(clubId, from, to)
         : [];
+    const packSalesForUnit =
+      performer && needsPackUnitSales
+        ? await loadPackSalesForUnitPrice(
+            this.prisma,
+            clubId,
+            fromD,
+            toD,
+          )
+        : [];
     const coveredSaleDays = new Set<string>();
     for (const o of onexPt) {
       const key = onexSessionKey(o.externalId);
@@ -518,7 +480,7 @@ export class PayrollService {
       });
       if (unitFromPackage == null && primary?.clientName) {
         unitFromPackage = unitPriceFromMatchingPackSale(
-          trainerPtSales,
+          packSalesForUnit,
           primary.clientName,
           primary.paymentBasis,
           o.title,
