@@ -86,6 +86,26 @@ export type BookingControlApi = {
     bookingId: string,
     guestPhone: string,
   ) => Promise<void>;
+  /** Admin / specialist: change SPA nomenclature on the FitGO booking. */
+  updateSpaService?: (
+    bookingId: string,
+    serviceId: string,
+  ) => Promise<void>;
+  /** Services for nomenclature select. */
+  listSpaServices?: () => Promise<Array<{ id: string; name: string }>>;
+  /** Admin: link ClubRevenueEntry sale to FitGO SPA booking. */
+  linkSpaSale?: (
+    bookingId: string,
+    saleExternalId: string,
+    applyServiceId?: string,
+  ) => Promise<BookingControlDetail>;
+  /** Admin: link Onex SPA visit to FitGO booking. */
+  linkSpaVisit?: (
+    bookingId: string,
+    onexExternalId: string,
+  ) => Promise<BookingControlDetail>;
+  /** Admin: clear linked sale / soft crmDocRef. */
+  unlinkSpaDocument?: (bookingId: string) => Promise<BookingControlDetail>;
 };
 
 type Props = {
@@ -148,6 +168,11 @@ type Props = {
    * Hidden from trainer / specialist / admin surfaces.
    */
   showOpsHints?: boolean;
+  /**
+   * Specialist: deep-link to edit the SPA booking in the journal.
+   * Admin/SA do not need this.
+   */
+  spaBookingEditHref?: (bookingId: string) => string;
 };
 
 function todayIso() {
@@ -261,6 +286,7 @@ export function BookingControlPanel({
   cancelSpaBooking,
   approvalSegments = false,
   showOpsHints = false,
+  spaBookingEditHref,
 }: Props) {
   const [from, setFrom] = useState(
     initialFrom?.trim() || todayIso(),
@@ -325,6 +351,14 @@ export function BookingControlPanel({
   const [linkPhone, setLinkPhone] = useState('');
   const [linkPhoneBusy, setLinkPhoneBusy] = useState(false);
   const [linkPhoneMsg, setLinkPhoneMsg] = useState('');
+  const [spaServices, setSpaServices] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  const [serviceBusy, setServiceBusy] = useState(false);
+  const [linkDocBusy, setLinkDocBusy] = useState(false);
+
+  const showSpaLinkHints =
+    approvalActor === 'admin' || approvalActor === 'override';
 
   const load = useCallback(() => {
     if (detailOnly) {
@@ -568,6 +602,9 @@ export function BookingControlPanel({
           d.members.filter((m) => m.trainerSeen).map((m) => m.externalId),
       );
       setLocalSeen(seen);
+      if (d.kind === 'SPA' && api.listSpaServices && spaServices.length === 0) {
+        void api.listSpaServices().then(setSpaServices).catch(() => undefined);
+      }
     } catch (e) {
       const text = e instanceof Error ? e.message : 'Ошибка';
       setSelected(null);
@@ -575,6 +612,78 @@ export function BookingControlPanel({
       else setMessage(text);
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const changeSpaService = async (serviceId: string) => {
+    if (!selected?.fitgoBookingId || !api.updateSpaService || !serviceId) return;
+    if (serviceId === selected.serviceId) return;
+    setServiceBusy(true);
+    setMessage('');
+    try {
+      await api.updateSpaService(selected.fitgoBookingId, serviceId);
+      const d = await api.detail(selected.sessionKey);
+      setSelected(d);
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось сменить услугу');
+    } finally {
+      setServiceBusy(false);
+    }
+  };
+
+  const linkSelectedSale = async (
+    saleExternalId: string,
+    applyServiceId?: string,
+  ) => {
+    if (!selected?.fitgoBookingId || !api.linkSpaSale) return;
+    setLinkDocBusy(true);
+    setMessage('');
+    try {
+      const d = await api.linkSpaSale(
+        selected.fitgoBookingId,
+        saleExternalId,
+        applyServiceId,
+      );
+      setSelected(d);
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось привязать');
+    } finally {
+      setLinkDocBusy(false);
+    }
+  };
+
+  const linkSelectedVisit = async (onexExternalId: string) => {
+    if (!selected?.fitgoBookingId || !api.linkSpaVisit) return;
+    setLinkDocBusy(true);
+    setMessage('');
+    try {
+      const d = await api.linkSpaVisit(
+        selected.fitgoBookingId,
+        onexExternalId,
+      );
+      setSelected(d);
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось привязать');
+    } finally {
+      setLinkDocBusy(false);
+    }
+  };
+
+  const unlinkSelectedSpa = async () => {
+    if (!selected?.fitgoBookingId || !api.unlinkSpaDocument) return;
+    setLinkDocBusy(true);
+    setMessage('');
+    try {
+      const d = await api.unlinkSpaDocument(selected.fitgoBookingId);
+      setSelected(d);
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось отвязать');
+    } finally {
+      setLinkDocBusy(false);
     }
   };
 
@@ -1301,7 +1410,7 @@ export function BookingControlPanel({
                             продажа
                           </span>
                         ) : null}
-                        {item.source === 'FITGO' ? (
+                        {item.source === 'FITGO' && !item.oneCLinked ? (
                           <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">
                             нет в 1С
                           </span>
@@ -1365,7 +1474,7 @@ export function BookingControlPanel({
                             продажа
                           </span>
                         ) : null}
-                        {item.source === 'FITGO' ? (
+                        {item.source === 'FITGO' && !item.oneCLinked ? (
                           <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[10px] text-amber-300">
                             нет в 1С
                           </span>
@@ -1524,6 +1633,52 @@ export function BookingControlPanel({
                     <h2 className="truncate text-lg font-semibold">
                       {selected.title}
                     </h2>
+                    {selected.kind === 'SPA' &&
+                    selected.fitgoBookingId &&
+                    api.updateSpaService &&
+                    spaServices.length > 0 ? (
+                      <label className="mt-1 block space-y-1 text-sm">
+                        <span className="text-[11px] text-slate-500">
+                          Услуга
+                        </span>
+                        <select
+                          className="input w-full text-sm"
+                          disabled={serviceBusy}
+                          value={selected.serviceId ?? ''}
+                          onChange={(e) =>
+                            void changeSpaService(e.target.value)
+                          }
+                        >
+                          {!selected.serviceId ? (
+                            <option value="">— выберите —</option>
+                          ) : null}
+                          {spaServices.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    {selected.kind === 'SPA' &&
+                    selected.fitgoBookingId &&
+                    spaBookingEditHref ? (
+                      <p className="mt-1">
+                        <a
+                          className="text-sm text-fitgo-400 underline-offset-2 hover:underline"
+                          href={spaBookingEditHref(selected.fitgoBookingId)}
+                        >
+                          Открыть запись
+                        </a>
+                      </p>
+                    ) : null}
+                    {selected.kind === 'SPA' &&
+                    showSpaLinkHints &&
+                    selected.oneCTitle ? (
+                      <p className="mt-1 text-xs text-slate-500">
+                        в 1С: {selected.oneCTitle}
+                      </p>
+                    ) : null}
                     <p className="text-sm text-slate-400">
                       {formatDateTime(selected.startAt)}
                       {selected.endAt
@@ -1660,14 +1815,6 @@ export function BookingControlPanel({
                     </ul>
                   </div>
                 )}
-                {selected.source === 'FITGO' && (
-                  <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-                    Ещё нет в 1С — в ЗП не входит.
-                    {selected.fitgoBookedAt
-                      ? ` Запись создана ${formatDateTime(selected.fitgoBookedAt)}.`
-                      : ''}
-                  </p>
-                )}
                 {selected.source === 'SALE' && selected.payment === 'PAID' && (
                   <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
                     Разовая ПТ из строки продажи 1С (исполнитель + сумма). В ЗП:
@@ -1727,11 +1874,105 @@ export function BookingControlPanel({
                   </p>
                 ) : null}
                 {selected.kind === 'SPA' &&
+                showSpaLinkHints &&
+                selected.spaLinkHint &&
+                selected.spaLinkHint.kind !== 'LINKED' ? (
+                  <div className="space-y-2 rounded-xl border border-slate-700 bg-slate-900/60 p-3 text-sm">
+                    <p className="text-slate-200">
+                      {selected.spaLinkHint.message}
+                    </p>
+                    <ul className="space-y-1.5">
+                      {selected.spaLinkHint.candidates.map((c) => (
+                        <li
+                          key={c.externalId}
+                          className="flex flex-wrap items-center gap-2 text-xs text-slate-400"
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            {c.label}
+                            {c.performerName
+                              ? ` · ${c.performerName}`
+                              : ''}
+                          </span>
+                          {c.kind === 'sale' &&
+                          api.linkSpaSale &&
+                          selected.fitgoBookingId &&
+                          selected.spaLinkHint.kind !==
+                            'SALE_NO_PERFORMER' &&
+                          selected.spaLinkHint.kind !==
+                            'SALE_OTHER_PERFORMER' ? (
+                            <span className="inline-flex flex-wrap gap-1">
+                              {selected.spaLinkHint.kind ===
+                                'SALE_OTHER_NOMENCLATURE' &&
+                              c.serviceId ? (
+                                <button
+                                  type="button"
+                                  className="btn-secondary px-2 py-0.5 text-[11px]"
+                                  disabled={linkDocBusy}
+                                  onClick={() =>
+                                    void linkSelectedSale(
+                                      c.externalId,
+                                      c.serviceId,
+                                    )
+                                  }
+                                >
+                                  Поставить эту услугу
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="btn-primary px-2 py-0.5 text-[11px]"
+                                disabled={linkDocBusy}
+                                onClick={() =>
+                                  void linkSelectedSale(c.externalId)
+                                }
+                              >
+                                Привязать
+                              </button>
+                            </span>
+                          ) : null}
+                          {c.kind === 'visit' &&
+                          api.linkSpaVisit &&
+                          selected.fitgoBookingId ? (
+                            <button
+                              type="button"
+                              className="btn-primary px-2 py-0.5 text-[11px]"
+                              disabled={linkDocBusy}
+                              onClick={() =>
+                                void linkSelectedVisit(c.externalId)
+                              }
+                            >
+                              Привязать
+                            </button>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {selected.kind === 'SPA' &&
+                showSpaLinkHints &&
+                selected.fitgoBookingId &&
+                api.unlinkSpaDocument &&
+                (selected.linkedSaleExternalId ||
+                  (selected.oneCLinked &&
+                    selected.source === 'FITGO' &&
+                    selected.crmDocRef &&
+                    !selected.spaSettlement?.visitPosted)) ? (
+                  <p>
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline"
+                      disabled={linkDocBusy}
+                      onClick={() => void unlinkSelectedSpa()}
+                    >
+                      Отвязать документ 1С
+                    </button>
+                  </p>
+                ) : null}
+                {selected.kind === 'SPA' &&
                 selected.fitgoBookingId &&
                 api.updateSpaGuestPhone &&
-                (selected.spaSettlement?.status === 'AWAITING_CLIENT_LINK' ||
-                  selected.source === 'FITGO' ||
-                  !selected.guestPhone) ? (
+                selected.spaSettlement?.status === 'AWAITING_CLIENT_LINK' ? (
                   <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/50 p-3">
                     <p className="text-sm text-slate-300">
                       Телефон для привязки к 1С

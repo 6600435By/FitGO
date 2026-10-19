@@ -119,6 +119,13 @@ export interface BookingControlListItem {
   /** Linked FitGO booking id when matched or FitGO-only. */
   fitgoBookingId?: string;
   priceMinor?: number;
+  /**
+   * FitGO SPA row already has a 1C visit (`crmDocRef`) or linked sale.
+   * When true, UI must not show the «нет в 1С» badge.
+   */
+  oneCLinked?: boolean;
+  /** ClubRevenueEntry.externalId when SPA is linked to a reception sale. */
+  linkedSaleExternalId?: string;
 }
 
 /** Live settlement of SPA vs 1C (quota write-off or reception payment). */
@@ -139,7 +146,7 @@ export interface SpaSettlementInfo {
   status: SpaSettlementStatus;
   label: string;
   /** Where the status came from. */
-  source: 'visit' | 'debt' | 'local' | 'onex';
+  source: 'visit' | 'debt' | 'local' | 'onex' | 'sale';
   visitPosted?: boolean;
   visitNum?: string;
   /** Human package / membership title when quota was consumed. */
@@ -149,6 +156,37 @@ export interface SpaSettlementInfo {
    * False when posted & found in 1C — only time/date edit, no delete.
    */
   editableInApp?: boolean;
+}
+
+/** Why an admin sees a soft hint instead of auto-link. */
+export type SpaLinkHintKind =
+  | 'SALE_OTHER_NOMENCLATURE'
+  | 'SALE_NO_PERFORMER'
+  | 'SALE_OTHER_PERFORMER'
+  | 'SALE_MULTIPLE'
+  | 'VISIT_MULTIPLE'
+  | 'LINKED';
+
+export interface SpaLinkCandidate {
+  kind: 'sale' | 'visit';
+  externalId: string;
+  label: string;
+  amountMajor?: number;
+  occurredAt?: string;
+  paymentStatus?: 'PAID' | 'DEBT';
+  productName?: string;
+  performerName?: string;
+  /** 1C visit title when kind=visit. */
+  title?: string;
+  /** Sale product maps to a FitGO SpaService — enable «Поставить эту услугу». */
+  serviceId?: string;
+}
+
+/** One short admin hint under SPA settlement (never shown to specialist). */
+export interface SpaLinkHint {
+  kind: SpaLinkHintKind;
+  message: string;
+  candidates: SpaLinkCandidate[];
 }
 
 /**
@@ -217,6 +255,12 @@ export interface BookingControlDetail extends BookingControlListItem {
   groupApproval?: GroupClassApprovalInfo | null;
   /** SPA only: quota write-off / payment fact from 1C. */
   spaSettlement?: SpaSettlementInfo;
+  /** Admin-only: soft match to a sale/visit that needs a click. */
+  spaLinkHint?: SpaLinkHint;
+  /** When FitGO service title differs from the linked 1C visit title. */
+  oneCTitle?: string;
+  /** FitGO SpaService id — for nomenclature editor. */
+  serviceId?: string;
   /** Who created / confirmed — small popover on the card. */
   history?: BookingControlHistoryEvent[];
   /** SPA guest / booking phone (may be empty until admin fills it). */

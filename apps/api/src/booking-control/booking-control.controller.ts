@@ -296,6 +296,88 @@ export class BookingControlController {
     );
   }
 
+  @Post('admin/booking-control/spa-link-sale')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  linkSpaSaleAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      bookingId?: string;
+      saleExternalId?: string;
+      applyServiceId?: string;
+    },
+  ) {
+    return this.bookingControl.linkSpaSale(
+      user,
+      body.bookingId ?? '',
+      body.saleExternalId ?? '',
+      { applyServiceId: body.applyServiceId },
+    );
+  }
+
+  @Post('admin/booking-control/spa-link-visit')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  linkSpaVisitAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { bookingId?: string; onexExternalId?: string },
+  ) {
+    return this.bookingControl.linkSpaVisit(
+      user,
+      body.bookingId ?? '',
+      body.onexExternalId ?? '',
+    );
+  }
+
+  @Post('admin/booking-control/spa-unlink')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  unlinkSpaAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { bookingId?: string },
+  ) {
+    return this.bookingControl.unlinkSpaDocument(user, body.bookingId ?? '');
+  }
+
+  @Post('super-admin/booking-control/spa-link-sale')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  linkSpaSaleSuper(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      bookingId?: string;
+      saleExternalId?: string;
+      applyServiceId?: string;
+    },
+  ) {
+    return this.bookingControl.linkSpaSale(
+      user,
+      body.bookingId ?? '',
+      body.saleExternalId ?? '',
+      { applyServiceId: body.applyServiceId },
+    );
+  }
+
+  @Post('super-admin/booking-control/spa-link-visit')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  linkSpaVisitSuper(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { bookingId?: string; onexExternalId?: string },
+  ) {
+    return this.bookingControl.linkSpaVisit(
+      user,
+      body.bookingId ?? '',
+      body.onexExternalId ?? '',
+    );
+  }
+
+  @Post('super-admin/booking-control/spa-unlink')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  unlinkSpaSuper(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { bookingId?: string },
+  ) {
+    return this.bookingControl.unlinkSpaDocument(user, body.bookingId ?? '');
+  }
+
   @Get('trainer/booking-control')
   @Roles(UserRole.TRAINER)
   async listTrainer(

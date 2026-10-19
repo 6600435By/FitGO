@@ -14,6 +14,7 @@ import {
   SessionRemarkKind,
   SessionRemarkStatus,
   SpaBookingStatus,
+  SpaOneCLinkStatus,
   SpaPaymentType,
 } from '@prisma/client';
 import { requireClubId } from '../auth/require-club-id';
@@ -48,6 +49,7 @@ import {
   type GroupApprovalPhase,
   type GroupClassApprovalInfo,
   type SessionApprovalPhase,
+  type SpaLinkHint,
   type SpaSettlementInfo,
   type SpecialistServiceDebt,
   UserRole,
@@ -66,6 +68,17 @@ import { sessionMatchesFlag } from '../discrepancies/discrepancies-predicates';
 import { FitnessService } from '../fitness/fitness.service';
 import { matchOnexToScheduleSlots } from '../club-schedule/trainer-schedule.helpers';
 import { SessionApprovalService } from './session-approval.service';
+import {
+  awaitingPaymentLabel,
+  buildSpaDayMergePairs,
+  debtSearchWindow,
+  matchSpaSale,
+  matchSpaVisitByDay,
+  normalizeLabel,
+  type SpaBookingMatchInput,
+  type SpaOnexCandidate,
+  type SpaSaleCandidate,
+} from './spa-document-match';
 
 type ListFilters = {
   from: string;
@@ -436,6 +449,50 @@ export class BookingControlService {
       }
     }
 
+    // Quota day-merge: FitGO journal + 1C write-off same day (client+specialist).
+    if (!kindFilter || kindFilter === OnexClassKind.SPA) {
+      const matchedOnexExt = new Set(
+        items
+          .filter((i) => i.kind === 'SPA' && i.source === '1C' && i.fitgoBookingId)
+          .map((i) => parseSessionKey(i.sessionKey)?.id)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const dayPairs = buildSpaDayMergePairs({
+        bookings: allSpa.map((b) => this.toSpaMatchInput(b)),
+        onexSessions: onex
+          .filter((o) => o.kind === OnexClassKind.SPA)
+          .map((o) => this.toSpaOnexCandidate(o)),
+        alreadyMatchedBookingIds: matchedSpaIds,
+        alreadyMatchedOnexIds: matchedOnexExt,
+      });
+      for (const pair of dayPairs) {
+        matchedSpaIds.add(pair.bookingId);
+        const booking = allSpa.find((b) => b.id === pair.bookingId);
+        const item = items.find(
+          (i) =>
+            i.kind === 'SPA' &&
+            i.source === '1C' &&
+            i.sessionKey === onexSessionKey(pair.onexExternalId),
+        );
+        if (item) {
+          item.fitgoBookingId = pair.bookingId;
+          if (booking?.clientId) item.clientId = booking.clientId;
+          item.oneCLinked = true;
+        }
+        if (booking && !booking.crmDocRef) {
+          void this.prisma.spaBooking
+            .update({
+              where: { id: booking.id },
+              data: {
+                crmDocRef: pair.onexExternalId,
+                oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+              },
+            })
+            .catch(() => undefined);
+        }
+      }
+    }
+
     if (!kindFilter || kindFilter === OnexClassKind.SPA) {
       for (const b of allSpa) {
         if (matchedSpaIds.has(b.id)) continue;
@@ -460,6 +517,9 @@ export class BookingControlService {
               ? 'COMPLETED'
               : 'SCHEDULED';
         const counts = this.singleClientCounts(status);
+        const oneCLinked = Boolean(
+          b.crmDocRef?.trim() || b.linkedSaleExternalId?.trim(),
+        );
         items.push({
           sessionKey,
           kind: 'SPA',
@@ -489,6 +549,8 @@ export class BookingControlService {
                     : 'UNKNOWN',
           needsReview: openKeys.has(sessionKey),
           fitgoBookingId: b.id,
+          oneCLinked,
+          linkedSaleExternalId: b.linkedSaleExternalId ?? undefined,
         });
       }
     }
@@ -626,7 +688,10 @@ export class BookingControlService {
       out = await this.filterByDiscrepancyFlag(clubId, out, filters.flag);
     }
     if (filters.notIn1c) {
-      out = out.filter((i) => i.kind === 'SPA' && i.source === 'FITGO');
+      out = out.filter(
+        (i) =>
+          i.kind === 'SPA' && i.source === 'FITGO' && !i.oneCLinked,
+      );
     }
     if (filters.clientId?.trim() || filters.client?.trim()) {
       out = await this.filterByClient(
@@ -926,20 +991,39 @@ export class BookingControlService {
       let spaPayment = payment;
       let spaPayTag = payTag;
       let spaSettlement: SpaSettlementInfo | undefined;
+      let spaLinkHint: SpaLinkHint | undefined;
+      let spaOneCTitle: string | undefined;
+      let spaLinkedSaleId: string | undefined;
+      let spaServiceId: string | undefined;
       if (kind === 'SPA') {
         const spaBooking =
           matched?.id
             ? await this.prisma.spaBooking.findFirst({
                 where: { id: matched.id, clubId },
                 include: {
-                  client: { select: { externalId: true } },
+                  client: {
+                    select: {
+                      externalId: true,
+                      firstName: true,
+                      lastName: true,
+                    },
+                  },
                   specialist: {
-                    select: { externalId: true, employeeCode: true },
+                    select: {
+                      externalId: true,
+                      employeeCode: true,
+                      firstName: true,
+                      lastName: true,
+                    },
+                  },
+                  service: {
+                    select: { id: true, name: true, externalId: true },
                   },
                 },
               })
             : null;
         const settled = await this.resolveSpaSettlement({
+          clubId,
           booking: spaBooking,
           onex: s,
           paySource: primary?.paySource,
@@ -948,6 +1032,10 @@ export class BookingControlService {
         spaSettlement = settled.settlement;
         spaPayment = settled.payment;
         spaPayTag = settled.payTag;
+        spaLinkHint = settled.hint;
+        spaOneCTitle = settled.oneCTitle;
+        spaLinkedSaleId = settled.linkedSaleExternalId;
+        spaServiceId = spaBooking?.serviceId ?? spaBooking?.service?.id;
       }
 
       const performerName = s.employeeName?.trim() || '—';
@@ -1012,6 +1100,16 @@ export class BookingControlService {
         priceMinor: unitPrice ?? matchedPrice,
         groupApproval,
         spaSettlement,
+        spaLinkHint,
+        oneCTitle: spaOneCTitle,
+        linkedSaleExternalId: spaLinkedSaleId,
+        serviceId: spaServiceId,
+        oneCLinked: Boolean(
+          spaLinkedSaleId ||
+            spaSettlement?.status === 'QUOTA_CONSUMED' ||
+            spaSettlement?.status === 'PAID' ||
+            spaSettlement?.status === 'AWAITING_PAYMENT',
+        ),
         history,
       };
     }
@@ -1123,12 +1221,14 @@ export class BookingControlService {
       const counts = this.singleClientCounts(status);
       const approval = await this.loadSessionApprovalInfo(clubId, 'SPA', b.id);
       const settled = await this.resolveSpaSettlement({
+        clubId,
         booking: {
           id: b.id,
           paymentType: b.paymentType,
           paymentStatus: b.paymentStatus,
           consumedInCrmAt: b.consumedInCrmAt,
           crmDocRef: b.crmDocRef,
+          linkedSaleExternalId: b.linkedSaleExternalId,
           startAt: b.startAt,
           partnerSource: b.partnerSource,
           client: b.client,
@@ -1137,6 +1237,8 @@ export class BookingControlService {
           manualPaymentConfirmedAt: b.manualPaymentConfirmedAt,
           membershipServiceName: b.membershipServiceName,
           specialist: b.specialist,
+          service: b.service,
+          guestName: b.guestName,
         },
       });
       const performerName =
@@ -1152,6 +1254,8 @@ export class BookingControlService {
         sessionApprovalBookingId: b.id,
         sessionApprovalKind: SessionApprovalKind.SPA,
       });
+      const linkedSale =
+        settled.linkedSaleExternalId ?? b.linkedSaleExternalId ?? undefined;
       return {
         sessionKey,
         kind: 'SPA',
@@ -1185,6 +1289,17 @@ export class BookingControlService {
         crmDocRef: b.crmDocRef ?? undefined,
         priceMinor: b.priceMinor ?? b.service.priceMinor,
         spaSettlement: settled.settlement,
+        spaLinkHint: settled.hint,
+        oneCTitle: settled.oneCTitle,
+        linkedSaleExternalId: linkedSale,
+        serviceId: b.serviceId,
+        oneCLinked: Boolean(
+          linkedSale ||
+            b.crmDocRef ||
+            settled.settlement.status === 'QUOTA_CONSUMED' ||
+            settled.settlement.status === 'PAID' ||
+            settled.settlement.status === 'AWAITING_PAYMENT',
+        ),
         history,
       };
     }
@@ -3682,23 +3797,37 @@ export class BookingControlService {
    * Debts call is capped (~6s) so the card never hangs.
    */
   private async resolveSpaSettlement(input: {
+    clubId?: string;
     booking?: {
       id: string;
       paymentType: SpaPaymentType;
       paymentStatus: ServicePaymentStatus;
       consumedInCrmAt: Date | null;
       crmDocRef: string | null;
+      linkedSaleExternalId?: string | null;
       startAt: Date;
       partnerSource?: string | null;
       clientExternalId?: string | null;
       oneCLinkStatus?: string | null;
       manualPaymentConfirmedAt?: Date | null;
       membershipServiceName?: string | null;
-      client?: { externalId: string | null } | null;
+      client?: {
+        externalId: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+      } | null;
       specialist?: {
         externalId: string | null;
         employeeCode?: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
       } | null;
+      service?: {
+        id?: string;
+        name?: string;
+        externalId?: string | null;
+      } | null;
+      guestName?: string | null;
     } | null;
     onex?: {
       externalId: string;
@@ -3706,13 +3835,26 @@ export class BookingControlService {
       status: OnexClassStatus;
       startAt: Date;
       employeeExternalId: string | null;
+      title?: string | null;
+      members?: Array<{
+        externalId: string;
+        clientName: string;
+        cancelled?: boolean;
+        paymentBasis?: string | null;
+        paySource?: string | null;
+      }>;
     } | null;
     paySource?: string | null;
     paymentBasis?: string | null;
+    /** When false, skip sale/visit soft-match (list path). Default true for detail. */
+    withHints?: boolean;
   }): Promise<{
     settlement: SpaSettlementInfo;
     payment: BookingControlPayment;
     payTag?: BookingControlPayTag;
+    hint?: SpaLinkHint;
+    oneCTitle?: string;
+    linkedSaleExternalId?: string;
   }> {
     const booking = input.booking;
     const onex = input.onex;
@@ -3888,6 +4030,8 @@ export class BookingControlService {
             payTag: 'PACKAGE',
           };
         }
+        const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId);
+        if (dayHit) return dayHit;
         return {
           settlement: {
             status: 'NOT_IN_1C',
@@ -3911,6 +4055,13 @@ export class BookingControlService {
         payment: 'QUOTA',
         payTag: 'PACKAGE',
       };
+    }
+
+    // Linked / soft-matched ClubRevenueEntry sale (reception без bookingRef).
+    // Skip when this detail is already a 1C visit row — pay from the visit.
+    if (booking && !onex) {
+      const saleHit = await this.tryResolveSpaSale(booking, input.clubId);
+      if (saleHit) return saleHit;
     }
 
     // Paid path — check specialist debts by crmDocRef / bookingRef (short timeout).
@@ -4049,6 +4200,528 @@ export class BookingControlService {
       payment: 'UNKNOWN',
       payTag: 'SALE',
     };
+  }
+
+  private toSpaMatchInput(b: {
+    id: string;
+    startAt: Date;
+    paymentType: SpaPaymentType | string;
+    crmDocRef?: string | null;
+    linkedSaleExternalId?: string | null;
+    clientExternalId?: string | null;
+    guestName?: string | null;
+    client?: {
+      externalId?: string | null;
+      firstName?: string | null;
+      lastName?: string | null;
+    } | null;
+    specialist: {
+      externalId?: string | null;
+      employeeCode?: string | null;
+      firstName?: string | null;
+      lastName?: string | null;
+    };
+    service: { name: string; externalId?: string | null };
+  }): SpaBookingMatchInput {
+    const clientName =
+      b.client
+        ? `${b.client.lastName ?? ''} ${b.client.firstName ?? ''}`.trim()
+        : b.guestName?.trim() || null;
+    return {
+      id: b.id,
+      startAt: b.startAt,
+      paymentType: String(b.paymentType),
+      clientExternalId: b.client?.externalId ?? b.clientExternalId,
+      clientName,
+      specialistExternalId: b.specialist.externalId,
+      specialistEmployeeCode: b.specialist.employeeCode,
+      specialistName:
+        `${b.specialist.lastName ?? ''} ${b.specialist.firstName ?? ''}`.trim(),
+      serviceExternalId: b.service.externalId,
+      serviceName: b.service.name,
+      crmDocRef: b.crmDocRef,
+      linkedSaleExternalId: b.linkedSaleExternalId,
+    };
+  }
+
+  private toSpaOnexCandidate(o: {
+    externalId: string;
+    number: string | null;
+    startAt: Date;
+    title: string;
+    employeeExternalId: string | null;
+    status: OnexClassStatus | string;
+    fitgoBookingRef?: string | null;
+    members: Array<{
+      externalId: string;
+      clientName: string;
+      cancelled?: boolean;
+      paymentBasis?: string | null;
+      paySource?: string | null;
+    }>;
+  }): SpaOnexCandidate {
+    return {
+      externalId: o.externalId,
+      number: o.number,
+      startAt: o.startAt,
+      title: o.title,
+      employeeExternalId: o.employeeExternalId,
+      status: String(o.status),
+      fitgoBookingRef: o.fitgoBookingRef,
+      members: o.members,
+    };
+  }
+
+  private mapRevenueToSaleCandidate(r: {
+    externalId: string;
+    occurredAt: Date;
+    paidAt: Date | null;
+    productName: string | null;
+    productExternalId: string | null;
+    clientExternalId: string | null;
+    clientName: string | null;
+    performerExternalId: string | null;
+    performerName: string | null;
+    saleAmount: number;
+    paidAmount: number;
+    operationType: string;
+  }): SpaSaleCandidate {
+    return {
+      externalId: r.externalId,
+      occurredAt: r.occurredAt,
+      paidAt: r.paidAt,
+      productName: r.productName,
+      productExternalId: r.productExternalId,
+      clientExternalId: r.clientExternalId,
+      clientName: r.clientName,
+      performerExternalId: r.performerExternalId,
+      performerName: r.performerName,
+      saleAmount: r.saleAmount,
+      paidAmount: r.paidAmount,
+      operationType: r.operationType,
+    };
+  }
+
+  private async loadSpaSaleCandidates(
+    clubId: string,
+    booking: SpaBookingMatchInput,
+  ): Promise<SpaSaleCandidate[]> {
+    const win = debtSearchWindow(booking.startAt);
+    const clientExt = booking.clientExternalId?.trim();
+    const linkedId = booking.linkedSaleExternalId?.trim();
+    const rows = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        OR: [
+          ...(linkedId ? [{ externalId: linkedId }] : []),
+          {
+            occurredAt: { gte: win.from, lte: win.to },
+            operationType: { in: ['payment', 'unpaid', 'sale'] },
+            ...(clientExt
+              ? { clientExternalId: clientExt }
+              : booking.clientName
+                ? {
+                    clientName: {
+                      contains: booking.clientName.split(/\s+/)[0] ?? '',
+                      mode: 'insensitive' as const,
+                    },
+                  }
+                : { id: '__none__' }),
+          },
+        ],
+      },
+      orderBy: { occurredAt: 'desc' },
+      take: 80,
+    });
+    return rows.map((r) => this.mapRevenueToSaleCandidate(r));
+  }
+
+  private async spaServiceIdByProduct(
+    clubId: string,
+  ): Promise<Map<string, string>> {
+    const services = await this.prisma.spaService.findMany({
+      where: { clubId, active: true },
+      select: { id: true, name: true, externalId: true },
+    });
+    const map = new Map<string, string>();
+    for (const s of services) {
+      if (s.externalId?.trim()) map.set(s.externalId.trim(), s.id);
+      map.set(`name:${normalizeLabel(s.name)}`, s.id);
+    }
+    return map;
+  }
+
+  private async tryResolveSpaSale(
+    booking: {
+      id: string;
+      paymentType: SpaPaymentType;
+      paymentStatus: ServicePaymentStatus;
+      consumedInCrmAt: Date | null;
+      crmDocRef: string | null;
+      linkedSaleExternalId?: string | null;
+      startAt: Date;
+      clientExternalId?: string | null;
+      membershipServiceName?: string | null;
+      guestName?: string | null;
+      client?: {
+        externalId: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+      } | null;
+      specialist?: {
+        externalId: string | null;
+        employeeCode?: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+      } | null;
+      service?: {
+        id?: string;
+        name?: string;
+        externalId?: string | null;
+      } | null;
+    },
+    clubId?: string,
+  ): Promise<{
+    settlement: SpaSettlementInfo;
+    payment: BookingControlPayment;
+    payTag?: BookingControlPayTag;
+    hint?: SpaLinkHint;
+    linkedSaleExternalId?: string;
+  } | null> {
+    if (!clubId || !booking?.id) return null;
+    const matchInput = this.toSpaMatchInput({
+      id: booking.id,
+      startAt: booking.startAt,
+      paymentType: booking.paymentType,
+      crmDocRef: booking.crmDocRef,
+      linkedSaleExternalId: booking.linkedSaleExternalId,
+      clientExternalId: booking.clientExternalId,
+      guestName: booking.guestName,
+      client: booking.client,
+      specialist: booking.specialist ?? {
+        externalId: null,
+        employeeCode: null,
+        firstName: null,
+        lastName: null,
+      },
+      service: {
+        name: booking.service?.name ?? '',
+        externalId: booking.service?.externalId,
+      },
+    });
+    if (!matchInput.serviceName && !matchInput.clientExternalId) return null;
+
+    const [sales, serviceMap, taken] = await Promise.all([
+      this.loadSpaSaleCandidates(clubId, matchInput),
+      this.spaServiceIdByProduct(clubId),
+      this.prisma.spaBooking.findMany({
+        where: {
+          clubId,
+          linkedSaleExternalId: { not: null },
+          id: { not: booking.id },
+        },
+        select: { linkedSaleExternalId: true },
+      }),
+    ]);
+    const takenSaleIds = new Set(
+      taken
+        .map((t) => t.linkedSaleExternalId?.trim())
+        .filter((x): x is string => Boolean(x)),
+    );
+
+    const result = matchSpaSale({
+      booking: matchInput,
+      sales,
+      takenSaleIds,
+      serviceIdByProduct: serviceMap,
+    });
+
+    if (result.kind === 'auto') {
+      const sale = result.sale;
+      if (booking.linkedSaleExternalId !== sale.externalId) {
+        await this.prisma.spaBooking
+          .update({
+            where: { id: booking.id },
+            data: {
+              linkedSaleExternalId: sale.externalId,
+              oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+              paymentStatus:
+                result.paymentStatus === 'PAID'
+                  ? ServicePaymentStatus.PAID
+                  : ServicePaymentStatus.DEBT,
+              ...(result.paymentStatus === 'PAID'
+                ? { paidAt: new Date(), eligibleForMotivation: true }
+                : { eligibleForMotivation: false }),
+            },
+          })
+          .catch(() => undefined);
+      }
+      if (result.paymentStatus === 'PAID') {
+        return {
+          settlement: {
+            status: 'PAID',
+            label: spaSettlementLabelRu('PAID'),
+            source: 'sale',
+            visitNum: sale.externalId,
+            editableInApp: false,
+          },
+          payment: 'PAID',
+          payTag: 'SALE',
+          linkedSaleExternalId: sale.externalId,
+        };
+      }
+      return {
+        settlement: {
+          status: 'AWAITING_PAYMENT',
+          label: awaitingPaymentLabel(sale),
+          source: 'sale',
+          visitNum: sale.externalId,
+          editableInApp: false,
+        },
+        payment: 'DEBT',
+        payTag: 'SALE',
+        linkedSaleExternalId: sale.externalId,
+      };
+    }
+
+    if (result.kind === 'hint') {
+      return {
+        settlement: {
+          status: 'NOT_IN_1C',
+          label: spaSettlementLabelRu('NOT_IN_1C'),
+          source: 'local',
+          editableInApp: true,
+        },
+        payment: 'UNKNOWN',
+        payTag: 'SALE',
+        hint: result.hint,
+      };
+    }
+    return null;
+  }
+
+  private async tryLinkSpaVisitByDay(
+    booking: {
+      id: string;
+      paymentType: SpaPaymentType;
+      crmDocRef: string | null;
+      linkedSaleExternalId?: string | null;
+      startAt: Date;
+      clientExternalId?: string | null;
+      membershipServiceName?: string | null;
+      guestName?: string | null;
+      client?: {
+        externalId: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+      } | null;
+      specialist?: {
+        externalId: string | null;
+        employeeCode?: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+      } | null;
+      service?: {
+        id?: string;
+        name?: string;
+        externalId?: string | null;
+      } | null;
+    },
+    clubId?: string,
+  ): Promise<{
+    settlement: SpaSettlementInfo;
+    payment: BookingControlPayment;
+    payTag?: BookingControlPayTag;
+    hint?: SpaLinkHint;
+    oneCTitle?: string;
+  } | null> {
+    if (!clubId || !booking?.id) return null;
+    const matchInput = this.toSpaMatchInput({
+      id: booking.id,
+      startAt: booking.startAt,
+      paymentType: booking.paymentType,
+      crmDocRef: booking.crmDocRef,
+      linkedSaleExternalId: booking.linkedSaleExternalId,
+      clientExternalId: booking.clientExternalId,
+      guestName: booking.guestName,
+      client: booking.client,
+      specialist: booking.specialist ?? {
+        externalId: null,
+        employeeCode: null,
+        firstName: null,
+        lastName: null,
+      },
+      service: {
+        name: booking.service?.name ?? '',
+        externalId: booking.service?.externalId,
+      },
+    });
+    const dayStart = new Date(booking.startAt);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const dayEnd = new Date(booking.startAt);
+    dayEnd.setUTCHours(23, 59, 59, 999);
+    // Widen ±1 day for timezone edge
+    const from = new Date(dayStart.getTime() - 86400000);
+    const to = new Date(dayEnd.getTime() + 86400000);
+    const sessions = await this.prisma.onexClassSession.findMany({
+      where: {
+        clubId,
+        kind: OnexClassKind.SPA,
+        isActive: true,
+        startAt: { gte: from, lte: to },
+        status: { not: OnexClassStatus.CANCELLED },
+      },
+      include: { members: true },
+    });
+    const result = matchSpaVisitByDay({
+      booking: matchInput,
+      onexSessions: sessions.map((o) => this.toSpaOnexCandidate(o)),
+    });
+    if (result.kind === 'auto') {
+      const o = result.onex;
+      await this.prisma.spaBooking
+        .update({
+          where: { id: booking.id },
+          data: {
+            crmDocRef: o.externalId,
+            oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+          },
+        })
+        .catch(() => undefined);
+      const membershipName =
+        membershipNameFromPaymentBasis(
+          o.members.find((m) => !m.cancelled)?.paymentBasis,
+        ) || booking.membershipServiceName?.trim() || undefined;
+      const serviceTitle = booking.service?.name?.trim();
+      return {
+        settlement: {
+          status: 'QUOTA_CONSUMED',
+          label: spaSettlementLabelRu('QUOTA_CONSUMED', membershipName),
+          source: 'onex',
+          visitPosted: true,
+          visitNum: o.number ?? o.externalId,
+          membershipName,
+          editableInApp: false,
+        },
+        payment: 'QUOTA',
+        payTag: 'PACKAGE',
+        oneCTitle:
+          serviceTitle &&
+          normalizeLabel(o.title) !== normalizeLabel(serviceTitle)
+            ? o.title
+            : undefined,
+      };
+    }
+    if (result.kind === 'hint') {
+      return {
+        settlement: {
+          status: 'NOT_IN_1C',
+          label: spaSettlementLabelRu('NOT_IN_1C'),
+          source: 'local',
+          editableInApp: true,
+        },
+        payment: 'QUOTA',
+        payTag: 'PACKAGE',
+        hint: result.hint,
+      };
+    }
+    return null;
+  }
+
+  async linkSpaSale(
+    user: JwtPayload,
+    bookingId: string,
+    saleExternalId: string,
+    opts?: { applyServiceId?: string },
+  ) {
+    const clubId = requireClubId(user);
+    const booking = await this.prisma.spaBooking.findFirst({
+      where: { id: bookingId, clubId },
+    });
+    if (!booking) throw new NotFoundException('Запись не найдена');
+    const saleId = saleExternalId.trim();
+    if (!saleId) throw new BadRequestException('Укажите продажу');
+    const sale = await this.prisma.clubRevenueEntry.findFirst({
+      where: { clubId, externalId: saleId, isActive: true },
+    });
+    if (!sale) throw new NotFoundException('Продажа не найдена');
+    const taken = await this.prisma.spaBooking.findFirst({
+      where: {
+        clubId,
+        linkedSaleExternalId: saleId,
+        id: { not: bookingId },
+      },
+      select: { id: true },
+    });
+    if (taken) {
+      throw new BadRequestException('Эта продажа уже привязана к другой записи');
+    }
+    const paid =
+      sale.operationType !== 'unpaid' &&
+      (sale.paidAmount > 0.009 || sale.operationType === 'payment');
+    await this.prisma.spaBooking.update({
+      where: { id: bookingId },
+      data: {
+        linkedSaleExternalId: saleId,
+        oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+        ...(opts?.applyServiceId
+          ? { serviceId: opts.applyServiceId }
+          : {}),
+        paymentStatus: paid
+          ? ServicePaymentStatus.PAID
+          : ServicePaymentStatus.DEBT,
+        ...(paid
+          ? { paidAt: new Date(), eligibleForMotivation: true }
+          : { eligibleForMotivation: false }),
+      },
+    });
+    return this.detail(clubId, fitgoSessionKey('SPA', bookingId));
+  }
+
+  async unlinkSpaDocument(user: JwtPayload, bookingId: string) {
+    const clubId = requireClubId(user);
+    const booking = await this.prisma.spaBooking.findFirst({
+      where: { id: bookingId, clubId },
+    });
+    if (!booking) throw new NotFoundException('Запись не найдена');
+    await this.prisma.spaBooking.update({
+      where: { id: bookingId },
+      data: {
+        linkedSaleExternalId: null,
+        ...(booking.consumedInCrmAt
+          ? {}
+          : { crmDocRef: null, oneCLinkStatus: SpaOneCLinkStatus.NOT_LINKED }),
+        eligibleForMotivation: false,
+      },
+    });
+    return this.detail(clubId, fitgoSessionKey('SPA', bookingId));
+  }
+
+  async linkSpaVisit(
+    user: JwtPayload,
+    bookingId: string,
+    onexExternalId: string,
+  ) {
+    const clubId = requireClubId(user);
+    const booking = await this.prisma.spaBooking.findFirst({
+      where: { id: bookingId, clubId },
+    });
+    if (!booking) throw new NotFoundException('Запись не найдена');
+    const ext = onexExternalId.trim();
+    if (!ext) throw new BadRequestException('Укажите занятие 1С');
+    const onex = await this.prisma.onexClassSession.findFirst({
+      where: { clubId, externalId: ext, kind: OnexClassKind.SPA, isActive: true },
+    });
+    if (!onex) throw new NotFoundException('Занятие 1С не найдено');
+    await this.prisma.spaBooking.update({
+      where: { id: bookingId },
+      data: {
+        crmDocRef: ext,
+        oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+      },
+    });
+    return this.detail(clubId, onexSessionKey(ext));
   }
 
   private matchSpaInMemory(

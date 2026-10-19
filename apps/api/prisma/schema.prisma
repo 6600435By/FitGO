@@ -1729,6 +1729,8 @@ model SpaBooking {
   /// Atomic claim for consume-to-1C (IN_PROGRESS → DONE/FAILED).
   consumeState           SpaConsumeState?
   crmDocRef              String?
+  /// Linked 1C sale line (`ClubRevenueEntry.externalId`) when reception sold without bookingRef.
+  linkedSaleExternalId   String?
   cancelledBy            SpaCancelledBy?
   cancelledAt            DateTime?
   controlLevel           ServiceControlLevel   @default(BASE)
@@ -1768,6 +1770,7 @@ model SpaBooking {
   @@index([clientId])
   @@index([clubId, clientExternalId])
   @@index([clubId, startAt])
+  @@index([clubId, linkedSaleExternalId])
   @@index([reviewFlag, usageStatus])
   @@index([presenceStatus, startAt])
   @@index([trustBand, trustResolution])

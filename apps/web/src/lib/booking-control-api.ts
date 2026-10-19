@@ -73,6 +73,41 @@ export function createBookingControlApi(
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlReturnApproval(token, base, sessionKey, comment);
     },
+    linkSpaSale: async (bookingId, saleExternalId, applyServiceId) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlSpaLinkSale(token, base, {
+        bookingId,
+        saleExternalId,
+        applyServiceId,
+      });
+    },
+    linkSpaVisit: async (bookingId, onexExternalId) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlSpaLinkVisit(token, base, {
+        bookingId,
+        onexExternalId,
+      });
+    },
+    unlinkSpaDocument: async (bookingId) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlSpaUnlink(token, base, bookingId);
+    },
+    updateSpaService: async (bookingId, serviceId) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      await api.adminUpdateSpaBooking(token, bookingId, { serviceId });
+    },
+    listSpaServices: async () => {
+      const token = getToken();
+      if (!token) return [];
+      const rows = await api.adminSpaServices(token);
+      return rows
+        .filter((s) => s.active !== false)
+        .map((s) => ({ id: s.id, name: s.name }));
+    },
     listHallSnapshots: async (sessionKey) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');

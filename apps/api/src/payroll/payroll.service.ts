@@ -421,6 +421,66 @@ export class PayrollService {
       }
     }
 
+    // ── SPA from linked reception sales (no 1C visit / onex row) ────────────
+    const spaPaidViaOnex = new Set(
+      units.filter((u) => u.kind === 'SPA').map((u) => u.id),
+    );
+    const linkedSpaBookings = await this.prisma.spaBooking.findMany({
+      where: {
+        clubId,
+        specialistId: performerId,
+        linkedSaleExternalId: { not: null },
+        startAt: { gte: fromD, lte: toD },
+        status: { not: 'CANCELLED' },
+        paymentStatus: 'PAID',
+      },
+      include: { service: true, client: true },
+    });
+    for (const b of linkedSpaBookings) {
+      if (spaPaidViaOnex.has(b.id)) continue;
+      // Visit already in units (matched onex) — do not pay twice from the sale.
+      if (
+        b.crmDocRef?.trim() &&
+        onexSpa.some(
+          (o) =>
+            o.externalId === b.crmDocRef || o.number === b.crmDocRef,
+        )
+      ) {
+        continue;
+      }
+      const saleExt = b.linkedSaleExternalId!.trim();
+      const sale = await this.prisma.clubRevenueEntry.findFirst({
+        where: { clubId, externalId: saleExt, isActive: true },
+      });
+      if (!sale) continue;
+      if (sale.operationType === 'unpaid' && (sale.paidAmount ?? 0) < 0.01) {
+        continue;
+      }
+      const amountMajor = Math.max(sale.paidAmount || 0, sale.saleAmount || 0);
+      if (amountMajor < 0.01) continue;
+      const priceMinor = Math.round(amountMajor * 100);
+      const clientName = b.client
+        ? `${b.client.lastName} ${b.client.firstName}`.trim()
+        : b.guestName ?? undefined;
+      units.push({
+        id: b.id,
+        kind: 'SPA',
+        performerId,
+        title: b.service.name,
+        occurredAt: b.startAt.toISOString(),
+        quantity: 1,
+        priceMinor,
+        trustBand: 'GREEN',
+        trustResolution: 'NONE',
+        payrollTrusted: true,
+        clientName,
+        serviceId: b.serviceId,
+        serviceExternalId: b.service.externalId ?? undefined,
+        partnerSource: b.partnerSource ?? undefined,
+      });
+      spaPaidViaOnex.add(b.id);
+    }
+
     // ── PT from 1C class docs (block/package → unitPriceMinor = blockPrice/N) ─
     // SOLARIUM never enters trainer payroll (admin % of paid solarium sales only).
     const onexPt = await this.prisma.onexClassSession.findMany({

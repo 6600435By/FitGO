@@ -9,7 +9,8 @@ import type {
   SpecialistCalendarResponse,
   SpecialistWorkSlotInput,
 } from '@fitgo/shared-types';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { SpaBoard } from '@/components/spa-board/spa-board';
 import {
   boardPeriodForView,
@@ -51,8 +52,10 @@ function normalizeSlots(slots: SpecialistWorkSlotInput[]) {
   }));
 }
 
-export default function SpecialistSchedulePage() {
+function SpecialistScheduleInner() {
   const me = getUser();
+  const searchParams = useSearchParams();
+  const deepLinkBookingId = searchParams.get('booking')?.trim() || '';
   const [board, setBoard] = useState<SpaBoardResponse | null>(null);
   const [calendar, setCalendar] = useState<SpecialistCalendarResponse | null>(
     null,
@@ -196,6 +199,37 @@ export default function SpecialistSchedulePage() {
       setMessage(err instanceof Error ? err.message : 'Ошибка загрузки'),
     );
   }, [reload]);
+
+  /** Deep-link from контроль записей: /specialist/schedule?booking=<id> */
+  useEffect(() => {
+    if (!deepLinkBookingId) return;
+    const fromBoard = board?.bookings.find((b) => b.id === deepLinkBookingId);
+    if (fromBoard) {
+      setSelectedBooking(fromBoard);
+      const start = new Date(fromBoard.startAt);
+      start.setHours(0, 0, 0, 0);
+      setDay(start);
+      return;
+    }
+    const fromList = bookings.find((b) => b.id === deepLinkBookingId);
+    if (!fromList) return;
+    setSelectedBooking({
+      id: fromList.id,
+      specialistId: fromList.specialistId,
+      startAt: fromList.startAt,
+      endAt: fromList.endAt,
+      serviceId: fromList.serviceId,
+      serviceName: fromList.serviceName,
+      clientId: fromList.clientId,
+      clientName: fromList.clientName,
+      status: fromList.status,
+      paymentType: fromList.paymentType,
+      busy: false,
+    });
+    const start = new Date(fromList.startAt);
+    start.setHours(0, 0, 0, 0);
+    setDay(start);
+  }, [deepLinkBookingId, board, bookings]);
 
   useEffect(() => {
     const tick = () => {
@@ -789,5 +823,13 @@ export default function SpecialistSchedulePage() {
         onCancel={cancelBookingCard}
       />
     </div>
+  );
+}
+
+export default function SpecialistSchedulePage() {
+  return (
+    <Suspense fallback={<p className="text-sm text-slate-400">Загрузка…</p>}>
+      <SpecialistScheduleInner />
+    </Suspense>
   );
 }

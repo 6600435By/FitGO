@@ -562,6 +562,30 @@ export class ServiceUsageService {
       return;
     }
 
+    // Reception already sold / admin wrote off in 1C — adopt, do not create a second doc.
+    if (
+      booking.linkedSaleExternalId?.trim() ||
+      (booking.crmDocRef?.trim() &&
+        booking.oneCLinkStatus === SpaOneCLinkStatus.LINKED)
+    ) {
+      const eligible =
+        booking.paymentType === SpaPaymentType.QUOTA ||
+        booking.paymentStatus === ServicePaymentStatus.PAID ||
+        Boolean(booking.manualPaymentConfirmedAt);
+      await this.prisma.spaBooking.update({
+        where: { id: bookingId },
+        data: {
+          consumeState: 'DONE',
+          consumedInCrmAt: booking.consumedInCrmAt ?? new Date(),
+          oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+          usageStatus: ServiceUsageStatus.CONSUMED,
+          eligibleForMotivation: eligible,
+          status: SpaBookingStatus.COMPLETED,
+        },
+      });
+      return;
+    }
+
     const externalId =
       booking.client?.externalId ?? booking.clientExternalId;
     if (!externalId) {

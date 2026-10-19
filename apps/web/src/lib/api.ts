@@ -2478,6 +2478,43 @@ export const api = {
       token,
     ),
 
+  bookingControlSpaLinkSale: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    body: {
+      bookingId: string;
+      saleExternalId: string;
+      applyServiceId?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/spa-link-sale`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  bookingControlSpaLinkVisit: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    body: { bookingId: string; onexExternalId: string },
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/spa-link-visit`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  bookingControlSpaUnlink: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    bookingId: string,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/spa-unlink`,
+      { method: 'POST', body: JSON.stringify({ bookingId }) },
+      token,
+    ),
+
   bookingControlPendingApprovals: (
     token: string,
     base: 'super-admin' | 'admin',

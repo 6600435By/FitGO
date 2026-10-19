@@ -64,6 +64,19 @@ function SpecialistMySessionsInner() {
           comment,
         );
       },
+      updateSpaService: async (bookingId: string, serviceId: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        await api.specialistUpdateSpaBooking(token, bookingId, { serviceId });
+      },
+      listSpaServices: async () => {
+        const token = getToken();
+        if (!token) return [];
+        const rows = await api.specialistOwnServices(token);
+        return rows
+          .filter((s) => s.active !== false)
+          .map((s) => ({ id: s.id, name: s.name }));
+      },
     }),
     [],
   );
@@ -82,6 +95,9 @@ function SpecialistMySessionsInner() {
       initialPayment={initialPayment}
       initialClient={initialClient}
       initialClientId={initialClientId}
+      spaBookingEditHref={(bookingId) =>
+        `/specialist/schedule?booking=${encodeURIComponent(bookingId)}`
+      }
     />
   );
 }
