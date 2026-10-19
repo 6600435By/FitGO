@@ -151,6 +151,9 @@ function AdminTasksInner() {
       .then((r) => {
         setSkippedBirthdays(r.skipped ?? 0);
         setBirthdayScanError(r.scanError?.trim() || null);
+        // Scan finishes after the first list paint. Reload so new birthday
+        // rows show up without waiting on 1C for the rest of the queue.
+        return api.adminMyTasks(token).then(setTasks);
       })
       .catch(() => {
         setSkippedBirthdays(0);

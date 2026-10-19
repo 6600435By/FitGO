@@ -552,43 +552,62 @@ export class SuperAdminService implements OnModuleInit {
     } catch {
       // non-fatal
     }
-    try {
-      await this.tasksScheduler.refreshBirthdays(clubId);
-    } catch {
-      // non-fatal
-    }
+    this.tasksScheduler.refreshBirthdaysNonBlocking(clubId);
 
-    // Default: active queue only (otherwise CANCELLED legacy floods the UI).
-    const statusFilter = status
-      ? { status: status as PrismaAdminTaskStatus }
-      : {
-          status: {
-            in: [PrismaAdminTaskStatus.OPEN, PrismaAdminTaskStatus.IN_PROGRESS],
+    // Hide legacy per-sale debt tasks; keep aggregated debtor:* only.
+    const hideLegacy = {
+      NOT: {
+        OR: [
+          { source: 'DEBT_OVERDUE' },
+          {
+            source: { in: ['STAFF_DEBT', 'CLIENT_DEBT'] },
+            dedupeKey: { startsWith: 'debt:' },
           },
-        };
+        ],
+      },
+    };
+    const taskInclude = {
+      assignee: true,
+      createdBy: { select: { id: true, firstName: true, lastName: true } },
+    } as const;
 
-    const tasks = await this.prisma.adminTask.findMany({
-      where: {
-        clubId,
-        ...statusFilter,
-        // Hide legacy per-sale debt tasks; keep aggregated debtor:* only.
-        NOT: {
-          OR: [
-            { source: 'DEBT_OVERDUE' },
-            {
-              source: { in: ['STAFF_DEBT', 'CLIENT_DEBT'] },
-              dedupeKey: { startsWith: 'debt:' },
-            },
-          ],
-        },
-      },
-      include: {
-        assignee: true,
-        createdBy: { select: { id: true, firstName: true, lastName: true } },
-      },
-      orderBy: [{ status: 'asc' }, { dueAt: 'asc' }, { createdAt: 'desc' }],
-      take: 500,
-    });
+    // OPEN is the first enum value, so a single take ordered by status
+    // drops IN_PROGRESS once the open queue is large. Load them separately.
+    const tasks = status
+      ? await this.prisma.adminTask.findMany({
+          where: {
+            clubId,
+            status: status as PrismaAdminTaskStatus,
+            ...hideLegacy,
+          },
+          include: taskInclude,
+          orderBy: [{ dueAt: 'asc' }, { createdAt: 'desc' }],
+          take: 500,
+        })
+      : (
+          await Promise.all([
+            this.prisma.adminTask.findMany({
+              where: {
+                clubId,
+                status: PrismaAdminTaskStatus.IN_PROGRESS,
+                ...hideLegacy,
+              },
+              include: taskInclude,
+              orderBy: [{ dueAt: 'asc' }, { createdAt: 'desc' }],
+              take: 300,
+            }),
+            this.prisma.adminTask.findMany({
+              where: {
+                clubId,
+                status: PrismaAdminTaskStatus.OPEN,
+                ...hideLegacy,
+              },
+              include: taskInclude,
+              orderBy: [{ dueAt: 'asc' }, { createdAt: 'desc' }],
+              take: 400,
+            }),
+          ])
+        ).flat();
 
     const saleIds = tasks
       .map((task) => task.relatedSaleId)

@@ -73,6 +73,16 @@ export class AdminTasksSchedulerService implements OnModuleInit {
   private readonly lastBirthdayRefreshAt = new Map<string, number>();
   /** Last birthday scan error per club (cleared on success). */
   private readonly lastBirthdayScanError = new Map<string, string>();
+  /** One birthday scan per club — inbox must not start a second 60s 1C call. */
+  private readonly birthdayRefreshFlight = new Map<
+    string,
+    Promise<{
+      created: number;
+      skipped: number;
+      skippedThrottle: boolean;
+      scanError: string | null;
+    }>
+  >();
 
   constructor(
     private readonly config: ConfigService,
@@ -184,10 +194,26 @@ export class AdminTasksSchedulerService implements OnModuleInit {
   }
 
   /**
+   * Start a birthday scan without holding the task list.
+   * A slow /clients/birthdays used to keep GET /super-admin/tasks open for 60s,
+   * so the inbox painted as empty while admins still had the queue.
+   */
+  refreshBirthdaysNonBlocking(clubId: string) {
+    void this.refreshBirthdays(clubId).catch((err) => {
+      this.logger.warn(
+        `Birthday refresh failed: ${err instanceof Error ? err.message : err}`,
+      );
+    });
+  }
+
+  /**
    * Refresh birthday tasks from 1C. Safe for admin / super-admin inbox open.
    * At most once per 30 min per club unless force.
    */
   async refreshBirthdays(clubId: string, force = false) {
+    const inflight = this.birthdayRefreshFlight.get(clubId);
+    if (inflight && !force) return inflight;
+
     const last = this.lastBirthdayRefreshAt.get(clubId) ?? 0;
     if (!force && Date.now() - last < REFRESH_MIN_MS) {
       return {
@@ -198,6 +224,17 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       };
     }
 
+    const job = this.executeBirthdayRefresh(clubId);
+    this.birthdayRefreshFlight.set(clubId, job);
+    void job.finally(() => {
+      if (this.birthdayRefreshFlight.get(clubId) === job) {
+        this.birthdayRefreshFlight.delete(clubId);
+      }
+    });
+    return job;
+  }
+
+  private async executeBirthdayRefresh(clubId: string) {
     const systemUser =
       (await this.prisma.user.findFirst({
         where: {

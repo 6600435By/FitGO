@@ -678,6 +678,15 @@ export class FitgoHttpProvider {
     }>(`/clients/birthdays${q.toString() ? `?${q.toString()}` : ''}`, {
       timeoutMs: 60_000,
     });
+    if (
+      data &&
+      typeof data === 'object' &&
+      !Array.isArray(data) &&
+      typeof data.error === 'string' &&
+      data.error.trim()
+    ) {
+      throw new Error(data.error.trim());
+    }
     // unwrapFormaData may return inner payload { found, data } or the array itself.
     const rows = Array.isArray(data)
       ? data

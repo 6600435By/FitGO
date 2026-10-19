@@ -752,12 +752,9 @@ export class AdminService {
     } catch {
       // non-fatal
     }
-    // Birthdays from 1C (throttled) — otherwise only FULL sync creates them.
-    try {
-      await this.tasksScheduler.refreshBirthdays(clubId);
-    } catch {
-      // non-fatal — scanError surfaced via getBirthdaySkipped
-    }
+    // Birthdays from 1C (throttled). Do not await: a 60s 1C timeout used to
+    // hold the whole inbox, including tasks already in progress.
+    this.tasksScheduler.refreshBirthdaysNonBlocking(clubId);
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
     const sharedOpen = {

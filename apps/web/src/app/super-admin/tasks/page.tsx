@@ -60,6 +60,8 @@ function parseTopic(raw: string | null): TopicFilter {
 function SuperAdminTasksInner() {
   const searchParams = useSearchParams();
   const [tasks, setTasks] = useState<AdminTaskItem[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [admins, setAdmins] = useState<StaffMember[]>([]);
   const [form, setForm] = useState({
     assigneeIds: [] as string[],
@@ -76,14 +78,20 @@ function SuperAdminTasksInner() {
   const load = () => {
     const token = getToken();
     if (!token) return;
-    Promise.all([api.superAdminTasks(token), api.superAdminStaff(token)]).then(
-      ([taskList, staff]) => {
+    setLoadError(null);
+    Promise.all([api.superAdminTasks(token), api.superAdminStaff(token)])
+      .then(([taskList, staff]) => {
         setTasks(taskList);
         setAdmins(
           staff.filter((s) => s.roles.includes(UserRole.ADMIN) && s.isActive),
         );
-      },
-    );
+      })
+      .catch((err: unknown) => {
+        setLoadError(
+          err instanceof Error ? err.message : 'Не удалось загрузить задачи',
+        );
+      })
+      .finally(() => setLoaded(true));
   };
 
   useEffect(() => {
@@ -251,7 +259,13 @@ function SuperAdminTasksInner() {
       )}
 
       <ul className="space-y-3">
-        {visible.length === 0 && (
+        {!loaded && (
+          <li className="text-sm text-slate-400">Загрузка задач…</li>
+        )}
+        {loaded && loadError && (
+          <li className="text-sm text-amber-300/90">{loadError}</li>
+        )}
+        {loaded && !loadError && visible.length === 0 && (
           <li className="text-sm text-slate-400">Нет задач в этом фильтре</li>
         )}
         {visible.map((task) => {
