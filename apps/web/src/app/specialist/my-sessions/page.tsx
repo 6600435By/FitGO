@@ -16,6 +16,8 @@ function SpecialistMySessionsInner() {
   const paymentRaw = searchParams.get('payment')?.trim()?.toUpperCase();
   const initialPayment =
     paymentRaw === 'DEBT' || paymentRaw === 'PAID' ? paymentRaw : 'ALL';
+  const initialClient = searchParams.get('client')?.trim() || undefined;
+  const initialClientId = searchParams.get('clientId')?.trim() || undefined;
 
   const panelApi = useMemo(
     () => ({
@@ -26,6 +28,9 @@ function SpecialistMySessionsInner() {
         status?: string;
         needsReview?: boolean;
         payment?: string;
+        client?: string;
+        clientId?: string;
+        notIn1c?: boolean;
       }) => {
         const token = getToken();
         if (!token) return [];
@@ -68,13 +73,15 @@ function SpecialistMySessionsInner() {
       api={panelApi}
       fixedKind="SPA"
       title="Контроль записей"
-      subtitle="Ваши SPA-записи. Подтвердите выполнение — затем админ допустит в ЗП."
+      subtitle="Ваши SPA-записи. Подтвердите услугу — затем админ допустит в ЗП."
       canApproveGroup
       approvalActor="performer"
       initialFrom={initialFrom}
       initialTo={initialTo}
       initialNeedsReview={initialNeedsReview}
       initialPayment={initialPayment}
+      initialClient={initialClient}
+      initialClientId={initialClientId}
     />
   );
 }

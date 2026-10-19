@@ -2320,6 +2320,9 @@ export const api = {
       performerId?: string;
       payTag?: string;
       flag?: string;
+      client?: string;
+      clientId?: string;
+      notIn1c?: boolean;
     },
   ) => {
     const q = new URLSearchParams({ from: params.from, to: params.to });
@@ -2331,6 +2334,9 @@ export const api = {
     if (params.performerId) q.set('performerId', params.performerId);
     if (params.payTag) q.set('payTag', params.payTag);
     if (params.flag) q.set('flag', params.flag);
+    if (params.client?.trim()) q.set('client', params.client.trim());
+    if (params.clientId?.trim()) q.set('clientId', params.clientId.trim());
+    if (params.notIn1c) q.set('notIn1c', '1');
     return request<import('@fitgo/shared-types').BookingControlListItem[]>(
       `/${base}/booking-control?${q}`,
       {},

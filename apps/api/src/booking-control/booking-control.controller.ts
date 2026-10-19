@@ -30,6 +30,12 @@ type ListQuery = {
   /** EXPIRING_PACKAGE | LATE_ADD — discrepancy deep-link */
   flag?: string;
   sessionKey?: string;
+  /** Client name substring */
+  client?: string;
+  /** FitGO client user id */
+  clientId?: string;
+  /** SPA not linked to 1C */
+  notIn1c?: string;
 };
 
 @Controller()
@@ -433,6 +439,9 @@ export class BookingControlController {
         query.needsReview === '1' || query.needsReview === 'true',
       performerId: query._own ? undefined : query.performerId,
       restrictPerformerId: query._own ? query.performerId : undefined,
+      client: query.client?.trim() || undefined,
+      clientId: query.clientId?.trim() || undefined,
+      notIn1c: query.notIn1c === '1' || query.notIn1c === 'true',
     });
   }
 }

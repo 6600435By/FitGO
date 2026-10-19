@@ -28,8 +28,20 @@ function AdminBookingControlInner() {
       : undefined;
   const initialPerformerId =
     searchParams.get('performerId')?.trim() || undefined;
+  const initialClient = searchParams.get('client')?.trim() || undefined;
+  const initialClientId = searchParams.get('clientId')?.trim() || undefined;
 
-  const panelApi = useMemo(() => createBookingControlApi('admin'), []);
+  const panelApi = useMemo(() => {
+    const base = createBookingControlApi('admin');
+    return {
+      ...base,
+      updateSpaGuestPhone: async (bookingId: string, guestPhone: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        await api.adminUpdateSpaBooking(token, bookingId, { guestPhone });
+      },
+    };
+  }, []);
 
   return (
     <BookingControlPanel
@@ -47,6 +59,8 @@ function AdminBookingControlInner() {
       initialPayment={initialPayment}
       initialKind={initialKind}
       initialPerformerId={initialPerformerId}
+      initialClient={initialClient}
+      initialClientId={initialClientId}
       cancelSpaBooking={async (bookingId) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');

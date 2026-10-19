@@ -19,6 +19,8 @@ function TrainerMySessionsInner() {
   const initialPayment =
     paymentRaw === 'DEBT' || paymentRaw === 'PAID' ? paymentRaw : 'ALL';
   const initialSessionKey = searchParams.get('session')?.trim() || undefined;
+  const initialClient = searchParams.get('client')?.trim() || undefined;
+  const initialClientId = searchParams.get('clientId')?.trim() || undefined;
 
   const panelApi = useMemo(() => createTrainerBookingControlApi(), []);
 
@@ -42,6 +44,8 @@ function TrainerMySessionsInner() {
       initialNeedsReview={initialNeedsReview}
       initialPayment={initialPayment}
       initialSessionKey={initialSessionKey}
+      initialClient={initialClient}
+      initialClientId={initialClientId}
     />
   );
 }

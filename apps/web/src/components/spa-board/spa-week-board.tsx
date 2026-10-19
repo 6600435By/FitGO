@@ -16,14 +16,19 @@ import {
 } from 'react';
 import {
   addDays,
+  defaultSpaWeekScale,
+  nudgeSpaWeekScale,
   startOfDay,
   startOfWeekMonday,
   weekDays,
+  writeStoredSpaWeekScale,
+  type SpaWeekScale,
 } from './spa-board-period';
 
 const DAY_START_HOUR = 8;
 const DAY_END_HOUR = 22;
-const PX_PER_MIN = 0.95;
+const BASE_PX_PER_MIN = 0.95;
+const BASE_COL_MIN_REM = 9.5;
 const GRID_STEP_MIN = 15;
 const MOUSE_DRAG_THRESHOLD_PX = 6;
 const TOUCH_SCROLL_SLOP_PX = 16;
@@ -31,7 +36,6 @@ const TOUCH_DRAG_DELAY_MS = 400;
 const NOW_MARKER_TICK_MS = 30_000;
 const EDGE_SCROLL_PX = 48;
 const EDGE_SCROLL_STEP = 18;
-const COL_MIN_WIDTH_CLASS = 'min-w-[9.5rem]';
 
 const STAFF_COLORS = [
   'bg-amber-500/80 border-amber-400/50',
@@ -297,9 +301,21 @@ export function SpaWeekBoard({
       : filterSpecialistId || '';
 
   const [localFilter, setLocalFilter] = useState(effectiveFilter);
+  const [weekScale, setWeekScale] = useState<SpaWeekScale>(100);
   useEffect(() => {
     setLocalFilter(effectiveFilter);
   }, [effectiveFilter]);
+  useEffect(() => {
+    setWeekScale(defaultSpaWeekScale());
+  }, []);
+
+  const setScale = (next: SpaWeekScale) => {
+    setWeekScale(next);
+    writeStoredSpaWeekScale(next);
+  };
+
+  const pxPerMin = BASE_PX_PER_MIN * (weekScale / 100);
+  const colMinWidthRem = BASE_COL_MIN_REM * (weekScale / 100);
 
   const activeFilter = onFilterSpecialistChange
     ? effectiveFilter
@@ -339,7 +355,7 @@ export function SpaWeekBoard({
   }, [board.bookings, board.hours, days, filteredStaffId, totalMin]);
 
   const viewHeight =
-    (viewport.viewEndMin - viewport.viewStartMin) * PX_PER_MIN;
+    (viewport.viewEndMin - viewport.viewStartMin) * pxPerMin;
   const hourMarks = useMemo(() => {
     const marks: number[] = [];
     for (
@@ -502,7 +518,7 @@ export function SpaWeekBoard({
           Math.min(adjustedY - rect.top, colHeight - 1),
         );
         const minsFromView =
-          Math.floor(relY / PX_PER_MIN / GRID_STEP_MIN) * GRID_STEP_MIN;
+          Math.floor(relY / pxPerMin / GRID_STEP_MIN) * GRID_STEP_MIN;
         const maxStart =
           Math.floor(
             (viewport.viewEndMin - viewport.viewStartMin - GRID_STEP_MIN) /
@@ -517,7 +533,7 @@ export function SpaWeekBoard({
       }
       return null;
     },
-    [days, viewport.viewEndMin, viewport.viewStartMin],
+    [days, pxPerMin, viewport.viewEndMin, viewport.viewStartMin],
   );
 
   const commitMove = useCallback(
@@ -709,13 +725,19 @@ export function SpaWeekBoard({
       )}`
     : '';
 
+  const isTracking = Boolean(drag || pointerStart);
+
   useEffect(() => {
+    if (!isTracking) return;
+    const prevUserSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = 'none';
     if (drag) document.body.style.cursor = 'grabbing';
-    else document.body.style.cursor = '';
     return () => {
-      document.body.style.cursor = '';
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
     };
-  }, [drag]);
+  }, [drag, isTracking]);
 
   return (
     <div className="space-y-3">
@@ -744,6 +766,34 @@ export function SpaWeekBoard({
         >
           Эта неделя
         </button>
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            type="button"
+            className="btn-secondary !px-2 !py-1 text-xs"
+            aria-label="Уменьшить журнал"
+            disabled={weekScale <= 70}
+            onClick={() => setScale(nudgeSpaWeekScale(weekScale, -1))}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="btn-secondary !min-w-[3.25rem] !px-2 !py-1 text-xs tabular-nums"
+            aria-label="Масштаб 100%"
+            onClick={() => setScale(100)}
+          >
+            {weekScale}%
+          </button>
+          <button
+            type="button"
+            className="btn-secondary !px-2 !py-1 text-xs"
+            aria-label="Увеличить журнал"
+            disabled={weekScale >= 115}
+            onClick={() => setScale(nudgeSpaWeekScale(weekScale, 1))}
+          >
+            +
+          </button>
+        </div>
       </div>
 
       {mode === 'admin' && staffOptions.length > 1 ? (
@@ -777,11 +827,10 @@ export function SpaWeekBoard({
       ) : null}
 
       <div
-        ref={scrollRef}
-        className="snap-x snap-mandatory overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/40 [-webkit-overflow-scrolling:touch]"
+        className="max-h-[calc(100dvh-var(--app-header-h,3rem)-4.5rem-env(safe-area-inset-bottom,0px))] select-none overflow-y-auto overscroll-contain rounded-xl border border-slate-800 bg-slate-950/40 md:max-h-[calc(100dvh-var(--app-header-h,3rem)-2rem)]"
       >
-        <div className="flex w-full min-w-max md:min-w-0">
-          <div className="admin-time-rail sticky left-0 z-20 w-12 shrink-0 border-r border-slate-800 bg-slate-950">
+        <div className="flex w-full">
+          <div className="admin-time-rail w-12 shrink-0 border-r border-slate-800 bg-slate-950">
             <div className="h-12 border-b border-slate-800" />
             <div className="relative" style={{ height: viewHeight }}>
               {hourMarks.map((m) => {
@@ -789,9 +838,9 @@ export function SpaWeekBoard({
                 const label = `${String(Math.floor(clockHour)).padStart(2, '0')}:00`;
                 const isClosing = m >= viewport.viewEndMin;
                 const topPx = isClosing
-                  ? (m - viewport.viewStartMin) * PX_PER_MIN
-                  : (m - viewport.viewStartMin) * PX_PER_MIN +
-                    (60 * PX_PER_MIN) / 2;
+                  ? (m - viewport.viewStartMin) * pxPerMin
+                  : (m - viewport.viewStartMin) * pxPerMin +
+                    (60 * pxPerMin) / 2;
                 return (
                   <div
                     key={m}
@@ -808,6 +857,11 @@ export function SpaWeekBoard({
             </div>
           </div>
 
+          <div
+            ref={scrollRef}
+            className="min-w-0 flex-1 snap-x snap-mandatory overflow-x-auto [-webkit-overflow-scrolling:touch]"
+          >
+            <div className="flex w-max min-w-full md:min-w-0 md:w-full">
           {days.map((d) => {
             const key = dateKey(d);
             const isToday = sameCalendarDay(d, today);
@@ -829,17 +883,18 @@ export function SpaWeekBoard({
                 ? (nowMinutes -
                     DAY_START_HOUR * 60 -
                     viewport.viewStartMin) *
-                  PX_PER_MIN
+                  pxPerMin
                 : null;
 
             return (
               <div
                 key={key}
-                className={`${COL_MIN_WIDTH_CLASS} w-0 shrink-0 grow basis-0 snap-start border-r border-slate-800 last:border-r-0 ${
+                className={`w-0 shrink-0 grow basis-0 snap-start border-r border-slate-800 last:border-r-0 ${
                   isToday ? 'bg-fitgo-500/5' : ''
                 } ${dropOk ? 'bg-fitgo-500/10' : ''} ${
                   dropBad ? 'bg-rose-500/10' : ''
                 }`}
+                style={{ minWidth: `${colMinWidthRem}rem` }}
               >
                 <div
                   className={`flex h-12 flex-col items-center justify-center border-b border-slate-800 px-1 text-center ${
@@ -877,7 +932,7 @@ export function SpaWeekBoard({
                       Math.min(e.clientY - rect.top, rect.height - 1),
                     );
                     const minsFromView =
-                      Math.floor(relY / PX_PER_MIN / GRID_STEP_MIN) *
+                      Math.floor(relY / pxPerMin / GRID_STEP_MIN) *
                       GRID_STEP_MIN;
                     const clickMins = viewport.viewStartMin + minsFromView;
 
@@ -927,12 +982,12 @@ export function SpaWeekBoard({
                     const top =
                       (minutesFromDayStart(h.startAt, d) -
                         viewport.viewStartMin) *
-                      PX_PER_MIN;
+                      pxPerMin;
                     const height = Math.max(
                       4,
                       (minutesFromDayStart(h.endAt, d) -
                         minutesFromDayStart(h.startAt, d)) *
-                        PX_PER_MIN,
+                        pxPerMin,
                     );
                     return (
                       <div
@@ -952,7 +1007,7 @@ export function SpaWeekBoard({
                       key={`line-${m}`}
                       className="pointer-events-none absolute inset-x-0 border-t border-slate-800/70"
                       style={{
-                        top: (m - viewport.viewStartMin) * PX_PER_MIN,
+                        top: (m - viewport.viewStartMin) * pxPerMin,
                       }}
                     />
                   ))}
@@ -961,7 +1016,7 @@ export function SpaWeekBoard({
                       key={`half-${m}`}
                       className="pointer-events-none absolute inset-x-0 border-t border-dashed border-slate-800/40"
                       style={{
-                        top: (m - viewport.viewStartMin) * PX_PER_MIN,
+                        top: (m - viewport.viewStartMin) * pxPerMin,
                       }}
                     />
                   ))}
@@ -987,7 +1042,7 @@ export function SpaWeekBoard({
                         style={{
                           top:
                             (drag.startMinutes - viewport.viewStartMin) *
-                            PX_PER_MIN,
+                            pxPerMin,
                           height: drag.height,
                         }}
                       />
@@ -1007,7 +1062,7 @@ export function SpaWeekBoard({
                         style={{
                           top:
                             (drag.startMinutes - viewport.viewStartMin) *
-                            PX_PER_MIN,
+                            pxPerMin,
                           height: drag.height,
                         }}
                       >
@@ -1032,8 +1087,8 @@ export function SpaWeekBoard({
                     const endMin = minutesFromDayStart(b.endAt, d);
                     const durationMin = Math.max(15, endMin - topMin);
                     const top =
-                      (topMin - viewport.viewStartMin) * PX_PER_MIN;
-                    const height = Math.max(22, durationMin * PX_PER_MIN);
+                      (topMin - viewport.viewStartMin) * pxPerMin;
+                    const height = Math.max(22, durationMin * pxPerMin);
                     const isDragging = drag?.booking.id === b.id;
                     const showMulti = !filteredStaffId;
                     const staff = board.staff.find(
@@ -1124,6 +1179,8 @@ export function SpaWeekBoard({
               </div>
             );
           })}
+            </div>
+          </div>
         </div>
       </div>
 

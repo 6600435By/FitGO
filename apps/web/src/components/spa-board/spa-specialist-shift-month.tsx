@@ -40,6 +40,7 @@ export function SpaSpecialistShiftMonth({
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -133,74 +134,96 @@ export function SpaSpecialistShiftMonth({
 
   return (
     <section className="card space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="font-medium">Мои смены</h3>
-          <p className="text-xs text-slate-500">
-            Опубликованные часы месяца. Нажмите день, чтобы изменить.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="btn-secondary !px-2.5 !py-1 text-xs"
-            onClick={prevMonth}
-          >
-            ←
-          </button>
-          <span className="min-w-[8rem] text-center text-sm capitalize">
-            {monthLabel(year, month)}
-          </span>
-          <button
-            type="button"
-            className="btn-secondary !px-2.5 !py-1 text-xs"
-            onClick={nextMonth}
-          >
-            →
-          </button>
-        </div>
-      </div>
+      <button
+        type="button"
+        className="flex w-full items-start justify-between gap-3 text-left"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="min-w-0">
+          <span className="block font-medium">Мои смены</span>
+          {!open ? (
+            <span className="mt-1 block text-sm text-slate-400">
+              {monthLabel(year, month)}
+              {blocks.length
+                ? ` · ${blocks.length} смен`
+                : ' · нет опубликованных смен'}
+            </span>
+          ) : (
+            <span className="mt-1 block text-sm text-slate-400">
+              Опубликованные часы месяца. Нажмите день, чтобы изменить.
+            </span>
+          )}
+        </span>
+        <span className="shrink-0 pt-0.5 text-xs text-slate-500">
+          {open ? '▾' : '▸'}
+        </span>
+      </button>
 
-      {message ? (
-        <p className="text-xs text-fitgo-300">{message}</p>
-      ) : null}
-
-      <div className="grid grid-cols-7 gap-1 text-center text-[10px] uppercase text-slate-500">
-        {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((l) => (
-          <div key={l}>{l}</div>
-        ))}
-      </div>
-      <div className="grid grid-cols-7 gap-1">
-        {Array.from({ length: firstWeekday }).map((_, i) => (
-          <div key={`pad-${i}`} className="min-h-[3.25rem]" />
-        ))}
-        {Array.from({ length: daysInMonth }).map((_, i) => {
-          const day = i + 1;
-          const date = `${year}-${pad(month)}-${pad(day)}`;
-          const dayBlocks = byDate.get(date) ?? [];
-          const has = dayBlocks.length > 0;
-          return (
+      {open ? (
+        <>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <button
-              key={date}
               type="button"
-              className={`min-h-[3.25rem] rounded-lg border p-1 text-left transition ${
-                has
-                  ? 'border-amber-500/40 bg-amber-500/10'
-                  : 'border-white/5 bg-slate-950/40 hover:border-white/20'
-              }`}
-              onClick={() => setSelectedDay(date)}
+              className="btn-secondary !px-2.5 !py-1 text-xs"
+              onClick={prevMonth}
             >
-              <span className="text-xs font-medium text-white">{day}</span>
-              {has ? (
-                <span className="mt-0.5 block text-[9px] tabular-nums text-amber-200/90">
-                  {timeOf(dayBlocks[0]!.startAt)}–
-                  {timeOf(dayBlocks[0]!.endAt)}
-                </span>
-              ) : null}
+              ←
             </button>
-          );
-        })}
-      </div>
+            <span className="min-w-[8rem] text-center text-sm capitalize">
+              {monthLabel(year, month)}
+            </span>
+            <button
+              type="button"
+              className="btn-secondary !px-2.5 !py-1 text-xs"
+              onClick={nextMonth}
+            >
+              →
+            </button>
+          </div>
+
+          {message ? (
+            <p className="text-xs text-fitgo-300">{message}</p>
+          ) : null}
+
+          <div className="grid grid-cols-7 gap-1 text-center text-[10px] uppercase text-slate-500">
+            {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((l) => (
+              <div key={l}>{l}</div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {Array.from({ length: firstWeekday }).map((_, i) => (
+              <div key={`pad-${i}`} className="min-h-[3.25rem]" />
+            ))}
+            {Array.from({ length: daysInMonth }).map((_, i) => {
+              const day = i + 1;
+              const date = `${year}-${pad(month)}-${pad(day)}`;
+              const dayBlocks = byDate.get(date) ?? [];
+              const has = dayBlocks.length > 0;
+              return (
+                <button
+                  key={date}
+                  type="button"
+                  className={`min-h-[3.25rem] rounded-lg border p-1 text-left transition ${
+                    has
+                      ? 'border-amber-500/40 bg-amber-500/10'
+                      : 'border-white/5 bg-slate-950/40 hover:border-white/20'
+                  }`}
+                  onClick={() => setSelectedDay(date)}
+                >
+                  <span className="text-xs font-medium text-white">{day}</span>
+                  {has ? (
+                    <span className="mt-0.5 block text-[9px] tabular-nums text-amber-200/90">
+                      {timeOf(dayBlocks[0]!.startAt)}–
+                      {timeOf(dayBlocks[0]!.endAt)}
+                    </span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
 
       {selectedDay ? (
         <SpaDayHoursDialog

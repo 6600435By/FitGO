@@ -82,6 +82,12 @@ type ListFilters = {
   flag?: 'EXPIRING_PACKAGE' | 'LATE_ADD';
   /** Skip live 1C PT-sales fetch (dashboard KPI / counts). */
   skipExternal?: boolean;
+  /** Substring match on clientName (case-insensitive). */
+  client?: string;
+  /** Exact FitGO client id, or same normalized FIO for guest rows. */
+  clientId?: string;
+  /** SPA rows not yet linked to 1C (source FITGO). */
+  notIn1c?: boolean;
 };
 
 @Injectable()
@@ -247,16 +253,19 @@ export class BookingControlService {
           : undefined;
 
       let fitgoBookingId: string | undefined;
+      let fitgoClientId: string | undefined;
       if (kind === 'PT') {
         const hit = this.matchPtInMemory(allPt, s, primaryMember?.externalId);
         if (hit) {
           fitgoBookingId = hit.id;
+          fitgoClientId = hit.clientId;
           matchedPtIds.add(hit.id);
         }
       } else if (kind === 'SPA') {
         const hit = this.matchSpaInMemory(allSpa, s, primaryMember?.externalId);
         if (hit) {
           fitgoBookingId = hit.id;
+          fitgoClientId = hit.clientId ?? undefined;
           matchedSpaIds.add(hit.id);
         }
       }
@@ -304,6 +313,7 @@ export class BookingControlService {
           kind === 'GROUP'
             ? undefined
             : primaryMember?.clientName ?? '—',
+        clientId: fitgoClientId,
         roomTitle: s.roomTitle ?? undefined,
         number: s.number ?? undefined,
         attendeeCount: counts.arrivedCount,
@@ -407,6 +417,7 @@ export class BookingControlService {
           performerName: `${b.trainer.lastName} ${b.trainer.firstName}`.trim(),
           performerId: b.trainerId,
           clientName: `${b.client.lastName} ${b.client.firstName}`.trim(),
+          clientId: b.clientId,
           attendeeCount: counts.arrivedCount,
           bookedCount: counts.bookedCount,
           arrivedCount: counts.arrivedCount,
@@ -460,6 +471,7 @@ export class BookingControlService {
             `${b.specialist.lastName} ${b.specialist.firstName}`.trim(),
           performerId: b.specialistId,
           clientName: this.spaClientLabel(b),
+          clientId: b.clientId ?? undefined,
           attendeeCount: counts.arrivedCount,
           bookedCount: counts.bookedCount,
           arrivedCount: counts.arrivedCount,
@@ -612,11 +624,75 @@ export class BookingControlService {
     if (filters.flag) {
       out = await this.filterByDiscrepancyFlag(clubId, out, filters.flag);
     }
+    if (filters.notIn1c) {
+      out = out.filter((i) => i.kind === 'SPA' && i.source === 'FITGO');
+    }
+    if (filters.clientId?.trim() || filters.client?.trim()) {
+      out = await this.filterByClient(
+        clubId,
+        out,
+        filters.clientId?.trim(),
+        filters.client?.trim(),
+      );
+    }
 
     return out.sort(
       (a, b) =>
         new Date(b.startAt).getTime() - new Date(a.startAt).getTime(),
     );
+  }
+
+  private normalizeClientName(name: string): string {
+    return name
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private async filterByClient(
+    _clubId: string,
+    items: BookingControlListItem[],
+    clientId?: string,
+    clientQuery?: string,
+  ): Promise<BookingControlListItem[]> {
+    let nameNeedle = clientQuery
+      ? this.normalizeClientName(clientQuery)
+      : '';
+    let exactNames = new Set<string>();
+
+    if (clientId) {
+      const user = await this.prisma.user.findFirst({
+        where: { id: clientId },
+        select: { firstName: true, lastName: true },
+      });
+      if (user) {
+        const full = this.normalizeClientName(
+          `${user.lastName} ${user.firstName}`,
+        );
+        if (full) exactNames.add(full);
+        const rev = this.normalizeClientName(
+          `${user.firstName} ${user.lastName}`,
+        );
+        if (rev) exactNames.add(rev);
+      }
+      // Guest bookings under this clientId also match by id.
+    }
+
+    return items.filter((i) => {
+      if (i.kind === 'GROUP') return false;
+      const itemName = this.normalizeClientName(i.clientName ?? '');
+      if (clientId) {
+        if (i.clientId === clientId) return true;
+        if (exactNames.size && itemName && exactNames.has(itemName)) {
+          return true;
+        }
+        return false;
+      }
+      if (nameNeedle) {
+        return itemName.includes(nameNeedle);
+      }
+      return true;
+    });
   }
 
   private async filterByDiscrepancyFlag(
@@ -1083,6 +1159,8 @@ export class BookingControlService {
         performerName,
         performerId: b.specialistId,
         clientName: this.spaClientLabel(b),
+        clientId: b.clientId ?? undefined,
+        guestPhone: b.guestPhone ?? b.client?.phone ?? undefined,
         attendeeCount: counts.arrivedCount,
         bookedCount: counts.bookedCount,
         arrivedCount: counts.arrivedCount,
@@ -3357,6 +3435,7 @@ export class BookingControlService {
   private matchPtInMemory(
     bookings: Array<{
       id: string;
+      clientId: string;
       startAt: Date;
       crmDocRef: string | null;
       trainer: { externalId: string | null };
@@ -3787,6 +3866,7 @@ export class BookingControlService {
   private matchSpaInMemory(
     bookings: Array<{
       id: string;
+      clientId?: string | null;
       startAt: Date;
       crmDocRef: string | null;
       clientExternalId?: string | null;

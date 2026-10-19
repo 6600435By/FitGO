@@ -2,7 +2,7 @@
 
 import type { SpaService } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
-import { DateField } from '@/components/ui/date-field';
+import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -184,6 +184,11 @@ export function SpaBookingDialog({
 
   const lookupPhone = async (raw: string) => {
     const digits = raw.replace(/\D/g, '');
+    if (!digits.length) {
+      setPhoneLookup('');
+      setForm((f) => ({ ...f, clientId: '' }));
+      return;
+    }
     if (digits.length < 9) {
       setPhoneLookup('Введите номер полностью');
       setForm((f) => ({ ...f, clientId: '' }));
@@ -222,20 +227,23 @@ export function SpaBookingDialog({
     }
   };
 
-  const buildPayload = (startIso: string): BookingPayload => ({
-    specialistId: allowPickSpecialist ? form.specialistId : undefined,
-    serviceId: form.serviceId,
-    startAt: startIso,
-    paymentType: form.paymentType,
-    ...(mode === 'base'
-      ? { clientId: form.clientId }
-      : form.clientId
-        ? { clientId: form.clientId, guestPhone: form.guestPhone }
-        : {
-            guestName: form.guestName,
-            guestPhone: form.guestPhone,
-          }),
-  });
+  const buildPayload = (startIso: string): BookingPayload => {
+    const phone = form.guestPhone.trim() || undefined;
+    return {
+      specialistId: allowPickSpecialist ? form.specialistId : undefined,
+      serviceId: form.serviceId,
+      startAt: startIso,
+      paymentType: form.paymentType,
+      ...(mode === 'base'
+        ? { clientId: form.clientId }
+        : form.clientId
+          ? { clientId: form.clientId, ...(phone ? { guestPhone: phone } : {}) }
+          : {
+              guestName: form.guestName.trim(),
+              ...(phone ? { guestPhone: phone } : {}),
+            }),
+    };
+  };
 
   const submit = async () => {
     setError('');
@@ -363,7 +371,7 @@ export function SpaBookingDialog({
         ) : (
           <>
             <label className="block space-y-1 text-sm">
-              <span className="text-slate-400">Телефон</span>
+              <span className="text-slate-400">Телефон (необязательно)</span>
               <input
                 className="input"
                 value={form.guestPhone}
@@ -376,7 +384,12 @@ export function SpaBookingDialog({
             </label>
             {phoneLookup ? (
               <p className="text-xs text-slate-400">{phoneLookup}</p>
-            ) : null}
+            ) : (
+              <p className="text-xs text-slate-500">
+                Без номера запись сохранится с пометкой «Нет в 1С». Телефон
+                добавит админ на контроле записей.
+              </p>
+            )}
             <label className="block space-y-1 text-sm">
               <span className="text-slate-400">ФИО</span>
               <input
@@ -422,16 +435,11 @@ export function SpaBookingDialog({
               value={datePart}
               onChange={setDatePart}
             />
-            <label className="block space-y-1 text-sm">
-              <span className="text-[11px] text-slate-500">Время</span>
-              <input
-                type="time"
-                className="input date-field"
-                step={60}
-                value={timePart}
-                onChange={(e) => setTimePart(e.target.value)}
-              />
-            </label>
+            <TimeField
+              label="Время"
+              value={timePart || '10:00'}
+              onChange={setTimePart}
+            />
           </div>
           <p className="text-xs text-slate-500">
             Можно изменить вручную. Запись в прошлое — если забыли добавить
@@ -521,13 +529,10 @@ export function SpaBookingDialog({
                       <span className="min-w-[6.5rem] capitalize text-slate-300">
                         {formatDateShort(entry.date)}
                       </span>
-                      <input
-                        type="time"
-                        className="input date-field !w-auto"
-                        step={60}
+                      <TimeField
+                        className="min-w-[8.5rem] flex-1"
                         value={entry.time}
-                        onChange={(e) => {
-                          const t = e.target.value;
+                        onChange={(t) => {
                           setPeriodEntries((prev) =>
                             prev.map((row) =>
                               row.date === entry.date
@@ -546,16 +551,12 @@ export function SpaBookingDialog({
                     value={extraDate}
                     onChange={setExtraDate}
                   />
-                  <label className="block space-y-1 text-sm">
-                    <span className="text-[11px] text-slate-500">Время</span>
-                    <input
-                      type="time"
-                      className="input date-field"
-                      step={60}
-                      value={extraTime}
-                      onChange={(e) => setExtraTime(e.target.value)}
-                    />
-                  </label>
+                  <TimeField
+                    label="Время"
+                    className="min-w-[8.5rem]"
+                    value={extraTime}
+                    onChange={setExtraTime}
+                  />
                   <button
                     type="button"
                     className="btn-secondary text-xs"

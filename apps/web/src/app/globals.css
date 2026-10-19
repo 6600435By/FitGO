@@ -60,20 +60,17 @@ body {
     opacity: 0.7;
   }
 
-  /* Vertically center native time digits inside fixed-height .input */
+  /* Native time: keep default inline layout so Android Chrome can edit
+   * hour/minute segments. Do not force display:flex on datetime-edit. */
   input.input[type='time']::-webkit-datetime-edit,
   input.date-field[type='time']::-webkit-datetime-edit {
-    display: flex;
-    align-items: center;
-    height: 100%;
     padding: 0;
+    line-height: 2.75rem;
   }
 
   input.input[type='time']::-webkit-datetime-edit-fields-wrapper,
   input.date-field[type='time']::-webkit-datetime-edit-fields-wrapper {
-    display: flex;
-    align-items: center;
-    height: 100%;
+    padding: 0;
   }
 
   select.input {

@@ -40,8 +40,20 @@ function SuperAdminBookingControlInner() {
     flagRaw === 'EXPIRING_PACKAGE' || flagRaw === 'LATE_ADD'
       ? flagRaw
       : undefined;
+  const initialClient = searchParams.get('client')?.trim() || undefined;
+  const initialClientId = searchParams.get('clientId')?.trim() || undefined;
 
-  const panelApi = useMemo(() => createBookingControlApi('super-admin'), []);
+  const panelApi = useMemo(() => {
+    const base = createBookingControlApi('super-admin');
+    return {
+      ...base,
+      updateSpaGuestPhone: async (bookingId: string, guestPhone: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        await api.adminUpdateSpaBooking(token, bookingId, { guestPhone });
+      },
+    };
+  }, []);
 
   return (
     <BookingControlPanel
@@ -63,6 +75,8 @@ function SuperAdminBookingControlInner() {
       initialPerformerId={initialPerformerId}
       initialPayTag={initialPayTag}
       initialFlag={initialFlag}
+      initialClient={initialClient}
+      initialClientId={initialClientId}
       cancelSpaBooking={async (bookingId) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');

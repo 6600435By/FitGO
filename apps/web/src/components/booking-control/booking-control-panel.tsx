@@ -30,6 +30,9 @@ export type BookingControlApi = {
     performerId?: string;
     payTag?: string;
     flag?: string;
+    client?: string;
+    clientId?: string;
+    notIn1c?: boolean;
   }) => Promise<BookingControlListItem[]>;
   detail: (sessionKey: string) => Promise<BookingControlDetail>;
   openRemark: (
@@ -78,6 +81,11 @@ export type BookingControlApi = {
   ) => Promise<import('@fitgo/shared-types').HallClassSnapshotItem[]>;
   /** Returns object URL for JPEG (caller must revoke). */
   loadHallSnapshotImage?: (snapshotId: string) => Promise<string>;
+  /** Admin: save phone on unlinked SPA booking and retry 1C link. */
+  updateSpaGuestPhone?: (
+    bookingId: string,
+    guestPhone: string,
+  ) => Promise<void>;
 };
 
 type Props = {
@@ -115,6 +123,9 @@ type Props = {
   initialPayTag?: string;
   /** Discrepancy deep-link: EXPIRING_PACKAGE | LATE_ADD */
   initialFlag?: string;
+  /** Client name / id deep-link from booking card. */
+  initialClient?: string;
+  initialClientId?: string;
   /** Hide kind filter (specialist SPA-only) */
   fixedKind?: BookingControlKind;
   title?: string;
@@ -148,6 +159,15 @@ function monthStartIso() {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   return `${y}-${m}-01`;
+}
+
+/** Last calendar day of the current month (local), ISO yyyy-mm-dd. */
+function monthEndIso() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  const last = new Date(y, m + 1, 0).getDate();
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
 }
 
 function formatDay(iso: string) {
@@ -226,6 +246,8 @@ export function BookingControlPanel({
   initialPerformerId,
   initialPayTag,
   initialFlag,
+  initialClient,
+  initialClientId,
   fixedKind,
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
@@ -263,6 +285,13 @@ export function BookingControlPanel({
     'pending' | 'done'
   >('pending');
   const [needsReview, setNeedsReview] = useState(Boolean(initialNeedsReview));
+  const [clientFilter, setClientFilter] = useState(
+    initialClient?.trim() || '',
+  );
+  const [clientIdFilter, setClientIdFilter] = useState(
+    initialClientId?.trim() || '',
+  );
+  const [notIn1c, setNotIn1c] = useState(false);
   const [items, setItems] = useState<BookingControlListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
@@ -288,6 +317,9 @@ export function BookingControlPanel({
   const [localSeen, setLocalSeen] = useState<Set<string>>(new Set());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [approvalNotesOpen, setApprovalNotesOpen] = useState(false);
+  const [linkPhone, setLinkPhone] = useState('');
+  const [linkPhoneBusy, setLinkPhoneBusy] = useState(false);
+  const [linkPhoneMsg, setLinkPhoneMsg] = useState('');
 
   const load = useCallback(() => {
     if (detailOnly) {
@@ -307,6 +339,11 @@ export function BookingControlPanel({
         ...(performerId ? { performerId } : {}),
         ...(payTag ? { payTag } : {}),
         ...(flag ? { flag } : {}),
+        ...(clientFilter.trim() ? { client: clientFilter.trim() } : {}),
+        ...(clientIdFilter.trim()
+          ? { clientId: clientIdFilter.trim() }
+          : {}),
+        ...(notIn1c ? { notIn1c: true } : {}),
       })
       .then(setItems)
       .catch((e) =>
@@ -324,6 +361,9 @@ export function BookingControlPanel({
     flag,
     needsReview,
     performerId,
+    clientFilter,
+    clientIdFilter,
+    notIn1c,
     fixedKind,
     detailOnly,
   ]);
@@ -474,6 +514,8 @@ export function BookingControlPanel({
     setHistoryOpen(false);
     setApprovalNotesOpen(false);
     setDetailError('');
+    setLinkPhone('');
+    setLinkPhoneMsg('');
     closePhotos();
     const listItem = items.find((i) => i.sessionKey === sessionKey);
 
@@ -500,6 +542,7 @@ export function BookingControlPanel({
       try {
         const d = await api.detail(sessionKey);
         setSelected(d);
+        setLinkPhone(d.guestPhone ?? '');
       } catch (e) {
         // Keep provisional detail; only surface error if we have nothing useful.
         if (!listItem.title) {
@@ -514,6 +557,7 @@ export function BookingControlPanel({
     try {
       const d = await api.detail(sessionKey);
       setSelected(d);
+      setLinkPhone(d.guestPhone ?? '');
       const seen = new Set(
         d.groupApproval?.trainerSeenClientIds ??
           d.members.filter((m) => m.trainerSeen).map((m) => m.externalId),
@@ -546,8 +590,50 @@ export function BookingControlPanel({
     setHistoryOpen(false);
     setApprovalNotesOpen(false);
     setDetailError('');
+    setLinkPhone('');
+    setLinkPhoneMsg('');
     setSelected(null);
     onDetailClose?.();
+  };
+
+  const filterToClientBookings = (name: string, clientId?: string) => {
+    const n = name.trim();
+    if (!n && !clientId) return;
+    setFrom(monthStartIso());
+    setTo(monthEndIso());
+    setClientFilter(n);
+    setClientIdFilter(clientId?.trim() || '');
+    setStatus('ALL');
+    setNeedsReview(false);
+    setNotIn1c(false);
+    closeDetail();
+  };
+
+  const saveSpaGuestPhone = async () => {
+    if (!selected?.fitgoBookingId || !api.updateSpaGuestPhone) return;
+    const phone = linkPhone.trim();
+    if (!phone) {
+      setLinkPhoneMsg('Введите номер телефона');
+      return;
+    }
+    setLinkPhoneBusy(true);
+    setLinkPhoneMsg('');
+    try {
+      await api.updateSpaGuestPhone(selected.fitgoBookingId, phone);
+      const d = await api.detail(selected.sessionKey);
+      setSelected(d);
+      setLinkPhone(d.guestPhone ?? phone);
+      if (d.spaSettlement?.status === 'AWAITING_CLIENT_LINK') {
+        setLinkPhoneMsg('В 1С не найден, номер сохранён');
+      } else {
+        setLinkPhoneMsg('Клиент привязан');
+      }
+      load();
+    } catch (e) {
+      setLinkPhoneMsg(e instanceof Error ? e.message : 'Не удалось сохранить');
+    } finally {
+      setLinkPhoneBusy(false);
+    }
   };
 
   const spaEditableInApp =
@@ -963,6 +1049,18 @@ export function BookingControlPanel({
               </select>
             </label>
           ) : null}
+          <label className="col-span-2 min-w-0 text-[11px] text-slate-500 md:col-span-2">
+            Клиент
+            <input
+              className="input mt-1 block w-full min-w-0 text-sm"
+              value={clientFilter}
+              onChange={(e) => {
+                setClientFilter(e.target.value);
+                if (!e.target.value.trim()) setClientIdFilter('');
+              }}
+              placeholder="ФИО или часть имени"
+            />
+          </label>
           <label className="col-span-2 flex h-11 items-center gap-2 text-sm text-slate-300 md:col-span-1">
             <input
               type="checkbox"
@@ -971,6 +1069,15 @@ export function BookingControlPanel({
               onChange={(e) => setNeedsReview(e.target.checked)}
             />
             На проверке
+          </label>
+          <label className="col-span-2 flex h-11 items-center gap-2 text-sm text-slate-300 md:col-span-1">
+            <input
+              type="checkbox"
+              className="h-4 w-4 shrink-0"
+              checked={notIn1c}
+              onChange={(e) => setNotIn1c(e.target.checked)}
+            />
+            Нет в 1С
           </label>
           {flag ? (
             <div className="col-span-2 flex h-11 items-center md:col-span-2">
@@ -1431,6 +1538,22 @@ export function BookingControlPanel({
                         ? ` · ${selected.clientName}`
                         : ''}
                     </p>
+                    {selected.kind !== 'GROUP' && selected.clientName ? (
+                      <p className="mt-1 text-sm">
+                        <button
+                          type="button"
+                          className="text-fitgo-400 underline-offset-2 hover:underline"
+                          onClick={() =>
+                            filterToClientBookings(
+                              selected.clientName!,
+                              selected.clientId,
+                            )
+                          }
+                        >
+                          Записи клиента
+                        </button>
+                      </p>
+                    ) : null}
                     <p className="mt-1 text-sm text-slate-300">
                       Записано {selected.bookedCount ?? attendanceOf(selected).booked}
                       {' · '}
@@ -1603,6 +1726,47 @@ export function BookingControlPanel({
                       ? ` · ref ${selected.crmDocRef}`
                       : ''}
                   </p>
+                ) : null}
+                {selected.kind === 'SPA' &&
+                selected.fitgoBookingId &&
+                api.updateSpaGuestPhone &&
+                (selected.spaSettlement?.status === 'AWAITING_CLIENT_LINK' ||
+                  selected.source === 'FITGO' ||
+                  !selected.guestPhone) ? (
+                  <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+                    <p className="text-sm text-slate-300">
+                      Телефон для привязки к 1С
+                    </p>
+                    <div className="flex flex-wrap items-end gap-2">
+                      <label className="min-w-0 flex-1 space-y-1 text-sm">
+                        <span className="text-[11px] text-slate-500">
+                          Номер
+                        </span>
+                        <input
+                          className="input"
+                          value={linkPhone}
+                          onChange={(e) => setLinkPhone(e.target.value)}
+                          placeholder="+375…"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="btn-primary text-sm"
+                        disabled={linkPhoneBusy}
+                        onClick={() => void saveSpaGuestPhone()}
+                      >
+                        {linkPhoneBusy ? '…' : 'Сохранить номер'}
+                      </button>
+                    </div>
+                    {linkPhoneMsg ? (
+                      <p className="text-xs text-slate-400">{linkPhoneMsg}</p>
+                    ) : (
+                      <p className="text-xs text-slate-500">
+                        Номер сохранится в записи. Если клиент есть в 1С —
+                        привязка выполнится автоматически.
+                      </p>
+                    )}
+                  </div>
                 ) : null}
                 {selected.members.length > 0 && (
                   <div className="space-y-1">

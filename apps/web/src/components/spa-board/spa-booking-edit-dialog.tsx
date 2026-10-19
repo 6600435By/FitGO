@@ -1,11 +1,37 @@
 'use client';
 
 import type { SpaBoardBooking, SpaService } from '@fitgo/shared-types';
-import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
 import { toDatetimeLocalValue } from '@/components/spa-board/spa-booking-dialog';
-import { DateField } from '@/components/ui/date-field';
+import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+
+function currentMonthRange(): { from: string; to: string } {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const from = `${y}-${String(m + 1).padStart(2, '0')}-01`;
+  const last = new Date(y, m + 1, 0).getDate();
+  const to = `${y}-${String(m + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
+  return { from, to };
+}
+
+function clientBookingsHref(
+  pathname: string | null,
+  clientName: string,
+  clientId?: string,
+): string {
+  const base = pathname?.startsWith('/specialist')
+    ? '/specialist/my-sessions'
+    : '/admin/booking-control';
+  const { from, to } = currentMonthRange();
+  const q = new URLSearchParams({ from, to, client: clientName });
+  if (clientId) q.set('clientId', clientId);
+  return `${base}?${q}`;
+}
 
 function formatPrice(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)} ${currency}`;
@@ -55,6 +81,7 @@ export function SpaBookingEditDialog({
   onCancel: () => Promise<void>;
   onConfirmManualPayment?: () => Promise<void>;
 }) {
+  const pathname = usePathname();
   const bookable = services.filter((s) => s.active && (s.bookable ?? true));
   const crmLocked = Boolean(booking?.crmLocked);
   const [error, setError] = useState('');
@@ -82,6 +109,17 @@ export function SpaBookingEditDialog({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when dialog opens
   }, [open, booking?.id]);
+
+  const clientLink = useMemo(() => {
+    if (!booking) return null;
+    const name = (
+      booking.guestName ??
+      booking.clientName ??
+      ''
+    ).trim();
+    if (!name) return null;
+    return clientBookingsHref(pathname, name, booking.clientId);
+  }, [booking, pathname]);
 
   if (!open || !booking) return null;
 
@@ -115,6 +153,10 @@ export function SpaBookingEditDialog({
 
   const lookupPhone = async (raw: string) => {
     const digits = raw.replace(/\D/g, '');
+    if (!digits.length) {
+      setPhoneLookup('');
+      return;
+    }
     if (digits.length < 9) {
       setPhoneLookup('Введите номер полностью');
       return;
@@ -298,9 +340,20 @@ export function SpaBookingEditDialog({
             }
           />
         </label>
+        {clientLink ? (
+          <p className="text-sm">
+            <Link
+              href={clientLink}
+              className="text-fitgo-400 underline-offset-2 hover:underline"
+              onClick={onClose}
+            >
+              Записи клиента
+            </Link>
+          </p>
+        ) : null}
 
         <label className="block space-y-1 text-sm">
-          <span className="text-slate-400">Телефон</span>
+          <span className="text-slate-400">Телефон (необязательно)</span>
           <input
             className="input"
             value={form.guestPhone}
@@ -351,16 +404,11 @@ export function SpaBookingEditDialog({
               value={datePart}
               onChange={setDatePart}
             />
-            <label className="block space-y-1 text-sm">
-              <span className="text-[11px] text-slate-500">Время</span>
-              <input
-                type="time"
-                className="input date-field"
-                step={60}
-                value={timePart}
-                onChange={(e) => setTimePart(e.target.value)}
-              />
-            </label>
+            <TimeField
+              label="Время"
+              value={timePart || '10:00'}
+              onChange={setTimePart}
+            />
           </div>
         </div>
 

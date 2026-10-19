@@ -79,6 +79,7 @@ export default function SpecialistSchedulePage() {
     null,
   );
   const [showDayHours, setShowDayHours] = useState(false);
+  const [upcomingOpen, setUpcomingOpen] = useState(false);
   const [waitlist, setWaitlist] = useState<SpaWaitlistEntry[]>([]);
   const [waitlistPick, setWaitlistPick] = useState<{
     specialistId?: string;
@@ -667,57 +668,82 @@ export default function SpecialistSchedulePage() {
         onSave={saveDayHours}
       />
 
-      <section className="space-y-3">
-        <h3 className="font-medium">Ближайшие записи</h3>
-        {bookings.length === 0 ? (
-          <div className="card text-slate-400">Записей пока нет</div>
-        ) : (
-          <ul className="space-y-2">
-            {bookings.map((b) => {
-              const presence = b.usage?.presenceStatus;
-              const trustHint =
-                presence === 'VERIFIED_1C'
-                  ? 'text-emerald-400'
-                  : presence === 'ADMIN_OVERRIDE'
-                    ? 'text-amber-300'
-                    : 'text-slate-500';
-              return (
-                <li key={b.id} className="card">
-                  <p className="font-medium">{b.serviceName}</p>
-                  <p className="text-sm text-slate-300">{b.clientName}</p>
-                  <p className="text-sm text-slate-400">
-                    {formatDateTime(b.startAt)} ·{' '}
-                    {b.paymentType === 'QUOTA' ? 'По абонементу' : 'Платно'}
-                  </p>
-                  {b.usage && (
-                    <p className={`mt-1 text-xs ${trustHint}`}>
-                      Вход:{' '}
-                      {b.usage.presenceStatus === 'VERIFIED_1C'
-                        ? 'есть'
-                        : b.usage.presenceStatus === 'ADMIN_OVERRIDE'
-                          ? 'override'
-                          : 'ожидается'}
+      <section className="card space-y-3">
+        <button
+          type="button"
+          className="flex w-full items-start justify-between gap-3 text-left"
+          aria-expanded={upcomingOpen}
+          onClick={() => setUpcomingOpen((v) => !v)}
+        >
+          <span className="min-w-0">
+            <span className="block font-medium">Ближайшие записи</span>
+            {!upcomingOpen ? (
+              <span className="mt-1 block text-sm text-slate-400">
+                {bookings.length
+                  ? `${bookings.length} в списке`
+                  : 'Записей пока нет'}
+              </span>
+            ) : null}
+          </span>
+          <span className="shrink-0 pt-0.5 text-xs text-slate-500">
+            {upcomingOpen ? '▾' : '▸'}
+          </span>
+        </button>
+        {upcomingOpen ? (
+          bookings.length === 0 ? (
+            <p className="text-sm text-slate-400">Записей пока нет</p>
+          ) : (
+            <ul className="space-y-2">
+              {bookings.map((b) => {
+                const presence = b.usage?.presenceStatus;
+                const trustHint =
+                  presence === 'VERIFIED_1C'
+                    ? 'text-emerald-400'
+                    : presence === 'ADMIN_OVERRIDE'
+                      ? 'text-amber-300'
+                      : 'text-slate-500';
+                return (
+                  <li
+                    key={b.id}
+                    className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"
+                  >
+                    <p className="font-medium">{b.serviceName}</p>
+                    <p className="text-sm text-slate-300">{b.clientName}</p>
+                    <p className="text-sm text-slate-400">
+                      {formatDateTime(b.startAt)} ·{' '}
+                      {b.paymentType === 'QUOTA' ? 'По абонементу' : 'Платно'}
                     </p>
-                  )}
-                  {b.usage?.performanceStatus === 'CONFIRMED_BY_PERFORMER' ? (
-                    <p className="mt-2 text-xs text-emerald-400">
-                      Специалист подтвердил · ждёт администратора
-                    </p>
-                  ) : new Date(b.endAt) <= new Date() ? (
-                    <button
-                      type="button"
-                      className="btn-secondary mt-2 text-sm"
-                      disabled={busy}
-                      onClick={() => completeBooking(b.id)}
-                    >
-                      Подтвердить
-                    </button>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        )}
+                    {b.usage && (
+                      <p className={`mt-1 text-xs ${trustHint}`}>
+                        Вход:{' '}
+                        {b.usage.presenceStatus === 'VERIFIED_1C'
+                          ? 'есть'
+                          : b.usage.presenceStatus === 'ADMIN_OVERRIDE'
+                            ? 'override'
+                            : 'ожидается'}
+                      </p>
+                    )}
+                    {b.usage?.performanceStatus ===
+                    'CONFIRMED_BY_PERFORMER' ? (
+                      <p className="mt-2 text-xs text-emerald-400">
+                        Специалист подтвердил · ждёт администратора
+                      </p>
+                    ) : new Date(b.endAt) <= new Date() ? (
+                      <button
+                        type="button"
+                        className="btn-secondary mt-2 text-sm"
+                        disabled={busy}
+                        onClick={() => completeBooking(b.id)}
+                      >
+                        Подтвердить
+                      </button>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )
+        ) : null}
       </section>
 
       <SpaBookingDialog

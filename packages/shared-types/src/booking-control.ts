@@ -97,6 +97,8 @@ export interface BookingControlListItem {
   performerName: string;
   performerId?: string;
   clientName?: string;
+  /** FitGO user id when the booking is linked to a local client. */
+  clientId?: string;
   roomTitle?: string;
   number?: string;
   /** @deprecated Prefer arrivedCount — kept for older clients. */
@@ -217,6 +219,8 @@ export interface BookingControlDetail extends BookingControlListItem {
   spaSettlement?: SpaSettlementInfo;
   /** Who created / confirmed — small popover on the card. */
   history?: BookingControlHistoryEvent[];
+  /** SPA guest / booking phone (may be empty until admin fills it). */
+  guestPhone?: string;
 }
 
 /** Shared admin inbox row for GROUP / SPA / PT tasks awaiting admin action. */
@@ -249,6 +253,12 @@ export interface BookingControlListQuery {
   status?: BookingControlStatus | 'ALL';
   needsReview?: boolean;
   payment?: 'PAID' | 'DEBT' | 'ALL';
+  /** Substring match on clientName (case-insensitive). */
+  client?: string;
+  /** Exact FitGO client user id, or match guest by same normalized name. */
+  clientId?: string;
+  /** SPA rows not yet linked to 1C (source FITGO). */
+  notIn1c?: boolean;
 }
 
 export function onexSessionKey(externalId: string): string {

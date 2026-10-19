@@ -2328,9 +2328,22 @@ export class SpaBookingService {
 
     if (clientTouched) {
       const resolved = await this.resolveBookingClient(actor, {
-        clientId: input.clientId,
-        guestName: input.guestName,
-        guestPhone: input.guestPhone,
+        clientId:
+          input.clientId !== undefined
+            ? input.clientId
+            : (existing.clientId ?? undefined),
+        guestName:
+          input.guestName !== undefined
+            ? input.guestName
+            : (existing.guestName ??
+              (existing.client
+                ? `${existing.client.lastName} ${existing.client.firstName}`.trim()
+                : undefined)),
+        guestPhone:
+          input.guestPhone !== undefined
+            ? input.guestPhone
+            : (existing.guestPhone ?? undefined),
+        paymentType,
       });
       clientId = resolved.clientId ?? null;
       guestName = resolved.guestName ?? null;

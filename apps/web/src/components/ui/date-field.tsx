@@ -42,6 +42,82 @@ function inRange(iso: string, min?: string, max?: string): boolean {
   return true;
 }
 
+export type TimeFieldProps = {
+  label?: string;
+  /** HH:mm */
+  value: string;
+  onChange: (next: string) => void;
+  className?: string;
+  disabled?: boolean;
+};
+
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) =>
+  String(i).padStart(2, '0'),
+);
+const MINUTE_OPTIONS = Array.from({ length: 60 }, (_, i) =>
+  String(i).padStart(2, '0'),
+);
+
+function splitHm(value: string): { hour: string; minute: string } {
+  const m = /^(\d{1,2}):(\d{2})/.exec(value.trim());
+  if (!m) return { hour: '10', minute: '00' };
+  const hour = String(Math.min(23, Math.max(0, Number(m[1])))).padStart(2, '0');
+  const minute = String(Math.min(59, Math.max(0, Number(m[2])))).padStart(
+    2,
+    '0',
+  );
+  return { hour, minute };
+}
+
+/**
+ * Hour/minute selects — reliable on Android Chrome where native
+ * `input type="time"` often blocks segment edits inside fixed-height .input.
+ */
+export function TimeField({
+  label,
+  value,
+  onChange,
+  className,
+  disabled,
+}: TimeFieldProps) {
+  const { hour, minute } = splitHm(value || '10:00');
+  return (
+    <label className={`block space-y-1 text-sm ${className ?? ''}`}>
+      {label ? (
+        <span className="block h-4 text-[11px] text-slate-500">{label}</span>
+      ) : null}
+      <div className="grid grid-cols-2 gap-1.5">
+        <select
+          className="input"
+          aria-label="Часы"
+          disabled={disabled}
+          value={hour}
+          onChange={(e) => onChange(`${e.target.value}:${minute}`)}
+        >
+          {HOUR_OPTIONS.map((h) => (
+            <option key={h} value={h}>
+              {h}
+            </option>
+          ))}
+        </select>
+        <select
+          className="input"
+          aria-label="Минуты"
+          disabled={disabled}
+          value={minute}
+          onChange={(e) => onChange(`${hour}:${e.target.value}`)}
+        >
+          {MINUTE_OPTIONS.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+      </div>
+    </label>
+  );
+}
+
 /** FitGO date picker — etalon from Super Admin «Нестыковки» → Свой. */
 export function DateField({
   label,
