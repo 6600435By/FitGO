@@ -143,6 +143,11 @@ type Props = {
    * Past sessions only; default period last 14 days.
    */
   approvalSegments?: boolean;
+  /**
+   * Super-admin only: ops/env hints (FITNESS_PROVIDER, FORMA_FITGO_URL, etc.).
+   * Hidden from trainer / specialist / admin surfaces.
+   */
+  showOpsHints?: boolean;
 };
 
 function todayIso() {
@@ -255,6 +260,7 @@ export function BookingControlPanel({
   onDetailClose,
   cancelSpaBooking,
   approvalSegments = false,
+  showOpsHints = false,
 }: Props) {
   const [from, setFrom] = useState(
     initialFrom?.trim() || todayIso(),
@@ -295,7 +301,6 @@ export function BookingControlPanel({
   const [items, setItems] = useState<BookingControlListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
-  const [seenBusy, setSeenBusy] = useState(false);
   const [approveBusy, setApproveBusy] = useState(false);
   const [bulkRole, setBulkRole] = useState<'trainer' | 'admin'>('admin');
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
@@ -748,32 +753,15 @@ export function BookingControlPanel({
     }
   };
 
-  const toggleTrainerSeen = async (clientExternalId: string) => {
-    if (!selected || !api.saveTrainerSeen || selected.groupApproval?.locked) {
+  /** Local-only checkmarks — persist once before confirm (avoids 404 spam per click). */
+  const toggleTrainerSeen = (clientExternalId: string) => {
+    if (!selected || selected.groupApproval?.locked) {
       return;
     }
     const next = new Set(localSeen);
     if (next.has(clientExternalId)) next.delete(clientExternalId);
     else next.add(clientExternalId);
     setLocalSeen(next);
-    setSeenBusy(true);
-    setMessage('');
-    try {
-      const updated = await api.saveTrainerSeen(
-        selected.sessionKey,
-        [...next],
-      );
-      setSelected(updated);
-      setLocalSeen(new Set(updated.groupApproval?.trainerSeenClientIds ?? []));
-      load();
-    } catch (e) {
-      setLocalSeen(
-        new Set(selected.groupApproval?.trainerSeenClientIds ?? []),
-      );
-      setMessage(e instanceof Error ? e.message : 'Ошибка сохранения');
-    } finally {
-      setSeenBusy(false);
-    }
   };
 
   const approveGroup = async () => {
@@ -781,6 +769,13 @@ export function BookingControlPanel({
     setApproveBusy(true);
     setMessage('');
     try {
+      if (api.saveTrainerSeen && selected.kind === 'GROUP') {
+        try {
+          await api.saveTrainerSeen(selected.sessionKey, [...localSeen]);
+        } catch {
+          /* non-critical — confirm still proceeds */
+        }
+      }
       const updated = await api.approveGroup(
         selected.sessionKey,
         comment.trim() || undefined,
@@ -1235,7 +1230,11 @@ export function BookingControlPanel({
       {message && !selected ? (
         <p className="text-sm text-fitgo-300">{message}</p>
       ) : null}
-      {!loading && !fixedKind && saleCount === 0 && (kind === 'ALL' || kind === 'PT') ? (
+      {showOpsHints &&
+      !loading &&
+      !fixedKind &&
+      saleCount === 0 &&
+      (kind === 'ALL' || kind === 'PT') ? (
         <p className="text-xs text-slate-500">
           Разовых ПТ из продаж за период нет. Обновите данные кнопкой «Обновить
           из 1С» сверху у статуса данных, расширьте период (Неделя / Месяц) или
@@ -1797,7 +1796,6 @@ export function BookingControlPanel({
                           className="flex flex-wrap items-center gap-2 border-b border-slate-900 px-2 py-1.5 last:border-0"
                         >
                           {canTrainerSeen &&
-                          api.saveTrainerSeen &&
                           selected.kind === 'GROUP' &&
                           selected.source === '1C' &&
                           m.attendance !== 'CANCELLED' &&
@@ -1807,7 +1805,6 @@ export function BookingControlPanel({
                                 type="checkbox"
                                 className="rounded border-slate-600"
                                 checked={localSeen.has(m.externalId)}
-                                disabled={seenBusy}
                                 onChange={() => toggleTrainerSeen(m.externalId)}
                                 aria-label="Был на занятии"
                               />

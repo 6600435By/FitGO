@@ -64,6 +64,7 @@ import {
 } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { sessionMatchesFlag } from '../discrepancies/discrepancies-predicates';
 import { FitnessService } from '../fitness/fitness.service';
+import { matchOnexToScheduleSlots } from '../club-schedule/trainer-schedule.helpers';
 import { SessionApprovalService } from './session-approval.service';
 
 type ListFilters = {
@@ -776,40 +777,31 @@ export class BookingControlService {
     const parsed = parseSessionKey(sessionKey);
     if (!parsed) throw new BadRequestException('Некорректный sessionKey');
 
-    const remarks = await this.prisma.sessionRemark.findMany({
-      where: { clubId, sessionKey },
-      include: {
-        staff: { select: { firstName: true, lastName: true } },
-        admin: { select: { firstName: true, lastName: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-    const mappedRemarks = remarks.map((r) => this.mapRemark(r));
-    const open = mappedRemarks.find((r) => r.status === 'OPEN') ?? null;
-
     if (parsed.source === '1C') {
-      let s = await this.prisma.onexClassSession.findFirst({
-        where: { clubId, externalId: parsed.id, isActive: true },
-        include: { members: true },
-      });
-      if (!s && !viewer?.ownOnly) {
-        // Future / freshly published class may not be in Onex yet — pull ± window once.
-        // Trainers (ownOnly) must not trigger a 38-day 1C pull on a miss.
-        try {
-          await this.classSessions.syncRange(
-            clubId,
-            this.ymdDaysAgo(7),
-            this.ymdDaysAhead(31),
-          );
-        } catch {
-          /* ignore */
-        }
-        s = await this.prisma.onexClassSession.findFirst({
-          where: { clubId, externalId: parsed.id, isActive: true },
-          include: { members: true },
-        });
-      }
+      // Forma appointment id ≠ 1C document id; trainers get a narrow sync (not 38d).
+      const s = await this.findOnexSessionForControl(
+        clubId,
+        parsed.id,
+        viewer?.ownOnly ? 'narrow' : 'wide',
+      );
       if (!s) throw new NotFoundException('Занятие не найдено');
+
+      // Always expose the canonical 1C key so approve / remarks stay consistent.
+      const canonicalKey = onexSessionKey(s.externalId);
+      const remarkKeys =
+        canonicalKey === sessionKey
+          ? [canonicalKey]
+          : [canonicalKey, sessionKey];
+      const remarks = await this.prisma.sessionRemark.findMany({
+        where: { clubId, sessionKey: { in: remarkKeys } },
+        include: {
+          staff: { select: { firstName: true, lastName: true } },
+          admin: { select: { firstName: true, lastName: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      const mappedRemarks = remarks.map((r) => this.mapRemark(r));
+      const open = mappedRemarks.find((r) => r.status === 'OPEN') ?? null;
 
       if (viewer?.ownOnly) {
         await this.assertOwnOnex(clubId, viewer.userId, s);
@@ -884,10 +876,11 @@ export class BookingControlService {
         kind === 'GROUP'
           ? await this.loadGroupApprovalInfo(
               clubId,
-              sessionKey,
+              canonicalKey,
               members,
               counts.arrivedCount,
               s.payrollLocked,
+              sessionKey !== canonicalKey ? sessionKey : undefined,
             )
           : null;
       if (groupApproval) {
@@ -903,7 +896,7 @@ export class BookingControlService {
         | undefined = groupApproval?.phase;
       let approvalLabel = groupApprovalLabelRu(groupApproval?.phase);
       if (kind === 'SPA') {
-        const approvalId = matched?.id ?? sessionKey;
+        const approvalId = matched?.id ?? canonicalKey;
         const row = await this.prisma.sessionApproval.findUnique({
           where: {
             kind_bookingId: {
@@ -975,7 +968,7 @@ export class BookingControlService {
         groupApproval,
         sessionApprovalBookingId:
           kind === 'SPA' || kind === 'PT'
-            ? matched?.id ?? sessionKey
+            ? matched?.id ?? canonicalKey
             : undefined,
         sessionApprovalKind:
           kind === 'SPA'
@@ -985,7 +978,7 @@ export class BookingControlService {
               : undefined,
       });
       return {
-        sessionKey,
+        sessionKey: canonicalKey,
         kind,
         source: '1C',
         title: s.title,
@@ -1022,6 +1015,17 @@ export class BookingControlService {
         history,
       };
     }
+
+    const remarks = await this.prisma.sessionRemark.findMany({
+      where: { clubId, sessionKey },
+      include: {
+        staff: { select: { firstName: true, lastName: true } },
+        admin: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    const mappedRemarks = remarks.map((r) => this.mapRemark(r));
+    const open = mappedRemarks.find((r) => r.status === 'OPEN') ?? null;
 
     if (parsed.source === 'SALE') {
       // Prefer list cache (no 1C round-trip). Fallback: one ≤30d fetch, never multi-window loops.
@@ -1294,10 +1298,11 @@ export class BookingControlService {
       );
     }
 
-    const session = await this.prisma.onexClassSession.findFirst({
-      where: { clubId, externalId: parsed.id, isActive: true },
-      include: { members: true },
-    });
+    const session = await this.findOnexSessionForControl(
+      clubId,
+      parsed.id,
+      'wide',
+    );
     if (!session) throw new NotFoundException('Занятие не найдено');
     if (session.kind !== OnexClassKind.GROUP) {
       throw new BadRequestException(
@@ -1363,7 +1368,7 @@ export class BookingControlService {
       data: { attendedCount: arrivedCount },
     });
 
-    return this.detail(clubId, sessionKey);
+    return this.detail(clubId, onexSessionKey(session.externalId));
   }
 
   /** Trainer checkmarks (FitGO-only). Changing after admin confirm clears admin approval. */
@@ -1374,6 +1379,7 @@ export class BookingControlService {
   ): Promise<BookingControlDetail> {
     const clubId = requireClubId(actor);
     const session = await this.requireGroupOnex(clubId, sessionKey);
+    const key = onexSessionKey(session.externalId);
     await this.assertOwnOnex(clubId, actor.sub, session);
     this.assertGroupEditable(session);
 
@@ -1388,21 +1394,17 @@ export class BookingControlService {
       ),
     ];
 
-    const existing = await this.prisma.groupClassApproval.findUnique({
-      where: {
-        clubId_sessionKey: { clubId, sessionKey },
-      },
-    });
+    const existing = await this.findGroupApprovalRow(clubId, key, sessionKey);
 
     const clearAdmin = Boolean(
       existing?.adminApprovedAt || existing?.overrideApprovedAt,
     );
 
     await this.prisma.groupClassApproval.upsert({
-      where: { clubId_sessionKey: { clubId, sessionKey } },
+      where: { clubId_sessionKey: { clubId, sessionKey: key } },
       create: {
         clubId,
-        sessionKey,
+        sessionKey: key,
         trainerSeenClientIds: clean,
       },
       update: {
@@ -1422,7 +1424,7 @@ export class BookingControlService {
       },
     });
 
-    return this.detail(clubId, sessionKey, {
+    return this.detail(clubId, key, {
       userId: actor.sub,
       ownOnly: true,
     });
@@ -1452,14 +1454,17 @@ export class BookingControlService {
 
     const clubId = requireClubId(actor);
     if (parsed?.source === '1C') {
-      const onexSpa = await this.prisma.onexClassSession.findFirst({
-        where: { clubId, externalId: parsed.id, isActive: true },
-      });
+      const onexSpa = await this.findOnexSessionForControl(
+        clubId,
+        parsed.id,
+        'narrow',
+      );
       if (onexSpa?.kind === OnexClassKind.SPA) {
         return this.approveSpaFromOnex(actor, onexSpa, comment);
       }
     }
     const session = await this.requireGroupOnex(clubId, sessionKey);
+    const key = onexSessionKey(session.externalId);
     this.assertGroupEditable(session);
     this.assertSessionEnded(session);
 
@@ -1482,17 +1487,15 @@ export class BookingControlService {
     const note = comment?.trim() || null;
     const now = new Date();
 
-    const existing = await this.prisma.groupClassApproval.findUnique({
-      where: { clubId_sessionKey: { clubId, sessionKey } },
-    });
-    await this.ensureApprovalNotesMigrated(clubId, sessionKey, existing);
+    const existing = await this.findGroupApprovalRow(clubId, key, sessionKey);
+    await this.ensureApprovalNotesMigrated(clubId, key, existing);
 
     if (isOverride) {
       await this.prisma.groupClassApproval.upsert({
-        where: { clubId_sessionKey: { clubId, sessionKey } },
+        where: { clubId_sessionKey: { clubId, sessionKey: key } },
         create: {
           clubId,
-          sessionKey,
+          sessionKey: key,
           overrideUserId: actor.sub,
           overrideName: actorName,
           overrideApprovedAt: now,
@@ -1511,7 +1514,7 @@ export class BookingControlService {
           returnedAt: null,
         },
       });
-      await this.appendApprovalNote(clubId, sessionKey, {
+      await this.appendApprovalNote(clubId, key, {
         authorId: actor.sub,
         authorName: actorName,
         authorRole: 'OVERRIDE',
@@ -1524,19 +1527,40 @@ export class BookingControlService {
           'Сначала тренер должен подтвердить занятие',
         );
       }
-      await this.prisma.groupClassApproval.update({
-        where: { clubId_sessionKey: { clubId, sessionKey } },
-        data: {
-          adminUserId: actor.sub,
-          adminName: actorName,
-          adminApprovedAt: now,
-          ...(note ? { adminComment: note } : {}),
-          returnedByUserId: null,
-          returnedByName: null,
-          returnedAt: null,
-        },
-      });
-      await this.appendApprovalNote(clubId, sessionKey, {
+      if (existing.sessionKey === key) {
+        await this.prisma.groupClassApproval.update({
+          where: { clubId_sessionKey: { clubId, sessionKey: key } },
+          data: {
+            adminUserId: actor.sub,
+            adminName: actorName,
+            adminApprovedAt: now,
+            ...(note ? { adminComment: note } : {}),
+            returnedByUserId: null,
+            returnedByName: null,
+            returnedAt: null,
+          },
+        });
+      } else {
+        // Alias key (Forma) → create canonical row for admin confirm.
+        await this.prisma.groupClassApproval.create({
+          data: {
+            clubId,
+            sessionKey: key,
+            trainerUserId: existing.trainerUserId,
+            trainerName: existing.trainerName,
+            trainerApprovedAt: existing.trainerApprovedAt,
+            trainerComment: existing.trainerComment,
+            trainerSeenClientIds: this.parseSeenIds(
+              existing.trainerSeenClientIds,
+            ),
+            adminUserId: actor.sub,
+            adminName: actorName,
+            adminApprovedAt: now,
+            ...(note ? { adminComment: note } : {}),
+          },
+        });
+      }
+      await this.appendApprovalNote(clubId, key, {
         authorId: actor.sub,
         authorName: actorName,
         authorRole: 'ADMIN',
@@ -1546,10 +1570,10 @@ export class BookingControlService {
     } else {
       // Trainer
       await this.prisma.groupClassApproval.upsert({
-        where: { clubId_sessionKey: { clubId, sessionKey } },
+        where: { clubId_sessionKey: { clubId, sessionKey: key } },
         create: {
           clubId,
-          sessionKey,
+          sessionKey: key,
           trainerUserId: actor.sub,
           trainerName: actorName,
           trainerApprovedAt: now,
@@ -1573,7 +1597,7 @@ export class BookingControlService {
           returnedAt: null,
         },
       });
-      await this.appendApprovalNote(clubId, sessionKey, {
+      await this.appendApprovalNote(clubId, key, {
         authorId: actor.sub,
         authorName: actorName,
         authorRole: 'TRAINER',
@@ -1582,7 +1606,7 @@ export class BookingControlService {
       });
     }
 
-    return this.detail(clubId, sessionKey, {
+    return this.detail(clubId, key, {
       userId: actor.sub,
       ownOnly: !isOverride && !isAdmin,
     });
@@ -1932,6 +1956,7 @@ export class BookingControlService {
       throw new ForbiddenException('Только администратор');
     }
     const session = await this.requireGroupOnex(clubId, sessionKey);
+    const key = onexSessionKey(session.externalId);
     this.assertGroupEditable(session);
 
     const actorName = await this.actorDisplayName(clubId, actor.sub);
@@ -1943,16 +1968,14 @@ export class BookingControlService {
         ? ('OVERRIDE' as const)
         : ('ADMIN' as const);
 
-    const existing = await this.prisma.groupClassApproval.findUnique({
-      where: { clubId_sessionKey: { clubId, sessionKey } },
-    });
-    await this.ensureApprovalNotesMigrated(clubId, sessionKey, existing);
+    const existing = await this.findGroupApprovalRow(clubId, key, sessionKey);
+    await this.ensureApprovalNotesMigrated(clubId, key, existing);
 
     await this.prisma.groupClassApproval.upsert({
-      where: { clubId_sessionKey: { clubId, sessionKey } },
+      where: { clubId_sessionKey: { clubId, sessionKey: key } },
       create: {
         clubId,
-        sessionKey,
+        sessionKey: key,
         returnedByUserId: actor.sub,
         returnedByName: actorName,
         returnedAt: now,
@@ -1975,7 +1998,7 @@ export class BookingControlService {
         ...(note ? { returnComment: note } : {}),
       },
     });
-    await this.appendApprovalNote(clubId, sessionKey, {
+    await this.appendApprovalNote(clubId, key, {
       authorId: actor.sub,
       authorName: actorName,
       authorRole,
@@ -1983,7 +2006,7 @@ export class BookingControlService {
       text: note,
     });
 
-    return this.detail(clubId, sessionKey);
+    return this.detail(clubId, key);
   }
 
   /**
@@ -2319,14 +2342,16 @@ export class BookingControlService {
     const parsed = parseSessionKey(sessionKey);
     if (!parsed) throw new BadRequestException('Некорректный sessionKey');
 
-    // Ensure session exists and actor may comment (own for trainer/specialist)
-    await this.detail(clubId, sessionKey, {
+    // Ensure session exists and actor may comment (own for trainer/specialist).
+    // detail() returns the canonical 1C key when Forma id was passed.
+    const detail = await this.detail(clubId, sessionKey, {
       userId: actor.sub,
       ownOnly: !this.isAdminLike(actor),
     });
+    const key = detail.sessionKey;
 
     const existing = await this.prisma.sessionRemark.findFirst({
-      where: { clubId, sessionKey, status: SessionRemarkStatus.OPEN },
+      where: { clubId, sessionKey: key, status: SessionRemarkStatus.OPEN },
     });
     if (existing) {
       throw new BadRequestException(
@@ -2334,18 +2359,19 @@ export class BookingControlService {
       );
     }
 
+    const kindParsed = parseSessionKey(key) ?? parsed;
     const kind =
-      parsed.source === '1C'
-        ? await this.kindFromOnex(clubId, parsed.id)
-        : parsed.source === 'SALE'
+      kindParsed.source === '1C'
+        ? await this.kindFromOnex(clubId, kindParsed.id)
+        : kindParsed.source === 'SALE'
           ? SessionRemarkKind.PT
-          : (parsed.kind as SessionRemarkKind);
+          : (kindParsed.kind as SessionRemarkKind);
 
     const row = await this.prisma.sessionRemark.create({
       data: {
         clubId,
         kind,
-        sessionKey,
+        sessionKey: key,
         status: SessionRemarkStatus.OPEN,
         staffComment: text,
         staffId: actor.sub,
@@ -2451,10 +2477,11 @@ export class BookingControlService {
         'Подтверждение доступно только для группового занятия из 1С',
       );
     }
-    const session = await this.prisma.onexClassSession.findFirst({
-      where: { clubId, externalId: parsed.id, isActive: true },
-      include: { members: true },
-    });
+    const session = await this.findOnexSessionForControl(
+      clubId,
+      parsed.id,
+      'narrow',
+    );
     if (!session) throw new NotFoundException('Занятие не найдено');
     if (session.kind !== OnexClassKind.GROUP) {
       throw new BadRequestException(
@@ -2462,6 +2489,163 @@ export class BookingControlService {
       );
     }
     return session;
+  }
+
+  /**
+   * Resolve 1C Onex row by document id or Forma schedule slot id.
+   * `narrow` = ±1 day around the slot (or ±3d) — safe for trainers;
+   * `wide` = existing admin ±7/+31 window.
+   */
+  private async findOnexSessionForControl(
+    clubId: string,
+    candidateId: string,
+    syncMode: 'narrow' | 'wide',
+  ) {
+    const load = async (externalId: string) =>
+      this.prisma.onexClassSession.findFirst({
+        where: { clubId, externalId, isActive: true },
+        include: { members: true },
+      });
+
+    const resolveId = async (): Promise<string> => {
+      const direct = await this.prisma.onexClassSession.findFirst({
+        where: { clubId, externalId: candidateId, isActive: true },
+        select: { externalId: true },
+      });
+      if (direct) return direct.externalId;
+
+      const mapped = await this.resolveFormaSlotToOnexId(clubId, candidateId);
+      return mapped ?? candidateId;
+    };
+
+    let id = await resolveId();
+    let session = await load(id);
+    if (session) return session;
+
+    const window = await this.syncWindowForCandidate(
+      clubId,
+      candidateId,
+      syncMode,
+    );
+    try {
+      await this.classSessions.syncRange(clubId, window.from, window.to);
+    } catch {
+      /* ignore — still try resolve after partial sync */
+    }
+
+    id = await resolveId();
+    return load(id);
+  }
+
+  private async syncWindowForCandidate(
+    clubId: string,
+    candidateId: string,
+    syncMode: 'narrow' | 'wide',
+  ): Promise<{ from: string; to: string }> {
+    if (syncMode === 'wide') {
+      return {
+        from: this.ymdDaysAgo(7),
+        to: this.ymdDaysAhead(31),
+      };
+    }
+    const slot = await this.prisma.clubScheduleSlot.findFirst({
+      where: { clubId, externalId: candidateId },
+      select: { startAt: true },
+    });
+    if (slot) {
+      const day = slot.startAt.toISOString().slice(0, 10);
+      return {
+        from: this.ymdShift(day, -1),
+        to: this.ymdShift(day, 1),
+      };
+    }
+    return {
+      from: this.ymdDaysAgo(3),
+      to: this.ymdDaysAhead(3),
+    };
+  }
+
+  /** Forma schedule appointment id → 1C Onex document id (same class, different ids). */
+  private async resolveFormaSlotToOnexId(
+    clubId: string,
+    formaSlotId: string,
+  ): Promise<string | null> {
+    const slot = await this.prisma.clubScheduleSlot.findFirst({
+      where: { clubId, externalId: formaSlotId },
+      select: {
+        externalId: true,
+        title: true,
+        startAt: true,
+        trainerName: true,
+        roomTitle: true,
+      },
+    });
+    if (!slot) return null;
+
+    const day = slot.startAt.toISOString().slice(0, 10);
+    const from = this.ymdShift(day, -1);
+    const to = this.ymdShift(day, 1);
+    const rangeStart = new Date(`${from}T00:00:00.000Z`);
+    const rangeEnd = new Date(`${to}T23:59:59.999Z`);
+
+    const onexRows = await this.prisma.onexClassSession.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        startAt: { gte: rangeStart, lte: rangeEnd },
+      },
+      select: {
+        externalId: true,
+        title: true,
+        startAt: true,
+        employeeName: true,
+        roomTitle: true,
+      },
+    });
+    if (!onexRows.length) return null;
+
+    const link = matchOnexToScheduleSlots(
+      [
+        {
+          id: slot.externalId,
+          title: slot.title,
+          startAt: slot.startAt.toISOString(),
+          trainerName: slot.trainerName ?? undefined,
+          roomTitle: slot.roomTitle ?? undefined,
+        },
+      ],
+      onexRows,
+    );
+    return link.slotOnexId.get(slot.externalId) ?? null;
+  }
+
+  private async findGroupApprovalRow(
+    clubId: string,
+    canonicalKey: string,
+    aliasKey?: string,
+  ) {
+    const keys = [
+      ...new Set(
+        [canonicalKey, aliasKey].filter(
+          (k): k is string => Boolean(k && k.trim()),
+        ),
+      ),
+    ];
+    if (!keys.length) return null;
+    const rows = await this.prisma.groupClassApproval.findMany({
+      where: { clubId, sessionKey: { in: keys } },
+    });
+    return (
+      rows.find((r) => r.sessionKey === canonicalKey) ??
+      rows.find((r) => r.sessionKey === aliasKey) ??
+      null
+    );
+  }
+
+  private ymdShift(ymd: string, days: number): string {
+    const t = Date.parse(`${ymd.slice(0, 10)}T12:00:00.000Z`);
+    if (Number.isNaN(t)) return ymd.slice(0, 10);
+    return new Date(t + days * 86400000).toISOString().slice(0, 10);
   }
 
   private assertGroupEditable(session: { payrollLocked: boolean }) {
@@ -2501,17 +2685,21 @@ export class BookingControlService {
     _members: BookingControlMember[],
     _arrivedCount: number,
     payrollLocked: boolean,
+    aliasSessionKey?: string,
   ): Promise<GroupClassApprovalInfo> {
-    const row = await this.prisma.groupClassApproval.findUnique({
-      where: { clubId_sessionKey: { clubId, sessionKey } },
-    });
+    const row = await this.findGroupApprovalRow(
+      clubId,
+      sessionKey,
+      aliasSessionKey,
+    );
     const seenIds = this.parseSeenIds(row?.trainerSeenClientIds);
     const phase = groupApprovalPhase({
       trainerApprovedAt: row?.trainerApprovedAt?.toISOString() ?? null,
       adminApprovedAt: row?.adminApprovedAt?.toISOString() ?? null,
       overrideApprovedAt: row?.overrideApprovedAt?.toISOString() ?? null,
     });
-    const approvalNotes = await this.loadApprovalNotes(clubId, sessionKey, row);
+    const notesKey = row?.sessionKey ?? sessionKey;
+    const approvalNotes = await this.loadApprovalNotes(clubId, notesKey, row);
     return {
       trainerSeenClientIds: seenIds,
       trainerName: row?.trainerName ?? undefined,

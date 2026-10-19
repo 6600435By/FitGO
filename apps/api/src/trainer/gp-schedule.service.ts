@@ -12,6 +12,7 @@ import {
   clampScheduleRange,
   filterTrainerScheduleSlots,
   inferSlotStatus,
+  matchOnexToScheduleSlots,
   slotOverlapsDayRange,
 } from '../club-schedule/trainer-schedule.helpers';
 import { PrismaService } from '../prisma/prisma.service';
@@ -50,18 +51,37 @@ export class GpScheduleService {
     );
     if (!slots.length) return [];
 
-    const appointmentIds = slots.map((s) => s.id);
     const onexSessions = await this.prisma.onexClassSession.findMany({
       where: {
         clubId,
-        externalId: { in: appointmentIds },
         kind: 'GROUP',
         isActive: true,
+        startAt: { gte: rangeStart, lte: rangeEnd },
       },
     });
     const onexById = new Map(onexSessions.map((s) => [s.externalId, s]));
+    const link = matchOnexToScheduleSlots(
+      slots.map((slot) => ({
+        id: slot.id,
+        title: slot.title,
+        startAt: slot.startAt,
+        trainerName: slot.trainerName,
+        roomTitle: slot.roomTitle,
+      })),
+      onexSessions.map((row) => ({
+        externalId: row.externalId,
+        title: row.title,
+        startAt: row.startAt,
+        employeeName: row.employeeName,
+        roomTitle: row.roomTitle,
+      })),
+    );
 
-    const sessionKeys = onexSessions.map((s) => onexSessionKey(s.externalId));
+    const sessionKeys = [
+      ...new Set(
+        [...link.slotOnexId.values()].map((id) => onexSessionKey(id)),
+      ),
+    ];
     const approvals = sessionKeys.length
       ? await this.prisma.groupClassApproval.findMany({
           where: { clubId, sessionKey: { in: sessionKeys } },
@@ -70,9 +90,16 @@ export class GpScheduleService {
     const approvalByKey = new Map(approvals.map((a) => [a.sessionKey, a]));
 
     return slots.map((slot) => {
-      const onex = onexById.get(slot.id);
-      const sessionKey = onexSessionKey(slot.id);
-      const approval = approvalByKey.get(sessionKey);
+      const linkedId = link.slotOnexId.get(slot.id);
+      const onex =
+        (linkedId ? onexById.get(linkedId) : undefined) ??
+        onexById.get(slot.id);
+      const sessionKey = onex
+        ? onexSessionKey(onex.externalId)
+        : undefined;
+      const approval = sessionKey
+        ? approvalByKey.get(sessionKey)
+        : undefined;
       const phase = approval
         ? groupApprovalPhase({
             trainerApprovedAt: approval.trainerApprovedAt?.toISOString() ?? null,
@@ -92,7 +119,7 @@ export class GpScheduleService {
         capacity: slot.capacity,
         attended: onex?.attendedCount ?? 0,
         roomTitle: slot.roomTitle ?? onex?.roomTitle ?? undefined,
-        sessionKey: onex ? sessionKey : undefined,
+        sessionKey,
         onexExternalId: onex?.externalId,
         approvalPhase: phase,
         approvalLabel: groupApprovalLabelRu(phase),

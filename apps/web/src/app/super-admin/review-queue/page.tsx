@@ -65,6 +65,7 @@ function SuperAdminBookingControlInner() {
       canBulkApprove
       canReturnApproval
       canViewHallPhotos
+      showOpsHints
       initialSessionKey={initialSessionKey}
       initialFrom={initialFrom}
       initialTo={initialTo}

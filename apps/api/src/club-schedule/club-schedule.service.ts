@@ -250,9 +250,19 @@ export class ClubScheduleService {
 
     const onexById = new Map(onexInRange.map((s) => [s.externalId, s]));
 
-    const sessionKeys = slots.map((slot) =>
-      onexSessionKey(link.slotOnexId.get(slot.id) ?? slot.id),
-    );
+    const sessionKeys = [
+      ...new Set(
+        slots
+          .map((slot) => {
+            const linkedId = link.slotOnexId.get(slot.id);
+            const onexId =
+              linkedId ??
+              (onexById.has(slot.id) ? slot.id : undefined);
+            return onexId ? onexSessionKey(onexId) : null;
+          })
+          .filter((k): k is string => Boolean(k)),
+      ),
+    ];
     const approvals = sessionKeys.length
       ? await this.prisma.groupClassApproval.findMany({
           where: { clubId, sessionKey: { in: sessionKeys } },
@@ -261,9 +271,17 @@ export class ClubScheduleService {
     const approvalByKey = new Map(approvals.map((a) => [a.sessionKey, a]));
 
     return slots.map((slot) => {
-      const onex = onexById.get(link.slotOnexId.get(slot.id) ?? slot.id);
-      const sessionKey = onexSessionKey(onex?.externalId ?? slot.id);
-      const approval = approvalByKey.get(sessionKey);
+      const linkedId = link.slotOnexId.get(slot.id);
+      const onex =
+        (linkedId ? onexById.get(linkedId) : undefined) ??
+        onexById.get(slot.id);
+      // Never expose Forma-only ids — detail looks up Onex and 404s.
+      const sessionKey = onex
+        ? onexSessionKey(onex.externalId)
+        : undefined;
+      const approval = sessionKey
+        ? approvalByKey.get(sessionKey)
+        : undefined;
       const status = inferSlotStatus(slot, onex);
       const endMs = Date.parse(
         slot.endAt.includes('T') ? slot.endAt : slot.endAt.replace(' ', 'T'),
