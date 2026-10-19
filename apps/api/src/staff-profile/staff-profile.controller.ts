@@ -47,6 +47,19 @@ function readUploadBuffer(file: UploadFile | undefined): Buffer | null {
   return null;
 }
 
+function bufferFromBase64(raw: string | undefined): Buffer | null {
+  const b64 = (raw || '')
+    .replace(/^data:[^;]+;base64,/, '')
+    .replace(/\s/g, '');
+  if (!b64) return null;
+  try {
+    const buf = Buffer.from(b64, 'base64');
+    return buf.length ? buf : null;
+  } catch {
+    return null;
+  }
+}
+
 @Controller()
 export class StaffProfileController {
   constructor(private readonly profiles: StaffProfileService) {}
@@ -72,6 +85,28 @@ export class StaffProfileController {
     @Body() body: { bio?: string },
   ) {
     return this.profiles.updateBio(user.sub, body.bio ?? '');
+  }
+
+  /**
+   * Preferred from browser (Next /api rewrite corrupts multipart →
+   * «Unexpected end of form» / Bad Request). Same payload as multer upload.
+   */
+  @Post('me/staff-profile/photo-json')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.TRAINER, UserRole.SPECIALIST)
+  uploadPhotoJson(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { fileBase64?: string; mimeType?: string },
+  ) {
+    const buffer = bufferFromBase64(body?.fileBase64);
+    if (!buffer?.length) {
+      throw new BadRequestException('Файл обязателен (fileBase64)');
+    }
+    return this.profiles.uploadPhoto(
+      user.sub,
+      buffer,
+      body?.mimeType,
+    );
   }
 
   @Post('me/staff-profile/photo')

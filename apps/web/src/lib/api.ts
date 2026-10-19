@@ -3995,6 +3995,27 @@ export const api = {
       token,
     ),
 
+  staffProfileUploadPhoto: async (token: string, file: File) => {
+    // JSON base64 — Next rewrite /api → Nest truncates multipart («Unexpected end of form»).
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return request<StaffProfileDto>(
+      '/me/staff-profile/photo-json',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          fileBase64: btoa(binary),
+          mimeType: file.type || undefined,
+        }),
+      },
+      token,
+    );
+  },
+
   clientStaffCard: (token: string, id: string) =>
     request<StaffProfileDto>(`/client/staff/${id}`, {}, token),
 

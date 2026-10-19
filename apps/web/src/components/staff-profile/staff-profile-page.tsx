@@ -53,20 +53,7 @@ export function StaffProfilePage({ title }: { title: string }) {
     setError(null);
     setOk(null);
     try {
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/me/staff-profile/photo', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: fd,
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(
-          (err as { message?: string }).message || res.statusText,
-        );
-      }
-      const p = (await res.json()) as StaffProfileDto;
+      const p = await api.staffProfileUploadPhoto(token, file);
       setProfile(p);
       setOk('Фото обновлено');
     } catch (e) {
