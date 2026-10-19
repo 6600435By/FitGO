@@ -33,6 +33,7 @@ import {
   saleSessionKey,
   sessionApprovalLabelRu,
   sessionApprovalPhase,
+  humanDocumentNumber,
   membershipNameFromPaymentBasis,
   spaSettlementLabelRu,
   type BookingControlDetail,
@@ -75,6 +76,8 @@ import {
   matchSpaSale,
   matchSpaVisitByDay,
   normalizeLabel,
+  paidSaleSettlementLabel,
+  saleAmountMajor,
   type SpaBookingMatchInput,
   type SpaOnexCandidate,
   type SpaSaleCandidate,
@@ -3963,7 +3966,7 @@ export class BookingControlService {
           label: spaSettlementLabelRu('DELETED_IN_1C'),
           source: 'visit',
           visitPosted: visit.posted,
-          visitNum: visit.num,
+          visitNum: humanDocumentNumber(visit.num),
           editableInApp: true,
         },
         payment: isQuota ? 'QUOTA' : 'UNKNOWN',
@@ -3983,7 +3986,7 @@ export class BookingControlService {
             label: spaSettlementLabelRu('CANCELLED_IN_1C'),
             source: 'visit',
             visitPosted: visit.posted,
-            visitNum: visit.num,
+            visitNum: humanDocumentNumber(visit.num),
             editableInApp: true,
           },
           payment: isQuota ? 'QUOTA' : 'UNKNOWN',
@@ -4009,7 +4012,7 @@ export class BookingControlService {
             label: spaSettlementLabelRu('QUOTA_CONSUMED', membershipName),
             source: visit?.found ? 'visit' : onex ? 'onex' : 'local',
             visitPosted: true,
-            visitNum: visit?.num ?? onex?.number ?? undefined,
+            visitNum: humanDocumentNumber(visit?.num ?? onex?.number),
             membershipName,
             editableInApp: false,
           },
@@ -4049,7 +4052,7 @@ export class BookingControlService {
           label: spaSettlementLabelRu('UNKNOWN'),
           source: 'local',
           visitPosted: visit?.posted,
-          visitNum: visit?.num,
+          visitNum: humanDocumentNumber(visit?.num),
           editableInApp: !booking?.consumedInCrmAt,
         },
         payment: 'QUOTA',
@@ -4135,7 +4138,7 @@ export class BookingControlService {
           label: spaSettlementLabelRu('PAID'),
           source: 'debt',
           visitPosted: visit?.posted,
-          visitNum: visit?.num ?? debtHit.docRef,
+          visitNum: humanDocumentNumber(visit?.num ?? debtHit.docRef),
           editableInApp: false,
         },
         payment: 'PAID',
@@ -4156,7 +4159,9 @@ export class BookingControlService {
           label: spaSettlementLabelRu('AWAITING_PAYMENT'),
           source: debtHit ? 'debt' : visit?.found ? 'visit' : onex ? 'onex' : 'local',
           visitPosted: visit?.posted ?? Boolean(onex),
-          visitNum: visit?.num ?? onex?.number ?? debtHit?.docRef,
+          visitNum: humanDocumentNumber(
+            visit?.num ?? onex?.number ?? debtHit?.docRef,
+          ),
           editableInApp: false,
         },
         payment: 'DEBT',
@@ -4285,6 +4290,10 @@ export class BookingControlService {
     saleAmount: number;
     paidAmount: number;
     operationType: string;
+    cash?: number | null;
+    card?: number | null;
+    cashless?: number | null;
+    personalAccount?: number | null;
   }): SpaSaleCandidate {
     return {
       externalId: r.externalId,
@@ -4299,6 +4308,10 @@ export class BookingControlService {
       saleAmount: r.saleAmount,
       paidAmount: r.paidAmount,
       operationType: r.operationType,
+      cash: r.cash,
+      card: r.card,
+      cashless: r.cashless,
+      personalAccount: r.personalAccount,
     };
   }
 
@@ -4457,13 +4470,16 @@ export class BookingControlService {
           })
           .catch(() => undefined);
       }
+      const amountMajor = saleAmountMajor(sale);
+      const amountMinor =
+        amountMajor > 0 ? Math.round(amountMajor * 100) : undefined;
       if (result.paymentStatus === 'PAID') {
         return {
           settlement: {
             status: 'PAID',
-            label: spaSettlementLabelRu('PAID'),
+            label: paidSaleSettlementLabel(sale),
             source: 'sale',
-            visitNum: sale.externalId,
+            amountMinor,
             editableInApp: false,
           },
           payment: 'PAID',
@@ -4476,7 +4492,7 @@ export class BookingControlService {
           status: 'AWAITING_PAYMENT',
           label: awaitingPaymentLabel(sale),
           source: 'sale',
-          visitNum: sale.externalId,
+          amountMinor,
           editableInApp: false,
         },
         payment: 'DEBT',
@@ -4600,7 +4616,7 @@ export class BookingControlService {
           label: spaSettlementLabelRu('QUOTA_CONSUMED', membershipName),
           source: 'onex',
           visitPosted: true,
-          visitNum: o.number ?? o.externalId,
+          visitNum: humanDocumentNumber(o.number),
           membershipName,
           editableInApp: false,
         },

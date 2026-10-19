@@ -148,7 +148,10 @@ export interface SpaSettlementInfo {
   /** Where the status came from. */
   source: 'visit' | 'debt' | 'local' | 'onex' | 'sale';
   visitPosted?: boolean;
+  /** 1C document number safe to show (never a UUID or revenue key). */
   visitNum?: string;
+  /** Reception sale amount in minor units, when settlement comes from a payment. */
+  amountMinor?: number;
   /** Human package / membership title when quota was consumed. */
   membershipName?: string;
   /**
@@ -206,6 +209,23 @@ export function membershipNameFromPaymentBasis(
     return m[1].trim().replace(/^["«]|["»]$/g, '');
   }
   return undefined;
+}
+
+const DOC_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * 1C document number an admin can read («32076»).
+ * Revenue keys (`uuid:cash:…`) and bare UUIDs are not document numbers.
+ */
+export function humanDocumentNumber(raw?: string | null): string | undefined {
+  const v = raw?.trim();
+  if (!v) return undefined;
+  if (v.includes(':')) return undefined;
+  if (DOC_UUID_RE.test(v)) return undefined;
+  if (v.length > 24) return undefined;
+  if (!/\d/.test(v)) return undefined;
+  return v;
 }
 
 export function spaSettlementLabelRu(

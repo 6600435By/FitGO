@@ -2,6 +2,7 @@
  * Run: cd apps/api && npx ts-node --transpile-only src/booking-control/spa-document-match.test.ts
  */
 import assert from 'node:assert/strict';
+import { humanDocumentNumber } from '@fitgo/shared-types';
 import {
   awaitingPaymentLabel,
   buildSpaDayMergePairs,
@@ -9,6 +10,7 @@ import {
   matchSpaVisitByDay,
   minskDayKey,
   namesMatch,
+  paidSaleSettlementLabel,
   type SpaBookingMatchInput,
   type SpaOnexCandidate,
   type SpaSaleCandidate,
@@ -183,5 +185,27 @@ function sale(
 }
 
 assert.equal(namesMatch('Бирюкова Екатерина', 'Бирюкова Е.'), true);
+
+// Paid cash sale must not leak the revenue key into the admin card.
+{
+  const key =
+    '54b0d2e2-cb8a-11f1-0dec-a45d36e32cf1:cash:Долг:39b8fdb1-f15c-11e9-8108-7085c20c362e:c5e4e053-2c29-4b87-807a-c92a6a28eb5f:20261019095722:payment:p2026-10-19';
+  const s = sale({
+    externalId: key,
+    occurredAt: new Date('2026-10-19T06:57:00.000Z'),
+    cash: 90,
+    paidAmount: 90,
+    saleAmount: 90,
+  });
+  const label = paidSaleSettlementLabel(s);
+  assert.equal(label, 'Оплачено · наличные 90.00 BYN');
+  assert.equal(label.includes(key), false);
+  assert.equal(humanDocumentNumber(key), undefined);
+  assert.equal(humanDocumentNumber('32076'), '32076');
+  assert.equal(
+    humanDocumentNumber('54b0d2e2-cb8a-11f1-0dec-a45d36e32cf1'),
+    undefined,
+  );
+}
 
 console.log('spa-document-match.test.ts: ok');

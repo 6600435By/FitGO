@@ -25,7 +25,48 @@ export type SpaSaleCandidate = {
   saleAmount: number;
   paidAmount: number;
   operationType: string;
+  cash?: number | null;
+  card?: number | null;
+  cashless?: number | null;
+  personalAccount?: number | null;
 };
+
+function positiveMajor(n: number | null | undefined): number {
+  const v = Number(n) || 0;
+  return v > 0.009 ? v : 0;
+}
+
+function formatMajor(n: number): string {
+  return `${n.toFixed(2)} BYN`;
+}
+
+/** Sum of tender splits, else paid / sale amount. */
+export function saleAmountMajor(sale: SpaSaleCandidate): number {
+  const split =
+    positiveMajor(sale.cash) +
+    positiveMajor(sale.card) +
+    positiveMajor(sale.cashless) +
+    positiveMajor(sale.personalAccount);
+  if (split > 0.009) return Math.round(split * 100) / 100;
+  return positiveMajor(sale.paidAmount) || positiveMajor(sale.saleAmount);
+}
+
+/** «Оплачено · наличные 90.00 BYN» — never the revenue externalId. */
+export function paidSaleSettlementLabel(sale: SpaSaleCandidate): string {
+  const bits: string[] = [];
+  const cash = positiveMajor(sale.cash);
+  const card = positiveMajor(sale.card);
+  const cashless = positiveMajor(sale.cashless);
+  const pa = positiveMajor(sale.personalAccount);
+  if (cash) bits.push(`наличные ${formatMajor(cash)}`);
+  if (card) bits.push(`карта ${formatMajor(card)}`);
+  if (cashless) bits.push(`безнал ${formatMajor(cashless)}`);
+  if (pa) bits.push(`лицевой счёт ${formatMajor(pa)}`);
+  if (bits.length) return `Оплачено · ${bits.join(' · ')}`;
+  const amt = saleAmountMajor(sale);
+  if (amt > 0) return `Оплачено · ${formatMajor(amt)}`;
+  return 'Оплачено';
+}
 
 export type SpaOnexCandidate = {
   externalId: string;

@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  humanDocumentNumber,
   paymentLabelRu,
   payTagLabelRu,
   type BookingControlDetail,
@@ -237,6 +238,16 @@ function attendanceOf(item: BookingControlListItem) {
   const noShow =
     item.noShowCount ?? Math.max(0, booked - arrived);
   return { booked, arrived, noShow };
+}
+
+function shownPriceMinor(item: {
+  priceMinor?: number;
+  spaSettlement?: { amountMinor?: number };
+}): number | null {
+  if (item.priceMinor != null && item.priceMinor > 0) return item.priceMinor;
+  const fromSale = item.spaSettlement?.amountMinor;
+  if (fromSale != null && fromSale > 0) return fromSale;
+  return null;
 }
 
 function paymentCell(item: BookingControlListItem): string {
@@ -1004,6 +1015,9 @@ export function BookingControlPanel({
       setBulkBusy(false);
     }
   };
+
+  const detailPriceMinor = selected ? shownPriceMinor(selected) : null;
+  const spaDocNumber = humanDocumentNumber(selected?.spaSettlement?.visitNum);
 
   return (
     <div className={detailOnly ? '' : 'space-y-3'}>
@@ -1838,8 +1852,8 @@ export function BookingControlPanel({
                     {selected.payTag
                       ? ` · ${payTagLabelRu(selected.payTag)}`
                       : ''}
-                    {selected.priceMinor != null
-                      ? ` · ${(selected.priceMinor / 100).toFixed(2)} BYN`
+                    {detailPriceMinor != null
+                      ? ` · ${(detailPriceMinor / 100).toFixed(2)} BYN`
                       : ''}
                   </p>
                 )}
@@ -1862,14 +1876,8 @@ export function BookingControlPanel({
                     }
                   >
                     {selected.spaSettlement.label}
-                    {!selected.spaSettlement.membershipName &&
-                    selected.spaSettlement.visitNum
-                      ? ` · док. ${selected.spaSettlement.visitNum}`
-                      : ''}
-                    {!selected.spaSettlement.membershipName &&
-                    selected.crmDocRef &&
-                    selected.crmDocRef !== selected.spaSettlement.visitNum
-                      ? ` · ref ${selected.crmDocRef}`
+                    {!selected.spaSettlement.membershipName && spaDocNumber
+                      ? ` · док. ${spaDocNumber}`
                       : ''}
                   </p>
                 ) : null}
