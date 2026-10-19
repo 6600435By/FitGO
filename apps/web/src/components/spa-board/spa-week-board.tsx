@@ -23,12 +23,15 @@ import {
 
 const DAY_START_HOUR = 8;
 const DAY_END_HOUR = 22;
-const PX_PER_MIN = 0.9;
+const PX_PER_MIN = 0.95;
 const GRID_STEP_MIN = 15;
 const MOUSE_DRAG_THRESHOLD_PX = 6;
-const TOUCH_SCROLL_SLOP_PX = 8;
-const TOUCH_DRAG_DELAY_MS = 480;
+const TOUCH_SCROLL_SLOP_PX = 16;
+const TOUCH_DRAG_DELAY_MS = 400;
 const NOW_MARKER_TICK_MS = 30_000;
+const EDGE_SCROLL_PX = 48;
+const EDGE_SCROLL_STEP = 18;
+const COL_MIN_WIDTH_CLASS = 'min-w-[9.5rem]';
 
 const STAFF_COLORS = [
   'bg-amber-500/80 border-amber-400/50',
@@ -57,6 +60,14 @@ function dateKey(d: Date) {
 }
 
 function formatDayHeader(d: Date) {
+  return d.toLocaleDateString('ru-RU', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
+function formatDayChip(d: Date) {
   return d.toLocaleDateString('ru-RU', {
     weekday: 'short',
     day: 'numeric',
@@ -218,6 +229,9 @@ type DragState = {
   durationMin: number;
   height: number;
   valid: boolean;
+  grabOffsetY: number;
+  pointerX: number;
+  pointerY: number;
 };
 
 type PointerStart = {
@@ -227,6 +241,7 @@ type PointerStart = {
   height: number;
   durationMin: number;
   pointerType: string;
+  grabOffsetY: number;
 };
 
 export type SpaBoardMode = 'specialist' | 'admin';
@@ -352,6 +367,7 @@ export function SpaWeekBoard({
   }, []);
 
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [pointerStart, setPointerStart] = useState<PointerStart | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -361,8 +377,6 @@ export function SpaWeekBoard({
   const isMutatingRef = useRef(false);
   dragRef.current = drag;
   pointerStartRef.current = pointerStart;
-
-  const isTracking = drag !== null || pointerStart !== null;
 
   const clearTouchArmTimer = useCallback(() => {
     if (touchArmTimerRef.current != null) {
@@ -427,6 +441,13 @@ export function SpaWeekBoard({
   const beginDragFromPending = useCallback(
     (pending: PointerStart) => {
       clearTouchArmTimer();
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try {
+          navigator.vibrate(12);
+        } catch {
+          /* ignore */
+        }
+      }
       const bookDay = startOfDay(new Date(pending.booking.startAt));
       const startMin = Math.max(
         0,
@@ -439,6 +460,9 @@ export function SpaWeekBoard({
         startMinutes: snapped,
         durationMin: pending.durationMin,
         height: pending.height,
+        grabOffsetY: pending.grabOffsetY,
+        pointerX: pending.x,
+        pointerY: pending.y,
         valid: canDrop(
           pending.booking.specialistId,
           bookDay,
@@ -452,34 +476,48 @@ export function SpaWeekBoard({
     [canDrop, clearTouchArmTimer],
   );
 
+  const maybeEdgeScroll = useCallback((clientX: number) => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const rect = scroller.getBoundingClientRect();
+    if (clientX < rect.left + EDGE_SCROLL_PX) {
+      scroller.scrollLeft -= EDGE_SCROLL_STEP;
+    } else if (clientX > rect.right - EDGE_SCROLL_PX) {
+      scroller.scrollLeft += EDGE_SCROLL_STEP;
+    }
+  }, []);
+
   const resolveDropTarget = useCallback(
-    (clientX: number, clientY: number) => {
+    (clientX: number, clientY: number, grabOffsetY: number) => {
       for (const d of days) {
         const key = dateKey(d);
         const el = columnRefs.current.get(key);
         if (!el) continue;
         const rect = el.getBoundingClientRect();
-        if (
-          clientX < rect.left ||
-          clientX > rect.right ||
-          clientY < rect.top ||
-          clientY > rect.bottom
-        ) {
-          continue;
-        }
+        if (clientX < rect.left || clientX > rect.right) continue;
         const colHeight = Math.max(1, rect.height);
-        const relY = Math.max(0, Math.min(clientY - rect.top, colHeight - 1));
+        const adjustedY = clientY - grabOffsetY;
+        const relY = Math.max(
+          0,
+          Math.min(adjustedY - rect.top, colHeight - 1),
+        );
         const minsFromView =
           Math.floor(relY / PX_PER_MIN / GRID_STEP_MIN) * GRID_STEP_MIN;
+        const maxStart =
+          Math.floor(
+            (viewport.viewEndMin - viewport.viewStartMin - GRID_STEP_MIN) /
+              GRID_STEP_MIN,
+          ) * GRID_STEP_MIN;
+        const clamped = Math.max(0, Math.min(minsFromView, maxStart));
         return {
           day: d,
           dayKey: key,
-          minutes: viewport.viewStartMin + minsFromView,
+          minutes: viewport.viewStartMin + clamped,
         };
       }
       return null;
     },
-    [days, viewport.viewStartMin],
+    [days, viewport.viewEndMin, viewport.viewStartMin],
   );
 
   const commitMove = useCallback(
@@ -520,15 +558,12 @@ export function SpaWeekBoard({
   commitMoveRef.current = commitMove;
 
   useEffect(() => {
-    if (!isTracking) return;
-
     function onPointerMove(e: PointerEvent) {
-      if (dragRef.current || pointerStartRef.current) {
-        e.preventDefault();
-      }
-
       const pending = pointerStartRef.current;
       const current = dragRef.current;
+      if (!pending && !current) return;
+
+      e.preventDefault();
 
       if (pending && !current) {
         const dx = e.clientX - pending.x;
@@ -550,10 +585,23 @@ export function SpaWeekBoard({
       const dragNow = dragRef.current;
       if (!dragNow) return;
 
-      const target = resolveDropTarget(e.clientX, e.clientY);
+      maybeEdgeScroll(e.clientX);
+
+      const target = resolveDropTarget(
+        e.clientX,
+        e.clientY,
+        dragNow.grabOffsetY,
+      );
       if (!target) {
         setDrag((prev) =>
-          prev ? { ...prev, valid: false } : null,
+          prev
+            ? {
+                ...prev,
+                valid: false,
+                pointerX: e.clientX,
+                pointerY: e.clientY,
+              }
+            : null,
         );
         return;
       }
@@ -568,13 +616,15 @@ export function SpaWeekBoard({
         ...dragNow,
         dayKey: target.dayKey,
         startMinutes: target.minutes,
+        pointerX: e.clientX,
+        pointerY: e.clientY,
         valid,
       });
     }
 
     function onPointerUp() {
+      if (!pointerStartRef.current && !dragRef.current) return;
       clearTouchArmTimer();
-      const pending = pointerStartRef.current;
       const current = dragRef.current;
       setPointerStart(null);
       if (current) {
@@ -584,10 +634,6 @@ export function SpaWeekBoard({
         }, 250);
         void commitMoveRef.current(current);
         setDrag(null);
-        return;
-      }
-      if (pending) {
-        setPointerStart(null);
       }
     }
 
@@ -599,7 +645,7 @@ export function SpaWeekBoard({
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
     };
-  }, [canDrop, clearTouchArmTimer, isTracking, resolveDropTarget]);
+  }, [canDrop, clearTouchArmTimer, maybeEdgeScroll, resolveDropTarget]);
 
   const onBookingPointerDown = (
     e: ReactPointerEvent,
@@ -611,6 +657,12 @@ export function SpaWeekBoard({
     if (e.button !== 0) return;
     e.stopPropagation();
     clearTouchArmTimer();
+    const target = e.currentTarget as HTMLElement;
+    const rect = target.getBoundingClientRect();
+    const grabOffsetY = Math.max(
+      0,
+      Math.min(e.clientY - rect.top, Math.max(0, height - 1)),
+    );
     const pending: PointerStart = {
       booking,
       x: e.clientX,
@@ -618,11 +670,14 @@ export function SpaWeekBoard({
       height,
       durationMin,
       pointerType: e.pointerType,
+      grabOffsetY,
     };
     setPointerStart(pending);
     if (isTouchPointer(e.pointerType)) {
       touchArmTimerRef.current = window.setTimeout(() => {
-        if (pointerStartRef.current === pending || pointerStartRef.current) {
+        const still =
+          pointerStartRef.current?.booking.id === pending.booking.id;
+        if (still) {
           beginDragFromPendingRef.current(pending);
         }
       }, TOUCH_DRAG_DELAY_MS);
@@ -632,6 +687,35 @@ export function SpaWeekBoard({
   const goPrev = () => onDayChange(addDays(weekStart, -7));
   const goNext = () => onDayChange(addDays(weekStart, 7));
   const goThisWeek = () => onDayChange(startOfDay(new Date()));
+
+  const halfHourMarks = useMemo(() => {
+    const marks: number[] = [];
+    for (
+      let m = viewport.viewStartMin;
+      m < viewport.viewEndMin;
+      m += 30
+    ) {
+      if (m % 60 !== 0) marks.push(m);
+    }
+    return marks;
+  }, [viewport]);
+
+  const dragTargetDay = drag
+    ? days.find((d) => dateKey(d) === drag.dayKey)
+    : null;
+  const dragChipLabel = drag
+    ? `${dragTargetDay ? formatDayChip(dragTargetDay) : '…'} · ${minutesToTimeLabel(
+        DAY_START_HOUR * 60 + drag.startMinutes,
+      )}`
+    : '';
+
+  useEffect(() => {
+    if (drag) document.body.style.cursor = 'grabbing';
+    else document.body.style.cursor = '';
+    return () => {
+      document.body.style.cursor = '';
+    };
+  }, [drag]);
 
   return (
     <div className="space-y-3">
@@ -692,22 +776,32 @@ export function SpaWeekBoard({
         </div>
       ) : null}
 
-      <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/40 [-webkit-overflow-scrolling:touch]">
-        <div className="flex min-w-max">
+      <div
+        ref={scrollRef}
+        className="snap-x snap-mandatory overflow-x-auto rounded-xl border border-slate-800 bg-slate-950/40 [-webkit-overflow-scrolling:touch]"
+      >
+        <div className="flex w-full min-w-max md:min-w-0">
           <div className="admin-time-rail sticky left-0 z-20 w-12 shrink-0 border-r border-slate-800 bg-slate-950">
-            <div className="h-11 border-b border-slate-800" />
+            <div className="h-12 border-b border-slate-800" />
             <div className="relative" style={{ height: viewHeight }}>
               {hourMarks.map((m) => {
                 const clockHour = DAY_START_HOUR + m / 60;
+                const label = `${String(Math.floor(clockHour)).padStart(2, '0')}:00`;
+                const isClosing = m >= viewport.viewEndMin;
+                const topPx = isClosing
+                  ? (m - viewport.viewStartMin) * PX_PER_MIN
+                  : (m - viewport.viewStartMin) * PX_PER_MIN +
+                    (60 * PX_PER_MIN) / 2;
                 return (
                   <div
                     key={m}
-                    className="absolute left-0 right-0 whitespace-nowrap px-1 text-[10px] tabular-nums leading-none text-slate-500"
+                    className="absolute left-0 right-0 flex justify-end px-1 text-[10px] tabular-nums leading-none text-slate-500"
                     style={{
-                      top: (m - viewport.viewStartMin) * PX_PER_MIN + 2,
+                      top: topPx,
+                      transform: 'translateY(-50%)',
                     }}
                   >
-                    {String(Math.floor(clockHour)).padStart(2, '0')}:00
+                    {label}
                   </div>
                 );
               })}
@@ -717,7 +811,6 @@ export function SpaWeekBoard({
           {days.map((d) => {
             const key = dateKey(d);
             const isToday = sameCalendarDay(d, today);
-            const isWeekend = d.getDay() === 0 || d.getDay() === 6;
             const bands = hourBandsForDay(board.hours, d, filteredStaffId);
             const items = bookingsForDay(
               board.bookings,
@@ -725,6 +818,9 @@ export function SpaWeekBoard({
               filteredStaffId,
             ).sort((a, b) => a.startAt.localeCompare(b.startAt));
             const hasWork = bands.length > 0;
+            const isDropDay = drag?.dayKey === key;
+            const dropOk = Boolean(isDropDay && drag?.valid);
+            const dropBad = Boolean(isDropDay && drag && !drag.valid);
 
             const nowTop =
               isToday &&
@@ -739,13 +835,17 @@ export function SpaWeekBoard({
             return (
               <div
                 key={key}
-                className={`w-[5.5rem] shrink-0 border-r border-slate-800 last:border-r-0 sm:w-28 md:w-32 ${
-                  isToday ? 'bg-fitgo-500/5' : isWeekend ? 'bg-slate-950/60' : ''
-                } ${!hasWork ? 'opacity-70' : ''}`}
+                className={`${COL_MIN_WIDTH_CLASS} w-0 shrink-0 grow basis-0 snap-start border-r border-slate-800 last:border-r-0 ${
+                  isToday ? 'bg-fitgo-500/5' : ''
+                } ${dropOk ? 'bg-fitgo-500/10' : ''} ${
+                  dropBad ? 'bg-rose-500/10' : ''
+                }`}
               >
                 <div
-                  className={`flex h-11 flex-col items-center justify-center border-b border-slate-800 px-1 text-center ${
+                  className={`flex h-12 flex-col items-center justify-center border-b border-slate-800 px-1 text-center ${
                     isToday ? 'bg-fitgo-500/10' : ''
+                  } ${dropOk ? 'ring-1 ring-inset ring-fitgo-500/40' : ''} ${
+                    dropBad ? 'ring-1 ring-inset ring-rose-400/50' : ''
                   }`}
                 >
                   <span
@@ -755,6 +855,9 @@ export function SpaWeekBoard({
                   >
                     {formatDayHeader(d)}
                   </span>
+                  {!hasWork ? (
+                    <span className="text-[9px] text-slate-500">нет смены</span>
+                  ) : null}
                 </div>
 
                 <div
@@ -788,10 +891,7 @@ export function SpaWeekBoard({
                       specialistId = hit?.specialistId;
                     }
                     if (!specialistId) {
-                      if (
-                        mode === 'specialist' &&
-                        viewerSpecialistId
-                      ) {
+                      if (mode === 'specialist' && viewerSpecialistId) {
                         specialistId = viewerSpecialistId;
                       } else {
                         return;
@@ -823,8 +923,6 @@ export function SpaWeekBoard({
                     onEmptySlotClick({ specialistId, startAt });
                   }}
                 >
-                  {/* Off-hours dim */}
-                  <div className="pointer-events-none absolute inset-0 bg-slate-950/50" />
                   {bands.map((h) => {
                     const top =
                       (minutesFromDayStart(h.startAt, d) -
@@ -839,7 +937,11 @@ export function SpaWeekBoard({
                     return (
                       <div
                         key={h.id}
-                        className="pointer-events-none absolute inset-x-0 bg-slate-800/40"
+                        className={
+                          h.status === 'DRAFT'
+                            ? 'pointer-events-none absolute inset-x-0 border border-dashed border-fitgo-500/40 bg-fitgo-500/5'
+                            : 'pointer-events-none absolute inset-x-0 bg-fitgo-500/10'
+                        }
                         style={{ top, height }}
                       />
                     );
@@ -848,7 +950,16 @@ export function SpaWeekBoard({
                   {hourMarks.map((m) => (
                     <div
                       key={`line-${m}`}
-                      className="pointer-events-none absolute inset-x-0 border-t border-slate-800/80"
+                      className="pointer-events-none absolute inset-x-0 border-t border-slate-800/70"
+                      style={{
+                        top: (m - viewport.viewStartMin) * PX_PER_MIN,
+                      }}
+                    />
+                  ))}
+                  {halfHourMarks.map((m) => (
+                    <div
+                      key={`half-${m}`}
+                      className="pointer-events-none absolute inset-x-0 border-t border-dashed border-slate-800/40"
                       style={{
                         top: (m - viewport.viewStartMin) * PX_PER_MIN,
                       }}
@@ -865,13 +976,64 @@ export function SpaWeekBoard({
                     </div>
                   ) : null}
 
+                  {isDropDay && drag ? (
+                    <>
+                      <div
+                        className={`pointer-events-none absolute inset-x-0.5 z-20 rounded-md border-2 border-dashed ${
+                          drag.valid
+                            ? 'border-fitgo-400/70 bg-fitgo-500/15'
+                            : 'border-rose-400/60 bg-rose-500/10'
+                        }`}
+                        style={{
+                          top:
+                            (drag.startMinutes - viewport.viewStartMin) *
+                            PX_PER_MIN,
+                          height: drag.height,
+                        }}
+                      />
+                      <div
+                        className={`pointer-events-none absolute inset-x-0.5 z-30 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-lg ring-2 ${
+                          drag.valid
+                            ? `${
+                                !filteredStaffId
+                                  ? staffColorClass(
+                                      drag.booking.specialistId,
+                                      board.staff,
+                                    )
+                                  : 'bg-amber-500/85 border-amber-400/40'
+                              } ring-fitgo-300/70`
+                            : 'border-rose-400/60 bg-rose-900/80 ring-rose-400/70'
+                        }`}
+                        style={{
+                          top:
+                            (drag.startMinutes - viewport.viewStartMin) *
+                            PX_PER_MIN,
+                          height: drag.height,
+                        }}
+                      >
+                        <p className="truncate font-semibold tabular-nums">
+                          {minutesToTimeLabel(
+                            DAY_START_HOUR * 60 + drag.startMinutes,
+                          )}
+                          –
+                          {minutesToTimeLabel(
+                            DAY_START_HOUR * 60 +
+                              drag.startMinutes +
+                              drag.durationMin,
+                          )}
+                        </p>
+                        <p className="truncate">{clientLabel(drag.booking)}</p>
+                      </div>
+                    </>
+                  ) : null}
+
                   {items.map((b) => {
                     const topMin = minutesFromDayStart(b.startAt, d);
                     const endMin = minutesFromDayStart(b.endAt, d);
                     const durationMin = Math.max(15, endMin - topMin);
                     const top =
                       (topMin - viewport.viewStartMin) * PX_PER_MIN;
-                    const height = Math.max(18, durationMin * PX_PER_MIN);
+                    const height = Math.max(22, durationMin * PX_PER_MIN);
                     const isDragging = drag?.booking.id === b.id;
                     const showMulti = !filteredStaffId;
                     const staff = board.staff.find(
@@ -880,49 +1042,32 @@ export function SpaWeekBoard({
                     const color = showMulti
                       ? staffColorClass(b.specialistId, board.staff)
                       : 'bg-amber-500/85 border-amber-400/40';
-
-                    if (isDragging && drag) {
-                      const ghostDay = days.find(
-                        (x) => dateKey(x) === drag.dayKey,
-                      );
-                      if (ghostDay && dateKey(ghostDay) === key) {
-                        const ghostTop =
-                          (drag.startMinutes - viewport.viewStartMin) *
-                          PX_PER_MIN;
-                        return (
-                          <div
-                            key={b.id}
-                            className={`absolute inset-x-0.5 z-30 overflow-hidden rounded-md border px-1 py-0.5 text-[10px] leading-tight text-white shadow-lg ${
-                              drag.valid
-                                ? color
-                                : 'border-rose-400/60 bg-rose-900/70'
-                            }`}
-                            style={{
-                              top: ghostTop,
-                              height: drag.height,
-                            }}
-                          >
-                            <p className="truncate font-medium">
-                              {minutesToTimeLabel(
-                                DAY_START_HOUR * 60 + drag.startMinutes,
-                              )}{' '}
-                              {clientLabel(b)}
-                            </p>
-                          </div>
-                        );
-                      }
-                      return null;
-                    }
+                    const editable = canEditBooking(b) && !!onBookingMove;
+                    const timeStart = minutesToTimeLabel(
+                      DAY_START_HOUR * 60 + topMin,
+                    );
+                    const timeEnd = minutesToTimeLabel(
+                      DAY_START_HOUR * 60 + endMin,
+                    );
 
                     return (
                       <div
                         key={b.id}
                         role="button"
                         tabIndex={0}
-                        className={`absolute inset-x-0.5 z-10 overflow-hidden rounded-md border px-1 py-0.5 text-[10px] leading-tight text-white shadow-sm ${color} ${
-                          canEditBooking(b) && onBookingMove
+                        title={
+                          editable
+                            ? 'Удерживайте и перетащите на другой день или время'
+                            : undefined
+                        }
+                        className={`absolute inset-x-0.5 z-10 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-sm touch-none ${color} ${
+                          editable
                             ? 'cursor-grab active:cursor-grabbing'
                             : 'cursor-pointer'
+                        } ${isDragging ? 'opacity-35' : ''} ${
+                          pointerStart?.booking.id === b.id
+                            ? 'scale-[1.02] shadow-md ring-2 ring-white/30'
+                            : ''
                         }`}
                         style={{ top, height }}
                         onPointerDown={(e) =>
@@ -934,19 +1079,44 @@ export function SpaWeekBoard({
                         }}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <p className="truncate font-medium">
-                          {minutesToTimeLabel(DAY_START_HOUR * 60 + topMin)}{' '}
-                          {clientLabel(b)}
-                        </p>
-                        {showMulti && staff ? (
-                          <p className="truncate text-[9px] text-white/80">
-                            {staffShort(staff)}
-                          </p>
-                        ) : b.serviceName && !b.busy ? (
-                          <p className="truncate text-[9px] text-white/80">
-                            {b.serviceName}
-                          </p>
-                        ) : null}
+                        <div className="flex items-start gap-1">
+                          {editable ? (
+                            <span
+                              className="mt-px flex shrink-0 flex-col gap-0.5 opacity-80"
+                              aria-hidden
+                            >
+                              <span className="block h-0.5 w-2 rounded-full bg-white/90" />
+                              <span className="block h-0.5 w-2 rounded-full bg-white/90" />
+                              <span className="block h-0.5 w-2 rounded-full bg-white/90" />
+                            </span>
+                          ) : null}
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-semibold tabular-nums">
+                              {timeStart}
+                              {height >= 36 ? (
+                                <span className="font-normal text-white/80">
+                                  –{timeEnd}
+                                </span>
+                              ) : null}
+                            </p>
+                            <p className="truncate font-medium">
+                              {clientLabel(b)}
+                            </p>
+                            {height >= 44 && showMulti && staff ? (
+                              <p className="truncate text-[9px] text-white/80">
+                                {staffShort(staff)}
+                              </p>
+                            ) : null}
+                            {height >= 44 &&
+                            !showMulti &&
+                            b.serviceName &&
+                            !b.busy ? (
+                              <p className="hidden truncate text-[9px] text-white/80 sm:block">
+                                {b.serviceName}
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
                       </div>
                     );
                   })}
@@ -956,9 +1126,23 @@ export function SpaWeekBoard({
           })}
         </div>
       </div>
+
+      {drag ? (
+        <div
+          className={`pointer-events-none fixed z-[80] -translate-x-1/2 -translate-y-[120%] rounded-full px-3 py-1.5 text-xs font-medium shadow-lg ring-1 ${
+            drag.valid
+              ? 'bg-fitgo-500 text-white ring-fitgo-300/50'
+              : 'bg-rose-600 text-white ring-rose-300/40'
+          }`}
+          style={{ left: drag.pointerX, top: drag.pointerY }}
+        >
+          {drag.valid ? dragChipLabel : `${dragChipLabel} · занято`}
+        </div>
+      ) : null}
+
       <p className="text-[11px] text-slate-500">
-        Перетащите запись на другой день или время. Между специалистами —
-        в виде «День».
+        Удерживайте запись и перетащите на другой день или время. На телефоне —
+        долгое нажатие. Между специалистами — в виде «День».
       </p>
     </div>
   );

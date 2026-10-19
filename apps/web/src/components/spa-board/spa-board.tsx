@@ -802,13 +802,21 @@ export function SpaBoard({
         <div className="relative" style={{ height: colHeight }}>
           {hourMarks.map((m) => {
             const clockHour = DAY_START_HOUR + m / 60;
+            const label = `${String(Math.floor(clockHour)).padStart(2, '0')}:00`;
+            const isClosing = m >= viewEndMin;
+            const topPx = isClosing
+              ? (m - viewStartMin) * PX_PER_MIN
+              : (m - viewStartMin) * PX_PER_MIN + (60 * PX_PER_MIN) / 2;
             return (
               <div
                 key={m}
-                className="absolute left-0 right-0 whitespace-nowrap px-1 text-[10px] tabular-nums leading-none text-slate-500"
-                style={{ top: (m - viewStartMin) * PX_PER_MIN + 2 }}
+                className="absolute left-0 right-0 flex justify-end px-1 text-[10px] tabular-nums leading-none text-slate-500"
+                style={{
+                  top: topPx,
+                  transform: 'translateY(-50%)',
+                }}
               >
-                {String(Math.floor(clockHour)).padStart(2, '0')}:00
+                {label}
               </div>
             );
           })}
