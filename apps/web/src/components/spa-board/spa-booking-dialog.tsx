@@ -20,20 +20,55 @@ type BookingPayload = {
   paymentType: 'QUOTA' | 'PAID';
 };
 
-function buildWeeklyDates(startLocal: string, weeks: number): string[] {
+type PeriodEntry = { date: string; time: string };
+
+function pad2(n: number) {
+  return String(n).padStart(2, '0');
+}
+
+function localDateKey(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function localTimeHm(d: Date) {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function buildWeeklyEntries(
+  startLocal: string,
+  weeks: number,
+): PeriodEntry[] {
   const base = new Date(startLocal);
   if (Number.isNaN(base.getTime()) || weeks < 1) return [];
-  const out: string[] = [];
+  const time = localTimeHm(base);
+  const out: PeriodEntry[] = [];
   for (let i = 0; i < weeks; i++) {
     const d = new Date(base);
     d.setDate(d.getDate() + i * 7);
-    out.push(d.toISOString());
+    out.push({ date: localDateKey(d), time });
   }
   return out;
 }
 
-function formatDateShort(iso: string) {
-  return new Date(iso).toLocaleDateString('ru-RU', {
+/** Keep custom times for dates that remain; fill new weeks from defaultTime. */
+function mergePeriodEntries(
+  prev: PeriodEntry[],
+  suggested: PeriodEntry[],
+  defaultTime: string,
+): PeriodEntry[] {
+  const byDate = new Map(prev.map((e) => [e.date, e.time]));
+  return suggested.map((s) => ({
+    date: s.date,
+    time: byDate.get(s.date) ?? s.time ?? defaultTime,
+  }));
+}
+
+function entryToIso(entry: PeriodEntry) {
+  return new Date(`${entry.date}T${entry.time}`).toISOString();
+}
+
+function formatDateShort(dateYmd: string) {
+  return new Date(`${dateYmd}T12:00:00`).toLocaleDateString('ru-RU', {
     weekday: 'short',
     day: 'numeric',
     month: 'short',
@@ -73,8 +108,9 @@ export function SpaBookingDialog({
   const [error, setError] = useState('');
   const [periodMode, setPeriodMode] = useState(false);
   const [periodWeeks, setPeriodWeeks] = useState(4);
-  const [periodDates, setPeriodDates] = useState<string[]>([]);
+  const [periodEntries, setPeriodEntries] = useState<PeriodEntry[]>([]);
   const [extraDate, setExtraDate] = useState('');
+  const [extraTime, setExtraTime] = useState('10:00');
   const [form, setForm] = useState({
     specialistId: defaultSpecialistId ?? '',
     clientId: '',
@@ -92,7 +128,9 @@ export function SpaBookingDialog({
     setMode('phone');
     setPeriodMode(false);
     setPeriodWeeks(4);
+    setPeriodEntries([]);
     setExtraDate('');
+    setExtraTime('10:00');
     setForm({
       specialistId: defaultSpecialistId ?? '',
       clientId: '',
@@ -105,18 +143,21 @@ export function SpaBookingDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when dialog opens
   }, [open, defaultSpecialistId, defaultStartAt]);
 
-  const suggestedDates = useMemo(
-    () => (periodMode ? buildWeeklyDates(form.startAt, periodWeeks) : []),
+  const suggestedEntries = useMemo(
+    () => (periodMode ? buildWeeklyEntries(form.startAt, periodWeeks) : []),
     [form.startAt, periodMode, periodWeeks],
   );
 
   useEffect(() => {
     if (!periodMode) {
-      setPeriodDates([]);
+      setPeriodEntries([]);
       return;
     }
-    setPeriodDates(suggestedDates);
-  }, [periodMode, suggestedDates]);
+    const { timePart: defaultTime } = splitDatetimeLocal(form.startAt);
+    setPeriodEntries((prev) =>
+      mergePeriodEntries(prev, suggestedEntries, defaultTime || '10:00'),
+    );
+  }, [periodMode, suggestedEntries, form.startAt]);
 
   if (!open) return null;
 
@@ -226,11 +267,18 @@ export function SpaBookingDialog({
     try {
       const payload = buildPayload(startIso);
       if (periodMode && onBulkSubmit) {
-        if (periodDates.length === 0) {
+        if (periodEntries.length === 0) {
           setError('Выберите хотя бы одну дату');
           return;
         }
-        await onBulkSubmit({ ...payload, dates: periodDates });
+        const dates = periodEntries.map(entryToIso).filter((iso) => {
+          return !Number.isNaN(new Date(iso).getTime());
+        });
+        if (dates.length === 0) {
+          setError('Некорректные даты периода');
+          return;
+        }
+        await onBulkSubmit({ ...payload, dates });
       } else {
         await onSubmit(payload);
       }
@@ -438,21 +486,57 @@ export function SpaBookingDialog({
                     }
                   />
                 </label>
-                <ul className="max-h-40 space-y-1 overflow-y-auto text-sm">
-                  {periodDates.map((iso) => (
-                    <li key={iso}>
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked
-                          onChange={() =>
-                            setPeriodDates((prev) =>
-                              prev.filter((d) => d !== iso),
-                            )
-                          }
-                        />
-                        <span>{formatDateShort(iso)}</span>
-                      </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary text-xs"
+                    onClick={() => {
+                      const t = timePart || '10:00';
+                      setPeriodEntries((prev) =>
+                        prev.map((e) => ({ ...e, time: t })),
+                      );
+                    }}
+                  >
+                    Это время всем
+                  </button>
+                </div>
+                <ul className="max-h-48 space-y-1.5 overflow-y-auto text-sm">
+                  {periodEntries.map((entry) => (
+                    <li
+                      key={entry.date}
+                      className="flex flex-wrap items-center gap-2"
+                    >
+                      <button
+                        type="button"
+                        className="text-slate-500 hover:text-rose-300"
+                        title="Убрать"
+                        onClick={() =>
+                          setPeriodEntries((prev) =>
+                            prev.filter((e) => e.date !== entry.date),
+                          )
+                        }
+                      >
+                        ×
+                      </button>
+                      <span className="min-w-[6.5rem] capitalize text-slate-300">
+                        {formatDateShort(entry.date)}
+                      </span>
+                      <input
+                        type="time"
+                        className="input date-field !w-auto"
+                        step={60}
+                        value={entry.time}
+                        onChange={(e) => {
+                          const t = e.target.value;
+                          setPeriodEntries((prev) =>
+                            prev.map((row) =>
+                              row.date === entry.date
+                                ? { ...row, time: t }
+                                : row,
+                            ),
+                          );
+                        }}
+                      />
                     </li>
                   ))}
                 </ul>
@@ -462,17 +546,33 @@ export function SpaBookingDialog({
                     value={extraDate}
                     onChange={setExtraDate}
                   />
+                  <label className="block space-y-1 text-sm">
+                    <span className="text-[11px] text-slate-500">Время</span>
+                    <input
+                      type="time"
+                      className="input date-field"
+                      step={60}
+                      value={extraTime}
+                      onChange={(e) => setExtraTime(e.target.value)}
+                    />
+                  </label>
                   <button
                     type="button"
                     className="btn-secondary text-xs"
                     onClick={() => {
-                      if (!extraDate || !timePart) return;
-                      const local = `${extraDate}T${timePart}`;
-                      const iso = new Date(local).toISOString();
-                      if (Number.isNaN(new Date(iso).getTime())) return;
-                      setPeriodDates((prev) =>
-                        prev.includes(iso) ? prev : [...prev, iso].sort(),
-                      );
+                      if (!extraDate || !extraTime) return;
+                      setPeriodEntries((prev) => {
+                        if (prev.some((e) => e.date === extraDate)) {
+                          return prev.map((e) =>
+                            e.date === extraDate
+                              ? { ...e, time: extraTime }
+                              : e,
+                          );
+                        }
+                        return [...prev, { date: extraDate, time: extraTime }].sort(
+                          (a, b) => a.date.localeCompare(b.date),
+                        );
+                      });
                       setExtraDate('');
                     }}
                   >
@@ -501,7 +601,7 @@ export function SpaBookingDialog({
           {busy
             ? 'Записываем…'
             : periodMode
-              ? `Создать ${periodDates.length || 0} записей`
+              ? `Создать ${periodEntries.length || 0} записей`
               : 'Записать'}
         </button>
       </div>

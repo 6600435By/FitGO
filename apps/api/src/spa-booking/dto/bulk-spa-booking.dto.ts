@@ -34,11 +34,14 @@ export class BulkSpaBookingDto {
   @IsString()
   membershipServiceName?: string;
 
-  /** Time-of-day from the first booking; applied to each date. */
+  /**
+   * Fallback time-of-day when a dates[] entry has no time component.
+   * Prefer embedding HH:mm in each dates[] ISO.
+   */
   @IsISO8601()
   startAt!: string;
 
-  /** ISO date-times for each occurrence. */
+  /** ISO date-times for each occurrence (own time per entry). */
   @IsArray()
   @ArrayMinSize(1)
   @IsString({ each: true })

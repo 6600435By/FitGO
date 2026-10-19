@@ -13,6 +13,13 @@ import { UserRole } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SpaBoard } from '@/components/spa-board/spa-board';
 import {
+  boardPeriodForView,
+  defaultSpaBoardView,
+  type SpaBoardView,
+  writeStoredSpaBoardView,
+} from '@/components/spa-board/spa-board-period';
+import { SpaBoardViewToggle } from '@/components/spa-board/spa-board-view-toggle';
+import {
   SpaBookingDialog,
   toDatetimeLocalValue,
 } from '@/components/spa-board/spa-booking-dialog';
@@ -20,6 +27,7 @@ import { SpaBookingEditDialog } from '@/components/spa-board/spa-booking-edit-di
 import { SpaDayHoursDialog } from '@/components/spa-board/spa-day-hours-dialog';
 import { SpaWaitlistPanel } from '@/components/spa-board/spa-waitlist-panel';
 import { SpaWaitlistPickDialog } from '@/components/spa-board/spa-waitlist-pick-dialog';
+import { SpaWeekBoard } from '@/components/spa-board/spa-week-board';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -57,6 +65,8 @@ export function AdminSpaWorkspace() {
     d.setHours(0, 0, 0, 0);
     return d;
   });
+  const [boardView, setBoardView] = useState<SpaBoardView>('day');
+  const [weekFilterSpecialistId, setWeekFilterSpecialistId] = useState('');
   const [showAssign, setShowAssign] = useState(false);
   const [assignDefaults, setAssignDefaults] = useState<{
     specialistId?: string;
@@ -100,13 +110,19 @@ export function AdminSpaWorkspace() {
     return { start: start.toISOString(), end: end.toISOString() };
   }, []);
 
-  const boardPeriod = useMemo(() => {
-    const start = new Date(day);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setHours(23, 59, 59, 999);
-    return { start: start.toISOString(), end: end.toISOString() };
-  }, [day]);
+  const boardPeriod = useMemo(
+    () => boardPeriodForView(day, boardView),
+    [boardView, day],
+  );
+
+  useEffect(() => {
+    setBoardView(defaultSpaBoardView());
+  }, []);
+
+  const changeBoardView = (v: SpaBoardView) => {
+    setBoardView(v);
+    writeStoredSpaBoardView(v);
+  };
 
   const reload = useCallback(async () => {
     const token = getToken();
@@ -911,43 +927,90 @@ export function AdminSpaWorkspace() {
             }}
           />
 
+          <div className="flex flex-wrap items-center gap-2">
+            <SpaBoardViewToggle view={boardView} onChange={changeBoardView} />
+          </div>
+
           {board ? (
-            <SpaBoard
-              board={board}
-              mode="admin"
-              day={day}
-              onDayChange={setDay}
-              onEmptySlotClick={({ specialistId, startAt }) => {
-                const iso = startAt.toISOString();
-                const matches = matchingWaitlist(specialistId, iso);
-                if (matches.length > 0 || waitlist.some((e) => e.specialistId === specialistId)) {
-                  setWaitlistPick({
-                    specialistId,
-                    startAt: iso,
-                    title: 'Свободный слот',
-                    allowNew: true,
-                  });
+            boardView === 'week' ? (
+              <SpaWeekBoard
+                board={board}
+                mode="admin"
+                day={day}
+                onDayChange={setDay}
+                filterSpecialistId={weekFilterSpecialistId}
+                onFilterSpecialistChange={setWeekFilterSpecialistId}
+                onEmptySlotClick={({ specialistId, startAt }) => {
+                  const iso = startAt.toISOString();
+                  const matches = matchingWaitlist(specialistId, iso);
+                  if (
+                    matches.length > 0 ||
+                    waitlist.some((e) => e.specialistId === specialistId)
+                  ) {
+                    setWaitlistPick({
+                      specialistId,
+                      startAt: iso,
+                      title: 'Свободный слот',
+                      allowNew: true,
+                    });
+                    setAssignDefaults({
+                      specialistId,
+                      startAt: toDatetimeLocalValue(startAt),
+                    });
+                    return;
+                  }
                   setAssignDefaults({
                     specialistId,
                     startAt: toDatetimeLocalValue(startAt),
                   });
-                  return;
-                }
-                setAssignDefaults({
-                  specialistId,
-                  startAt: toDatetimeLocalValue(startAt),
-                });
-                setShowAssign(true);
-              }}
-              onBookingDoubleClick={(b) => {
-                if (!b.busy) setSelectedBooking(b);
-              }}
-              onBookingMove={moveBooking}
-              onEditDayHours={({ specialistId }) => {
-                setDayHoursSpecialistId(specialistId);
-                setShowDayHours(true);
-              }}
-            />
+                  setShowAssign(true);
+                }}
+                onBookingDoubleClick={(b) => {
+                  if (!b.busy) setSelectedBooking(b);
+                }}
+                onBookingMove={moveBooking}
+              />
+            ) : (
+              <SpaBoard
+                board={board}
+                mode="admin"
+                day={day}
+                onDayChange={setDay}
+                onEmptySlotClick={({ specialistId, startAt }) => {
+                  const iso = startAt.toISOString();
+                  const matches = matchingWaitlist(specialistId, iso);
+                  if (
+                    matches.length > 0 ||
+                    waitlist.some((e) => e.specialistId === specialistId)
+                  ) {
+                    setWaitlistPick({
+                      specialistId,
+                      startAt: iso,
+                      title: 'Свободный слот',
+                      allowNew: true,
+                    });
+                    setAssignDefaults({
+                      specialistId,
+                      startAt: toDatetimeLocalValue(startAt),
+                    });
+                    return;
+                  }
+                  setAssignDefaults({
+                    specialistId,
+                    startAt: toDatetimeLocalValue(startAt),
+                  });
+                  setShowAssign(true);
+                }}
+                onBookingDoubleClick={(b) => {
+                  if (!b.busy) setSelectedBooking(b);
+                }}
+                onBookingMove={moveBooking}
+                onEditDayHours={({ specialistId }) => {
+                  setDayHoursSpecialistId(specialistId);
+                  setShowDayHours(true);
+                }}
+              />
+            )
           ) : (
             <p className="text-sm text-slate-400">Загрузка доски…</p>
           )}

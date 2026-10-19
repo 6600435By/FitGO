@@ -21,13 +21,26 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import {
+  monthBoundsIso,
+  spaBoardToMonthCells,
+  spaStaffOptions,
+} from './spa-roster-map';
 import { StaffDayDialog } from './staff-day-dialog';
 
-const TRACKS: Array<{ id: StaffShiftTrack; label: string }> = [
+/** SPA is a UI filter over published specialist hours — not a StaffShiftTrack. */
+type RosterUiTrack = StaffShiftTrack | 'SPA';
+
+const TRACKS: Array<{ id: RosterUiTrack; label: string }> = [
   { id: 'ADMIN', label: 'Админы' },
   { id: 'TRAINER', label: 'Тренеры' },
   { id: 'TECH', label: 'Техперсонал' },
+  { id: 'SPA', label: 'SPA-специалисты' },
 ];
+
+function isStaffShiftTrack(t: RosterUiTrack): t is StaffShiftTrack {
+  return t === 'ADMIN' || t === 'TRAINER' || t === 'TECH';
+}
 
 const DAY_LABELS: Record<DayOfWeekKey, string> = {
   monday: 'Пн',
@@ -71,9 +84,10 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
   const now = useMemo(() => new Date(), []);
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  const [track, setTrack] = useState<StaffShiftTrack>(
+  const [track, setTrack] = useState<RosterUiTrack>(
     mode === 'trainer' ? 'TRAINER' : 'ADMIN',
   );
+  const isSpaTrack = track === 'SPA';
   const [cells, setCells] = useState<StaffShiftMonthCell[]>([]);
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [hours, setHours] = useState<ClubWorkingHours>(DEFAULT_CLUB_WORKING_HOURS);
@@ -115,13 +129,30 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
         setStaff([]);
         return;
       }
+
+      if (track === 'SPA') {
+        const { start, end } = monthBoundsIso(year, month);
+        const [board, wh] = await Promise.all([
+          api.adminSpaBoard(token, start, end),
+          mode === 'super'
+            ? api.saRosterWorkingHours(token)
+            : api.adminRosterWorkingHours(token),
+        ]);
+        setCells(spaBoardToMonthCells(board, year, month));
+        setStaff(spaStaffOptions(board));
+        setHours({ ...DEFAULT_CLUB_WORKING_HOURS, ...wh });
+        setSummary(null);
+        return;
+      }
+
+      const shiftTrack = track;
       const [monthCells, staffList, wh] = await Promise.all([
         mode === 'super'
-          ? api.saRosterMonth(token, year, month, track)
-          : api.adminRosterMonth(token, year, month, track),
+          ? api.saRosterMonth(token, year, month, shiftTrack)
+          : api.adminRosterMonth(token, year, month, shiftTrack),
         mode === 'super'
-          ? api.saRosterStaff(token, track)
-          : api.adminRosterStaff(token, track),
+          ? api.saRosterStaff(token, shiftTrack)
+          : api.adminRosterStaff(token, shiftTrack),
         mode === 'super'
           ? api.saRosterWorkingHours(token)
           : api.adminRosterWorkingHours(token),
@@ -135,7 +166,7 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
         const last = new Date(year, month, 0).getDate();
         const to = `${year}-${pad(month)}-${pad(last)}`;
         if (mode === 'super') {
-          setSummary(await api.saRosterSummaries(token, from, to, track));
+          setSummary(await api.saRosterSummaries(token, from, to, shiftTrack));
         } else {
           setSummary(await api.adminRosterMyHours(token, from, to));
         }
@@ -169,11 +200,13 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
   const dayBudget = (dateStr: string) => {
     const d = new Date(`${dateStr}T12:00:00`);
     const kind = rosterDayKind(d, hours.holidayDates ?? []);
-    const cap = trackDayCapMinutes(track, d, hours.holidayDates ?? []);
     const used = (shiftByDate.get(dateStr) ?? []).reduce(
       (sum, s) => sum + s.minutes,
       0,
     );
+    const cap = isStaffShiftTrack(track)
+      ? trackDayCapMinutes(track, d, hours.holidayDates ?? [])
+      : 24 * 60;
     return {
       kind,
       cap,
@@ -239,8 +272,21 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     if (!token) return;
     setBusy(true);
     try {
-      if (mode === 'super') await api.saRosterDeleteShift(token, id);
-      else await api.adminRosterDeleteShift(token, id);
+      if (isSpaTrack) {
+        const row = (shiftByDate.get(selectedDate) ?? []).find(
+          (s) => s.id === id,
+        );
+        if (!row) return;
+        await api.adminSetSpecialistDayHours(token, row.userId, {
+          day: selectedDate,
+          startTime: null,
+          endTime: null,
+        });
+      } else if (mode === 'super') {
+        await api.saRosterDeleteShift(token, id);
+      } else {
+        await api.adminRosterDeleteShift(token, id);
+      }
       await load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
@@ -265,18 +311,27 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     setBusy(true);
     setMessage('');
     try {
-      const body = {
-        id: input.id,
-        userId: input.userId,
-        userIds: input.id ? undefined : [input.userId],
-        track,
-        date: selectedDate,
-        startAt: new Date(`${selectedDate}T${input.start}:00`).toISOString(),
-        endAt: new Date(`${selectedDate}T${input.end}:00`).toISOString(),
-        overtimeMinutes: input.overtimeMinutes,
-      };
-      if (mode === 'super') await api.saRosterUpsertShift(token, body);
-      else await api.adminRosterUpsertShift(token, body);
+      if (isSpaTrack) {
+        await api.adminSetSpecialistDayHours(token, input.userId, {
+          day: selectedDate,
+          startTime: input.start,
+          endTime: input.end,
+        });
+      } else {
+        if (!isStaffShiftTrack(track)) return false;
+        const body = {
+          id: input.id,
+          userId: input.userId,
+          userIds: input.id ? undefined : [input.userId],
+          track,
+          date: selectedDate,
+          startAt: new Date(`${selectedDate}T${input.start}:00`).toISOString(),
+          endAt: new Date(`${selectedDate}T${input.end}:00`).toISOString(),
+          overtimeMinutes: input.overtimeMinutes,
+        };
+        if (mode === 'super') await api.saRosterUpsertShift(token, body);
+        else await api.adminRosterUpsertShift(token, body);
+      }
       await load();
       return true;
     } catch (e) {
@@ -307,6 +362,39 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     setBusy(true);
     setMessage('');
     try {
+      if (isSpaTrack) {
+        let created = 0;
+        const skipped: Array<{ date: string }> = [];
+        for (const date of editableDates) {
+          const existing = shiftByDate.get(date) ?? [];
+          if (existing.some((s) => s.userId === input.userId)) {
+            skipped.push({ date });
+            continue;
+          }
+          try {
+            await api.adminSetSpecialistDayHours(token, input.userId, {
+              day: date,
+              startTime: input.start,
+              endTime: input.end,
+            });
+            created += 1;
+          } catch {
+            skipped.push({ date });
+          }
+        }
+        await load();
+        const skipHint =
+          skipped.length > 0
+            ? ` Пропущено: ${skipped.length} (${skipped
+                .slice(0, 3)
+                .map((s) => s.date)
+                .join(', ')}${skipped.length > 3 ? '…' : ''})`
+            : '';
+        setMessage(`Создано смен: ${created}.${skipHint}`);
+        return true;
+      }
+
+      if (!isStaffShiftTrack(track)) return false;
       const body = {
         userId: input.userId,
         track,
@@ -344,7 +432,13 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
     const open = day?.open ?? '07:00';
     const close = day?.close ?? '23:00';
     const weekend = rosterDayKind(d, hours.holidayDates ?? []) === 'weekend';
-    const used = (shiftByDate.get(date) ?? []).reduce((sum, s) => sum + s.minutes, 0);
+    const used = (shiftByDate.get(date) ?? []).reduce(
+      (sum, s) => sum + s.minutes,
+      0,
+    );
+    if (isSpaTrack) {
+      return { start: '10:00', end: '20:00', used, cap: 24 * 60 };
+    }
     const cap = trackDayCapMinutes(track, d, hours.holidayDates ?? []);
     const remain = Math.max(0, cap - used);
     const pair: [string, string] =
@@ -383,9 +477,11 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
           <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
             {mode === 'trainer'
               ? 'Дежурство ставит администратор. Здесь его можно только смотреть. Время до или после дежурства открывается в Расписании: клиенты записываются, но ставка за эти часы не начисляется.'
-              : track === 'TRAINER'
-                ? 'Дежурство: в эти часы клиенты могут записаться, и часы идут в ставку. Время до и после тренер открывает сам.'
-              : 'Двойной щелчок по дню — добавить или изменить. Можно скопировать смену на период или выбранные дни недели.'}
+              : isSpaTrack
+                ? 'Рабочие часы SPA-специалистов (опубликованная смена). Те же часы, что в журнале SPA. Двойной щелчок — добавить или изменить; можно скопировать на период.'
+                : track === 'TRAINER'
+                  ? 'Дежурство: в эти часы клиенты могут записаться, и часы идут в ставку. Время до и после тренер открывает сам.'
+                  : 'Двойной щелчок по дню — добавить или изменить. Можно скопировать смену на период или выбранные дни недели.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -525,9 +621,11 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
             intro={
               isRosterDateLocked(selectedDate) && !dayEditable(selectedDate)
                 ? rosterLockMessage(selectedDate)
-                : track === 'TRAINER'
-                  ? 'Дежурство. Эти часы оплачиваются по ставке, клиенты могут записаться. Время до и после тренер ставит сам.'
-                  : undefined
+                : isSpaTrack
+                  ? 'Смена SPA: клиенты видят эти часы в журнале. Один интервал на специалиста в день. Оплата — по услугам, не по часам смены.'
+                  : track === 'TRAINER'
+                    ? 'Дежурство. Эти часы оплачиваются по ставке, клиенты могут записаться. Время до и после тренер ставит сам.'
+                    : undefined
             }
             defaultStart={win.start}
             defaultEnd={win.end}
@@ -549,7 +647,7 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
         );
       })()}
 
-      {showMotivation && summaries.length > 0 && (
+      {showMotivation && !isSpaTrack && summaries.length > 0 && (
         <details className="card">
           <summary className="cursor-pointer text-sm font-medium text-white">
             {mode === 'super' ? 'Суммы по сменам' : 'Мои часы и сумма'}

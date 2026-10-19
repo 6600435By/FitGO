@@ -3283,9 +3283,9 @@ export class SpaBookingService {
     if (Number.isNaN(template.getTime())) {
       throw new BadRequestException('Некорректное время');
     }
-    const hours = template.getHours();
-    const minutes = template.getMinutes();
-    const seconds = template.getSeconds();
+    const fallbackHours = template.getHours();
+    const fallbackMinutes = template.getMinutes();
+    const fallbackSeconds = template.getSeconds();
 
     const created: SpaBooking[] = [];
     const skipped: Array<{ date: string; reason: string }> = [];
@@ -3295,13 +3295,17 @@ export class SpaBookingService {
 
     const uniqueDates = [...new Set(input.dates)];
     for (const raw of uniqueDates) {
-      const day = new Date(raw);
-      if (Number.isNaN(day.getTime())) {
+      const parsed = new Date(raw);
+      if (Number.isNaN(parsed.getTime())) {
         skipped.push({ date: raw, reason: 'Некорректная дата' });
         continue;
       }
-      const start = new Date(day);
-      start.setHours(hours, minutes, seconds, 0);
+      // Prefer time-of-day from each dates[] ISO; fall back to startAt when date-only.
+      const hasTimeComponent = /T\d{2}:\d{2}/.test(raw);
+      const start = new Date(parsed);
+      if (!hasTimeComponent) {
+        start.setHours(fallbackHours, fallbackMinutes, fallbackSeconds, 0);
+      }
       try {
         const result = await this.bookSpa(user, {
           clientId: input.clientId,

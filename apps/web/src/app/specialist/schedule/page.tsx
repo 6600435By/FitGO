@@ -12,6 +12,13 @@ import type {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SpaBoard } from '@/components/spa-board/spa-board';
 import {
+  boardPeriodForView,
+  defaultSpaBoardView,
+  type SpaBoardView,
+  writeStoredSpaBoardView,
+} from '@/components/spa-board/spa-board-period';
+import { SpaBoardViewToggle } from '@/components/spa-board/spa-board-view-toggle';
+import {
   SpaBookingDialog,
   toDatetimeLocalValue,
 } from '@/components/spa-board/spa-booking-dialog';
@@ -21,8 +28,10 @@ import {
   normalizeHm,
   SpaHoursEditor,
 } from '@/components/spa-board/spa-hours-editor';
+import { SpaSpecialistShiftMonth } from '@/components/spa-board/spa-specialist-shift-month';
 import { SpaWaitlistPanel } from '@/components/spa-board/spa-waitlist-panel';
 import { SpaWaitlistPickDialog } from '@/components/spa-board/spa-waitlist-pick-dialog';
+import { SpaWeekBoard } from '@/components/spa-board/spa-week-board';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
@@ -61,6 +70,7 @@ export default function SpecialistSchedulePage() {
     d.setHours(0, 0, 0, 0);
     return d;
   });
+  const [boardView, setBoardView] = useState<SpaBoardView>('day');
   const [showAssign, setShowAssign] = useState(false);
   const [assignDefaults, setAssignDefaults] = useState<{
     startAt?: string;
@@ -83,13 +93,19 @@ export default function SpecialistSchedulePage() {
     count: number;
   } | null>(null);
 
-  const boardPeriod = useMemo(() => {
-    const start = new Date(day);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setHours(23, 59, 59, 999);
-    return { start: start.toISOString(), end: end.toISOString() };
-  }, [day]);
+  const boardPeriod = useMemo(
+    () => boardPeriodForView(day, boardView),
+    [boardView, day],
+  );
+
+  useEffect(() => {
+    setBoardView(defaultSpaBoardView());
+  }, []);
+
+  const changeBoardView = (v: SpaBoardView) => {
+    setBoardView(v);
+    writeStoredSpaBoardView(v);
+  };
 
   const publishPeriod = useMemo(() => {
     const start = new Date();
@@ -551,36 +567,71 @@ export default function SpecialistSchedulePage() {
         }}
       />
 
+      <div className="flex flex-wrap items-center gap-2">
+        <SpaBoardViewToggle view={boardView} onChange={changeBoardView} />
+      </div>
+
       {board ? (
-        <SpaBoard
-          board={board}
-          mode="specialist"
-          viewerSpecialistId={me?.id}
-          day={day}
-          onDayChange={setDay}
-          onEmptySlotClick={({ specialistId, startAt }) => {
-            if (me?.id && specialistId !== me.id) return;
-            const iso = startAt.toISOString();
-            setAssignDefaults({
-              startAt: toDatetimeLocalValue(startAt),
-            });
-            if (waitlist.length > 0) {
-              setWaitlistPick({
-                specialistId,
-                startAt: iso,
-                title: 'Свободный слот',
-                allowNew: true,
+        boardView === 'week' ? (
+          <SpaWeekBoard
+            board={board}
+            mode="specialist"
+            viewerSpecialistId={me?.id}
+            day={day}
+            onDayChange={setDay}
+            onEmptySlotClick={({ specialistId, startAt }) => {
+              if (me?.id && specialistId !== me.id) return;
+              const iso = startAt.toISOString();
+              setAssignDefaults({
+                startAt: toDatetimeLocalValue(startAt),
               });
-              return;
-            }
-            setShowAssign(true);
-          }}
-          onBookingDoubleClick={(b) => {
-            if (!b.busy) setSelectedBooking(b);
-          }}
-          onBookingMove={moveBooking}
-          onEditDayHours={() => setShowDayHours(true)}
-        />
+              if (waitlist.length > 0) {
+                setWaitlistPick({
+                  specialistId,
+                  startAt: iso,
+                  title: 'Свободный слот',
+                  allowNew: true,
+                });
+                return;
+              }
+              setShowAssign(true);
+            }}
+            onBookingDoubleClick={(b) => {
+              if (!b.busy) setSelectedBooking(b);
+            }}
+            onBookingMove={moveBooking}
+          />
+        ) : (
+          <SpaBoard
+            board={board}
+            mode="specialist"
+            viewerSpecialistId={me?.id}
+            day={day}
+            onDayChange={setDay}
+            onEmptySlotClick={({ specialistId, startAt }) => {
+              if (me?.id && specialistId !== me.id) return;
+              const iso = startAt.toISOString();
+              setAssignDefaults({
+                startAt: toDatetimeLocalValue(startAt),
+              });
+              if (waitlist.length > 0) {
+                setWaitlistPick({
+                  specialistId,
+                  startAt: iso,
+                  title: 'Свободный слот',
+                  allowNew: true,
+                });
+                return;
+              }
+              setShowAssign(true);
+            }}
+            onBookingDoubleClick={(b) => {
+              if (!b.busy) setSelectedBooking(b);
+            }}
+            onBookingMove={moveBooking}
+            onEditDayHours={() => setShowDayHours(true)}
+          />
+        )
       ) : (
         <p className="text-sm text-slate-400">Загрузка доски…</p>
       )}
@@ -593,6 +644,12 @@ export default function SpecialistSchedulePage() {
         lastPublicationAt={calendar?.lastPublication?.publishedAt}
         onSaveTemplate={saveTemplate}
         onFillAndPublish={fillAndPublish}
+      />
+
+      <SpaSpecialistShiftMonth
+        onChanged={async () => {
+          await reload();
+        }}
       />
 
       <SpaDayHoursDialog
