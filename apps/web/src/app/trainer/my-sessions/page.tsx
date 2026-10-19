@@ -5,11 +5,17 @@ import { useSearchParams } from 'next/navigation';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { getUser } from '@/lib/auth';
 import { createTrainerBookingControlApi } from '@/lib/trainer-booking-control-api';
+import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 
 function TrainerMySessionsInner() {
   const searchParams = useSearchParams();
   const user = getUser();
-  const isGp = Boolean(user?.groupPrograms);
+  const { groupCabinet, isGp, isReformer } = trainerCabinetMode(user);
+  // GP-only: groups. Reformer: GROUP+PT (API filters to reformer hall).
+  const fixedKind =
+    groupCabinet && isGp && !isReformer
+      ? ('GROUP' as const)
+      : undefined;
   const initialFrom = searchParams.get('from')?.trim() || undefined;
   const initialTo = searchParams.get('to')?.trim() || undefined;
   const initialNeedsReview =
@@ -27,9 +33,9 @@ function TrainerMySessionsInner() {
   return (
     <BookingControlPanel
       api={panelApi}
-      title={isGp ? 'Контроль записей' : 'Мои занятия'}
+      title={groupCabinet ? 'Контроль записей' : 'Мои занятия'}
       subtitle={
-        isGp
+        groupCabinet
           ? 'После занятия отметьте кто был, сверьте фото и подтвердите. Явку в 1С ставит администратор.'
           : 'После занятия отметьте галочками кто был, сверьте фото и нажмите «Подтвердить». Явку в 1С ставит администратор.'
       }
@@ -37,8 +43,8 @@ function TrainerMySessionsInner() {
       canApproveGroup
       approvalActor="performer"
       canViewHallPhotos
-      fixedKind={isGp ? 'GROUP' : undefined}
-      approvalSegments={isGp}
+      fixedKind={fixedKind}
+      approvalSegments={groupCabinet}
       initialFrom={initialFrom}
       initialTo={initialTo}
       initialNeedsReview={initialNeedsReview}

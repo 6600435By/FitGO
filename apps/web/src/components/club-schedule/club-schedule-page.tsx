@@ -8,9 +8,10 @@ import type { ClubScheduleEvent } from '@fitgo/shared-types';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { createBookingControlApi } from '@/lib/booking-control-api';
 import { createTrainerBookingControlApi } from '@/lib/trainer-booking-control-api';
+import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 
 const TYPE_LABEL: Record<string, string> = {
   GROUP: 'ГП',
@@ -52,6 +53,8 @@ export function ClubSchedulePage({
   apiBase: 'admin' | 'super-admin' | 'trainer';
 }) {
   const isTrainer = apiBase === 'trainer';
+  const { isReformer } = trainerCabinetMode(getUser());
+  const trainerTypes = isReformer ? 'GROUP,PT' : 'GROUP';
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -63,7 +66,7 @@ export function ClubSchedulePage({
       : format(new Date(), 'yyyy-MM-dd');
   });
   const [types, setTypes] = useState(() =>
-    isTrainer ? 'GROUP' : normalizeTypes(searchParams.get('types')),
+    isTrainer ? trainerTypes : normalizeTypes(searchParams.get('types')),
   );
   const [events, setEvents] = useState<ClubScheduleEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -123,7 +126,7 @@ export function ClubSchedulePage({
       const list = await api.adminClubSchedule(token, apiBase, {
         from: day,
         to: day,
-        types: isTrainer ? 'GROUP' : types,
+        types: isTrainer ? trainerTypes : types,
       });
       setEvents(list);
     } catch (e) {
@@ -131,7 +134,7 @@ export function ClubSchedulePage({
     } finally {
       setLoading(false);
     }
-  }, [apiBase, day, types, isTrainer]);
+  }, [apiBase, day, types, isTrainer, trainerTypes]);
 
   useEffect(() => {
     void load();

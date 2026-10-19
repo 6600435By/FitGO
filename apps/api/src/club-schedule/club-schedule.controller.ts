@@ -46,23 +46,21 @@ export class ClubScheduleController {
     );
   }
 
-  /** Trainer GP: same schedule surface as admin, forced to own GROUP slots. */
+  /**
+   * Trainer schedule: own GROUP (GP), or reformer-hall GROUP+PT when
+   * «Реформеры» is set. Performer is always the current trainer.
+   */
   @Get('trainer/club-schedule')
   @Roles(UserRole.TRAINER)
   listTrainer(@CurrentUser() user: JwtPayload, @Query() query: ListQuery) {
     const clubId = requireClubId(user);
     this.clubSync.ensureFreshToday(clubId);
-    return this.clubSchedule.list(
-      clubId,
-      this.clubSchedule.parseListQuery({
-        from: query.from,
-        to: query.to,
-        status: query.status,
-        approval: query.approval,
-        types: 'GROUP',
-        staffIds: user.sub,
-      }),
-    );
+    return this.clubSchedule.listForTrainer(user, {
+      from: query.from,
+      to: query.to,
+      status: query.status,
+      approval: query.approval,
+    });
   }
 
   private resolveClubId(user: JwtPayload, queryClubId?: string): string {

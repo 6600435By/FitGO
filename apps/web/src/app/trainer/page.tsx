@@ -8,6 +8,7 @@ import { FloorStaffHomePage } from '@/components/staff/floor-staff-home';
 import { MessagesHomeLink } from '@/components/messages-home-link';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
+import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 import { formatDateTime } from '@/lib/utils';
 
 interface TrainerDashboard {
@@ -153,9 +154,9 @@ function PtTrainerHome() {
 
 export default function TrainerHomePage() {
   const user = getUser();
-  const isGp = Boolean(user?.groupPrograms);
+  const { groupCabinet } = trainerCabinetMode(user);
 
-  if (isGp) {
+  if (groupCabinet) {
     return <FloorStaffHomePage role="gp" />;
   }
 

@@ -321,7 +321,8 @@ export class PayrollService {
         })
       : null;
     const needsPtSales =
-      !!payFlags?.isTrainer && (!!payFlags.staff || !!payFlags.club);
+      !!payFlags?.isTrainer &&
+      (!!payFlags.staff || !!payFlags.club || !!payFlags.reformers);
     // Pack unit = sale/N for ALL trainers (incl. GP/reformer) when class sync
     // left packageAmount empty — not gated on staff/club.
     const needsPackUnitSales = !!payFlags?.isTrainer;
@@ -506,11 +507,12 @@ export class PayrollService {
         serviceExternalId,
         title: o.title,
       });
-      const isReformerPersonal = isReformerPersonalNomenclature(
-        o.title,
-        serviceExternalId,
-        payrollSegments,
-      );
+      const isReformerPersonal =
+        isReformerPersonalNomenclature(
+          o.title,
+          serviceExternalId,
+          payrollSegments,
+        ) || roomKey === 'REFORMER';
       units.push({
         id: matched?.id ?? `onex:${o.id}`,
         kind: 'PT',
@@ -584,6 +586,11 @@ export class PayrollService {
       // here — only conducted write-offs (pack amount / N). Still track remarks.
       if (isPtAllSports) continue;
       if (isMultiVisitPackSale(sale.serviceName, sale.quantity)) continue;
+      const isReformerPersonal = isReformerPersonalNomenclature(
+        sale.serviceName,
+        null,
+        payrollSegments,
+      );
       units.push({
         id: unitId,
         kind: 'PT',
@@ -599,6 +606,7 @@ export class PayrollService {
         payrollTrusted: true,
         clientName: sale.clientName,
         isPtAllSports: false,
+        isReformerPersonal,
       });
       ptSaleUnitKeys.set(unitId, sk);
     }
@@ -866,9 +874,14 @@ export class PayrollService {
       ? this.calcMotivationBreakdownFromProfile(profile, sales)
       : undefined;
     const groupTrusted = trusted.filter((u) => u.kind === 'GROUP');
+    const hasReformerScheme = allPaySlices(profile).some(
+      (s) => s.track === 'REFORMER',
+    );
     const groupStats =
       groupTrusted.length > 0 ||
-      allPaySlices(profile).some((s) => s.track === 'GROUP_TRAINER')
+      allPaySlices(profile).some(
+        (s) => s.track === 'GROUP_TRAINER' || s.track === 'REFORMER',
+      )
         ? (() => {
             const classCount = groupTrusted.length;
             const attendeeTotal = groupTrusted.reduce(
@@ -885,9 +898,6 @@ export class PayrollService {
             };
           })()
         : undefined;
-    const hasReformerScheme = allPaySlices(profile).some(
-      (s) => s.track === 'REFORMER',
-    );
     const ptSlice = allPaySlices(profile).find(
       (s) => s.track === 'PT' || s.track === 'CLUB',
     );
@@ -898,6 +908,7 @@ export class PayrollService {
               x.kind === 'PT' &&
               !x.isPtAllSports &&
               !(hasReformerScheme && x.isReformerPersonal) &&
+              !(hasReformerScheme && x.roomKey === 'REFORMER') &&
               !(x.roomKey === 'REFORMER' && x.isReformerPersonal),
           );
           return {
@@ -2532,9 +2543,14 @@ export class PayrollService {
     const isAdmin = roles.has(Role.ADMIN);
     const isSpecialist = roles.has(Role.SPECIALIST);
     const isTrainer = roles.has(Role.TRAINER);
-    if (isTrainer && !dbUser.groupPrograms && !dbUser.trainerStaff) {
+    if (
+      isTrainer &&
+      !dbUser.groupPrograms &&
+      !dbUser.trainerStaff &&
+      !dbUser.trainerReformers
+    ) {
       throw new ForbiddenException(
-        'Расчёт ЗП доступен тренерам ГП и штатным ПТ',
+        'Расчёт ЗП доступен тренерам ГП, реформеров и штатным ПТ',
       );
     }
     if (!isAdmin && !isSpecialist && !isTrainer) {
@@ -2948,7 +2964,7 @@ export class PayrollService {
           for (const u of trusted.filter(
             (x) =>
               x.kind === 'PT' &&
-              x.isReformerPersonal &&
+              (x.isReformerPersonal || x.roomKey === 'REFORMER') &&
               !x.isComplimentary &&
               !x.isPtAllSports,
           )) {
@@ -2990,6 +3006,7 @@ export class PayrollService {
             x.kind === 'PT' &&
             !x.isPtAllSports &&
             !(hasReformerScheme && x.isReformerPersonal) &&
+            !(hasReformerScheme && x.roomKey === 'REFORMER') &&
             // Legacy: room-based reformer exclusion when reformer scheme absent
             // but still tagged as reformer room (avoid double-count with old GP %).
             !(x.roomKey === 'REFORMER' && x.isReformerPersonal),

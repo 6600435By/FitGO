@@ -7,8 +7,10 @@ import {
   SessionType,
   groupApprovalLabelRu,
   groupApprovalPhase,
+  isReformerHallSession,
   onexSessionKey,
   sessionApprovalLabelRu,
+  sessionApprovalPhase,
   type ClubScheduleEvent,
   type ClubScheduleEventType,
   type ClubScheduleQuery,
@@ -17,6 +19,8 @@ import {
   type ScheduleSlot,
   type SessionApprovalPhase,
 } from '@fitgo/shared-types';
+import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import { SessionApprovalService } from '../booking-control/session-approval.service';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -66,6 +70,9 @@ export class ClubScheduleService {
     }
     if (types.has('PT')) {
       loaders.push(this.loadPtEvents(clubId, rangeStart, rangeEnd, staffIds));
+      loaders.push(
+        this.loadOnexPtEvents(clubId, rangeStart, rangeEnd, staffIds, staffByExt),
+      );
     }
     if (types.has('SPA')) {
       loaders.push(this.loadSpaEvents(clubId, rangeStart, rangeEnd, staffIds));
@@ -330,6 +337,159 @@ export class ClubScheduleService {
       }
     }
     return false;
+  }
+
+  /**
+   * Trainer schedule: own GROUP (all rooms if GP / reformer hall if reformer-only)
+   * plus own PT in the reformer hall when the Reformers flag is on.
+   */
+  async listForTrainer(
+    user: JwtPayload,
+    query: {
+      from?: string;
+      to?: string;
+      status?: string;
+      approval?: string;
+    },
+  ): Promise<ClubScheduleEvent[]> {
+    const clubId = requireClubId(user);
+    const me = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { groupPrograms: true, trainerReformers: true },
+    });
+    const isReformer = Boolean(me?.trainerReformers);
+    const isGp = Boolean(me?.groupPrograms);
+
+    let events = await this.list(
+      clubId,
+      this.parseListQuery({
+        from: query.from,
+        to: query.to,
+        status: query.status,
+        approval: query.approval,
+        types: isReformer ? 'GROUP,PT' : 'GROUP',
+        staffIds: user.sub,
+      }),
+    );
+
+    if (isReformer && !isGp) {
+      events = events.filter((e) =>
+        isReformerHallSession(e.roomTitle, e.title),
+      );
+    } else if (isReformer && isGp) {
+      events = events.filter(
+        (e) =>
+          e.type === 'GROUP' || isReformerHallSession(e.roomTitle, e.title),
+      );
+    }
+
+    return events;
+  }
+
+  /** 1C personal sessions (incl. individual reformer) as schedule PT rows. */
+  private async loadOnexPtEvents(
+    clubId: string,
+    rangeStart: Date,
+    rangeEnd: Date,
+    staffIds: string[],
+    staffByExt: Map<
+      string,
+      { id: string; firstName: string; lastName: string; externalId: string | null }
+    >,
+  ): Promise<ClubScheduleEvent[]> {
+    const staffUsers = staffIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: staffIds }, clubId },
+          select: {
+            id: true,
+            externalId: true,
+            employeeCode: true,
+            firstName: true,
+            lastName: true,
+          },
+        })
+      : [];
+    const extCodes = new Set<string>();
+    for (const u of staffUsers) {
+      for (const raw of [u.externalId, u.employeeCode]) {
+        const t = raw?.trim();
+        if (t) extCodes.add(t);
+      }
+    }
+
+    const rows = await this.prisma.onexClassSession.findMany({
+      where: {
+        clubId,
+        kind: 'PT',
+        isActive: true,
+        startAt: { gte: rangeStart, lt: rangeEnd },
+        ...(extCodes.size
+          ? { employeeExternalId: { in: [...extCodes] } }
+          : staffIds.length
+            ? { employeeExternalId: '__none__' }
+            : {}),
+      },
+      orderBy: { startAt: 'asc' },
+    });
+
+    if (!rows.length) return [];
+
+    const sessionKeys = rows.map((r) => onexSessionKey(r.externalId));
+    const approvals = await this.prisma.sessionApproval.findMany({
+      where: {
+        clubId,
+        kind: 'PT',
+        OR: [
+          { bookingId: { in: rows.map((r) => r.externalId) } },
+          { bookingId: { in: sessionKeys } },
+        ],
+      },
+    });
+    const approvalByBooking = new Map(
+      approvals.map((a) => [a.bookingId, a]),
+    );
+
+    return rows.map((r) => {
+      const status = mapOnexToClubStatus(r.status, r.endAt);
+      const approval =
+        approvalByBooking.get(r.externalId) ??
+        approvalByBooking.get(onexSessionKey(r.externalId));
+      const phase = approval
+        ? sessionApprovalPhase({
+            performerConfirmedAt:
+              approval.performerConfirmedAt?.toISOString() ?? null,
+            adminApprovedAt: approval.adminApprovedAt?.toISOString() ?? null,
+            overrideApprovedAt:
+              approval.overrideApprovedAt?.toISOString() ?? null,
+          })
+        : undefined;
+      const staffId =
+        (r.employeeExternalId &&
+          staffByExt.get(r.employeeExternalId)?.id) ||
+        staffUsers.find(
+          (u) =>
+            u.externalId === r.employeeExternalId ||
+            u.employeeCode === r.employeeExternalId,
+        )?.id;
+      return {
+        id: `onex-pt-${r.externalId}`,
+        type: 'PT' as const,
+        title: r.title || 'Персональная тренировка',
+        startAt: r.startAt.toISOString(),
+        endAt: (r.endAt ?? r.startAt).toISOString(),
+        status,
+        staffId,
+        staffName: r.employeeName ?? undefined,
+        roomTitle: r.roomTitle ?? undefined,
+        sessionKey: onexSessionKey(r.externalId),
+        booked: Math.max(r.bookedCount, 1),
+        capacity: Math.max(r.capacity ?? 0, r.bookedCount, 1),
+        attended: r.attendedCount ?? 0,
+        approvalPhase: phase,
+        approvalLabel: sessionApprovalLabelRu(phase),
+        payrollLocked: r.payrollLocked ?? false,
+      };
+    });
   }
 
   private async loadPtEvents(

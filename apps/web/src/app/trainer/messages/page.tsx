@@ -4,6 +4,7 @@ import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { api, type NotificationItem } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
+import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 import { formatDateTime } from '@/lib/utils';
 import { ChatInbox } from '@/components/chat/chat-inbox';
 
@@ -26,12 +27,12 @@ export default function TrainerMessagesPage() {
   const searchParams = useSearchParams();
   const initialClientId = searchParams.get('clientId') ?? undefined;
   const user = getUser();
-  const isGp = Boolean(user?.groupPrograms);
-  const isPt = Boolean(user?.trainerStaff || user?.trainerClub);
-  const gpOnly = isGp && !isPt;
+  const { groupOnlyMessaging } = trainerCabinetMode(user);
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [tab, setTab] = useState<MessagesTab>(gpOnly ? 'admin' : 'clients');
+  const [tab, setTab] = useState<MessagesTab>(
+    groupOnlyMessaging ? 'admin' : 'clients',
+  );
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
@@ -68,7 +69,7 @@ export default function TrainerMessagesPage() {
       <h2 className="text-xl font-semibold">Сообщения</h2>
 
       <div className="flex gap-2">
-        {!gpOnly ? (
+        {!groupOnlyMessaging ? (
           <button
             type="button"
             onClick={() => setTab('clients')}
@@ -112,11 +113,11 @@ export default function TrainerMessagesPage() {
               : 'bg-slate-800 text-slate-400'
           }`}
         >
-          {gpOnly ? 'Уведомления' : 'Отмены'}
+          {groupOnlyMessaging ? 'Уведомления' : 'Отмены'}
         </button>
       </div>
 
-      {tab === 'clients' && !gpOnly ? (
+      {tab === 'clients' && !groupOnlyMessaging ? (
         <ChatInbox
           key="clients"
           role="trainer"

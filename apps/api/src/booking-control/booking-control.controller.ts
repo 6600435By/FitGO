@@ -6,7 +6,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { UserRole } from '@fitgo/shared-types';
+import { isReformerHallSession, UserRole } from '@fitgo/shared-types';
 import { ClubSyncProfile, ClubSyncTrigger } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -16,6 +16,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { ClubSyncOrchestrator } from '../club-sync/club-sync-orchestrator.service';
 import { ClubSyncStatusService } from '../club-sync/club-sync-status.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { BookingControlService } from './booking-control.service';
 
 type ListQuery = {
@@ -45,6 +46,7 @@ export class BookingControlController {
     private readonly bookingControl: BookingControlService,
     private readonly clubSync: ClubSyncOrchestrator,
     private readonly clubSyncStatus: ClubSyncStatusService,
+    private readonly prisma: PrismaService,
   ) {}
 
   private async refreshClubFrom1c(user: JwtPayload) {
@@ -296,7 +298,10 @@ export class BookingControlController {
 
   @Get('trainer/booking-control')
   @Roles(UserRole.TRAINER)
-  listTrainer(@CurrentUser() user: JwtPayload, @Query() query: ListQuery) {
+  async listTrainer(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: ListQuery,
+  ) {
     const clubId = requireClubId(user);
     if (query.sessionKey?.trim()) {
       return this.bookingControl.detail(clubId, query.sessionKey.trim(), {
@@ -305,10 +310,35 @@ export class BookingControlController {
       });
     }
     this.clubSync.ensureFreshToday(clubId);
-    return this.list(clubId, {
+
+    const me = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { trainerReformers: true, groupPrograms: true },
+    });
+    const isReformer = Boolean(me?.trainerReformers);
+    const isGp = Boolean(me?.groupPrograms);
+    // Reformers need GROUP+PT; GP-only stays on GROUP when the UI asks for it.
+    const kind =
+      isReformer && (!query.kind || query.kind.toUpperCase() === 'GROUP')
+        ? 'ALL'
+        : query.kind;
+
+    const items = await this.list(clubId, {
       ...query,
+      kind,
       performerId: user.sub,
       _own: true,
+    });
+
+    if (!isReformer) return items;
+
+    return items.filter((item) => {
+      if (item.kind === 'SPA') return false;
+      const hall = isReformerHallSession(item.roomTitle, item.title);
+      if (isGp) {
+        return item.kind === 'GROUP' || hall;
+      }
+      return hall && (item.kind === 'GROUP' || item.kind === 'PT');
     });
   }
 

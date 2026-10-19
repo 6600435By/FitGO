@@ -60,8 +60,25 @@ export function payProfileForCalculation(
   profile: StaffPayProfile | null | undefined,
   flags: TrainerPayFlags,
 ): StaffPayProfile | undefined {
-  if (!profile) return undefined;
-  if (!flags.isTrainer) return profile;
+  if (!flags.isTrainer) return profile ?? undefined;
+  // No saved compensation yet — still seed REFORMER / GP / PT from flags
+  // so self-view and club payroll can accrue default reformer hall rates.
+  if (!profile) {
+    if (!flags.gp && !flags.staff && !flags.club && !flags.reformers) {
+      return undefined;
+    }
+    const seedTrack: StaffPayTrack = flags.reformers
+      ? 'REFORMER'
+      : flags.gp
+        ? 'GROUP_TRAINER'
+        : flags.club && !flags.staff
+          ? 'CLUB'
+          : 'PT';
+    return payProfileForCalculation(
+      { track: seedTrack, byTrack: {} },
+      flags,
+    );
+  }
   const stored = allPaySlices(profile);
   const hasGroupSlice = stored.some((slice) => slice.track === 'GROUP_TRAINER');
   const hasPtSlice = stored.some((slice) => slice.track === 'PT');
@@ -80,17 +97,34 @@ export function payProfileForCalculation(
     if (slice.track === 'REFORMER') return flags.reformers;
     return true;
   });
-  // Seed reformer scheme from defaults + migrate legacy GP personal % when flag is on.
-  if (flags.reformers && !slices.some((s) => s.track === 'REFORMER')) {
-    const seeded = defaultPayProfile('REFORMER');
+  // Seed / fill REFORMER scheme (empty `track: REFORMER` stub has no tiers).
+  if (flags.reformers) {
     const legacyGp = stored.find((s) => s.track === 'GROUP_TRAINER');
+    const seeded = defaultPayProfile('REFORMER');
     if (
       legacyGp?.reformerPersonalPercent &&
       !(seeded.reformerPersonalPercent ?? 0)
     ) {
       seeded.reformerPersonalPercent = legacyGp.reformerPersonalPercent;
     }
-    slices.push(seeded);
+    const idx = slices.findIndex((s) => s.track === 'REFORMER');
+    if (idx < 0) {
+      slices.push(seeded);
+    } else {
+      const existing = slices[idx]!;
+      const hasTiers =
+        (existing.groupRateTiers?.filter((t) => t.roomKey === 'REFORMER')
+          .length ?? 0) > 0;
+      if (!hasTiers) {
+        slices[idx] = {
+          ...seeded,
+          ...existing,
+          groupRateTiers: seeded.groupRateTiers,
+          reformerPersonalPercent:
+            existing.reformerPersonalPercent ?? seeded.reformerPersonalPercent,
+        };
+      }
+    }
   }
   if (!slices.length) {
     return {
@@ -245,6 +279,16 @@ export function resolveGroupRoomKey(
   if (lower.includes('реформ')) return 'REFORMER';
   if (lower.includes('тренаж')) return 'GYM';
   return undefined;
+}
+
+/** Group or personal session in the reformer hall (room or title). */
+export function isReformerHallSession(
+  roomTitle?: string | null,
+  title?: string | null,
+): boolean {
+  if (resolveGroupRoomKey(roomTitle) === 'REFORMER') return true;
+  if (title && /реформ/i.test(title)) return true;
+  return false;
 }
 
 /**

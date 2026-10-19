@@ -3,6 +3,7 @@
 import { UserRole } from '@fitgo/shared-types';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { AuthGuard } from '@/components/auth-guard';
 import {
   AdminThemeProvider,
@@ -18,6 +19,10 @@ import { StaffTopNavLinks } from '@/components/staff/staff-top-nav';
 import { StaffTasksInbox } from '@/components/staff-tasks-inbox';
 import { api, type AuthUser } from '@/lib/api';
 import { getToken, getUser, saveAuth } from '@/lib/auth';
+import {
+  isTrainerPtOnlyPath,
+  trainerCabinetMode,
+} from '@/lib/trainer-cabinet';
 
 type NavItem = {
   href: string;
@@ -62,6 +67,8 @@ function splitMobileNav(items: NavItem[]): {
 
 export default function TrainerLayout({ children }: { children: ReactNode }) {
   const { isEnabled } = useFeatures();
+  const pathname = usePathname();
+  const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(() => getUser());
 
   useEffect(() => {
@@ -81,17 +88,20 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const isGp = Boolean(user?.groupPrograms);
-  const isPt = Boolean(user?.trainerStaff || user?.trainerClub);
-  // Legacy accounts with no flags: show both surfaces.
-  const showGp = isGp || (!isGp && !isPt);
-  const showPt = isPt || (!isGp && !isPt);
-  const gpCabinet = isGp;
+  const cabinet = useMemo(() => trainerCabinetMode(user), [user]);
+  const { groupCabinet, showGp, showPt, showPayroll } = cabinet;
+
+  useEffect(() => {
+    if (!user) return;
+    if (groupCabinet && !showPt && isTrainerPtOnlyPath(pathname)) {
+      router.replace('/trainer');
+    }
+  }, [user, groupCabinet, showPt, pathname, router]);
 
   const allNavItems = useMemo(() => {
     const items: NavItem[] = [];
 
-    if (gpCabinet) {
+    if (groupCabinet) {
       items.push(
         { href: '/trainer', label: 'Главная', exact: true },
         { href: '/trainer/gp-schedule', label: 'Расписание' },
@@ -112,7 +122,7 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
           },
         );
       }
-      if (user?.groupPrograms || user?.trainerStaff) {
+      if (showPayroll) {
         items.push({ href: '/trainer/payroll', label: 'ЗП' });
       }
       items.push(
@@ -150,7 +160,7 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
           module: 'trainer_crm',
         });
       }
-      if (user?.groupPrograms || user?.trainerStaff) {
+      if (showPayroll) {
         items.push({ href: '/trainer/payroll', label: 'ЗП' });
       }
       items.push(
@@ -160,21 +170,14 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     }
 
     return items.filter((item) => !item.module || isEnabled(item.module));
-  }, [
-    isEnabled,
-    gpCabinet,
-    showGp,
-    showPt,
-    user?.groupPrograms,
-    user?.trainerStaff,
-  ]);
+  }, [isEnabled, groupCabinet, showGp, showPt, showPayroll]);
 
   const { primary, more } = useMemo(
     () => splitMobileNav(allNavItems),
     [allNavItems],
   );
 
-  if (gpCabinet) {
+  if (groupCabinet) {
     return (
       <AuthGuard allowedRoles={[UserRole.TRAINER]}>
         <AdminThemeProvider>

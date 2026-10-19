@@ -15,6 +15,7 @@ import type {
   FloorStaffHomeSession,
   FloorStaffMonthMetric,
 } from '@fitgo/shared-types';
+import { isReformerHallSession } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { PrismaService } from '../prisma/prisma.service';
@@ -431,41 +432,70 @@ export class FloorStaffHomeService {
         firstName: true,
         lastName: true,
         externalId: true,
+        employeeCode: true,
         groupPrograms: true,
+        trainerReformers: true,
       },
     });
-    if (!me?.groupPrograms) {
-      throw new ForbiddenException('Доступно только тренерам групповых программ');
+    if (!me?.groupPrograms && !me?.trainerReformers) {
+      throw new ForbiddenException(
+        'Доступно тренерам групповых программ и реформеров',
+      );
     }
     const staffName = `${me.firstName} ${me.lastName}`.trim();
-    const externalId = me.externalId;
-    if (!externalId) {
+    const performerCodes = [
+      ...new Set(
+        [me.externalId, me.employeeCode]
+          .map((c) => c?.trim())
+          .filter((c): c is string => !!c),
+      ),
+    ];
+    if (!performerCodes.length) {
       return this.emptyGpHome(staffName, today, cur, prev);
     }
 
-    const [todaySessions, curSessions, prevSessions, slots] = await Promise.all([
+    const isReformer = Boolean(me.trainerReformers);
+    const isGp = Boolean(me.groupPrograms);
+    const kinds = isReformer
+      ? [OnexClassKind.GROUP, OnexClassKind.PT]
+      : [OnexClassKind.GROUP];
+
+    const keepSession = (s: {
+      kind: OnexClassKind;
+      roomTitle: string | null;
+      title: string;
+    }) => {
+      if (!isReformer) return true;
+      if (isGp && s.kind === OnexClassKind.GROUP) return true;
+      return isReformerHallSession(s.roomTitle, s.title);
+    };
+
+    const performerWhere = {
+      clubId,
+      isActive: true,
+      kind: { in: kinds },
+      employeeExternalId: { in: performerCodes },
+    };
+
+    const [todayRaw, curRaw, prevRaw, slots] = await Promise.all([
       this.prisma.onexClassSession.findMany({
         where: {
-          clubId,
-          isActive: true,
-          kind: OnexClassKind.GROUP,
-          employeeExternalId: externalId,
+          ...performerWhere,
           startAt: { gte: dayStart, lte: dayEnd },
         },
         orderBy: { startAt: 'asc' },
       }),
       this.prisma.onexClassSession.findMany({
         where: {
-          clubId,
-          isActive: true,
-          kind: OnexClassKind.GROUP,
-          employeeExternalId: externalId,
+          ...performerWhere,
           startAt: { gte: cur.start, lte: cur.end },
         },
         select: {
+          kind: true,
           externalId: true,
           status: true,
           title: true,
+          roomTitle: true,
           attendedCount: true,
           bookedCount: true,
           capacity: true,
@@ -476,16 +506,15 @@ export class FloorStaffHomeService {
       }),
       this.prisma.onexClassSession.findMany({
         where: {
-          clubId,
-          isActive: true,
-          kind: OnexClassKind.GROUP,
-          employeeExternalId: externalId,
+          ...performerWhere,
           startAt: { gte: prev.start, lte: prev.end },
         },
         select: {
+          kind: true,
           externalId: true,
           status: true,
           title: true,
+          roomTitle: true,
           attendedCount: true,
           bookedCount: true,
           capacity: true,
@@ -502,6 +531,10 @@ export class FloorStaffHomeService {
         select: { externalId: true, capacity: true },
       }),
     ]);
+
+    const todaySessions = todayRaw.filter(keepSession);
+    const curSessions = curRaw.filter(keepSession);
+    const prevSessions = prevRaw.filter(keepSession);
 
     const cap = new Map(slots.map((s) => [s.externalId, s.capacity]));
 
@@ -527,12 +560,9 @@ export class FloorStaffHomeService {
       null;
 
     // Control queue — past sessions without trainer approval
-    const pastSessions = await this.prisma.onexClassSession.findMany({
+    const pastRaw = await this.prisma.onexClassSession.findMany({
       where: {
-        clubId,
-        isActive: true,
-        kind: OnexClassKind.GROUP,
-        employeeExternalId: externalId,
+        ...performerWhere,
         status: { not: OnexClassStatus.CANCELLED },
         startAt: {
           gte: new Date(now.getTime() - 45 * 86400_000),
@@ -542,6 +572,7 @@ export class FloorStaffHomeService {
       orderBy: { startAt: 'asc' },
       take: 200,
     });
+    const pastSessions = pastRaw.filter(keepSession);
 
     const sessionKeys = pastSessions.map((s) => `1c:${s.externalId}`);
     const approvals = sessionKeys.length

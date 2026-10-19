@@ -104,12 +104,24 @@ export function SelfPayrollView({ role }: Props) {
   const debt = data?.staffDebt;
   const currency = summary?.currency ?? 'BYN';
   const groupStats = summary?.groupStats;
-  const trustedGroupUnits: WorkUnit[] = useMemo(
+  /** Confirmed GROUP + reformer-hall / personal reformer PT for the sessions list. */
+  const trustedSessionUnits: WorkUnit[] = useMemo(
     () =>
-      (summary?.workUnits ?? []).filter(
-        (u) => u.kind === 'GROUP' && u.payrollTrusted,
-      ),
+      (summary?.workUnits ?? []).filter((u) => {
+        if (!u.payrollTrusted) return false;
+        if (u.kind === 'GROUP') return true;
+        if (u.kind !== 'PT') return false;
+        return Boolean(u.isReformerPersonal || u.roomKey === 'REFORMER');
+      }),
     [summary?.workUnits],
+  );
+  const trustedGroupUnits = useMemo(
+    () => trustedSessionUnits.filter((u) => u.kind === 'GROUP'),
+    [trustedSessionUnits],
+  );
+  const trustedReformerPtUnits = useMemo(
+    () => trustedSessionUnits.filter((u) => u.kind === 'PT'),
+    [trustedSessionUnits],
   );
   const hasMotivationBreakdown =
     summary?.motivationBreakdown != null &&
@@ -475,7 +487,7 @@ export function SelfPayrollView({ role }: Props) {
             </section>
           ) : null}
 
-          {groupStats ? (
+          {groupStats || trustedReformerPtUnits.length > 0 ? (
             <section className="card space-y-2">
               <button
                 type="button"
@@ -485,11 +497,24 @@ export function SelfPayrollView({ role }: Props) {
                 <div>
                   <p className="font-medium text-slate-200">Занятия в ЗП</p>
                   <p className="text-xs text-slate-500">
-                    {trustedGroupUnits.length} групповых · ср.{' '}
-                    {groupStats.avgPeople.toLocaleString('ru-RU', {
-                      maximumFractionDigits: 1,
-                    })}{' '}
-                    чел.
+                    {trustedGroupUnits.length > 0
+                      ? `${trustedGroupUnits.length} групповых · ср. ${(
+                          groupStats?.avgPeople ?? 0
+                        ).toLocaleString('ru-RU', {
+                          maximumFractionDigits: 1,
+                        })} чел.`
+                      : null}
+                    {trustedGroupUnits.length > 0 &&
+                    trustedReformerPtUnits.length > 0
+                      ? ' · '
+                      : null}
+                    {trustedReformerPtUnits.length > 0
+                      ? `${trustedReformerPtUnits.length} инд. реформер`
+                      : null}
+                    {!trustedGroupUnits.length &&
+                    !trustedReformerPtUnits.length
+                      ? 'Нет подтверждённых'
+                      : null}
                   </p>
                 </div>
                 <span className="text-slate-400">
@@ -498,12 +523,12 @@ export function SelfPayrollView({ role }: Props) {
               </button>
               {groupOpen ? (
                 <ul className="max-h-72 space-y-1.5 overflow-y-auto border-t border-slate-800 pt-2 text-sm">
-                  {trustedGroupUnits.length === 0 ? (
+                  {trustedSessionUnits.length === 0 ? (
                     <li className="text-slate-500">
                       Нет подтверждённых занятий за период
                     </li>
                   ) : (
-                    trustedGroupUnits.map((u) => (
+                    trustedSessionUnits.map((u) => (
                       <li
                         key={u.id}
                         className="flex justify-between gap-2 border-b border-slate-900/80 py-1.5"
@@ -511,6 +536,10 @@ export function SelfPayrollView({ role }: Props) {
                         <span className="min-w-0 flex-1">
                           <span className="text-slate-500">
                             {formatDateTime(u.occurredAt).slice(0, 10)}
+                          </span>{' '}
+                          ·{' '}
+                          <span className="text-slate-500">
+                            {u.kind === 'PT' ? 'ПТ' : 'ГП'}
                           </span>{' '}
                           · {u.title}
                           {u.roomTitle ? (
@@ -521,7 +550,11 @@ export function SelfPayrollView({ role }: Props) {
                           ) : null}
                         </span>
                         <span className="shrink-0 tabular-nums text-slate-300">
-                          пришло {u.quantity}
+                          {u.kind === 'PT'
+                            ? u.priceMinor != null
+                              ? money(u.priceMinor, currency)
+                              : '1'
+                            : `пришло ${u.quantity}`}
                         </span>
                       </li>
                     ))
