@@ -1896,6 +1896,7 @@ export function BookingControlPanel({
                           {c.kind === 'sale' &&
                           api.linkSpaSale &&
                           selected.fitgoBookingId &&
+                          selected.spaLinkHint &&
                           selected.spaLinkHint.kind !==
                             'SALE_NO_PERFORMER' &&
                           selected.spaLinkHint.kind !==
