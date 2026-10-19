@@ -659,7 +659,10 @@ export class ClubSyncOrchestrator {
               rows:
                 (r?.debt ?? 0) +
                 (r?.membership ?? 0) +
-                (r?.installment ?? 0),
+                (r?.installment ?? 0) +
+                (r?.birthday ?? 0) +
+                (r?.confirmation ?? 0) +
+                (r?.ptNoPerformer ?? 0),
             };
           });
 

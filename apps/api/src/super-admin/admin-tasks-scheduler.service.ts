@@ -11,6 +11,7 @@ import {
 } from '@prisma/client';
 import {
   FitgoAnalyticsHttpProvider,
+  isGuestVisitProductName,
   type FitgoBirthdayRow,
   type FitgoExpiringMembershipRow,
   type FitgoInstallmentSale,
@@ -53,7 +54,8 @@ const MAX_NO_ANSWER = 2;
 const NO_ANSWER_RETRY_DAYS = 2;
 const LOST_AFTER_DAYS = 7;
 const REFRESH_MIN_MS = 30 * 60 * 1000;
-const BIRTHDAY_SEGMENT_UUID = '81167085-c20c-362e-11eb-03e61ea82c5b';
+/** e1cib ref 81167085c20c362e11eb03e61ea82c5b → platform UUID (not dash-insert). */
+const BIRTHDAY_SEGMENT_UUID = '1ea82c5b-03e6-11eb-8116-7085c20c362e';
 const BIRTHDAY_ACTIVE_MONTHS = 24;
 
 /** @deprecated use MAX_NO_ANSWER — kept for imports during transition */
@@ -237,7 +239,10 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         lastVisit != null &&
         !Number.isNaN(lastVisit.getTime()) &&
         lastVisit.getTime() >= cutoff.getTime();
-      const include = activeVisit || row.hasActiveMembership === true;
+      const guestOnly = row.guestOnly === true;
+      const include =
+        !guestOnly &&
+        (activeVisit || row.hasActiveMembership === true);
       const name =
         `${row.lastName} ${row.firstName}`.trim() || row.externalId;
       const dedupeKey = include
@@ -246,13 +251,16 @@ export class AdminTasksSchedulerService implements OnModuleInit {
 
       if (!include) {
         skipped += 1;
+        const skipReason = guestOnly
+          ? 'Не звоним — только гостевой визит'
+          : 'Не звоним — нет визита более 2 лет и нет абонемента';
         await this.prisma.adminTask.upsert({
           where: { clubId_dedupeKey: { clubId, dedupeKey } },
           create: {
             clubId,
             createdById: systemUserId,
             title: `День рождения: ${name}`,
-            description: 'Не звоним — нет визита более 2 лет и нет абонемента',
+            description: skipReason,
             dueAt: new Date(`${dayKey}T10:00:00+03:00`),
             status: AdminTaskStatus.CANCELLED,
             completedAt: new Date(),
@@ -263,6 +271,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
               phone: row.phone ?? null,
               clientName: name,
               skippedInactive: true,
+              skippedGuest: guestOnly,
               lastVisitAt: row.lastVisitAt ?? null,
             },
           },
@@ -1409,6 +1418,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     let closedRenewed = 0;
     let closedLost = 0;
     let cancelledOneOff = 0;
+    let cancelledGuest = 0;
 
     const provider = this.fitness.getProvider();
     if (!provider.getExpiringMemberships) {
@@ -1426,8 +1436,10 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       return { created, closedRenewed, closedLost };
     }
 
-    // Nest-side oneOff filter (old 1C publication may still return them)
-    rows = rows.filter((r) => !r.oneOff);
+    // Nest-side filters (old 1C publication may still return one-offs / guests)
+    rows = rows.filter(
+      (r) => !r.oneOff && !isGuestVisitProductName(r.name),
+    );
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -1505,6 +1517,31 @@ export class AdminTasksSchedulerService implements OnModuleInit {
           },
         });
         cancelledOneOff += 1;
+        continue;
+      }
+
+      const membershipName =
+        (typeof meta.membershipName === 'string' ? meta.membershipName : '') ||
+        row?.name ||
+        '';
+      if (isGuestVisitProductName(membershipName)) {
+        await this.prisma.adminTask.update({
+          where: { id: task.id },
+          data: {
+            status: AdminTaskStatus.CANCELLED,
+            completedAt: new Date(),
+            nextActionAt: null,
+          },
+        });
+        await this.prisma.adminTaskEvent.create({
+          data: {
+            taskId: task.id,
+            actorId: systemUserId,
+            stage: task.stage,
+            comment: 'Авто: гостевой визит — исключён из задач',
+          },
+        });
+        cancelledGuest += 1;
         continue;
       }
 
@@ -1774,9 +1811,9 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       });
     }
 
-    if (cancelledOneOff > 0) {
+    if (cancelledOneOff > 0 || cancelledGuest > 0) {
       this.logger.log(
-        `Club ${clubId}: cancelled ${cancelledOneOff} one-off renewal tasks`,
+        `Club ${clubId}: cancelled renewals oneOff=${cancelledOneOff} guest=${cancelledGuest}`,
       );
     }
 

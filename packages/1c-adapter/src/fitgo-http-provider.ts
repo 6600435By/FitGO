@@ -9,7 +9,12 @@ import {
 } from '@fitgo/shared-types';
 import { unwrapFormaData } from './forma-shared';
 import { RequestGate } from './request-gate';
-import type { FitgoClientLookup, FitgoHttpConfig, VisitPeriod } from './types';
+import {
+  isGuestVisitProductName,
+  type FitgoClientLookup,
+  type FitgoHttpConfig,
+  type VisitPeriod,
+} from './types';
 
 /** Cap concurrent FitGOIntegration calls so rphost is not saturated. */
 const integrationGate = new RequestGate(3);
@@ -656,35 +661,41 @@ export class FitgoHttpProvider {
   > {
     const q = new URLSearchParams();
     if (uuid?.trim()) q.set('uuid', uuid.trim());
-    try {
-      const data = await this.request<{
-        found?: boolean;
-        data?: Array<{
-          externalId?: string;
-          firstName?: string;
-          lastName?: string;
-          phone?: string;
-          lastVisitAt?: string;
-          hasActiveMembership?: boolean;
-        }>;
-      }>(
-        `/clients/birthdays${q.toString() ? `?${q.toString()}` : ''}`,
-        { timeoutMs: 60_000 },
-      );
-      if (!data || !Array.isArray(data.data)) return [];
-      return data.data
-        .filter((row) => row.externalId)
-        .map((row) => ({
-          externalId: String(row.externalId),
-          firstName: row.firstName ?? '',
-          lastName: row.lastName ?? '',
-          phone: row.phone || undefined,
-          lastVisitAt: row.lastVisitAt || undefined,
-          hasActiveMembership: row.hasActiveMembership === true,
-        }));
-    } catch {
-      return [];
-    }
+    // Do not swallow errors — scheduler logs «Birthday scan failed».
+    // 404 = template not published; wrong uuid = empty { found:false }.
+    const data = await this.request<{
+      found?: boolean;
+      data?: Array<{
+        externalId?: string;
+        firstName?: string;
+        lastName?: string;
+        phone?: string;
+        lastVisitAt?: string;
+        hasActiveMembership?: boolean;
+        guestOnly?: boolean;
+      }>;
+      error?: string;
+    }>(`/clients/birthdays${q.toString() ? `?${q.toString()}` : ''}`, {
+      timeoutMs: 60_000,
+    });
+    // unwrapFormaData may return inner payload { found, data } or the array itself.
+    const rows = Array.isArray(data)
+      ? data
+      : data && typeof data === 'object' && Array.isArray(data.data)
+        ? data.data
+        : null;
+    if (!rows) return [];
+    return rows
+      .filter((row) => row?.externalId)
+      .map((row) => ({
+        externalId: String(row.externalId),
+        firstName: row.firstName ?? '',
+        lastName: row.lastName ?? '',
+        phone: row.phone || undefined,
+        lastVisitAt: row.lastVisitAt || undefined,
+        hasActiveMembership: row.hasActiveMembership === true,
+        guestOnly: row.guestOnly === true,
+      }));
   }
 
   async getExpiringMemberships(days = 14): Promise<
@@ -774,7 +785,7 @@ export class FitgoHttpProvider {
             renewed: row.renewed === true || nextMembership != null,
           };
         })
-        .filter((row) => !row.oneOff);
+        .filter((row) => !row.oneOff && !isGuestVisitProductName(row.name));
     } catch {
       return [];
     }

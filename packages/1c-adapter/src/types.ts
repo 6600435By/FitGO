@@ -341,6 +341,13 @@ export interface FitgoBirthdayRow {
   /** ISO date of last club visit, if known */
   lastVisitAt?: string;
   hasActiveMembership?: boolean;
+  /** true when client only has guest visit packages (no real membership) */
+  guestOnly?: boolean;
+}
+
+/** Guest visit / trial nomenclature — exclude from renewal and birthday call lists. */
+export function isGuestVisitProductName(name?: string | null): boolean {
+  return /гостев/i.test((name ?? '').trim());
 }
 
 export interface FitgoExpiringMembershipNext {

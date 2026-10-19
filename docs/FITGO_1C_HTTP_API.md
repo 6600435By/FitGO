@@ -183,9 +183,47 @@ Query: `days` (1…60, default 14).
 | `renewed` | `true` если есть `nextMembership` или колонка «Продлено» на документе. FitGO не создаёт задачу и закрывает открытую как `RENEWED` |
 | `phone` | Телефон для звонка админом |
 
-Разовые услуги / пакеты / членства (1 день или 1 посещение) в ответ не входят. Nest дополнительно отфильтровывает `oneOff` на случай старой публикации BSL. Новые задачи создаются только при `daysLeft ≥ 0` (lookback-строки служат для закрытия уже открытых).
+Разовые услуги / пакеты / членства (1 день или 1 посещение) в ответ не входят. Номенклатура с «гостев» в названии («Гостевое занятие», «Гостевой визит») тоже не отдаётся — Nest дополнительно фильтрует по имени на случай старой публикации BSL. Новые задачи создаются только при `daysLeft ≥ 0` (lookback-строки служат для закрытия уже открытых).
 
 В конфигураторе: шаблон `/v1/memberships/expiring`, метод GET → `MembershipsExpiringGET`.
+
+### GET `/clients/birthdays`
+
+Именинники **сегодня** из сегмента контрагентов клуба.
+
+Query: `uuid` — UUID сегмента `Справочник.СегментыКонтрагентов`. По умолчанию сегмент «все клиенты»  
+(`e1cib/...ref=81167085c20c362e11eb03e61ea82c5b` → UUID `1ea82c5b-03e6-11eb-8116-7085c20c362e`).
+
+Без публикации шаблона `/v1/clients/birthdays` в HTTP-сервисе FitGOIntegration ответ будет **404** — задачи «День рождения» не создаются.
+
+```json
+{
+  "found": true,
+  "segmentCount": 12000,
+  "birthdayCount": 3,
+  "data": [
+    {
+      "externalId": "client-uuid",
+      "firstName": "Анна",
+      "lastName": "Иванова",
+      "phone": "375291112233",
+      "lastVisitAt": "2026-09-01",
+      "hasActiveMembership": true,
+      "guestOnly": false
+    }
+  ]
+}
+```
+
+| Поле | Описание |
+|------|----------|
+| `found` | Сегмент найден по UUID |
+| `segmentCount` | Число объектов в составе сегмента |
+| `birthdayCount` | Сколько именинников в `data` |
+| `hasActiveMembership` | Есть ACTIVE/FROZEN членство **не** гостевое |
+| `guestOnly` | Только гостевые пакеты — Nest не ставит задачу поздравления |
+
+В конфигураторе: шаблон `/v1/clients/birthdays`, метод GET → `ClientsBirthdaysGET`. Модули: [FitGOIntegration_HTTP.bsl](../scripts/windows/FitGOIntegration_HTTP.bsl), [FitGOIntegration_Клиенты.bsl](../scripts/windows/FitGOIntegration_Клиенты.bsl).
 
 ### POST `/memberships/renewal-coverage`
 

@@ -418,6 +418,7 @@ export class Mock1CProvider implements IFitnessClubProvider {
         phone: '375291112233',
         lastVisitAt: new Date().toISOString().slice(0, 10),
         hasActiveMembership: true,
+        guestOnly: false,
       },
     ];
   }
