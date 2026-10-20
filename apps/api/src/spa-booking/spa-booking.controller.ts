@@ -320,6 +320,7 @@ export class SpaBookingController {
       paymentType: dto.paymentType,
       membershipServiceName: dto.membershipServiceName,
       visitNote: dto.visitNote,
+      overlapConfirmed: dto.overlapConfirmed,
     });
   }
 
@@ -340,6 +341,7 @@ export class SpaBookingController {
       membershipServiceName: dto.membershipServiceName,
       visitNote: dto.visitNote,
       dates: dto.dates,
+      overlapConfirmed: dto.overlapConfirmed,
     });
   }
 
@@ -563,6 +565,7 @@ export class SpaBookingController {
       paymentType: dto.paymentType,
       membershipServiceName: dto.membershipServiceName,
       visitNote: dto.visitNote,
+      overlapConfirmed: dto.overlapConfirmed,
     });
   }
 
@@ -586,6 +589,7 @@ export class SpaBookingController {
       membershipServiceName: dto.membershipServiceName,
       visitNote: dto.visitNote,
       dates: dto.dates,
+      overlapConfirmed: dto.overlapConfirmed,
     });
   }
 

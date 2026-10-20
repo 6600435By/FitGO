@@ -8,6 +8,13 @@ import type {
   SpaBoardStaff,
 } from '@fitgo/shared-types';
 import {
+  SPA_FREE_GAP_MIN,
+  SPA_OVERLAP_ALLOW_MIN,
+  checkSpaPlacement,
+  computeSpaFreeWindows,
+  packSpaBookingLanes,
+} from '@fitgo/shared-types';
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -174,6 +181,8 @@ function isTouchPointer(pointerType: string) {
   return pointerType === 'touch' || pointerType === 'pen';
 }
 
+type DragValidity = 'ok' | 'overlap' | 'invalid';
+
 type DragState = {
   booking: SpaBoardBooking;
   specialistId: string;
@@ -181,6 +190,16 @@ type DragState = {
   durationMin: number;
   height: number;
   valid: boolean;
+  validity: DragValidity;
+  overlapMin: number;
+};
+
+type PendingOverlapConfirm = {
+  booking: SpaBoardBooking;
+  specialistId: string;
+  startAt: Date;
+  overlapMin: number;
+  peerLabel: string;
 };
 
 type PointerStart = {
@@ -221,6 +240,7 @@ export function SpaBoard({
     booking: SpaBoardBooking;
     specialistId: string;
     startAt: Date;
+    overlapConfirmed?: boolean;
   }) => void | Promise<void>;
   /** Edit published hours for the selected calendar day (own or picked staff). */
   onEditDayHours?: (args: { specialistId: string }) => void;
@@ -230,11 +250,15 @@ export function SpaBoard({
   const dayStart = startOfDay(day);
   const totalMin = (DAY_END_HOUR - DAY_START_HOUR) * 60;
   const isToday = sameCalendarDay(dayStart, new Date());
+  const dayBaseMs = dayStart.getTime() + DAY_START_HOUR * 60 * 60 * 1000;
 
   const [nowMinutes, setNowMinutes] = useState(() => {
     const n = new Date();
     return n.getHours() * 60 + n.getMinutes();
   });
+  const [overlapConfirm, setOverlapConfirm] =
+    useState<PendingOverlapConfirm | null>(null);
+  const [overlapConfirmBusy, setOverlapConfirmBusy] = useState(false);
 
   useEffect(() => {
     if (!isToday) return;
@@ -333,16 +357,66 @@ export function SpaBoard({
     [mode, viewerSpecialistId],
   );
 
-  const canDrop = useCallback(
-    (specialistId: string, startMinutes: number, durationMin: number) => {
-      if (!staffOrdered.some((s) => s.id === specialistId)) return false;
-      if (mode === 'specialist' && viewerSpecialistId) {
-        if (specialistId !== viewerSpecialistId) return false;
+  const evaluateDrop = useCallback(
+    (
+      specialistId: string,
+      startMinutes: number,
+      durationMin: number,
+      excludeId?: string,
+    ): { ok: boolean; validity: DragValidity; overlapMin: number; peerLabel: string } => {
+      if (!staffOrdered.some((s) => s.id === specialistId)) {
+        return { ok: false, validity: 'invalid', overlapMin: 0, peerLabel: '' };
       }
-      if (startMinutes < 0 || startMinutes + durationMin > totalMin) return false;
-      return true;
+      if (mode === 'specialist' && viewerSpecialistId) {
+        if (specialistId !== viewerSpecialistId) {
+          return { ok: false, validity: 'invalid', overlapMin: 0, peerLabel: '' };
+        }
+      }
+      if (startMinutes < 0 || startMinutes + durationMin > totalMin) {
+        return { ok: false, validity: 'invalid', overlapMin: 0, peerLabel: '' };
+      }
+
+      const startMs = dayBaseMs + startMinutes * 60_000;
+      const endMs = startMs + durationMin * 60_000;
+      const bands = hourBandsForStaff(board.hours, specialistId, dayStart)
+        .filter((h) => h.status === 'PUBLISHED')
+        .map((h) => ({
+          startMs: new Date(h.startAt).getTime(),
+          endMs: new Date(h.endAt).getTime(),
+        }));
+      const inHours = bands.some((b) => startMs >= b.startMs && endMs <= b.endMs);
+      if (!inHours) {
+        return { ok: false, validity: 'invalid', overlapMin: 0, peerLabel: '' };
+      }
+
+      const peers = bookingsForStaff(board.bookings, specialistId, dayStart)
+        .filter((b) => !b.busy && b.id !== excludeId)
+        .map((b) => ({
+          id: b.id,
+          label: b.clientName ?? b.guestName ?? 'Клиент',
+          startMs: new Date(b.startAt).getTime(),
+          endMs: new Date(b.endAt).getTime(),
+        }));
+      const check = checkSpaPlacement(startMs, endMs, peers, SPA_OVERLAP_ALLOW_MIN);
+      if (check.fitsClean) {
+        return { ok: true, validity: 'ok', overlapMin: 0, peerLabel: '' };
+      }
+      if (check.allowedWithConfirm) {
+        return {
+          ok: true,
+          validity: 'overlap',
+          overlapMin: check.maxOverlapMin,
+          peerLabel: check.peers[0]?.label ?? '',
+        };
+      }
+      return {
+        ok: false,
+        validity: 'invalid',
+        overlapMin: check.maxOverlapMin,
+        peerLabel: check.peers[0]?.label ?? '',
+      };
     },
-    [mode, staffOrdered, totalMin, viewerSpecialistId],
+    [board.bookings, board.hours, dayBaseMs, dayStart, mode, staffOrdered, totalMin, viewerSpecialistId],
   );
 
   const beginDragFromPending = useCallback(
@@ -353,21 +427,25 @@ export function SpaBoard({
         Math.round(minutesFromDayStart(pending.booking.startAt, dayStart)),
       );
       const snapped = Math.floor(startMin / GRID_STEP_MIN) * GRID_STEP_MIN;
+      const drop = evaluateDrop(
+        pending.booking.specialistId,
+        snapped,
+        pending.durationMin,
+        pending.booking.id,
+      );
       setDrag({
         booking: pending.booking,
         specialistId: pending.booking.specialistId,
         startMinutes: snapped,
         durationMin: pending.durationMin,
         height: pending.height,
-        valid: canDrop(
-          pending.booking.specialistId,
-          snapped,
-          pending.durationMin,
-        ),
+        valid: drop.ok,
+        validity: drop.validity,
+        overlapMin: drop.overlapMin,
       });
       setPointerStart(null);
     },
-    [canDrop, clearTouchArmTimer, dayStart],
+    [clearTouchArmTimer, dayStart, evaluateDrop],
   );
 
   const resolveDropTarget = useCallback(
@@ -400,7 +478,7 @@ export function SpaBoard({
   );
 
   const commitMove = useCallback(
-    async (current: DragState) => {
+    async (current: DragState, overlapConfirmed = false) => {
       if (!onBookingMove || isMutatingRef.current || !current.valid) return;
       const originMin = Math.round(
         minutesFromDayStart(current.booking.startAt, dayStart),
@@ -414,18 +492,37 @@ export function SpaBoard({
         dayStart.getTime() +
           (DAY_START_HOUR * 60 + current.startMinutes) * 60000,
       );
+
+      if (current.validity === 'overlap' && !overlapConfirmed) {
+        const drop = evaluateDrop(
+          current.specialistId,
+          current.startMinutes,
+          current.durationMin,
+          current.booking.id,
+        );
+        setOverlapConfirm({
+          booking: current.booking,
+          specialistId: current.specialistId,
+          startAt,
+          overlapMin: drop.overlapMin,
+          peerLabel: drop.peerLabel,
+        });
+        return;
+      }
+
       isMutatingRef.current = true;
       try {
         await onBookingMove({
           booking: current.booking,
           specialistId: current.specialistId,
           startAt,
+          overlapConfirmed: current.validity === 'overlap' || overlapConfirmed,
         });
       } finally {
         isMutatingRef.current = false;
       }
     },
-    [dayStart, onBookingMove],
+    [dayStart, evaluateDrop, onBookingMove],
   );
 
   const beginDragFromPendingRef = useRef(beginDragFromPending);
@@ -474,15 +571,19 @@ export function SpaBoard({
         ) {
           return prev;
         }
+        const drop = evaluateDrop(
+          target.specialistId,
+          target.minutes,
+          prev.durationMin,
+          prev.booking.id,
+        );
         return {
           ...prev,
           specialistId: target.specialistId,
           startMinutes: target.minutes,
-          valid: canDrop(
-            target.specialistId,
-            target.minutes,
-            prev.durationMin,
-          ),
+          valid: drop.ok,
+          validity: drop.validity,
+          overlapMin: drop.overlapMin,
         };
       });
     }
@@ -539,7 +640,7 @@ export function SpaBoard({
       window.removeEventListener('pointercancel', onPointerCancel);
       clearTouchArmTimer();
     };
-  }, [canDrop, clearTouchArmTimer, isTracking, resolveDropTarget]);
+  }, [clearTouchArmTimer, evaluateDrop, isTracking, resolveDropTarget]);
 
   useEffect(() => {
     if (!isTracking) return;
@@ -604,9 +705,11 @@ export function SpaBoard({
   const renderDragPreview = (d: DragState, viewStartMin: number) => (
     <div
       className={`pointer-events-none absolute left-1 right-1 z-30 overflow-hidden rounded-lg px-1.5 py-1 text-[11px] leading-tight shadow-lg ring-2 ${
-        d.valid
+        d.validity === 'ok'
           ? 'bg-amber-900/90 text-amber-50 ring-amber-400/80'
-          : 'bg-rose-950/90 text-rose-100 ring-rose-500/80'
+          : d.validity === 'overlap'
+            ? 'bg-amber-800/95 text-amber-50 ring-amber-300/90'
+            : 'bg-rose-950/90 text-rose-100 ring-rose-500/80'
       }`}
       style={{
         top: (d.startMinutes - viewStartMin) * PX_PER_MIN,
@@ -620,6 +723,11 @@ export function SpaBoard({
           DAY_START_HOUR * 60 + d.startMinutes + d.durationMin,
         )}
       </p>
+      {d.validity === 'overlap' ? (
+        <p className="truncate font-medium text-amber-100">
+          пересечение {d.overlapMin} мин
+        </p>
+      ) : null}
     </div>
   );
 
@@ -704,84 +812,178 @@ export function SpaBoard({
 
         {renderNowLine(nowTopInView)}
 
-        {items.map((b) => {
-          const top = minutesFromDayStart(b.startAt, dayStart);
-          const end = minutesFromDayStart(b.endAt, dayStart);
-          if (end <= viewStartMin || top >= viewEndMin) return null;
-          const clippedTop = Math.max(viewStartMin, top);
-          const clippedEnd = Math.min(viewEndMin, end);
-          const blockHeight = Math.max(
-            22,
-            (clippedEnd - clippedTop) * PX_PER_MIN,
+        {(() => {
+          const publishedBands = bands
+            .filter((h) => h.status === 'PUBLISHED')
+            .map((h) => ({
+              startMs: new Date(h.startAt).getTime(),
+              endMs: new Date(h.endAt).getTime(),
+            }));
+          const bookingIntervals = items
+            .filter((b) => !b.busy)
+            .map((b) => ({
+              startMs: new Date(b.startAt).getTime(),
+              endMs: new Date(b.endAt).getTime(),
+            }));
+          const freeWindows = computeSpaFreeWindows(
+            publishedBands,
+            bookingIntervals,
+            SPA_FREE_GAP_MIN,
           );
-          const durationMin = Math.max(GRID_STEP_MIN, Math.round(end - top));
-          const editable = canEditBooking(b);
-          const isDragging = drag?.booking.id === b.id;
-          return (
-            <button
-              key={b.id}
-              type="button"
-              disabled={b.busy}
-              onPointerDown={(e) => {
-                if (!editable) return;
-                startBookingPointer(e, b, blockHeight, durationMin);
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (suppressClickRef.current || dragRef.current) return;
-                if (!b.busy && onBookingDoubleClick) onBookingDoubleClick(b);
-              }}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                if (suppressClickRef.current || dragRef.current) return;
-                if (!b.busy && onBookingDoubleClick) onBookingDoubleClick(b);
-              }}
-              className={`absolute inset-x-1 overflow-hidden rounded-lg px-1.5 py-1 text-left text-[11px] leading-tight ${
-                b.busy
-                  ? 'bg-slate-800 text-slate-400'
-                  : editable
-                    ? 'cursor-grab border-l-2 border-amber-500 bg-amber-950/40 text-amber-100 active:cursor-grabbing'
-                    : 'border-l-2 border-amber-500 bg-amber-950/40 text-amber-100'
-              } ${isDragging ? 'opacity-30' : ''}`}
-              style={{
-                top: (clippedTop - viewStartMin) * PX_PER_MIN,
-                height: blockHeight,
-              }}
-            >
-              {b.busy ? (
-                <span>Занято</span>
-              ) : (
-                <>
-                  <SpaBookingNoteHint
-                    clientNote={b.clientNote}
-                    visitNote={b.visitNote}
-                  />
-                  <p
-                    className={`truncate font-medium ${
-                      b.clientNote || b.visitNote ? 'pr-4' : ''
-                    }`}
-                  >
-                    {b.clientName ?? 'Клиент'}
-                  </p>
-                  <p className="truncate text-amber-200/80">{b.serviceName}</p>
-                  {b.oneCLinkStatus === 'NOT_LINKED' &&
-                  !b.manualPaymentConfirmed ? (
-                    <p className="truncate text-rose-300/90">Нет в 1С</p>
-                  ) : null}
-                  {b.manualPaymentConfirmed ? (
-                    <p className="truncate text-sky-300/90">Оплата без 1С</p>
-                  ) : null}
-                  {b.approvalLabel ? (
-                    <p className="truncate text-amber-300/90">
-                      {b.approvalLabel}
+          return freeWindows.map((w) => {
+            const top = (w.startMs - dayBaseMs) / 60_000;
+            const end = (w.endMs - dayBaseMs) / 60_000;
+            if (end <= viewStartMin || top >= viewEndMin) return null;
+            const clippedTop = Math.max(viewStartMin, top);
+            const clippedEnd = Math.min(viewEndMin, end);
+            const height = Math.max(
+              18,
+              (clippedEnd - clippedTop) * PX_PER_MIN,
+            );
+            const startAt = new Date(w.startMs);
+            return (
+              <button
+                key={`free-${w.startMs}-${w.endMs}`}
+                type="button"
+                className="spa-free-gap absolute inset-x-1 z-[1] overflow-hidden rounded-md border border-dashed border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-left text-[10px] leading-tight text-emerald-300/90 hover:bg-emerald-500/20"
+                style={{
+                  top: (clippedTop - viewStartMin) * PX_PER_MIN,
+                  height,
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!own || !onEmptySlotClick) return;
+                  onEmptySlotClick({ specialistId: staff.id, startAt });
+                }}
+              >
+                <span className="font-medium">
+                  свободно {w.durationMin} мин
+                </span>
+                {height >= 32 ? (
+                  <span className="mt-0.5 block tabular-nums opacity-90">
+                    {minutesToTimeLabel(DAY_START_HOUR * 60 + top)}–
+                    {minutesToTimeLabel(DAY_START_HOUR * 60 + end)}
+                  </span>
+                ) : null}
+              </button>
+            );
+          });
+        })()}
+
+        {(() => {
+          const lanes = packSpaBookingLanes(
+            items.map((b) => ({
+              id: b.id,
+              startMs: new Date(b.startAt).getTime(),
+              endMs: new Date(b.endAt).getTime(),
+            })),
+          );
+          return items.map((b) => {
+            const top = minutesFromDayStart(b.startAt, dayStart);
+            const end = minutesFromDayStart(b.endAt, dayStart);
+            if (end <= viewStartMin || top >= viewEndMin) return null;
+            const clippedTop = Math.max(viewStartMin, top);
+            const clippedEnd = Math.min(viewEndMin, end);
+            const blockHeight = Math.max(
+              22,
+              (clippedEnd - clippedTop) * PX_PER_MIN,
+            );
+            const durationMin = Math.max(GRID_STEP_MIN, Math.round(end - top));
+            const editable = canEditBooking(b);
+            const isDragging = drag?.booking.id === b.id;
+            const lane = lanes.get(b.id) ?? { lane: 0, laneCount: 1 };
+            const peerOverlap = (() => {
+              if (b.busy) return 0;
+              const peers = items
+                .filter((o) => o.id !== b.id && !o.busy)
+                .map((o) => ({
+                  id: o.id,
+                  label: o.clientName ?? 'Клиент',
+                  startMs: new Date(o.startAt).getTime(),
+                  endMs: new Date(o.endAt).getTime(),
+                }));
+              return checkSpaPlacement(
+                new Date(b.startAt).getTime(),
+                new Date(b.endAt).getTime(),
+                peers,
+                SPA_OVERLAP_ALLOW_MIN,
+              ).maxOverlapMin;
+            })();
+            return (
+              <button
+                key={b.id}
+                type="button"
+                disabled={b.busy}
+                onPointerDown={(e) => {
+                  if (!editable) return;
+                  startBookingPointer(e, b, blockHeight, durationMin);
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (suppressClickRef.current || dragRef.current) return;
+                  if (!b.busy && onBookingDoubleClick) onBookingDoubleClick(b);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  if (suppressClickRef.current || dragRef.current) return;
+                  if (!b.busy && onBookingDoubleClick) onBookingDoubleClick(b);
+                }}
+                className={`spa-booking-cell-day absolute z-[2] overflow-hidden rounded-lg px-1.5 py-1 text-left text-[11px] leading-tight ${
+                  b.busy
+                    ? 'bg-slate-800 text-slate-400'
+                    : editable
+                      ? 'cursor-grab border-l-[3px] border-amber-500 bg-amber-950/40 text-amber-50 active:cursor-grabbing'
+                      : 'border-l-[3px] border-amber-500 bg-amber-950/40 text-amber-50'
+                } ${isDragging ? 'opacity-30' : ''}`}
+                style={{
+                  top: (clippedTop - viewStartMin) * PX_PER_MIN,
+                  height: blockHeight,
+                  left: `calc(${lane.lane} * (100% - 0.5rem) / ${lane.laneCount} + 0.25rem)`,
+                  width: `calc((100% - 0.5rem) / ${lane.laneCount} - 0.15rem)`,
+                }}
+              >
+                {b.busy ? (
+                  <span>Занято</span>
+                ) : (
+                  <>
+                    <SpaBookingNoteHint
+                      clientNote={b.clientNote}
+                      visitNote={b.visitNote}
+                    />
+                    <p
+                      className={`spa-booking-cell-title truncate font-medium ${
+                        b.clientNote || b.visitNote ? 'pr-5' : ''
+                      }`}
+                    >
+                      {b.clientName ?? 'Клиент'}
                     </p>
-                  ) : null}
-                </>
-              )}
-            </button>
-          );
-        })}
+                    <p className="spa-booking-cell-meta truncate text-amber-100">
+                      {b.serviceName}
+                    </p>
+                    {peerOverlap > 0 ? (
+                      <p className="spa-booking-cell-meta truncate text-amber-100">
+                        ∩ {peerOverlap} мин
+                      </p>
+                    ) : null}
+                    {b.oneCLinkStatus === 'NOT_LINKED' &&
+                    !b.manualPaymentConfirmed ? (
+                      <p className="truncate text-rose-300">Нет в 1С</p>
+                    ) : null}
+                    {b.manualPaymentConfirmed ? (
+                      <p className="truncate text-sky-300">Оплата без 1С</p>
+                    ) : null}
+                    {b.approvalLabel ? (
+                      <p className="spa-booking-cell-meta truncate text-amber-100">
+                        {b.approvalLabel}
+                      </p>
+                    ) : null}
+                  </>
+                )}
+              </button>
+            );
+          });
+        })()}
 
         {drag && isDropColumn
           ? renderDragPreview(drag, viewStartMin)
@@ -958,6 +1160,66 @@ export function SpaBoard({
           })}
         </div>
       )}
+
+      {overlapConfirm ? (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal
+          aria-labelledby="spa-overlap-confirm-title"
+        >
+          <div className="card max-w-sm space-y-3 p-4 shadow-xl">
+            <h3
+              id="spa-overlap-confirm-title"
+              className="text-sm font-semibold"
+            >
+              Наслоение записей
+            </h3>
+            <p className="text-sm text-slate-300">
+              Пересечение {overlapConfirm.overlapMin} мин
+              {overlapConfirm.peerLabel
+                ? ` с «${overlapConfirm.peerLabel}»`
+                : ''}
+              . Подтвердите, чтобы сохранить.
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary text-xs"
+                disabled={overlapConfirmBusy}
+                onClick={() => setOverlapConfirm(null)}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="btn-primary text-xs"
+                disabled={overlapConfirmBusy || !onBookingMove}
+                onClick={() => {
+                  if (!onBookingMove) return;
+                  const pending = overlapConfirm;
+                  setOverlapConfirmBusy(true);
+                  void (async () => {
+                    try {
+                      await onBookingMove({
+                        booking: pending.booking,
+                        specialistId: pending.specialistId,
+                        startAt: pending.startAt,
+                        overlapConfirmed: true,
+                      });
+                      setOverlapConfirm(null);
+                    } finally {
+                      setOverlapConfirmBusy(false);
+                    }
+                  })();
+                }}
+              >
+                Подтверждаю наслоение
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

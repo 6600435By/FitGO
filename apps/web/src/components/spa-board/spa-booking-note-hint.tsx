@@ -138,7 +138,7 @@ export function SpaBookingNoteHint({ clientNote, visitNote }: Props) {
         ref={btnRef}
         role="button"
         tabIndex={0}
-        className="absolute right-0.5 top-0.5 z-10 flex h-4 w-4 cursor-pointer items-center justify-center rounded text-amber-200/70 hover:bg-amber-500/10 hover:text-amber-100"
+        className="spa-booking-note-chip absolute right-0.5 top-0.5 z-10 flex h-[18px] w-[18px] cursor-pointer items-center justify-center rounded-full shadow-sm"
         aria-label="Комментарий"
         aria-describedby={open ? tipId : undefined}
         aria-expanded={open}
@@ -173,7 +173,7 @@ export function SpaBookingNoteHint({ clientNote, visitNote }: Props) {
         <MessageIcon className="h-3 w-3" />
         {both ? (
           <span
-            className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-amber-400/80"
+            className="spa-booking-note-dot absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full"
             aria-hidden
           />
         ) : null}

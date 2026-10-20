@@ -344,6 +344,7 @@ export function AdminSpaWorkspace() {
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
     visitNote?: string;
+    overlapConfirmed?: boolean;
   }) => {
     const token = getToken();
     if (!token) return;
@@ -363,6 +364,7 @@ export function AdminSpaWorkspace() {
         guestName: payload.guestName,
         guestPhone: payload.guestPhone,
         visitNote: payload.visitNote,
+        overlapConfirmed: payload.overlapConfirmed,
       });
       setShowAssign(false);
       setMessage('Клиент записан');
@@ -385,6 +387,7 @@ export function AdminSpaWorkspace() {
     paymentType: 'QUOTA' | 'PAID';
     visitNote?: string;
     dates: string[];
+    overlapConfirmed?: boolean;
   }) => {
     const token = getToken();
     if (!token) return;
@@ -405,6 +408,7 @@ export function AdminSpaWorkspace() {
         guestPhone: payload.guestPhone,
         visitNote: payload.visitNote,
         dates: payload.dates,
+        overlapConfirmed: payload.overlapConfirmed,
       });
       setShowAssign(false);
       const skipNote =
@@ -512,6 +516,7 @@ export function AdminSpaWorkspace() {
     booking: SpaBoardBooking;
     specialistId: string;
     startAt: Date;
+    overlapConfirmed?: boolean;
   }) => {
     const token = getToken();
     if (!token) return;
@@ -521,6 +526,7 @@ export function AdminSpaWorkspace() {
       await api.adminUpdateSpaBooking(token, args.booking.id, {
         specialistId: args.specialistId,
         startAt: args.startAt.toISOString(),
+        overlapConfirmed: args.overlapConfirmed,
       });
       setMessage('Запись перенесена');
       await reload();
@@ -541,6 +547,7 @@ export function AdminSpaWorkspace() {
     guestPhone?: string;
     paymentType: 'QUOTA' | 'PAID';
     visitNote?: string;
+    overlapConfirmed?: boolean;
   }) => {
     const token = getToken();
     if (!token || !selectedBooking) return;
@@ -556,6 +563,7 @@ export function AdminSpaWorkspace() {
         guestPhone: payload.guestPhone,
         paymentType: payload.paymentType,
         visitNote: payload.visitNote,
+        overlapConfirmed: payload.overlapConfirmed,
       });
       setSelectedBooking(null);
       setMessage('Запись сохранена');
@@ -1077,6 +1085,8 @@ export function AdminSpaWorkspace() {
             allowPickSpecialist
             defaultSpecialistId={assignDefaults.specialistId}
             defaultStartAt={assignDefaults.startAt}
+            boardHours={board?.hours}
+            boardBookings={board?.bookings}
             busy={busy}
             onSubmit={assignFromDialog}
             onBulkSubmit={bulkAssignFromDialog}
@@ -1129,6 +1139,7 @@ export function AdminSpaWorkspace() {
             specialists={specialists}
             allowPickSpecialist
             allowManualPayment
+            boardBookings={board?.bookings}
             busy={busy}
             onClose={() => setSelectedBooking(null)}
             onSave={saveBookingCard}

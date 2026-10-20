@@ -173,7 +173,9 @@ body {
 .admin-app.admin-theme-light .text-amber-300\/90,
 .admin-app.admin-theme-light .text-amber-400,
 .admin-app.admin-theme-light .text-amber-700,
-.admin-app.admin-theme-light .text-yellow-400 {
+.admin-app.admin-theme-light .text-yellow-400,
+.admin-app.admin-theme-light .text-amber-50,
+.admin-app.admin-theme-light .text-amber-200\/80 {
   color: #5c3a00 !important;
 }
 
@@ -181,7 +183,46 @@ body {
 .admin-app.admin-theme-light .bg-amber-500\/10,
 .admin-app.admin-theme-light .bg-amber-500\/20,
 .admin-app.admin-theme-light .bg-amber-950\/40 {
-  background-color: #fff4e0 !important;
+  background-color: #fff1d6 !important;
+}
+
+/* SPA day journal cells — high contrast in light theme (week keeps staff colors) */
+.admin-app.admin-theme-light .spa-booking-cell-day {
+  background-color: #fff1d6 !important;
+  color: #3f2a00 !important;
+  border-left-color: #d97706 !important;
+}
+
+.admin-app.admin-theme-light .spa-booking-cell-day .spa-booking-cell-title {
+  color: #3f2a00 !important;
+}
+
+.admin-app.admin-theme-light .spa-booking-cell-day .spa-booking-cell-meta {
+  color: #6b4a12 !important;
+}
+
+.admin-app.admin-theme-light .spa-booking-cell-day .text-rose-300 {
+  color: #9f1239 !important;
+}
+
+.admin-app.admin-theme-light .spa-booking-cell-day .text-sky-300 {
+  color: #0369a1 !important;
+}
+
+.admin-app.admin-theme-light .spa-booking-note-chip {
+  background-color: #ffffff !important;
+  color: #3f2a00 !important;
+  border: 1px solid #d6b97a;
+}
+
+.admin-app.admin-theme-light .spa-booking-note-dot {
+  background-color: #d97706 !important;
+}
+
+.admin-app.admin-theme-light .spa-free-gap {
+  background-color: rgba(16, 185, 129, 0.12) !important;
+  border-color: rgba(5, 150, 105, 0.45) !important;
+  color: #047857 !important;
 }
 
 .admin-app.admin-theme-light .border-amber-500\/20,
@@ -315,4 +356,25 @@ body {
 
 .admin-app.admin-theme-light .hover\:bg-rose-500\/10:hover {
   background-color: #fde8ee !important;
+}
+
+/* SPA journal — default (dark) note chip contrast */
+.spa-booking-note-chip {
+  background-color: rgb(15 23 42 / 0.92);
+  color: #fef3c7;
+  border: 1px solid rgb(251 191 36 / 0.55);
+}
+
+.spa-booking-note-chip:hover {
+  background-color: rgb(30 41 59 / 0.95);
+  color: #fffbeb;
+}
+
+.spa-booking-note-dot {
+  background-color: #fbbf24;
+  box-shadow: 0 0 0 1px rgb(15 23 42 / 0.8);
+}
+
+.spa-free-gap {
+  border-style: dashed;
 }

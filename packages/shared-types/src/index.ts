@@ -625,6 +625,7 @@ export * from './analytics';
 export * from './floor-staff-home';
 export * from './discrepancies';
 export * from './admin-home-layout';
+export * from './spa-board-slots';
 
 import type {
   ServiceControlLevel,

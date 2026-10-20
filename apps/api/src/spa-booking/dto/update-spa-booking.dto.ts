@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsISO8601,
   IsIn,
   IsOptional,
@@ -43,4 +44,9 @@ export class UpdateSpaBookingDto {
   @IsString()
   @MaxLength(280)
   visitNote?: string;
+
+  /** Staff confirmed intentional overlap ≤ 15 min with a neighbor. */
+  @IsOptional()
+  @IsBoolean()
+  overlapConfirmed?: boolean;
 }

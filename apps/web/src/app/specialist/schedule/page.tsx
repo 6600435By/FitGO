@@ -386,6 +386,7 @@ function SpecialistScheduleInner() {
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
     visitNote?: string;
+    overlapConfirmed?: boolean;
   }) => {
     const token = getToken();
     if (!token) return;
@@ -413,6 +414,7 @@ function SpecialistScheduleInner() {
     paymentType: 'QUOTA' | 'PAID';
     visitNote?: string;
     dates: string[];
+    overlapConfirmed?: boolean;
   }) => {
     const token = getToken();
     if (!token) return;
@@ -456,6 +458,7 @@ function SpecialistScheduleInner() {
     booking: SpaBoardBooking;
     specialistId: string;
     startAt: Date;
+    overlapConfirmed?: boolean;
   }) => {
     const token = getToken();
     if (!token) return;
@@ -464,6 +467,7 @@ function SpecialistScheduleInner() {
     try {
       await api.specialistUpdateSpaBooking(token, args.booking.id, {
         startAt: args.startAt.toISOString(),
+        overlapConfirmed: args.overlapConfirmed,
       });
       setMessage('Запись перенесена');
       await reload();
@@ -484,6 +488,7 @@ function SpecialistScheduleInner() {
     guestPhone?: string;
     paymentType: 'QUOTA' | 'PAID';
     visitNote?: string;
+    overlapConfirmed?: boolean;
   }) => {
     const token = getToken();
     if (!token || !selectedBooking) return;
@@ -497,6 +502,7 @@ function SpecialistScheduleInner() {
         guestName: payload.guestName,
         guestPhone: payload.guestPhone,
         paymentType: payload.paymentType,
+        overlapConfirmed: payload.overlapConfirmed,
         visitNote: payload.visitNote,
       });
       setSelectedBooking(null);
@@ -790,7 +796,10 @@ function SpecialistScheduleInner() {
         onClose={() => setShowAssign(false)}
         services={services}
         clients={clients}
+        defaultSpecialistId={me?.id}
         defaultStartAt={assignDefaults.startAt}
+        boardHours={board?.hours}
+        boardBookings={board?.bookings}
         busy={busy}
         onSubmit={assignClient}
         onBulkSubmit={bulkAssignClient}
@@ -821,6 +830,7 @@ function SpecialistScheduleInner() {
         open={Boolean(selectedBooking && !selectedBooking.busy)}
         booking={selectedBooking}
         services={services}
+        boardBookings={board?.bookings}
         busy={busy}
         onClose={() => setSelectedBooking(null)}
         onSave={saveBookingCard}

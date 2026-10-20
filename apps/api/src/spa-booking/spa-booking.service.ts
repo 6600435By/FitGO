@@ -977,14 +977,17 @@ export class SpaBookingService {
   }
 
   /**
-   * Staff (specialist/admin) may pick any start that fits published hours
-   * and does not overlap — not only the client self-book slot grid.
+   * Staff (specialist/admin) may pick any start that fits published hours.
+   * Clean slots need no flag; overlaps of 1–15 min require overlapConfirmed;
+   * overlaps over 15 min are always rejected. Client self-book still uses
+   * the strict available-slot grid.
    */
   private async assertStaffBookingWindow(
     specialistId: string,
     start: Date,
     end: Date,
     excludeBookingId?: string,
+    overlapConfirmed?: boolean,
   ) {
     // Past starts are allowed for staff backfill («забыли сразу добавить»).
     if (end <= start) {
@@ -1005,7 +1008,7 @@ export class SpaBookingService {
       );
     }
 
-    const overlap = await this.prisma.spaBooking.findFirst({
+    const overlaps = await this.prisma.spaBooking.findMany({
       where: {
         specialistId,
         status: SpaBookingStatus.CONFIRMED,
@@ -1013,10 +1016,42 @@ export class SpaBookingService {
         endAt: { gt: start },
         ...(excludeBookingId ? { id: { not: excludeBookingId } } : {}),
       },
-      select: { id: true },
+      select: {
+        id: true,
+        startAt: true,
+        endAt: true,
+        guestName: true,
+        client: { select: { firstName: true, lastName: true } },
+      },
     });
-    if (overlap) {
-      throw new ConflictException('На это время уже есть запись');
+    if (overlaps.length === 0) return;
+
+    const startMs = start.getTime();
+    const endMs = end.getTime();
+    let maxOverlapMin = 0;
+    let peerLabel = '';
+    for (const o of overlaps) {
+      const overlapStart = Math.max(startMs, o.startAt.getTime());
+      const overlapEnd = Math.min(endMs, o.endAt.getTime());
+      const mins = Math.round((overlapEnd - overlapStart) / 60_000);
+      if (mins > maxOverlapMin) {
+        maxOverlapMin = mins;
+        peerLabel =
+          `${o.client?.lastName ?? ''} ${o.client?.firstName ?? ''}`.trim() ||
+          o.guestName ||
+          'клиент';
+      }
+    }
+
+    if (maxOverlapMin > 15) {
+      throw new ConflictException(
+        `Пересечение ${maxOverlapMin} мин с «${peerLabel}» — больше 15 минут нельзя`,
+      );
+    }
+    if (!overlapConfirmed) {
+      throw new ConflictException(
+        `На это время уже есть запись (пересечение ${maxOverlapMin} мин с «${peerLabel}»). Подтвердите наслоение.`,
+      );
     }
   }
 
@@ -1076,6 +1111,7 @@ export class SpaBookingService {
       membershipServiceName?: string;
       origin: SpaBookingOrigin;
       visitNote?: string;
+      overlapConfirmed?: boolean;
     },
   ): Promise<{ booking: SpaBooking; membership: Membership | null }> {
     const start = new Date(input.startAt);
@@ -1101,7 +1137,13 @@ export class SpaBookingService {
       input.origin === SpaBookingOrigin.SPECIALIST_ASSIGNED ||
       input.origin === SpaBookingOrigin.ADMIN_ASSIGNED;
     if (staffOrigin) {
-      await this.assertStaffBookingWindow(input.specialistId, start, end);
+      await this.assertStaffBookingWindow(
+        input.specialistId,
+        start,
+        end,
+        undefined,
+        input.overlapConfirmed,
+      );
     } else {
       const available = await this.getSpecialistAvailableSlots(
         clubId,
@@ -1387,6 +1429,7 @@ export class SpaBookingService {
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
+      overlapConfirmed?: boolean;
     },
   ) {
     return this.bookSpa(user, {
@@ -1408,6 +1451,7 @@ export class SpaBookingService {
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
+      overlapConfirmed?: boolean;
     },
   ) {
     return this.bookSpa(user, {
@@ -2287,6 +2331,7 @@ export class SpaBookingService {
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
+      overlapConfirmed?: boolean;
     },
     opts: { asSpecialist: boolean },
   ): Promise<{ booking: SpaBooking }> {
@@ -2369,6 +2414,7 @@ export class SpaBookingService {
       start,
       end,
       existing.id,
+      input.overlapConfirmed,
     );
 
     const paymentType = input.paymentType ?? (
@@ -3370,6 +3416,7 @@ export class SpaBookingService {
       membershipServiceName?: string;
       visitNote?: string;
       dates: string[];
+      overlapConfirmed?: boolean;
     },
   ): Promise<SpaBulkBookingResult> {
     if (!this.isSpaStaff(user)) {
@@ -3417,6 +3464,7 @@ export class SpaBookingService {
           paymentType: input.paymentType,
           membershipServiceName: input.membershipServiceName,
           visitNote: input.visitNote,
+          overlapConfirmed: input.overlapConfirmed,
           origin,
         });
         created.push(result.booking);

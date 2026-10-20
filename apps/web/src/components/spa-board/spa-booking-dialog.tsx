@@ -1,6 +1,15 @@
 'use client';
 
-import type { SpaService } from '@fitgo/shared-types';
+import type {
+  SpaBoardBooking,
+  SpaBoardHourBlock,
+  SpaService,
+} from '@fitgo/shared-types';
+import {
+  SPA_OVERLAP_ALLOW_MIN,
+  checkSpaPlacement,
+  suggestSpaFitStarts,
+} from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
 import { SpaBookingNotesFields } from '@/components/spa-board/spa-booking-notes-fields';
 import { DateField, TimeField } from '@/components/ui/date-field';
@@ -9,6 +18,11 @@ import { getToken } from '@/lib/auth';
 
 function formatPrice(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)} ${currency}`;
+}
+
+function formatHm(ms: number) {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
 type BookingPayload = {
@@ -20,6 +34,7 @@ type BookingPayload = {
   startAt: string;
   paymentType: 'QUOTA' | 'PAID';
   visitNote?: string;
+  overlapConfirmed?: boolean;
 };
 
 type PeriodEntry = { date: string; time: string };
@@ -86,6 +101,8 @@ export function SpaBookingDialog({
   defaultSpecialistId,
   defaultStartAt,
   allowPickSpecialist,
+  boardHours,
+  boardBookings,
   onSubmit,
   onBulkSubmit,
   busy,
@@ -98,6 +115,9 @@ export function SpaBookingDialog({
   defaultSpecialistId?: string;
   defaultStartAt?: string;
   allowPickSpecialist?: boolean;
+  /** Current board data for «Куда влезет» suggestions. */
+  boardHours?: SpaBoardHourBlock[];
+  boardBookings?: SpaBoardBooking[];
   onSubmit: (payload: BookingPayload) => Promise<void>;
   onBulkSubmit?: (
     payload: BookingPayload & { dates: string[] },
@@ -113,6 +133,7 @@ export function SpaBookingDialog({
   const [periodEntries, setPeriodEntries] = useState<PeriodEntry[]>([]);
   const [extraDate, setExtraDate] = useState('');
   const [extraTime, setExtraTime] = useState('10:00');
+  const [overlapConfirmed, setOverlapConfirmed] = useState(false);
   const [form, setForm] = useState({
     specialistId: defaultSpecialistId ?? '',
     clientId: '',
@@ -215,12 +236,109 @@ export function SpaBookingDialog({
     );
   }, [periodMode, suggestedEntries, form.startAt]);
 
+  useEffect(() => {
+    if (!open) return;
+    setOverlapConfirmed(false);
+  }, [open, form.startAt, form.serviceId, form.specialistId]);
+
+  const selectedService = useMemo(
+    () => bookable.find((s) => s.id === form.serviceId),
+    [bookable, form.serviceId],
+  );
+
+  const resolvedSpecialistId = allowPickSpecialist
+    ? form.specialistId
+    : (defaultSpecialistId ?? form.specialistId);
+
+  const fitSuggestions = useMemo(() => {
+    if (!boardHours || !boardBookings || !selectedService || !resolvedSpecialistId) {
+      return [];
+    }
+    if (!form.startAt) return [];
+    const day = new Date(form.startAt);
+    if (Number.isNaN(day.getTime())) return [];
+    const dayStart = new Date(day);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const dayStartMs = dayStart.getTime();
+    const dayEndMs = dayEnd.getTime();
+
+    const workBands = boardHours
+      .filter(
+        (h) =>
+          h.specialistId === resolvedSpecialistId &&
+          h.status === 'PUBLISHED' &&
+          new Date(h.startAt).getTime() < dayEndMs &&
+          new Date(h.endAt).getTime() > dayStartMs,
+      )
+      .map((h) => ({
+        startMs: new Date(h.startAt).getTime(),
+        endMs: new Date(h.endAt).getTime(),
+      }));
+    const bookings = boardBookings
+      .filter(
+        (b) =>
+          b.specialistId === resolvedSpecialistId &&
+          !b.busy &&
+          new Date(b.startAt).getTime() < dayEndMs &&
+          new Date(b.endAt).getTime() > dayStartMs,
+      )
+      .map((b) => ({
+        id: b.id,
+        label: b.clientName ?? b.guestName ?? 'Клиент',
+        startMs: new Date(b.startAt).getTime(),
+        endMs: new Date(b.endAt).getTime(),
+      }));
+    const durationMin =
+      selectedService.durationMin + (selectedService.bufferMin ?? 0);
+    return suggestSpaFitStarts(workBands, bookings, durationMin, {
+      allowOverlapMin: SPA_OVERLAP_ALLOW_MIN,
+      maxSuggestions: 10,
+    });
+  }, [
+    boardBookings,
+    boardHours,
+    form.startAt,
+    resolvedSpecialistId,
+    selectedService,
+  ]);
+
+  const placementCheck = useMemo(() => {
+    if (!boardBookings || !selectedService || !resolvedSpecialistId || !form.startAt) {
+      return null;
+    }
+    const start = new Date(form.startAt);
+    if (Number.isNaN(start.getTime())) return null;
+    const durationMin =
+      selectedService.durationMin + (selectedService.bufferMin ?? 0);
+    const startMs = start.getTime();
+    const endMs = startMs + durationMin * 60_000;
+    const peers = boardBookings
+      .filter((b) => b.specialistId === resolvedSpecialistId && !b.busy)
+      .map((b) => ({
+        id: b.id,
+        label: b.clientName ?? b.guestName ?? 'Клиент',
+        startMs: new Date(b.startAt).getTime(),
+        endMs: new Date(b.endAt).getTime(),
+      }));
+    return checkSpaPlacement(startMs, endMs, peers, SPA_OVERLAP_ALLOW_MIN);
+  }, [boardBookings, form.startAt, resolvedSpecialistId, selectedService]);
+
   if (!open) return null;
 
-  const selected = bookable.find((s) => s.id === form.serviceId);
+  const selected = selectedService;
   const { datePart, timePart } = splitDatetimeLocal(form.startAt);
   const startIsPast =
     Boolean(form.startAt) && new Date(form.startAt).getTime() < Date.now();
+  const needsOverlapConfirm =
+    Boolean(placementCheck) &&
+    !placementCheck!.fitsClean &&
+    placementCheck!.allowedWithConfirm;
+  const overlapBlocked =
+    Boolean(placementCheck) &&
+    !placementCheck!.fitsClean &&
+    !placementCheck!.allowedWithConfirm;
 
   const setDatePart = (date: string) => {
     const time = timePart || '10:00';
@@ -307,6 +425,9 @@ export function SpaBookingDialog({
       serviceId: form.serviceId,
       startAt: startIso,
       paymentType: form.paymentType,
+      ...(needsOverlapConfirm && overlapConfirmed
+        ? { overlapConfirmed: true }
+        : {}),
       ...(note ? { visitNote: note } : { visitNote: '' }),
       ...(mode === 'base'
         ? { clientId: form.clientId }
@@ -339,6 +460,16 @@ export function SpaBookingDialog({
     }
     if (mode === 'phone' && !form.clientId && !form.guestName.trim()) {
       setError('Укажите ФИО клиента');
+      return;
+    }
+    if (overlapBlocked) {
+      setError(
+        `Пересечение ${placementCheck?.maxOverlapMin ?? ''} мин — больше ${SPA_OVERLAP_ALLOW_MIN} минут нельзя`,
+      );
+      return;
+    }
+    if (needsOverlapConfirm && !overlapConfirmed) {
+      setError('Подтвердите наслоение записей');
       return;
     }
     const startIso = new Date(form.startAt).toISOString();
@@ -539,6 +670,62 @@ export function SpaBookingDialog({
                 </span>
               ) : null}
             </p>
+            {boardHours && boardBookings && selected ? (
+              <div className="space-y-1.5 pt-1">
+                <p className="text-xs font-medium text-slate-400">Куда влезет</p>
+                {fitSuggestions.length === 0 ? (
+                  <p className="text-xs text-slate-500">
+                    На {selected.durationMin} мин в этот день окна нет
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {fitSuggestions.map((s) => (
+                      <button
+                        key={s.startMs}
+                        type="button"
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                          s.kind === 'clean'
+                            ? 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/30'
+                            : 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/30'
+                        }`}
+                        onClick={() => {
+                          const local = toDatetimeLocalValue(new Date(s.startMs));
+                          setForm((f) => ({ ...f, startAt: local }));
+                        }}
+                      >
+                        {formatHm(s.startMs)}
+                        {s.kind === 'overlap'
+                          ? ` · ∩ ${s.overlapMin} мин`
+                          : ''}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+            {needsOverlapConfirm ? (
+              <label className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-100">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={overlapConfirmed}
+                  onChange={(e) => setOverlapConfirmed(e.target.checked)}
+                />
+                <span>
+                  Пересечение {placementCheck?.maxOverlapMin} мин
+                  {placementCheck?.peers[0]
+                    ? ` с «${placementCheck.peers[0].label}»`
+                    : ''}
+                  . Подтверждаю наслоение.
+                </span>
+              </label>
+            ) : null}
+            {overlapBlocked ? (
+              <p className="mt-2 text-xs text-rose-300">
+                Пересечение {placementCheck?.maxOverlapMin} мин — больше{' '}
+                {SPA_OVERLAP_ALLOW_MIN} минут нельзя. Выберите другое время.
+              </p>
+            ) : null}
           </div>
 
           <label className="block space-y-1 text-sm">

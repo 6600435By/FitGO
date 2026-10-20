@@ -27,13 +27,24 @@ ALTER TABLE "PersonalTrainingBooking"
   )
   WHERE (status NOT IN ('CANCELLED', 'FAILED'));
 
+-- Soft overlap: protect all but the last 15 minutes of each booking so staff
+-- may layer a new visit by ≤15 min after confirming. Services ≤15 min keep a
+-- full exclusive range (no stacking).
 ALTER TABLE "SpaBooking"
   DROP CONSTRAINT IF EXISTS spa_booking_no_overlap_specialist;
 ALTER TABLE "SpaBooking"
   ADD CONSTRAINT spa_booking_no_overlap_specialist
   EXCLUDE USING gist (
     "specialistId" WITH =,
-    tsrange("startAt", "endAt", '[)') WITH &&
+    tsrange(
+      "startAt",
+      CASE
+        WHEN "endAt" - "startAt" > interval '15 minutes'
+          THEN "endAt" - interval '15 minutes'
+        ELSE "endAt"
+      END,
+      '[)'
+    ) WITH &&
   )
   WHERE (status NOT IN ('CANCELLED', 'FAILED'));
 

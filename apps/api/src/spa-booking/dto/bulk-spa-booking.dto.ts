@@ -1,6 +1,7 @@
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsISO8601,
   IsIn,
   IsOptional,
@@ -52,4 +53,9 @@ export class BulkSpaBookingDto {
   @ArrayMinSize(1)
   @IsString({ each: true })
   dates!: string[];
+
+  /** Staff confirmed intentional overlap ≤ 15 min with a neighbor. */
+  @IsOptional()
+  @IsBoolean()
+  overlapConfirmed?: boolean;
 }

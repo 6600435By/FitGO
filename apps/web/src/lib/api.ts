@@ -999,6 +999,7 @@ export const api = {
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
+      overlapConfirmed?: boolean;
     },
   ) =>
     request<{ booking: SpaBooking; membership: Membership | null }>(
@@ -1019,6 +1020,7 @@ export const api = {
       membershipServiceName?: string;
       visitNote?: string;
       dates: string[];
+      overlapConfirmed?: boolean;
     },
   ) =>
     request<SpaBulkBookingResult>(
@@ -1094,6 +1096,7 @@ export const api = {
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
+      overlapConfirmed?: boolean;
     },
   ) =>
     request<{ booking: SpaBooking }>(
@@ -1218,6 +1221,7 @@ export const api = {
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
+      overlapConfirmed?: boolean;
     },
   ) =>
     request<{ booking: SpaBooking; membership: Membership | null }>(
@@ -1239,6 +1243,7 @@ export const api = {
       membershipServiceName?: string;
       visitNote?: string;
       dates: string[];
+      overlapConfirmed?: boolean;
     },
   ) =>
     request<SpaBulkBookingResult>(
@@ -1317,6 +1322,7 @@ export const api = {
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
+      overlapConfirmed?: boolean;
     },
   ) =>
     request<{ booking: SpaBooking }>(

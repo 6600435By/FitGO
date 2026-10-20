@@ -1,6 +1,10 @@
 'use client';
 
 import type { SpaBoardBooking, SpaService } from '@fitgo/shared-types';
+import {
+  SPA_OVERLAP_ALLOW_MIN,
+  checkSpaPlacement,
+} from '@fitgo/shared-types';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
@@ -55,6 +59,7 @@ export function SpaBookingEditDialog({
   specialists,
   allowPickSpecialist,
   allowManualPayment,
+  boardBookings,
   busy,
   onClose,
   onSave,
@@ -68,6 +73,7 @@ export function SpaBookingEditDialog({
   allowPickSpecialist?: boolean;
   /** Admin-only: confirm paid SPA without posting to 1C. */
   allowManualPayment?: boolean;
+  boardBookings?: SpaBoardBooking[];
   busy?: boolean;
   onClose: () => void;
   onSave: (payload: {
@@ -79,6 +85,7 @@ export function SpaBookingEditDialog({
     guestPhone?: string;
     paymentType: 'QUOTA' | 'PAID';
     visitNote?: string;
+    overlapConfirmed?: boolean;
   }) => Promise<void>;
   onCancel: () => Promise<void>;
   onConfirmManualPayment?: () => Promise<void>;
@@ -88,6 +95,7 @@ export function SpaBookingEditDialog({
   const crmLocked = Boolean(booking?.crmLocked);
   const [error, setError] = useState('');
   const [phoneLookup, setPhoneLookup] = useState('');
+  const [overlapConfirmed, setOverlapConfirmed] = useState(false);
   const [form, setForm] = useState({
     specialistId: '',
     guestName: '',
@@ -105,6 +113,7 @@ export function SpaBookingEditDialog({
     if (!open || !booking) return;
     setError('');
     setPhoneLookup('');
+    setOverlapConfirmed(false);
     setForm({
       specialistId: booking.specialistId,
       guestName: booking.guestName ?? booking.clientName ?? '',
@@ -132,10 +141,47 @@ export function SpaBookingEditDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when dialog opens
   }, [open, booking?.id]);
 
+  useEffect(() => {
+    setOverlapConfirmed(false);
+  }, [form.startAt, form.serviceId, form.specialistId]);
+
   const clientNoteEnabled = Boolean(
     booking?.clientId ||
       form.guestPhone.replace(/\D/g, '').length >= 9,
   );
+
+  const placementCheck = useMemo(() => {
+    if (!booking || !boardBookings || !form.startAt || !form.serviceId) {
+      return null;
+    }
+    const service = bookable.find((s) => s.id === form.serviceId);
+    if (!service) return null;
+    const start = new Date(form.startAt);
+    if (Number.isNaN(start.getTime())) return null;
+    const specialistId = form.specialistId || booking.specialistId;
+    const durationMin = service.durationMin + (service.bufferMin ?? 0);
+    const startMs = start.getTime();
+    const endMs = startMs + durationMin * 60_000;
+    const peers = boardBookings
+      .filter(
+        (b) =>
+          b.specialistId === specialistId && !b.busy && b.id !== booking.id,
+      )
+      .map((b) => ({
+        id: b.id,
+        label: b.clientName ?? b.guestName ?? 'Клиент',
+        startMs: new Date(b.startAt).getTime(),
+        endMs: new Date(b.endAt).getTime(),
+      }));
+    return checkSpaPlacement(startMs, endMs, peers, SPA_OVERLAP_ALLOW_MIN);
+  }, [
+    boardBookings,
+    bookable,
+    booking,
+    form.serviceId,
+    form.specialistId,
+    form.startAt,
+  ]);
 
   const saveClientNoteNow = async () => {
     const token = getToken();
@@ -178,6 +224,14 @@ export function SpaBookingEditDialog({
     booking.paymentType === 'PAID' &&
     !booking.manualPaymentConfirmed &&
     !booking.consumedInCrm;
+  const needsOverlapConfirm =
+    Boolean(placementCheck) &&
+    !placementCheck!.fitsClean &&
+    placementCheck!.allowedWithConfirm;
+  const overlapBlocked =
+    Boolean(placementCheck) &&
+    !placementCheck!.fitsClean &&
+    !placementCheck!.allowedWithConfirm;
 
   const setDatePart = (date: string) => {
     const time = timePart || '10:00';
@@ -253,6 +307,16 @@ export function SpaBookingEditDialog({
       setError('Укажите ФИО клиента');
       return;
     }
+    if (overlapBlocked) {
+      setError(
+        `Пересечение ${placementCheck?.maxOverlapMin ?? ''} мин — больше ${SPA_OVERLAP_ALLOW_MIN} минут нельзя`,
+      );
+      return;
+    }
+    if (needsOverlapConfirm && !overlapConfirmed) {
+      setError('Подтвердите наслоение записей');
+      return;
+    }
     const startIso = new Date(form.startAt).toISOString();
     if (Number.isNaN(new Date(startIso).getTime())) {
       setError('Некорректная дата');
@@ -265,12 +329,17 @@ export function SpaBookingEditDialog({
       ) {
         await saveClientNoteNow();
       }
+      const overlapFlag =
+        needsOverlapConfirm && overlapConfirmed
+          ? { overlapConfirmed: true as const }
+          : {};
       if (crmLocked) {
         await onSave({
           serviceId: booking.serviceId ?? form.serviceId,
           startAt: startIso,
           paymentType: booking.paymentType === 'QUOTA' ? 'QUOTA' : 'PAID',
           visitNote: visitNote.trim(),
+          ...overlapFlag,
         });
       } else {
         await onSave({
@@ -282,6 +351,7 @@ export function SpaBookingEditDialog({
           guestPhone: form.guestPhone.trim() || undefined,
           paymentType: form.paymentType,
           visitNote: visitNote.trim(),
+          ...overlapFlag,
         });
       }
     } catch (err) {
@@ -466,6 +536,29 @@ export function SpaBookingEditDialog({
                 onChange={setTimePart}
               />
             </div>
+            {needsOverlapConfirm ? (
+              <label className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-100">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={overlapConfirmed}
+                  onChange={(e) => setOverlapConfirmed(e.target.checked)}
+                />
+                <span>
+                  Пересечение {placementCheck?.maxOverlapMin} мин
+                  {placementCheck?.peers[0]
+                    ? ` с «${placementCheck.peers[0].label}»`
+                    : ''}
+                  . Подтверждаю наслоение.
+                </span>
+              </label>
+            ) : null}
+            {overlapBlocked ? (
+              <p className="mt-2 text-xs text-rose-300">
+                Пересечение {placementCheck?.maxOverlapMin} мин — больше{' '}
+                {SPA_OVERLAP_ALLOW_MIN} минут нельзя. Выберите другое время.
+              </p>
+            ) : null}
           </div>
 
           <label className="block space-y-1 text-sm">

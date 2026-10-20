@@ -7,12 +7,20 @@ import type {
   SpaBoardStaff,
 } from '@fitgo/shared-types';
 import {
+  SPA_FREE_GAP_MIN,
+  SPA_OVERLAP_ALLOW_MIN,
+  checkSpaPlacement,
+  computeSpaFreeWindows,
+  packSpaBookingLanes,
+} from '@fitgo/shared-types';
+import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from 'react';
 import { SpaBookingNoteHint } from '@/components/spa-board/spa-booking-note-hint';
 import {
@@ -168,25 +176,6 @@ function isInsidePublishedHours(
   });
 }
 
-function conflictsWithBooking(
-  bookings: SpaBoardBooking[],
-  specialistId: string,
-  day: Date,
-  startMinutes: number,
-  durationMin: number,
-  excludeId?: string,
-) {
-  const absStart = DAY_START_HOUR * 60 + startMinutes;
-  const absEnd = absStart + durationMin;
-  for (const b of bookingsForDay(bookings, day, specialistId)) {
-    if (excludeId && b.id === excludeId) continue;
-    const bs = DAY_START_HOUR * 60 + minutesFromDayStart(b.startAt, day);
-    const be = DAY_START_HOUR * 60 + minutesFromDayStart(b.endAt, day);
-    if (absStart < be && absEnd > bs) return true;
-  }
-  return false;
-}
-
 function resolveEmptySlotStartAt(
   clickMinsFromDayStart: number,
   items: SpaBoardBooking[],
@@ -227,6 +216,8 @@ function clientLabel(b: SpaBoardBooking) {
   return b.clientName || b.guestName || 'Клиент';
 }
 
+type DragValidity = 'ok' | 'overlap' | 'invalid';
+
 type DragState = {
   booking: SpaBoardBooking;
   dayKey: string;
@@ -234,9 +225,19 @@ type DragState = {
   durationMin: number;
   height: number;
   valid: boolean;
+  validity: DragValidity;
+  overlapMin: number;
   grabOffsetY: number;
   pointerX: number;
   pointerY: number;
+};
+
+type PendingOverlapConfirm = {
+  booking: SpaBoardBooking;
+  specialistId: string;
+  startAt: Date;
+  overlapMin: number;
+  peerLabel: string;
 };
 
 type PointerStart = {
@@ -277,12 +278,16 @@ export function SpaWeekBoard({
     booking: SpaBoardBooking;
     specialistId: string;
     startAt: Date;
+    overlapConfirmed?: boolean;
   }) => void | Promise<void>;
   filterSpecialistId?: string;
   onFilterSpecialistChange?: (id: string) => void;
 }) {
   const days = useMemo(() => weekDays(day), [day]);
   const weekStart = days[0] ?? startOfWeekMonday(day);
+  const [overlapConfirm, setOverlapConfirm] =
+    useState<PendingOverlapConfirm | null>(null);
+  const [overlapConfirmBusy, setOverlapConfirmBusy] = useState(false);
   const totalMin = (DAY_END_HOUR - DAY_START_HOUR) * 60;
   const today = startOfDay(new Date());
 
@@ -413,19 +418,26 @@ export function SpaWeekBoard({
     [mode, viewerSpecialistId],
   );
 
-  const canDrop = useCallback(
+  const evaluateDrop = useCallback(
     (
       specialistId: string,
       day: Date,
       startMinutes: number,
       durationMin: number,
       excludeId?: string,
-    ) => {
+    ): {
+      ok: boolean;
+      validity: DragValidity;
+      overlapMin: number;
+      peerLabel: string;
+    } => {
       if (mode === 'specialist' && viewerSpecialistId) {
-        if (specialistId !== viewerSpecialistId) return false;
+        if (specialistId !== viewerSpecialistId) {
+          return { ok: false, validity: 'invalid', overlapMin: 0, peerLabel: '' };
+        }
       }
       if (startMinutes < 0 || startMinutes + durationMin > totalMin) {
-        return false;
+        return { ok: false, validity: 'invalid', overlapMin: 0, peerLabel: '' };
       }
       if (
         !isInsidePublishedHours(
@@ -436,21 +448,42 @@ export function SpaWeekBoard({
           durationMin,
         )
       ) {
-        return false;
+        return { ok: false, validity: 'invalid', overlapMin: 0, peerLabel: '' };
       }
-      if (
-        conflictsWithBooking(
-          board.bookings,
-          specialistId,
-          day,
-          startMinutes,
-          durationMin,
-          excludeId,
-        )
-      ) {
-        return false;
+      const dayBaseMs = day.getTime() + DAY_START_HOUR * 60 * 60 * 1000;
+      const startMs = dayBaseMs + startMinutes * 60_000;
+      const endMs = startMs + durationMin * 60_000;
+      const peers = bookingsForDay(board.bookings, day, specialistId)
+        .filter((b) => !b.busy && b.id !== excludeId)
+        .map((b) => ({
+          id: b.id,
+          label: b.clientName ?? b.guestName ?? 'Клиент',
+          startMs: new Date(b.startAt).getTime(),
+          endMs: new Date(b.endAt).getTime(),
+        }));
+      const check = checkSpaPlacement(
+        startMs,
+        endMs,
+        peers,
+        SPA_OVERLAP_ALLOW_MIN,
+      );
+      if (check.fitsClean) {
+        return { ok: true, validity: 'ok', overlapMin: 0, peerLabel: '' };
       }
-      return true;
+      if (check.allowedWithConfirm) {
+        return {
+          ok: true,
+          validity: 'overlap',
+          overlapMin: check.maxOverlapMin,
+          peerLabel: check.peers[0]?.label ?? '',
+        };
+      }
+      return {
+        ok: false,
+        validity: 'invalid',
+        overlapMin: check.maxOverlapMin,
+        peerLabel: check.peers[0]?.label ?? '',
+      };
     },
     [board.bookings, board.hours, mode, totalMin, viewerSpecialistId],
   );
@@ -471,6 +504,13 @@ export function SpaWeekBoard({
         Math.round(minutesFromDayStart(pending.booking.startAt, bookDay)),
       );
       const snapped = Math.floor(startMin / GRID_STEP_MIN) * GRID_STEP_MIN;
+      const drop = evaluateDrop(
+        pending.booking.specialistId,
+        bookDay,
+        snapped,
+        pending.durationMin,
+        pending.booking.id,
+      );
       setDrag({
         booking: pending.booking,
         dayKey: dateKey(bookDay),
@@ -480,17 +520,13 @@ export function SpaWeekBoard({
         grabOffsetY: pending.grabOffsetY,
         pointerX: pending.x,
         pointerY: pending.y,
-        valid: canDrop(
-          pending.booking.specialistId,
-          bookDay,
-          snapped,
-          pending.durationMin,
-          pending.booking.id,
-        ),
+        valid: drop.ok,
+        validity: drop.validity,
+        overlapMin: drop.overlapMin,
       });
       setPointerStart(null);
     },
-    [canDrop, clearTouchArmTimer],
+    [clearTouchArmTimer, evaluateDrop],
   );
 
   const maybeEdgeScroll = useCallback((clientX: number) => {
@@ -538,7 +574,7 @@ export function SpaWeekBoard({
   );
 
   const commitMove = useCallback(
-    async (current: DragState) => {
+    async (current: DragState, overlapConfirmed = false) => {
       if (!onBookingMove || isMutatingRef.current || !current.valid) return;
       const targetDay = days.find((d) => dateKey(d) === current.dayKey);
       if (!targetDay) return;
@@ -555,18 +591,39 @@ export function SpaWeekBoard({
         targetDay.getTime() +
           (DAY_START_HOUR * 60 + current.startMinutes) * 60000,
       );
+
+      if (current.validity === 'overlap' && !overlapConfirmed) {
+        const drop = evaluateDrop(
+          current.booking.specialistId,
+          targetDay,
+          current.startMinutes,
+          current.durationMin,
+          current.booking.id,
+        );
+        setOverlapConfirm({
+          booking: current.booking,
+          specialistId: current.booking.specialistId,
+          startAt,
+          overlapMin: drop.overlapMin,
+          peerLabel: drop.peerLabel,
+        });
+        return;
+      }
+
       isMutatingRef.current = true;
       try {
         await onBookingMove({
           booking: current.booking,
           specialistId: current.booking.specialistId,
           startAt,
+          overlapConfirmed:
+            current.validity === 'overlap' || overlapConfirmed,
         });
       } finally {
         isMutatingRef.current = false;
       }
     },
-    [days, onBookingMove],
+    [days, evaluateDrop, onBookingMove],
   );
 
   const beginDragFromPendingRef = useRef(beginDragFromPending);
@@ -615,6 +672,8 @@ export function SpaWeekBoard({
             ? {
                 ...prev,
                 valid: false,
+                validity: 'invalid',
+                overlapMin: 0,
                 pointerX: e.clientX,
                 pointerY: e.clientY,
               }
@@ -622,7 +681,7 @@ export function SpaWeekBoard({
         );
         return;
       }
-      const valid = canDrop(
+      const drop = evaluateDrop(
         dragNow.booking.specialistId,
         target.day,
         target.minutes,
@@ -635,7 +694,9 @@ export function SpaWeekBoard({
         startMinutes: target.minutes,
         pointerX: e.clientX,
         pointerY: e.clientY,
-        valid,
+        valid: drop.ok,
+        validity: drop.validity,
+        overlapMin: drop.overlapMin,
       });
     }
 
@@ -662,7 +723,7 @@ export function SpaWeekBoard({
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
     };
-  }, [canDrop, clearTouchArmTimer, maybeEdgeScroll, resolveDropTarget]);
+  }, [clearTouchArmTimer, evaluateDrop, maybeEdgeScroll, resolveDropTarget]);
 
   const onBookingPointerDown = (
     e: ReactPointerEvent,
@@ -1036,9 +1097,11 @@ export function SpaWeekBoard({
                     <>
                       <div
                         className={`pointer-events-none absolute inset-x-0.5 z-20 rounded-md border-2 border-dashed ${
-                          drag.valid
+                          drag.validity === 'ok'
                             ? 'border-fitgo-400/70 bg-fitgo-500/15'
-                            : 'border-rose-400/60 bg-rose-500/10'
+                            : drag.validity === 'overlap'
+                              ? 'border-amber-400/70 bg-amber-500/15'
+                              : 'border-rose-400/60 bg-rose-500/10'
                         }`}
                         style={{
                           top:
@@ -1049,16 +1112,20 @@ export function SpaWeekBoard({
                       />
                       <div
                         className={`pointer-events-none absolute inset-x-0.5 z-30 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-lg ring-2 ${
-                          drag.valid
-                            ? `${
+                          drag.validity === 'invalid'
+                            ? 'border-rose-400/60 bg-rose-900/80 ring-rose-400/70'
+                            : `${
                                 !filteredStaffId
                                   ? staffColorClass(
                                       drag.booking.specialistId,
                                       board.staff,
                                     )
                                   : 'bg-amber-500/85 border-amber-400/40'
-                              } ring-fitgo-300/70`
-                            : 'border-rose-400/60 bg-rose-900/80 ring-rose-400/70'
+                              } ${
+                                drag.validity === 'overlap'
+                                  ? 'ring-amber-300/80'
+                                  : 'ring-fitgo-300/70'
+                              }`
                         }`}
                         style={{
                           top:
@@ -1079,113 +1146,233 @@ export function SpaWeekBoard({
                           )}
                         </p>
                         <p className="truncate">{clientLabel(drag.booking)}</p>
+                        {drag.validity === 'overlap' ? (
+                          <p className="truncate font-medium">
+                            пересечение {drag.overlapMin} мин
+                          </p>
+                        ) : null}
                       </div>
                     </>
                   ) : null}
 
-                  {items.map((b) => {
-                    const topMin = minutesFromDayStart(b.startAt, d);
-                    const endMin = minutesFromDayStart(b.endAt, d);
-                    const durationMin = Math.max(15, endMin - topMin);
-                    const top =
-                      (topMin - viewport.viewStartMin) * pxPerMin;
-                    const height = Math.max(22, durationMin * pxPerMin);
-                    const isDragging = drag?.booking.id === b.id;
-                    const showMulti = !filteredStaffId;
-                    const staff = board.staff.find(
-                      (s) => s.id === b.specialistId,
-                    );
-                    const color = showMulti
-                      ? staffColorClass(b.specialistId, board.staff)
-                      : 'bg-amber-500/85 border-amber-400/40';
-                    const editable = canEditBooking(b) && !!onBookingMove;
-                    const timeStart = minutesToTimeLabel(
-                      DAY_START_HOUR * 60 + topMin,
-                    );
-                    const timeEnd = minutesToTimeLabel(
-                      DAY_START_HOUR * 60 + endMin,
-                    );
+                  {(() => {
+                    const dayBaseMs =
+                      d.getTime() + DAY_START_HOUR * 60 * 60 * 1000;
+                    const specialistIds = filteredStaffId
+                      ? [filteredStaffId]
+                      : [
+                          ...new Set(
+                            bands
+                              .filter((h) => h.status === 'PUBLISHED')
+                              .map((h) => h.specialistId),
+                          ),
+                        ];
+                    const freeNodes: ReactNode[] = [];
+                    for (const sid of specialistIds) {
+                      const pubBands = hourBandsForDay(board.hours, d, sid)
+                        .filter((h) => h.status === 'PUBLISHED')
+                        .map((h) => ({
+                          startMs: new Date(h.startAt).getTime(),
+                          endMs: new Date(h.endAt).getTime(),
+                        }));
+                      const dayBookings = bookingsForDay(
+                        board.bookings,
+                        d,
+                        sid,
+                      ).filter((b) => !b.busy);
+                      const windows = computeSpaFreeWindows(
+                        pubBands,
+                        dayBookings.map((b) => ({
+                          startMs: new Date(b.startAt).getTime(),
+                          endMs: new Date(b.endAt).getTime(),
+                        })),
+                        SPA_FREE_GAP_MIN,
+                      );
+                      for (const w of windows) {
+                        const topMin = (w.startMs - dayBaseMs) / 60_000;
+                        const endMin = (w.endMs - dayBaseMs) / 60_000;
+                        if (
+                          endMin <= viewport.viewStartMin ||
+                          topMin >= viewport.viewEndMin
+                        ) {
+                          continue;
+                        }
+                        const top =
+                          (Math.max(viewport.viewStartMin, topMin) -
+                            viewport.viewStartMin) *
+                          pxPerMin;
+                        const height = Math.max(
+                          16,
+                          (Math.min(viewport.viewEndMin, endMin) -
+                            Math.max(viewport.viewStartMin, topMin)) *
+                            pxPerMin,
+                        );
+                        freeNodes.push(
+                          <button
+                            key={`free-${sid}-${w.startMs}`}
+                            type="button"
+                            className="spa-free-gap absolute inset-x-0.5 z-[1] overflow-hidden rounded border border-dashed border-emerald-500/40 bg-emerald-500/10 px-1 py-0.5 text-left text-[9px] leading-tight text-emerald-300/90 hover:bg-emerald-500/20"
+                            style={{ top, height }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!onEmptySlotClick) return;
+                              onEmptySlotClick({
+                                specialistId: sid,
+                                startAt: new Date(w.startMs),
+                              });
+                            }}
+                          >
+                            свободно {w.durationMin} мин
+                          </button>,
+                        );
+                      }
+                    }
+                    return freeNodes;
+                  })()}
 
-                    return (
-                      <div
-                        key={b.id}
-                        role="button"
-                        tabIndex={0}
-                        title={
-                          editable
-                            ? 'Удерживайте и перетащите на другой день или время'
-                            : undefined
-                        }
-                        className={`absolute inset-x-0.5 z-10 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-sm touch-none ${color} ${
-                          editable
-                            ? 'cursor-grab active:cursor-grabbing'
-                            : 'cursor-pointer'
-                        } ${isDragging ? 'opacity-35' : ''} ${
-                          pointerStart?.booking.id === b.id
-                            ? 'scale-[1.02] shadow-md ring-2 ring-white/30'
-                            : ''
-                        }`}
-                        style={{ top, height }}
-                        onPointerDown={(e) =>
-                          onBookingPointerDown(e, b, height, durationMin)
-                        }
-                        onDoubleClick={(e) => {
-                          e.stopPropagation();
-                          if (!b.busy) onBookingDoubleClick?.(b);
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {!b.busy ? (
-                          <SpaBookingNoteHint
-                            clientNote={b.clientNote}
-                            visitNote={b.visitNote}
-                          />
-                        ) : null}
-                        <div className="flex items-start gap-1">
-                          {editable ? (
-                            <span
-                              className="mt-px flex shrink-0 flex-col gap-0.5 opacity-80"
-                              aria-hidden
-                            >
-                              <span className="block h-0.5 w-2 rounded-full bg-white/90" />
-                              <span className="block h-0.5 w-2 rounded-full bg-white/90" />
-                              <span className="block h-0.5 w-2 rounded-full bg-white/90" />
-                            </span>
+                  {(() => {
+                    const lanes = packSpaBookingLanes(
+                      items.map((b) => ({
+                        id: b.id,
+                        startMs: new Date(b.startAt).getTime(),
+                        endMs: new Date(b.endAt).getTime(),
+                      })),
+                    );
+                    return items.map((b) => {
+                      const topMin = minutesFromDayStart(b.startAt, d);
+                      const endMin = minutesFromDayStart(b.endAt, d);
+                      const durationMin = Math.max(15, endMin - topMin);
+                      const top =
+                        (topMin - viewport.viewStartMin) * pxPerMin;
+                      const height = Math.max(22, durationMin * pxPerMin);
+                      const isDragging = drag?.booking.id === b.id;
+                      const showMulti = !filteredStaffId;
+                      const staff = board.staff.find(
+                        (s) => s.id === b.specialistId,
+                      );
+                      const color = showMulti
+                        ? staffColorClass(b.specialistId, board.staff)
+                        : 'bg-amber-500/85 border-amber-400/40';
+                      const editable = canEditBooking(b) && !!onBookingMove;
+                      const timeStart = minutesToTimeLabel(
+                        DAY_START_HOUR * 60 + topMin,
+                      );
+                      const timeEnd = minutesToTimeLabel(
+                        DAY_START_HOUR * 60 + endMin,
+                      );
+                      const lane = lanes.get(b.id) ?? {
+                        lane: 0,
+                        laneCount: 1,
+                      };
+                      const peerOverlap = (() => {
+                        if (b.busy) return 0;
+                        const peers = items
+                          .filter((o) => o.id !== b.id && !o.busy)
+                          .map((o) => ({
+                            id: o.id,
+                            label: o.clientName ?? 'Клиент',
+                            startMs: new Date(o.startAt).getTime(),
+                            endMs: new Date(o.endAt).getTime(),
+                          }));
+                        return checkSpaPlacement(
+                          new Date(b.startAt).getTime(),
+                          new Date(b.endAt).getTime(),
+                          peers,
+                          SPA_OVERLAP_ALLOW_MIN,
+                        ).maxOverlapMin;
+                      })();
+
+                      return (
+                        <div
+                          key={b.id}
+                          role="button"
+                          tabIndex={0}
+                          title={
+                            editable
+                              ? 'Удерживайте и перетащите на другой день или время'
+                              : undefined
+                          }
+                          className={`absolute z-10 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-sm touch-none ${color} ${
+                            editable
+                              ? 'cursor-grab active:cursor-grabbing'
+                              : 'cursor-pointer'
+                          } ${isDragging ? 'opacity-35' : ''} ${
+                            pointerStart?.booking.id === b.id
+                              ? 'scale-[1.02] shadow-md ring-2 ring-white/30'
+                              : ''
+                          }`}
+                          style={{
+                            top,
+                            height,
+                            left: `calc(${lane.lane} * (100% - 0.25rem) / ${lane.laneCount} + 0.125rem)`,
+                            width: `calc((100% - 0.25rem) / ${lane.laneCount} - 0.1rem)`,
+                          }}
+                          onPointerDown={(e) =>
+                            onBookingPointerDown(e, b, height, durationMin)
+                          }
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            if (!b.busy) onBookingDoubleClick?.(b);
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {!b.busy ? (
+                            <SpaBookingNoteHint
+                              clientNote={b.clientNote}
+                              visitNote={b.visitNote}
+                            />
                           ) : null}
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate font-semibold tabular-nums">
-                              {timeStart}
-                              {height >= 36 ? (
-                                <span className="font-normal text-white/80">
-                                  –{timeEnd}
-                                </span>
+                          <div className="flex items-start gap-1">
+                            {editable ? (
+                              <span
+                                className="mt-px flex shrink-0 flex-col gap-0.5 opacity-80"
+                                aria-hidden
+                              >
+                                <span className="block h-0.5 w-2 rounded-full bg-white/90" />
+                                <span className="block h-0.5 w-2 rounded-full bg-white/90" />
+                                <span className="block h-0.5 w-2 rounded-full bg-white/90" />
+                              </span>
+                            ) : null}
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate font-semibold tabular-nums">
+                                {timeStart}
+                                {height >= 36 ? (
+                                  <span className="font-normal text-white/80">
+                                    –{timeEnd}
+                                  </span>
+                                ) : null}
+                              </p>
+                              <p
+                                className={`truncate font-medium ${
+                                  b.clientNote || b.visitNote ? 'pr-4' : ''
+                                }`}
+                              >
+                                {clientLabel(b)}
+                              </p>
+                              {peerOverlap > 0 ? (
+                                <p className="truncate text-[9px] text-white/90">
+                                  ∩ {peerOverlap} мин
+                                </p>
                               ) : null}
-                            </p>
-                            <p
-                              className={`truncate font-medium ${
-                                b.clientNote || b.visitNote ? 'pr-3' : ''
-                              }`}
-                            >
-                              {clientLabel(b)}
-                            </p>
-                            {height >= 44 && showMulti && staff ? (
-                              <p className="truncate text-[9px] text-white/80">
-                                {staffShort(staff)}
-                              </p>
-                            ) : null}
-                            {height >= 44 &&
-                            !showMulti &&
-                            b.serviceName &&
-                            !b.busy ? (
-                              <p className="hidden truncate text-[9px] text-white/80 sm:block">
-                                {b.serviceName}
-                              </p>
-                            ) : null}
+                              {height >= 44 && showMulti && staff ? (
+                                <p className="truncate text-[9px] text-white/80">
+                                  {staffShort(staff)}
+                                </p>
+                              ) : null}
+                              {height >= 44 &&
+                              !showMulti &&
+                              b.serviceName &&
+                              !b.busy ? (
+                                <p className="hidden truncate text-[9px] text-white/80 sm:block">
+                                  {b.serviceName}
+                                </p>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    });
+                  })()}
                 </div>
               </div>
             );
@@ -1198,13 +1385,79 @@ export function SpaWeekBoard({
       {drag ? (
         <div
           className={`pointer-events-none fixed z-[80] -translate-x-1/2 -translate-y-[120%] rounded-full px-3 py-1.5 text-xs font-medium shadow-lg ring-1 ${
-            drag.valid
+            drag.validity === 'ok'
               ? 'bg-fitgo-500 text-white ring-fitgo-300/50'
-              : 'bg-rose-600 text-white ring-rose-300/40'
+              : drag.validity === 'overlap'
+                ? 'bg-amber-600 text-white ring-amber-300/50'
+                : 'bg-rose-600 text-white ring-rose-300/40'
           }`}
           style={{ left: drag.pointerX, top: drag.pointerY }}
         >
-          {drag.valid ? dragChipLabel : `${dragChipLabel} · занято`}
+          {drag.validity === 'ok'
+            ? dragChipLabel
+            : drag.validity === 'overlap'
+              ? `${dragChipLabel} · ∩ ${drag.overlapMin} мин`
+              : `${dragChipLabel} · занято`}
+        </div>
+      ) : null}
+
+      {overlapConfirm ? (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal
+          aria-labelledby="spa-week-overlap-confirm-title"
+        >
+          <div className="card max-w-sm space-y-3 p-4 shadow-xl">
+            <h3
+              id="spa-week-overlap-confirm-title"
+              className="text-sm font-semibold"
+            >
+              Наслоение записей
+            </h3>
+            <p className="text-sm text-slate-300">
+              Пересечение {overlapConfirm.overlapMin} мин
+              {overlapConfirm.peerLabel
+                ? ` с «${overlapConfirm.peerLabel}»`
+                : ''}
+              . Подтвердите, чтобы сохранить.
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary text-xs"
+                disabled={overlapConfirmBusy}
+                onClick={() => setOverlapConfirm(null)}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="btn-primary text-xs"
+                disabled={overlapConfirmBusy || !onBookingMove}
+                onClick={() => {
+                  if (!onBookingMove) return;
+                  const pending = overlapConfirm;
+                  setOverlapConfirmBusy(true);
+                  void (async () => {
+                    try {
+                      await onBookingMove({
+                        booking: pending.booking,
+                        specialistId: pending.specialistId,
+                        startAt: pending.startAt,
+                        overlapConfirmed: true,
+                      });
+                      setOverlapConfirm(null);
+                    } finally {
+                      setOverlapConfirmBusy(false);
+                    }
+                  })();
+                }}
+              >
+                Подтверждаю наслоение
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 
