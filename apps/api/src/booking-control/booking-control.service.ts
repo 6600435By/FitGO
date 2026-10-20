@@ -34,6 +34,7 @@ import {
   sessionApprovalLabelRu,
   sessionApprovalPhase,
   humanDocumentNumber,
+  isSpaAllSportsBioimpedance,
   membershipNameFromPaymentBasis,
   spaSettlementLabelRu,
   type BookingControlDetail,
@@ -78,6 +79,7 @@ import {
   normalizeLabel,
   paidSaleSettlementLabel,
   saleAmountMajor,
+  saleIsComplimentaryPartner,
   type SpaBookingMatchInput,
   type SpaOnexCandidate,
   type SpaSaleCandidate,
@@ -541,7 +543,11 @@ export class BookingControlService {
           arrivedCount: counts.arrivedCount,
           noShowCount: counts.noShowCount,
           payment:
-            b.partnerSource?.toUpperCase() === 'ALLSPORTS'
+            b.partnerSource?.toUpperCase() === 'ALLSPORTS' ||
+            isSpaAllSportsBioimpedance({
+              serviceExternalId: b.service.externalId,
+              title: b.service.name,
+            })
               ? 'PARTNER'
               : b.paymentType === 'QUOTA'
                 ? 'QUOTA'
@@ -3865,13 +3871,42 @@ export class BookingControlService {
       membershipNameFromPaymentBasis(input.paymentBasis) ||
       booking?.membershipServiceName?.trim() ||
       undefined;
+    const bioimpedance = isSpaAllSportsBioimpedance({
+      serviceExternalId: booking?.service?.externalId,
+      title: booking?.service?.name,
+    });
     const partner =
-      booking?.partnerSource?.toUpperCase() === 'ALLSPORTS';
+      booking?.partnerSource?.toUpperCase() === 'ALLSPORTS' || bioimpedance;
+    // Partner / AllSports биоимпеданс: сначала цепляем бесплатную продажу из 1С,
+    // иначе помечаем PARTNER (тариф из профиля), без «Нет документа в 1С».
+    if (partner && booking && !onex) {
+      const saleHit = await this.tryResolveSpaSale(booking, input.clubId);
+      if (saleHit) {
+        return {
+          ...saleHit,
+          payment: 'PARTNER',
+          payTag: 'SALE',
+        };
+      }
+      return {
+        settlement: {
+          status: 'PAID',
+          label: bioimpedance
+            ? 'AllSports · биоимпеданс'
+            : spaSettlementLabelRu('PAID'),
+          source: 'local',
+        },
+        payment: 'PARTNER',
+        payTag: 'SALE',
+      };
+    }
     if (partner) {
       return {
         settlement: {
           status: 'PAID',
-          label: spaSettlementLabelRu('PAID'),
+          label: bioimpedance
+            ? 'AllSports · биоимпеданс'
+            : spaSettlementLabelRu('PAID'),
           source: 'local',
         },
         payment: 'PARTNER',
@@ -4452,6 +4487,14 @@ export class BookingControlService {
 
     if (result.kind === 'auto') {
       const sale = result.sale;
+      const complimentary = saleIsComplimentaryPartner(sale);
+      const partnerPay =
+        complimentary ||
+        isSpaAllSportsBioimpedance({
+          serviceExternalId:
+            sale.productExternalId ?? booking.service?.externalId,
+          title: sale.productName ?? booking.service?.name,
+        });
       if (booking.linkedSaleExternalId !== sale.externalId) {
         await this.prisma.spaBooking
           .update({
@@ -4459,6 +4502,7 @@ export class BookingControlService {
             data: {
               linkedSaleExternalId: sale.externalId,
               oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+              ...(partnerPay ? { partnerSource: 'ALLSPORTS' } : {}),
               paymentStatus:
                 result.paymentStatus === 'PAID'
                   ? ServicePaymentStatus.PAID
@@ -4482,7 +4526,7 @@ export class BookingControlService {
             amountMinor,
             editableInApp: false,
           },
-          payment: 'PAID',
+          payment: partnerPay ? 'PARTNER' : 'PAID',
           payTag: 'SALE',
           linkedSaleExternalId: sale.externalId,
         };

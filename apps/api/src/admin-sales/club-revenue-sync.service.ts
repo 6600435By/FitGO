@@ -4,6 +4,7 @@ import {
   FitgoAnalyticsHttpProvider,
   type FitgoAnalyticsSalesItem,
 } from '@fitgo/1c-adapter';
+import { isSpaAllSportsBioimpedance } from '@fitgo/shared-types';
 import {
   moscowDayKey,
   moscowParts,
@@ -25,6 +26,29 @@ import {
 } from './sales-sync-window';
 
 const RESOURCE_KEY = 'club_revenue';
+
+/** Free AllSports биоимпеданс from scope=sales (cash scope has no 0 BYN lines). */
+function isFreeAllSportsBioimpedanceSale(
+  item: FitgoAnalyticsSalesItem,
+): boolean {
+  if (
+    !isSpaAllSportsBioimpedance({
+      serviceExternalId: item.productExternalId,
+      title: item.productName,
+    })
+  ) {
+    return false;
+  }
+  const money =
+    Math.abs(Number(item.saleAmount) || 0) +
+    Math.abs(Number(item.paidAmount) || 0) +
+    Math.abs(Number(item.amount) || 0) +
+    Math.abs(Number(item.cash) || 0) +
+    Math.abs(Number(item.card) || 0) +
+    Math.abs(Number(item.cashless) || 0) +
+    Math.abs(Number(item.personalAccount) || 0);
+  return money < 0.01;
+}
 
 export type RevenueRangeOptions = {
   skipChangeLog?: boolean;
@@ -299,12 +323,29 @@ export class ClubRevenueSyncService {
             ...sales.filter(
               (i) =>
                 i.operationType === 'unpaid' ||
+                isFreeAllSportsBioimpedanceSale(i) ||
                 (!i.paidAt &&
                   !(Number(i.paidAmount) > 0) &&
                   (Number(i.saleAmount) > 0 || Number(i.amount) > 0)),
             ),
           );
         }
+      } else {
+        // Debt snapshot covered unpaid; still need free partner sales from /sales.
+        for (let i = 0; i < days.length; i++) {
+          const day = days[i]!;
+          if (i > 0 && delay > 0) await sleep(delay);
+          const sales = await fetchSalesOnce(provider, { from: day, to: day });
+          items.push(...sales.filter(isFreeAllSportsBioimpedanceSale));
+        }
+      }
+    } else {
+      // Cash-only backfill: still pull free AllSports биоимпеданс for SPA link/payroll.
+      for (let i = 0; i < days.length; i++) {
+        const day = days[i]!;
+        if (i > 0 && delay > 0) await sleep(delay);
+        const sales = await fetchSalesOnce(provider, { from: day, to: day });
+        items.push(...sales.filter(isFreeAllSportsBioimpedanceSale));
       }
     }
 
@@ -783,8 +824,22 @@ function mapItem(item: FitgoAnalyticsSalesItem) {
     saleAmount = 0;
   }
 
+  const freeBioimpedance =
+    saleAmount < 0.01 &&
+    paidAmount < 0.01 &&
+    cash < 0.01 &&
+    card < 0.01 &&
+    cashless < 0.01 &&
+    personalAccount < 0.01 &&
+    isSpaAllSportsBioimpedance({
+      serviceExternalId: item.productExternalId,
+      title: item.productName,
+    });
+
   const countsTowardIncome =
-    operationType === 'personal_credit' || operationType === 'personal_burn'
+    operationType === 'personal_credit' ||
+    operationType === 'personal_burn' ||
+    freeBioimpedance
       ? false
       : (item.countsTowardIncome ??
         (operationType === 'payment' ||
@@ -793,16 +848,21 @@ function mapItem(item: FitgoAnalyticsSalesItem) {
   const countsTowardMotivation =
     operationType === 'personal_credit' || operationType === 'personal_burn'
       ? false
-      : (item.countsTowardMotivation ??
-        (operationType === 'payment' || operationType === 'personal_deposit'));
+      : freeBioimpedance
+        ? true
+        : (item.countsTowardMotivation ??
+          (operationType === 'payment' || operationType === 'personal_deposit'));
 
+  const rawPayMethod = item.paymentMethod?.trim() || '';
   const paymentMethod =
     operationType === 'personal_credit' ||
     operationType === 'personal_burn' ||
     personalAccount !== 0
       ? inferPaymentMethod(cash, card, cashless, Math.abs(personalAccount))
-      : item.paymentMethod?.trim() ||
-        inferPaymentMethod(cash, card, cashless, personalAccount);
+      : rawPayMethod === 'complimentary'
+        ? 'unknown'
+        : rawPayMethod ||
+          inferPaymentMethod(cash, card, cashless, personalAccount);
 
   const productName =
     operationType === 'personal_burn'

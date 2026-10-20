@@ -324,6 +324,18 @@ export class ClubRevenueService {
           paidAt: { gte: from, lte: to },
           paidAmount: { gt: 0 },
         },
+        // Free AllSports биоимпеданс (0 BYN) — show in «Продажи», not in revenue.
+        {
+          operationType: 'sale',
+          occurredAt: { gte: from, lte: to },
+          saleAmount: { lte: 0.009 },
+          paidAmount: { lte: 0.009 },
+          OR: [
+            { productName: { contains: 'биоимпеданс', mode: 'insensitive' } },
+            { productName: { contains: 'bioimped', mode: 'insensitive' } },
+            { countsTowardMotivation: true },
+          ],
+        },
       ],
     };
 
@@ -1001,6 +1013,14 @@ export class ClubRevenueService {
     if (row.operationType === 'refund') {
       if (row.cash > 0) baseLabel = 'Возврат (наличные)';
       else if (row.card > 0) baseLabel = 'Возврат (карта)';
+    }
+    if (
+      row.operationType === 'sale' &&
+      !(row.saleAmount > 0.009) &&
+      !(row.paidAmount > 0.009) &&
+      /биоимпеданс|bio.?imped/i.test(row.productName ?? '')
+    ) {
+      baseLabel = 'Бесплатная · AllSports';
     }
     return {
       id: row.id,

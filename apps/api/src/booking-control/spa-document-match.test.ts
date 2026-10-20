@@ -184,6 +184,40 @@ function sale(
   if (r.kind === 'hint') assert.equal(r.hint.kind, 'VISIT_MULTIPLE');
 }
 
+// Free AllSports биоимпеданс (0 BYN) auto-links and counts as PAID
+{
+  const visit = new Date('2026-10-16T06:30:00.000Z');
+  const b = booking({
+    id: 'b-bio',
+    startAt: visit,
+    serviceName: 'Allsports БИОИМПЕДАНС',
+    serviceExternalId: '8de2a45d-36c3-2cf1-11f1-318f3dd9913b',
+    clientExternalId: 'cli-patulo',
+    clientName: 'Патуло Дарья',
+    specialistName: 'Бирюкова Екатерина',
+    specialistExternalId: 'bio-perf',
+  });
+  const s = sale({
+    externalId: 'sale-bio-free',
+    occurredAt: visit,
+    saleAmount: 0,
+    paidAmount: 0,
+    operationType: 'sale',
+    productName: 'Allsports БИОИМПЕДАНС',
+    productExternalId: '8de2a45d-36c3-2cf1-11f1-318f3dd9913b',
+    clientExternalId: 'cli-patulo',
+    clientName: 'Патуло Дарья',
+    performerExternalId: 'bio-perf',
+    performerName: 'Бирюкова Екатерина',
+  });
+  const r = matchSpaSale({ booking: b, sales: [s] });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.paymentStatus, 'PAID');
+    assert.equal(paidSaleSettlementLabel(r.sale), 'AllSports · бесплатно');
+  }
+}
+
 assert.equal(namesMatch('Бирюкова Екатерина', 'Бирюкова Е.'), true);
 
 // Paid cash sale must not leak the revenue key into the admin card.

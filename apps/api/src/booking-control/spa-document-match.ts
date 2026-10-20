@@ -65,6 +65,9 @@ export function paidSaleSettlementLabel(sale: SpaSaleCandidate): string {
   if (bits.length) return `Оплачено · ${bits.join(' · ')}`;
   const amt = saleAmountMajor(sale);
   if (amt > 0) return `Оплачено · ${formatMajor(amt)}`;
+  if (saleIsComplimentaryPartner(sale)) {
+    return 'AllSports · бесплатно';
+  }
   return 'Оплачено';
 }
 
@@ -183,8 +186,24 @@ export function idsMatch(
   return Boolean(sx && sy && sx === sy);
 }
 
+/** Free AllSports биоимпеданс (0 BYN) — still a completed sale for settlement/payroll. */
+export function saleIsComplimentaryPartner(sale: SpaSaleCandidate): boolean {
+  if (sale.operationType === 'unpaid') return false;
+  const money =
+    (Number(sale.saleAmount) || 0) +
+    (Number(sale.paidAmount) || 0) +
+    (Number(sale.cash) || 0) +
+    (Number(sale.card) || 0) +
+    (Number(sale.cashless) || 0) +
+    (Number(sale.personalAccount) || 0);
+  if (money > 0.009) return false;
+  const title = `${sale.productName ?? ''}`.toLowerCase();
+  return /биоимпеданс|bio.?imped/i.test(title);
+}
+
 export function saleIsPaid(sale: SpaSaleCandidate): boolean {
   if (sale.operationType === 'unpaid') return false;
+  if (saleIsComplimentaryPartner(sale)) return true;
   if (sale.paidAmount > 0.009) return true;
   if (sale.operationType === 'payment' && sale.saleAmount > 0) return true;
   return false;

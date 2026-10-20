@@ -355,7 +355,6 @@ export class PayrollService {
       const key = onexSessionKey(o.externalId);
       remarkKeys.push(key);
       const primary = o.members.find((m) => !m.cancelled) ?? o.members[0];
-      const payment = inferPaymentFromBasis(primary?.paymentBasis);
       const matched = await this.prisma.spaBooking.findFirst({
         where: {
           clubId,
@@ -370,6 +369,15 @@ export class PayrollService {
         },
         include: { service: true, client: true },
       });
+      const serviceExternalId =
+        o.serviceExternalId ?? matched?.service.externalId ?? undefined;
+      const bioimpedance = isSpaAllSportsBioimpedance({
+        serviceExternalId,
+        title: o.title,
+      });
+      const payment = bioimpedance
+        ? 'PARTNER'
+        : inferPaymentFromBasis(primary?.paymentBasis);
       const unitFromPackage = resolvePackageUnitPriceMinor({
         unitPriceMinor: primary?.unitPriceMinor,
         packageAmountMinor: primary?.packageAmountMinor,
@@ -383,14 +391,9 @@ export class PayrollService {
         matched?.service.priceMinor ??
         undefined;
       const partner =
-        payment === 'PARTNER'
+        payment === 'PARTNER' || bioimpedance
           ? 'ALLSPORTS'
           : matched?.partnerSource ?? undefined;
-      const serviceExternalId = o.serviceExternalId ?? undefined;
-      const bioimpedance = isSpaAllSportsBioimpedance({
-        serviceExternalId,
-        title: o.title,
-      });
       units.push({
         id: matched?.id ?? `onex:${o.id}`,
         kind: 'SPA',
@@ -401,7 +404,7 @@ export class PayrollService {
         priceMinor,
         trustBand: 'GREEN',
         trustResolution: 'NONE',
-        payrollTrusted: paymentCountsForMoney(payment),
+        payrollTrusted: paymentCountsForMoney(payment) || bioimpedance,
         clientName: primary?.clientName,
         serviceId: matched?.serviceId,
         serviceExternalId,
@@ -456,8 +459,13 @@ export class PayrollService {
       if (sale.operationType === 'unpaid' && (sale.paidAmount ?? 0) < 0.01) {
         continue;
       }
+      const bioimpedance = isSpaAllSportsBioimpedance({
+        serviceExternalId: b.service.externalId,
+        title: b.service.name,
+      });
       const amountMajor = Math.max(sale.paidAmount || 0, sale.saleAmount || 0);
-      if (amountMajor < 0.01) continue;
+      // Free AllSports биоимпеданс: 0 BYN in 1C, pay spaPartnerRateMinor from profile.
+      if (amountMajor < 0.01 && !bioimpedance) continue;
       const priceMinor = Math.round(amountMajor * 100);
       const clientName = b.client
         ? `${b.client.lastName} ${b.client.firstName}`.trim()
@@ -476,7 +484,51 @@ export class PayrollService {
         clientName,
         serviceId: b.serviceId,
         serviceExternalId: b.service.externalId ?? undefined,
-        partnerSource: b.partnerSource ?? undefined,
+        partnerSource:
+          bioimpedance || b.partnerSource?.toUpperCase() === 'ALLSPORTS'
+            ? 'ALLSPORTS'
+            : b.partnerSource ?? undefined,
+        isSpaAllSportsBioimpedance: bioimpedance,
+      });
+      spaPaidViaOnex.add(b.id);
+    }
+
+    // FitGO SPA AllSports биоимпеданс без onex / без денежной продажи в 1С.
+    const partnerSpaBookings = await this.prisma.spaBooking.findMany({
+      where: {
+        clubId,
+        specialistId: performerId,
+        startAt: { gte: fromD, lte: toD },
+        status: { not: 'CANCELLED' },
+      },
+      include: { service: true, client: true },
+    });
+    for (const b of partnerSpaBookings) {
+      if (spaPaidViaOnex.has(b.id)) continue;
+      const bioimpedance = isSpaAllSportsBioimpedance({
+        serviceExternalId: b.service.externalId,
+        title: b.service.name,
+      });
+      if (!bioimpedance) continue;
+      const clientName = b.client
+        ? `${b.client.lastName} ${b.client.firstName}`.trim()
+        : b.guestName ?? undefined;
+      units.push({
+        id: b.id,
+        kind: 'SPA',
+        performerId,
+        title: b.service.name,
+        occurredAt: b.startAt.toISOString(),
+        quantity: 1,
+        priceMinor: 0,
+        trustBand: 'GREEN',
+        trustResolution: 'NONE',
+        payrollTrusted: true,
+        clientName,
+        serviceId: b.serviceId,
+        serviceExternalId: b.service.externalId ?? undefined,
+        partnerSource: 'ALLSPORTS',
+        isSpaAllSportsBioimpedance: true,
       });
       spaPaidViaOnex.add(b.id);
     }
