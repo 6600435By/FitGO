@@ -2087,16 +2087,19 @@ export function BookingControlPanel({
                               />
                             </label>
                           ) : (
-                            <span className="w-14 shrink-0 text-[11px] text-slate-500">
-                              {m.attendance === 'ATTENDED'
-                                ? 'Прибыл'
-                                : m.attendance === 'NO_SHOW'
-                                  ? 'не пришёл'
-                                  : m.attendance === 'CANCELLED'
-                                    ? 'отмена'
-                                    : localSeen.has(m.externalId) || m.trainerSeen
-                                      ? 'отмечен'
+                            <span className="flex w-[4.5rem] shrink-0 flex-col gap-0.5 text-[11px] leading-tight text-slate-500">
+                              <span>
+                                {m.attendance === 'ATTENDED'
+                                  ? 'Прибыл'
+                                  : m.attendance === 'NO_SHOW'
+                                    ? 'не пришёл'
+                                    : m.attendance === 'CANCELLED'
+                                      ? 'отмена'
                                       : 'ожид.'}
+                              </span>
+                              {localSeen.has(m.externalId) || m.trainerSeen ? (
+                                <span className="text-amber-300/90">тренер</span>
+                              ) : null}
                             </span>
                           )}
                           <span className="min-w-0 flex-1 truncate">
@@ -2212,7 +2215,7 @@ export function BookingControlPanel({
                           const older = notes.length - 1;
                           return (
                             <>
-                              <p className="truncate text-slate-300">
+                              <p className="break-words text-slate-300">
                                 <span className="text-slate-400">
                                   {last.authorName} ·{' '}
                                   {approvalNoteActionRu(last.action)}:{' '}
