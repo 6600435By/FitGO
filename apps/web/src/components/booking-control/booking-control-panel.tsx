@@ -367,6 +367,7 @@ export function BookingControlPanel({
   >([]);
   const [serviceBusy, setServiceBusy] = useState(false);
   const [linkDocBusy, setLinkDocBusy] = useState(false);
+  const [refreshBusy, setRefreshBusy] = useState(false);
 
   const showSpaLinkHints =
     approvalActor === 'admin' || approvalActor === 'override';
@@ -374,11 +375,11 @@ export function BookingControlPanel({
   const load = useCallback(() => {
     if (detailOnly) {
       setLoading(false);
-      return;
+      return Promise.resolve();
     }
     setLoading(true);
     setMessage('');
-    api
+    return api
       .list({
         from,
         to,
@@ -979,6 +980,21 @@ export function BookingControlPanel({
     setTo(todayIso());
   };
 
+  const refreshPeriodFrom1c = async () => {
+    if (!api.refreshFrom1c || refreshBusy) return;
+    setRefreshBusy(true);
+    setMessage('');
+    try {
+      const res = await api.refreshFrom1c(from, to);
+      await load();
+      setMessage(res.message || 'Период обновлён из 1С');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось обновить из 1С');
+    } finally {
+      setRefreshBusy(false);
+    }
+  };
+
   const toggleBulk = (sessionKey: string) => {
     setBulkSelected((prev) => {
       const next = new Set(prev);
@@ -1212,7 +1228,7 @@ export function BookingControlPanel({
               </button>
             </div>
           ) : null}
-          <div className="col-span-2 flex flex-wrap gap-2 md:col-span-4">
+          <div className="col-span-2 flex flex-wrap items-center gap-2 md:col-span-4">
             <button
               type="button"
               className="btn-primary px-3 py-2 text-sm"
@@ -1234,6 +1250,17 @@ export function BookingControlPanel({
             >
               Месяц
             </button>
+            {api.refreshFrom1c ? (
+              <button
+                type="button"
+                className="btn-secondary ml-auto px-3 py-2 text-sm"
+                disabled={refreshBusy || !from || !to || from > to}
+                title={`Перечитать занятия 1С и разовые ПТ за ${from} – ${to}`}
+                onClick={() => void refreshPeriodFrom1c()}
+              >
+                {refreshBusy ? 'Обновляем…' : 'Обновить период из 1С'}
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -1359,8 +1386,8 @@ export function BookingControlPanel({
       saleCount === 0 &&
       (kind === 'ALL' || kind === 'PT') ? (
         <p className="text-xs text-slate-500">
-          Разовых ПТ из продаж за период нет. Обновите данные кнопкой «Обновить
-          из 1С» сверху у статуса данных, расширьте период (Неделя / Месяц) или
+          Разовых ПТ из продаж за период нет. Нажмите «Обновить период из 1С»
+          выше (по выбранным датам), расширьте период (Неделя / Месяц) или
           проверьте FITNESS_PROVIDER=forma и FORMA_FITGO_URL.
         </p>
       ) : null}

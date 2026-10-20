@@ -97,8 +97,12 @@ export class FitgoHttpProvider {
   constructor(private readonly config: FitgoHttpConfig) {}
 
   private headers(): Record<string, string> {
+    // FitGOIntegration publication (Apache/1C Basic) often drops custom
+    // `apikey` and `Authorization` before the HTTP handler. `X-Api-Key`
+    // reaches ПроверитьАвторизациюFitGO; keep `apikey` for older publishes.
     return {
       apikey: this.config.apiKey,
+      'X-Api-Key': this.config.apiKey,
       Authorization: `Basic ${this.config.basicAuth}`,
     };
   }
