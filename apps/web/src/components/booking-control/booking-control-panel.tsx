@@ -1923,6 +1923,9 @@ export function BookingControlPanel({
                           className="flex flex-wrap items-center gap-2 text-xs text-slate-400"
                         >
                           <span className="min-w-0 flex-1 truncate">
+                            {c.kind === 'sale' && c.occurredAt
+                              ? `${formatDateTime(c.occurredAt)} · `
+                              : ''}
                             {c.label}
                             {c.performerName
                               ? ` · ${c.performerName}`
