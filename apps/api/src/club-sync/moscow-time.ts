@@ -79,6 +79,17 @@ export function isMoscowNightWindow(now = new Date()): boolean {
   return hour >= 3 && hour < 4;
 }
 
+/**
+ * Daytime auto LIGHT: starts allowed 08:00–23:00 Moscow inclusive
+ * (through the 23:00 minute; 23:01+ is outside so a 22:40 manual → 23:40 is skipped).
+ */
+export function isMoscowDaytimeAutoSyncWindow(now = new Date()): boolean {
+  const { hour, minute } = moscowParts(now);
+  if (hour >= 8 && hour < 23) return true;
+  if (hour === 23) return minute === 0;
+  return false;
+}
+
 export function formatMoscowDataAsOf(d: Date | null | undefined): string | null {
   if (!d) return null;
   const fmt = new Intl.DateTimeFormat('ru-RU', {

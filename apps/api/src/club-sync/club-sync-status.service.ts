@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { ClubSyncRunStatus, ClubSyncTrigger } from '@prisma/client';
+import {
+  ClubSyncProfile,
+  ClubSyncRunStatus,
+  ClubSyncTrigger,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   formatMoscowDataAsOf,
@@ -156,6 +160,14 @@ export class ClubSyncStatusService {
         lastRun.status === ClubSyncRunStatus.PARTIAL)
     ) {
       sourceLabel = 'ночная выгрузка';
+    } else if (
+      lastRun?.trigger === ClubSyncTrigger.AUTO &&
+      lastRun.profile === ClubSyncProfile.LIGHT &&
+      lastRun.finishedAt &&
+      (lastRun.status === ClubSyncRunStatus.SUCCESS ||
+        lastRun.status === ClubSyncRunStatus.PARTIAL)
+    ) {
+      sourceLabel = 'автообновление';
     } else if (lastManualOk?.triggeredByUserId) {
       const u = await this.prisma.user.findUnique({
         where: { id: lastManualOk.triggeredByUserId },
