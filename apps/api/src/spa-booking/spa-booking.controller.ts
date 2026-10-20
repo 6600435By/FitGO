@@ -37,6 +37,10 @@ import {
   CreateSpaWaitlistDto,
 } from './dto/spa-waitlist.dto';
 import { UpdateSpaBookingDto } from './dto/update-spa-booking.dto';
+import {
+  GetSpaClientNoteQueryDto,
+  UpsertSpaClientNoteDto,
+} from './dto/spa-client-note.dto';
 import { FloorStaffHomeService } from '../floor-home/floor-staff-home.service';
 import { SpaBookingService } from './spa-booking.service';
 
@@ -273,6 +277,34 @@ export class SpaBookingController {
     return this.spa.lookupClientByPhone(user, phone ?? '');
   }
 
+  @Get('specialist/spa/client-note')
+  @Roles(
+    UserRole.SPECIALIST,
+    UserRole.ADMIN,
+    UserRole.MANAGER,
+    UserRole.SUPER_ADMIN,
+  )
+  specialistGetClientNote(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: GetSpaClientNoteQueryDto,
+  ) {
+    return this.spa.getSpaClientNote(user, query);
+  }
+
+  @Put('specialist/spa/client-note')
+  @Roles(
+    UserRole.SPECIALIST,
+    UserRole.ADMIN,
+    UserRole.MANAGER,
+    UserRole.SUPER_ADMIN,
+  )
+  specialistPutClientNote(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpsertSpaClientNoteDto,
+  ) {
+    return this.spa.putSpaClientNote(user, dto);
+  }
+
   @Post('specialist/spa-bookings')
   @Roles(UserRole.SPECIALIST)
   specialistAssign(
@@ -287,6 +319,7 @@ export class SpaBookingController {
       startAt: dto.startAt,
       paymentType: dto.paymentType,
       membershipServiceName: dto.membershipServiceName,
+      visitNote: dto.visitNote,
     });
   }
 
@@ -305,6 +338,7 @@ export class SpaBookingController {
       startAt: dto.startAt,
       paymentType: dto.paymentType,
       membershipServiceName: dto.membershipServiceName,
+      visitNote: dto.visitNote,
       dates: dto.dates,
     });
   }
@@ -492,6 +526,24 @@ export class SpaBookingController {
     return this.spa.adminListClients(user);
   }
 
+  @Get('admin/spa/client-note')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminGetClientNote(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: GetSpaClientNoteQueryDto,
+  ) {
+    return this.spa.getSpaClientNote(user, query);
+  }
+
+  @Put('admin/spa/client-note')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminPutClientNote(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpsertSpaClientNoteDto,
+  ) {
+    return this.spa.putSpaClientNote(user, dto);
+  }
+
   @Post('admin/spa-bookings')
   @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adminAssign(
@@ -510,6 +562,7 @@ export class SpaBookingController {
       startAt: dto.startAt,
       paymentType: dto.paymentType,
       membershipServiceName: dto.membershipServiceName,
+      visitNote: dto.visitNote,
     });
   }
 
@@ -531,6 +584,7 @@ export class SpaBookingController {
       startAt: dto.startAt,
       paymentType: dto.paymentType,
       membershipServiceName: dto.membershipServiceName,
+      visitNote: dto.visitNote,
       dates: dto.dates,
     });
   }

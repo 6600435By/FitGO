@@ -43,6 +43,11 @@ import { AdminTasksSchedulerService, MAX_NO_ANSWER, NO_ANSWER_RETRY_DAYS } from 
 import { ackDiscrepancyFromTask } from '../discrepancies/discrepancy-task-ack';
 import { localDayKey } from '../club-schedule/trainer-schedule.helpers';
 import { CreateDailyReportDto } from './dto/create-daily-report.dto';
+import {
+  findSpaClientNotesByIdentities,
+  resolveNoteFromMap,
+  type SpaNoteIdentity,
+} from '../spa-booking/spa-client-note.util';
 
 @Injectable()
 export class AdminService {
@@ -862,7 +867,7 @@ export class AdminService {
       }
     }
 
-    return tasks.map((task) => {
+    const mapped = tasks.map((task) => {
       const item = this.mapTaskItem(
         task,
         clientBySale.get(task.relatedSaleId ?? '') ?? null,
@@ -884,6 +889,83 @@ export class AdminService {
         }
       }
       return item;
+    });
+
+    return this.enrichConfirmTasksWithSpaNotes(clubId, mapped);
+  }
+
+  /** Attach live SPA client/visit notes to BOOKING_CONFIRM rows. */
+  private async enrichConfirmTasksWithSpaNotes<
+    T extends {
+      source?: string;
+      kind?: string;
+      confirmClients?: Array<{
+        externalId: string;
+        phone?: string;
+        clientNote?: string;
+        visitNote?: string;
+      }>;
+      sessionKey?: string;
+    },
+  >(clubId: string, tasks: T[]): Promise<T[]> {
+    const confirmTasks = tasks.filter((t) => t.source === 'BOOKING_CONFIRM');
+    if (!confirmTasks.length) return tasks;
+
+    const identities: SpaNoteIdentity[] = [];
+    const spaBookingIds: string[] = [];
+    for (const task of confirmTasks) {
+      for (const c of task.confirmClients ?? []) {
+        identities.push({
+          clientExternalId: c.externalId.startsWith('guest:')
+            ? null
+            : c.externalId,
+          phone: c.phone,
+        });
+      }
+      if (task.kind === 'SPA' && task.sessionKey) {
+        const m = /^fitgo:SPA:(.+)$/.exec(task.sessionKey);
+        if (m?.[1]) spaBookingIds.push(m[1]);
+      }
+    }
+
+    const [noteMap, spaBookings] = await Promise.all([
+      findSpaClientNotesByIdentities(this.prisma, clubId, identities),
+      spaBookingIds.length
+        ? this.prisma.spaBooking.findMany({
+            where: { clubId, id: { in: spaBookingIds } },
+            select: { id: true, visitNote: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const visitByBooking = new Map(
+      spaBookings.map((b) => [b.id, b.visitNote?.trim() || undefined]),
+    );
+
+    return tasks.map((task) => {
+      if (task.source !== 'BOOKING_CONFIRM' || !task.confirmClients?.length) {
+        return task;
+      }
+      let visitNote: string | undefined;
+      if (task.kind === 'SPA' && task.sessionKey) {
+        const m = /^fitgo:SPA:(.+)$/.exec(task.sessionKey);
+        if (m?.[1]) visitNote = visitByBooking.get(m[1]);
+      }
+      return {
+        ...task,
+        confirmClients: task.confirmClients.map((c) => {
+          const clientNote = resolveNoteFromMap(noteMap, {
+            clientExternalId: c.externalId.startsWith('guest:')
+              ? null
+              : c.externalId,
+            phone: c.phone,
+          });
+          return {
+            ...c,
+            ...(clientNote ? { clientNote } : {}),
+            ...(visitNote ? { visitNote } : {}),
+          };
+        }),
+      };
     });
   }
 

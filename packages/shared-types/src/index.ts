@@ -1162,6 +1162,10 @@ export interface AdminConfirmClient {
   phone?: string;
   confirmed: boolean;
   confirmedAt?: string;
+  /** Persistent SPA/client note (do-not-call, …). */
+  clientNote?: string;
+  /** Visit note — SPA confirmation only. */
+  visitNote?: string;
 }
 
 export interface AdminDebtLine {
@@ -1429,6 +1433,16 @@ export interface SpaBoardBooking {
   crmLocked?: boolean;
   /** Had a CRM write-off / sale link at some point (may be unlocked after 1C delete). */
   consumedInCrm?: boolean;
+  /** Persistent note for this client (all their SPA bookings). */
+  clientNote?: string;
+  /** Note for this visit only. */
+  visitNote?: string;
+}
+
+/** Persistent SPA client note (club-scoped). */
+export interface SpaClientNotePayload {
+  text: string;
+  identityKey?: string;
 }
 
 export interface SpaBoardResponse {

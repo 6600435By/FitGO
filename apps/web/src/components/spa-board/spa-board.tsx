@@ -1,5 +1,6 @@
 'use client';
 
+import { SpaBookingNoteHint } from '@/components/spa-board/spa-booking-note-hint';
 import type {
   SpaBoardBooking,
   SpaBoardHourBlock,
@@ -752,7 +753,15 @@ export function SpaBoard({
                 <span>Занято</span>
               ) : (
                 <>
-                  <p className="truncate font-medium">
+                  <SpaBookingNoteHint
+                    clientNote={b.clientNote}
+                    visitNote={b.visitNote}
+                  />
+                  <p
+                    className={`truncate font-medium ${
+                      b.clientNote || b.visitNote ? 'pr-4' : ''
+                    }`}
+                  >
                     {b.clientName ?? 'Клиент'}
                   </p>
                   <p className="truncate text-amber-200/80">{b.serviceName}</p>

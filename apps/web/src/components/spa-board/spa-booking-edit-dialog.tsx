@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { toDatetimeLocalValue } from '@/components/spa-board/spa-booking-dialog';
+import { SpaBookingNotesFields } from '@/components/spa-board/spa-booking-notes-fields';
 import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -77,6 +78,7 @@ export function SpaBookingEditDialog({
     guestName?: string;
     guestPhone?: string;
     paymentType: 'QUOTA' | 'PAID';
+    visitNote?: string;
   }) => Promise<void>;
   onCancel: () => Promise<void>;
   onConfirmManualPayment?: () => Promise<void>;
@@ -94,6 +96,10 @@ export function SpaBookingEditDialog({
     startAt: '',
     paymentType: 'PAID' as 'QUOTA' | 'PAID',
   });
+  const [clientNote, setClientNote] = useState('');
+  const [clientNoteSaved, setClientNoteSaved] = useState('');
+  const [visitNote, setVisitNote] = useState('');
+  const [clientNoteBusy, setClientNoteBusy] = useState(false);
 
   useEffect(() => {
     if (!open || !booking) return;
@@ -107,8 +113,46 @@ export function SpaBookingEditDialog({
       startAt: toDatetimeLocalValue(booking.startAt),
       paymentType: booking.paymentType === 'QUOTA' ? 'QUOTA' : 'PAID',
     });
+    setVisitNote(booking.visitNote ?? '');
+    setClientNote(booking.clientNote ?? '');
+    setClientNoteSaved(booking.clientNote ?? '');
+    const token = getToken();
+    if (token && (booking.clientId || booking.guestPhone)) {
+      void api
+        .getSpaClientNote(token, {
+          clientId: booking.clientId,
+          phone: booking.guestPhone,
+        })
+        .then((res) => {
+          setClientNote(res.text);
+          setClientNoteSaved(res.text);
+        })
+        .catch(() => undefined);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when dialog opens
   }, [open, booking?.id]);
+
+  const clientNoteEnabled = Boolean(
+    booking?.clientId ||
+      form.guestPhone.replace(/\D/g, '').length >= 9,
+  );
+
+  const saveClientNoteNow = async () => {
+    const token = getToken();
+    if (!token || !clientNoteEnabled) return;
+    setClientNoteBusy(true);
+    try {
+      const res = await api.putSpaClientNote(token, {
+        clientId: booking?.clientId,
+        phone: form.guestPhone.trim() || undefined,
+        text: clientNote,
+      });
+      setClientNote(res.text);
+      setClientNoteSaved(res.text);
+    } finally {
+      setClientNoteBusy(false);
+    }
+  };
 
   const clientLink = useMemo(() => {
     if (!booking) return null;
@@ -215,11 +259,18 @@ export function SpaBookingEditDialog({
       return;
     }
     try {
+      if (
+        clientNoteEnabled &&
+        clientNote.trim() !== clientNoteSaved.trim()
+      ) {
+        await saveClientNoteNow();
+      }
       if (crmLocked) {
         await onSave({
           serviceId: booking.serviceId ?? form.serviceId,
           startAt: startIso,
           paymentType: booking.paymentType === 'QUOTA' ? 'QUOTA' : 'PAID',
+          visitNote: visitNote.trim(),
         });
       } else {
         await onSave({
@@ -230,6 +281,7 @@ export function SpaBookingEditDialog({
           guestName: form.guestName.trim() || undefined,
           guestPhone: form.guestPhone.trim() || undefined,
           paymentType: form.paymentType,
+          visitNote: visitNote.trim(),
         });
       }
     } catch (err) {
@@ -329,111 +381,135 @@ export function SpaBookingEditDialog({
           </label>
         ) : null}
 
-        <label className="block space-y-1 text-sm">
-          <span className="text-slate-400">Клиент</span>
-          <input
-            className="input"
-            value={form.guestName}
-            disabled={crmLocked}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, guestName: e.target.value }))
-            }
-          />
-        </label>
-        {clientLink ? (
-          <p className="text-sm">
-            <Link
-              href={clientLink}
-              className="text-fitgo-400 underline-offset-2 hover:underline"
-              onClick={onClose}
-            >
-              Записи клиента
-            </Link>
-          </p>
-        ) : null}
-
-        <label className="block space-y-1 text-sm">
-          <span className="text-slate-400">Телефон (необязательно)</span>
-          <input
-            className="input"
-            value={form.guestPhone}
-            disabled={crmLocked}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, guestPhone: e.target.value }))
-            }
-            onBlur={(e) => {
-              if (!crmLocked) void lookupPhone(e.target.value);
-            }}
-            placeholder="+375…"
-          />
-          {phoneLookup ? (
-            <p className="text-xs text-slate-400">{phoneLookup}</p>
-          ) : null}
-        </label>
-
-        <label className="block space-y-1 text-sm">
-          <span className="text-slate-400">Услуга</span>
-          <select
-            className="input"
-            value={form.serviceId}
-            disabled={crmLocked}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, serviceId: e.target.value }))
-            }
-          >
-            {bookable.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} · {s.durationMin} мин ·{' '}
-                {formatPrice(s.priceMinor, s.currency)}
-              </option>
-            ))}
-          </select>
-          {selected ? (
-            <p className="text-xs text-slate-500">
-              {selected.durationMin} мин
-              {selected.bufferMin ? ` + перерыв ${selected.bufferMin}` : ''}
+        <div className="space-y-3 rounded-xl border border-white/5 bg-slate-900/40 p-3">
+          <p className="text-sm font-medium text-slate-300">Клиент</p>
+          <label className="block space-y-1 text-sm">
+            <span className="text-slate-400">ФИО</span>
+            <input
+              className="input"
+              value={form.guestName}
+              disabled={crmLocked}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, guestName: e.target.value }))
+              }
+            />
+          </label>
+          {clientLink ? (
+            <p className="text-sm">
+              <Link
+                href={clientLink}
+                className="text-fitgo-400 underline-offset-2 hover:underline"
+                onClick={onClose}
+              >
+                Записи клиента
+              </Link>
             </p>
           ) : null}
-        </label>
-
-        <div className="space-y-1">
-          <p className="text-sm text-slate-400">Дата и время начала</p>
-          <div className="grid grid-cols-2 gap-2">
-            <DateField
-              label="Дата"
-              value={datePart}
-              onChange={setDatePart}
+          <label className="block space-y-1 text-sm">
+            <span className="text-slate-400">Телефон (необязательно)</span>
+            <input
+              className="input"
+              value={form.guestPhone}
+              disabled={crmLocked}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, guestPhone: e.target.value }))
+              }
+              onBlur={(e) => {
+                if (!crmLocked) void lookupPhone(e.target.value);
+              }}
+              placeholder="+375…"
             />
-            <TimeField
-              label="Время"
-              value={timePart || '10:00'}
-              onChange={setTimePart}
-            />
-          </div>
+            {phoneLookup ? (
+              <p className="text-xs text-slate-400">{phoneLookup}</p>
+            ) : null}
+          </label>
         </div>
 
-        <label className="block space-y-1 text-sm">
-          <span className="text-slate-400">Оплата</span>
-          <select
-            className="input"
-            value={form.paymentType}
-            disabled={crmLocked}
-            onChange={(e) =>
-              setForm((f) => ({
-                ...f,
-                paymentType: e.target.value as 'QUOTA' | 'PAID',
-              }))
-            }
-          >
-            <option value="PAID">Платно</option>
-            <option value="QUOTA">По квоте</option>
-          </select>
-          {form.paymentType === 'QUOTA' && unlinked ? (
-            <p className="text-xs text-amber-300/90">
-              Квоту можно списать только после привязки клиента к 1С.
-            </p>
-          ) : null}
-        </label>
+        <div className="space-y-3 rounded-xl border border-white/5 bg-slate-900/40 p-3">
+          <p className="text-sm font-medium text-slate-300">Запись</p>
+          <label className="block space-y-1 text-sm">
+            <span className="text-slate-400">Услуга</span>
+            <select
+              className="input"
+              value={form.serviceId}
+              disabled={crmLocked}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, serviceId: e.target.value }))
+              }
+            >
+              {bookable.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} · {s.durationMin} мин ·{' '}
+                  {formatPrice(s.priceMinor, s.currency)}
+                </option>
+              ))}
+            </select>
+            {selected ? (
+              <p className="text-xs text-slate-500">
+                {selected.durationMin} мин
+                {selected.bufferMin ? ` + перерыв ${selected.bufferMin}` : ''}
+              </p>
+            ) : null}
+          </label>
+
+          <div className="space-y-1">
+            <p className="text-sm text-slate-400">Дата и время начала</p>
+            <div className="grid grid-cols-2 gap-2">
+              <DateField
+                label="Дата"
+                value={datePart}
+                onChange={setDatePart}
+              />
+              <TimeField
+                label="Время"
+                value={timePart || '10:00'}
+                onChange={setTimePart}
+              />
+            </div>
+          </div>
+
+          <label className="block space-y-1 text-sm">
+            <span className="text-slate-400">Оплата</span>
+            <select
+              className="input"
+              value={form.paymentType}
+              disabled={crmLocked}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  paymentType: e.target.value as 'QUOTA' | 'PAID',
+                }))
+              }
+            >
+              <option value="PAID">Платно</option>
+              <option value="QUOTA">По квоте</option>
+            </select>
+            {form.paymentType === 'QUOTA' && unlinked ? (
+              <p className="text-xs text-amber-300/90">
+                Квоту можно списать только после привязки клиента к 1С.
+              </p>
+            ) : null}
+          </label>
+        </div>
+
+        <SpaBookingNotesFields
+          clientNote={clientNote}
+          visitNote={visitNote}
+          clientNoteSaved={clientNoteSaved}
+          clientNoteEnabled={clientNoteEnabled}
+          clientNoteBusy={clientNoteBusy}
+          onClientNoteChange={setClientNote}
+          onVisitNoteChange={setVisitNote}
+          onSaveClientNote={() => {
+            void saveClientNoteNow().catch((err) => {
+              setError(
+                err instanceof Error
+                  ? err.message
+                  : 'Не удалось сохранить комментарий',
+              );
+            });
+          }}
+        />
 
         {error ? (
           <p className="rounded-xl bg-rose-500/10 px-3 py-2 text-sm text-rose-300">

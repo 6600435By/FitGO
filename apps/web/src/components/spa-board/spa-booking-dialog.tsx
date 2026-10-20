@@ -2,6 +2,7 @@
 
 import type { SpaService } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
+import { SpaBookingNotesFields } from '@/components/spa-board/spa-booking-notes-fields';
 import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -18,6 +19,7 @@ type BookingPayload = {
   serviceId: string;
   startAt: string;
   paymentType: 'QUOTA' | 'PAID';
+  visitNote?: string;
 };
 
 type PeriodEntry = { date: string; time: string };
@@ -120,6 +122,11 @@ export function SpaBookingDialog({
     startAt: defaultStartAt ?? '',
     paymentType: 'PAID' as 'QUOTA' | 'PAID',
   });
+  const [clientExternalId, setClientExternalId] = useState('');
+  const [clientNote, setClientNote] = useState('');
+  const [clientNoteSaved, setClientNoteSaved] = useState('');
+  const [visitNote, setVisitNote] = useState('');
+  const [clientNoteBusy, setClientNoteBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -131,6 +138,10 @@ export function SpaBookingDialog({
     setPeriodEntries([]);
     setExtraDate('');
     setExtraTime('10:00');
+    setClientExternalId('');
+    setClientNote('');
+    setClientNoteSaved('');
+    setVisitNote('');
     setForm({
       specialistId: defaultSpecialistId ?? '',
       clientId: '',
@@ -142,6 +153,51 @@ export function SpaBookingDialog({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when dialog opens
   }, [open, defaultSpecialistId, defaultStartAt]);
+
+  const clientNoteEnabled = Boolean(
+    form.clientId ||
+      clientExternalId ||
+      form.guestPhone.replace(/\D/g, '').length >= 9,
+  );
+
+  const loadClientNote = async (opts: {
+    clientId?: string;
+    clientExternalId?: string;
+    phone?: string;
+  }) => {
+    const token = getToken();
+    if (!token) return;
+    if (!opts.clientId && !opts.clientExternalId && !opts.phone) {
+      setClientNote('');
+      setClientNoteSaved('');
+      return;
+    }
+    try {
+      const res = await api.getSpaClientNote(token, opts);
+      setClientNote(res.text);
+      setClientNoteSaved(res.text);
+    } catch {
+      /* non-fatal */
+    }
+  };
+
+  const saveClientNoteNow = async () => {
+    const token = getToken();
+    if (!token || !clientNoteEnabled) return;
+    setClientNoteBusy(true);
+    try {
+      const res = await api.putSpaClientNote(token, {
+        clientId: form.clientId || undefined,
+        clientExternalId: clientExternalId || undefined,
+        phone: form.guestPhone.trim() || undefined,
+        text: clientNote,
+      });
+      setClientNote(res.text);
+      setClientNoteSaved(res.text);
+    } finally {
+      setClientNoteBusy(false);
+    }
+  };
 
   const suggestedEntries = useMemo(
     () => (periodMode ? buildWeeklyEntries(form.startAt, periodWeeks) : []),
@@ -186,11 +242,15 @@ export function SpaBookingDialog({
     const digits = raw.replace(/\D/g, '');
     if (!digits.length) {
       setPhoneLookup('');
+      setClientExternalId('');
       setForm((f) => ({ ...f, clientId: '' }));
+      setClientNote('');
+      setClientNoteSaved('');
       return;
     }
     if (digits.length < 9) {
       setPhoneLookup('Введите номер полностью');
+      setClientExternalId('');
       setForm((f) => ({ ...f, clientId: '' }));
       return;
     }
@@ -204,11 +264,17 @@ export function SpaBookingDialog({
           '1С не ответила. Можно записать гостя по ФИО, телефон сохранится.',
         );
         setForm((f) => ({ ...f, clientId: found.clientId ?? '' }));
+        void loadClientNote({
+          clientId: found.clientId,
+          phone: found.phone || raw,
+        });
         return;
       }
       if (!found.found) {
         setPhoneLookup('В 1С и в базе нет. Укажите ФИО — запишем как гостя.');
+        setClientExternalId('');
         setForm((f) => ({ ...f, clientId: '' }));
+        void loadClientNote({ phone: found.phone || raw });
         return;
       }
       const name = `${found.lastName ?? ''} ${found.firstName ?? ''}`.trim();
@@ -217,11 +283,17 @@ export function SpaBookingDialog({
           ? `Клиент из базы: ${name}`
           : `Клиент из 1С: ${name}. Запись свяжется с ним.`,
       );
+      setClientExternalId(found.externalId ?? '');
       setForm((f) => ({
         ...f,
         clientId: found.clientId ?? '',
         guestName: f.guestName || name,
       }));
+      void loadClientNote({
+        clientId: found.clientId,
+        clientExternalId: found.externalId,
+        phone: found.phone || raw,
+      });
     } catch (err) {
       setPhoneLookup(err instanceof Error ? err.message : 'Ошибка поиска');
     }
@@ -229,11 +301,13 @@ export function SpaBookingDialog({
 
   const buildPayload = (startIso: string): BookingPayload => {
     const phone = form.guestPhone.trim() || undefined;
+    const note = visitNote.trim() || undefined;
     return {
       specialistId: allowPickSpecialist ? form.specialistId : undefined,
       serviceId: form.serviceId,
       startAt: startIso,
       paymentType: form.paymentType,
+      ...(note ? { visitNote: note } : { visitNote: '' }),
       ...(mode === 'base'
         ? { clientId: form.clientId }
         : form.clientId
@@ -273,6 +347,12 @@ export function SpaBookingDialog({
       return;
     }
     try {
+      if (
+        clientNoteEnabled &&
+        clientNote.trim() !== clientNoteSaved.trim()
+      ) {
+        await saveClientNoteNow();
+      }
       const payload = buildPayload(startIso);
       if (periodMode && onBulkSubmit) {
         if (periodEntries.length === 0) {
@@ -350,240 +430,275 @@ export function SpaBookingDialog({
           </label>
         ) : null}
 
-        {mode === 'base' ? (
+        <div className="space-y-3 rounded-xl border border-white/5 bg-slate-900/40 p-3">
+          <p className="text-sm font-medium text-slate-300">Клиент</p>
+          {mode === 'base' ? (
+            <label className="block space-y-1 text-sm">
+              <span className="text-slate-400">Из базы</span>
+              <select
+                className="input"
+                value={form.clientId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setForm((f) => ({ ...f, clientId: id }));
+                  setClientExternalId('');
+                  void loadClientNote({ clientId: id || undefined });
+                }}
+              >
+                <option value="">Выберите</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.lastName} {c.firstName}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <>
+              <label className="block space-y-1 text-sm">
+                <span className="text-slate-400">Телефон (необязательно)</span>
+                <input
+                  className="input"
+                  value={form.guestPhone}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, guestPhone: e.target.value }))
+                  }
+                  onBlur={(e) => lookupPhone(e.target.value)}
+                  placeholder="+375…"
+                />
+              </label>
+              {phoneLookup ? (
+                <p className="text-xs text-slate-400">{phoneLookup}</p>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  Без номера запись сохранится с пометкой «Нет в 1С». Телефон
+                  добавит админ на контроле записей.
+                </p>
+              )}
+              <label className="block space-y-1 text-sm">
+                <span className="text-slate-400">ФИО</span>
+                <input
+                  className="input"
+                  value={form.guestName}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, guestName: e.target.value }))
+                  }
+                />
+              </label>
+            </>
+          )}
+        </div>
+
+        <div className="space-y-3 rounded-xl border border-white/5 bg-slate-900/40 p-3">
+          <p className="text-sm font-medium text-slate-300">Запись</p>
           <label className="block space-y-1 text-sm">
-            <span className="text-slate-400">Клиент</span>
+            <span className="text-slate-400">Услуга</span>
             <select
               className="input"
-              value={form.clientId}
+              value={form.serviceId}
               onChange={(e) =>
-                setForm((f) => ({ ...f, clientId: e.target.value }))
+                setForm((f) => ({ ...f, serviceId: e.target.value }))
               }
             >
-              <option value="">Выберите</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.lastName} {c.firstName}
+              {bookable.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} · {s.durationMin} мин ·{' '}
+                  {formatPrice(s.priceMinor, s.currency)}
                 </option>
               ))}
             </select>
-          </label>
-        ) : (
-          <>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-400">Телефон (необязательно)</span>
-              <input
-                className="input"
-                value={form.guestPhone}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, guestPhone: e.target.value }))
-                }
-                onBlur={(e) => lookupPhone(e.target.value)}
-                placeholder="+375…"
-              />
-            </label>
-            {phoneLookup ? (
-              <p className="text-xs text-slate-400">{phoneLookup}</p>
-            ) : (
+            {selected ? (
               <p className="text-xs text-slate-500">
-                Без номера запись сохранится с пометкой «Нет в 1С». Телефон
-                добавит админ на контроле записей.
+                {selected.durationMin} мин
+                {selected.bufferMin ? ` + перерыв ${selected.bufferMin}` : ''}
               </p>
-            )}
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-400">ФИО</span>
-              <input
-                className="input"
-                value={form.guestName}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, guestName: e.target.value }))
-                }
-              />
-            </label>
-          </>
-        )}
-
-        <label className="block space-y-1 text-sm">
-          <span className="text-slate-400">Услуга</span>
-          <select
-            className="input"
-            value={form.serviceId}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, serviceId: e.target.value }))
-            }
-          >
-            {bookable.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} · {s.durationMin} мин ·{' '}
-                {formatPrice(s.priceMinor, s.currency)}
-              </option>
-            ))}
-          </select>
-          {selected ? (
-            <p className="text-xs text-slate-500">
-              {selected.durationMin} мин
-              {selected.bufferMin ? ` + перерыв ${selected.bufferMin}` : ''}
-            </p>
-          ) : null}
-        </label>
-
-        <div className="space-y-1">
-          <p className="text-sm text-slate-400">Дата и время начала</p>
-          <div className="grid grid-cols-2 gap-2">
-            <DateField
-              label="Дата"
-              value={datePart}
-              onChange={setDatePart}
-            />
-            <TimeField
-              label="Время"
-              value={timePart || '10:00'}
-              onChange={setTimePart}
-            />
-          </div>
-          <p className="text-xs text-slate-500">
-            Можно изменить вручную. Запись в прошлое — если забыли добавить
-            сразу.
-            {startIsPast ? (
-              <span className="text-amber-300/90"> Сейчас указано прошлое время.</span>
             ) : null}
-          </p>
+          </label>
+
+          <div className="space-y-1">
+            <p className="text-sm text-slate-400">Дата и время начала</p>
+            <div className="grid grid-cols-2 gap-2">
+              <DateField
+                label="Дата"
+                value={datePart}
+                onChange={setDatePart}
+              />
+              <TimeField
+                label="Время"
+                value={timePart || '10:00'}
+                onChange={setTimePart}
+              />
+            </div>
+            <p className="text-xs text-slate-500">
+              Можно изменить вручную. Запись в прошлое — если забыли добавить
+              сразу.
+              {startIsPast ? (
+                <span className="text-amber-300/90">
+                  {' '}
+                  Сейчас указано прошлое время.
+                </span>
+              ) : null}
+            </p>
+          </div>
+
+          <label className="block space-y-1 text-sm">
+            <span className="text-slate-400">Оплата</span>
+            <select
+              className="input"
+              value={form.paymentType}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  paymentType: e.target.value as 'QUOTA' | 'PAID',
+                }))
+              }
+            >
+              <option value="PAID">Платно</option>
+              <option value="QUOTA">По квоте</option>
+            </select>
+          </label>
+
+          {onBulkSubmit ? (
+            <div className="space-y-2 border-t border-white/5 pt-3">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={periodMode}
+                  onChange={(e) => setPeriodMode(e.target.checked)}
+                />
+                <span>Запись на период</span>
+              </label>
+              {periodMode ? (
+                <div className="space-y-2">
+                  <label className="block space-y-1 text-sm">
+                    <span className="text-slate-400">Недель (тот же день)</span>
+                    <input
+                      type="number"
+                      className="input"
+                      min={1}
+                      max={26}
+                      value={periodWeeks}
+                      onChange={(e) =>
+                        setPeriodWeeks(
+                          Math.max(
+                            1,
+                            Math.min(26, Number(e.target.value) || 1),
+                          ),
+                        )
+                      }
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="btn-secondary text-xs"
+                      onClick={() => {
+                        const t = timePart || '10:00';
+                        setPeriodEntries((prev) =>
+                          prev.map((e) => ({ ...e, time: t })),
+                        );
+                      }}
+                    >
+                      Это время всем
+                    </button>
+                  </div>
+                  <ul className="max-h-48 space-y-1.5 overflow-y-auto text-sm">
+                    {periodEntries.map((entry) => (
+                      <li
+                        key={entry.date}
+                        className="flex flex-wrap items-center gap-2"
+                      >
+                        <button
+                          type="button"
+                          className="text-slate-500 hover:text-rose-300"
+                          title="Убрать"
+                          onClick={() =>
+                            setPeriodEntries((prev) =>
+                              prev.filter((e) => e.date !== entry.date),
+                            )
+                          }
+                        >
+                          ×
+                        </button>
+                        <span className="min-w-[6.5rem] capitalize text-slate-300">
+                          {formatDateShort(entry.date)}
+                        </span>
+                        <TimeField
+                          className="min-w-[8.5rem] flex-1"
+                          value={entry.time}
+                          onChange={(t) => {
+                            setPeriodEntries((prev) =>
+                              prev.map((row) =>
+                                row.date === entry.date
+                                  ? { ...row, time: t }
+                                  : row,
+                              ),
+                            );
+                          }}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <DateField
+                      label="Добавить дату"
+                      value={extraDate}
+                      onChange={setExtraDate}
+                    />
+                    <TimeField
+                      label="Время"
+                      className="min-w-[8.5rem]"
+                      value={extraTime}
+                      onChange={setExtraTime}
+                    />
+                    <button
+                      type="button"
+                      className="btn-secondary text-xs"
+                      onClick={() => {
+                        if (!extraDate || !extraTime) return;
+                        setPeriodEntries((prev) => {
+                          if (prev.some((e) => e.date === extraDate)) {
+                            return prev.map((e) =>
+                              e.date === extraDate
+                                ? { ...e, time: extraTime }
+                                : e,
+                            );
+                          }
+                          return [
+                            ...prev,
+                            { date: extraDate, time: extraTime },
+                          ].sort((a, b) => a.date.localeCompare(b.date));
+                        });
+                        setExtraDate('');
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
-        <label className="block space-y-1 text-sm">
-          <span className="text-slate-400">Оплата</span>
-          <select
-            className="input"
-            value={form.paymentType}
-            onChange={(e) =>
-              setForm((f) => ({
-                ...f,
-                paymentType: e.target.value as 'QUOTA' | 'PAID',
-              }))
-            }
-          >
-            <option value="PAID">Платно</option>
-            <option value="QUOTA">По квоте</option>
-          </select>
-        </label>
-
-        {onBulkSubmit ? (
-          <div className="space-y-2 rounded-xl border border-white/5 bg-slate-900/40 p-3">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={periodMode}
-                onChange={(e) => setPeriodMode(e.target.checked)}
-              />
-              <span>Запись на период</span>
-            </label>
-            {periodMode ? (
-              <div className="space-y-2">
-                <label className="block space-y-1 text-sm">
-                  <span className="text-slate-400">Недель (тот же день)</span>
-                  <input
-                    type="number"
-                    className="input"
-                    min={1}
-                    max={26}
-                    value={periodWeeks}
-                    onChange={(e) =>
-                      setPeriodWeeks(
-                        Math.max(1, Math.min(26, Number(e.target.value) || 1)),
-                      )
-                    }
-                  />
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="btn-secondary text-xs"
-                    onClick={() => {
-                      const t = timePart || '10:00';
-                      setPeriodEntries((prev) =>
-                        prev.map((e) => ({ ...e, time: t })),
-                      );
-                    }}
-                  >
-                    Это время всем
-                  </button>
-                </div>
-                <ul className="max-h-48 space-y-1.5 overflow-y-auto text-sm">
-                  {periodEntries.map((entry) => (
-                    <li
-                      key={entry.date}
-                      className="flex flex-wrap items-center gap-2"
-                    >
-                      <button
-                        type="button"
-                        className="text-slate-500 hover:text-rose-300"
-                        title="Убрать"
-                        onClick={() =>
-                          setPeriodEntries((prev) =>
-                            prev.filter((e) => e.date !== entry.date),
-                          )
-                        }
-                      >
-                        ×
-                      </button>
-                      <span className="min-w-[6.5rem] capitalize text-slate-300">
-                        {formatDateShort(entry.date)}
-                      </span>
-                      <TimeField
-                        className="min-w-[8.5rem] flex-1"
-                        value={entry.time}
-                        onChange={(t) => {
-                          setPeriodEntries((prev) =>
-                            prev.map((row) =>
-                              row.date === entry.date
-                                ? { ...row, time: t }
-                                : row,
-                            ),
-                          );
-                        }}
-                      />
-                    </li>
-                  ))}
-                </ul>
-                <div className="flex flex-wrap items-end gap-2">
-                  <DateField
-                    label="Добавить дату"
-                    value={extraDate}
-                    onChange={setExtraDate}
-                  />
-                  <TimeField
-                    label="Время"
-                    className="min-w-[8.5rem]"
-                    value={extraTime}
-                    onChange={setExtraTime}
-                  />
-                  <button
-                    type="button"
-                    className="btn-secondary text-xs"
-                    onClick={() => {
-                      if (!extraDate || !extraTime) return;
-                      setPeriodEntries((prev) => {
-                        if (prev.some((e) => e.date === extraDate)) {
-                          return prev.map((e) =>
-                            e.date === extraDate
-                              ? { ...e, time: extraTime }
-                              : e,
-                          );
-                        }
-                        return [...prev, { date: extraDate, time: extraTime }].sort(
-                          (a, b) => a.date.localeCompare(b.date),
-                        );
-                      });
-                      setExtraDate('');
-                    }}
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+        <SpaBookingNotesFields
+          clientNote={clientNote}
+          visitNote={visitNote}
+          clientNoteSaved={clientNoteSaved}
+          clientNoteEnabled={clientNoteEnabled}
+          clientNoteBusy={clientNoteBusy}
+          onClientNoteChange={setClientNote}
+          onVisitNoteChange={setVisitNote}
+          onSaveClientNote={() => {
+            void saveClientNoteNow().catch((err) => {
+              setError(
+                err instanceof Error
+                  ? err.message
+                  : 'Не удалось сохранить комментарий',
+              );
+            });
+          }}
+        />
 
         {error ? (
           <p className="rounded-xl bg-rose-500/10 px-3 py-2 text-sm text-rose-300">

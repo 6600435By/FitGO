@@ -343,6 +343,7 @@ export function AdminSpaWorkspace() {
     serviceId: string;
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
+    visitNote?: string;
   }) => {
     const token = getToken();
     if (!token) return;
@@ -361,6 +362,7 @@ export function AdminSpaWorkspace() {
         clientId: payload.clientId,
         guestName: payload.guestName,
         guestPhone: payload.guestPhone,
+        visitNote: payload.visitNote,
       });
       setShowAssign(false);
       setMessage('Клиент записан');
@@ -381,6 +383,7 @@ export function AdminSpaWorkspace() {
     serviceId: string;
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
+    visitNote?: string;
     dates: string[];
   }) => {
     const token = getToken();
@@ -400,6 +403,7 @@ export function AdminSpaWorkspace() {
         clientId: payload.clientId,
         guestName: payload.guestName,
         guestPhone: payload.guestPhone,
+        visitNote: payload.visitNote,
         dates: payload.dates,
       });
       setShowAssign(false);
@@ -536,6 +540,7 @@ export function AdminSpaWorkspace() {
     guestName?: string;
     guestPhone?: string;
     paymentType: 'QUOTA' | 'PAID';
+    visitNote?: string;
   }) => {
     const token = getToken();
     if (!token || !selectedBooking) return;
@@ -550,6 +555,7 @@ export function AdminSpaWorkspace() {
         guestName: payload.guestName,
         guestPhone: payload.guestPhone,
         paymentType: payload.paymentType,
+        visitNote: payload.visitNote,
       });
       setSelectedBooking(null);
       setMessage('Запись сохранена');

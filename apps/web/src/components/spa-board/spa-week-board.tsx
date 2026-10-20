@@ -14,6 +14,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
+import { SpaBookingNoteHint } from '@/components/spa-board/spa-booking-note-hint';
 import {
   addDays,
   defaultSpaWeekScale,
@@ -1134,6 +1135,12 @@ export function SpaWeekBoard({
                         }}
                         onClick={(e) => e.stopPropagation()}
                       >
+                        {!b.busy ? (
+                          <SpaBookingNoteHint
+                            clientNote={b.clientNote}
+                            visitNote={b.visitNote}
+                          />
+                        ) : null}
                         <div className="flex items-start gap-1">
                           {editable ? (
                             <span
@@ -1154,7 +1161,11 @@ export function SpaWeekBoard({
                                 </span>
                               ) : null}
                             </p>
-                            <p className="truncate font-medium">
+                            <p
+                              className={`truncate font-medium ${
+                                b.clientNote || b.visitNote ? 'pr-3' : ''
+                              }`}
+                            >
                               {clientLabel(b)}
                             </p>
                             {height >= 44 && showMulti && staff ? (

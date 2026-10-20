@@ -5,6 +5,7 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  MaxLength,
 } from 'class-validator';
 
 export class BulkSpaBookingDto {
@@ -33,6 +34,11 @@ export class BulkSpaBookingDto {
   @IsOptional()
   @IsString()
   membershipServiceName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(280)
+  visitNote?: string;
 
   /**
    * Fallback time-of-day when a dates[] entry has no time component.

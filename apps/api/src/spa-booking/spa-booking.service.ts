@@ -44,6 +44,15 @@ import { SessionApprovalService } from '../booking-control/session-approval.serv
 import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { normalizePhone } from '../common/phone.util';
+import {
+  findSpaClientNotesByIdentities,
+  normalizeSpaNoteText,
+  primarySpaClientIdentityKey,
+  resolveNoteFromMap,
+  upsertSpaClientNote,
+  findSpaClientNoteText,
+  type SpaNoteIdentity,
+} from './spa-client-note.util';
 import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -1011,6 +1020,49 @@ export class SpaBookingService {
     }
   }
 
+  async getSpaClientNote(
+    actor: JwtPayload,
+    query: {
+      clientId?: string;
+      clientExternalId?: string;
+      phone?: string;
+    },
+  ) {
+    const clubId = requireClubId(actor);
+    const identity: SpaNoteIdentity = {
+      clientId: query.clientId,
+      clientExternalId: query.clientExternalId,
+      phone: query.phone,
+    };
+    const text = await findSpaClientNoteText(this.prisma, clubId, identity);
+    return {
+      text: text ?? '',
+      identityKey: primarySpaClientIdentityKey(identity),
+    };
+  }
+
+  async putSpaClientNote(
+    actor: JwtPayload,
+    body: {
+      clientId?: string;
+      clientExternalId?: string;
+      phone?: string;
+      text: string;
+    },
+  ) {
+    const clubId = requireClubId(actor);
+    return upsertSpaClientNote(this.prisma, {
+      clubId,
+      actorId: actor.sub,
+      identity: {
+        clientId: body.clientId,
+        clientExternalId: body.clientExternalId,
+        phone: body.phone,
+      },
+      text: body.text,
+    });
+  }
+
   async bookSpa(
     actor: JwtPayload,
     input: {
@@ -1023,6 +1075,7 @@ export class SpaBookingService {
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       origin: SpaBookingOrigin;
+      visitNote?: string;
     },
   ): Promise<{ booking: SpaBooking; membership: Membership | null }> {
     const start = new Date(input.startAt);
@@ -1079,6 +1132,7 @@ export class SpaBookingService {
 
     const resolved = await this.resolveBookingClient(actor, input);
     const client = resolved.client;
+    const visitNote = normalizeSpaNoteText(input.visitNote) || null;
 
     let membership: Membership | null = null;
     if (resolved.externalId) {
@@ -1208,6 +1262,7 @@ export class SpaBookingService {
             bookedByUserId: control.bookedByUserId,
             specialistCompletedAt: null,
             paidAt: null,
+            visitNote,
           },
           include: {
             specialist: true,
@@ -1242,6 +1297,7 @@ export class SpaBookingService {
                 : SpaPaymentType.PAID,
             priceMinor,
             membershipServiceName: membershipServiceName ?? null,
+            visitNote,
             controlLevel: control.controlLevel,
             reviewFlag: control.reviewFlag,
             paymentStatus: control.paymentStatus,
@@ -1330,6 +1386,7 @@ export class SpaBookingService {
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
     },
   ) {
     return this.bookSpa(user, {
@@ -1350,6 +1407,7 @@ export class SpaBookingService {
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
     },
   ) {
     return this.bookSpa(user, {
@@ -2228,6 +2286,7 @@ export class SpaBookingService {
       guestPhone?: string;
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
     },
     opts: { asSpecialist: boolean },
   ): Promise<{ booking: SpaBooking }> {
@@ -2377,6 +2436,10 @@ export class SpaBookingService {
         oneCLinkStatus === SpaOneCLinkStatus.LINKED &&
         existing.oneCLinkStatus !== SpaOneCLinkStatus.LINKED &&
         Boolean(clientExternalId);
+      const visitNotePatch =
+        input.visitNote !== undefined
+          ? { visitNote: normalizeSpaNoteText(input.visitNote) || null }
+          : {};
       const updated = await this.prisma.spaBooking.update({
         where: { id: existing.id },
         data: {
@@ -2401,6 +2464,7 @@ export class SpaBookingService {
               : SpaPaymentType.PAID,
           priceMinor,
           membershipServiceName,
+          ...visitNotePatch,
         },
         include: { specialist: true, client: true, service: true },
       });
@@ -2479,6 +2543,7 @@ export class SpaBookingService {
       guestPhone?: string;
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
     },
   ) {
     return this.updateStaffBooking(user, bookingId, input, {
@@ -2498,6 +2563,7 @@ export class SpaBookingService {
       guestPhone?: string;
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
     },
   ) {
     return this.updateStaffBooking(user, bookingId, input, {
@@ -2904,6 +2970,17 @@ export class SpaBookingService {
       approvals.map((a) => [a.bookingId, a] as const),
     );
 
+    const noteIdentities: SpaNoteIdentity[] = bookings.map((b) => ({
+      clientId: b.clientId,
+      clientExternalId: b.clientExternalId ?? b.client?.externalId,
+      phone: b.guestPhone ?? b.client?.phone,
+    }));
+    const clientNotes = await findSpaClientNotesByIdentities(
+      this.prisma,
+      opts.clubId,
+      noteIdentities,
+    );
+
     const now = Date.now();
     const mappedBookings: SpaBoardBooking[] = [];
     for (const b of bookings) {
@@ -2941,6 +3018,13 @@ export class SpaBookingService {
         }
       }
 
+      const clientNote = resolveNoteFromMap(clientNotes, {
+        clientId: b.clientId,
+        clientExternalId: b.clientExternalId ?? b.client?.externalId,
+        phone: b.guestPhone ?? b.client?.phone,
+      });
+      const visitNote = b.visitNote?.trim() || undefined;
+
       mappedBookings.push({
         id: b.id,
         specialistId: b.specialistId,
@@ -2964,6 +3048,8 @@ export class SpaBookingService {
             : sessionApprovalLabelRu(phase),
         crmLocked: Boolean(b.consumedInCrmAt),
         consumedInCrm: Boolean(b.consumedInCrmAt),
+        ...(clientNote ? { clientNote } : {}),
+        ...(visitNote ? { visitNote } : {}),
       });
     }
 
@@ -3282,6 +3368,7 @@ export class SpaBookingService {
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
       dates: string[];
     },
   ): Promise<SpaBulkBookingResult> {
@@ -3329,6 +3416,7 @@ export class SpaBookingService {
           startAt: start.toISOString(),
           paymentType: input.paymentType,
           membershipServiceName: input.membershipServiceName,
+          visitNote: input.visitNote,
           origin,
         });
         created.push(result.booking);

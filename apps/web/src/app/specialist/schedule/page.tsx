@@ -385,6 +385,7 @@ function SpecialistScheduleInner() {
     serviceId: string;
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
+    visitNote?: string;
   }) => {
     const token = getToken();
     if (!token) return;
@@ -410,6 +411,7 @@ function SpecialistScheduleInner() {
     serviceId: string;
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
+    visitNote?: string;
     dates: string[];
   }) => {
     const token = getToken();
@@ -481,6 +483,7 @@ function SpecialistScheduleInner() {
     guestName?: string;
     guestPhone?: string;
     paymentType: 'QUOTA' | 'PAID';
+    visitNote?: string;
   }) => {
     const token = getToken();
     if (!token || !selectedBooking) return;
@@ -494,6 +497,7 @@ function SpecialistScheduleInner() {
         guestName: payload.guestName,
         guestPhone: payload.guestPhone,
         paymentType: payload.paymentType,
+        visitNote: payload.visitNote,
       });
       setSelectedBooking(null);
       setMessage('Запись сохранена');

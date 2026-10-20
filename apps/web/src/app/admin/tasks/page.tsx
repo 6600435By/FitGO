@@ -802,10 +802,20 @@ function AdminTasksInner() {
                         }`}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <div>
+                          <div className="min-w-0 flex-1">
                             <p className="text-sm font-medium text-slate-100">
                               {client.clientName}
                             </p>
+                            {client.clientNote ? (
+                              <p className="mt-0.5 text-[11px] text-amber-200/85">
+                                Клиент: {client.clientNote}
+                              </p>
+                            ) : null}
+                            {client.visitNote ? (
+                              <p className="mt-0.5 text-[11px] text-slate-300/90">
+                                Запись: {client.visitNote}
+                              </p>
+                            ) : null}
                             {client.confirmed ? (
                               <p className="text-[11px] text-emerald-400/90">
                                 Подтверждён

@@ -1,4 +1,10 @@
-import { IsISO8601, IsIn, IsOptional, IsString } from 'class-validator';
+import {
+  IsISO8601,
+  IsIn,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 export class AssignSpaBookingDto {
   @IsOptional()
@@ -29,4 +35,9 @@ export class AssignSpaBookingDto {
   @IsOptional()
   @IsString()
   membershipServiceName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(280)
+  visitNote?: string;
 }

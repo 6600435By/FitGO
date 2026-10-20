@@ -956,6 +956,38 @@ export const api = {
       token,
     ),
 
+  getSpaClientNote: (
+    token: string,
+    query: { clientId?: string; clientExternalId?: string; phone?: string },
+  ) => {
+    const q = new URLSearchParams();
+    if (query.clientId) q.set('clientId', query.clientId);
+    if (query.clientExternalId) {
+      q.set('clientExternalId', query.clientExternalId);
+    }
+    if (query.phone) q.set('phone', query.phone);
+    return request<{ text: string; identityKey: string | null }>(
+      `/specialist/spa/client-note?${q}`,
+      {},
+      token,
+    );
+  },
+
+  putSpaClientNote: (
+    token: string,
+    data: {
+      clientId?: string;
+      clientExternalId?: string;
+      phone?: string;
+      text: string;
+    },
+  ) =>
+    request<{ text: string; identityKey: string | null }>(
+      '/specialist/spa/client-note',
+      { method: 'PUT', body: JSON.stringify(data) },
+      token,
+    ),
+
   specialistAssignSpaBooking: (
     token: string,
     data: {
@@ -966,6 +998,7 @@ export const api = {
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
     },
   ) =>
     request<{ booking: SpaBooking; membership: Membership | null }>(
@@ -984,6 +1017,7 @@ export const api = {
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
       dates: string[];
     },
   ) =>
@@ -1059,6 +1093,7 @@ export const api = {
       guestPhone?: string;
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
     },
   ) =>
     request<{ booking: SpaBooking }>(
@@ -1182,6 +1217,7 @@ export const api = {
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
     },
   ) =>
     request<{ booking: SpaBooking; membership: Membership | null }>(
@@ -1201,6 +1237,7 @@ export const api = {
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
       dates: string[];
     },
   ) =>
@@ -1279,6 +1316,7 @@ export const api = {
       guestPhone?: string;
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      visitNote?: string;
     },
   ) =>
     request<{ booking: SpaBooking }>(

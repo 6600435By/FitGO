@@ -478,6 +478,7 @@ model Club {
   spaServices          SpaService[]
   spaQuotaRules        SpaQuotaRule[]
   spaBookings          SpaBooking[]
+  spaClientNotes       SpaClientNote[]
   spaWaitlistEntries   SpaWaitlistEntry[]
   groupClassSessions   GroupClassSession[]
   staffCompensations   StaffCompensation[]
@@ -629,6 +630,7 @@ model User {
   specialistSchedulePublications  SpecialistSchedulePublication[]
   specialistSpaBookings           SpaBooking[] @relation("SpecialistSpaBookings")
   clientSpaBookings               SpaBooking[] @relation("ClientSpaBookings")
+  spaClientNotesUpdated           SpaClientNote[] @relation("SpaClientNoteUpdater")
   specialistSpaWaitlist           SpaWaitlistEntry[] @relation("SpecialistSpaWaitlist")
   clientSpaWaitlist               SpaWaitlistEntry[] @relation("ClientSpaWaitlist")
   createdSpaWaitlist              SpaWaitlistEntry[] @relation("CreatedSpaWaitlist")
@@ -1759,6 +1761,8 @@ model SpaBooking {
   manualPaymentConfirmedById String?
   /// Partner channel for fixed SPA rate (e.g. ALLSPORTS).
   partnerSource          String?
+  /// Staff note for this visit only (towels, room preference, …).
+  visitNote              String?
   createdAt              DateTime         @default(now())
   updatedAt              DateTime         @updatedAt
 
@@ -1777,6 +1781,24 @@ model SpaBooking {
   @@index([presenceStatus, startAt])
   @@index([trustBand, trustResolution])
   @@index([status])
+}
+
+/// Persistent SPA note for a client within a club (do-not-call, allergies, …).
+/// identityKey: ext:{1cId} | user:{userId} | phone:{normalized}.
+model SpaClientNote {
+  id          String   @id @default(cuid())
+  clubId      String
+  identityKey String
+  text        String
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  club      Club  @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  updatedBy User? @relation("SpaClientNoteUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([clubId, identityKey])
+  @@index([clubId])
 }
 
 /// Desired SPA slot when the time is busy — staff decides when to convert to SpaBooking.
