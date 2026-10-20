@@ -9,6 +9,7 @@ import type {
   SpecialistCalendarResponse,
   SpecialistWorkSlotInput,
 } from '@fitgo/shared-types';
+import { spaWaitlistFitsSlot } from '@fitgo/shared-types';
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { SpaBoard } from '@/components/spa-board/spa-board';
@@ -87,6 +88,7 @@ function SpecialistScheduleInner() {
   const [waitlistPick, setWaitlistPick] = useState<{
     specialistId?: string;
     startAt?: string;
+    endAt?: string;
     title?: string;
     allowNew?: boolean;
   } | null>(null);
@@ -157,14 +159,9 @@ function SpecialistScheduleInner() {
 
   const matchingWaitlist = useCallback(
     (specialistId: string, startAt: string, endAt?: string) => {
-      const start = new Date(startAt).getTime();
-      const end = endAt ? new Date(endAt).getTime() : start + 60 * 60 * 1000;
-      return waitlist.filter((e) => {
-        if (e.specialistId !== specialistId) return false;
-        const s = new Date(e.desiredStartAt).getTime();
-        const ee = new Date(e.desiredEndAt).getTime();
-        return s < end && ee > start;
-      });
+      return waitlist.filter(
+        (e) => spaWaitlistFitsSlot(e, specialistId, startAt, endAt).fits,
+      );
     },
     [waitlist],
   );
@@ -582,6 +579,7 @@ function SpecialistScheduleInner() {
                 setWaitlistPick({
                   specialistId: freedBanner.specialistId,
                   startAt: freedBanner.startAt,
+                  endAt: freedBanner.endAt,
                   title: 'Освободилось время',
                   allowNew: false,
                 });
@@ -604,6 +602,7 @@ function SpecialistScheduleInner() {
         entries={waitlist}
         services={services}
         clients={clients}
+        boardDayYmd={toDayIso(day)}
         busy={busy}
         onReload={reload}
         onMessage={setMessage}
@@ -811,6 +810,7 @@ function SpecialistScheduleInner() {
         entries={waitlist}
         specialistId={waitlistPick?.specialistId}
         slotStartAt={waitlistPick?.startAt}
+        slotEndAt={waitlistPick?.endAt}
         busy={busy}
         onClose={() => setWaitlistPick(null)}
         onBook={async (entry) => {

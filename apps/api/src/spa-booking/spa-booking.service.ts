@@ -16,13 +16,17 @@ import {
   SpaCancelledBy,
   SpaOneCLinkStatus,
   SpaPaymentType,
+  SpaWaitlistPreference,
   SpaWaitlistStatus,
   type SpaService as PrismaSpaService,
 } from '@prisma/client';
 import {
   classifyVisitKind,
+  daysBetweenYmdInclusive,
   MembershipStatus,
   SessionType,
+  SPA_WAITLIST_MAX_WINDOW_DAYS,
+  SPA_WAITLIST_WEEKDAY_ALL,
   UserRole,
   sessionApprovalLabelRu,
   toUsageControl,
@@ -36,6 +40,7 @@ import {
   type SpaService,
   type SpaServiceEligibility,
   type SpaWaitlistEntry,
+  type SpaWaitlistPreference as SpaWaitlistPreferenceShared,
   type SpecialistCalendarResponse,
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
@@ -3136,12 +3141,21 @@ export class SpaBookingService {
     guestPhone: string | null;
     desiredStartAt: Date;
     desiredEndAt: Date;
+    preference: SpaWaitlistPreference;
+    windowStart: Date | null;
+    windowEnd: Date | null;
+    timeFromMin: number | null;
+    timeToMin: number | null;
+    weekdays: number | null;
+    note: string | null;
     status: SpaWaitlistStatus;
     createdAt: Date;
     specialist: { firstName: string; lastName: string };
     client: { firstName: string; lastName: string } | null;
     service: { name: string };
   }): SpaWaitlistEntry {
+    const preference =
+      entry.preference as SpaWaitlistPreferenceShared;
     return {
       id: entry.id,
       clubId: entry.clubId,
@@ -3155,6 +3169,17 @@ export class SpaBookingService {
       guestPhone: entry.guestPhone ?? undefined,
       desiredStartAt: entry.desiredStartAt.toISOString(),
       desiredEndAt: entry.desiredEndAt.toISOString(),
+      preference,
+      windowStart: entry.windowStart
+        ? this.waitlistYmdFromDate(entry.windowStart)
+        : undefined,
+      windowEnd: entry.windowEnd
+        ? this.waitlistYmdFromDate(entry.windowEnd)
+        : undefined,
+      timeFromMin: entry.timeFromMin ?? undefined,
+      timeToMin: entry.timeToMin ?? undefined,
+      weekdays: entry.weekdays ?? undefined,
+      note: entry.note ?? undefined,
       status: entry.status,
       createdAt: entry.createdAt.toISOString(),
     };
@@ -3165,6 +3190,121 @@ export class SpaBookingService {
     client: { select: { firstName: true, lastName: true } },
     service: { select: { name: true } },
   } as const;
+
+  private waitlistYmdFromDate(d: Date): string {
+    return d.toISOString().slice(0, 10);
+  }
+
+  private parseWaitlistYmd(ymd: string): Date {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+    if (!m) throw new BadRequestException('Некорректная дата периода');
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const day = Number(m[3]);
+    const d = new Date(Date.UTC(y, mo - 1, day));
+    if (
+      d.getUTCFullYear() !== y ||
+      d.getUTCMonth() !== mo - 1 ||
+      d.getUTCDate() !== day
+    ) {
+      throw new BadRequestException('Некорректная дата периода');
+    }
+    return d;
+  }
+
+  private todayWaitlistYmd(): string {
+    const n = new Date();
+    const y = n.getFullYear();
+    const m = String(n.getMonth() + 1).padStart(2, '0');
+    const d = String(n.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  private normalizeWaitlistWindow(input: {
+    windowStart: string;
+    windowEnd: string;
+    timeFromMin?: number | null;
+    timeToMin?: number | null;
+    weekdays?: number | null;
+    note?: string | null;
+  }) {
+    const windowStart = this.parseWaitlistYmd(input.windowStart);
+    const windowEnd = this.parseWaitlistYmd(input.windowEnd);
+    if (windowEnd.getTime() < windowStart.getTime()) {
+      throw new BadRequestException('Конец периода раньше начала');
+    }
+    const days = daysBetweenYmdInclusive(
+      this.waitlistYmdFromDate(windowStart),
+      this.waitlistYmdFromDate(windowEnd),
+    );
+    if (days < 1 || days > SPA_WAITLIST_MAX_WINDOW_DAYS) {
+      throw new BadRequestException(
+        `Период не длиннее ${SPA_WAITLIST_MAX_WINDOW_DAYS} дней`,
+      );
+    }
+    if (windowEnd.getTime() < this.parseWaitlistYmd(this.todayWaitlistYmd()).getTime()) {
+      throw new BadRequestException('Период уже закончился');
+    }
+
+    const weekdays =
+      input.weekdays == null
+        ? SPA_WAITLIST_WEEKDAY_ALL
+        : input.weekdays & SPA_WAITLIST_WEEKDAY_ALL;
+    if (weekdays === 0) {
+      throw new BadRequestException('Выберите хотя бы один день недели');
+    }
+
+    let timeFromMin = input.timeFromMin ?? null;
+    let timeToMin = input.timeToMin ?? null;
+    if (timeFromMin != null || timeToMin != null) {
+      if (timeFromMin == null || timeToMin == null) {
+        throw new BadRequestException('Укажите начало и конец интервала часов');
+      }
+      if (timeFromMin < 0 || timeToMin > 24 * 60 || timeFromMin >= timeToMin) {
+        throw new BadRequestException('Некорректный интервал часов');
+      }
+    } else {
+      timeFromMin = null;
+      timeToMin = null;
+    }
+
+    const noteRaw = input.note?.trim() ?? '';
+    const note = noteRaw.length > 0 ? noteRaw.slice(0, 200) : null;
+
+    const desiredStartAt = new Date(
+      Date.UTC(
+        windowStart.getUTCFullYear(),
+        windowStart.getUTCMonth(),
+        windowStart.getUTCDate(),
+        0,
+        0,
+        0,
+        0,
+      ),
+    );
+    const desiredEndAt = new Date(
+      Date.UTC(
+        windowEnd.getUTCFullYear(),
+        windowEnd.getUTCMonth(),
+        windowEnd.getUTCDate(),
+        23,
+        59,
+        59,
+        999,
+      ),
+    );
+
+    return {
+      windowStart,
+      windowEnd,
+      timeFromMin,
+      timeToMin,
+      weekdays,
+      note,
+      desiredStartAt,
+      desiredEndAt,
+    };
+  }
 
   /** Expire past WAITING rows in the queried range, then return active list. */
   async listSpaWaitlist(
@@ -3192,23 +3332,54 @@ export class SpaBookingService {
       ...(specialistScope ? { specialistId: specialistScope } : {}),
     };
 
+    const now = new Date();
+    const todayDate = this.parseWaitlistYmd(this.todayWaitlistYmd());
+
     await this.prisma.spaWaitlistEntry.updateMany({
       where: {
         ...scopeWhere,
         status: SpaWaitlistStatus.WAITING,
-        desiredStartAt: { lt: new Date() },
+        preference: SpaWaitlistPreference.EXACT,
+        desiredStartAt: { lt: now },
       },
       data: { status: SpaWaitlistStatus.EXPIRED },
     });
+
+    await this.prisma.spaWaitlistEntry.updateMany({
+      where: {
+        ...scopeWhere,
+        status: SpaWaitlistStatus.WAITING,
+        preference: SpaWaitlistPreference.WINDOW,
+        windowEnd: { lt: todayDate },
+      },
+      data: { status: SpaWaitlistStatus.EXPIRED },
+    });
+
+    const rangeStartDate = this.parseWaitlistYmd(
+      rangeStart.toISOString().slice(0, 10),
+    );
+    const rangeEndDate = this.parseWaitlistYmd(
+      rangeEnd.toISOString().slice(0, 10),
+    );
 
     const entries = await this.prisma.spaWaitlistEntry.findMany({
       where: {
         ...scopeWhere,
         status: SpaWaitlistStatus.WAITING,
-        desiredStartAt: { gte: rangeStart, lte: rangeEnd },
+        OR: [
+          {
+            preference: SpaWaitlistPreference.EXACT,
+            desiredStartAt: { gte: rangeStart, lte: rangeEnd },
+          },
+          {
+            preference: SpaWaitlistPreference.WINDOW,
+            windowStart: { lte: rangeEndDate },
+            windowEnd: { gte: rangeStartDate },
+          },
+        ],
       },
       include: this.waitlistInclude,
-      orderBy: [{ desiredStartAt: 'asc' }, { createdAt: 'asc' }],
+      orderBy: [{ createdAt: 'asc' }, { desiredStartAt: 'asc' }],
     });
     return entries.map((e) => this.mapWaitlistEntry(e));
   }
@@ -3218,23 +3389,31 @@ export class SpaBookingService {
     input: {
       specialistId: string;
       serviceId: string;
-      desiredStartAt: string;
+      desiredStartAt?: string;
+      preference?: SpaWaitlistPreferenceShared;
+      windowStart?: string;
+      windowEnd?: string;
+      timeFromMin?: number;
+      timeToMin?: number;
+      weekdays?: number;
+      note?: string;
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
     },
   ): Promise<SpaWaitlistEntry> {
     const clubId = requireClubId(user);
-    const start = new Date(input.desiredStartAt);
-    if (Number.isNaN(start.getTime())) {
-      throw new BadRequestException('Некорректная дата');
-    }
-    if (start.getTime() < Date.now() - 60_000) {
-      throw new BadRequestException('Нельзя добавить прошедшее время');
-    }
+    const preference: SpaWaitlistPreferenceShared =
+      input.preference === 'WINDOW' ? 'WINDOW' : 'EXACT';
 
     const isClientOnly =
       (user.roles ?? []).includes(UserRole.CLIENT) && !this.isSpaStaff(user);
+
+    if (isClientOnly && preference === 'WINDOW') {
+      throw new BadRequestException(
+        'Клиент может добавить только точное время',
+      );
+    }
 
     let clientId = input.clientId;
     let guestName = input.guestName;
@@ -3245,7 +3424,6 @@ export class SpaBookingService {
       guestName = undefined;
       guestPhone = undefined;
     } else if (rolesIncludesSpecialistOnly(user)) {
-      // specialist creates for their own column only
       if (input.specialistId !== user.sub) {
         throw new ForbiddenException('Можно добавить только к себе');
       }
@@ -3289,14 +3467,88 @@ export class SpaBookingService {
           guestPhone,
         });
 
+    if (preference === 'WINDOW') {
+      if (!input.windowStart || !input.windowEnd) {
+        throw new BadRequestException('Укажите период');
+      }
+      const window = this.normalizeWaitlistWindow({
+        windowStart: input.windowStart,
+        windowEnd: input.windowEnd,
+        timeFromMin: input.timeFromMin,
+        timeToMin: input.timeToMin,
+        weekdays: input.weekdays,
+        note: input.note,
+      });
+
+      const duplicate = await this.prisma.spaWaitlistEntry.findFirst({
+        where: {
+          clubId,
+          status: SpaWaitlistStatus.WAITING,
+          preference: SpaWaitlistPreference.WINDOW,
+          specialistId: input.specialistId,
+          serviceId: input.serviceId,
+          windowStart: window.windowStart,
+          windowEnd: window.windowEnd,
+          timeFromMin: window.timeFromMin,
+          timeToMin: window.timeToMin,
+          weekdays: window.weekdays,
+          ...(resolved.clientId
+            ? { clientId: resolved.clientId }
+            : { guestName: resolved.guestName ?? '' }),
+        },
+      });
+      if (duplicate) {
+        throw new ConflictException('Уже есть заявка в листе ожидания');
+      }
+
+      const entry = await this.prisma.spaWaitlistEntry.create({
+        data: {
+          clubId,
+          specialistId: input.specialistId,
+          serviceId: input.serviceId,
+          clientId: resolved.clientId,
+          guestName: resolved.guestName,
+          guestPhone: resolved.guestPhone,
+          desiredStartAt: window.desiredStartAt,
+          desiredEndAt: window.desiredEndAt,
+          preference: SpaWaitlistPreference.WINDOW,
+          windowStart: window.windowStart,
+          windowEnd: window.windowEnd,
+          timeFromMin: window.timeFromMin,
+          timeToMin: window.timeToMin,
+          weekdays: window.weekdays,
+          note: window.note,
+          status: SpaWaitlistStatus.WAITING,
+          createdByUserId: user.sub,
+        },
+        include: this.waitlistInclude,
+      });
+      return this.mapWaitlistEntry(entry);
+    }
+
+    if (!input.desiredStartAt) {
+      throw new BadRequestException('Укажите дату и время');
+    }
+    const start = new Date(input.desiredStartAt);
+    if (Number.isNaN(start.getTime())) {
+      throw new BadRequestException('Некорректная дата');
+    }
+    if (start.getTime() < Date.now() - 60_000) {
+      throw new BadRequestException('Нельзя добавить прошедшее время');
+    }
+
     const end = new Date(
       start.getTime() + (service.durationMin + service.bufferMin) * 60_000,
     );
+
+    const noteRaw = input.note?.trim() ?? '';
+    const note = noteRaw.length > 0 ? noteRaw.slice(0, 200) : null;
 
     const duplicate = await this.prisma.spaWaitlistEntry.findFirst({
       where: {
         clubId,
         status: SpaWaitlistStatus.WAITING,
+        preference: SpaWaitlistPreference.EXACT,
         specialistId: input.specialistId,
         serviceId: input.serviceId,
         desiredStartAt: start,
@@ -3319,12 +3571,114 @@ export class SpaBookingService {
         guestPhone: resolved.guestPhone,
         desiredStartAt: start,
         desiredEndAt: end,
+        preference: SpaWaitlistPreference.EXACT,
+        note,
         status: SpaWaitlistStatus.WAITING,
         createdByUserId: user.sub,
       },
       include: this.waitlistInclude,
     });
     return this.mapWaitlistEntry(entry);
+  }
+
+  async updateSpaWaitlist(
+    user: JwtPayload,
+    entryId: string,
+    input: {
+      windowStart?: string;
+      windowEnd?: string;
+      timeFromMin?: number | null;
+      timeToMin?: number | null;
+      weekdays?: number;
+      note?: string | null;
+      desiredStartAt?: string;
+    },
+  ): Promise<SpaWaitlistEntry> {
+    if (!this.isSpaStaff(user)) {
+      throw new ForbiddenException('Только сотрудники могут править лист');
+    }
+    const clubId = requireClubId(user);
+    const entry = await this.prisma.spaWaitlistEntry.findFirst({
+      where: { id: entryId, clubId },
+      include: { service: true },
+    });
+    if (!entry) throw new NotFoundException('Заявка не найдена');
+    if (entry.status !== SpaWaitlistStatus.WAITING) {
+      throw new BadRequestException('Заявка уже закрыта');
+    }
+    if (rolesIncludesSpecialistOnly(user) && entry.specialistId !== user.sub) {
+      throw new ForbiddenException('Нельзя править заявку другого специалиста');
+    }
+
+    if (entry.preference === SpaWaitlistPreference.WINDOW) {
+      const window = this.normalizeWaitlistWindow({
+        windowStart:
+          input.windowStart ?? this.waitlistYmdFromDate(entry.windowStart!),
+        windowEnd:
+          input.windowEnd ?? this.waitlistYmdFromDate(entry.windowEnd!),
+        timeFromMin:
+          input.timeFromMin !== undefined
+            ? input.timeFromMin
+            : entry.timeFromMin,
+        timeToMin:
+          input.timeToMin !== undefined ? input.timeToMin : entry.timeToMin,
+        weekdays: input.weekdays ?? entry.weekdays ?? SPA_WAITLIST_WEEKDAY_ALL,
+        note: input.note !== undefined ? input.note : entry.note,
+      });
+
+      const updated = await this.prisma.spaWaitlistEntry.update({
+        where: { id: entryId },
+        data: {
+          windowStart: window.windowStart,
+          windowEnd: window.windowEnd,
+          timeFromMin: window.timeFromMin,
+          timeToMin: window.timeToMin,
+          weekdays: window.weekdays,
+          note: window.note,
+          desiredStartAt: window.desiredStartAt,
+          desiredEndAt: window.desiredEndAt,
+        },
+        include: this.waitlistInclude,
+      });
+      return this.mapWaitlistEntry(updated);
+    }
+
+    const data: {
+      desiredStartAt?: Date;
+      desiredEndAt?: Date;
+      note?: string | null;
+    } = {};
+
+    if (input.note !== undefined) {
+      const noteRaw = input.note?.trim() ?? '';
+      data.note = noteRaw.length > 0 ? noteRaw.slice(0, 200) : null;
+    }
+
+    if (input.desiredStartAt) {
+      const start = new Date(input.desiredStartAt);
+      if (Number.isNaN(start.getTime())) {
+        throw new BadRequestException('Некорректная дата');
+      }
+      if (start.getTime() < Date.now() - 60_000) {
+        throw new BadRequestException('Нельзя поставить прошедшее время');
+      }
+      data.desiredStartAt = start;
+      data.desiredEndAt = new Date(
+        start.getTime() +
+          (entry.service.durationMin + entry.service.bufferMin) * 60_000,
+      );
+    }
+
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('Нечего обновлять');
+    }
+
+    const updated = await this.prisma.spaWaitlistEntry.update({
+      where: { id: entryId },
+      data,
+      include: this.waitlistInclude,
+    });
+    return this.mapWaitlistEntry(updated);
   }
 
   async cancelSpaWaitlist(user: JwtPayload, entryId: string) {

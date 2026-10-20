@@ -1042,7 +1042,14 @@ export const api = {
     token: string,
     data: {
       serviceId: string;
-      desiredStartAt: string;
+      desiredStartAt?: string;
+      preference?: 'EXACT' | 'WINDOW';
+      windowStart?: string;
+      windowEnd?: string;
+      timeFromMin?: number;
+      timeToMin?: number;
+      weekdays?: number;
+      note?: string;
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
@@ -1051,6 +1058,25 @@ export const api = {
     request<SpaWaitlistEntry>(
       '/specialist/spa-waitlist',
       { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  specialistUpdateSpaWaitlist: (
+    token: string,
+    id: string,
+    data: {
+      windowStart?: string;
+      windowEnd?: string;
+      timeFromMin?: number | null;
+      timeToMin?: number | null;
+      weekdays?: number;
+      note?: string | null;
+      desiredStartAt?: string;
+    },
+  ) =>
+    request<SpaWaitlistEntry>(
+      `/specialist/spa-waitlist/${id}`,
+      { method: 'PATCH', body: JSON.stringify(data) },
       token,
     ),
 
@@ -1268,7 +1294,14 @@ export const api = {
     data: {
       specialistId: string;
       serviceId: string;
-      desiredStartAt: string;
+      desiredStartAt?: string;
+      preference?: 'EXACT' | 'WINDOW';
+      windowStart?: string;
+      windowEnd?: string;
+      timeFromMin?: number;
+      timeToMin?: number;
+      weekdays?: number;
+      note?: string;
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
@@ -1277,6 +1310,25 @@ export const api = {
     request<SpaWaitlistEntry>(
       '/admin/spa-waitlist',
       { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  adminUpdateSpaWaitlist: (
+    token: string,
+    id: string,
+    data: {
+      windowStart?: string;
+      windowEnd?: string;
+      timeFromMin?: number | null;
+      timeToMin?: number | null;
+      weekdays?: number;
+      note?: string | null;
+      desiredStartAt?: string;
+    },
+  ) =>
+    request<SpaWaitlistEntry>(
+      `/admin/spa-waitlist/${id}`,
+      { method: 'PATCH', body: JSON.stringify(data) },
       token,
     ),
 

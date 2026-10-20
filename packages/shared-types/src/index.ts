@@ -626,7 +626,9 @@ export * from './floor-staff-home';
 export * from './discrepancies';
 export * from './admin-home-layout';
 export * from './spa-board-slots';
+export * from './spa-waitlist';
 
+import type { SpaWaitlistPreference } from './spa-waitlist';
 import type {
   ServiceControlLevel,
   ServicePresenceStatus,
@@ -1497,6 +1499,17 @@ export interface SpaWaitlistEntry {
   guestPhone?: string;
   desiredStartAt: string;
   desiredEndAt: string;
+  preference: SpaWaitlistPreference;
+  /** YYYY-MM-DD when preference is WINDOW. */
+  windowStart?: string;
+  /** YYYY-MM-DD when preference is WINDOW. */
+  windowEnd?: string;
+  /** Minutes from midnight; null/omit = whole day. */
+  timeFromMin?: number;
+  timeToMin?: number;
+  /** Bitmask Mon=1 … Sun=64; default all days when WINDOW. */
+  weekdays?: number;
+  note?: string;
   status: SpaWaitlistStatus;
   createdAt: string;
 }

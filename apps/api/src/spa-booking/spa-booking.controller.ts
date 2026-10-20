@@ -35,6 +35,7 @@ import { SetSpecialistWorkScheduleDto } from './dto/set-work-schedule.dto';
 import {
   BookFromSpaWaitlistDto,
   CreateSpaWaitlistDto,
+  UpdateSpaWaitlistDto,
 } from './dto/spa-waitlist.dto';
 import { UpdateSpaBookingDto } from './dto/update-spa-booking.dto';
 import {
@@ -365,9 +366,34 @@ export class SpaBookingController {
       specialistId: user.sub,
       serviceId: dto.serviceId,
       desiredStartAt: dto.desiredStartAt,
+      preference: dto.preference,
+      windowStart: dto.windowStart,
+      windowEnd: dto.windowEnd,
+      timeFromMin: dto.timeFromMin,
+      timeToMin: dto.timeToMin,
+      weekdays: dto.weekdays,
+      note: dto.note,
       clientId: dto.clientId,
       guestName: dto.guestName,
       guestPhone: dto.guestPhone,
+    });
+  }
+
+  @Patch('specialist/spa-waitlist/:id')
+  @Roles(UserRole.SPECIALIST)
+  specialistUpdateWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdateSpaWaitlistDto,
+  ) {
+    return this.spa.updateSpaWaitlist(user, id, {
+      windowStart: dto.windowStart,
+      windowEnd: dto.windowEnd,
+      timeFromMin: dto.timeFromMin,
+      timeToMin: dto.timeToMin,
+      weekdays: dto.weekdays,
+      note: dto.note,
+      desiredStartAt: dto.desiredStartAt,
     });
   }
 
@@ -617,9 +643,34 @@ export class SpaBookingController {
       specialistId: dto.specialistId,
       serviceId: dto.serviceId,
       desiredStartAt: dto.desiredStartAt,
+      preference: dto.preference,
+      windowStart: dto.windowStart,
+      windowEnd: dto.windowEnd,
+      timeFromMin: dto.timeFromMin,
+      timeToMin: dto.timeToMin,
+      weekdays: dto.weekdays,
+      note: dto.note,
       clientId: dto.clientId,
       guestName: dto.guestName,
       guestPhone: dto.guestPhone,
+    });
+  }
+
+  @Patch('admin/spa-waitlist/:id')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminUpdateWaitlist(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdateSpaWaitlistDto,
+  ) {
+    return this.spa.updateSpaWaitlist(user, id, {
+      windowStart: dto.windowStart,
+      windowEnd: dto.windowEnd,
+      timeFromMin: dto.timeFromMin,
+      timeToMin: dto.timeToMin,
+      weekdays: dto.weekdays,
+      note: dto.note,
+      desiredStartAt: dto.desiredStartAt,
     });
   }
 

@@ -204,6 +204,12 @@ enum SpaWaitlistStatus {
   EXPIRED
 }
 
+/// Exact preferred datetime vs flexible date/time window.
+enum SpaWaitlistPreference {
+  EXACT
+  WINDOW
+}
+
 /// Atomic claim for SPA consume-to-1C (prevents double post).
 enum SpaConsumeState {
   IN_PROGRESS
@@ -1803,7 +1809,7 @@ model SpaClientNote {
 
 /// Desired SPA slot when the time is busy — staff decides when to convert to SpaBooking.
 model SpaWaitlistEntry {
-  id                 String            @id @default(cuid())
+  id                 String                 @id @default(cuid())
   clubId             String
   specialistId       String
   serviceId          String
@@ -1812,11 +1818,22 @@ model SpaWaitlistEntry {
   guestPhone         String?
   desiredStartAt     DateTime
   desiredEndAt       DateTime
-  status             SpaWaitlistStatus @default(WAITING)
+  preference         SpaWaitlistPreference  @default(EXACT)
+  /// Calendar start of flexible window (date only).
+  windowStart        DateTime?              @db.Date
+  /// Calendar end of flexible window (inclusive, date only).
+  windowEnd          DateTime?              @db.Date
+  /// Minutes from midnight; null with WINDOW = whole day.
+  timeFromMin        Int?
+  timeToMin          Int?
+  /// Bitmask Mon=1 … Sun=64; null with WINDOW treated as all days.
+  weekdays           Int?
+  note               String?
+  status             SpaWaitlistStatus      @default(WAITING)
   createdByUserId    String?
   fulfilledBookingId String?
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
 
   club         Club       @relation(fields: [clubId], references: [id], onDelete: Cascade)
   specialist   User       @relation("SpecialistSpaWaitlist", fields: [specialistId], references: [id], onDelete: Cascade)
@@ -1826,6 +1843,7 @@ model SpaWaitlistEntry {
 
   @@index([clubId, desiredStartAt, status])
   @@index([specialistId, desiredStartAt, status])
+  @@index([clubId, windowStart, windowEnd, status])
   @@index([clientId, status])
 }
 

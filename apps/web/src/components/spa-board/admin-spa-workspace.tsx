@@ -9,7 +9,7 @@ import type {
   SpaSpecialistSummary,
   SpaWaitlistEntry,
 } from '@fitgo/shared-types';
-import { UserRole } from '@fitgo/shared-types';
+import { spaWaitlistFitsSlot, UserRole } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SpaBoard } from '@/components/spa-board/spa-board';
 import {
@@ -81,6 +81,7 @@ export function AdminSpaWorkspace() {
   const [waitlistPick, setWaitlistPick] = useState<{
     specialistId?: string;
     startAt?: string;
+    endAt?: string;
     title?: string;
     allowNew?: boolean;
   } | null>(null);
@@ -176,16 +177,9 @@ export function AdminSpaWorkspace() {
 
   const matchingWaitlist = useCallback(
     (specialistId: string, startAt: string, endAt?: string) => {
-      const start = new Date(startAt).getTime();
-      const end = endAt
-        ? new Date(endAt).getTime()
-        : start + 60 * 60 * 1000;
-      return waitlist.filter((e) => {
-        if (e.specialistId !== specialistId) return false;
-        const s = new Date(e.desiredStartAt).getTime();
-        const ee = new Date(e.desiredEndAt).getTime();
-        return s < end && ee > start;
-      });
+      return waitlist.filter(
+        (e) => spaWaitlistFitsSlot(e, specialistId, startAt, endAt).fits,
+      );
     },
     [waitlist],
   );
@@ -909,6 +903,7 @@ export function AdminSpaWorkspace() {
                     setWaitlistPick({
                       specialistId: freedBanner.specialistId,
                       startAt: freedBanner.startAt,
+                      endAt: freedBanner.endAt,
                       title: 'Освободилось время',
                       allowNew: false,
                     });
@@ -932,6 +927,7 @@ export function AdminSpaWorkspace() {
             services={services}
             specialists={specialists}
             clients={clients}
+            boardDayYmd={toDayIso(day)}
             allowPickSpecialist
             busy={busy}
             onReload={reload}
@@ -1098,6 +1094,7 @@ export function AdminSpaWorkspace() {
             entries={waitlist}
             specialistId={waitlistPick?.specialistId}
             slotStartAt={waitlistPick?.startAt}
+            slotEndAt={waitlistPick?.endAt}
             showSpecialist
             busy={busy}
             onClose={() => setWaitlistPick(null)}

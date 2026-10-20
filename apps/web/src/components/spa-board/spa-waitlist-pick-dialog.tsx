@@ -1,14 +1,11 @@
 'use client';
 
 import type { SpaWaitlistEntry } from '@fitgo/shared-types';
+import {
+  formatSpaWaitlistPreference,
+  spaWaitlistFitsSlot,
+} from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
-
-function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
 
 export function SpaWaitlistPickDialog({
   open,
@@ -16,6 +13,8 @@ export function SpaWaitlistPickDialog({
   entries,
   specialistId,
   slotStartAt,
+  slotEndAt,
+  serviceDurationMin,
   showSpecialist,
   busy,
   onClose,
@@ -27,6 +26,9 @@ export function SpaWaitlistPickDialog({
   entries: SpaWaitlistEntry[];
   specialistId?: string;
   slotStartAt?: string;
+  slotEndAt?: string;
+  /** Used to flag when a WINDOW booking would run past the hour band. */
+  serviceDurationMin?: number;
   showSpecialist?: boolean;
   busy?: boolean;
   onClose: () => void;
@@ -43,32 +45,66 @@ export function SpaWaitlistPickDialog({
   }, [open, slotStartAt, specialistId]);
 
   const ranked = useMemo(() => {
-    const slotT = slotStartAt ? new Date(slotStartAt).getTime() : null;
     const scored = entries.map((e) => {
       let score = 0;
       if (specialistId && e.specialistId === specialistId) score += 100;
-      if (slotT != null) {
-        const s = new Date(e.desiredStartAt).getTime();
-        const end = new Date(e.desiredEndAt).getTime();
-        if (s <= slotT && end > slotT) score += 50;
-        else score -= Math.min(40, Math.abs(s - slotT) / 60000);
+      if (slotStartAt && specialistId) {
+        const match = spaWaitlistFitsSlot(
+          e,
+          specialistId,
+          slotStartAt,
+          slotEndAt,
+          serviceDurationMin,
+        );
+        if (match.fits) {
+          score += 50;
+          if (match.exceedsWindow) score -= 5;
+        } else if (e.preference !== 'WINDOW') {
+          const s = new Date(e.desiredStartAt).getTime();
+          const slotT = new Date(slotStartAt).getTime();
+          if (!Number.isNaN(s) && !Number.isNaN(slotT)) {
+            score -= Math.min(40, Math.abs(s - slotT) / 60000);
+          }
+        } else {
+          score -= 40;
+        }
       }
+      // Prefer longer waiting
+      score += Math.min(
+        10,
+        (Date.now() - new Date(e.createdAt).getTime()) / (86_400_000 * 3),
+      );
       return { e, score };
     });
     scored.sort((a, b) => b.score - a.score);
     return scored.map((x) => x.e);
-  }, [entries, specialistId, slotStartAt]);
+  }, [
+    entries,
+    specialistId,
+    slotStartAt,
+    slotEndAt,
+    serviceDurationMin,
+  ]);
 
   const preferred = useMemo(() => {
     if (!slotStartAt || !specialistId) return ranked;
-    const t = new Date(slotStartAt).getTime();
-    return ranked.filter((e) => {
-      if (e.specialistId !== specialistId) return false;
-      const s = new Date(e.desiredStartAt).getTime();
-      const end = new Date(e.desiredEndAt).getTime();
-      return s <= t && end > t;
-    });
-  }, [ranked, specialistId, slotStartAt]);
+    return ranked.filter(
+      (e) =>
+        spaWaitlistFitsSlot(
+          e,
+          specialistId,
+          slotStartAt,
+          slotEndAt,
+          serviceDurationMin,
+        ).fits,
+    );
+  }, [
+    ranked,
+    specialistId,
+    slotStartAt,
+    slotEndAt,
+    serviceDurationMin,
+  ]);
 
   const list = showAll || preferred.length === 0 ? ranked : preferred;
 
@@ -100,55 +136,76 @@ export function SpaWaitlistPickDialog({
           <p className="text-sm text-slate-500">Заявок нет</p>
         ) : (
           <ul className="space-y-2">
-            {list.map((e) => (
-              <li key={e.id}>
-                <button
-                  type="button"
-                  className={`w-full rounded-xl border px-3 py-2 text-left text-sm transition ${
-                    selectedId === e.id
-                      ? 'border-fitgo-500 bg-fitgo-500/10'
-                      : 'border-white/10 bg-slate-900/40'
-                  }`}
-                  onClick={() => setSelectedId(e.id)}
-                >
-                  <p className="font-medium">{e.clientName}</p>
-                  <p className="text-slate-400">
-                    {e.serviceName} · {formatTime(e.desiredStartAt)}
-                    {showSpecialist ? ` · ${e.specialistName}` : ''}
-                  </p>
-                </button>
-              </li>
-            ))}
+            {list.map((e) => {
+              const match =
+                slotStartAt && specialistId
+                  ? spaWaitlistFitsSlot(
+                      e,
+                      specialistId,
+                      slotStartAt,
+                      slotEndAt,
+                      serviceDurationMin,
+                    )
+                  : { fits: false, exceedsWindow: false };
+              return (
+                <li key={e.id}>
+                  <button
+                    type="button"
+                    className={`w-full rounded-xl border px-3 py-2 text-left text-sm transition ${
+                      selectedId === e.id
+                        ? 'border-fitgo-500 bg-fitgo-500/10'
+                        : 'border-white/10 bg-slate-900/40'
+                    }`}
+                    onClick={() => setSelectedId(e.id)}
+                  >
+                    <p className="font-medium">{e.clientName}</p>
+                    <p className="text-slate-400">
+                      {e.serviceName}
+                      {showSpecialist ? ` · ${e.specialistName}` : ''}
+                    </p>
+                    <p className="text-xs text-slate-300">
+                      {formatSpaWaitlistPreference(e)}
+                    </p>
+                    {e.note ? (
+                      <p className="text-xs text-slate-500">{e.note}</p>
+                    ) : null}
+                    {match.fits && match.exceedsWindow ? (
+                      <p className="text-xs text-amber-300/90">уйдёт за окно</p>
+                    ) : null}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
 
-        {!showAll && preferred.length > 0 && preferred.length < ranked.length ? (
+        {preferred.length > 0 && preferred.length < ranked.length ? (
           <button
             type="button"
-            className="text-xs text-fitgo-300 underline"
-            onClick={() => setShowAll(true)}
+            className="btn-secondary w-full text-xs"
+            onClick={() => setShowAll((v) => !v)}
           >
-            Показать весь лист дня ({ranked.length})
+            {showAll ? 'Только подходящие' : 'Показать весь лист дня'}
           </button>
         ) : null}
 
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            className="btn-primary w-full"
+            className="btn-primary flex-1"
             disabled={busy || !selectedId}
             onClick={() => {
-              const entry = list.find((e) => e.id === selectedId);
+              const entry = entries.find((e) => e.id === selectedId);
               if (!entry) return;
               void onBook(entry);
             }}
           >
-            Записать выбранного
+            Записать из листа
           </button>
           {onNewBooking ? (
             <button
               type="button"
-              className="btn-secondary w-full"
+              className="btn-secondary flex-1"
               disabled={busy}
               onClick={onNewBooking}
             >
