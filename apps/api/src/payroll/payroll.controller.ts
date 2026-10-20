@@ -138,6 +138,22 @@ export class PayrollController {
     return this.payroll.setEmploymentKind(user, userId, body.employmentKind);
   }
 
+  @Patch('staff/:userId/motivation-exclusion')
+  setMotivationExclusion(
+    @CurrentUser() user: JwtPayload,
+    @Param('userId') userId: string,
+    @Body() body: { excludeFromPayrollMotivation: boolean },
+  ) {
+    if (typeof body.excludeFromPayrollMotivation !== 'boolean') {
+      throw new BadRequestException('excludeFromPayrollMotivation boolean');
+    }
+    return this.payroll.setMotivationExclusion(
+      user,
+      userId,
+      body.excludeFromPayrollMotivation,
+    );
+  }
+
   @Get('summary')
   summary(
     @CurrentUser() user: JwtPayload,

@@ -1143,6 +1143,14 @@ export class PayrollService {
       anomalyHints.push(`Много RESOLVED исключений: ${amberResolved}`);
     }
 
+    let outBase = baseSalaryMinor;
+    let outMotivation = motivationMinor;
+    if (performer.excludeFromPayrollMotivation) {
+      outBase = 0;
+      outMotivation = 0;
+      anomalyHints.push('Без мотивации — исключён из расчёта ЗП');
+    }
+
     return {
       from,
       to,
@@ -1152,8 +1160,8 @@ export class PayrollService {
       greenCount,
       resolvedCount,
       workUnits,
-      baseSalaryMinor,
-      motivationMinor,
+      baseSalaryMinor: outBase,
+      motivationMinor: outMotivation,
       adjustmentsMinor,
       adjustments: adjustments.map((a) => ({
         id: a.id,
@@ -1165,7 +1173,7 @@ export class PayrollService {
         createdAt: a.createdAt.toISOString(),
       })),
       payChips: payProfileSummary(profile),
-      totalMinor: baseSalaryMinor + motivationMinor + adjustmentsMinor,
+      totalMinor: outBase + outMotivation + adjustmentsMinor,
       currency: compensation?.currency ?? 'BYN',
       canLock: openTotal === 0 && !locked,
       locked: Boolean(locked),
@@ -2221,9 +2229,11 @@ export class PayrollService {
       include: { roles: true },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
     });
-    const eligible = opts?.excludeClubTrainerOnly
-      ? users.filter((u) => !isClubTrainerOnlyPayrollSkip(u))
-      : users;
+    const eligible = (
+      opts?.excludeClubTrainerOnly
+        ? users.filter((u) => !isClubTrainerOnlyPayrollSkip(u))
+        : users
+    ).filter((u) => !u.excludeFromPayrollMotivation);
     const comps = await this.prisma.staffCompensation.findMany({
       where: { clubId, userId: { in: eligible.map((u) => u.id) } },
       orderBy: { effectiveFrom: 'desc' },
@@ -2263,6 +2273,7 @@ export class PayrollService {
           u.employmentKind === PrismaEmploymentKind.EXTERNAL
             ? 'EXTERNAL'
             : 'STAFF',
+        excludeFromPayrollMotivation: u.excludeFromPayrollMotivation ?? false,
       };
     });
   }
@@ -3964,6 +3975,33 @@ export class PayrollService {
       },
     });
     return { userId, employmentKind };
+  }
+
+  async setMotivationExclusion(
+    actor: JwtPayload,
+    userId: string,
+    excludeFromPayrollMotivation: boolean,
+  ) {
+    const clubId = requireClubId(actor);
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+      include: { roles: true },
+    });
+    if (!user) throw new NotFoundException('Сотрудник не найден');
+    if (excludeFromPayrollMotivation) {
+      const isManager = user.roles.some((r) => r.role === Role.MANAGER);
+      const isClubTrainer = Boolean(user.trainerClub);
+      if (!isManager && !isClubTrainer) {
+        throw new BadRequestException(
+          'Без мотивации только для управляющего или тренера клуба',
+        );
+      }
+    }
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { excludeFromPayrollMotivation },
+    });
+    return { userId, excludeFromPayrollMotivation };
   }
 
   async setSpaPartnerSource(

@@ -1081,6 +1081,8 @@ export interface StaffMember {
   archivedAt?: string | null;
   /** STAFF (default) or EXTERNAL (сторонние в отчёте ЗП). */
   employmentKind?: 'STAFF' | 'EXTERNAL';
+  /** Exclude from payroll motivation / club ЗП report; app access kept. */
+  excludeFromPayrollMotivation?: boolean;
   createdAt: string;
 }
 

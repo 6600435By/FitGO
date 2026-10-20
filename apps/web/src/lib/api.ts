@@ -3226,6 +3226,20 @@ export const api = {
       token,
     ),
 
+  payrollSetMotivationExclusion: (
+    token: string,
+    userId: string,
+    excludeFromPayrollMotivation: boolean,
+  ) =>
+    request<{ userId: string; excludeFromPayrollMotivation: boolean }>(
+      `/super-admin/payroll/staff/${userId}/motivation-exclusion`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ excludeFromPayrollMotivation }),
+      },
+      token,
+    ),
+
   payrollSetSpaPartner: (
     token: string,
     bookingId: string,

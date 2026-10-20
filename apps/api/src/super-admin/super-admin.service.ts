@@ -895,6 +895,7 @@ export class SuperAdminService implements OnModuleInit {
     isActive: boolean;
     archivedAt?: Date | null;
     employmentKind?: 'STAFF' | 'EXTERNAL' | string;
+    excludeFromPayrollMotivation?: boolean;
     createdAt: Date;
     roles: Array<{ role: Role }>;
   }) {
@@ -927,6 +928,8 @@ export class SuperAdminService implements OnModuleInit {
       archivedAt: member.archivedAt?.toISOString() ?? null,
       employmentKind:
         member.employmentKind === 'EXTERNAL' ? 'EXTERNAL' : 'STAFF',
+      excludeFromPayrollMotivation:
+        member.excludeFromPayrollMotivation ?? false,
       createdAt: member.createdAt.toISOString(),
     };
   }

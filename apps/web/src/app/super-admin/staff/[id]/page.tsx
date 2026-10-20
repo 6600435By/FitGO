@@ -341,43 +341,86 @@ export default function SuperAdminStaffDetailPage() {
             </div>
           </div>
         ) : null}
-        <div className="border-t border-slate-800 pt-3">
-          <p className="mb-2 text-xs text-slate-400">
-            Сторонний специалист — отдельная секция в сводном отчёте ЗП
-          </p>
-          <button
-            type="button"
-            disabled={rolesBusy}
-            className={
-              member.employmentKind === 'EXTERNAL'
-                ? 'btn-primary px-3 py-1.5 text-sm'
-                : 'btn-secondary px-3 py-1.5 text-sm'
-            }
-            onClick={async () => {
-              const token = getToken();
-              if (!token) return;
-              const next =
-                member.employmentKind === 'EXTERNAL' ? 'STAFF' : 'EXTERNAL';
-              setRolesBusy(true);
-              try {
-                await api.payrollSetEmployment(token, id, next);
-                setMessage(
-                  next === 'EXTERNAL'
-                    ? 'Отмечен как сторонний'
-                    : 'Штатный сотрудник',
-                );
-                load();
-              } catch (e) {
-                setMessage(e instanceof Error ? e.message : 'Ошибка');
-              } finally {
-                setRolesBusy(false);
+        <div className="border-t border-slate-800 pt-3 space-y-3">
+          <div>
+            <p className="mb-2 text-xs text-slate-400">
+              Сторонний специалист — отдельная секция в сводном отчёте ЗП
+            </p>
+            <button
+              type="button"
+              disabled={rolesBusy}
+              className={
+                member.employmentKind === 'EXTERNAL'
+                  ? 'btn-primary px-3 py-1.5 text-sm'
+                  : 'btn-secondary px-3 py-1.5 text-sm'
               }
-            }}
-          >
-            {member.employmentKind === 'EXTERNAL'
-              ? 'Сторонний ✓'
-              : 'Сделать сторонним'}
-          </button>
+              onClick={async () => {
+                const token = getToken();
+                if (!token) return;
+                const next =
+                  member.employmentKind === 'EXTERNAL' ? 'STAFF' : 'EXTERNAL';
+                setRolesBusy(true);
+                try {
+                  await api.payrollSetEmployment(token, id, next);
+                  setMessage(
+                    next === 'EXTERNAL'
+                      ? 'Отмечен как сторонний'
+                      : 'Штатный сотрудник',
+                  );
+                  load();
+                } catch (e) {
+                  setMessage(e instanceof Error ? e.message : 'Ошибка');
+                } finally {
+                  setRolesBusy(false);
+                }
+              }}
+            >
+              {member.employmentKind === 'EXTERNAL'
+                ? 'Сторонний ✓'
+                : 'Сделать сторонним'}
+            </button>
+          </div>
+          {member.roles.includes(UserRole.MANAGER) ||
+          member.trainerClub ? (
+            <div>
+              <p className="mb-2 text-xs text-slate-400">
+                Без мотивации — исключает из расчёта в отчёте ЗП, доступ в
+                приложение сохраняется
+              </p>
+              <button
+                type="button"
+                disabled={rolesBusy}
+                className={
+                  member.excludeFromPayrollMotivation
+                    ? 'btn-primary px-3 py-1.5 text-sm'
+                    : 'btn-secondary px-3 py-1.5 text-sm'
+                }
+                onClick={async () => {
+                  const token = getToken();
+                  if (!token) return;
+                  const next = !member.excludeFromPayrollMotivation;
+                  setRolesBusy(true);
+                  try {
+                    await api.payrollSetMotivationExclusion(token, id, next);
+                    setMessage(
+                      next
+                        ? 'Исключён из мотивации ЗП'
+                        : 'Снова в расчёте мотивации',
+                    );
+                    load();
+                  } catch (e) {
+                    setMessage(e instanceof Error ? e.message : 'Ошибка');
+                  } finally {
+                    setRolesBusy(false);
+                  }
+                }}
+              >
+                {member.excludeFromPayrollMotivation
+                  ? 'Без мотивации ✓'
+                  : 'Без мотивации'}
+              </button>
+            </div>
+          ) : null}
         </div>
         {member.roles.includes(UserRole.ADMIN) && (
           <Link

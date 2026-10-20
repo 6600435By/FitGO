@@ -589,6 +589,8 @@ model User {
   archivedAt            DateTime?
   /// STAFF = штат; EXTERNAL = сторонние специалисты (отдельная секция ЗП).
   employmentKind        StaffEmploymentKind @default(STAFF)
+  /// Exclude from payroll motivation / club ЗП report; app login & roles stay.
+  excludeFromPayrollMotivation Boolean @default(false)
   createdById           String?
   osmiCardId            String?
   osmiBarcode           String?

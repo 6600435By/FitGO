@@ -78,6 +78,8 @@ export interface StaffPaySummary {
   baseSalaryMinor: number;
   currency: string;
   employmentKind?: import('./staff-pay').StaffEmploymentKind;
+  /** True when staff is excluded from payroll motivation / club report. */
+  excludeFromPayrollMotivation?: boolean;
 }
 
 export interface MotivationRateDto {
