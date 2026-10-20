@@ -1662,6 +1662,14 @@ export class AdminService {
       doNotCall: task.doNotCall ?? false,
       clientExternalId: task.clientExternalId ?? undefined,
       phone: typeof meta.phone === 'string' ? meta.phone : undefined,
+      firstName:
+        typeof meta.firstName === 'string' && meta.firstName.trim()
+          ? meta.firstName.trim()
+          : undefined,
+      middleName:
+        typeof meta.middleName === 'string' && meta.middleName.trim()
+          ? meta.middleName.trim()
+          : undefined,
       membershipName:
         typeof meta.membershipName === 'string'
           ? meta.membershipName

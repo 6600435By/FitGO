@@ -353,6 +353,16 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         ? `birthday:${row.externalId}:${dayKey}`
         : `birthday-skip:${row.externalId}:${dayKey}`;
 
+      const firstName = (row.firstName ?? '').trim() || null;
+      const middleName = (row.middleName ?? '').trim() || null;
+      const birthdayMeta = {
+        phone: row.phone ?? null,
+        clientName: name,
+        firstName,
+        middleName,
+        lastVisitAt: row.lastVisitAt ?? null,
+      };
+
       if (!include) {
         skipped += 1;
         const skipReason = guestOnly
@@ -372,11 +382,9 @@ export class AdminTasksSchedulerService implements OnModuleInit {
             dedupeKey,
             clientExternalId: row.externalId,
             meta: {
-              phone: row.phone ?? null,
-              clientName: name,
+              ...birthdayMeta,
               skippedInactive: true,
               skippedGuest: guestOnly,
-              lastVisitAt: row.lastVisitAt ?? null,
             },
           },
           update: {},
@@ -387,7 +395,27 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       const existing = await this.prisma.adminTask.findUnique({
         where: { clubId_dedupeKey: { clubId, dedupeKey } },
       });
-      if (existing) continue;
+      if (existing) {
+        // Backfill name fields for call script without changing status.
+        const prev = (existing.meta ?? {}) as Record<string, unknown>;
+        const needsName =
+          prev.firstName !== firstName || prev.middleName !== middleName;
+        if (needsName) {
+          await this.prisma.adminTask.update({
+            where: { id: existing.id },
+            data: {
+              meta: {
+                ...prev,
+                firstName,
+                middleName,
+                clientName: name,
+                phone: row.phone ?? prev.phone ?? null,
+              },
+            },
+          });
+        }
+        continue;
+      }
 
       await this.prisma.adminTask.create({
         data: {
@@ -401,9 +429,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
           dedupeKey,
           clientExternalId: row.externalId,
           meta: {
-            phone: row.phone ?? null,
-            clientName: name,
-            lastVisitAt: row.lastVisitAt ?? null,
+            ...birthdayMeta,
             hasActiveMembership: row.hasActiveMembership === true,
           },
         },

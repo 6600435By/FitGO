@@ -337,6 +337,8 @@ export interface FitgoBirthdayRow {
   externalId: string;
   firstName: string;
   lastName: string;
+  /** Patronymic from Контрагенты.Отчество (optional). */
+  middleName?: string;
   phone?: string;
   /** ISO date of last club visit, if known */
   lastVisitAt?: string;

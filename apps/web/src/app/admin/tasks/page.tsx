@@ -10,6 +10,7 @@ import { AdminTaskStatus } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { BirthdayCallScript } from '@/components/admin/birthday-call-script';
 import { RenewalTaskSheet } from '@/components/admin/renewal-task-sheet';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -732,6 +733,11 @@ function AdminTasksInner() {
                 {task.title.replace(/^День рождения:\s*/i, '')}
               </p>
               <p className="text-sm text-slate-400">Поздравить сегодня</p>
+              <BirthdayCallScript
+                firstName={task.firstName}
+                middleName={task.middleName}
+                title={task.title}
+              />
               <CallButton phone={task.phone} />
               <button
                 type="button"

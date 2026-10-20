@@ -4,6 +4,7 @@ import type { AdminTaskItem, StaffMember } from '@fitgo/shared-types';
 import { AdminTaskStatus, UserRole } from '@fitgo/shared-types';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
+import { BirthdayCallScript } from '@/components/admin/birthday-call-script';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { phoneTelHref } from '@/lib/phone';
@@ -321,7 +322,16 @@ function SuperAdminTasksInner() {
                   {statusLabel[task.status]}
                 </span>
               </div>
-              {isBirthday ? <CallButton phone={task.phone} /> : null}
+              {isBirthday ? (
+                <>
+                  <BirthdayCallScript
+                    firstName={task.firstName}
+                    middleName={task.middleName}
+                    title={task.title}
+                  />
+                  <CallButton phone={task.phone} />
+                </>
+              ) : null}
               {task.status !== AdminTaskStatus.DONE &&
                 task.status !== AdminTaskStatus.CANCELLED && (
                   <div className="mt-1 flex flex-wrap gap-2">

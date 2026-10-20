@@ -673,6 +673,7 @@ export class FitgoHttpProvider {
         externalId?: string;
         firstName?: string;
         lastName?: string;
+        middleName?: string;
         phone?: string;
         lastVisitAt?: string;
         hasActiveMembership?: boolean;
@@ -704,6 +705,7 @@ export class FitgoHttpProvider {
         externalId: String(row.externalId),
         firstName: row.firstName ?? '',
         lastName: row.lastName ?? '',
+        middleName: row.middleName?.trim() || undefined,
         phone: row.phone || undefined,
         lastVisitAt: row.lastVisitAt || undefined,
         hasActiveMembership: row.hasActiveMembership === true,

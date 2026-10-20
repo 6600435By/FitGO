@@ -1126,6 +1126,10 @@ export interface AdminTaskItem {
   doNotCall?: boolean;
   clientExternalId?: string;
   phone?: string;
+  /** BIRTHDAY call script — given name from 1C / title fallback on UI */
+  firstName?: string;
+  /** BIRTHDAY call script — patronymic when 1C published middleName */
+  middleName?: string;
   membershipName?: string;
   validUntil?: string;
   daysLeft?: number;

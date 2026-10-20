@@ -206,6 +206,7 @@ Query: `uuid` — UUID сегмента `Справочник.СегментыК
       "externalId": "client-uuid",
       "firstName": "Анна",
       "lastName": "Иванова",
+      "middleName": "Ивановна",
       "phone": "375291112233",
       "lastVisitAt": "2026-09-01",
       "hasActiveMembership": true,
@@ -220,6 +221,7 @@ Query: `uuid` — UUID сегмента `Справочник.СегментыК
 | `found` | Сегмент найден по UUID |
 | `segmentCount` | Число объектов в составе сегмента |
 | `birthdayCount` | Сколько именинников в `data` |
+| `middleName` | Отчество (`Контрагенты.Отчество`), если заполнено |
 | `hasActiveMembership` | Есть ACTIVE/FROZEN членство **не** гостевое |
 | `guestOnly` | Только гостевые пакеты — Nest не ставит задачу поздравления |
 
