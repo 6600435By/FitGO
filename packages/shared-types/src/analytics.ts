@@ -353,3 +353,95 @@ export interface StaffAnalyticsReport {
     toPayMinor?: number;
   };
 }
+
+/** Topic keys aligned with admin task-topic display filters. */
+export type AdminTaskWorkTopic =
+  | 'staff_debt'
+  | 'client_debt'
+  | 'membership'
+  | 'installment'
+  | 'manager'
+  | 'birthday'
+  | 'confirmation'
+  | 'pt_sale_check'
+  | 'other';
+
+export interface AdminTaskWorkQueueAge {
+  d0_1: number;
+  d2_3: number;
+  d4_7: number;
+  d8plus: number;
+}
+
+/** Snapshot of open queue — independent of selected period. */
+export interface AdminTaskWorkSnapshot {
+  open: number;
+  overdue: number;
+  unassigned: number;
+  age: AdminTaskWorkQueueAge;
+}
+
+export interface AdminTaskWorkFlowMetrics {
+  created: AnalyticMetric;
+  closed: AnalyticMetric;
+  onTimePct: AnalyticMetric;
+  medianCloseHours: AnalyticMetric;
+}
+
+export interface AdminTaskWorkTopicRow {
+  topic: AdminTaskWorkTopic;
+  label: string;
+  created: number;
+  closed: number;
+  open: number;
+  overdue: number;
+  onTimePct: number | null;
+}
+
+export interface AdminTaskWorkPersonTask {
+  id: string;
+  title: string;
+  topic: AdminTaskWorkTopic;
+  status: 'OPEN' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED';
+  dueAt?: string | null;
+  completedAt?: string | null;
+  createdAt: string;
+  overdue: boolean;
+}
+
+export interface AdminTaskWorkPersonRow {
+  userId: string;
+  name: string;
+  /** Open + in progress assigned now. */
+  openNow: number;
+  overdueNow: number;
+  closed: number;
+  onTimePct: number | null;
+  medianCloseHours: number | null;
+  renewalRenewed: number;
+  renewalLost: number;
+  /** 0–100 when closed >= 5; otherwise null («мало данных»). */
+  rating: number | null;
+  rank: number | null;
+  openTasks: AdminTaskWorkPersonTask[];
+  closedTasks: AdminTaskWorkPersonTask[];
+}
+
+/** Unassigned open queue — shown as «Очередь», excluded from rating. */
+export interface AdminTaskWorkUnassignedRow {
+  openNow: number;
+  overdueNow: number;
+  tasks: AdminTaskWorkPersonTask[];
+}
+
+export interface AdminTaskWorkReport {
+  from: string;
+  to: string;
+  snapshot: AdminTaskWorkSnapshot;
+  flow: AdminTaskWorkFlowMetrics;
+  byTopic: AdminTaskWorkTopicRow[];
+  byPerson: AdminTaskWorkPersonRow[];
+  unassigned: AdminTaskWorkUnassignedRow;
+  /** Shown in UI so rating is transparent. */
+  ratingFormula: string;
+}

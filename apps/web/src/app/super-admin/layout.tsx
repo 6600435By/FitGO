@@ -65,6 +65,12 @@ const ALL_NAV: SaNavItem[] = [
     group: 'control',
   },
   { href: '/super-admin/sales', label: 'Продажи', group: 'reports' },
+  {
+    href: '/super-admin/task-report',
+    label: 'Работа с задачами',
+    shortLabel: 'Отчёт задач',
+    group: 'reports',
+  },
   { href: '/super-admin/payroll', label: 'ЗП', group: 'reports' },
   {
     href: '/super-admin/pt-timesheet',

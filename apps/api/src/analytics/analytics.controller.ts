@@ -14,6 +14,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import type { AnalyticsCompareMode, AnalyticsDepartment } from '@fitgo/shared-types';
+import { AdminTaskReportService } from './admin-task-report.service';
 import { ClubAnalyticsService } from './club-analytics.service';
 import { StaffAnalyticsService } from './staff-analytics.service';
 
@@ -24,6 +25,7 @@ export class AnalyticsController {
   constructor(
     private readonly club: ClubAnalyticsService,
     private readonly staff: StaffAnalyticsService,
+    private readonly taskReport: AdminTaskReportService,
   ) {}
 
   @Get('club')
@@ -101,6 +103,34 @@ export class AnalyticsController {
     res!.setHeader(
       'Content-Disposition',
       `attachment; filename="analytics_staff_${from}_${to}.xlsx"`,
+    );
+    res!.send(buf);
+  }
+
+  @Get('tasks')
+  taskWorkReport(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.taskReport.getReport(user, { from, to });
+  }
+
+  @Get('tasks.xlsx')
+  async taskWorkXlsx(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Res() res?: Response,
+  ) {
+    const buf = await this.taskReport.exportXlsx(user, { from, to });
+    res!.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res!.setHeader(
+      'Content-Disposition',
+      `attachment; filename="analytics_tasks_${from}_${to}.xlsx"`,
     );
     res!.send(buf);
   }

@@ -29,7 +29,10 @@ type TopicFilter =
   | 'client_debt'
   | 'membership'
   | 'installment'
-  | 'birthday';
+  | 'birthday'
+  | 'confirmation'
+  | 'pt_sale_check'
+  | 'other';
 
 function sourceLabel(source: string): string {
   if (source === 'STAFF_DEBT') return 'авто: долг сотрудника';
@@ -39,7 +42,9 @@ function sourceLabel(source: string): string {
   if (source === 'MEMBERSHIP_EXPIRING') return 'авто: абонемент';
   if (source === 'INSTALLMENT_PAYMENT') return 'авто: рассрочка';
   if (source === 'BIRTHDAY') return 'авто: день рождения';
-  if (source === 'MANAGER') return 'от руководителя';
+  if (source === 'BOOKING_CONFIRM') return 'авто: подтверждение';
+  if (source === 'TRAINING_SALE_NO_PERFORMER') return 'авто: продажа ПТ';
+  if (source === 'MANAGER' || source === 'DISCREPANCY') return 'от руководителя';
   return source;
 }
 
@@ -50,7 +55,10 @@ function parseTopic(raw: string | null): TopicFilter {
     raw === 'client_debt' ||
     raw === 'membership' ||
     raw === 'installment' ||
-    raw === 'birthday'
+    raw === 'birthday' ||
+    raw === 'confirmation' ||
+    raw === 'pt_sale_check' ||
+    raw === 'other'
   ) {
     return raw;
   }
@@ -143,6 +151,9 @@ function SuperAdminTasksInner() {
     { id: 'installment', label: 'Рассрочки' },
     { id: 'membership', label: 'Абонементы' },
     { id: 'birthday', label: 'Дни рождения' },
+    { id: 'confirmation', label: 'Подтверждение записи' },
+    { id: 'pt_sale_check', label: 'Продажа ПТ' },
+    { id: 'other', label: 'Прочее' },
   ];
   const visible = tasks.filter((task) => {
     if (topic === 'all') return true;

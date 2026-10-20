@@ -57,6 +57,7 @@ import {
   type ClubAnalyticsReport,
   type ManagerEfficiencyBlock,
   type StaffAnalyticsReport,
+  type AdminTaskWorkReport,
   type AnalyticsCompareMode,
   type AnalyticsDepartment,
   type FloorStaffHome,
@@ -2263,6 +2264,39 @@ export const api = {
     return res.blob();
   },
 
+  analyticsTasks: (
+    token: string,
+    params: { from: string; to: string },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    return request<AdminTaskWorkReport>(
+      `/super-admin/analytics/tasks?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsTasksXlsx: async (
+    token: string,
+    params: { from: string; to: string },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    const res = await fetch(
+      `${API_URL}/api/super-admin/analytics/tasks.xlsx?${q}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(xlsxErrorMessage(text, res.status));
+    }
+    return res.blob();
+  },
 
   superAdminAuditLog: (token: string) =>
     request<StaffAuditLogItem[]>('/super-admin/audit-log', {}, token),
