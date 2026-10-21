@@ -843,6 +843,7 @@ export class PayrollService {
         trustResolution: 'NONE',
         payrollTrusted: Boolean(trusted),
         sessionId: s.id,
+        sessionKey: key,
         roomTitle,
         roomKey: resolveGroupRoomKey(roomTitle),
         serviceExternalId,
@@ -885,6 +886,7 @@ export class PayrollService {
           trustResolution: 'NONE',
           payrollTrusted: true,
           sessionId: o.id,
+          sessionKey: key,
           roomTitle,
           roomKey: resolveGroupRoomKey(roomTitle),
           serviceExternalId,
@@ -1320,6 +1322,8 @@ export class PayrollService {
   /**
    * Preview a club pay wave.
    * - ADVANCE_HALF (25th): default days 1–15 (override via periodFrom/To).
+   *   Admins & staff PT → fixed card advance (0 = pay nothing).
+   *   Others → fixed only when card-advance > 0, else motivation for the range.
    * - MONTH_SETTLEMENT (15th): previous calendar month minus paid ADVANCE_HALF.
    */
   async previewPayout(
@@ -1372,16 +1376,18 @@ export class PayrollService {
     const resolvedFixedAdvance = this.resolveFixedAdvance(profile, roles, {
       trainerStaff: Boolean(user.trainerStaff),
     });
-    // ADMIN / any TRAINER: always fixed path on 25th (0 = pay nothing).
-    // MANAGER / SPA / TECH: fixed path only when the card-advance field is set.
+    // ADMIN / staff PT: always fixed card advance on 25th (0 = pay nothing).
+    // GP / club / reformer trainers and MANAGER / SPA / TECH: fixed path only
+    // when «Выплата аванса на карту» > 0; otherwise accrue motivation for 1–15.
     const usesFixedAdvance =
       kind === 'ADVANCE_HALF' &&
       (roles.includes(Role.ADMIN) ||
-        roles.includes(Role.TRAINER) ||
+        Boolean(user.trainerStaff) ||
         (resolvedFixedAdvance > 0 &&
           (roles.includes(Role.MANAGER) ||
             roles.includes(Role.SPECIALIST) ||
-            roles.includes(Role.TECH))));
+            roles.includes(Role.TECH) ||
+            roles.includes(Role.TRAINER))));
     const fixedAdvanceMinor = usesFixedAdvance ? resolvedFixedAdvance : 0;
 
     const hints: string[] = [];
@@ -1762,9 +1768,9 @@ export class PayrollService {
     const firstPositive = ordered.find((n) => n > 0);
     if (firstPositive != null) return firstPositive;
 
-    // ADMIN / staff trainer with explicit 0 still use the fixed path (earned = 0).
+    // ADMIN / staff PT with explicit 0 still use the fixed path (earned = 0).
+    // Club / GP trainers without a card-advance field fall through to motivation.
     if (roles.includes(Role.ADMIN) || opts?.trainerStaff) return 0;
-    if (roles.includes(Role.TRAINER)) return 0;
     return profile.fixedAdvanceMinor ?? 0;
   }
 
@@ -3032,7 +3038,7 @@ export class PayrollService {
   }
 
   /**
-   * Fill earnMinor / ratePercent on PT+SPA lines for the payroll breakdown table.
+   * Fill earnMinor / ratePercent on PT+SPA+GROUP lines for the payroll table.
    * Mirrors calcMotivationFromProfile (and legacy rates) per unit.
    * Annotates untrusted rows too (display); totals still use payrollTrusted only.
    */
@@ -3043,7 +3049,7 @@ export class PayrollService {
   ): void {
     if (!profile) {
       for (const u of units) {
-        if (u.kind !== 'SPA' && u.kind !== 'PT') continue;
+        if (u.kind !== 'SPA' && u.kind !== 'PT' && u.kind !== 'GROUP') continue;
         if (u.isComplimentary) continue;
         const rate = this.pickRate(u, rates);
         if (!rate) continue;
@@ -3062,6 +3068,11 @@ export class PayrollService {
     const trusted = units.filter((u) => u.payrollTrusted);
     const slices = allPaySlices(profile);
     const hasReformerScheme = slices.some((s) => s.track === 'REFORMER');
+    const asdRateMinor = Math.max(
+      0,
+      ...slices.map((s) => s.asdGroupRateMinor ?? 0),
+    );
+    const paidAsdIds = new Set<string>();
     const ptAllSportsRate = Math.max(
       0,
       ...slices
@@ -3069,6 +3080,15 @@ export class PayrollService {
         .map((s) => s.ptAllSportsRateMinor ?? 0),
     );
     const paidPtAllSportsIds = new Set<string>();
+
+    if (asdRateMinor > 0) {
+      for (const u of units) {
+        if (!u.isAsd || u.quantity < 1) continue;
+        if (paidAsdIds.has(u.id)) continue;
+        paidAsdIds.add(u.id);
+        u.earnMinor = asdRateMinor;
+      }
+    }
 
     if (ptAllSportsRate > 0) {
       for (const u of units) {
@@ -3080,7 +3100,52 @@ export class PayrollService {
     }
 
     for (const slice of slices) {
+      if (slice.track === 'GROUP_TRAINER') {
+        for (const u of units.filter((x) => x.kind === 'GROUP')) {
+          if (u.isAsd) continue;
+          if (u.roomKey === 'REFORMER') continue;
+          const hasTiers = (slice.groupRateTiers?.length ?? 0) > 0;
+          let pay = 0;
+          if (hasTiers || u.roomKey) {
+            pay = resolveGroupSessionRateMinor(
+              u.quantity,
+              u.roomKey,
+              slice.groupRateTiers,
+              {
+                rateMinor: slice.groupSessionRateMinor,
+                minAttendees: slice.groupMinAttendees,
+              },
+            );
+          } else {
+            const min = slice.groupMinAttendees ?? 1;
+            if (u.quantity >= min) pay = slice.groupSessionRateMinor ?? 0;
+          }
+          if (slice.groupPerAttendeeMinor) {
+            pay += slice.groupPerAttendeeMinor * u.quantity;
+          }
+          if (pay > 0) u.earnMinor = pay;
+        }
+      }
+
       if (slice.track === 'REFORMER') {
+        const tiers =
+          (slice.groupRateTiers?.filter((t) => t.roomKey === 'REFORMER')
+            ?.length ?? 0) > 0
+            ? slice.groupRateTiers
+            : DEFAULT_REFORMER_RATE_TIERS;
+        for (const u of units.filter(
+          (x) => x.kind === 'GROUP' && x.roomKey === 'REFORMER',
+        )) {
+          if (u.isAsd) continue;
+          if (u.quantity < 1) continue;
+          const pay = resolveGroupSessionRateMinor(
+            u.quantity,
+            'REFORMER',
+            tiers,
+          );
+          if (pay > 0) u.earnMinor = pay;
+        }
+
         const refPct = slice.reformerPersonalPercent ?? 0;
         if (refPct > 0) {
           for (const u of units.filter(
