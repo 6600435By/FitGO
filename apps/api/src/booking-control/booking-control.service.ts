@@ -304,6 +304,8 @@ export class BookingControlService {
           s.status,
         );
       }
+      const paidArrived =
+        kind !== 'GROUP' && this.paymentImpliesArrived(payment);
       const counts =
         kind === 'GROUP'
           ? this.attendanceCounts(
@@ -311,10 +313,14 @@ export class BookingControlService {
               Math.max(s.attendedCount ?? 0, s.headerAttendedCount ?? 0),
             )
           : memberSnapshot.length
-            ? this.attendanceCounts(memberSnapshot)
+            ? this.attendanceCounts(
+                memberSnapshot,
+                paidArrived ? 1 : 0,
+              )
             : this.singleClientCounts(status, {
                 arrived:
                   memberSnapshot.some((m) => m.attendance === 'ATTENDED') ||
+                  paidArrived ||
                   undefined,
               });
 
@@ -422,7 +428,16 @@ export class BookingControlService {
             : b.status === PersonalBookingStatus.COMPLETED
               ? 'COMPLETED'
               : 'SCHEDULED';
-        const counts = this.singleClientCounts(status);
+        const payment: BookingControlPayment = b.isComplimentary
+          ? 'GIFT'
+          : b.paymentStatus === 'PAID'
+            ? 'PAID'
+            : b.paymentStatus === 'DEBT'
+              ? 'DEBT'
+              : 'UNKNOWN';
+        const counts = this.singleClientCounts(status, {
+          arrived: this.paymentImpliesArrived(payment),
+        });
         items.push({
           sessionKey,
           kind: 'PT',
@@ -441,13 +456,7 @@ export class BookingControlService {
           bookedCount: counts.bookedCount,
           arrivedCount: counts.arrivedCount,
           noShowCount: counts.noShowCount,
-          payment: b.isComplimentary
-            ? 'GIFT'
-            : b.paymentStatus === 'PAID'
-              ? 'PAID'
-              : b.paymentStatus === 'DEBT'
-                ? 'DEBT'
-                : 'UNKNOWN',
+          payment,
           needsReview: openKeys.has(sessionKey),
           fitgoBookingId: b.id,
         });
@@ -521,10 +530,30 @@ export class BookingControlService {
             : b.status === SpaBookingStatus.COMPLETED
               ? 'COMPLETED'
               : 'SCHEDULED';
-        const counts = this.singleClientCounts(status);
         const oneCLinked = Boolean(
           b.crmDocRef?.trim() || b.linkedSaleExternalId?.trim(),
         );
+        const payment: BookingControlPayment =
+          b.partnerSource?.toUpperCase() === 'ALLSPORTS' ||
+          isSpaAllSportsBioimpedance({
+            serviceExternalId: b.service.externalId,
+            title: b.service.name,
+          })
+            ? 'PARTNER'
+            : b.paymentType === 'QUOTA'
+              ? 'QUOTA'
+              : b.paymentStatus === 'PAID'
+                ? 'PAID'
+                : b.paymentStatus === 'DEBT'
+                  ? 'DEBT'
+                  : 'UNKNOWN';
+        // Paid sale / partner ⇒ client came (even if booking still SCHEDULED).
+        const counts = this.singleClientCounts(status, {
+          arrived:
+            this.paymentImpliesArrived(payment) ||
+            (Boolean(b.linkedSaleExternalId?.trim()) &&
+              b.paymentStatus === ServicePaymentStatus.PAID),
+        });
         items.push({
           sessionKey,
           kind: 'SPA',
@@ -542,20 +571,7 @@ export class BookingControlService {
           bookedCount: counts.bookedCount,
           arrivedCount: counts.arrivedCount,
           noShowCount: counts.noShowCount,
-          payment:
-            b.partnerSource?.toUpperCase() === 'ALLSPORTS' ||
-            isSpaAllSportsBioimpedance({
-              serviceExternalId: b.service.externalId,
-              title: b.service.name,
-            })
-              ? 'PARTNER'
-              : b.paymentType === 'QUOTA'
-                ? 'QUOTA'
-                : b.paymentStatus === 'PAID'
-                  ? 'PAID'
-                  : b.paymentStatus === 'DEBT'
-                    ? 'DEBT'
-                    : 'UNKNOWN',
+          payment,
           needsReview: openKeys.has(sessionKey),
           fitgoBookingId: b.id,
           oneCLinked,
@@ -1045,6 +1061,25 @@ export class BookingControlService {
         spaOneCTitle = settled.oneCTitle;
         spaLinkedSaleId = settled.linkedSaleExternalId;
         spaServiceId = spaBooking?.serviceId ?? spaBooking?.service?.id;
+        // Sale / quota write-off ⇒ client arrived (doc may stay SCHEDULED).
+        if (
+          this.paymentImpliesArrived(spaPayment) ||
+          this.settlementImpliesArrived(spaSettlement.status)
+        ) {
+          for (const m of members) {
+            if (m.attendance === 'EXPECTED') m.attendance = 'ATTENDED';
+          }
+          counts = this.attendanceCounts(members, 1);
+        }
+      } else if (kind === 'PT' && this.paymentImpliesArrived(payment)) {
+        for (const m of members) {
+          if (m.attendance === 'EXPECTED') m.attendance = 'ATTENDED';
+        }
+        counts = members.length
+          ? this.attendanceCounts(members, 1)
+          : this.singleClientCounts(mapOnexStatusToControl(s.status), {
+              arrived: true,
+            });
       }
 
       const performerName = s.employeeName?.trim() || '—';
@@ -1161,7 +1196,16 @@ export class BookingControlService {
           : b.status === PersonalBookingStatus.CANCELLED
             ? 'CANCELLED'
             : 'SCHEDULED';
-      const counts = this.singleClientCounts(status);
+      const payment: BookingControlPayment = b.isComplimentary
+        ? 'GIFT'
+        : b.paymentStatus === 'PAID'
+          ? 'PAID'
+          : b.paymentStatus === 'DEBT'
+            ? 'DEBT'
+            : 'UNKNOWN';
+      const counts = this.singleClientCounts(status, {
+        arrived: this.paymentImpliesArrived(payment),
+      });
       const approval = await this.loadSessionApprovalInfo(clubId, 'PT', b.id);
       const performerName = `${b.trainer.lastName} ${b.trainer.firstName}`.trim();
       const history = await this.buildBookingHistory({
@@ -1191,13 +1235,7 @@ export class BookingControlService {
         bookedCount: counts.bookedCount,
         arrivedCount: counts.arrivedCount,
         noShowCount: counts.noShowCount,
-        payment: b.isComplimentary
-          ? 'GIFT'
-          : b.paymentStatus === 'PAID'
-            ? 'PAID'
-            : b.paymentStatus === 'DEBT'
-              ? 'DEBT'
-              : 'UNKNOWN',
+        payment,
         needsReview: Boolean(open),
         fitgoBookingId: b.id,
         approvalPhase: approval?.phase,
@@ -1227,7 +1265,6 @@ export class BookingControlService {
           : b.status === SpaBookingStatus.CANCELLED
             ? 'CANCELLED'
             : 'SCHEDULED';
-      const counts = this.singleClientCounts(status);
       const approval = await this.loadSessionApprovalInfo(clubId, 'SPA', b.id);
       const settled = await this.resolveSpaSettlement({
         clubId,
@@ -1249,6 +1286,12 @@ export class BookingControlService {
           service: b.service,
           guestName: b.guestName,
         },
+      });
+      // Paid sale / quota write-off ⇒ прибыло 1 even while status is SCHEDULED.
+      const counts = this.singleClientCounts(status, {
+        arrived:
+          this.paymentImpliesArrived(settled.payment) ||
+          this.settlementImpliesArrived(settled.settlement.status),
       });
       const performerName =
         `${b.specialist.lastName} ${b.specialist.firstName}`.trim();
@@ -3698,6 +3741,26 @@ export class BookingControlService {
     }
   }
 
+  /** Paid / partner / gift — client was present (sale or package settlement). */
+  private paymentImpliesArrived(
+    payment?: BookingControlPayment | null,
+  ): boolean {
+    return (
+      payment === 'PAID' || payment === 'PARTNER' || payment === 'GIFT'
+    );
+  }
+
+  /** SPA settlement that proves the visit happened. */
+  private settlementImpliesArrived(
+    status?: SpaSettlementInfo['status'] | null,
+  ): boolean {
+    return (
+      status === 'PAID' ||
+      status === 'QUOTA_CONSUMED' ||
+      status === 'MANUAL_PAID'
+    );
+  }
+
   /** Booked / arrived / no-show from roster (CANCELLED excluded from booked). */
   private attendanceCounts(
     members: BookingControlMember[],
@@ -3734,13 +3797,14 @@ export class BookingControlService {
     const arrived =
       opts?.arrived === true ||
       (opts?.arrived !== false && status === 'COMPLETED');
-    if (status === 'SCHEDULED') {
+    // SCHEDULED + paid sale still counts as arrived (reception sale = клиент пришёл).
+    if (status === 'SCHEDULED' && !arrived) {
       return { bookedCount: 1, arrivedCount: 0, noShowCount: 0 };
     }
     return {
       bookedCount: 1,
       arrivedCount: arrived ? 1 : 0,
-      noShowCount: arrived ? 0 : 1,
+      noShowCount: arrived || status === 'SCHEDULED' ? 0 : 1,
     };
   }
 
