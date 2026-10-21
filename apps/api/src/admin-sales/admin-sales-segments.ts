@@ -94,8 +94,13 @@ async function fetchSegmentMembers(
   basicAuth: string,
   query: string,
 ): Promise<Set<string>> {
+  // Apache/1C Basic often drops bare `apikey`; X-Api-Key reaches FitGOIntegration.
   const res = await fetch(`${base}/segments/members?${query}`, {
-    headers: { apikey: apiKey, Authorization: `Basic ${basicAuth}` },
+    headers: {
+      apikey: apiKey,
+      'X-Api-Key': apiKey,
+      Authorization: `Basic ${basicAuth}`,
+    },
   });
   if (!res.ok) return new Set();
   const body = (await res.json()) as {

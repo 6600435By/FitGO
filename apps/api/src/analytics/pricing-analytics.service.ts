@@ -988,6 +988,7 @@ export class PricingAnalyticsService {
       const res = await fetch(url, {
         headers: {
           apikey: apiKey,
+          'X-Api-Key': apiKey,
           Authorization: `Basic ${basicAuth}`,
         },
       });
