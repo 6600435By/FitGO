@@ -235,6 +235,20 @@ export function StaffPayProfileEditor({
       if (map.PT) {
         map.PT = { ...map.PT, asdGroupRateMinor: asdSource };
       }
+      // «Выплата аванса на карту» — одна графа на штат / ГП / реформеры.
+      const advanceSource =
+        map.PT?.fixedAdvanceMinor ||
+        map.GROUP_TRAINER?.fixedAdvanceMinor ||
+        map.REFORMER?.fixedAdvanceMinor ||
+        0;
+      for (const track of ['PT', 'GROUP_TRAINER', 'REFORMER'] as const) {
+        if (map[track]) {
+          map[track] = {
+            ...map[track]!,
+            fixedAdvanceMinor: advanceSource,
+          };
+        }
+      }
     }
     let primary = { ...current, track: current.track };
     if (
@@ -586,6 +600,7 @@ export function StaffPayProfileEditor({
             profile={readSlice('PT')}
             onChange={(next) => writeSlice('PT', next)}
             showShift
+            showAdvance={false}
           />
         </div>
       ) : null}
@@ -660,6 +675,48 @@ export function StaffPayProfileEditor({
           <ReformerRates
             profile={readSlice('REFORMER')}
             onChange={(next) => writeSlice('REFORMER', next)}
+          />
+        </div>
+      ) : null}
+
+      {stacked &&
+      (trainerGroups?.staff ||
+        trainerGroups?.gp ||
+        trainerGroups?.reformers) ? (
+        <div className="space-y-3 rounded-xl border border-slate-800 p-3">
+          <p className="text-sm font-medium text-white">Аванс на карту</p>
+          <p className="text-xs leading-relaxed text-slate-500">
+            Одна сумма на сотрудника, даже если выбраны несколько подразделений.
+            25-го уходит в колонку «Карта»; 15-го вычитается из расчёта за месяц.
+          </p>
+          <MoneyField
+            label="Выплата аванса на карту, BYN"
+            value={formatMinor(
+              readSlice('PT').fixedAdvanceMinor ||
+                readSlice('GROUP_TRAINER').fixedAdvanceMinor ||
+                readSlice('REFORMER').fixedAdvanceMinor,
+            )}
+            onChange={(v) => {
+              const minor = parseMoneyToMinor(v);
+              if (trainerGroups?.staff) {
+                writeSlice('PT', {
+                  ...readSlice('PT'),
+                  fixedAdvanceMinor: minor,
+                });
+              }
+              if (trainerGroups?.gp) {
+                writeSlice('GROUP_TRAINER', {
+                  ...readSlice('GROUP_TRAINER'),
+                  fixedAdvanceMinor: minor,
+                });
+              }
+              if (trainerGroups?.reformers) {
+                writeSlice('REFORMER', {
+                  ...readSlice('REFORMER'),
+                  fixedAdvanceMinor: minor,
+                });
+              }
+            }}
           />
         </div>
       ) : null}
@@ -815,22 +872,44 @@ export function StaffPayProfileEditor({
       )}
 
       {profile.track === 'GROUP_TRAINER' && !stacked && (
-        <GroupTrainerRates
-          profile={profile}
-          onChange={setProfile}
-        />
+        <div className="space-y-3">
+          <GroupTrainerRates profile={profile} onChange={setProfile} />
+          <MoneyField
+            label="Выплата аванса на карту, BYN"
+            value={formatMinor(profile.fixedAdvanceMinor)}
+            onChange={(v) =>
+              setProfile({
+                ...profile,
+                fixedAdvanceMinor: parseMoneyToMinor(v),
+              })
+            }
+          />
+        </div>
       )}
 
       {profile.track === 'REFORMER' && !stacked && (
-        <ReformerRates profile={profile} onChange={setProfile} />
+        <div className="space-y-3">
+          <ReformerRates profile={profile} onChange={setProfile} />
+          <MoneyField
+            label="Выплата аванса на карту, BYN"
+            value={formatMinor(profile.fixedAdvanceMinor)}
+            onChange={(v) =>
+              setProfile({
+                ...profile,
+                fixedAdvanceMinor: parseMoneyToMinor(v),
+              })
+            }
+          />
+        </div>
       )}
 
       {profile.track === 'SPA' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
             % от оплаченных услуг + фикс из абонемента + фикс за услугу
-            «Allsports БИОИМПЕДАНС» (по номенклатуре 1С). 25-го — аванс на
-            карту из поля ниже; 15-го эта сумма вычитается из итога за месяц.
+            «Allsports БИОИМПЕДАНС» (по номенклатуре 1С). 25-го — продажи и
+            ставки за 1–15; сумма «на карту» уходит в колонку «Карта», остаток
+            — из кассы. 15-го — остаток месяца минус подтверждённый аванс.
           </p>
           <PercentField
             label="% от проведённых / оплаченных платных услуг"
@@ -886,7 +965,8 @@ export function StaffPayProfileEditor({
           <p className="text-xs leading-relaxed text-slate-500">
             Оплата по часам смены из графика. Премии и штрафы — отдельными
             корректировками в разделе расчёта ЗП (не в этой схеме). 25-го —
-            аванс на карту из поля ниже; 15-го эта сумма вычитается из итога.
+            часы за 1–15; сумма «на карту» уходит в колонку «Карта», остаток —
+            из кассы. 15-го — остаток месяца минус подтверждённый аванс.
           </p>
           <MoneyField
             label="Ставка за час, BYN"
@@ -1040,10 +1120,13 @@ function PtPercentFields({
   profile,
   onChange,
   showShift,
+  showAdvance = showShift,
 }: {
   profile: StaffPayTrackSlice;
   onChange: (next: StaffPayTrackSlice) => void;
   showShift: boolean;
+  /** When false, advance is edited in the shared trainer block. */
+  showAdvance?: boolean;
 }) {
   return (
     <div className="space-y-3">
@@ -1053,22 +1136,22 @@ function PtPercentFields({
           : '% от оплаченной ПТ. Подарочные идут в количество, но не в оплату.'}
       </p>
       {showShift ? (
-        <>
-          <MoneyField
-            label="Ставка за час смены, BYN"
-            value={formatMinor(profile.hourlyRateMinor)}
-            onChange={(v) =>
-              onChange({ ...profile, hourlyRateMinor: parseMoneyToMinor(v) })
-            }
-          />
-          <MoneyField
-            label="Выплата аванса на карту, BYN"
-            value={formatMinor(profile.fixedAdvanceMinor)}
-            onChange={(v) =>
-              onChange({ ...profile, fixedAdvanceMinor: parseMoneyToMinor(v) })
-            }
-          />
-        </>
+        <MoneyField
+          label="Ставка за час смены, BYN"
+          value={formatMinor(profile.hourlyRateMinor)}
+          onChange={(v) =>
+            onChange({ ...profile, hourlyRateMinor: parseMoneyToMinor(v) })
+          }
+        />
+      ) : null}
+      {showAdvance ? (
+        <MoneyField
+          label="Выплата аванса на карту, BYN"
+          value={formatMinor(profile.fixedAdvanceMinor)}
+          onChange={(v) =>
+            onChange({ ...profile, fixedAdvanceMinor: parseMoneyToMinor(v) })
+          }
+        />
       ) : null}
       <MoneyField
         label="Стоимость ПТ для расчёта, BYN"

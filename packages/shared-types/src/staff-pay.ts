@@ -235,7 +235,8 @@ export interface StaffPayProfile {
   ptAllSportsRateMinor?: number;
   /**
    * Fixed advance to card on the 25th (days 1–15), minor units.
-   * Tracks: ADMIN, MANAGER, SPA, TECH, staff PT. Deducted once on the 15th via priorPaid.
+   * Tracks: ADMIN, MANAGER, SPA, TECH, staff PT, GROUP_TRAINER, REFORMER
+   * (one shared value for trainer subdivisions). Deducted once on the 15th via priorPaid.
    */
   fixedAdvanceMinor?: number;
   notes?: string;
@@ -510,6 +511,43 @@ export function allPaySlices(
   return [...tracks].map((t) => sliceForTrack(profile, t));
 }
 
+/**
+ * ADVANCE_HALF (25th) accrual profile: drop PT / CLUB / REFORMER so only
+ * GP group rates (and non-trainer slices) earn for days 1–15.
+ * Reformer and staff PT settle on the 15th.
+ */
+export function payProfileForAdvanceHalf(
+  profile: StaffPayProfile | null | undefined,
+  flags: TrainerPayFlags,
+): StaffPayProfile | undefined {
+  const base = payProfileForCalculation(profile, flags);
+  if (!base) return undefined;
+  if (!flags.isTrainer) return base;
+  const slices = allPaySlices(base).filter((slice) => {
+    if (slice.track === 'REFORMER') return false;
+    if (slice.track === 'PT' || slice.track === 'CLUB') return false;
+    if (slice.track === 'GROUP_TRAINER') return flags.gp;
+    return true;
+  });
+  if (!slices.length) {
+    return {
+      track: 'GROUP_TRAINER',
+      groupSessionRateMinor: 0,
+      groupMinAttendees: 1,
+      fixedAdvanceMinor:
+        sliceForTrack(base, 'GROUP_TRAINER').fixedAdvanceMinor ||
+        sliceForTrack(base, 'PT').fixedAdvanceMinor ||
+        sliceForTrack(base, 'REFORMER').fixedAdvanceMinor ||
+        base.fixedAdvanceMinor ||
+        0,
+    };
+  }
+  const byTrack: NonNullable<StaffPayProfile['byTrack']> = {};
+  for (const slice of slices) byTrack[slice.track] = slice;
+  const primary = slices[0]!;
+  return { ...primary, track: primary.track, byTrack };
+}
+
 /** Pack editor state: current track fields + other byTrack entries. */
 export function packPayProfile(
   current: StaffPayTrackSlice,
@@ -575,12 +613,14 @@ export function defaultPayProfile(track: StaffPayTrack): StaffPayProfile {
         groupPerAttendeeMinor: 0,
         groupRateTiers: DEFAULT_GROUP_RATE_TIERS.map((t) => ({ ...t })),
         asdGroupRateMinor: 0,
+        fixedAdvanceMinor: 0,
       };
     case 'REFORMER':
       return {
         track,
         groupRateTiers: DEFAULT_REFORMER_RATE_TIERS.map((t) => ({ ...t })),
         reformerPersonalPercent: 0,
+        fixedAdvanceMinor: 0,
       };
     case 'SPA':
       return {
@@ -720,6 +760,10 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
           chips.push(`${tag}+${money(slice.groupPerAttendeeMinor)}/чел`);
         if (slice.asdGroupRateMinor)
           chips.push(`${tag}АСД ${money(slice.asdGroupRateMinor)}`);
+        if (slice.fixedAdvanceMinor)
+          chips.push(
+            `${tag}аванс на карту 25-е ${money(slice.fixedAdvanceMinor)}`,
+          );
         break;
       case 'REFORMER': {
         const tiers =
@@ -737,6 +781,10 @@ export function payProfileSummary(profile: StaffPayProfile | null | undefined): 
         if (slice.reformerPersonalPercent)
           chips.push(
             `${tag}инд. ${formatPercent(slice.reformerPersonalPercent)}%`,
+          );
+        if (slice.fixedAdvanceMinor)
+          chips.push(
+            `${tag}аванс на карту 25-е ${money(slice.fixedAdvanceMinor)}`,
           );
         break;
       }

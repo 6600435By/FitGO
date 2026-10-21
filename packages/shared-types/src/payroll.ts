@@ -266,6 +266,32 @@ export interface PayrollPayoutPreview {
   hints: string[];
 }
 
+/**
+ * Split an ADVANCE_HALF wave: card advance is a share of the same earned amount
+ * (not an add-on). Earned is at least the profile card amount so a filled
+ * «Выплата аванса на карту» always appears in the 25th report.
+ *
+ * cash = earned − card; when accrual is below card, earned = card and cash = 0.
+ */
+export function splitAdvanceWave(input: {
+  accrualMinor: number;
+  cardAdvanceMinor: number;
+}): {
+  earnedMinor: number;
+  cardMinor: number;
+  cashMinor: number;
+} {
+  const accrual = Math.max(0, Math.round(input.accrualMinor));
+  const cardAdvance = Math.max(0, Math.round(input.cardAdvanceMinor));
+  const earnedMinor = Math.max(accrual, cardAdvance);
+  const cardMinor = Math.min(cardAdvance, earnedMinor);
+  return {
+    earnedMinor,
+    cardMinor,
+    cashMinor: earnedMinor - cardMinor,
+  };
+}
+
 /** Calendar helpers for Belarus club pay waves. */
 export function advanceHalfRange(year: number, month: number): {
   from: string;

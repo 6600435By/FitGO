@@ -11,8 +11,10 @@ import {
   DEFAULT_GROUP_RATE_TIERS,
   DEFAULT_REFORMER_RATE_TIERS,
   monthSettlementRange,
+  payProfileForAdvanceHalf,
   payProfileForCalculation,
   payProfileSummary,
+  splitAdvanceWave,
   isAsdGroupSession,
   isComplimentarySessionTitle,
   isMultiVisitPackSale,
@@ -997,6 +999,13 @@ export class PayrollService {
     performerId: string,
     from: string,
     to: string,
+    opts?: {
+      /**
+       * ADVANCE_HALF: GP-only group rates (no reformer/PT), TECH hours without
+       * prorated monthly оклад.
+       */
+      forAdvanceHalf?: boolean;
+    },
   ): Promise<PayrollPeriodSummary> {
     this.assertPeriod(from, to);
     const performer = await this.prisma.user.findFirst({
@@ -1046,10 +1055,10 @@ export class PayrollService {
       from,
       to,
     );
-    const profile = payProfileForCalculation(
-      asPayProfile(compensation?.payProfile),
-      trainerFlags,
-    );
+    const rawProfile = asPayProfile(compensation?.payProfile);
+    const profile = opts?.forAdvanceHalf
+      ? payProfileForAdvanceHalf(rawProfile, trainerFlags)
+      : payProfileForCalculation(rawProfile, trainerFlags);
     const rates = await this.listRates(clubId);
     const sales = await this.resolveStaffSales(
       clubId,
@@ -1125,10 +1134,15 @@ export class PayrollService {
       fromD.getMonth() + 1,
       0,
     ).getDate();
-    let baseSalaryMinor = compensation
-      ? Math.round((compensation.baseSalaryMinor * daysInclusive) / monthDays)
-      : 0;
     const slices = allPaySlices(profile);
+    const advanceTechHoursOnly =
+      Boolean(opts?.forAdvanceHalf) &&
+      slices.some((s) => s.track === 'TECH') &&
+      !slices.some((s) => s.track === 'ADMIN' || s.track === 'MANAGER');
+    let baseSalaryMinor =
+      compensation && !advanceTechHoursOnly
+        ? Math.round((compensation.baseSalaryMinor * daysInclusive) / monthDays)
+        : 0;
     const hasPt = slices.some((s) => s.track === 'PT');
     const hasHourlyDesk = slices.some(
       (s) =>
@@ -1322,8 +1336,9 @@ export class PayrollService {
   /**
    * Preview a club pay wave.
    * - ADVANCE_HALF (25th): default days 1–15 (override via periodFrom/To).
-   *   Admins & staff PT → fixed card advance (0 = pay nothing).
-   *   Others → fixed only when card-advance > 0, else motivation for the range.
+   *   Admins, staff-only PT, reformer-only → card advance only (0 = pay nothing).
+   *   TECH / SPA / GP → period accrual; card is a share of earned (max(accrual, card)).
+   *   Manager with card > 0 → card only; otherwise motivation for the range.
    * - MONTH_SETTLEMENT (15th): previous calendar month minus paid ADVANCE_HALF.
    */
   async previewPayout(
@@ -1376,19 +1391,26 @@ export class PayrollService {
     const resolvedFixedAdvance = this.resolveFixedAdvance(profile, roles, {
       trainerStaff: Boolean(user.trainerStaff),
     });
-    // ADMIN / staff PT: always fixed card advance on 25th (0 = pay nothing).
-    // GP / club / reformer trainers and MANAGER / SPA / TECH: fixed path only
-    // when «Выплата аванса на карту» > 0; otherwise accrue motivation for 1–15.
+    const staffOnly =
+      Boolean(user.trainerStaff) && !user.groupPrograms;
+    const reformerOnly =
+      Boolean(user.trainerReformers) &&
+      !user.groupPrograms &&
+      !user.trainerStaff;
+    // Card-only on 25th (no period motivation in earned).
     const usesFixedAdvance =
       kind === 'ADVANCE_HALF' &&
       (roles.includes(Role.ADMIN) ||
-        Boolean(user.trainerStaff) ||
-        (resolvedFixedAdvance > 0 &&
-          (roles.includes(Role.MANAGER) ||
-            roles.includes(Role.SPECIALIST) ||
-            roles.includes(Role.TECH) ||
-            roles.includes(Role.TRAINER))));
-    const fixedAdvanceMinor = usesFixedAdvance ? resolvedFixedAdvance : 0;
+        staffOnly ||
+        reformerOnly ||
+        (resolvedFixedAdvance > 0 && roles.includes(Role.MANAGER)));
+    const useAdvanceHalfAccrual =
+      kind === 'ADVANCE_HALF' &&
+      !usesFixedAdvance &&
+      (roles.includes(Role.TECH) ||
+        roles.includes(Role.SPECIALIST) ||
+        Boolean(user.groupPrograms));
+    const fixedAdvanceMinor = resolvedFixedAdvance;
 
     const hints: string[] = [];
     let earnedMinor = 0;
@@ -1397,33 +1419,56 @@ export class PayrollService {
       userId,
       range.from,
       range.to,
+      useAdvanceHalfAccrual ? { forAdvanceHalf: true } : undefined,
     );
 
     const periodOverridden =
       range.from !== defaultRange.from || range.to !== defaultRange.to;
 
-    if (kind === 'ADVANCE_HALF' && usesFixedAdvance && !periodOverridden) {
-      earnedMinor = fixedAdvanceMinor;
-      if (fixedAdvanceMinor <= 0) {
-        hints.push(
-          'Выплата аванса на карту не задана в мотивации — сумма 0',
-        );
+    if (kind === 'ADVANCE_HALF' && !periodOverridden) {
+      const accrualMinor = usesFixedAdvance ? 0 : summary.totalMinor;
+      const split = splitAdvanceWave({
+        accrualMinor,
+        cardAdvanceMinor: fixedAdvanceMinor,
+      });
+      earnedMinor = split.earnedMinor;
+      if (usesFixedAdvance) {
+        if (fixedAdvanceMinor <= 0) {
+          hints.push(
+            'Выплата аванса на карту не задана в мотивации — сумма 0',
+          );
+        } else {
+          hints.push(
+            '25-е: фиксированный аванс на карту из мотивации (вычитается 15-го)',
+          );
+        }
       } else {
         hints.push(
-          '25-е: фиксированный аванс на карту из мотивации (вычитается 15-го)',
+          `Аванс 25-е: начисление за ${range.from}–${range.to}` +
+            (fixedAdvanceMinor > 0
+              ? `; на карту ${(fixedAdvanceMinor / 100).toFixed(2)}, остаток из кассы`
+              : ''),
         );
+        if (Boolean(user.groupPrograms) && Boolean(user.trainerReformers)) {
+          hints.push(
+            'ГП + реформеры: в аванс только занятия как тренер ГП (без зала реформеров)',
+          );
+        }
       }
     } else {
       earnedMinor = summary.totalMinor;
       if (kind === 'ADVANCE_HALF') {
-        if (usesFixedAdvance && periodOverridden) {
-          hints.push(
-            `Период изменён (${range.from}–${range.to}): начисление по мотивации вместо фикса`,
-          );
-        } else {
-          hints.push(
-            `Аванс 25-е: начисление по мотивации за ${range.from}–${range.to}`,
-          );
+        hints.push(
+          `Период изменён (${range.from}–${range.to}): начисление по мотивации` +
+            (fixedAdvanceMinor > 0
+              ? `; карта ${(fixedAdvanceMinor / 100).toFixed(2)}`
+              : ''),
+        );
+        if (fixedAdvanceMinor > 0) {
+          earnedMinor = splitAdvanceWave({
+            accrualMinor: summary.totalMinor,
+            cardAdvanceMinor: fixedAdvanceMinor,
+          }).earnedMinor;
         }
       }
     }
@@ -1739,8 +1784,10 @@ export class PayrollService {
   }
 
   /**
-   * First non-zero card advance in order: MANAGER → ADMIN → SPA → TECH → staff PT.
-   * Sums are never combined across tracks.
+   * First non-zero card advance in order:
+   * MANAGER → ADMIN → SPA → TECH → PT / GROUP_TRAINER / REFORMER.
+   * Trainer subdivisions share one amount (never summed).
+   * Root `profile.fixedAdvanceMinor` is a fallback when byTrack slice is empty.
    */
   private resolveFixedAdvance(
     profile: StaffPayProfile | undefined,
@@ -1748,30 +1795,35 @@ export class PayrollService {
     opts?: { trainerStaff?: boolean },
   ): number {
     if (!profile) return 0;
-    const pick = (track: 'MANAGER' | 'ADMIN' | 'SPA' | 'TECH' | 'PT' | 'GROUP_TRAINER') =>
-      sliceForTrack(profile, track).fixedAdvanceMinor ?? 0;
+    const pick = (
+      track:
+        | 'MANAGER'
+        | 'ADMIN'
+        | 'SPA'
+        | 'TECH'
+        | 'PT'
+        | 'GROUP_TRAINER'
+        | 'REFORMER',
+    ) => sliceForTrack(profile, track).fixedAdvanceMinor ?? 0;
+    const root = profile.fixedAdvanceMinor ?? 0;
 
     const ordered: number[] = [];
-    if (roles.includes(Role.MANAGER)) ordered.push(pick('MANAGER'));
-    if (roles.includes(Role.ADMIN)) ordered.push(pick('ADMIN'));
-    if (roles.includes(Role.SPECIALIST)) ordered.push(pick('SPA'));
-    if (roles.includes(Role.TECH)) ordered.push(pick('TECH'));
+    if (roles.includes(Role.MANAGER)) ordered.push(pick('MANAGER') || root);
+    if (roles.includes(Role.ADMIN)) ordered.push(pick('ADMIN') || root);
+    if (roles.includes(Role.SPECIALIST)) ordered.push(pick('SPA') || root);
+    if (roles.includes(Role.TECH)) ordered.push(pick('TECH') || root);
     if (roles.includes(Role.TRAINER)) {
-      if (opts?.trainerStaff) {
-        ordered.push(pick('PT'));
-      } else {
-        // Club / GP trainers: keep prior PT → GROUP_TRAINER lookup.
-        ordered.push(pick('PT') || pick('GROUP_TRAINER'));
-      }
+      ordered.push(
+        pick('PT') || pick('GROUP_TRAINER') || pick('REFORMER') || root,
+      );
     }
 
     const firstPositive = ordered.find((n) => n > 0);
     if (firstPositive != null) return firstPositive;
 
     // ADMIN / staff PT with explicit 0 still use the fixed path (earned = 0).
-    // Club / GP trainers without a card-advance field fall through to motivation.
     if (roles.includes(Role.ADMIN) || opts?.trainerStaff) return 0;
-    return profile.fixedAdvanceMinor ?? 0;
+    return root;
   }
 
   private mapPayout(row: {
