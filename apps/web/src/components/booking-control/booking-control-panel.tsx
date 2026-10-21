@@ -10,10 +10,10 @@ import {
   type BookingControlStatus,
   type GroupApprovalNoteItem,
 } from '@fitgo/shared-types';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminStickyTable } from '@/components/admin/admin-sticky-table';
 import { DateField } from '@/components/ui/date-field';
-import { formatDateTime } from '@/lib/utils';
+import { formatDateTime, formatVisitClock } from '@/lib/utils';
 
 export type BookingControlPerformerOption = {
   id: string;
@@ -426,6 +426,14 @@ export function BookingControlPanel({
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [photosError, setPhotosError] = useState('');
   const [localSeen, setLocalSeen] = useState<Set<string>>(new Set());
+  const [seenSaveError, setSeenSaveError] = useState('');
+  const [seenSaving, setSeenSaving] = useState(false);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const seenSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSeenRef = useRef<{
+    sessionKey: string;
+    ids: string[];
+  } | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [approvalNotesOpen, setApprovalNotesOpen] = useState(false);
   const [linkPhone, setLinkPhone] = useState('');
@@ -440,6 +448,74 @@ export function BookingControlPanel({
 
   const showSpaLinkHints =
     approvalActor === 'admin' || approvalActor === 'override';
+
+  const groupSessionEndMs = (d: {
+    startAt: string;
+    endAt?: string | null;
+  }) =>
+    d.endAt ? new Date(d.endAt).getTime() : new Date(d.startAt).getTime();
+
+  const flushTrainerSeen = useCallback(
+    async (sessionKey: string, ids: string[]) => {
+      if (!api.saveTrainerSeen) return;
+      setSeenSaving(true);
+      setSeenSaveError('');
+      try {
+        const updated = await api.saveTrainerSeen(sessionKey, ids);
+        setSelected((prev) =>
+          prev?.sessionKey === sessionKey ? updated : prev,
+        );
+      } catch (e) {
+        setSeenSaveError(
+          e instanceof Error ? e.message : 'Отметки не сохранились',
+        );
+      } finally {
+        setSeenSaving(false);
+      }
+    },
+    [api],
+  );
+
+  const scheduleTrainerSeenSave = useCallback(
+    (sessionKey: string, ids: string[]) => {
+      if (!api.saveTrainerSeen) return;
+      pendingSeenRef.current = { sessionKey, ids };
+      if (seenSaveTimerRef.current) clearTimeout(seenSaveTimerRef.current);
+      seenSaveTimerRef.current = setTimeout(() => {
+        seenSaveTimerRef.current = null;
+        const pending = pendingSeenRef.current;
+        pendingSeenRef.current = null;
+        if (pending) void flushTrainerSeen(pending.sessionKey, pending.ids);
+      }, 400);
+    },
+    [api.saveTrainerSeen, flushTrainerSeen],
+  );
+
+  const flushPendingTrainerSeen = useCallback(() => {
+    if (seenSaveTimerRef.current) {
+      clearTimeout(seenSaveTimerRef.current);
+      seenSaveTimerRef.current = null;
+    }
+    const pending = pendingSeenRef.current;
+    pendingSeenRef.current = null;
+    if (pending && api.saveTrainerSeen) {
+      void flushTrainerSeen(pending.sessionKey, pending.ids);
+    }
+  }, [api.saveTrainerSeen, flushTrainerSeen]);
+
+  useEffect(() => {
+    return () => {
+      if (seenSaveTimerRef.current) clearTimeout(seenSaveTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selected || selected.kind !== 'GROUP') return;
+    const endMs = groupSessionEndMs(selected);
+    if (endMs <= Date.now()) return;
+    const id = setInterval(() => setNowTick(Date.now()), 15_000);
+    return () => clearInterval(id);
+  }, [selected?.sessionKey, selected?.endAt, selected?.startAt, selected?.kind]);
 
   const load = useCallback(() => {
     if (detailOnly) {
@@ -629,11 +705,13 @@ export function BookingControlPanel({
   }, [pendingKey]);
 
   const openDetail = async (sessionKey: string) => {
+    flushPendingTrainerSeen();
     setComment('');
     setAdminComment('');
     setHistoryOpen(false);
     setApprovalNotesOpen(false);
     setDetailError('');
+    setSeenSaveError('');
     setLinkPhone('');
     setLinkPhoneMsg('');
     closePhotos();
@@ -781,10 +859,12 @@ export function BookingControlPanel({
   };
 
   const closeDetail = () => {
+    flushPendingTrainerSeen();
     closePhotos();
     setHistoryOpen(false);
     setApprovalNotesOpen(false);
     setDetailError('');
+    setSeenSaveError('');
     setLinkPhone('');
     setLinkPhoneMsg('');
     setSelected(null);
@@ -943,7 +1023,7 @@ export function BookingControlPanel({
     }
   };
 
-  /** Local-only checkmarks — persist once before confirm (avoids 404 spam per click). */
+  /** FitGO checkmarks — autosave while class is in progress (debounced). */
   const toggleTrainerSeen = (clientExternalId: string) => {
     if (!selected || selected.groupApproval?.locked) {
       return;
@@ -952,6 +1032,10 @@ export function BookingControlPanel({
     if (next.has(clientExternalId)) next.delete(clientExternalId);
     else next.add(clientExternalId);
     setLocalSeen(next);
+    setSeenSaveError('');
+    if (selected.kind === 'GROUP' && selected.source === '1C') {
+      scheduleTrainerSeenSave(selected.sessionKey, [...next]);
+    }
   };
 
   const approveGroup = async () => {
@@ -960,8 +1044,14 @@ export function BookingControlPanel({
     setMessage('');
     try {
       if (api.saveTrainerSeen && selected.kind === 'GROUP') {
+        if (seenSaveTimerRef.current) {
+          clearTimeout(seenSaveTimerRef.current);
+          seenSaveTimerRef.current = null;
+        }
+        pendingSeenRef.current = null;
         try {
           await api.saveTrainerSeen(selected.sessionKey, [...localSeen]);
+          setSeenSaveError('');
         } catch {
           /* non-critical — confirm still proceeds */
         }
@@ -989,6 +1079,11 @@ export function BookingControlPanel({
     }
   };
 
+  const selectedGroupEnded =
+    !selected || selected.kind !== 'GROUP'
+      ? true
+      : groupSessionEndMs(selected) <= nowTick;
+
   const canConfirmSelected = (() => {
     if (!canApproveGroup || !api.approveGroup || !selected) return false;
     if (selected.kind === 'SPA') {
@@ -1003,12 +1098,25 @@ export function BookingControlPanel({
       if (!phase || phase === 'APPROVED' || selected.groupApproval?.locked) {
         return false;
       }
+      if (!selectedGroupEnded) return false;
       if (approvalActor === 'override') return true;
       if (approvalActor === 'performer') return phase === 'PENDING_TRAINER';
       return phase === 'PENDING_ADMIN';
     }
     return false;
   })();
+
+  const showConfirmAfterEndHint =
+    Boolean(
+      canTrainerSeen &&
+        selected &&
+        selected.kind === 'GROUP' &&
+        selected.source === '1C' &&
+        !selected.groupApproval?.locked &&
+        !selectedGroupEnded &&
+        (selected.groupApproval?.phase === 'PENDING_TRAINER' ||
+          !selected.groupApproval?.phase),
+    );
 
   const returnApproval = async () => {
     if (!selected || !api.returnGroupApproval) return;
@@ -2149,6 +2257,22 @@ export function BookingControlPanel({
                         · в 1С прибыло {selected.arrivedCount ?? 0}
                       </p>
                     ) : null}
+                    {canTrainerSeen &&
+                    selected.kind === 'GROUP' &&
+                    selected.source === '1C' &&
+                    (seenSaving || seenSaveError) ? (
+                      <p
+                        className={
+                          seenSaveError
+                            ? 'text-xs text-rose-300/90'
+                            : 'text-xs text-slate-500'
+                        }
+                      >
+                        {seenSaving
+                          ? 'Сохраняем отметки…'
+                          : `Не сохранилось — нажмите галочку ещё раз. ${seenSaveError}`}
+                      </p>
+                    ) : null}
                     <ul className="max-h-56 overflow-y-auto rounded-lg border border-slate-800 text-sm">
                       {selected.members.map((m) => (
                         <li
@@ -2373,6 +2497,18 @@ export function BookingControlPanel({
                       );
                     })()
                   : null}
+                {selected.kind === 'GROUP' &&
+                selected.source === '1C' &&
+                !selected.groupApproval?.locked &&
+                showConfirmAfterEndHint ? (
+                  <p className="text-xs text-slate-400">
+                    Отметки сохраняются. Подтвердить можно после{' '}
+                    {formatVisitClock(
+                      selected.endAt ?? selected.startAt,
+                    ) ?? 'окончания'}
+                    .
+                  </p>
+                ) : null}
                 {selected.kind === 'GROUP' &&
                 selected.source === '1C' &&
                 !selected.groupApproval?.locked &&
