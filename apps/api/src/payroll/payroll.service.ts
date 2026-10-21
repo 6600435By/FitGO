@@ -1372,17 +1372,15 @@ export class PayrollService {
     };
     this.assertPeriod(range.from, range.to);
 
-    const compensation = await this.resolveCompensation(
-      clubId,
-      userId,
-      range.from,
-      range.to,
-    );
-    // Raw profile: do not run payProfileForCalculation first — that filter
-    // drops inactive trainer slices and can zero out «аванс на карту».
-    const rawProfile = asPayProfile(compensation?.payProfile);
+    // Card advance is a standing profile setting (same source as staff-list
+    // chips). Period-scoped compensation can lag when the field was saved
+    // after periodTo (e.g. set on the 20th while calculating 1–15).
+    const latestCompensation = await this.prisma.staffCompensation.findFirst({
+      where: { clubId, userId },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+    });
     const resolvedFixedAdvance = resolveFixedAdvanceMinor(
-      rawProfile,
+      asPayProfile(latestCompensation?.payProfile),
       roles.map(String),
       { trainerStaff: Boolean(user.trainerStaff) },
     );
@@ -1866,7 +1864,7 @@ export class PayrollService {
     const row = await this.prisma.staffCompensation.findFirst({
       where: { clubId, userId },
       include: { user: true },
-      orderBy: { effectiveFrom: 'desc' },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
     if (!row) return null;
     const profile = asPayProfile(row.payProfile);
@@ -1892,15 +1890,11 @@ export class PayrollService {
     },
   ): Promise<StaffCompensationDto> {
     const clubId = requireClubId(actor);
-    const effectiveFrom =
-      input.effectiveFrom ?? new Date().toISOString().slice(0, 10);
-    const existing = await this.getActiveCompensation(
-      clubId,
-      input.userId,
-      effectiveFrom,
-    );
-    const baseSalaryMinor =
-      input.baseSalaryMinor ?? existing?.baseSalaryMinor ?? 0;
+    const latest = await this.prisma.staffCompensation.findFirst({
+      where: { clubId, userId: input.userId },
+      include: { user: true },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+    });
     let payProfile = input.payProfile;
     const slices = allPaySlices(payProfile);
     if (
@@ -1925,6 +1919,36 @@ export class PayrollService {
         };
       }
     }
+    const baseSalaryMinor =
+      input.baseSalaryMinor ?? latest?.baseSalaryMinor ?? 0;
+
+    // Default save updates the latest row in place so mid-month edits
+    // (card advance, rates) apply to the open pay wave. Pass effectiveFrom
+    // explicitly to start a new dated version.
+    if (latest && !input.effectiveFrom) {
+      const row = await this.prisma.staffCompensation.update({
+        where: { id: latest.id },
+        data: {
+          baseSalaryMinor,
+          payProfile: payProfile as object,
+        },
+        include: { user: true },
+      });
+      const profile = asPayProfile(row.payProfile);
+      return {
+        id: row.id,
+        userId: row.userId,
+        userName: `${row.user.lastName} ${row.user.firstName}`.trim(),
+        baseSalaryMinor: row.baseSalaryMinor,
+        currency: row.currency,
+        effectiveFrom: row.effectiveFrom.toISOString().slice(0, 10),
+        payProfile: profile,
+        payChips: payProfileSummary(profile),
+      };
+    }
+
+    const effectiveFrom =
+      input.effectiveFrom ?? new Date().toISOString().slice(0, 10);
     return this.upsertCompensation(actor, {
       userId: input.userId,
       baseSalaryMinor,
@@ -2328,7 +2352,7 @@ export class PayrollService {
     ).filter((u) => !u.excludeFromPayrollMotivation);
     const comps = await this.prisma.staffCompensation.findMany({
       where: { clubId, userId: { in: eligible.map((u) => u.id) } },
-      orderBy: { effectiveFrom: 'desc' },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
     const latest = new Map<string, (typeof comps)[0]>();
     for (const c of comps) {
@@ -2887,7 +2911,7 @@ export class PayrollService {
     // Last resort: any latest profile for this staff member.
     return this.prisma.staffCompensation.findFirst({
       where: { clubId, userId },
-      orderBy: { effectiveFrom: 'desc' },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
   }
 
@@ -2902,7 +2926,7 @@ export class PayrollService {
         userId,
         effectiveFrom: { lte: new Date(`${asOf}T23:59:59`) },
       },
-      orderBy: { effectiveFrom: 'desc' },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
   }
 
