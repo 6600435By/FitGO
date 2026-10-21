@@ -1,7 +1,7 @@
 # FitGOAnalytics — предоставленные скидки
 
-Эталон в базе Forma: `Отчет.ПредоставленныеСкидки`
-(`e1c://server/s2016.forma.local/forma#e1cib/app/Отчет.ПредоставленныеСкидки`).
+Эталон в базе Forma: `Отчет.ПредоставленныеСкидки`  
+Источник данных: `РегистрНакопления.ПредоставленныеСкидки` (обороты, денежные скидки).
 
 FitGO вкладка «Рынок и цены» вызывает:
 
@@ -11,41 +11,71 @@ GET {FORMA_ANALYTICS_URL}/discounts?from=YYYY-MM-DD&to=YYYY-MM-DD
 
 с заголовками `apikey` и `Authorization: Basic …` как у `/sales`.
 
-Пока метод не опубликован, Nest помечает синк как `endpoint_missing`, блок скидок на UI — «н/д».
-
-## Что сделать на сервере 1С
-
-1. Открыть отчёт `ПредоставленныеСкидки` в конфигураторе.
-2. Снять текст запроса / СКД (поля **не выдумывать**).
-3. Ожидаемый JSON (после сверки со схемой):
+Ответ:
 
 ```json
 {
   "data": {
+    "from": "2026-08-01",
+    "to": "2026-08-31",
+    "total": 12,
     "items": [
       {
         "occurredAt": "2026-08-15T12:00:00",
-        "productExternalId": "uuid-номенклатуры",
+        "productExternalId": "uuid",
         "productName": "Безлимит 12 мес",
         "clientExternalId": "uuid",
         "clientName": "Иванов",
-        "employeeExternalId": "код",
+        "employeeExternalId": "000000168",
         "employeeName": "Админ",
         "discountName": "Акция август",
         "discountAmount": 50.00,
         "discountPercent": 10,
-        "saleDocumentId": "uuid-документа"
+        "saleAmount": 500.00,
+        "saleDocumentId": "uuid"
       }
     ]
   }
 }
 ```
 
-4. Вставить обработчик в HTTP-сервис Analytics (см. заготовку [FitGOAnalytics_Discounts_Stub.bsl](FitGOAnalytics_Discounts_Stub.bsl)).
-5. Опубликовать (F7), на вкладке «Рынок и цены» нажать «Обновить скидки из 1С».
+## Установка в конфигураторе
+
+1. **Общий модуль `FitGOAnalyticsПродажи`**  
+   Скопировать в конец модуля функции из  
+   [FitGOAnalytics_Продажи.bsl](FitGOAnalytics_Продажи.bsl)  
+   (блок `ПолучитьПредоставленныеСкидки` … `СтрокаПредоставленнойСкидкиВJSON`).  
+   Зеркало probe: `/Users/machome/projects/fitgo-probe/1c-extension/FitGOAnalytics_Продажи.bsl`.
+
+2. **Модуль HTTP-сервиса `FitGOAnalytics`**  
+   Вставить `DiscountsGET` из  
+   [FitGOAnalytics_HTTPService.bsl](FitGOAnalytics_HTTPService.bsl)  
+   (или короткий файл [FitGOAnalytics_Discounts_Stub.bsl](FitGOAnalytics_Discounts_Stub.bsl)).
+
+3. **Шаблон URL** в HTTP-сервисе `FitGOAnalytics` → `v1`:
+
+   | Имя | Шаблон | Обработчик |
+   |-----|--------|------------|
+   | `discounts` | `discounts` | `DiscountsGET` |
+
+4. Сохранить конфигурацию → обновить БД → опубликовать HTTP analytics (F7).
+
+5. В FitGO: Аналитика → **Рынок и цены** → **Обновить скидки из 1С**.
 
 Строки кэшируются в Postgres (`ProvidedDiscountRow`). Повторное открытие вкладки в 1С не ходит.
 
-## Запасной след в регистре продаж
+## Проверка с Mac
 
-В СКД `FFS_ПродажиАдминов` уже есть `СтоимостьБезСкидкиОборот` и процент `Скидка` из `РегистрНакопления.ПродажиСебестоимость`. Если отчёт `ПредоставленныеСкидки` окажется неудобным для HTTP, можно расширить `/sales` полями `listAmount` / `discountAmount` — но целевой путь вкладки остаётся отдельный `/discounts` по отчёту скидок.
+```bash
+set -a; source apps/api/.env; set +a
+curl -sk -H "apikey: $FORMA_API_KEY" -H "Authorization: Basic $FORMA_BASIC_AUTH" \
+  "$FORMA_ANALYTICS_URL/discounts?from=2026-08-01&to=2026-08-31" | head -c 800
+```
+
+- **404** — метод не в публикации / неверное имя шаблона.  
+- **200** + `items` — готово.  
+- **500** про периодичность — в BSL есть fallback на `День`; переопубликуйте модуль продаж.
+
+## Что не берём из отчёта
+
+Вторая часть СКД (подарки, `НоменклатураПодарок`, блоки `{ХАРАКТЕРИСТИКИ}`) в v1 не реализована — для ценового отчёта нужны только денежные `СуммаСкидкиОборот`.
