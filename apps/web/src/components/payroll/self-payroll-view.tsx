@@ -135,6 +135,7 @@ export function SelfPayrollView({ role }: Props) {
     const base = new Date(today);
     const y = base.getFullYear();
     const m = base.getMonth();
+    setData(null);
     if (half === 'first') {
       setFrom(isoDate(new Date(y, m, 1)));
       setTo(isoDate(new Date(y, m, 15)));
@@ -179,13 +180,19 @@ export function SelfPayrollView({ role }: Props) {
           <DateField
             label="С"
             value={from}
-            onChange={setFrom}
+            onChange={(v) => {
+              setFrom(v);
+              setData(null);
+            }}
             inputClassName="text-sm"
           />
           <DateField
             label="По"
             value={to}
-            onChange={setTo}
+            onChange={(v) => {
+              setTo(v);
+              setData(null);
+            }}
             inputClassName="text-sm"
           />
         </div>

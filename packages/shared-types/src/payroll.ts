@@ -24,7 +24,7 @@ export interface WorkUnit {
   quantity: number;
   priceMinor?: number;
   /**
-   * Employee share for this line from motivation (PT/SPA).
+   * Employee share for this line from motivation (PT / SPA / GROUP).
    * Null/omitted when not applicable or no price basis.
    */
   earnMinor?: number;
