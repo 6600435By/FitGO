@@ -563,7 +563,7 @@ export function ClubRevenuePanel() {
   const [backfillHint, setBackfillHint] = useState('');
   const [backfillBusy, setBackfillBusy] = useState(false);
 
-  // Keep filters in sync when navigating here with query params (Нестыковки → Продажи).
+  // Keep filters in sync when navigating here with query params (ЗП → Продажа).
   useEffect(() => {
     const nextFrom = search.get('from');
     const nextTo = search.get('to');
@@ -618,6 +618,9 @@ export function ClubRevenuePanel() {
     }
     if (productId.trim()) next.set('productId', productId.trim());
     if (productExact && q.trim()) next.set('productExact', '1');
+    // Preserve deep-link from ЗП so detail + list stay open after filter rewrite.
+    const ext = search.get('externalId')?.trim();
+    if (ext) next.set('externalId', ext);
     const qs = next.toString();
     const current = search.toString();
     if (qs !== current) {
@@ -680,7 +683,8 @@ export function ClubRevenuePanel() {
     void load();
   }, [load]);
 
-  // Deep-link from ЗП / discrepancies: ?externalId=… opens sale detail.
+  // Deep-link from ЗП / discrepancies: ?externalId=… opens sale detail
+  // and aligns date/client filters so the row is visible in the list.
   useEffect(() => {
     const ext = search.get('externalId')?.trim();
     if (!ext) return;
@@ -690,7 +694,21 @@ export function ClubRevenuePanel() {
     void (async () => {
       try {
         const d = await api.superAdminClubSaleDetail(token, ext);
-        if (!cancelled) setDetail(d);
+        if (cancelled) return;
+        setDetail(d);
+        const saleDay = (d.line.paidAt || d.line.occurredAt || '').slice(
+          0,
+          10,
+        );
+        if (saleDay && (saleDay < from || saleDay > to)) {
+          setFrom(saleDay);
+          setTo(saleDay);
+        }
+        const client = d.line.clientName?.trim();
+        if (client && client !== q) {
+          setQ(client);
+          setQInput(client);
+        }
       } catch {
         /* ignore — list still useful */
       }
@@ -698,6 +716,7 @@ export function ClubRevenuePanel() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-fetch on externalId
   }, [search]);
 
   const refreshBackfill = useCallback(async () => {

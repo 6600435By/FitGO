@@ -34,6 +34,11 @@ export interface WorkUnit {
   sessionKey?: string;
   /** ClubRevenueEntry.externalId when a reception/sale doc is linked. */
   saleExternalId?: string;
+  /**
+   * When the visit is a pack/абонемент write-off, ISO timestamp of the
+   * matching pack sale (for «Продажа» deep-link date filter).
+   */
+  saleOccurredAt?: string;
   /** Gift PT: counts toward volume tiers, not paid. */
   isComplimentary?: boolean;
   trustBand: TrustBand;

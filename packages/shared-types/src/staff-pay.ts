@@ -839,7 +839,10 @@ export function parsePackVisitCountFromTitle(
     const n = Number(m[1]);
     return n > 0 ? n : null;
   }
-  m = s.match(/массаж[а]?\s+(\d{1,3})\s*(?:занят|сеанс|визит|шт)?/);
+  // «Блок массажа 10 новый», «массаж 10», «массажа 5 занятий»
+  m = s.match(
+    /(?:блок\s+)?массаж[а]?\s+(\d{1,3})\s*(?:занят|сеанс|визит|шт|нов)?/,
+  );
   if (m) {
     const n = Number(m[1]);
     return n > 0 ? n : null;
@@ -849,16 +852,41 @@ export function parsePackVisitCountFromTitle(
 
 /**
  * Pack SKU inside paymentBasis like
- * `Пакет услуг "Индивидуальное занятие реформер 8" 73437 от 08.10.2026`.
+ * `Пакет услуг "Индивидуальное занятие реформер 8" 73437 от 08.10.2026`
+ * or with «ёлочки» `Пакет услуг «Блок массажа 10 новый» …`.
  */
 export function extractQuotedPackNameFromBasis(
   paymentBasis: string | null | undefined,
 ): string | null {
   const s = (paymentBasis ?? '').trim();
   if (!s) return null;
-  const m = s.match(/"([^"]+)"/);
+  const m =
+    s.match(/«([^»]+)»/) ||
+    s.match(/"([^"]+)"/) ||
+    s.match(/“([^”]+)”/);
   const name = m?.[1]?.trim();
   return name || null;
+}
+
+/**
+ * 1C often stores massage / bioimpedance appointments as kind=PT.
+ * Reclassify to SPA payroll when the title is clearly a spa service.
+ */
+export function isSpaLikeSessionTitle(
+  title: string | null | undefined,
+): boolean {
+  const s = (title ?? '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return false;
+  if (/массаж|massage/.test(s)) return true;
+  if (/биоимпеданс|bioimped|inbody/.test(s)) return true;
+  if (/состав.*тел|композиц/.test(s)) return true;
+  if (/(?:^|[^a-zа-я])спа(?:[^a-zа-я]|$)|(?:^|[^a-z])spa(?:[^a-z]|$)/.test(s))
+    return true;
+  return false;
 }
 
 /** Pack document date from basis (`от 08.10.2026` / `от 08.10.26`). */

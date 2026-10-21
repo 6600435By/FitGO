@@ -17,7 +17,9 @@ import {
   isComplimentarySessionTitle,
   isMultiVisitPackSale,
   isPtAllSportsSession,
+  extractPackDateIsoFromBasis,
   isSpaAllSportsBioimpedance,
+  isSpaLikeSessionTitle,
   resolveGroupRoomKey,
   resolveGroupSessionRateMinor,
   resolvePackageUnitPriceMinor,
@@ -94,9 +96,9 @@ import {
 import {
   loadPackSalesForUnitPrice,
   loadTrainerPtSalesFromRevenue,
+  matchPackSaleForUnitPrice,
   mergeTrainerPtSaleRows,
   trainerPtSaleDocKey,
-  unitPriceFromMatchingPackSale,
   type TrainerPtSaleRow,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
 
@@ -324,9 +326,12 @@ export class PayrollService {
     const needsPtSales =
       !!payFlags?.isTrainer &&
       (!!payFlags.staff || !!payFlags.club || !!payFlags.reformers);
-    // Pack unit = sale/N for ALL trainers (incl. GP/reformer) when class sync
-    // left packageAmount empty — not gated on staff/club.
-    const needsPackUnitSales = !!payFlags?.isTrainer;
+    const isSpecialist = Boolean(
+      performer?.roles.some((r) => r.role === Role.SPECIALIST),
+    );
+    // Pack unit = sale/N when class sync left packageAmount empty.
+    // Trainers (PT packs) + SPA specialists (massage blocks).
+    const needsPackUnitSales = !!payFlags?.isTrainer || isSpecialist;
     const payrollSegments = await loadPayrollSegmentSets(this.config);
 
     const performerOr =
@@ -338,6 +343,12 @@ export class PayrollService {
             ],
           }
         : { employeeExternalId: '__none__' };
+
+    // Pack sales lookback: unit = sale/N when class members lack packageAmount.
+    const packSalesForUnit =
+      performer && needsPackUnitSales
+        ? await loadPackSalesForUnitPrice(this.prisma, clubId, fromD, toD)
+        : [];
 
     // ── SPA from 1C (Onex) — FitGO-only never pays ─────────────────────────
     const onexSpa = await this.prisma.onexClassSession.findMany({
@@ -379,13 +390,29 @@ export class PayrollService {
       const payment = bioimpedance
         ? 'PARTNER'
         : inferPaymentFromBasis(primary?.paymentBasis);
-      const unitFromPackage = resolvePackageUnitPriceMinor({
+      let unitFromPackage = resolvePackageUnitPriceMinor({
         unitPriceMinor: primary?.unitPriceMinor,
         packageAmountMinor: primary?.packageAmountMinor,
         packageQty: primary?.packageQty,
         paymentBasis: primary?.paymentBasis,
         sessionTitle: o.title,
       });
+      let packSaleExt: string | undefined;
+      let packSaleAt: string | undefined;
+      if (unitFromPackage == null && primary?.clientName) {
+        const packMatch = matchPackSaleForUnitPrice(
+          packSalesForUnit,
+          primary.clientName,
+          primary.paymentBasis,
+          o.title,
+        );
+        if (packMatch) {
+          unitFromPackage = packMatch.unitPriceMinor;
+          packSaleExt = packMatch.externalId;
+          packSaleAt = packMatch.occurredAt;
+        }
+      }
+      const packDateIso = extractPackDateIsoFromBasis(primary?.paymentBasis);
       const priceMinor =
         unitFromPackage ??
         matched?.priceMinor ??
@@ -395,11 +422,16 @@ export class PayrollService {
         payment === 'PARTNER' || bioimpedance
           ? 'ALLSPORTS'
           : matched?.partnerSource ?? undefined;
+      const isPackage =
+        (primary?.paySource ?? '').toUpperCase() === 'PACKAGE' ||
+        payment === 'QUOTA';
       units.push({
         id: matched?.id ?? `onex:${o.id}`,
         kind: 'SPA',
         performerId,
-        title: o.title,
+        title: isPackage && !bioimpedance
+          ? `${o.title || 'SPA'} (абонемент)`
+          : o.title,
         occurredAt: o.startAt.toISOString(),
         quantity: 1,
         priceMinor,
@@ -413,9 +445,15 @@ export class PayrollService {
         isSpaAllSportsBioimpedance: bioimpedance,
         sessionId: o.id,
         sessionKey: key,
-        saleExternalId: matched?.linkedSaleExternalId?.trim() || undefined,
+        saleExternalId:
+          packSaleExt ||
+          matched?.linkedSaleExternalId?.trim() ||
+          undefined,
+        saleOccurredAt:
+          packSaleAt ||
+          (packDateIso ? `${packDateIso}T12:00:00.000Z` : undefined),
       });
-      // QUOTA without pack unit price → spaQuotaRates. Pack unit (e.g. курс массажа N)
+      // QUOTA without pack unit price → spaQuotaRates. Pack unit (e.g. блок массажа N)
       // pays via spaSoldPercent × unit, same as PT pack write-offs.
       if (
         payment === 'QUOTA' &&
@@ -560,15 +598,6 @@ export class PayrollService {
       performer && needsPtSales
         ? await this.loadTrainerPtSalesForPeriod(clubId, from, to)
         : [];
-    const packSalesForUnit =
-      performer && needsPackUnitSales
-        ? await loadPackSalesForUnitPrice(
-            this.prisma,
-            clubId,
-            fromD,
-            toD,
-          )
-        : [];
     const coveredSaleDays = new Set<string>();
     for (const o of onexPt) {
       const key = onexSessionKey(o.externalId);
@@ -598,14 +627,22 @@ export class PayrollService {
         paymentBasis: primary?.paymentBasis,
         sessionTitle: o.title,
       });
+      let packSaleExt: string | undefined;
+      let packSaleAt: string | undefined;
       if (unitFromPackage == null && primary?.clientName) {
-        unitFromPackage = unitPriceFromMatchingPackSale(
+        const packMatch = matchPackSaleForUnitPrice(
           packSalesForUnit,
           primary.clientName,
           primary.paymentBasis,
           o.title,
         );
+        if (packMatch) {
+          unitFromPackage = packMatch.unitPriceMinor;
+          packSaleExt = packMatch.externalId;
+          packSaleAt = packMatch.occurredAt;
+        }
       }
+      const packDateIso = extractPackDateIsoFromBasis(primary?.paymentBasis);
       // Package/block write-offs pay from unit price; one-time cash sales pay via sale lines below
       const isPackage = paySource === 'PACKAGE' || payment === 'QUOTA';
       const trusted =
@@ -632,22 +669,46 @@ export class PayrollService {
           serviceExternalId,
           payrollSegments,
         ) || roomKey === 'REFORMER';
+      // 1C often stores massage as kind=PT — pay via SPA scheme for specialists.
+      const asSpa =
+        isSpecialist &&
+        !isGift &&
+        isSpaLikeSessionTitle(o.title) &&
+        !isReformerPersonal;
+      const bioimpedance = asSpa
+        ? isSpaAllSportsBioimpedance({
+            serviceExternalId,
+            title: o.title,
+          })
+        : false;
+      // QUOTA without pack unit → spaQuotaRates (fixed 20р etc.).
+      const spaPriceMinor =
+        asSpa &&
+        payment === 'QUOTA' &&
+        !bioimpedance &&
+        !(unitFromPackage != null && unitFromPackage > 0)
+          ? 0
+          : priceMinor;
       units.push({
         id: matched?.id ?? `onex:${o.id}`,
-        kind: 'PT',
+        kind: asSpa ? 'SPA' : 'PT',
         performerId,
         title: isGift
           ? 'Подарочная ПТ'
           : isPackage
-            ? `${o.title || 'ПТ'} (абонемент)`
-            : o.title || 'Персональная тренировка',
+            ? `${o.title || (asSpa ? 'SPA' : 'ПТ')} (абонемент)`
+            : o.title || (asSpa ? 'SPA' : 'Персональная тренировка'),
         occurredAt: o.startAt.toISOString(),
         quantity: 1,
-        priceMinor,
+        priceMinor: asSpa ? spaPriceMinor : priceMinor,
         isComplimentary: isGift,
         trustBand: 'GREEN',
         trustResolution: 'NONE',
-        payrollTrusted: Boolean(trusted),
+        payrollTrusted: Boolean(
+          asSpa
+            ? paymentCountsForMoney(payment) || bioimpedance
+            : trusted,
+        ),
         clientName:
           primary?.clientName ??
           (matched
@@ -655,18 +716,26 @@ export class PayrollService {
             : undefined),
         sessionId: o.id,
         sessionKey: key,
-        roomTitle,
-        roomKey,
+        roomTitle: asSpa ? undefined : roomTitle,
+        roomKey: asSpa ? undefined : roomKey,
         serviceExternalId,
-        isAsd: isAsdGroupSession({
-          serviceExternalId,
-          title: o.title,
-        }),
-        isPtAllSports,
-        isReformerPersonal,
+        isAsd: asSpa
+          ? false
+          : isAsdGroupSession({
+              serviceExternalId,
+              title: o.title,
+            }),
+        isPtAllSports: asSpa ? false : isPtAllSports,
+        isReformerPersonal: asSpa ? false : isReformerPersonal,
+        isSpaAllSportsBioimpedance: bioimpedance || undefined,
+        saleExternalId: packSaleExt || undefined,
+        saleOccurredAt:
+          packSaleAt ||
+          (packDateIso ? `${packDateIso}T12:00:00.000Z` : undefined),
       });
       if (
         trusted &&
+        !asSpa &&
         isPackage &&
         (priceMinor ?? 0) > 0 &&
         primary?.clientName
@@ -2965,6 +3034,7 @@ export class PayrollService {
   /**
    * Fill earnMinor / ratePercent on PT+SPA lines for the payroll breakdown table.
    * Mirrors calcMotivationFromProfile (and legacy rates) per unit.
+   * Annotates untrusted rows too (display); totals still use payrollTrusted only.
    */
   private annotateUnitEarnings(
     units: WorkUnit[],
@@ -2974,7 +3044,7 @@ export class PayrollService {
     if (!profile) {
       for (const u of units) {
         if (u.kind !== 'SPA' && u.kind !== 'PT') continue;
-        if (!u.payrollTrusted || u.isComplimentary) continue;
+        if (u.isComplimentary) continue;
         const rate = this.pickRate(u, rates);
         if (!rate) continue;
         if (rate.rateType === 'PERCENT_OF_PRICE' && (u.priceMinor ?? 0) > 0) {
@@ -3001,7 +3071,7 @@ export class PayrollService {
     const paidPtAllSportsIds = new Set<string>();
 
     if (ptAllSportsRate > 0) {
-      for (const u of trusted) {
+      for (const u of units) {
         if (u.kind !== 'PT' || !u.isPtAllSports || u.isComplimentary) continue;
         if (paidPtAllSportsIds.has(u.id)) continue;
         paidPtAllSportsIds.add(u.id);
@@ -3013,7 +3083,7 @@ export class PayrollService {
       if (slice.track === 'REFORMER') {
         const refPct = slice.reformerPersonalPercent ?? 0;
         if (refPct > 0) {
-          for (const u of trusted.filter(
+          for (const u of units.filter(
             (x) =>
               x.kind === 'PT' &&
               (x.isReformerPersonal || x.roomKey === 'REFORMER') &&
@@ -3030,7 +3100,8 @@ export class PayrollService {
       }
 
       if (slice.track === 'SPA') {
-        for (const u of trusted.filter((x) => x.kind === 'SPA')) {
+        for (const u of units.filter((x) => x.kind === 'SPA')) {
+          if (u.isComplimentary) continue;
           if (u.isSpaAllSportsBioimpedance && slice.spaPartnerRateMinor) {
             u.earnMinor = slice.spaPartnerRateMinor;
             continue;
@@ -3048,23 +3119,25 @@ export class PayrollService {
                 return /массаж|massage|класс/i.test(title);
               return r.serviceKey === u.serviceId;
             });
-            if (match) u.earnMinor = match.rateMinor;
+            if (match && match.rateMinor > 0) u.earnMinor = match.rateMinor;
           }
         }
       }
 
       if (slice.track === 'PT' || slice.track === 'CLUB') {
-        const ptUnits = trusted.filter(
-          (x) =>
-            x.kind === 'PT' &&
-            !x.isPtAllSports &&
-            !(hasReformerScheme && x.isReformerPersonal) &&
-            !(hasReformerScheme && x.roomKey === 'REFORMER') &&
-            !(x.roomKey === 'REFORMER' && x.isReformerPersonal),
+        const ptFilter = (x: WorkUnit) =>
+          x.kind === 'PT' &&
+          !x.isPtAllSports &&
+          !(hasReformerScheme && x.isReformerPersonal) &&
+          !(hasReformerScheme && x.roomKey === 'REFORMER') &&
+          !(x.roomKey === 'REFORMER' && x.isReformerPersonal);
+        // Ladder % from trusted volume; annotate every matching line for UI.
+        const pct = resolvePtPercent(
+          trusted.filter(ptFilter).length,
+          slice.ptPercentTiers,
         );
-        const pct = resolvePtPercent(ptUnits.length, slice.ptPercentTiers);
         const catalog = slice.ptSessionPriceMinor ?? 0;
-        for (const u of ptUnits) {
+        for (const u of units.filter(ptFilter)) {
           if (u.isComplimentary) continue;
           const price =
             u.priceMinor != null && u.priceMinor > 0 ? u.priceMinor : catalog;

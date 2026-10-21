@@ -46,14 +46,13 @@ function unitCostLabel(u: WorkUnit, currency: string): string {
 }
 
 /**
- * Employee share from motivation. Dash when no client cost
- * (fixed partner rates still pay, but UI follows «без стоимости → прочерк»).
+ * Employee share from motivation.
+ * Fixed quota / partner rates (price 0) still show earnMinor.
  */
 function unitEarnLabel(u: WorkUnit, currency: string): string {
   if (u.kind !== 'SPA' && u.kind !== 'PT') return '—';
-  if (u.priceMinor == null || u.priceMinor <= 0) return '—';
   if (u.earnMinor == null) return '—';
-  if (u.ratePercent != null) {
+  if (u.ratePercent != null && (u.priceMinor ?? 0) > 0) {
     return `${u.ratePercent}% · ${money(u.earnMinor, currency)}`;
   }
   return money(u.earnMinor, currency);
@@ -61,6 +60,12 @@ function unitEarnLabel(u: WorkUnit, currency: string): string {
 
 function unitDayIso(u: WorkUnit): string {
   return u.occurredAt.slice(0, 10);
+}
+
+function shiftIsoDays(isoDay: string, deltaDays: number): string {
+  const d = new Date(`${isoDay}T12:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return d.toISOString().slice(0, 10);
 }
 
 function unitBookingHref(
@@ -81,17 +86,37 @@ function unitBookingHref(
 
 function unitSaleHref(u: WorkUnit, mode: 'admin' | 'super'): string | null {
   if (u.kind !== 'SPA' && u.kind !== 'PT') return null;
-  const day = unitDayIso(u);
+  const sessionDay = unitDayIso(u);
+  const saleDay = u.saleOccurredAt?.slice(0, 10) || undefined;
   const q = new URLSearchParams();
-  if (day) {
-    q.set('from', day);
-    q.set('to', day);
-  }
   if (u.saleExternalId) {
+    const d = saleDay || sessionDay;
+    if (d) {
+      q.set('from', d);
+      q.set('to', d);
+    }
     q.set('externalId', u.saleExternalId);
   } else if (u.clientName?.trim()) {
+    // Pack/абонемент write-off: sale is usually earlier than the visit.
+    const looksPack = /\(абонемент\)|абонемент|пакет|блок/i.test(
+      u.title ?? '',
+    );
+    if (saleDay) {
+      q.set('from', saleDay);
+      q.set('to', saleDay);
+    } else if (sessionDay && looksPack) {
+      q.set('from', shiftIsoDays(sessionDay, -120));
+      q.set('to', sessionDay);
+    } else if (sessionDay) {
+      q.set('from', sessionDay);
+      q.set('to', sessionDay);
+    }
     q.set('q', u.clientName.trim());
   } else if (u.title?.trim()) {
+    if (sessionDay) {
+      q.set('from', sessionDay);
+      q.set('to', sessionDay);
+    }
     q.set('q', u.title.trim());
   } else {
     return null;

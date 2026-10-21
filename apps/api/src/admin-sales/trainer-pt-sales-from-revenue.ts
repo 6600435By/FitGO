@@ -37,6 +37,15 @@ export type PackSaleForUnitPrice = {
   /** Major currency (BYN). Prefer paid, else sale/document amount. */
   amount: number;
   quantity?: number;
+  /** ClubRevenueEntry.externalId for «Продажа» deep-link. */
+  externalId?: string;
+};
+
+/** Pack unit recovery result (price + optional sale pointer). */
+export type PackUnitPriceMatch = {
+  unitPriceMinor: number;
+  externalId?: string;
+  occurredAt?: string;
 };
 
 /**
@@ -347,10 +356,12 @@ export async function loadPackSalesForUnitPrice(
     if (rawAmount <= 0) continue;
 
     const qtyFromName = parsePackVisitCountFromTitle(product);
+    const isMassagePack = /массаж|massage|блок\s+массаж/i.test(product);
     const isPack =
       isMultiVisitPackSale(product, qtyFromName) ||
       isReformerPersonalTitle(product) ||
       isLikelyTrainingProductName(product) ||
+      isMassagePack ||
       // Debt stub «Продажа 30907…» — still usable with basis date + client match.
       (/^продажа\s+\d+/i.test(product) && saleAmt > 0);
 
@@ -359,6 +370,7 @@ export async function loadPackSalesForUnitPrice(
     if (
       qtyFromName == null &&
       !isReformerPersonalTitle(product) &&
+      !isMassagePack &&
       !/^продажа\s+\d+/i.test(product) &&
       !isMultiVisitPackSale(product)
     ) {
@@ -372,6 +384,7 @@ export async function loadPackSalesForUnitPrice(
       occurredAt: when.toISOString(),
       amount: Math.round(rawAmount * 100) / 100,
       quantity: qtyFromName && qtyFromName > 1 ? qtyFromName : undefined,
+      externalId: e.externalId || undefined,
     });
   }
   return out;
@@ -382,12 +395,12 @@ export async function loadPackSalesForUnitPrice(
  * Visit count comes from paymentBasis / quoted pack name — not from
  * conducted session title («реформер 1»).
  */
-export function unitPriceFromMatchingPackSale(
+export function matchPackSaleForUnitPrice(
   sales: PackSaleForUnitPrice[],
   clientName: string,
   paymentBasis?: string | null,
   sessionTitle?: string | null,
-): number | undefined {
+): PackUnitPriceMatch | undefined {
   const client = clientName.trim().toLowerCase();
   if (!client) return undefined;
   const basis = (paymentBasis ?? '').toLowerCase();
@@ -401,7 +414,12 @@ export function unitPriceFromMatchingPackSale(
     null;
   const packDateIso = extractPackDateIsoFromBasis(paymentBasis);
 
-  type Cand = { amountMinor: number; score: number };
+  type Cand = {
+    amountMinor: number;
+    score: number;
+    externalId?: string;
+    occurredAt?: string;
+  };
   const cands: Cand[] = [];
 
   for (const sale of sales) {
@@ -454,16 +472,40 @@ export function unitPriceFromMatchingPackSale(
     // Prefer exact visit-count match when known.
     if (packQty != null && svcQty != null && packQty === svcQty) score += 10;
     if (packQty != null && svcQty != null && packQty !== svcQty) continue;
-    cands.push({ amountMinor, score });
+    cands.push({
+      amountMinor,
+      score,
+      externalId: sale.externalId,
+      occurredAt: sale.occurredAt,
+    });
   }
 
   if (!cands.length) return undefined;
   cands.sort((a, b) => b.score - a.score || b.amountMinor - a.amountMinor);
-  const best = cands[0];
+  const best = cands[0]!;
   const qty =
     packQty && packQty > 0
       ? packQty
       : parsePackVisitCountFromTitle(quoted) ?? 0;
-  if (qty > 1) return Math.round(best.amountMinor / qty);
-  return undefined;
+  if (qty <= 1) return undefined;
+  return {
+    unitPriceMinor: Math.round(best.amountMinor / qty),
+    externalId: best.externalId,
+    occurredAt: best.occurredAt,
+  };
+}
+
+/** @deprecated Prefer matchPackSaleForUnitPrice when sale pointer is needed. */
+export function unitPriceFromMatchingPackSale(
+  sales: PackSaleForUnitPrice[],
+  clientName: string,
+  paymentBasis?: string | null,
+  sessionTitle?: string | null,
+): number | undefined {
+  return matchPackSaleForUnitPrice(
+    sales,
+    clientName,
+    paymentBasis,
+    sessionTitle,
+  )?.unitPriceMinor;
 }
