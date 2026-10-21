@@ -46,11 +46,11 @@ function unitCostLabel(u: WorkUnit, currency: string): string {
 }
 
 /**
- * Employee share from motivation.
- * Fixed quota / partner rates (price 0) still show earnMinor.
+ * Employee share from motivation (PT / SPA / GROUP).
+ * Fixed quota / partner / GP hall rates still show earnMinor.
  */
 function unitEarnLabel(u: WorkUnit, currency: string): string {
-  if (u.kind !== 'SPA' && u.kind !== 'PT') return '—';
+  if (u.kind !== 'SPA' && u.kind !== 'PT' && u.kind !== 'GROUP') return '—';
   if (u.earnMinor == null) return '—';
   if (u.ratePercent != null && (u.priceMinor ?? 0) > 0) {
     return `${u.ratePercent}% · ${money(u.earnMinor, currency)}`;
@@ -58,8 +58,50 @@ function unitEarnLabel(u: WorkUnit, currency: string): string {
   return money(u.earnMinor, currency);
 }
 
+function unitShowsPayCols(u: WorkUnit): boolean {
+  return u.kind === 'SPA' || u.kind === 'PT' || u.kind === 'GROUP';
+}
+
+/** Period totals under «Работы за период». */
+function workUnitsPeriodTotals(units: WorkUnit[]) {
+  let earnedMinor = 0;
+  let soldMinor = 0;
+  let classCount = 0;
+  for (const u of units) {
+    if (u.kind === 'GROUP') classCount += 1;
+    if (!u.payrollTrusted || u.isComplimentary) continue;
+    if (u.earnMinor != null) earnedMinor += u.earnMinor;
+    else if (u.kind === 'SHIFT' && u.priceMinor != null) {
+      earnedMinor += u.priceMinor;
+    }
+    if (
+      (u.kind === 'SPA' || u.kind === 'PT') &&
+      u.priceMinor != null &&
+      u.priceMinor > 0
+    ) {
+      soldMinor += u.priceMinor;
+    }
+  }
+  return { earnedMinor, soldMinor, classCount };
+}
+
 function unitDayIso(u: WorkUnit): string {
   return u.occurredAt.slice(0, 10);
+}
+
+/** Calendar day of a work unit in club local wall clock (ru-RU, with year). */
+function unitDayLabel(u: WorkUnit): string {
+  return new Date(u.occurredAt).toLocaleDateString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
+
+function formatIsoDayRu(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  if (!y || !m || !d) return iso;
+  return `${d}.${m}.${y}`;
 }
 
 function shiftIsoDays(isoDay: string, deltaDays: number): string {
@@ -85,7 +127,7 @@ function unitBookingHref(
 }
 
 function unitSaleHref(u: WorkUnit, mode: 'admin' | 'super'): string | null {
-  if (u.kind !== 'SPA' && u.kind !== 'PT') return null;
+  if (u.kind !== 'SPA' && u.kind !== 'PT' && u.kind !== 'GROUP') return null;
   const sessionDay = unitDayIso(u);
   const saleDay = u.saleOccurredAt?.slice(0, 10) || undefined;
   const q = new URLSearchParams();
@@ -96,6 +138,12 @@ function unitSaleHref(u: WorkUnit, mode: 'admin' | 'super'): string | null {
       q.set('to', d);
     }
     q.set('externalId', u.saleExternalId);
+  } else if (u.kind === 'GROUP') {
+    // Group class: open sales for the same day filtered by program title.
+    if (!u.title?.trim() || !sessionDay) return null;
+    q.set('from', sessionDay);
+    q.set('to', sessionDay);
+    q.set('q', u.title.trim());
   } else if (u.clientName?.trim()) {
     // Pack/абонемент write-off: sale is usually earlier than the visit.
     const looksPack = /\(абонемент\)|абонемент|пакет|блок/i.test(
@@ -453,6 +501,11 @@ export function PayrollWorkspace({ mode }: Props) {
       (summary?.workUnits ?? []).filter(
         (u) => u.kind === 'GROUP' && u.payrollTrusted,
       ),
+    [summary?.workUnits],
+  );
+
+  const workTotals = useMemo(
+    () => workUnitsPeriodTotals(summary?.workUnits ?? []),
     [summary?.workUnits],
   );
 
@@ -905,7 +958,11 @@ export function PayrollWorkspace({ mode }: Props) {
             </h2>
             <p className="text-[11px] text-slate-500">
               {selected
-                ? `${selected.name}${summary ? ` · ${money(summary.totalMinor, summary.currency)}` : ''}`
+                ? `${selected.name}${
+                    summary
+                      ? ` · ${formatIsoDayRu(summary.from)}–${formatIsoDayRu(summary.to)} · ${money(summary.totalMinor, summary.currency)}`
+                      : ''
+                  }`
                 : 'Индивидуальный расчёт и проверка'}
             </p>
           </div>
@@ -976,13 +1033,19 @@ export function PayrollWorkspace({ mode }: Props) {
           <DateField
             label="С"
             value={from}
-            onChange={setFrom}
+            onChange={(v) => {
+              setFrom(v);
+              setSummary(null);
+            }}
             inputClassName="text-sm"
           />
           <DateField
             label="По"
             value={to}
-            onChange={setTo}
+            onChange={(v) => {
+              setTo(v);
+              setSummary(null);
+            }}
             inputClassName="text-sm"
           />
           <button
@@ -1125,6 +1188,15 @@ export function PayrollWorkspace({ mode }: Props) {
             )}
       {summary && (
         <>
+          <p className="text-xs text-slate-500">
+            Расчёт за{' '}
+            <span className="tabular-nums text-slate-300">
+              {formatIsoDayRu(summary.from)}–{formatIsoDayRu(summary.to)}
+            </span>
+            {summary.from !== from || summary.to !== to
+              ? ' — даты изменены, нажмите «Рассчитать»'
+              : null}
+          </p>
           <section className="grid grid-cols-2 gap-2.5 md:grid-cols-4 md:gap-3">
             <Stat
               label="Оклад / часы"
@@ -1330,8 +1402,8 @@ export function PayrollWorkspace({ mode }: Props) {
                       className="flex justify-between gap-2 border-b border-slate-900/80 py-1.5 text-slate-300"
                     >
                       <span className="min-w-0 flex-1">
-                        <span className="text-slate-500">
-                          {formatDateTime(u.occurredAt).slice(0, 10)}
+                        <span className="tabular-nums text-slate-500">
+                          {unitDayLabel(u)}
                         </span>{' '}
                         · {u.title}
                         {u.roomTitle ? (
@@ -1386,7 +1458,7 @@ export function PayrollWorkspace({ mode }: Props) {
                       {u.kind === 'GROUP' && u.roomTitle && (
                         <span className="text-slate-500">{u.roomTitle}</span>
                       )}
-                      {(u.kind === 'SPA' || u.kind === 'PT') && (
+                      {unitShowsPayCols(u) && (
                         <>
                           <span>
                             {unitCostLabel(u, summary.currency)}
@@ -1454,7 +1526,7 @@ export function PayrollWorkspace({ mode }: Props) {
                             : 'не в ЗП'}
                       </span>
                     </div>
-                    {(u.kind === 'SPA' || u.kind === 'PT') &&
+                    {unitShowsPayCols(u) &&
                       (unitBookingHref(u, mode) || unitSaleHref(u, mode)) && (
                         <div className="mt-2 flex flex-wrap gap-3 text-xs">
                           {unitBookingHref(u, mode) ? (
@@ -1478,6 +1550,33 @@ export function PayrollWorkspace({ mode }: Props) {
                   </article>
                 ))
               )}
+              {summary.workUnits.length > 0 ? (
+                <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5 text-xs text-slate-400">
+                  <span className="font-medium uppercase tracking-wide text-slate-500">
+                    Итого
+                  </span>
+                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                    <span>
+                      Начислено:{' '}
+                      <span className="tabular-nums text-emerald-300">
+                        {money(workTotals.earnedMinor, summary.currency)}
+                      </span>
+                    </span>
+                    <span>
+                      Продано:{' '}
+                      <span className="tabular-nums text-slate-200">
+                        {money(workTotals.soldMinor, summary.currency)}
+                      </span>
+                    </span>
+                    <span>
+                      Занятий:{' '}
+                      <span className="tabular-nums text-slate-200">
+                        {workTotals.classCount}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="hidden overflow-hidden rounded-2xl border border-slate-800 md:block">
@@ -1499,7 +1598,7 @@ export function PayrollWorkspace({ mode }: Props) {
                   {summary.workUnits.map((u) => {
                     const bookingHref = unitBookingHref(u, mode);
                     const saleHref = unitSaleHref(u, mode);
-                    const showPayCols = u.kind === 'SPA' || u.kind === 'PT';
+                    const showPayCols = unitShowsPayCols(u);
                     return (
                       <tr
                         key={`${u.kind}-${u.id}`}
@@ -1590,6 +1689,37 @@ export function PayrollWorkspace({ mode }: Props) {
                     );
                   })}
                 </tbody>
+                {summary.workUnits.length > 0 ? (
+                  <tfoot>
+                    <tr className="border-t border-slate-700 bg-slate-950/90 text-xs">
+                      <td
+                        colSpan={4}
+                        className="px-4 py-3 font-medium uppercase tracking-wide text-slate-500"
+                      >
+                        Итого
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-slate-200">
+                        {money(workTotals.soldMinor, summary.currency)}
+                        <span className="mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-slate-500">
+                          продано
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-emerald-300">
+                        {money(workTotals.earnedMinor, summary.currency)}
+                        <span className="mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-slate-500">
+                          начислено
+                        </span>
+                      </td>
+                      <td
+                        colSpan={3}
+                        className="px-4 py-3 tabular-nums text-slate-200"
+                      >
+                        {workTotals.classCount}{' '}
+                        <span className="text-slate-500">занятий</span>
+                      </td>
+                    </tr>
+                  </tfoot>
+                ) : null}
               </table>
             </div>
           </section>
