@@ -141,9 +141,10 @@ export class AppPresenceService {
         };
       })
       .sort((a, b) => {
+        if (a.online !== b.online) return a.online ? -1 : 1;
         const aT = a.lastSeenAt ? Date.parse(a.lastSeenAt) : 0;
         const bT = b.lastSeenAt ? Date.parse(b.lastSeenAt) : 0;
-        return aT - bT;
+        return bT - aT;
       });
 
     const onlineNow = staffRows.filter((r) => r.online).length;
