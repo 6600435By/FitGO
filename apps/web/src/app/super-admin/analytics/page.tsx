@@ -5,11 +5,13 @@ import type {
   AnalyticsDepartment,
   ClubAnalyticsReport,
   ManagerEfficiencyBlock,
+  PricingAnalyticsReport,
   StaffAnalyticsReport,
 } from '@fitgo/shared-types';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ClubAnalyticsPanel } from '@/components/analytics/club-analytics-panel';
+import { MarketPricingPanel } from '@/components/analytics/market-pricing-panel';
 import {
   PayVisibilityToggle,
   readPayVisibility,
@@ -19,7 +21,7 @@ import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
-type Tab = 'club' | 'staff';
+type Tab = 'club' | 'staff' | 'market';
 
 function isoDate(d: Date) {
   const y = d.getFullYear();
@@ -50,6 +52,10 @@ function clubCacheKey(
   includePay: boolean,
 ) {
   return `${from}|${to}|${compare}|pay:${includePay ? 1 : 0}`;
+}
+
+function marketCacheKey(from: string, to: string, compare: string) {
+  return `${from}|${to}|${compare}`;
 }
 
 function filterStaffReport(
@@ -107,6 +113,7 @@ function AnalyticsInner() {
   const [showPay, setShowPay] = useState(false);
   const [club, setClub] = useState<ClubAnalyticsReport | null>(null);
   const [staffAll, setStaffAll] = useState<StaffAnalyticsReport | null>(null);
+  const [market, setMarket] = useState<PricingAnalyticsReport | null>(null);
   const [managerEff, setManagerEff] = useState<ManagerEfficiencyBlock | null>(
     null,
   );
@@ -114,9 +121,11 @@ function AnalyticsInner() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [marketReload, setMarketReload] = useState(0);
 
   const clubCache = useRef(new Map<string, ClubAnalyticsReport>());
   const staffCache = useRef(new Map<string, StaffAnalyticsReport>());
+  const marketCache = useRef(new Map<string, PricingAnalyticsReport>());
   const managerCache = useRef(new Map<string, ManagerEfficiencyBlock>());
 
   useEffect(() => {
@@ -135,8 +144,7 @@ function AnalyticsInner() {
     [pathname, router, searchParams],
   );
 
-  // Club / staff report: reload on period / pay / tab / department.
-  // Department is sent to API so collectors for other tracks are skipped.
+  // Club / staff / market report: reload on period / pay / tab / department.
   useEffect(() => {
     const token = getToken();
     if (!token) return;
@@ -166,6 +174,27 @@ function AnalyticsInner() {
             clubCache.current.set(key, data);
             setClub(data);
           }
+        } else if (tab === 'market') {
+          const key = marketCacheKey(from, to, compare);
+          const hit =
+            marketReload === 0 ? marketCache.current.get(key) : undefined;
+          if (hit) {
+            if (!cancelled) {
+              setMarket(hit);
+              setLoading(false);
+            }
+            return;
+          }
+          setLoading(true);
+          const data = await api.analyticsMarket(token, {
+            from,
+            to,
+            compare,
+          });
+          if (!cancelled) {
+            marketCache.current.set(key, data);
+            setMarket(data);
+          }
         } else {
           const key = staffCacheKey(from, to, showPay, department);
           const hit = staffCache.current.get(key);
@@ -192,6 +221,7 @@ function AnalyticsInner() {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : 'Ошибка загрузки');
           if (tab === 'club') setClub(null);
+          else if (tab === 'market') setMarket(null);
           else setStaffAll(null);
         }
       } finally {
@@ -202,7 +232,7 @@ function AnalyticsInner() {
     return () => {
       cancelled = true;
     };
-  }, [tab, from, to, compare, showPay, department]);
+  }, [tab, from, to, compare, showPay, department, marketReload]);
 
   // Manager efficiency: only when staff tab + ALL or MANAGER.
   useEffect(() => {
@@ -285,16 +315,22 @@ function AnalyticsInner() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
-        {(['club', 'staff'] as const).map((t) => (
+        {(
+          [
+            { id: 'club' as const, label: 'Клуб' },
+            { id: 'staff' as const, label: 'Персонал' },
+            { id: 'market' as const, label: 'Рынок и цены' },
+          ] as const
+        ).map((t) => (
           <button
-            key={t}
+            key={t.id}
             type="button"
-            onClick={() => setParams({ tab: t })}
+            onClick={() => setParams({ tab: t.id })}
             className={`rounded-full px-4 py-1.5 text-sm ${
-              tab === t ? 'bg-fitgo-500 text-white' : 'bg-slate-800'
+              tab === t.id ? 'bg-fitgo-500 text-white' : 'bg-slate-800'
             }`}
           >
-            {t === 'club' ? 'Клуб' : 'Персонал'}
+            {t.label}
           </button>
         ))}
       </div>
@@ -310,7 +346,7 @@ function AnalyticsInner() {
           value={to}
           onChange={(v) => setParams({ to: v })}
         />
-        {tab === 'club' && (
+        {(tab === 'club' || tab === 'market') && (
           <label className="text-sm">
             <span className="mb-1 block text-slate-400">Сравнение</span>
             <select
@@ -355,7 +391,9 @@ function AnalyticsInner() {
             90 дн.
           </button>
         </div>
-        <PayVisibilityToggle show={showPay} onChange={setShowPay} />
+        {tab !== 'market' && (
+          <PayVisibilityToggle show={showPay} onChange={setShowPay} />
+        )}
       </div>
 
       {error && <p className="text-red-400">{error}</p>}
@@ -368,6 +406,16 @@ function AnalyticsInner() {
 
       {!loading && tab === 'club' && club && (
         <ClubAnalyticsPanel report={club} showPay={showPay} />
+      )}
+
+      {!loading && tab === 'market' && market && (
+        <MarketPricingPanel
+          report={market}
+          onReload={() => {
+            marketCache.current.clear();
+            setMarketReload((n) => n + 1);
+          }}
+        />
       )}
 
       {!loading && tab === 'staff' && staffView && (

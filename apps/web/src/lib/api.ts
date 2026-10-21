@@ -57,6 +57,10 @@ import {
   type ClubAnalyticsReport,
   type ManagerEfficiencyBlock,
   type StaffAnalyticsReport,
+  type PricingAnalyticsReport,
+  type UpsertCompetitorPriceDto,
+  type UpsertSaleWindowDto,
+  type UpsertSegmentCompetitorDto,
   type AdminTaskWorkReport,
   type AnalyticsCompareMode,
   type AnalyticsDepartment,
@@ -2359,6 +2363,76 @@ export const api = {
     }
     return res.blob();
   },
+
+  analyticsMarket: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      compare?: AnalyticsCompareMode;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.compare) q.set('compare', params.compare);
+    return request<PricingAnalyticsReport>(
+      `/super-admin/analytics/market?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsMarketAddCompetitor: (
+    token: string,
+    body: UpsertSegmentCompetitorDto,
+  ) =>
+    request(`/super-admin/analytics/market/competitors`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, token),
+
+  analyticsMarketDeleteCompetitor: (token: string, id: string) =>
+    request(`/super-admin/analytics/market/competitors/${id}`, {
+      method: 'DELETE',
+    }, token),
+
+  analyticsMarketUpsertPrice: (
+    token: string,
+    body: UpsertCompetitorPriceDto,
+  ) =>
+    request(`/super-admin/analytics/market/competitor-prices`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }, token),
+
+  analyticsMarketAddSaleWindow: (
+    token: string,
+    body: UpsertSaleWindowDto,
+  ) =>
+    request(`/super-admin/analytics/market/sale-windows`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, token),
+
+  analyticsMarketDeleteSaleWindow: (token: string, id: string) =>
+    request(`/super-admin/analytics/market/sale-windows/${id}`, {
+      method: 'DELETE',
+    }, token),
+
+  analyticsMarketRefreshDiscounts: (
+    token: string,
+    body: { from: string; to: string },
+  ) =>
+    request<{ status: string; message?: string; imported?: number }>(
+      `/super-admin/analytics/market/discounts/refresh`,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+      token,
+    ),
 
   analyticsTasks: (
     token: string,

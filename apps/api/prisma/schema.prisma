@@ -522,6 +522,10 @@ model Club {
   webkassaSyncStates   WebkassaSyncState[]
   discrepancyAcks      DiscrepancyAck[]
   discrepancyTaskRules DiscrepancyTaskRule[]
+  segmentCompetitors   SegmentCompetitor[]
+  membershipSaleWindows MembershipSaleWindow[]
+  providedDiscountRows ProvidedDiscountRow[]
+  providedDiscountSyncStates ProvidedDiscountSyncState[]
 }
 
 model ClubTheme {
@@ -2224,6 +2228,98 @@ model ClubRevenueEntry {
   @@index([clubId, performerExternalId, occurredAt])
   @@index([clubId, isActive, occurredAt])
   @@index([clubId, productExternalId])
+}
+
+/// Competitor club monitored inside one pricing segment (not corporate).
+model SegmentCompetitor {
+  id         String   @id @default(cuid())
+  clubId     String
+  /// membership | training | shop | spa | solarium
+  segmentKey String
+  name       String
+  note       String?
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  club   Club                    @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  prices SegmentCompetitorPrice[]
+
+  @@index([clubId, segmentKey])
+  @@unique([clubId, segmentKey, name])
+}
+
+/// Observed competitor price for our nomenclature UUID.
+model SegmentCompetitorPrice {
+  id                 String   @id @default(cuid())
+  competitorId       String
+  productExternalId  String
+  priceMinor         Int
+  observedAt         DateTime @db.Date
+  theirName          String?
+  sourceUrl          String?
+  updatedAt          DateTime @updatedAt
+
+  competitor SegmentCompetitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@unique([competitorId, productExternalId])
+  @@index([productExternalId])
+}
+
+/// Extra membership sale windows (August is built into rules, not stored).
+model MembershipSaleWindow {
+  id         String   @id @default(cuid())
+  clubId     String
+  name       String
+  fromDate   DateTime @db.Date
+  toDate     DateTime @db.Date
+  /// Default membership
+  segmentKey String   @default("membership")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, fromDate, toDate])
+}
+
+/// Cached lines from 1C Отчет.ПредоставленныеСкидки (when Analytics publishes them).
+model ProvidedDiscountRow {
+  id                   String   @id @default(cuid())
+  clubId               String
+  occurredAt           DateTime
+  productExternalId    String?
+  productName          String?
+  clientExternalId     String?
+  clientName           String?
+  employeeExternalId   String?
+  employeeName         String?
+  discountName         String?
+  discountAmount       Float    @default(0)
+  discountPercent      Float?
+  saleDocumentId       String?
+  syncedAt             DateTime @default(now())
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, occurredAt])
+  @@index([clubId, productExternalId, occurredAt])
+  @@index([clubId, employeeExternalId, occurredAt])
+}
+
+model ProvidedDiscountSyncState {
+  id            String    @id @default(cuid())
+  clubId        String
+  lastFrom      String?
+  lastTo        String?
+  lastSyncedAt  DateTime?
+  lastStatus    String?
+  lastError     String?
+  updatedAt     DateTime  @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId])
 }
 
 /// Manual cash-desk lines for club revenue: Корпо (р/с) and Прочие.

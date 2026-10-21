@@ -1,21 +1,33 @@
 import {
+  Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
+  Param,
+  Post,
+  Put,
   Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
 import { UserRole } from '@fitgo/shared-types';
+import type {
+  AnalyticsCompareMode,
+  AnalyticsDepartment,
+  UpsertCompetitorPriceDto,
+  UpsertSaleWindowDto,
+  UpsertSegmentCompetitorDto,
+} from '@fitgo/shared-types';
 import type { Response } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
-import type { AnalyticsCompareMode, AnalyticsDepartment } from '@fitgo/shared-types';
 import { AdminTaskReportService } from './admin-task-report.service';
 import { ClubAnalyticsService } from './club-analytics.service';
+import { PricingAnalyticsService } from './pricing-analytics.service';
 import { StaffAnalyticsService } from './staff-analytics.service';
 
 @Controller('super-admin/analytics')
@@ -26,6 +38,7 @@ export class AnalyticsController {
     private readonly club: ClubAnalyticsService,
     private readonly staff: StaffAnalyticsService,
     private readonly taskReport: AdminTaskReportService,
+    private readonly pricing: PricingAnalyticsService,
   ) {}
 
   @Get('club')
@@ -133,5 +146,63 @@ export class AnalyticsController {
       `attachment; filename="analytics_tasks_${from}_${to}.xlsx"`,
     );
     res!.send(buf);
+  }
+
+  @Get('market')
+  marketReport(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('compare') compare?: AnalyticsCompareMode,
+  ) {
+    return this.pricing.getReport(user, { from, to, compare });
+  }
+
+  @Post('market/competitors')
+  addCompetitor(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: UpsertSegmentCompetitorDto,
+  ) {
+    return this.pricing.addCompetitor(user, body);
+  }
+
+  @Delete('market/competitors/:id')
+  deleteCompetitor(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.pricing.deleteCompetitor(user, id);
+  }
+
+  @Put('market/competitor-prices')
+  upsertCompetitorPrice(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: UpsertCompetitorPriceDto,
+  ) {
+    return this.pricing.upsertCompetitorPrice(user, body);
+  }
+
+  @Post('market/sale-windows')
+  addSaleWindow(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: UpsertSaleWindowDto,
+  ) {
+    return this.pricing.addSaleWindow(user, body);
+  }
+
+  @Delete('market/sale-windows/:id')
+  deleteSaleWindow(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.pricing.deleteSaleWindow(user, id);
+  }
+
+  @Post('market/discounts/refresh')
+  refreshDiscounts(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { from: string; to: string },
+  ) {
+    return this.pricing.refreshDiscounts(user, body);
   }
 }
