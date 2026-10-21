@@ -512,6 +512,46 @@ export function allPaySlices(
 }
 
 /**
+ * «Выплата аванса на карту» from a *stored* pay profile.
+ * Call on the raw compensation JSON — not on `payProfileForCalculation` output —
+ * otherwise GP filtering can drop the PT/REFORMER slice that holds the amount
+ * (admins keep working because non-trainers skip that filter).
+ */
+export function resolveFixedAdvanceMinor(
+  profile: StaffPayProfile | null | undefined,
+  roles: readonly string[],
+  opts?: { trainerStaff?: boolean },
+): number {
+  if (!profile) return 0;
+  const pick = (track: StaffPayTrack) =>
+    sliceForTrack(profile, track).fixedAdvanceMinor ?? 0;
+  const root = profile.fixedAdvanceMinor ?? 0;
+  const anySlice =
+    allPaySlices(profile)
+      .map((slice) => slice.fixedAdvanceMinor ?? 0)
+      .find((n) => n > 0) ?? 0;
+
+  const ordered: number[] = [];
+  if (roles.includes('MANAGER')) ordered.push(pick('MANAGER') || root);
+  if (roles.includes('ADMIN')) ordered.push(pick('ADMIN') || root);
+  if (roles.includes('SPECIALIST')) ordered.push(pick('SPA') || root);
+  if (roles.includes('TECH')) ordered.push(pick('TECH') || root);
+  if (roles.includes('TRAINER')) {
+    ordered.push(
+      pick('PT') || pick('GROUP_TRAINER') || pick('REFORMER') || root,
+    );
+  }
+
+  const firstPositive = ordered.find((n) => n > 0);
+  if (firstPositive != null) return firstPositive;
+  if (anySlice > 0) return anySlice;
+
+  // ADMIN / staff PT with explicit 0 still use the fixed path (earned = 0).
+  if (roles.includes('ADMIN') || opts?.trainerStaff) return 0;
+  return root;
+}
+
+/**
  * ADVANCE_HALF (25th) accrual profile: drop PT / CLUB / REFORMER so only
  * GP group rates (and non-trainer slices) earn for days 1–15.
  * Reformer and staff PT settle on the 15th.

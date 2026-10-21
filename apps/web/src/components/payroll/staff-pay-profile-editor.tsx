@@ -240,6 +240,7 @@ export function StaffPayProfileEditor({
         map.PT?.fixedAdvanceMinor ||
         map.GROUP_TRAINER?.fixedAdvanceMinor ||
         map.REFORMER?.fixedAdvanceMinor ||
+        current.fixedAdvanceMinor ||
         0;
       for (const track of ['PT', 'GROUP_TRAINER', 'REFORMER'] as const) {
         if (map[track]) {

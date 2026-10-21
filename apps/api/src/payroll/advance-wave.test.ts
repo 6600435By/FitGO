@@ -4,6 +4,8 @@
 import assert from 'node:assert/strict';
 import {
   payProfileForAdvanceHalf,
+  payProfileForCalculation,
+  resolveFixedAdvanceMinor,
   splitAdvanceWave,
   trainerPayFlags,
   type StaffPayProfile,
@@ -82,6 +84,69 @@ import {
   assert.ok(tracks.includes('GROUP_TRAINER'));
   assert.equal(tracks.includes('REFORMER'), false);
   assert.equal(tracks.includes('PT'), false);
+}
+
+{
+  // GP-only: advance stored on PT slice must still resolve from raw profile.
+  // payProfileForCalculation drops PT when GROUP_TRAINER exists — that used to
+  // zero the card column for everyone except ADMIN (non-trainers skip the filter).
+  const profile: StaffPayProfile = {
+    track: 'GROUP_TRAINER',
+    groupSessionRateMinor: 2000,
+    byTrack: {
+      GROUP_TRAINER: {
+        track: 'GROUP_TRAINER',
+        groupSessionRateMinor: 2000,
+      },
+      PT: {
+        track: 'PT',
+        ptPercentTiers: [{ minSessions: 0, percent: 50 }],
+        fixedAdvanceMinor: 12_000,
+      },
+    },
+  };
+  const flags = trainerPayFlags({
+    roles: ['TRAINER'],
+    groupPrograms: true,
+    trainerStaff: false,
+    trainerGroupsSet: true,
+  });
+  const filtered = payProfileForCalculation(profile, flags);
+  assert.equal(
+    resolveFixedAdvanceMinor(filtered, ['TRAINER']),
+    0,
+    'filtered profile loses PT advance (documents the bug)',
+  );
+  assert.equal(
+    resolveFixedAdvanceMinor(profile, ['TRAINER']),
+    12_000,
+    'raw profile keeps card advance for GP trainers',
+  );
+}
+
+{
+  assert.equal(
+    resolveFixedAdvanceMinor(
+      {
+        track: 'ADMIN',
+        fixedAdvanceMinor: 10_000,
+        byTrack: { ADMIN: { track: 'ADMIN', fixedAdvanceMinor: 10_000 } },
+      },
+      ['ADMIN'],
+    ),
+    10_000,
+  );
+  assert.equal(
+    resolveFixedAdvanceMinor(
+      {
+        track: 'SPA',
+        fixedAdvanceMinor: 8_000,
+        byTrack: { SPA: { track: 'SPA', fixedAdvanceMinor: 8_000 } },
+      },
+      ['SPECIALIST'],
+    ),
+    8_000,
+  );
 }
 
 console.log('advance-wave.test.ts: ok');

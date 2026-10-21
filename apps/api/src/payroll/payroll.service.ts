@@ -14,6 +14,7 @@ import {
   payProfileForAdvanceHalf,
   payProfileForCalculation,
   payProfileSummary,
+  resolveFixedAdvanceMinor,
   splitAdvanceWave,
   isAsdGroupSession,
   isComplimentarySessionTitle,
@@ -1377,20 +1378,14 @@ export class PayrollService {
       range.from,
       range.to,
     );
-    const profile = payProfileForCalculation(
-      asPayProfile(compensation?.payProfile),
-      trainerPayFlags({
-        roles,
-        groupPrograms: user.groupPrograms,
-        trainerStaff: user.trainerStaff,
-        trainerClub: user.trainerClub,
-        trainerReformers: user.trainerReformers,
-        trainerGroupsSet: user.trainerGroupsSet,
-      }),
+    // Raw profile: do not run payProfileForCalculation first — that filter
+    // drops inactive trainer slices and can zero out «аванс на карту».
+    const rawProfile = asPayProfile(compensation?.payProfile);
+    const resolvedFixedAdvance = resolveFixedAdvanceMinor(
+      rawProfile,
+      roles.map(String),
+      { trainerStaff: Boolean(user.trainerStaff) },
     );
-    const resolvedFixedAdvance = this.resolveFixedAdvance(profile, roles, {
-      trainerStaff: Boolean(user.trainerStaff),
-    });
     const staffOnly =
       Boolean(user.trainerStaff) && !user.groupPrograms;
     const reformerOnly =
@@ -1781,49 +1776,6 @@ export class PayrollService {
       take: 24,
     });
     return rows.map((r) => this.mapPayout(r));
-  }
-
-  /**
-   * First non-zero card advance in order:
-   * MANAGER → ADMIN → SPA → TECH → PT / GROUP_TRAINER / REFORMER.
-   * Trainer subdivisions share one amount (never summed).
-   * Root `profile.fixedAdvanceMinor` is a fallback when byTrack slice is empty.
-   */
-  private resolveFixedAdvance(
-    profile: StaffPayProfile | undefined,
-    roles: Role[],
-    opts?: { trainerStaff?: boolean },
-  ): number {
-    if (!profile) return 0;
-    const pick = (
-      track:
-        | 'MANAGER'
-        | 'ADMIN'
-        | 'SPA'
-        | 'TECH'
-        | 'PT'
-        | 'GROUP_TRAINER'
-        | 'REFORMER',
-    ) => sliceForTrack(profile, track).fixedAdvanceMinor ?? 0;
-    const root = profile.fixedAdvanceMinor ?? 0;
-
-    const ordered: number[] = [];
-    if (roles.includes(Role.MANAGER)) ordered.push(pick('MANAGER') || root);
-    if (roles.includes(Role.ADMIN)) ordered.push(pick('ADMIN') || root);
-    if (roles.includes(Role.SPECIALIST)) ordered.push(pick('SPA') || root);
-    if (roles.includes(Role.TECH)) ordered.push(pick('TECH') || root);
-    if (roles.includes(Role.TRAINER)) {
-      ordered.push(
-        pick('PT') || pick('GROUP_TRAINER') || pick('REFORMER') || root,
-      );
-    }
-
-    const firstPositive = ordered.find((n) => n > 0);
-    if (firstPositive != null) return firstPositive;
-
-    // ADMIN / staff PT with explicit 0 still use the fixed path (earned = 0).
-    if (roles.includes(Role.ADMIN) || opts?.trainerStaff) return 0;
-    return root;
   }
 
   private mapPayout(row: {
