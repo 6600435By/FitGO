@@ -170,6 +170,10 @@ function kpiCells(
     );
   }
   if (k.kind === 'GROUP_TRAINER') {
+    const mixTitle =
+      k.abonPct != null
+        ? `Абон ${k.abonVisits} · КП ${k.kpVisits}`
+        : undefined;
     return (
       <>
         <td className="px-2 py-2 text-right">
@@ -181,6 +185,12 @@ function kpiCells(
         <td className="px-2 py-2 text-right">{k.cancelledSessions}</td>
         <td className="px-2 py-2 text-right">{k.bookedTotal}</td>
         <td className="px-2 py-2 text-right">{k.attendedTotal}</td>
+        <td className="px-2 py-2 text-right" title={mixTitle}>
+          {k.abonPct != null ? `${k.abonPct}%` : '—'}
+        </td>
+        <td className="px-2 py-2 text-right" title={mixTitle}>
+          {k.kpPct != null ? `${k.kpPct}%` : '—'}
+        </td>
         <td
           className="px-2 py-2 text-right"
           title="Пришло / ёмкость занятия"
@@ -231,10 +241,20 @@ function kpiCells(
     );
   }
   if (k.kind === 'SPECIALIST') {
+    const mixTitle =
+      k.abonPct != null
+        ? `Абон ${k.abonVisits} · КП ${k.kpVisits}`
+        : undefined;
     return (
       <>
         <td className="px-2 py-2 text-right">
           <CountCell value={k.servicesTotal} href={controlHref('SPA')} />
+        </td>
+        <td className="px-2 py-2 text-right" title={mixTitle}>
+          {k.abonPct != null ? `${k.abonPct}%` : '—'}
+        </td>
+        <td className="px-2 py-2 text-right" title={mixTitle}>
+          {k.kpPct != null ? `${k.kpPct}%` : '—'}
         </td>
         <td className="px-2 py-2 text-right">{k.quotaCount}</td>
         <td className="px-2 py-2 text-right">{k.paidCount}</td>
@@ -293,6 +313,8 @@ function kpiHeaders(dept: AnalyticsDepartment) {
       'Отменено',
       'Записалось',
       'Пришло',
+      'Абон %',
+      'КП %',
       'Заполн.',
       'Неявка',
       'Отмены',
@@ -302,7 +324,16 @@ function kpiHeaders(dept: AnalyticsDepartment) {
     return ['ПТ', 'Новые', 'Конв.', 'Удерж.90', 'Активн.', 'Продажи'];
   }
   if (dept === 'SPECIALIST') {
-    return ['Услуги', 'Абон.', 'Оплата', 'Allsport', 'Повтор', 'Выручка'];
+    return [
+      'Услуги',
+      'Абон %',
+      'КП %',
+      'Абон.',
+      'Оплата',
+      'Allsport',
+      'Повтор',
+      'Выручка',
+    ];
   }
   if (dept === 'TECH') return ['Смены', 'Перераб. мин'];
   if (dept === 'MANAGER') return ['Корпо', 'Мотивация'];
@@ -565,6 +596,14 @@ function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
           {k.approvalSharePct != null ? ` (${k.approvalSharePct}% клуба)` : ''}.
         </p>
       )}
+      {k.kind === 'GROUP_TRAINER' && (
+        <p>
+          Состав явок:{' '}
+          {k.abonPct != null
+            ? `${k.abonPct}% Абон. (${k.abonVisits}) · ${k.kpPct}% КП (${k.kpVisits})`
+            : 'нет явок за период'}
+        </p>
+      )}
       {k.kind === 'GROUP_TRAINER' && k.programs.length > 0 && (
         <div className="overflow-x-auto">
           <p className="mb-1 text-xs font-medium text-slate-400">
@@ -611,6 +650,14 @@ function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
             ? `${k.retentionCohortFrom}…${k.retentionCohortTo}`
             : 'н/д'}
           .
+        </p>
+      )}
+      {k.kind === 'SPECIALIST' && (
+        <p>
+          Состав явок (VIP / Все включено = Абон.):{' '}
+          {k.abonPct != null
+            ? `${k.abonPct}% Абон. (${k.abonVisits}) · ${k.kpPct}% КП (${k.kpVisits})`
+            : 'нет явок 1С за период'}
         </p>
       )}
       {k.kind === 'SPECIALIST' && k.unknownPayCount > 0 && (

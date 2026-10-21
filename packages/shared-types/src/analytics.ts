@@ -250,6 +250,14 @@ export interface GroupTrainerStaffKpi {
   topDirections: Array<{ title: string; count: number }>;
   /** Per-program breakdown for expandable staff row. */
   programs: GroupTrainerProgramKpi[];
+  /** ATTENDED members from unlimited/guest/trial memberships (Абон.). */
+  abonVisits: number;
+  /** ATTENDED members from visit cards / one-offs / partners (КП). */
+  kpVisits: number;
+  /** Share of abonVisits among attended; null when no attended members. */
+  abonPct: number | null;
+  /** Always 100 − abonPct when set. */
+  kpPct: number | null;
 }
 
 export interface PtTrainerStaffKpi {
@@ -279,6 +287,12 @@ export interface SpaStaffKpi {
   /** New clients who returned within 60d. */
   repeatPct: number | null;
   paidRevenueMinor: number;
+  /** ATTENDED SPA members with VIP / «Все включено» payment basis (Абон.). */
+  abonVisits: number;
+  /** ATTENDED SPA members not on VIP (КП). */
+  kpVisits: number;
+  abonPct: number | null;
+  kpPct: number | null;
 }
 
 export interface TechStaffKpi {

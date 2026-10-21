@@ -9,8 +9,12 @@ import type {
 } from '@fitgo/shared-types';
 import {
   UserRole,
+  classifyGroupVisitMix,
+  classifySpaVisitMix,
+  emptyVisitMix,
   inferPaymentFromBasis,
   isComplimentarySessionTitle,
+  visitMixFromCounts,
 } from '@fitgo/shared-types';
 import {
   AdminTaskStatus,
@@ -450,6 +454,8 @@ export class StaffAnalyticsService {
               'Отменено',
               'Записалось',
               'Пришло',
+              'Абон %',
+              'КП %',
               'Заполн. %',
               'Неявка %',
               'Отмены %',
@@ -468,6 +474,8 @@ export class StaffAnalyticsService {
             : dept === 'SPECIALIST'
               ? [
                   'Услуги',
+                  'Абон %',
+                  'КП %',
                   'Абонемент',
                   'Оплата',
                   'Allsports',
@@ -506,6 +514,8 @@ export class StaffAnalyticsService {
         k.cancelledSessions,
         k.bookedTotal,
         k.attendedTotal,
+        k.abonPct ?? '',
+        k.kpPct ?? '',
         k.avgFillPct ?? '',
         k.noShowPct ?? '',
         k.cancelRatePct ?? '',
@@ -524,6 +534,8 @@ export class StaffAnalyticsService {
     } else if (k.kind === 'SPECIALIST') {
       kpi = [
         k.servicesTotal,
+        k.abonPct ?? '',
+        k.kpPct ?? '',
         k.quotaCount,
         k.paidCount,
         k.allsportsCount,
@@ -588,6 +600,7 @@ export class StaffAnalyticsService {
           cancelledSessions: 0,
           topDirections: [],
           programs: [],
+          ...emptyVisitMix(),
         };
       case 'PT_TRAINER':
         return {
@@ -614,6 +627,7 @@ export class StaffAnalyticsService {
           newClients: 0,
           repeatPct: null,
           paidRevenueMinor: 0,
+          ...emptyVisitMix(),
         };
       case 'TECH':
         return { kind: 'TECH', shifts: 0, overtimeMinutes: 0 };
@@ -980,7 +994,7 @@ export class StaffAnalyticsService {
         capacity: true,
         startAt: true,
         members: {
-          select: { attendance: true, cancelled: true },
+          select: { attendance: true, cancelled: true, paymentBasis: true },
         },
       },
     });
@@ -1022,6 +1036,8 @@ export class StaffAnalyticsService {
       let booked = 0;
       let memberCancelled = 0;
       let noShow = 0;
+      let abonVisits = 0;
+      let kpVisits = 0;
       type ProgAcc = {
         sessionsConducted: number;
         cancelledSessions: number;
@@ -1065,6 +1081,13 @@ export class StaffAnalyticsService {
             sessMemberCancelled++;
           }
           if (m.attendance === OnexClassMemberAttendance.NO_SHOW) noShow++;
+          if (
+            !m.cancelled &&
+            m.attendance === OnexClassMemberAttendance.ATTENDED
+          ) {
+            if (classifyGroupVisitMix(m.paymentBasis) === 'ABON') abonVisits++;
+            else kpVisits++;
+          }
         }
         const cur = byTitle.get(s.title) ?? emptyProg();
         cur.sessionsConducted++;
@@ -1105,6 +1128,7 @@ export class StaffAnalyticsService {
         .filter((p) => p.sessionsConducted > 0)
         .slice(0, 3)
         .map((p) => ({ title: p.title, count: p.sessionsConducted }));
+      const mix = visitMixFromCounts(abonVisits, kpVisits);
 
       map.set(t.id, {
         kind: 'GROUP_TRAINER',
@@ -1129,6 +1153,7 @@ export class StaffAnalyticsService {
         cancelledSessions,
         topDirections,
         programs,
+        ...mix,
       });
     }
     return map;
@@ -1402,26 +1427,70 @@ export class StaffAnalyticsService {
     const map = new Map<string, StaffDepartmentKpi>();
     if (!specialists.length) return map;
 
+    const byExternal = new Map<string, string>();
+    for (const sp of specialists) {
+      for (const code of staffEmployeeCodes(sp)) {
+        byExternal.set(code, sp.id);
+        const stripped = code.replace(/^0+/, '');
+        if (stripped) byExternal.set(stripped, sp.id);
+      }
+    }
+
     const historyStart = rangeBounds(addDaysIso(from, -60), to).start;
-    const bookings = await this.prisma.spaBooking.findMany({
-      where: {
-        clubId,
-        specialistId: { in: specialists.map((s) => s.id) },
-        status: SpaBookingStatus.COMPLETED,
-        startAt: { gte: historyStart, lte: end },
-      },
-      select: {
-        specialistId: true,
-        clientId: true,
-        clientExternalId: true,
-        guestPhone: true,
-        startAt: true,
-        paymentType: true,
-        partnerSource: true,
-        priceMinor: true,
-      },
-      orderBy: { startAt: 'asc' },
-    });
+    const [bookings, onexSpa] = await Promise.all([
+      this.prisma.spaBooking.findMany({
+        where: {
+          clubId,
+          specialistId: { in: specialists.map((s) => s.id) },
+          status: SpaBookingStatus.COMPLETED,
+          startAt: { gte: historyStart, lte: end },
+        },
+        select: {
+          specialistId: true,
+          clientId: true,
+          clientExternalId: true,
+          guestPhone: true,
+          startAt: true,
+          paymentType: true,
+          partnerSource: true,
+          priceMinor: true,
+        },
+        orderBy: { startAt: 'asc' },
+      }),
+      this.prisma.onexClassSession.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          kind: OnexClassKind.SPA,
+          status: OnexClassStatus.COMPLETED,
+          startAt: { gte: start, lte: end },
+        },
+        select: {
+          employeeExternalId: true,
+          members: {
+            select: { attendance: true, cancelled: true, paymentBasis: true },
+          },
+        },
+      }),
+    ]);
+
+    const mixByUser = new Map<string, { abon: number; kp: number }>();
+    for (const s of onexSpa) {
+      const raw = s.employeeExternalId?.trim();
+      if (!raw) continue;
+      const uid =
+        byExternal.get(raw) ?? byExternal.get(raw.replace(/^0+/, ''));
+      if (!uid) continue;
+      const cur = mixByUser.get(uid) ?? { abon: 0, kp: 0 };
+      for (const m of s.members) {
+        if (m.cancelled || m.attendance !== OnexClassMemberAttendance.ATTENDED) {
+          continue;
+        }
+        if (classifySpaVisitMix(m.paymentBasis) === 'ABON') cur.abon++;
+        else cur.kp++;
+      }
+      mixByUser.set(uid, cur);
+    }
 
     const clientKey = (b: (typeof bookings)[0]) =>
       b.clientId ??
@@ -1476,6 +1545,9 @@ export class StaffAnalyticsService {
         if (has) repeats++;
       }
 
+      const rawMix = mixByUser.get(sp.id) ?? { abon: 0, kp: 0 };
+      const mix = visitMixFromCounts(rawMix.abon, rawMix.kp);
+
       map.set(sp.id, {
         kind: 'SPECIALIST',
         servicesTotal: inPeriod.length,
@@ -1489,6 +1561,7 @@ export class StaffAnalyticsService {
             ? Math.round((repeats / newClients.length) * 1000) / 10
             : null,
         paidRevenueMinor: paidRevenue,
+        ...mix,
       });
     }
     return map;
