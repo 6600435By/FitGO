@@ -17,6 +17,7 @@ import type {
   UpsertSaleWindowDto,
   UpsertSegmentCompetitorDto,
 } from '@fitgo/shared-types';
+import type { PricingDiscountsStatus } from '@fitgo/shared-types';
 import {
   classifySaleType,
   loadPayrollSegmentSets,
@@ -27,16 +28,25 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   assertPeriod,
   isoDate,
+  minskParts,
   rangeBounds,
   resolveCompareRange,
 } from './analytics-period';
 import {
+  avgToListRatio,
   buildProductHint,
   deltaPct,
+  discountShareOfListPct,
   dominantSeason,
+  isDiscountStuck,
+  isStaffRelatedDiscount,
   markCoreProducts,
   marketRatio,
   membershipPromoActive,
+  monthBounds,
+  monthsInRange,
+  normalizeDiscountName,
+  parseDiscountOccurredAt,
   periodCrossesSeasonBoundary,
   pickBaseline,
   priceVolumeMixBridge,
@@ -53,6 +63,11 @@ import {
 import { loadSegmentPriceLists } from './pricing-price-list';
 
 const REPORT_CACHE_TTL_MS = 3 * 60 * 1000;
+/** Re-fetch current calendar month if last sync older than this. */
+const CURRENT_MONTH_STALE_MS = 60 * 60 * 1000;
+/** Max wait for auto discount sync inside getReport. */
+const AUTO_SYNC_BUDGET_MS = 10_000;
+const STAFF_DISC_HINT_SHARE = 0.35;
 const PRODUCT_SEGMENTS: Exclude<PricingSegmentKey, 'corporate'>[] = [
   'membership',
   'training',
@@ -137,8 +152,6 @@ export class PricingAnalyticsService {
       competitors,
       competitorPrices,
       dataSinceRow,
-      discountSync,
-      discountRows,
     ] = await Promise.all([
       loadPayrollSegmentSets(this.config),
       loadSegmentPriceLists(this.config),
@@ -154,16 +167,6 @@ export class PricingAnalyticsService {
         where: { clubId, isActive: true },
         orderBy: { occurredAt: 'asc' },
         select: { occurredAt: true },
-      }),
-      this.prisma.providedDiscountSyncState.findUnique({ where: { clubId } }),
-      this.prisma.providedDiscountRow.findMany({
-        where: {
-          clubId,
-          occurredAt: {
-            gte: rangeBounds(from, to).start,
-            lte: rangeBounds(from, to).end,
-          },
-        },
       }),
     ]);
 
@@ -260,39 +263,87 @@ export class PricingAnalyticsService {
         : 'Сравниваем по календарю сезона, своего прошлого года ещё нет.';
     }
 
-    // available only after a successful sync that found the endpoint
+    const neededMonths = new Set<string>([
+      ...monthsInRange(from, to),
+      ...(effectiveCmpFrom && effectiveCmpTo
+        ? monthsInRange(effectiveCmpFrom, effectiveCmpTo)
+        : []),
+    ]);
+    const discountCoverage = await this.ensureDiscountMonths(
+      clubId,
+      [...neededMonths],
+      { force: false, budgetMs: AUTO_SYNC_BUDGET_MS },
+    );
     const discountsReallyAvailable =
-      discountSync?.lastStatus === 'ok' &&
-      discountSync.lastError !== 'endpoint_missing' &&
-      Boolean(discountSync.lastSyncedAt);
+      discountCoverage.status === 'ok' || discountCoverage.status === 'partial';
+
+    const discountRows = discountsReallyAvailable
+      ? await this.prisma.providedDiscountRow.findMany({
+          where: {
+            clubId,
+            occurredAt: {
+              gte: rangeBounds(from, to).start,
+              lte: rangeBounds(from, to).end,
+            },
+          },
+        })
+      : [];
+    const cmpDiscountRows =
+      discountsReallyAvailable && effectiveCmpFrom && effectiveCmpTo
+        ? await this.prisma.providedDiscountRow.findMany({
+            where: {
+              clubId,
+              occurredAt: {
+                gte: rangeBounds(effectiveCmpFrom, effectiveCmpTo).start,
+                lte: rangeBounds(effectiveCmpFrom, effectiveCmpTo).end,
+              },
+            },
+          })
+        : [];
 
     const discountByProduct = new Map<string, number>();
     const discountByStaff = new Map<
       string,
       { name: string; minor: number }
     >();
+    const discountByType = new Map<string, number>();
     let totalDiscountMinor = 0;
-    if (discountsReallyAvailable) {
-      for (const d of discountRows) {
-        const minor = Math.round(Number(d.discountAmount) * 100);
-        if (minor <= 0) continue;
-        totalDiscountMinor += minor;
-        const pid = (d.productExternalId ?? '').toLowerCase();
-        if (pid) {
-          discountByProduct.set(
-            pid,
-            (discountByProduct.get(pid) ?? 0) + minor,
-          );
-        }
-        const eid = d.employeeExternalId ?? d.employeeName ?? 'unknown';
-        const prev = discountByStaff.get(eid) ?? {
-          name: d.employeeName ?? 'Без имени',
-          minor: 0,
-        };
-        prev.minor += minor;
-        discountByStaff.set(eid, prev);
+    let staffRelatedMinor = 0;
+    for (const d of discountRows) {
+      const minor = Math.round(Number(d.discountAmount) * 100);
+      if (minor <= 0) continue;
+      totalDiscountMinor += minor;
+      const dName = normalizeDiscountName(d.discountName);
+      discountByType.set(dName, (discountByType.get(dName) ?? 0) + minor);
+      if (
+        isStaffRelatedDiscount({
+          clientName: d.clientName,
+          discountName: dName,
+        })
+      ) {
+        staffRelatedMinor += minor;
       }
+      const pid = (d.productExternalId ?? '').toLowerCase();
+      if (pid) {
+        discountByProduct.set(
+          pid,
+          (discountByProduct.get(pid) ?? 0) + minor,
+        );
+      }
+      const eid = d.employeeExternalId ?? d.employeeName ?? 'unknown';
+      const prev = discountByStaff.get(eid) ?? {
+        name: d.employeeName ?? 'Без имени',
+        minor: 0,
+      };
+      prev.minor += minor;
+      discountByStaff.set(eid, prev);
     }
+    let cmpTotalDiscountMinor = 0;
+    for (const d of cmpDiscountRows) {
+      const minor = Math.round(Number(d.discountAmount) * 100);
+      if (minor > 0) cmpTotalDiscountMinor += minor;
+    }
+    const clientsMinor = totalDiscountMinor - staffRelatedMinor;
 
     const pricesByProduct = new Map<string, number>();
     for (const seg of PRODUCT_SEGMENTS) {
@@ -384,14 +435,21 @@ export class PricingAnalyticsService {
         const market = marketRatio(listPrice, filled);
         const discMinor = pid ? discountByProduct.get(pid) ?? null : null;
         const discShare =
-          discMinor != null && p.revenueMinor > 0
-            ? Math.round((discMinor / p.revenueMinor) * 1000) / 10
+          discountsReallyAvailable && discMinor != null
+            ? discountShareOfListPct(discMinor, p.revenueMinor)
             : null;
 
         const volumeDown = Boolean(
           cmp && p.salesCount < cmp.salesCount,
         );
         const volumeFlatOrUp = !cmp || p.salesCount >= cmp.salesCount;
+        const volumeGrowing = Boolean(
+          cmp && p.salesCount > cmp.salesCount,
+        );
+        const stuck = isDiscountStuck({
+          discountSharePct: discShare,
+          volumeGrowing,
+        });
 
         const hint = buildProductHint({
           segmentKey: segKey,
@@ -408,6 +466,7 @@ export class PricingAnalyticsService {
           // Club-level signals once below — not per SKU.
           saleNoInflow: false,
           upsellGap: false,
+          discountStuck: stuck,
           baselineLabel,
           ignoredNote: baseline.reasonDropped,
         });
@@ -418,6 +477,7 @@ export class PricingAnalyticsService {
           productName: p.productName,
           listPriceMinor: listPrice,
           avgActualMinor: avgActual,
+          avgToListRatio: avgToListRatio(avgActual, listPrice),
           salesCount: p.salesCount,
           revenueMinor: p.revenueMinor,
           compareRevenueMinor: cmp?.revenueMinor ?? null,
@@ -555,6 +615,20 @@ export class PricingAnalyticsService {
       });
       if (h) hints.push(h);
     }
+    if (
+      discountsReallyAvailable &&
+      totalDiscountMinor > 0 &&
+      staffRelatedMinor / totalDiscountMinor >= STAFF_DISC_HINT_SHARE
+    ) {
+      hints.push({
+        action: 'review_discounts',
+        title: 'Скидки сотрудникам',
+        body: `Скидки сотрудникам и родственникам — ${Math.round((staffRelatedMinor / totalDiscountMinor) * 100)}% всех скидок за период.`,
+        segmentKey: 'membership',
+        productName: 'Скидки',
+        weightMinor: staffRelatedMinor,
+      });
+    }
 
     const hintCards: PricingHintCard[] = rankHints(hints, 5).map((h) => ({
       action: h.action,
@@ -622,16 +696,33 @@ export class PricingAnalyticsService {
       },
       discounts: {
         available: discountsReallyAvailable,
-        message: discountsReallyAvailable
-          ? null
-          : 'Скидки пока не подтянуты — нужен отчёт «Предоставленные скидки» в Analytics.',
+        status: discountCoverage.status,
+        message: discountCoverage.message,
         totalDiscountMinor: discountsReallyAvailable
           ? totalDiscountMinor
           : null,
-        shareOfRevenuePct:
-          discountsReallyAvailable && totalRevenue > 0
-            ? Math.round((totalDiscountMinor / totalRevenue) * 1000) / 10
+        shareOfRevenuePct: discountsReallyAvailable
+          ? discountShareOfListPct(totalDiscountMinor, totalRevenue)
+          : null,
+        compareTotalDiscountMinor:
+          discountsReallyAvailable && effectiveCmpFrom
+            ? cmpTotalDiscountMinor
             : null,
+        deltaPct:
+          discountsReallyAvailable && effectiveCmpFrom
+            ? deltaPct(totalDiscountMinor, cmpTotalDiscountMinor)
+            : null,
+        clientsMinor: discountsReallyAvailable ? clientsMinor : null,
+        staffRelatedMinor: discountsReallyAvailable
+          ? staffRelatedMinor
+          : null,
+        byType: [...discountByType.entries()]
+          .map(([discountName, discountMinor]) => ({
+            discountName,
+            discountMinor,
+          }))
+          .sort((a, b) => b.discountMinor - a.discountMinor)
+          .slice(0, 8),
         byStaff: [...discountByStaff.entries()]
           .map(([id, v]) => ({
             employeeExternalId: id === 'unknown' ? null : id,
@@ -640,7 +731,8 @@ export class PricingAnalyticsService {
           }))
           .sort((a, b) => b.discountMinor - a.discountMinor)
           .slice(0, 15),
-        syncedAt: discountSync?.lastSyncedAt?.toISOString() ?? null,
+        syncedAt: discountCoverage.syncedAt,
+        missingMonths: discountCoverage.missingMonths,
       },
       saleWindows: saleWindowsOut,
       priceListAsOf: priceLists.asOf,
@@ -912,6 +1004,23 @@ export class PricingAnalyticsService {
     return row;
   }
 
+  async deleteCompetitorPrice(
+    user: JwtPayload,
+    body: { competitorId: string; productExternalId: string },
+  ) {
+    const clubId = requireClubId(user);
+    const comp = await this.prisma.segmentCompetitor.findFirst({
+      where: { id: body.competitorId, clubId },
+    });
+    if (!comp) throw new NotFoundException('Клуб не найден');
+    const productExternalId = body.productExternalId.trim().toLowerCase();
+    await this.prisma.segmentCompetitorPrice.deleteMany({
+      where: { competitorId: body.competitorId, productExternalId },
+    });
+    this.invalidateCache(clubId);
+    return { ok: true };
+  }
+
   async addSaleWindow(user: JwtPayload, dto: UpsertSaleWindowDto) {
     const clubId = requireClubId(user);
     if (!dto.name.trim() || !dto.from || !dto.to) {
@@ -946,8 +1055,7 @@ export class PricingAnalyticsService {
   }
 
   /**
-   * Pull Отчет.ПредоставленныеСкидки via Analytics when published.
-   * Until the endpoint exists, marks sync state as endpoint_missing.
+   * Manual refresh: force re-fetch all months covering [from, to].
    */
   async refreshDiscounts(
     user: JwtPayload,
@@ -955,116 +1063,321 @@ export class PricingAnalyticsService {
   ) {
     const clubId = requireClubId(user);
     assertPeriod(params.from, params.to);
+    const months = monthsInRange(params.from, params.to);
+    const coverage = await this.ensureDiscountMonths(clubId, months, {
+      force: true,
+      budgetMs: 60_000,
+    });
+    const imported = await this.prisma.providedDiscountRow.count({
+      where: {
+        clubId,
+        occurredAt: {
+          gte: rangeBounds(params.from, params.to).start,
+          lte: rangeBounds(params.from, params.to).end,
+        },
+      },
+    });
+    return {
+      status: coverage.status,
+      imported,
+      message: coverage.message ?? `Загружено ${imported} строк скидок`,
+      missingMonths: coverage.missingMonths,
+      syncedAt: coverage.syncedAt,
+    };
+  }
+
+  /**
+   * Nightly / orchestrator entry: sync given months (force).
+   */
+  async syncDiscountMonthsForClub(
+    clubId: string,
+    months: string[],
+  ): Promise<{ rows: number; months: string[]; error?: string }> {
+    const coverage = await this.ensureDiscountMonths(clubId, months, {
+      force: true,
+      budgetMs: 90_000,
+    });
+    let rows = 0;
+    for (const m of months) {
+      const { from, to } = monthBounds(m);
+      rows += await this.prisma.providedDiscountRow.count({
+        where: {
+          clubId,
+          occurredAt: {
+            gte: rangeBounds(from, to).start,
+            lte: rangeBounds(from, to).end,
+          },
+        },
+      });
+    }
+    return {
+      rows,
+      months,
+      error:
+        coverage.status === 'ok' || coverage.status === 'partial'
+          ? undefined
+          : coverage.message ?? coverage.status,
+    };
+  }
+
+  private async ensureDiscountMonths(
+    clubId: string,
+    months: string[],
+    opts: { force: boolean; budgetMs: number },
+  ): Promise<{
+    status: PricingDiscountsStatus;
+    message: string | null;
+    syncedAt: string | null;
+    missingMonths: string[];
+  }> {
+    const unique = [...new Set(months.filter((m) => /^\d{4}-\d{2}$/.test(m)))];
+    if (!unique.length) {
+      return {
+        status: 'ok',
+        message: null,
+        syncedAt: null,
+        missingMonths: [],
+      };
+    }
+
     const base = this.config.get<string>('FORMA_ANALYTICS_URL')?.trim();
     const apiKey = this.config.get<string>('FORMA_API_KEY')?.trim();
     const basicAuth = this.config.get<string>('FORMA_BASIC_AUTH')?.trim();
     if (!base || !apiKey || !basicAuth) {
-      await this.prisma.providedDiscountSyncState.upsert({
-        where: { clubId },
-        create: {
-          clubId,
-          lastFrom: params.from,
-          lastTo: params.to,
-          lastStatus: 'error',
-          lastError: 'FORMA_ANALYTICS_URL not configured',
-          lastSyncedAt: new Date(),
-        },
-        update: {
-          lastFrom: params.from,
-          lastTo: params.to,
-          lastStatus: 'error',
-          lastError: 'FORMA_ANALYTICS_URL not configured',
-          lastSyncedAt: new Date(),
-        },
+      await this.writeDiscountSyncState(clubId, unique, {
+        status: 'error',
+        error: 'FORMA_ANALYTICS_URL not configured',
       });
       return {
-        status: 'error' as const,
-        message: 'Analytics URL не настроен',
+        status: 'not_configured',
+        message: 'Analytics URL не настроен (FORMA_ANALYTICS_URL)',
+        syncedAt: null,
+        missingMonths: unique,
       };
     }
 
-    const url = `${base.replace(/\/$/, '')}/discounts?from=${encodeURIComponent(params.from)}&to=${encodeURIComponent(params.to)}`;
-    try {
-      const res = await fetch(url, {
-        headers: {
-          apikey: apiKey,
-          'X-Api-Key': apiKey,
-          Authorization: `Basic ${basicAuth}`,
-        },
-      });
-      const text = await res.text();
-      if (res.status === 404) {
-        await this.prisma.providedDiscountSyncState.upsert({
-          where: { clubId },
+    const existing = await this.prisma.providedDiscountMonth.findMany({
+      where: { clubId, month: { in: unique } },
+    });
+    const byMonth = new Map(existing.map((r) => [r.month, r]));
+    const now = Date.now();
+    const mk = minskParts();
+    const currentMonth = `${mk.year}-${String(mk.month).padStart(2, '0')}`;
+
+    const toFetch = unique.filter((m) => {
+      if (opts.force) return true;
+      const row = byMonth.get(m);
+      if (!row || row.lastError) return true;
+      if (
+        m === currentMonth &&
+        now - row.syncedAt.getTime() > CURRENT_MONTH_STALE_MS
+      ) {
+        return true;
+      }
+      return false;
+    });
+
+    if (!toFetch.length) {
+      const latest = existing
+        .map((r) => r.syncedAt.getTime())
+        .reduce((a, b) => Math.max(a, b), 0);
+      return {
+        status: 'ok',
+        message: null,
+        syncedAt: latest ? new Date(latest).toISOString() : null,
+        missingMonths: [],
+      };
+    }
+
+    const deadline = Date.now() + opts.budgetMs;
+    let imported = 0;
+    let lastError: string | null = null;
+    let endpointMissing = false;
+    const syncedOk: string[] = [];
+    const failed: string[] = [];
+
+    for (const month of toFetch) {
+      if (Date.now() >= deadline) {
+        failed.push(...toFetch.filter((m) => !syncedOk.includes(m) && !failed.includes(m)));
+        break;
+      }
+      try {
+        const result = await this.fetchAndStoreDiscountMonth(
+          clubId,
+          month,
+          base,
+          apiKey,
+          basicAuth,
+        );
+        if (result.endpointMissing) {
+          endpointMissing = true;
+          lastError = 'endpoint_missing';
+          failed.push(month);
+          break;
+        }
+        imported += result.rowCount;
+        syncedOk.push(month);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        lastError = msg.slice(0, 500);
+        this.logger.warn(`discount month ${month}: ${msg}`);
+        failed.push(month);
+        await this.prisma.providedDiscountMonth.upsert({
+          where: { clubId_month: { clubId, month } },
           create: {
             clubId,
-            lastFrom: params.from,
-            lastTo: params.to,
-            lastStatus: 'ok',
-            lastError: 'endpoint_missing',
-            lastSyncedAt: new Date(),
+            month,
+            syncedAt: new Date(),
+            rowCount: 0,
+            lastError: lastError,
           },
           update: {
-            lastFrom: params.from,
-            lastTo: params.to,
-            lastStatus: 'ok',
-            lastError: 'endpoint_missing',
-            lastSyncedAt: new Date(),
+            syncedAt: new Date(),
+            lastError: lastError,
           },
         });
-        return {
-          status: 'unavailable' as const,
-          message:
-            'Метод /discounts ещё не опубликован в FitGOAnalytics. Снимите запрос Отчет.ПредоставленныеСкидки и добавьте endpoint.',
-        };
       }
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
-      }
-      let body: {
-        data?: {
-          items?: Array<{
-            occurredAt?: string;
-            productExternalId?: string;
-            productName?: string;
-            clientExternalId?: string;
-            clientName?: string;
-            employeeExternalId?: string;
-            employeeName?: string;
-            discountName?: string;
-            discountAmount?: number;
-            discountPercent?: number;
-            saleDocumentId?: string;
-          }>;
-        };
+    }
+
+    const allCovered = unique.every((m) => {
+      if (syncedOk.includes(m)) return true;
+      const row = byMonth.get(m);
+      return Boolean(row && !row.lastError && !failed.includes(m));
+    });
+    const anyCovered =
+      syncedOk.length > 0 ||
+      unique.some((m) => {
+        const row = byMonth.get(m);
+        return Boolean(row && !row.lastError);
+      });
+
+    let status: PricingDiscountsStatus;
+    let message: string | null = null;
+    if (endpointMissing) {
+      status = 'unavailable';
+      message =
+        'Метод /discounts ещё не опубликован в FitGOAnalytics.';
+    } else if (allCovered && !failed.length) {
+      status = 'ok';
+      message = null;
+    } else if (anyCovered && (failed.length || !allCovered)) {
+      status = Date.now() >= deadline && failed.length ? 'loading' : 'partial';
+      message =
+        status === 'loading'
+          ? 'Скидки ещё подтягиваются из 1С — обновите через минуту.'
+          : lastError
+            ? `Часть месяцев не загрузилась: ${lastError}`
+            : 'Часть месяцев скидок ещё не в кэше.';
+    } else if (lastError) {
+      status = 'error';
+      message = lastError;
+    } else {
+      status = 'loading';
+      message = 'Скидки ещё подтягиваются из 1С — обновите через минуту.';
+    }
+
+    await this.writeDiscountSyncState(clubId, unique, {
+      status:
+        status === 'ok' || status === 'partial'
+          ? 'ok'
+          : status === 'unavailable'
+            ? 'unavailable'
+            : 'error',
+      error: lastError,
+    });
+
+    if (syncedOk.length) this.invalidateCache(clubId);
+
+    const after = await this.prisma.providedDiscountMonth.findMany({
+      where: { clubId, month: { in: unique } },
+    });
+    const missingMonths = unique.filter((m) => {
+      const row = after.find((r) => r.month === m);
+      return !row || Boolean(row.lastError);
+    });
+    const latest = after
+      .filter((r) => !r.lastError)
+      .map((r) => r.syncedAt.getTime())
+      .reduce((a, b) => Math.max(a, b), 0);
+
+    if (status === 'ok' && imported > 0) {
+      message = null;
+    }
+
+    return {
+      status,
+      message,
+      syncedAt: latest ? new Date(latest).toISOString() : null,
+      missingMonths,
+    };
+  }
+
+  private async fetchAndStoreDiscountMonth(
+    clubId: string,
+    month: string,
+    base: string,
+    apiKey: string,
+    basicAuth: string,
+  ): Promise<{ rowCount: number; endpointMissing: boolean }> {
+    const { from, to } = monthBounds(month);
+    const url = `${base.replace(/\/$/, '')}/discounts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+    const res = await fetch(url, {
+      headers: {
+        apikey: apiKey,
+        'X-Api-Key': apiKey,
+        Authorization: `Basic ${basicAuth}`,
+      },
+    });
+    const text = await res.text();
+    if (res.status === 404) {
+      return { rowCount: 0, endpointMissing: true };
+    }
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 300)}`);
+    }
+    let body: {
+      data?: {
+        items?: Array<{
+          occurredAt?: string;
+          productExternalId?: string;
+          productName?: string;
+          clientExternalId?: string;
+          clientName?: string;
+          employeeExternalId?: string;
+          employeeName?: string;
+          discountName?: string;
+          discountAmount?: number;
+          discountPercent?: number;
+          saleDocumentId?: string;
+        }>;
       };
-      try {
-        body = JSON.parse(text) as typeof body;
-      } catch {
-        throw new Error(`Invalid JSON: ${text.slice(0, 200)}`);
-      }
-      const items = body.data?.items ?? [];
-      const { start, end } = rangeBounds(params.from, params.to);
-      await this.prisma.providedDiscountRow.deleteMany({
+    };
+    try {
+      body = JSON.parse(text) as typeof body;
+    } catch {
+      throw new Error(`Invalid JSON: ${text.slice(0, 200)}`);
+    }
+    const items = body.data?.items ?? [];
+    const { start, end } = rangeBounds(from, to);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.providedDiscountRow.deleteMany({
         where: {
           clubId,
           occurredAt: { gte: start, lte: end },
         },
       });
       if (items.length) {
-        await this.prisma.providedDiscountRow.createMany({
+        await tx.providedDiscountRow.createMany({
           data: items.map((i) => ({
             clubId,
-            occurredAt: i.occurredAt
-              ? new Date(i.occurredAt)
-              : start,
+            occurredAt: parseDiscountOccurredAt(i.occurredAt, start),
             productExternalId: i.productExternalId ?? null,
             productName: i.productName ?? null,
             clientExternalId: i.clientExternalId ?? null,
             clientName: i.clientName ?? null,
             employeeExternalId: i.employeeExternalId ?? null,
             employeeName: i.employeeName ?? null,
-            discountName: i.discountName ?? null,
+            discountName: normalizeDiscountName(i.discountName),
             discountAmount: Number(i.discountAmount) || 0,
             discountPercent:
               i.discountPercent != null ? Number(i.discountPercent) : null,
@@ -1072,53 +1385,53 @@ export class PricingAnalyticsService {
           })),
         });
       }
-      await this.prisma.providedDiscountSyncState.upsert({
-        where: { clubId },
+      await tx.providedDiscountMonth.upsert({
+        where: { clubId_month: { clubId, month } },
         create: {
           clubId,
-          lastFrom: params.from,
-          lastTo: params.to,
-          lastStatus: 'ok',
+          month,
+          syncedAt: new Date(),
+          rowCount: items.length,
           lastError: null,
-          lastSyncedAt: new Date(),
         },
         update: {
-          lastFrom: params.from,
-          lastTo: params.to,
-          lastStatus: 'ok',
+          syncedAt: new Date(),
+          rowCount: items.length,
           lastError: null,
-          lastSyncedAt: new Date(),
         },
       });
-      this.invalidateCache(clubId);
-      return {
-        status: 'ok' as const,
-        imported: items.length,
-        message: `Загружено ${items.length} строк скидок`,
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`refreshDiscounts failed: ${msg}`);
-      await this.prisma.providedDiscountSyncState.upsert({
-        where: { clubId },
-        create: {
-          clubId,
-          lastFrom: params.from,
-          lastTo: params.to,
-          lastStatus: 'error',
-          lastError: msg.slice(0, 500),
-          lastSyncedAt: new Date(),
-        },
-        update: {
-          lastFrom: params.from,
-          lastTo: params.to,
-          lastStatus: 'error',
-          lastError: msg.slice(0, 500),
-          lastSyncedAt: new Date(),
-        },
-      });
-      return { status: 'error' as const, message: msg };
-    }
+    });
+    return { rowCount: items.length, endpointMissing: false };
+  }
+
+  private async writeDiscountSyncState(
+    clubId: string,
+    months: string[],
+    opts: { status: string; error: string | null },
+  ) {
+    const sorted = [...months].sort();
+    await this.prisma.providedDiscountSyncState.upsert({
+      where: { clubId },
+      create: {
+        clubId,
+        lastFrom: sorted[0] ? `${sorted[0]}-01` : null,
+        lastTo: sorted[sorted.length - 1]
+          ? monthBounds(sorted[sorted.length - 1]).to
+          : null,
+        lastStatus: opts.status,
+        lastError: opts.error,
+        lastSyncedAt: new Date(),
+      },
+      update: {
+        lastFrom: sorted[0] ? `${sorted[0]}-01` : null,
+        lastTo: sorted[sorted.length - 1]
+          ? monthBounds(sorted[sorted.length - 1]).to
+          : null,
+        lastStatus: opts.status,
+        lastError: opts.error,
+        lastSyncedAt: new Date(),
+      },
+    });
   }
 
   private assertProductSegment(segmentKey: string) {

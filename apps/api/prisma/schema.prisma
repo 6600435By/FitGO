@@ -526,6 +526,7 @@ model Club {
   membershipSaleWindows MembershipSaleWindow[]
   providedDiscountRows ProvidedDiscountRow[]
   providedDiscountSyncStates ProvidedDiscountSyncState[]
+  providedDiscountMonths ProvidedDiscountMonth[]
 }
 
 model ClubTheme {
@@ -2320,6 +2321,23 @@ model ProvidedDiscountSyncState {
   club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
 
   @@unique([clubId])
+}
+
+/// Per-month coverage for ProvidedDiscountRow (avoids false "0 discounts" for unsynced months).
+model ProvidedDiscountMonth {
+  id         String    @id @default(cuid())
+  clubId     String
+  /// Calendar month YYYY-MM (Europe/Moscow).
+  month      String
+  syncedAt   DateTime
+  rowCount   Int       @default(0)
+  lastError  String?
+  updatedAt  DateTime  @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, month])
+  @@index([clubId, syncedAt])
 }
 
 /// Manual cash-desk lines for club revenue: Корпо (р/с) and Прочие.

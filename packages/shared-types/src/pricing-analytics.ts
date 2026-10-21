@@ -58,6 +58,8 @@ export interface PricingProductRow {
   listPriceMinor: number | null;
   /** Average paid amount per sale document in period. */
   avgActualMinor: number | null;
+  /** avgActual / listPrice; null if either missing. */
+  avgToListRatio: number | null;
   salesCount: number;
   revenueMinor: number;
   compareRevenueMinor: number | null;
@@ -121,13 +123,37 @@ export interface PricingDiscountStaffRow {
   discountMinor: number;
 }
 
+export interface PricingDiscountTypeRow {
+  discountName: string;
+  discountMinor: number;
+}
+
+export type PricingDiscountsStatus =
+  | 'ok'
+  | 'partial'
+  | 'loading'
+  | 'error'
+  | 'not_configured'
+  | 'unavailable';
+
 export interface PricingDiscountsBlock {
   available: boolean;
+  status: PricingDiscountsStatus;
   message: string | null;
   totalDiscountMinor: number | null;
+  /** Discount / (revenue + discount) — share of list before discount. */
   shareOfRevenuePct: number | null;
+  compareTotalDiscountMinor: number | null;
+  deltaPct: number | null;
+  /** Client (non-staff) discounts. */
+  clientsMinor: number | null;
+  /** Staff / relatives discounts. */
+  staffRelatedMinor: number | null;
+  byType: PricingDiscountTypeRow[];
   byStaff: PricingDiscountStaffRow[];
   syncedAt: string | null;
+  /** Months YYYY-MM still missing from cache. */
+  missingMonths: string[];
 }
 
 export interface PricingCorporateBlock {

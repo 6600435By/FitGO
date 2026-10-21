@@ -429,11 +429,11 @@ export function buildProductHint(ctx: HintContext): BuiltHint | null {
     };
   }
 
-  if (discountStuck && segmentKey === 'membership') {
+  if (discountStuck) {
     return {
       action: 'discount_stuck',
-      title: 'Скидка не откатилась',
-      body: `${productName}: доля скидки всё ещё высокая после окончания акции.`,
+      title: 'Скидка без роста объёма',
+      body: `${productName}: скидки ≥15% от суммы до скидки, а объём не растёт (${baselineLabel}).`,
       segmentKey,
       productName,
       weightMinor: revenueMinor,
@@ -548,4 +548,117 @@ export function deltaPct(
     return current === 0 ? 0 : null;
   }
   return Math.round(((current - previous) / Math.abs(previous)) * 1000) / 10;
+}
+
+/** Discount share of list price: discount / (revenue + discount). */
+export function discountShareOfListPct(
+  discountMinor: number,
+  revenueMinor: number,
+): number | null {
+  const list = revenueMinor + discountMinor;
+  if (list <= 0 || discountMinor <= 0) return null;
+  return Math.round((discountMinor / list) * 1000) / 10;
+}
+
+/** avgActual / listPrice (1.0 = sold at list). */
+export function avgToListRatio(
+  avgActualMinor: number | null | undefined,
+  listPriceMinor: number | null | undefined,
+): number | null {
+  if (
+    avgActualMinor == null ||
+    listPriceMinor == null ||
+    listPriceMinor <= 0
+  ) {
+    return null;
+  }
+  return Math.round((avgActualMinor / listPriceMinor) * 1000) / 1000;
+}
+
+/**
+ * Parse 1C occurredAt. Bare local datetimes (no offset) are treated as +03:00.
+ */
+export function parseDiscountOccurredAt(
+  raw: string | undefined | null,
+  fallback: Date,
+): Date {
+  if (!raw || !String(raw).trim()) return fallback;
+  const s = String(raw).trim();
+  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) {
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? fallback : d;
+  }
+  const withOffset = s.includes('T') ? `${s}+03:00` : `${s}T12:00:00+03:00`;
+  const d = new Date(withOffset);
+  return Number.isNaN(d.getTime()) ? fallback : d;
+}
+
+/** YYYY-MM months inclusive between from/to (ISO dates). */
+export function monthsInRange(from: string, to: string): string[] {
+  const start = from.slice(0, 7);
+  const end = to.slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(start) || !/^\d{4}-\d{2}$/.test(end)) return [];
+  const out: string[] = [];
+  let y = Number(start.slice(0, 4));
+  let m = Number(start.slice(5, 7));
+  const endY = Number(end.slice(0, 4));
+  const endM = Number(end.slice(5, 7));
+  while (y < endY || (y === endY && m <= endM)) {
+    out.push(`${y}-${String(m).padStart(2, '0')}`);
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+  }
+  return out;
+}
+
+/** First/last calendar day of YYYY-MM. */
+export function monthBounds(month: string): { from: string; to: string } {
+  const [ys, ms] = month.split('-');
+  const y = Number(ys);
+  const m = Number(ms);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return {
+    from: `${month}-01`,
+    to: `${month}-${String(lastDay).padStart(2, '0')}`,
+  };
+}
+
+export function normalizeDiscountName(name: string | null | undefined): string {
+  const t = (name ?? '').trim();
+  return t || 'Ручная скидка';
+}
+
+/**
+ * Staff / relatives: client marked as employee, or discount name mentions staff.
+ */
+export function isStaffRelatedDiscount(opts: {
+  clientName?: string | null;
+  discountName?: string | null;
+}): boolean {
+  const client = (opts.clientName ?? '').toLowerCase();
+  if (client.includes('(сотрудник)')) return true;
+  const disc = (opts.discountName ?? '').toLowerCase();
+  if (disc.includes('штат')) return true;
+  if (disc.includes('сотрудник')) return true;
+  if (disc.includes('родственник')) return true;
+  if (disc.includes('мужа') || disc.includes('жены')) return true;
+  return false;
+}
+
+/** High discount share while volume is not growing → stuck discount signal. */
+export function isDiscountStuck(opts: {
+  discountSharePct: number | null;
+  /** True when qty is strictly higher than baseline. */
+  volumeGrowing: boolean;
+  thresholdPct?: number;
+}): boolean {
+  const thr = opts.thresholdPct ?? 15;
+  return (
+    opts.discountSharePct != null &&
+    opts.discountSharePct >= thr &&
+    !opts.volumeGrowing
+  );
 }

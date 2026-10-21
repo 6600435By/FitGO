@@ -677,6 +677,27 @@ export class ClubSyncOrchestrator {
             const r = await discrepancyTasks.runAuto(clubId);
             return { rows: r.created };
           });
+
+          await runStep('provided_discounts', async () => {
+            const { PricingAnalyticsService } = await import(
+              '../analytics/pricing-analytics.service'
+            );
+            const pricing = this.moduleRef.get(PricingAnalyticsService, {
+              strict: false,
+            });
+            if (!pricing?.syncDiscountMonthsForClub) {
+              return { rows: 0 };
+            }
+            const thisMonth = today.slice(0, 7);
+            const prevDay = addMoscowDays(today, -32);
+            const prevMonth = prevDay.slice(0, 7);
+            const months = [...new Set([prevMonth, thisMonth])];
+            const r = await pricing.syncDiscountMonthsForClub(clubId, months);
+            if (r.error) {
+              throw new Error(r.error);
+            }
+            return { rows: r.rows, from: months[0], to: months[months.length - 1] };
+          });
         }
 
         // Warm installments cache so analytics does not cold-hit 1C.

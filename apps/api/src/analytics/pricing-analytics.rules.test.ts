@@ -3,14 +3,22 @@
  */
 import assert from 'node:assert/strict';
 import {
+  avgToListRatio,
   buildProductHint,
   builtinAugustWindow,
+  discountShareOfListPct,
   dominantSeason,
+  isDiscountStuck,
   isFalseSeasonTransitionDrop,
   isFalseSeptemberCashDrop,
+  isStaffRelatedDiscount,
   markCoreProducts,
   marketRatio,
   membershipPromoActive,
+  monthBounds,
+  monthsInRange,
+  normalizeDiscountName,
+  parseDiscountOccurredAt,
   periodCrossesSeasonBoundary,
   pickBaseline,
   priceVolumeMixBridge,
@@ -279,6 +287,71 @@ assert.equal(
     },
   ]);
   assert.equal(ranked[0]!.title, 'b');
+}
+
+{
+  assert.equal(discountShareOfListPct(100, 900), 10);
+  assert.equal(discountShareOfListPct(0, 900), null);
+  assert.equal(avgToListRatio(9000, 10000), 0.9);
+  assert.equal(avgToListRatio(null, 10000), null);
+}
+
+{
+  assert.deepEqual(monthsInRange('2026-09-15', '2026-11-02'), [
+    '2026-09',
+    '2026-10',
+    '2026-11',
+  ]);
+  assert.deepEqual(monthBounds('2026-02'), {
+    from: '2026-02-01',
+    to: '2026-02-28',
+  });
+  assert.deepEqual(monthBounds('2024-02'), {
+    from: '2024-02-01',
+    to: '2024-02-29',
+  });
+}
+
+{
+  const fallback = new Date('2026-10-01T00:00:00+03:00');
+  const bare = parseDiscountOccurredAt('2026-10-01T00:00:00', fallback);
+  assert.equal(bare.toISOString(), '2026-09-30T21:00:00.000Z');
+  const withZ = parseDiscountOccurredAt('2026-10-01T00:00:00Z', fallback);
+  assert.equal(withZ.toISOString(), '2026-10-01T00:00:00.000Z');
+  assert.equal(normalizeDiscountName(''), 'Ручная скидка');
+  assert.equal(normalizeDiscountName('  Акция  '), 'Акция');
+}
+
+{
+  assert.equal(
+    isStaffRelatedDiscount({
+      clientName: 'Иванов Иван (Сотрудник)',
+      discountName: null,
+    }),
+    true,
+  );
+  assert.equal(
+    isStaffRelatedDiscount({
+      clientName: 'Петров',
+      discountName: 'Скидка: Скидка БАР ШТАТ',
+    }),
+    true,
+  );
+  assert.equal(
+    isStaffRelatedDiscount({
+      clientName: 'Клиент',
+      discountName: 'Скидки студентам 15%',
+    }),
+    false,
+  );
+  assert.equal(
+    isDiscountStuck({ discountSharePct: 20, volumeGrowing: false }),
+    true,
+  );
+  assert.equal(
+    isDiscountStuck({ discountSharePct: 20, volumeGrowing: true }),
+    false,
+  );
 }
 
 console.log('pricing-analytics.rules.test.ts: ok');

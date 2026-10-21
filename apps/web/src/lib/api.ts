@@ -2425,7 +2425,13 @@ export const api = {
     token: string,
     body: { from: string; to: string },
   ) =>
-    request<{ status: string; message?: string; imported?: number }>(
+    request<{
+      status: string;
+      message?: string;
+      imported?: number;
+      missingMonths?: string[];
+      syncedAt?: string | null;
+    }>(
       `/super-admin/analytics/market/discounts/refresh`,
       {
         method: 'POST',
@@ -2433,6 +2439,15 @@ export const api = {
       },
       token,
     ),
+
+  analyticsMarketDeletePrice: (
+    token: string,
+    body: { competitorId: string; productExternalId: string },
+  ) =>
+    request(`/super-admin/analytics/market/competitor-prices`, {
+      method: 'DELETE',
+      body: JSON.stringify(body),
+    }, token),
 
   analyticsTasks: (
     token: string,

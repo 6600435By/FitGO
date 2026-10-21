@@ -182,6 +182,14 @@ export class AnalyticsController {
     return this.pricing.upsertCompetitorPrice(user, body);
   }
 
+  @Delete('market/competitor-prices')
+  deleteCompetitorPrice(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { competitorId: string; productExternalId: string },
+  ) {
+    return this.pricing.deleteCompetitorPrice(user, body);
+  }
+
   @Post('market/sale-windows')
   addSaleWindow(
     @CurrentUser() user: JwtPayload,

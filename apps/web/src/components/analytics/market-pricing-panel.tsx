@@ -9,6 +9,8 @@ import { useCallback, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
+const STALE_COMPETITOR_DAYS = 90;
+
 function money(minor: number, currency: string) {
   return `${(minor / 100).toLocaleString('ru-RU', {
     maximumFractionDigits: 0,
@@ -18,6 +20,18 @@ function money(minor: number, currency: string) {
 function moneyShort(minor: number | null | undefined) {
   if (minor == null) return '—';
   return (minor / 100).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+}
+
+function isStaleObserved(observedAt: string | null): boolean {
+  if (!observedAt) return true;
+  const t = new Date(`${observedAt}T12:00:00+03:00`).getTime();
+  if (Number.isNaN(t)) return true;
+  return Date.now() - t > STALE_COMPETITOR_DAYS * 86400_000;
+}
+
+function periodIsPast(to: string): boolean {
+  const end = new Date(`${to}T23:59:59+03:00`).getTime();
+  return Number.isFinite(end) && end < Date.now() - 86400_000;
 }
 
 export function MarketPricingPanel({
@@ -33,13 +47,16 @@ export function MarketPricingPanel({
   );
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
+  const [info, setInfo] = useState('');
   const [clubName, setClubName] = useState('');
   const [promoName, setPromoName] = useState('');
   const [promoFrom, setPromoFrom] = useState('');
   const [promoTo, setPromoTo] = useState('');
   const [showPromos, setShowPromos] = useState(false);
   const [showStaffDisc, setShowStaffDisc] = useState(false);
+  const [showDiscTypes, setShowDiscTypes] = useState(false);
   const [priceDraft, setPriceDraft] = useState<Record<string, string>>({});
+  const [urlDraft, setUrlDraft] = useState<Record<string, string>>({});
 
   const openBlock = useMemo(
     () => report.segments.find((s) => s.key === openSeg) ?? null,
@@ -52,6 +69,7 @@ export function MarketPricingPanel({
       if (!token) return;
       setBusy(label);
       setErr('');
+      setInfo('');
       try {
         await fn();
         onReload();
@@ -90,14 +108,21 @@ export function MarketPricingPanel({
       setErr('Некорректная цена');
       return;
     }
+    const sourceUrl = urlDraft[draftKey]?.trim() || null;
     void run('price', async () => {
       const token = getToken()!;
       await api.analyticsMarketUpsertPrice(token, {
         competitorId,
         productExternalId,
         priceMinor: Math.round(major * 100),
+        sourceUrl,
       });
       setPriceDraft((d) => {
+        const next = { ...d };
+        delete next[draftKey];
+        return next;
+      });
+      setUrlDraft((d) => {
         const next = { ...d };
         delete next[draftKey];
         return next;
@@ -105,9 +130,49 @@ export function MarketPricingPanel({
     });
   };
 
+  const refreshDiscounts = () => {
+    void (async () => {
+      const token = getToken();
+      if (!token) return;
+      setBusy('disc');
+      setErr('');
+      setInfo('');
+      try {
+        const res = await api.analyticsMarketRefreshDiscounts(token, {
+          from: report.from,
+          to: report.to,
+        });
+        if (res.status === 'ok' || res.status === 'partial') {
+          setInfo(
+            res.message ??
+              `Скидки обновлены${res.imported != null ? `: ${res.imported} строк` : ''}`,
+          );
+        } else {
+          setErr(res.message ?? `Статус: ${res.status}`);
+        }
+        onReload();
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : 'Ошибка');
+      } finally {
+        setBusy('');
+      }
+    })();
+  };
+
+  const disc = report.discounts;
+  const syncedLabel = disc.syncedAt
+    ? new Date(disc.syncedAt).toLocaleString('ru-RU', {
+        hour: '2-digit',
+        minute: '2-digit',
+        day: '2-digit',
+        month: '2-digit',
+      })
+    : null;
+
   return (
     <div className="space-y-4">
       {err && <p className="text-sm text-red-400">{err}</p>}
+      {info && <p className="text-sm text-fitgo-300">{info}</p>}
 
       <div className="card space-y-2">
         <p className="text-sm font-medium text-fitgo-300">{report.mode.label}</p>
@@ -117,29 +182,68 @@ export function MarketPricingPanel({
         {report.mixedPeriod && report.mixedPeriodNote && (
           <p className="text-xs text-amber-300/90">{report.mixedPeriodNote}</p>
         )}
-        <div className="flex flex-wrap gap-4 text-sm text-slate-300">
+        <div className="flex flex-wrap items-center gap-4 text-sm text-slate-300">
           <span>
             Выручка:{' '}
             <strong className="text-white">
               {money(report.revenueMinor, currency)}
             </strong>
           </span>
-          <span>
+          <span className="inline-flex flex-wrap items-center gap-2">
             Скидки:{' '}
-            {report.discounts.available
-              ? money(report.discounts.totalDiscountMinor ?? 0, currency)
+            {disc.available
+              ? money(disc.totalDiscountMinor ?? 0, currency)
               : 'н/д'}
+            {disc.available && disc.deltaPct != null && (
+              <span className="text-xs text-slate-500">
+                {disc.deltaPct > 0 ? '+' : ''}
+                {disc.deltaPct}% к базе
+              </span>
+            )}
+            {disc.available && disc.shareOfRevenuePct != null && (
+              <span className="text-xs text-slate-500">
+                {disc.shareOfRevenuePct}% от суммы до скидки
+              </span>
+            )}
+            <button
+              type="button"
+              className="btn-secondary text-xs"
+              disabled={!!busy}
+              onClick={refreshDiscounts}
+            >
+              {busy === 'disc' ? '…' : 'Обновить скидки из 1С'}
+            </button>
+            {syncedLabel && (
+              <span className="text-xs text-slate-600">
+                синхр. {syncedLabel}
+              </span>
+            )}
           </span>
           <span className="text-slate-500">
             Сравнение: {report.baselineLabel}
           </span>
         </div>
-        {!report.discounts.available && report.discounts.message && (
-          <p className="text-xs text-slate-500">{report.discounts.message}</p>
+        {!disc.available && disc.message && (
+          <p className="text-xs text-amber-300/90">{disc.message}</p>
         )}
+        {disc.available && disc.status === 'partial' && disc.message && (
+          <p className="text-xs text-amber-300/90">{disc.message}</p>
+        )}
+        {disc.available &&
+          disc.clientsMinor != null &&
+          disc.staffRelatedMinor != null && (
+            <p className="text-xs text-slate-500">
+              Клиентам {money(disc.clientsMinor, currency)} · сотрудникам и
+              родственникам {money(disc.staffRelatedMinor, currency)}
+            </p>
+          )}
         {report.priceListAsOf && (
           <p className="text-xs text-slate-600">
-            Прайс 1С на {new Date(report.priceListAsOf).toLocaleString('ru-RU')}
+            Прайс 1С сейчас (
+            {new Date(report.priceListAsOf).toLocaleString('ru-RU')})
+            {periodIsPast(report.to)
+              ? ' — цены на дату периода в 1С недоступны, сравниваем с текущим прайсом'
+              : ''}
           </p>
         )}
       </div>
@@ -202,6 +306,8 @@ export function MarketPricingPanel({
           busy={busy}
           priceDraft={priceDraft}
           setPriceDraft={setPriceDraft}
+          urlDraft={urlDraft}
+          setUrlDraft={setUrlDraft}
           onAddClub={() =>
             addClub(openBlock.key as Exclude<PricingSegmentKey, 'corporate'>)
           }
@@ -211,10 +317,44 @@ export function MarketPricingPanel({
             })
           }
           onSavePrice={savePrice}
+          onDeletePrice={(competitorId, productExternalId) =>
+            void run('del-price', async () => {
+              await api.analyticsMarketDeletePrice(getToken()!, {
+                competitorId,
+                productExternalId,
+              });
+            })
+          }
         />
       )}
 
-      {report.discounts.available && report.discounts.byStaff.length > 0 && (
+      {disc.available && (
+        <div className="card space-y-2">
+          <button
+            type="button"
+            className="text-sm font-medium text-slate-300"
+            onClick={() => setShowDiscTypes((v) => !v)}
+          >
+            Виды скидок {showDiscTypes ? '▾' : '▸'}
+          </button>
+          {showDiscTypes &&
+            (disc.byType.length > 0 ? (
+              <ul className="space-y-1 text-sm text-slate-400">
+                {disc.byType.map((t) => (
+                  <li key={t.discountName}>
+                    {t.discountName}: {money(t.discountMinor, currency)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-slate-500">
+                За период денежных скидок нет.
+              </p>
+            ))}
+        </div>
+      )}
+
+      {disc.available && (
         <div className="card">
           <button
             type="button"
@@ -223,43 +363,31 @@ export function MarketPricingPanel({
           >
             Кто дал скидки {showStaffDisc ? '▾' : '▸'}
           </button>
-          {showStaffDisc && (
-            <ul className="mt-2 space-y-1 text-sm text-slate-400">
-              {report.discounts.byStaff.map((s) => (
-                <li key={s.employeeExternalId ?? s.employeeName}>
-                  {s.employeeName}: {money(s.discountMinor, currency)}
-                </li>
-              ))}
-            </ul>
-          )}
+          {showStaffDisc &&
+            (disc.byStaff.length > 0 ? (
+              <ul className="mt-2 space-y-1 text-sm text-slate-400">
+                {disc.byStaff.map((s) => (
+                  <li key={s.employeeExternalId ?? s.employeeName}>
+                    {s.employeeName}: {money(s.discountMinor, currency)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-xs text-slate-500">
+                Нет строк с сотрудником-продавцом за период.
+              </p>
+            ))}
         </div>
       )}
 
       <div className="card space-y-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            className="text-sm font-medium text-slate-300"
-            onClick={() => setShowPromos((v) => !v)}
-          >
-            Другие распродажи {showPromos ? '▾' : '▸'}
-          </button>
-          <button
-            type="button"
-            className="btn-secondary text-xs"
-            disabled={!!busy}
-            onClick={() =>
-              void run('disc', async () => {
-                await api.analyticsMarketRefreshDiscounts(getToken()!, {
-                  from: report.from,
-                  to: report.to,
-                });
-              })
-            }
-          >
-            Обновить скидки из 1С
-          </button>
-        </div>
+        <button
+          type="button"
+          className="text-sm font-medium text-slate-300"
+          onClick={() => setShowPromos((v) => !v)}
+        >
+          Другие распродажи {showPromos ? '▾' : '▸'}
+        </button>
         <p className="text-xs text-slate-500">
           Август уже учтён как ежегодная распродажа абонементов.
         </p>
@@ -358,9 +486,12 @@ function SegmentTable({
   busy,
   priceDraft,
   setPriceDraft,
+  urlDraft,
+  setUrlDraft,
   onAddClub,
   onDeleteClub,
   onSavePrice,
+  onDeletePrice,
 }: {
   block: PricingSegmentBlock;
   currency: string;
@@ -369,6 +500,8 @@ function SegmentTable({
   busy: string;
   priceDraft: Record<string, string>;
   setPriceDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  urlDraft: Record<string, string>;
+  setUrlDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   onAddClub: () => void;
   onDeleteClub: (id: string) => void;
   onSavePrice: (
@@ -376,6 +509,7 @@ function SegmentTable({
     productExternalId: string | null,
     draftKey: string,
   ) => void;
+  onDeletePrice: (competitorId: string, productExternalId: string) => void;
 }) {
   return (
     <div className="card space-y-3 overflow-x-auto">
@@ -429,11 +563,12 @@ function SegmentTable({
         </div>
       )}
 
-      <table className="w-full min-w-[640px] text-left text-sm">
+      <table className="w-full min-w-[720px] text-left text-sm">
         <thead className="text-xs text-slate-500">
           <tr>
             <th className="px-2 py-2">Услуга</th>
             <th className="px-2 py-2">Наша цена</th>
+            <th className="px-2 py-2">Чек / прайс</th>
             <th className="px-2 py-2">Продали</th>
             <th className="px-2 py-2">Выручка</th>
             <th className="px-2 py-2">К базе</th>
@@ -470,6 +605,11 @@ function SegmentTable({
               <td className="px-2 py-2 tabular-nums">
                 {moneyShort(p.listPriceMinor)}
               </td>
+              <td className="px-2 py-2 tabular-nums text-slate-400">
+                {p.avgToListRatio != null
+                  ? `${Math.round(p.avgToListRatio * 100)}%`
+                  : '—'}
+              </td>
               <td className="px-2 py-2 tabular-nums">{p.salesCount}</td>
               <td className="px-2 py-2 tabular-nums">
                 {money(p.revenueMinor, currency)}
@@ -484,41 +624,90 @@ function SegmentTable({
                   (x) => x.competitorId === c.id,
                 );
                 const draftKey = `${c.id}|${p.productExternalId ?? p.productName}`;
+                const stale = isStaleObserved(cell?.observedAt ?? null);
                 return (
                   <td key={c.id} className="px-2 py-2">
                     {cell?.priceMinor != null ? (
-                      <span className="tabular-nums">
+                      <span
+                        className={`tabular-nums ${stale ? 'text-slate-500' : ''}`}
+                        title={
+                          cell.observedAt
+                            ? `на ${cell.observedAt}${stale ? ' (старше 90 дн.)' : ''}`
+                            : undefined
+                        }
+                      >
                         {moneyShort(cell.priceMinor)}
+                        {cell.observedAt && (
+                          <span className="ml-1 text-[10px] text-slate-600">
+                            {cell.observedAt.slice(5)}
+                          </span>
+                        )}
                       </span>
                     ) : (
                       <span className="text-slate-600">—</span>
                     )}
-                    <div className="mt-1 flex gap-1">
+                    {cell?.sourceUrl && (
+                      <a
+                        href={cell.sourceUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="ml-1 text-[10px] text-fitgo-400"
+                      >
+                        ссылка
+                      </a>
+                    )}
+                    <div className="mt-1 flex flex-col gap-1">
+                      <div className="flex gap-1">
+                        <input
+                          className="input w-20 py-0.5 text-xs"
+                          placeholder="цена"
+                          value={priceDraft[draftKey] ?? ''}
+                          onChange={(e) =>
+                            setPriceDraft((d) => ({
+                              ...d,
+                              [draftKey]: e.target.value,
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          className="btn-secondary px-1.5 py-0.5 text-[10px]"
+                          disabled={!!busy}
+                          onClick={() =>
+                            onSavePrice(
+                              c.id,
+                              p.productExternalId,
+                              draftKey,
+                            )
+                          }
+                        >
+                          ok
+                        </button>
+                        {cell?.priceMinor != null && p.productExternalId && (
+                          <button
+                            type="button"
+                            className="px-1 text-[10px] text-rose-400"
+                            disabled={!!busy}
+                            title="Удалить цену"
+                            onClick={() =>
+                              onDeletePrice(c.id, p.productExternalId!)
+                            }
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
                       <input
-                        className="input w-20 py-0.5 text-xs"
-                        placeholder="цена"
-                        value={priceDraft[draftKey] ?? ''}
+                        className="input w-full py-0.5 text-[10px]"
+                        placeholder="url источника"
+                        value={urlDraft[draftKey] ?? ''}
                         onChange={(e) =>
-                          setPriceDraft((d) => ({
+                          setUrlDraft((d) => ({
                             ...d,
                             [draftKey]: e.target.value,
                           }))
                         }
                       />
-                      <button
-                        type="button"
-                        className="btn-secondary px-1.5 py-0.5 text-[10px]"
-                        disabled={!!busy}
-                        onClick={() =>
-                          onSavePrice(
-                            c.id,
-                            p.productExternalId,
-                            draftKey,
-                          )
-                        }
-                      >
-                        ok
-                      </button>
                     </div>
                   </td>
                 );
@@ -531,7 +720,7 @@ function SegmentTable({
           {block.products.length === 0 && (
             <tr>
               <td
-                colSpan={5 + block.competitors.length}
+                colSpan={6 + block.competitors.length}
                 className="px-2 py-4 text-slate-500"
               >
                 Нет продаж в этом сегменте за период
