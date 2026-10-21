@@ -267,6 +267,75 @@ function paymentCell(item: BookingControlListItem): string {
   return parts.length ? parts.join(' · ') : '—';
 }
 
+/**
+ * Status hint colors for booking-control badges.
+ * Distinct hues so floor staff can scan who must act next;
+ * tuned for dark slate surfaces (apps/web) with enough chroma to stay
+ * readable in bright rooms and at night.
+ *
+ * - trainer → sky (floor performer)
+ * - specialist → violet (SPA)
+ * - admin → amber (desk queue)
+ * - notIn1c → orange (sync gap, not a person-wait)
+ */
+type HintTone = 'trainer' | 'specialist' | 'admin' | 'notIn1c' | 'default';
+
+function approvalHintTone(label: string | undefined | null): HintTone {
+  if (!label) return 'default';
+  if (label.includes('тренера')) return 'trainer';
+  if (label.includes('специалиста')) return 'specialist';
+  if (label.includes('администратора')) return 'admin';
+  return 'default';
+}
+
+const HINT_BADGE_COLOR: Record<HintTone, string> = {
+  trainer: 'bg-sky-500/20 text-sky-300 ring-1 ring-inset ring-sky-400/30',
+  specialist:
+    'bg-violet-500/20 text-violet-300 ring-1 ring-inset ring-violet-400/30',
+  admin: 'bg-amber-500/20 text-amber-200 ring-1 ring-inset ring-amber-400/35',
+  notIn1c:
+    'bg-orange-500/20 text-orange-300 ring-1 ring-inset ring-orange-400/35',
+  default: 'bg-slate-500/20 text-slate-300 ring-1 ring-inset ring-slate-400/25',
+};
+
+const HINT_TEXT_COLOR: Record<HintTone, string> = {
+  trainer: 'text-sky-300',
+  specialist: 'text-violet-300',
+  admin: 'text-amber-200',
+  notIn1c: 'text-orange-300',
+  default: 'text-slate-300',
+};
+
+const HINT_PANEL_COLOR: Record<HintTone, string> = {
+  trainer:
+    'rounded-lg border border-sky-500/35 bg-sky-500/10 p-2 text-xs text-slate-300',
+  specialist:
+    'rounded-lg border border-violet-500/35 bg-violet-500/10 p-2 text-xs text-slate-300',
+  admin:
+    'rounded-lg border border-amber-500/35 bg-amber-500/10 p-2 text-xs text-slate-300',
+  notIn1c:
+    'rounded-lg border border-orange-500/35 bg-orange-500/10 p-2 text-xs text-slate-300',
+  default:
+    'rounded-lg border border-slate-500/30 bg-slate-500/10 p-2 text-xs text-slate-300',
+};
+
+function hintBadgeClass(tone: HintTone, compact = false): string {
+  const pad = compact
+    ? 'ml-1 rounded px-1 py-0.5 text-[10px]'
+    : 'rounded px-1.5 py-0.5 text-[10px]';
+  return `${pad} ${HINT_BADGE_COLOR[tone]}`;
+}
+
+function spaPendingLabel(
+  label: string | undefined,
+  phase: string | undefined,
+): string {
+  return (
+    label ??
+    (phase === 'PENDING_ADMIN' ? 'Ждёт администратора' : 'Ждёт специалиста')
+  );
+}
+
 export function BookingControlPanel({
   api,
   canResolve = false,
@@ -1331,7 +1400,9 @@ export function BookingControlPanel({
                             ? ` · ${item.performerName}`
                             : ''}
                         </button>
-                        <span className="shrink-0 text-[11px] text-amber-300">
+                        <span
+                          className={`shrink-0 text-[11px] ${HINT_TEXT_COLOR[approvalHintTone(item.approvalLabel)]}`}
+                        >
                           {item.approvalLabel}
                         </span>
                       </li>
@@ -1452,17 +1523,21 @@ export function BookingControlPanel({
                           </span>
                         ) : null}
                         {item.source === 'FITGO' && !item.oneCLinked ? (
-                          <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">
+                          <span className={hintBadgeClass('notIn1c')}>
                             нет в 1С
                           </span>
                         ) : null}
                         {item.needsReview ? (
-                          <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] text-rose-300">
+                          <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] text-rose-300 ring-1 ring-inset ring-rose-400/30">
                             проверка
                           </span>
                         ) : null}
                         {item.approvalLabel ? (
-                          <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">
+                          <span
+                            className={hintBadgeClass(
+                              approvalHintTone(item.approvalLabel),
+                            )}
+                          >
                             {item.approvalLabel}
                           </span>
                         ) : null}
@@ -1516,7 +1591,7 @@ export function BookingControlPanel({
                           </span>
                         ) : null}
                         {item.source === 'FITGO' && !item.oneCLinked ? (
-                          <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[10px] text-amber-300">
+                          <span className={hintBadgeClass('notIn1c', true)}>
                             нет в 1С
                           </span>
                         ) : null}
@@ -1537,7 +1612,12 @@ export function BookingControlPanel({
                           </span>
                         ) : null}
                         {item.approvalLabel ? (
-                          <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[10px] text-amber-300">
+                          <span
+                            className={hintBadgeClass(
+                              approvalHintTone(item.approvalLabel),
+                              true,
+                            )}
+                          >
                             {item.approvalLabel}
                           </span>
                         ) : null}
@@ -2169,7 +2249,7 @@ export function BookingControlPanel({
                     className={
                       selected.groupApproval.phase === 'APPROVED'
                         ? 'space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2 text-xs text-slate-300'
-                        : 'space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-slate-300'
+                        : `space-y-2 ${HINT_PANEL_COLOR[selected.groupApproval.phase === 'PENDING_ADMIN' ? 'admin' : 'trainer']}`
                     }
                   >
                     {selected.groupApproval.phase === 'APPROVED' ? (
@@ -2185,7 +2265,7 @@ export function BookingControlPanel({
                           : ''}
                       </p>
                     ) : selected.groupApproval.phase === 'PENDING_ADMIN' ? (
-                      <p className="text-amber-300">
+                      <p className={HINT_TEXT_COLOR.admin}>
                         Проверено тренером
                         {selected.groupApproval.trainerName
                           ? `: ${selected.groupApproval.trainerName}`
@@ -2193,7 +2273,9 @@ export function BookingControlPanel({
                         {' · ждёт администратора'}
                       </p>
                     ) : (
-                      <p className="text-amber-300">Ждёт подтверждения тренера</p>
+                      <p className={HINT_TEXT_COLOR.trainer}>
+                        Ждёт подтверждения тренера
+                      </p>
                     )}
                     {selected.groupApproval.returnedAt ? (
                       <p className="text-rose-300">
@@ -2267,26 +2349,30 @@ export function BookingControlPanel({
                 {selected.kind === 'SPA' &&
                 selected.status !== 'CANCELLED' &&
                 selected.approvalPhase &&
-                selected.approvalPhase !== 'APPROVED' ? (
-                  <div className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-slate-300">
-                    <p className="text-amber-300">
-                      {selected.approvalLabel ??
-                        (selected.approvalPhase === 'PENDING_ADMIN'
-                          ? 'Ждёт администратора'
-                          : 'Ждёт специалиста')}
-                    </p>
-                    {canConfirmSelected ? (
-                      <button
-                        type="button"
-                        className="btn-primary w-full text-sm"
-                        onClick={() => void approveGroup()}
-                        disabled={approveBusy}
-                      >
-                        {approveBusy ? 'Подтверждаем…' : 'Подтвердить'}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
+                selected.approvalPhase !== 'APPROVED'
+                  ? (() => {
+                      const spaLabel = spaPendingLabel(
+                        selected.approvalLabel,
+                        selected.approvalPhase,
+                      );
+                      const spaTone = approvalHintTone(spaLabel);
+                      return (
+                        <div className={`space-y-2 ${HINT_PANEL_COLOR[spaTone]}`}>
+                          <p className={HINT_TEXT_COLOR[spaTone]}>{spaLabel}</p>
+                          {canConfirmSelected ? (
+                            <button
+                              type="button"
+                              className="btn-primary w-full text-sm"
+                              onClick={() => void approveGroup()}
+                              disabled={approveBusy}
+                            >
+                              {approveBusy ? 'Подтверждаем…' : 'Подтвердить'}
+                            </button>
+                          ) : null}
+                        </div>
+                      );
+                    })()
+                  : null}
                 {selected.kind === 'GROUP' &&
                 selected.source === '1C' &&
                 !selected.groupApproval?.locked &&
