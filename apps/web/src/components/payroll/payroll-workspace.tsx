@@ -8,6 +8,7 @@ import type {
   PayrollAdjustmentDto,
   PayrollPeriodSummary,
   StaffPaySummary,
+  WorkUnit,
 } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -35,6 +36,68 @@ function bandDot(band: string) {
   if (band === 'GREEN') return 'bg-emerald-400';
   if (band === 'RED') return 'bg-red-400';
   return 'bg-amber-300';
+}
+
+/** Client-paid amount for PT/SPA lines; dash when free / unknown. */
+function unitCostLabel(u: WorkUnit, currency: string): string {
+  if (u.kind !== 'SPA' && u.kind !== 'PT') return '—';
+  if (u.priceMinor == null || u.priceMinor <= 0) return '—';
+  return money(u.priceMinor, currency);
+}
+
+/**
+ * Employee share from motivation. Dash when no client cost
+ * (fixed partner rates still pay, but UI follows «без стоимости → прочерк»).
+ */
+function unitEarnLabel(u: WorkUnit, currency: string): string {
+  if (u.kind !== 'SPA' && u.kind !== 'PT') return '—';
+  if (u.priceMinor == null || u.priceMinor <= 0) return '—';
+  if (u.earnMinor == null) return '—';
+  if (u.ratePercent != null) {
+    return `${u.ratePercent}% · ${money(u.earnMinor, currency)}`;
+  }
+  return money(u.earnMinor, currency);
+}
+
+function unitDayIso(u: WorkUnit): string {
+  return u.occurredAt.slice(0, 10);
+}
+
+function unitBookingHref(
+  u: WorkUnit,
+  mode: 'admin' | 'super',
+): string | null {
+  if (!u.sessionKey) return null;
+  const base =
+    mode === 'super' ? '/super-admin/review-queue' : '/admin/booking-control';
+  const q = new URLSearchParams({ sessionKey: u.sessionKey });
+  const day = unitDayIso(u);
+  if (day) {
+    q.set('from', day);
+    q.set('to', day);
+  }
+  return `${base}?${q.toString()}`;
+}
+
+function unitSaleHref(u: WorkUnit, mode: 'admin' | 'super'): string | null {
+  if (u.kind !== 'SPA' && u.kind !== 'PT') return null;
+  const day = unitDayIso(u);
+  const q = new URLSearchParams();
+  if (day) {
+    q.set('from', day);
+    q.set('to', day);
+  }
+  if (u.saleExternalId) {
+    q.set('externalId', u.saleExternalId);
+  } else if (u.clientName?.trim()) {
+    q.set('q', u.clientName.trim());
+  } else if (u.title?.trim()) {
+    q.set('q', u.title.trim());
+  } else {
+    return null;
+  }
+  const base = mode === 'super' ? '/super-admin/sales' : '/admin/sales';
+  return `${base}?${q.toString()}`;
 }
 
 function escapeHtml(s: string) {
@@ -1298,6 +1361,16 @@ export function PayrollWorkspace({ mode }: Props) {
                       {u.kind === 'GROUP' && u.roomTitle && (
                         <span className="text-slate-500">{u.roomTitle}</span>
                       )}
+                      {(u.kind === 'SPA' || u.kind === 'PT') && (
+                        <>
+                          <span>
+                            {unitCostLabel(u, summary.currency)}
+                          </span>
+                          <span className="text-slate-300">
+                            {unitEarnLabel(u, summary.currency)}
+                          </span>
+                        </>
+                      )}
                       {u.kind === 'SPA' && canEdit && (
                         <button
                           type="button"
@@ -1356,6 +1429,27 @@ export function PayrollWorkspace({ mode }: Props) {
                             : 'не в ЗП'}
                       </span>
                     </div>
+                    {(u.kind === 'SPA' || u.kind === 'PT') &&
+                      (unitBookingHref(u, mode) || unitSaleHref(u, mode)) && (
+                        <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                          {unitBookingHref(u, mode) ? (
+                            <Link
+                              href={unitBookingHref(u, mode)!}
+                              className="text-sky-300 hover:underline"
+                            >
+                              Контроль
+                            </Link>
+                          ) : null}
+                          {unitSaleHref(u, mode) ? (
+                            <Link
+                              href={unitSaleHref(u, mode)!}
+                              className="text-sky-300 hover:underline"
+                            >
+                              Продажа
+                            </Link>
+                          ) : null}
+                        </div>
+                      )}
                   </article>
                 ))
               )}
@@ -1369,56 +1463,107 @@ export function PayrollWorkspace({ mode }: Props) {
                     <th className="px-4 py-3">Вид</th>
                     <th className="px-4 py-3">Услуга</th>
                     <th className="px-4 py-3">Кол-во</th>
+                    <th className="px-4 py-3">Стоимость</th>
+                    <th className="px-4 py-3">%</th>
                     <th className="px-4 py-3">Trust</th>
                     <th className="px-4 py-3">В ЗП</th>
+                    <th className="px-4 py-3">Ссылки</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {summary.workUnits.map((u) => (
-                    <tr
-                      key={`${u.kind}-${u.id}`}
-                      className="border-t border-slate-900/80"
-                    >
-                      <td className="px-4 py-2.5 text-slate-400">
-                        {formatDateTime(u.occurredAt)}
-                      </td>
-                      <td className="px-4 py-2.5">{u.kind}</td>
-                      <td className="px-4 py-2.5">
-                        {u.title}
-                        {u.isComplimentary ? (
-                          <span className="ml-1 text-violet-300">· подарок</span>
-                        ) : null}
-                        {u.clientName ? (
-                          <span className="text-slate-500"> · {u.clientName}</span>
-                        ) : null}
-                        {u.kind === 'SHIFT' && u.priceMinor != null ? (
-                          <span className="ml-1 text-emerald-400">
-                            · {money(u.priceMinor, summary.currency)}
+                  {summary.workUnits.map((u) => {
+                    const bookingHref = unitBookingHref(u, mode);
+                    const saleHref = unitSaleHref(u, mode);
+                    const showPayCols = u.kind === 'SPA' || u.kind === 'PT';
+                    return (
+                      <tr
+                        key={`${u.kind}-${u.id}`}
+                        className="border-t border-slate-900/80"
+                      >
+                        <td className="px-4 py-2.5 text-slate-400">
+                          {formatDateTime(u.occurredAt)}
+                        </td>
+                        <td className="px-4 py-2.5">{u.kind}</td>
+                        <td className="px-4 py-2.5">
+                          {u.title}
+                          {u.isComplimentary ? (
+                            <span className="ml-1 text-violet-300">
+                              · подарок
+                            </span>
+                          ) : null}
+                          {u.clientName ? (
+                            <span className="text-slate-500">
+                              {' '}
+                              · {u.clientName}
+                            </span>
+                          ) : null}
+                          {u.kind === 'SHIFT' && u.priceMinor != null ? (
+                            <span className="ml-1 text-emerald-400">
+                              · {money(u.priceMinor, summary.currency)}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          {u.kind === 'SHIFT' ? `${u.quantity} ч` : u.quantity}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums text-slate-300">
+                          {showPayCols
+                            ? unitCostLabel(u, summary.currency)
+                            : '—'}
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums text-slate-300">
+                          {showPayCols
+                            ? unitEarnLabel(u, summary.currency)
+                            : '—'}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span className="inline-flex items-center gap-1.5">
+                            <i
+                              className={`h-2 w-2 rounded-full ${bandDot(u.trustBand)}`}
+                            />
+                            {u.trustBand}
                           </span>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        {u.kind === 'SHIFT' ? `${u.quantity} ч` : u.quantity}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <span className="inline-flex items-center gap-1.5">
-                          <i
-                            className={`h-2 w-2 rounded-full ${bandDot(u.trustBand)}`}
-                          />
-                          {u.trustBand}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5">
-                        {u.isComplimentary ? (
-                          <span className="text-violet-300">счёт</span>
-                        ) : u.payrollTrusted ? (
-                          <span className="text-emerald-400">да</span>
-                        ) : (
-                          <span className="text-slate-600">нет</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          {u.isComplimentary ? (
+                            <span className="text-violet-300">счёт</span>
+                          ) : u.payrollTrusted ? (
+                            <span className="text-emerald-400">да</span>
+                          ) : (
+                            <span className="text-slate-600">нет</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          {showPayCols ? (
+                            <span className="inline-flex flex-wrap gap-2 text-xs">
+                              {bookingHref ? (
+                                <Link
+                                  href={bookingHref}
+                                  className="text-sky-300 hover:underline"
+                                >
+                                  Контроль
+                                </Link>
+                              ) : (
+                                <span className="text-slate-600">Контроль</span>
+                              )}
+                              {saleHref ? (
+                                <Link
+                                  href={saleHref}
+                                  className="text-sky-300 hover:underline"
+                                >
+                                  Продажа
+                                </Link>
+                              ) : (
+                                <span className="text-slate-600">Продажа</span>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="text-slate-600">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

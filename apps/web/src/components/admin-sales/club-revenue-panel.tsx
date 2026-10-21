@@ -680,6 +680,26 @@ export function ClubRevenuePanel() {
     void load();
   }, [load]);
 
+  // Deep-link from ЗП / discrepancies: ?externalId=… opens sale detail.
+  useEffect(() => {
+    const ext = search.get('externalId')?.trim();
+    if (!ext) return;
+    const token = getToken();
+    if (!token) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const d = await api.superAdminClubSaleDetail(token, ext);
+        if (!cancelled) setDetail(d);
+      } catch {
+        /* ignore — list still useful */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [search]);
+
   const refreshBackfill = useCallback(async () => {
     const token = getToken();
     if (!token) return;

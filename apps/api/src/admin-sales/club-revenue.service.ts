@@ -665,7 +665,11 @@ export class ClubRevenueService {
     id: string,
   ): Promise<ClubRevenueDetailResponse> {
     let row = await this.prisma.clubRevenueEntry.findFirst({
-      where: { id, clubId, isActive: true },
+      where: {
+        clubId,
+        isActive: true,
+        OR: [{ id }, { externalId: id }],
+      },
     });
     if (!row) throw new NotFoundException('Sale not found');
 

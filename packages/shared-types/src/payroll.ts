@@ -23,6 +23,17 @@ export interface WorkUnit {
   occurredAt: string;
   quantity: number;
   priceMinor?: number;
+  /**
+   * Employee share for this line from motivation (PT/SPA).
+   * Null/omitted when not applicable or no price basis.
+   */
+  earnMinor?: number;
+  /** Motivation % applied to price (when rate is percent-of-price). */
+  ratePercent?: number;
+  /** Booking-control opaque key (`1c:…`, `sale:PT:…`, …). */
+  sessionKey?: string;
+  /** ClubRevenueEntry.externalId when a reception/sale doc is linked. */
+  saleExternalId?: string;
   /** Gift PT: counts toward volume tiers, not paid. */
   isComplimentary?: boolean;
   trustBand: TrustBand;

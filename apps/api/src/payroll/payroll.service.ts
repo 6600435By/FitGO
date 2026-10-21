@@ -27,6 +27,7 @@ import {
   trainerPayFlags,
   type TrainerGroupId,
   inferPaymentFromBasis,
+  fitgoSessionKey,
   onexSessionKey,
   paymentCountsForMoney,
   paymentCountsForVolume,
@@ -411,6 +412,8 @@ export class PayrollService {
         partnerSource: partner,
         isSpaAllSportsBioimpedance: bioimpedance,
         sessionId: o.id,
+        sessionKey: key,
+        saleExternalId: matched?.linkedSaleExternalId?.trim() || undefined,
       });
       // QUOTA without pack unit price → spaQuotaRates. Pack unit (e.g. курс массажа N)
       // pays via spaSoldPercent × unit, same as PT pack write-offs.
@@ -489,6 +492,8 @@ export class PayrollService {
             ? 'ALLSPORTS'
             : b.partnerSource ?? undefined,
         isSpaAllSportsBioimpedance: bioimpedance,
+        sessionKey: fitgoSessionKey('SPA', b.id),
+        saleExternalId: saleExt,
       });
       spaPaidViaOnex.add(b.id);
     }
@@ -529,6 +534,8 @@ export class PayrollService {
         serviceExternalId: b.service.externalId ?? undefined,
         partnerSource: 'ALLSPORTS',
         isSpaAllSportsBioimpedance: true,
+        sessionKey: fitgoSessionKey('SPA', b.id),
+        saleExternalId: b.linkedSaleExternalId?.trim() || undefined,
       });
       spaPaidViaOnex.add(b.id);
     }
@@ -647,6 +654,7 @@ export class PayrollService {
             ? `${matched.client.lastName} ${matched.client.firstName}`.trim()
             : undefined),
         sessionId: o.id,
+        sessionKey: key,
         roomTitle,
         roomKey,
         serviceExternalId,
@@ -719,6 +727,9 @@ export class PayrollService {
         clientName: sale.clientName,
         isPtAllSports: false,
         isReformerPersonal,
+        sessionKey: sk,
+        saleExternalId:
+          (sale.externalId || sale.docRef || docKey || '').trim() || undefined,
       });
       ptSaleUnitKeys.set(unitId, sk);
     }
@@ -861,7 +872,8 @@ export class PayrollService {
     }
 
     for (const u of units) {
-      const sk = unitKey.get(u.id);
+      const sk = unitKey.get(u.id) ?? u.sessionKey;
+      if (sk && !u.sessionKey) u.sessionKey = sk;
       if (sk && openKeys.has(sk)) u.payrollTrusted = false;
       if (u.kind === 'GROUP') {
         if (!sk || !approvedGroupKeys.has(sk)) u.payrollTrusted = false;
@@ -982,6 +994,7 @@ export class PayrollService {
       from,
       sales,
     );
+    this.annotateUnitEarnings(workUnits, rates, profile);
     const motivationBreakdown = profile
       ? this.calcMotivationBreakdownFromProfile(profile, sales)
       : undefined;
@@ -2947,6 +2960,121 @@ export class PayrollService {
       toD,
     );
     return mergeTrainerPtSaleRows(fromPt, fromRevenue);
+  }
+
+  /**
+   * Fill earnMinor / ratePercent on PT+SPA lines for the payroll breakdown table.
+   * Mirrors calcMotivationFromProfile (and legacy rates) per unit.
+   */
+  private annotateUnitEarnings(
+    units: WorkUnit[],
+    rates: MotivationRateDto[],
+    profile?: StaffPayProfile,
+  ): void {
+    if (!profile) {
+      for (const u of units) {
+        if (u.kind !== 'SPA' && u.kind !== 'PT') continue;
+        if (!u.payrollTrusted || u.isComplimentary) continue;
+        const rate = this.pickRate(u, rates);
+        if (!rate) continue;
+        if (rate.rateType === 'PERCENT_OF_PRICE' && (u.priceMinor ?? 0) > 0) {
+          u.ratePercent = rate.rateValue;
+          u.earnMinor = Math.round((u.priceMinor! * rate.rateValue) / 100);
+        } else if (rate.rateType === 'FIXED_PER_SESSION') {
+          u.earnMinor = rate.rateValue;
+        } else if (rate.rateType === 'FIXED_PER_ATTENDEE') {
+          u.earnMinor = rate.rateValue * u.quantity;
+        }
+      }
+      return;
+    }
+
+    const trusted = units.filter((u) => u.payrollTrusted);
+    const slices = allPaySlices(profile);
+    const hasReformerScheme = slices.some((s) => s.track === 'REFORMER');
+    const ptAllSportsRate = Math.max(
+      0,
+      ...slices
+        .filter((s) => s.track === 'PT' || s.track === 'CLUB')
+        .map((s) => s.ptAllSportsRateMinor ?? 0),
+    );
+    const paidPtAllSportsIds = new Set<string>();
+
+    if (ptAllSportsRate > 0) {
+      for (const u of trusted) {
+        if (u.kind !== 'PT' || !u.isPtAllSports || u.isComplimentary) continue;
+        if (paidPtAllSportsIds.has(u.id)) continue;
+        paidPtAllSportsIds.add(u.id);
+        u.earnMinor = ptAllSportsRate;
+      }
+    }
+
+    for (const slice of slices) {
+      if (slice.track === 'REFORMER') {
+        const refPct = slice.reformerPersonalPercent ?? 0;
+        if (refPct > 0) {
+          for (const u of trusted.filter(
+            (x) =>
+              x.kind === 'PT' &&
+              (x.isReformerPersonal || x.roomKey === 'REFORMER') &&
+              !x.isComplimentary &&
+              !x.isPtAllSports,
+          )) {
+            const price = u.priceMinor ?? 0;
+            if (price > 0) {
+              u.ratePercent = refPct;
+              u.earnMinor = Math.round((price * refPct) / 100);
+            }
+          }
+        }
+      }
+
+      if (slice.track === 'SPA') {
+        for (const u of trusted.filter((x) => x.kind === 'SPA')) {
+          if (u.isSpaAllSportsBioimpedance && slice.spaPartnerRateMinor) {
+            u.earnMinor = slice.spaPartnerRateMinor;
+            continue;
+          }
+          const price = u.priceMinor ?? 0;
+          if (price > 0 && slice.spaSoldPercent) {
+            u.ratePercent = slice.spaSoldPercent;
+            u.earnMinor = Math.round((price * slice.spaSoldPercent) / 100);
+          } else if (price === 0 && slice.spaQuotaRates?.length) {
+            const title = u.title.toLowerCase();
+            const match = slice.spaQuotaRates.find((r) => {
+              if (r.serviceKey === 'BODY_COMPOSITION')
+                return /состав|анализ|inbody|compos/i.test(title);
+              if (r.serviceKey === 'CLASSIC_MASSAGE')
+                return /массаж|massage|класс/i.test(title);
+              return r.serviceKey === u.serviceId;
+            });
+            if (match) u.earnMinor = match.rateMinor;
+          }
+        }
+      }
+
+      if (slice.track === 'PT' || slice.track === 'CLUB') {
+        const ptUnits = trusted.filter(
+          (x) =>
+            x.kind === 'PT' &&
+            !x.isPtAllSports &&
+            !(hasReformerScheme && x.isReformerPersonal) &&
+            !(hasReformerScheme && x.roomKey === 'REFORMER') &&
+            !(x.roomKey === 'REFORMER' && x.isReformerPersonal),
+        );
+        const pct = resolvePtPercent(ptUnits.length, slice.ptPercentTiers);
+        const catalog = slice.ptSessionPriceMinor ?? 0;
+        for (const u of ptUnits) {
+          if (u.isComplimentary) continue;
+          const price =
+            u.priceMinor != null && u.priceMinor > 0 ? u.priceMinor : catalog;
+          if (price > 0) {
+            u.ratePercent = pct;
+            u.earnMinor = Math.round((price * pct) / 100);
+          }
+        }
+      }
+    }
   }
 
   private calcMotivation(
