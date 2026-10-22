@@ -2677,12 +2677,17 @@ export const api = {
     token: string,
     sessionKey: string,
     seenClientIds: string[],
+    comment?: string,
   ) =>
     request<import('@fitgo/shared-types').BookingControlDetail>(
       '/trainer/booking-control/trainer-seen',
       {
         method: 'POST',
-        body: JSON.stringify({ sessionKey, seenClientIds }),
+        body: JSON.stringify({
+          sessionKey,
+          seenClientIds,
+          ...(comment !== undefined ? { comment } : {}),
+        }),
       },
       token,
     ),

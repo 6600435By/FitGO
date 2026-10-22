@@ -443,12 +443,17 @@ export class BookingControlController {
   @Roles(UserRole.TRAINER)
   trainerSeen(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { sessionKey?: string; seenClientIds?: string[] },
+    @Body() body: {
+      sessionKey?: string;
+      seenClientIds?: string[];
+      comment?: string;
+    },
   ) {
     return this.bookingControl.saveTrainerSeen(
       user,
       body.sessionKey ?? '',
       body.seenClientIds ?? [],
+      body.comment,
     );
   }
 

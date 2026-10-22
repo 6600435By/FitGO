@@ -20,10 +20,15 @@ export function createTrainerBookingControlApi(): BookingControlApi {
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlRemark(token, 'trainer', sessionKey, comment);
     },
-    saveTrainerSeen: async (sessionKey, seenClientIds) => {
+    saveTrainerSeen: async (sessionKey, seenClientIds, comment) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');
-      return api.bookingControlTrainerSeen(token, sessionKey, seenClientIds);
+      return api.bookingControlTrainerSeen(
+        token,
+        sessionKey,
+        seenClientIds,
+        comment,
+      );
     },
     approveGroup: async (sessionKey, comment) => {
       const token = getToken();

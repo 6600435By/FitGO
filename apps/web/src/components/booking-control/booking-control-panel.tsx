@@ -75,10 +75,11 @@ export type BookingControlApi = {
     clientExternalId: string,
     attendance: 'ATTENDED' | 'NO_SHOW',
   ) => Promise<BookingControlDetail>;
-  /** Trainer: FitGO checkmarks for who was present. */
+  /** Trainer: FitGO checkmarks for who was present (+ optional draft comment). */
   saveTrainerSeen?: (
     sessionKey: string,
     seenClientIds: string[],
+    comment?: string,
   ) => Promise<BookingControlDetail>;
   /** Trainer / admin / SA: confirm GROUP for payroll chain. */
   approveGroup?: (
@@ -830,6 +831,20 @@ export function BookingControlPanel({
     setBulkSelected(new Set(pendingKey ? pendingKey.split('|') : []));
   }, [pendingKey]);
 
+  const applyDetail = (d: BookingControlDetail) => {
+    setSelected(d);
+    setLinkPhone(d.guestPhone ?? '');
+    setComment(d.groupApproval?.trainerComment ?? '');
+    const seen = new Set(
+      d.groupApproval?.trainerSeenClientIds ??
+        d.members.filter((m) => m.trainerSeen).map((m) => m.externalId),
+    );
+    setLocalSeen(seen);
+    if (d.kind === 'SPA' && api.listSpaServices && spaServices.length === 0) {
+      void api.listSpaServices().then(setSpaServices).catch(() => undefined);
+    }
+  };
+
   const openDetail = async (sessionKey: string) => {
     flushPendingTrainerSeen();
     setComment('');
@@ -843,35 +858,60 @@ export function BookingControlPanel({
     closePhotos();
     const listItem = items.find((i) => i.sessionKey === sessionKey);
 
-    // ПТ продажа: show modal immediately from list row (avoid hang on 1C re-fetch).
-    if (listItem?.source === 'SALE') {
+    // List row first: avoid blank modal / hard-fail when detail 404s briefly.
+    if (listItem) {
       const payment = listItem.payment;
       setSelected({
         ...listItem,
-        members: [
-          {
-            externalId: listItem.number || listItem.sessionKey,
-            clientName: listItem.clientName || '—',
-            attendance:
-              payment === 'PAID' || payment === 'QUOTA' ? 'ATTENDED' : 'EXPECTED',
-            payment,
-          },
-        ],
+        members:
+          listItem.kind === 'GROUP'
+            ? []
+            : [
+                {
+                  externalId: listItem.number || listItem.sessionKey,
+                  clientName: listItem.clientName || '—',
+                  attendance:
+                    payment === 'PAID' || payment === 'QUOTA'
+                      ? 'ATTENDED'
+                      : 'EXPECTED',
+                  payment,
+                },
+              ],
         remark: null,
         remarksHistory: [],
         crmDocRef: listItem.number,
+        groupApproval:
+          listItem.kind === 'GROUP'
+            ? {
+                trainerSeenClientIds: [],
+                phase:
+                  (listItem.approvalPhase as
+                    | 'PENDING_TRAINER'
+                    | 'PENDING_ADMIN'
+                    | 'APPROVED'
+                    | undefined) ?? 'PENDING_TRAINER',
+                trainerSeenCount: 0,
+                payrollEligible: false,
+                locked: false,
+              }
+            : undefined,
       });
       setLocalSeen(new Set());
-      setDetailLoading(false);
+      setDetailLoading(true);
       try {
         const d = await api.detail(sessionKey);
-        setSelected(d);
-        setLinkPhone(d.guestPhone ?? '');
+        applyDetail(d);
       } catch (e) {
-        // Keep provisional detail; only surface error if we have nothing useful.
-        if (!listItem.title) {
-          setMessage(e instanceof Error ? e.message : 'Ошибка');
+        const text = e instanceof Error ? e.message : 'Ошибка';
+        if (listItem.source === 'SALE' && listItem.title) {
+          /* keep provisional sale row */
+        } else if (detailOnly) {
+          setDetailError(text);
+        } else {
+          setMessage(text);
         }
+      } finally {
+        setDetailLoading(false);
       }
       return;
     }
@@ -880,16 +920,7 @@ export function BookingControlPanel({
     setSelected(null);
     try {
       const d = await api.detail(sessionKey);
-      setSelected(d);
-      setLinkPhone(d.guestPhone ?? '');
-      const seen = new Set(
-        d.groupApproval?.trainerSeenClientIds ??
-          d.members.filter((m) => m.trainerSeen).map((m) => m.externalId),
-      );
-      setLocalSeen(seen);
-      if (d.kind === 'SPA' && api.listSpaServices && spaServices.length === 0) {
-        void api.listSpaServices().then(setSpaServices).catch(() => undefined);
-      }
+      applyDetail(d);
     } catch (e) {
       const text = e instanceof Error ? e.message : 'Ошибка';
       setSelected(null);
@@ -1243,6 +1274,39 @@ export function BookingControlPanel({
         (selected.groupApproval?.phase === 'PENDING_TRAINER' ||
           !selected.groupApproval?.phase),
     );
+
+  /** Comment box before/during class (draft) or with confirm/return after end. */
+  const showGroupCommentBox = Boolean(
+    selected &&
+      selected.kind === 'GROUP' &&
+      selected.source === '1C' &&
+      !selected.groupApproval?.locked &&
+      (canConfirmSelected ||
+        canReturnApproval ||
+        showConfirmAfterEndHint ||
+        (canTrainerSeen &&
+          (selected.groupApproval?.phase === 'PENDING_TRAINER' ||
+            !selected.groupApproval?.phase))),
+  );
+
+  const saveDraftComment = async () => {
+    if (!selected || !api.saveTrainerSeen) return;
+    setApproveBusy(true);
+    setMessage('');
+    try {
+      const updated = await api.saveTrainerSeen(
+        selected.sessionKey,
+        [...localSeen],
+        comment.trim(),
+      );
+      applyDetail(updated);
+      setMessage('Комментарий сохранён');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось сохранить');
+    } finally {
+      setApproveBusy(false);
+    }
+  };
 
   const returnApproval = async () => {
     if (!selected || !api.returnGroupApproval) return;
@@ -1907,7 +1971,7 @@ export function BookingControlPanel({
       {(selected || detailLoading || detailError) && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 pb-[max(2rem,env(safe-area-inset-bottom))] sm:items-center">
           <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl">
-            {detailLoading || !selected ? (
+            {!selected ? (
               <div className="space-y-3">
                 {detailError && !detailLoading ? (
                   <p className="text-sm text-rose-300">{detailError}</p>
@@ -1926,6 +1990,9 @@ export function BookingControlPanel({
               </div>
             ) : (
               <div className="space-y-3">
+                {detailLoading ? (
+                  <p className="text-xs text-slate-500">Обновляем данные…</p>
+                ) : null}
                 {message ? (
                   <p
                     className={
@@ -2628,17 +2695,14 @@ export function BookingControlPanel({
                 !selected.groupApproval?.locked &&
                 showConfirmAfterEndHint ? (
                   <p className="text-xs text-slate-400">
-                    Отметки сохраняются. Подтвердить можно после{' '}
+                    Отметки и комментарий сохраняются. Подтвердить можно после{' '}
                     {formatVisitClock(
                       selected.endAt ?? selected.startAt,
                     ) ?? 'окончания'}
                     .
                   </p>
                 ) : null}
-                {selected.kind === 'GROUP' &&
-                selected.source === '1C' &&
-                !selected.groupApproval?.locked &&
-                (canConfirmSelected || canReturnApproval) ? (
+                {showGroupCommentBox ? (
                   <div className="space-y-2">
                     <textarea
                       className="input min-h-[3rem] w-full text-sm"
@@ -2647,6 +2711,18 @@ export function BookingControlPanel({
                       onChange={(e) => setComment(e.target.value)}
                     />
                     <div className="flex flex-col gap-2">
+                      {showConfirmAfterEndHint &&
+                      api.saveTrainerSeen &&
+                      canTrainerSeen ? (
+                        <button
+                          type="button"
+                          className="btn-secondary w-full text-sm"
+                          onClick={() => void saveDraftComment()}
+                          disabled={approveBusy || !comment.trim()}
+                        >
+                          {approveBusy ? 'Сохраняем…' : 'Сохранить комментарий'}
+                        </button>
+                      ) : null}
                       {canConfirmSelected ? (
                         <button
                           type="button"

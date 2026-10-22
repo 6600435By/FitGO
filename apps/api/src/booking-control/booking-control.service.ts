@@ -77,6 +77,7 @@ import {
   debtSearchWindow,
   matchSpaSale,
   matchSpaVisitByDay,
+  minskDayKey,
   normalizeLabel,
   paidSaleSettlementLabel,
   saleAmountMajor,
@@ -1560,6 +1561,7 @@ export class BookingControlService {
     actor: JwtPayload,
     sessionKey: string,
     seenClientIds: string[],
+    comment?: string,
   ): Promise<BookingControlDetail> {
     const clubId = requireClubId(actor);
     const session = await this.requireGroupOnex(clubId, sessionKey);
@@ -1579,6 +1581,16 @@ export class BookingControlService {
     ];
 
     const existing = await this.findGroupApprovalRow(clubId, key, sessionKey);
+    const draftComment = comment?.trim();
+    // Draft note before confirm — only while trainer has not confirmed yet.
+    const canStoreDraft =
+      draftComment !== undefined && !existing?.trainerApprovedAt;
+    const notePatch =
+      canStoreDraft && draftComment
+        ? { trainerComment: draftComment }
+        : canStoreDraft && draftComment === ''
+          ? { trainerComment: null }
+          : {};
 
     const clearAdmin = Boolean(
       existing?.adminApprovedAt || existing?.overrideApprovedAt,
@@ -1590,9 +1602,11 @@ export class BookingControlService {
         clubId,
         sessionKey: key,
         trainerSeenClientIds: clean,
+        ...notePatch,
       },
       update: {
         trainerSeenClientIds: clean,
+        ...notePatch,
         ...(clearAdmin
           ? {
               adminUserId: null,
@@ -2679,22 +2693,31 @@ export class BookingControlService {
    * Resolve 1C Onex row by document id or Forma schedule slot id.
    * `narrow` = ±1 day around the slot (or ±3d) — safe for trainers;
    * `wide` = existing admin ±7/+31 window.
+   * On narrow miss: one wider ±7d pull (timezone / future publish), then
+   * inactive row — avoids trainer 404 when the doc exists but soft-deactivated.
    */
   private async findOnexSessionForControl(
     clubId: string,
     candidateId: string,
     syncMode: 'narrow' | 'wide',
   ) {
-    const load = async (externalId: string) =>
+    const loadActive = async (externalId: string) =>
       this.prisma.onexClassSession.findFirst({
         where: { clubId, externalId, isActive: true },
         include: { members: true },
       });
 
+    const loadAny = async (externalId: string) =>
+      this.prisma.onexClassSession.findFirst({
+        where: { clubId, externalId },
+        include: { members: true },
+      });
+
     const resolveId = async (): Promise<string> => {
       const direct = await this.prisma.onexClassSession.findFirst({
-        where: { clubId, externalId: candidateId, isActive: true },
-        select: { externalId: true },
+        where: { clubId, externalId: candidateId },
+        select: { externalId: true, isActive: true },
+        orderBy: { isActive: 'desc' },
       });
       if (direct) return direct.externalId;
 
@@ -2702,8 +2725,13 @@ export class BookingControlService {
       return mapped ?? candidateId;
     };
 
+    const afterSync = async () => {
+      const id = await resolveId();
+      return (await loadActive(id)) ?? null;
+    };
+
     let id = await resolveId();
-    let session = await load(id);
+    let session = await loadActive(id);
     if (session) return session;
 
     const window = await this.syncWindowForCandidate(
@@ -2717,8 +2745,26 @@ export class BookingControlService {
       /* ignore — still try resolve after partial sync */
     }
 
+    session = await afterSync();
+    if (session) return session;
+
+    // Trainer narrow miss: timezone edge or class just published in 1C.
+    if (syncMode === 'narrow') {
+      try {
+        await this.classSessions.syncRange(
+          clubId,
+          this.ymdDaysAgo(7),
+          this.ymdDaysAhead(7),
+        );
+      } catch {
+        /* ignore */
+      }
+      session = await afterSync();
+      if (session) return session;
+    }
+
     id = await resolveId();
-    return load(id);
+    return loadAny(id);
   }
 
   private async syncWindowForCandidate(
@@ -2737,7 +2783,19 @@ export class BookingControlService {
       select: { startAt: true },
     });
     if (slot) {
-      const day = slot.startAt.toISOString().slice(0, 10);
+      // Club calendar day (Europe/Minsk), not UTC — otherwise ±1d misses the slot.
+      const day = minskDayKey(slot.startAt);
+      return {
+        from: this.ymdShift(day, -1),
+        to: this.ymdShift(day, 1),
+      };
+    }
+    const onex = await this.prisma.onexClassSession.findFirst({
+      where: { clubId, externalId: candidateId },
+      select: { startAt: true },
+    });
+    if (onex) {
+      const day = minskDayKey(onex.startAt);
       return {
         from: this.ymdShift(day, -1),
         to: this.ymdShift(day, 1),
@@ -2766,7 +2824,7 @@ export class BookingControlService {
     });
     if (!slot) return null;
 
-    const day = slot.startAt.toISOString().slice(0, 10);
+    const day = minskDayKey(slot.startAt);
     const from = this.ymdShift(day, -1);
     const to = this.ymdShift(day, 1);
     const rangeStart = new Date(`${from}T00:00:00.000Z`);
