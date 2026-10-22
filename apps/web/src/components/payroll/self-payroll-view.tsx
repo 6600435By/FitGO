@@ -9,8 +9,12 @@ import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
 
+/** Local calendar day as YYYY-MM-DD (never UTC — avoids 1→30 / 16→15 in UTC+3). */
 function isoDate(d: Date) {
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function money(minor: number, currency = 'BYN') {

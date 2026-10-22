@@ -9,7 +9,12 @@ import { getToken } from '@/lib/auth';
 function monthRange(d = new Date()) {
   const from = new Date(d.getFullYear(), d.getMonth(), 1);
   const to = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-  const fmt = (x: Date) => x.toISOString().slice(0, 10);
+  const fmt = (x: Date) => {
+    const y = x.getFullYear();
+    const m = String(x.getMonth() + 1).padStart(2, '0');
+    const day = String(x.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
   return { from: fmt(from), to: fmt(to) };
 }
 
