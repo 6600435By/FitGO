@@ -47,6 +47,7 @@ import {
   type PayrollPeriodSummary,
   type PayrollPayoutDto,
   type PayrollPayoutKind,
+  type PayrollAdvanceBreakdown,
   type PayrollPayoutPreview,
   type PayrollSelfOverview,
   type PayrollStaffDebt,
@@ -2980,6 +2981,13 @@ export class PayrollService {
         ? '/specialist/my-sessions'
         : '/trainer/my-sessions';
 
+    const advance = await this.buildSelfAdvanceBreakdown(
+      clubId,
+      dbUser,
+      summary,
+      from,
+    );
+
     return {
       summary,
       staffDebt,
@@ -2990,10 +2998,130 @@ export class PayrollService {
         unpaidSalesMinor != null && unpaidSalesMinor > 0
           ? unpaidSalesMinor
           : undefined,
+      advance,
       links: {
         bookingControl,
         sales: isAdmin ? '/admin/sales' : undefined,
       },
+    };
+  }
+
+  /** Club calendar day YYYY-MM-DD (Europe/Minsk). */
+  private clubDayIso(occurredAt: string): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Minsk',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(occurredAt));
+  }
+
+  private isAdvanceHalfClubDay(occurredAt: string): boolean {
+    const day = Number(this.clubDayIso(occurredAt).slice(8, 10));
+    return day >= 1 && day <= 15;
+  }
+
+  /**
+   * Units that accrue on the 25th under forAdvanceHalf (GP hall / SPA / TECH).
+   * PT and reformer settle on the 15th.
+   */
+  private unitAccruesInAdvanceHalf(
+    u: WorkUnit,
+    opts: { gp: boolean; spa: boolean; tech: boolean },
+  ): boolean {
+    if (u.kind === 'GROUP' && u.roomKey !== 'REFORMER' && opts.gp) return true;
+    if (u.kind === 'SPA' && opts.spa) return true;
+    if (u.kind === 'SHIFT' && opts.tech) return true;
+    return false;
+  }
+
+  /**
+   * Tag work units ADVANCE/SETTLEMENT and return 25th-wave preview for the
+   * month of `from` when the employee is on advance.
+   */
+  private async buildSelfAdvanceBreakdown(
+    clubId: string,
+    dbUser: {
+      id: string;
+      roles: { role: Role }[];
+      groupPrograms: boolean | null;
+      trainerStaff: boolean | null;
+      trainerReformers: boolean | null;
+    },
+    summary: PayrollPeriodSummary,
+    from: string,
+  ): Promise<PayrollAdvanceBreakdown | undefined> {
+    const roleSet = new Set(dbUser.roles.map((r) => r.role));
+
+    const year = Number(from.slice(0, 4));
+    const month = Number(from.slice(5, 7));
+    if (!year || !month || month < 1 || month > 12) return undefined;
+
+    const preview = await this.previewPayout(
+      clubId,
+      dbUser.id,
+      'ADVANCE_HALF',
+      year,
+      month,
+    );
+
+    const usesFixedAdvance = preview.usesFixedAdvance;
+    const accruesFromSessions =
+      !usesFixedAdvance &&
+      (roleSet.has(Role.TECH) ||
+        roleSet.has(Role.SPECIALIST) ||
+        Boolean(dbUser.groupPrograms));
+
+    // GP/SPA/TECH always see the wave; card-only roles only when card > 0.
+    const eligible =
+      accruesFromSessions || preview.fixedAdvanceMinor > 0;
+
+    if (!eligible) return undefined;
+
+    const accrualMinor = usesFixedAdvance ? 0 : preview.summary.totalMinor;
+    const split = splitAdvanceWave({
+      accrualMinor,
+      cardAdvanceMinor: preview.fixedAdvanceMinor,
+    });
+
+    const tagOpts = {
+      gp: Boolean(dbUser.groupPrograms),
+      spa: roleSet.has(Role.SPECIALIST),
+      tech: roleSet.has(Role.TECH),
+    };
+
+    let advanceUnitCount = 0;
+    let advanceEarnMinor = 0;
+    for (const u of summary.workUnits) {
+      if (
+        accruesFromSessions &&
+        this.isAdvanceHalfClubDay(u.occurredAt) &&
+        this.unitAccruesInAdvanceHalf(u, tagOpts)
+      ) {
+        u.payWave = 'ADVANCE';
+        if (u.payrollTrusted) {
+          advanceUnitCount += 1;
+          advanceEarnMinor += u.earnMinor ?? 0;
+        }
+      } else {
+        u.payWave = 'SETTLEMENT';
+      }
+    }
+
+    return {
+      eligible: true,
+      accruesFromSessions,
+      periodFrom: preview.periodFrom,
+      periodTo: preview.periodTo,
+      usesFixedAdvance,
+      fixedAdvanceMinor: preview.fixedAdvanceMinor,
+      accrualMinor,
+      earnedMinor: split.earnedMinor,
+      cardMinor: split.cardMinor,
+      cashMinor: split.cashMinor,
+      advanceUnitCount,
+      advanceEarnMinor,
+      hints: preview.hints,
     };
   }
 

@@ -4,6 +4,9 @@ import type { TrustBand, TrustResolution } from './trust';
 
 export type WorkUnitKind = 'SPA' | 'PT' | 'GROUP' | 'SHIFT';
 
+/** 25th advance vs 15th month settlement (trainer/self payroll UI). */
+export type WorkUnitPayWave = 'ADVANCE' | 'SETTLEMENT';
+
 export type MotivationRateKind =
   | 'SPA_SERVICE'
   | 'SPA_KIND'
@@ -62,6 +65,11 @@ export interface WorkUnit {
   isReformerPersonal?: boolean;
   /** SPA partner channel, e.g. ALLSPORTS (legacy toggle; pay uses nomenclature). */
   partnerSource?: string;
+  /**
+   * Pay wave for self-service ZП: ADVANCE = 25th (days 1–15 GP/SPA/TECH),
+   * SETTLEMENT = 15th (PT, reformer, days 16+). Omitted when staff is not on advance.
+   */
+  payWave?: WorkUnitPayWave;
 }
 
 export interface StaffCompensationDto {
@@ -194,6 +202,35 @@ export interface PayrollStaffDebt {
 }
 
 /**
+ * Self-service preview of the 25th advance wave for the month of `from`.
+ * Shown when the employee is on advance (fixed card and/or session accrual).
+ */
+export interface PayrollAdvanceBreakdown {
+  /** Employee participates in the 25th wave. */
+  eligible: boolean;
+  /** GP / SPA / TECH: sessions 1–15 accrue; false = card-only (admin / staff PT / reformer-only). */
+  accruesFromSessions: boolean;
+  periodFrom: string;
+  periodTo: string;
+  usesFixedAdvance: boolean;
+  /** Profile «Выплата аванса на карту». */
+  fixedAdvanceMinor: number;
+  /** Motivation from advance-eligible work in 1–15 (0 when card-only). */
+  accrualMinor: number;
+  /** Wave total: max(accrual, card). */
+  earnedMinor: number;
+  /** Portion to card. */
+  cardMinor: number;
+  /** Remainder from cash desk. */
+  cashMinor: number;
+  /** Trusted ADVANCE-tagged units inside the selected overview period. */
+  advanceUnitCount: number;
+  /** Sum of earnMinor on those ADVANCE units. */
+  advanceEarnMinor: number;
+  hints: string[];
+}
+
+/**
  * Self-service payroll overview for admin / trainer / SPA specialist.
  * Debt is display-only (not deducted from totalMinor).
  */
@@ -207,6 +244,8 @@ export interface PayrollSelfOverview {
   unpaidCount: number;
   /** Admin only: open sales debt attributed to this admin. */
   unpaidSalesMinor?: number;
+  /** 25th advance preview for the month of the selected period (when eligible). */
+  advance?: PayrollAdvanceBreakdown;
   /** Deep-link bases for hints (role-specific). */
   links: {
     bookingControl: string;

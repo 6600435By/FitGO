@@ -28,6 +28,48 @@ function payoutKindRu(kind: string) {
   return kind === 'ADVANCE_HALF' ? 'аванс' : 'расчёт';
 }
 
+/** Selected date window vs club pay halves. */
+function periodSlice(
+  from: string,
+  to: string,
+): 'firstHalf' | 'secondHalf' | 'range' {
+  if (from.slice(0, 7) !== to.slice(0, 7)) return 'range';
+  const fd = Number(from.slice(8, 10));
+  const td = Number(to.slice(8, 10));
+  const y = Number(from.slice(0, 4));
+  const m = Number(from.slice(5, 7));
+  const eom = new Date(y, m, 0).getDate();
+  if (fd === 1 && td === 15) return 'firstHalf';
+  if (fd === 16 && td === eom) return 'secondHalf';
+  return 'range';
+}
+
+function formatIsoRangeRu(from: string, to: string) {
+  const fmt = (iso: string) => {
+    const [, m, d] = iso.split('-');
+    return `${d}.${m}`;
+  };
+  return `${fmt(from)}–${fmt(to)}`;
+}
+
+function PayWaveBadge({ wave }: { wave?: WorkUnit['payWave'] }) {
+  if (wave === 'ADVANCE') {
+    return (
+      <span className="ml-1 inline-flex shrink-0 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-300">
+        аванс
+      </span>
+    );
+  }
+  if (wave === 'SETTLEMENT') {
+    return (
+      <span className="ml-1 inline-flex shrink-0 rounded-md bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-300">
+        ЗП
+      </span>
+    );
+  }
+  return null;
+}
+
 function withQuery(
   base: string,
   params: Record<string, string | undefined>,
@@ -106,8 +148,12 @@ export function SelfPayrollView({ role }: Props) {
 
   const summary = data?.summary;
   const debt = data?.staffDebt;
+  const advance = data?.advance;
   const currency = summary?.currency ?? 'BYN';
   const groupStats = summary?.groupStats;
+  const slice = useMemo(() => periodSlice(from, to), [from, to]);
+  const showWaveTags = Boolean(advance?.eligible);
+
   /** Confirmed GROUP + reformer-hall / personal reformer PT for the sessions list. */
   const trustedSessionUnits: WorkUnit[] = useMemo(
     () =>
@@ -119,14 +165,81 @@ export function SelfPayrollView({ role }: Props) {
       }),
     [summary?.workUnits],
   );
-  const trustedGroupUnits = useMemo(
-    () => trustedSessionUnits.filter((u) => u.kind === 'GROUP'),
-    [trustedSessionUnits],
+
+  /** 1–15 + advance profile → only sessions that pay on the 25th. */
+  const displayedSessionUnits = useMemo(() => {
+    if (
+      advance?.eligible &&
+      advance.accruesFromSessions &&
+      slice === 'firstHalf'
+    ) {
+      return trustedSessionUnits.filter((u) => u.payWave === 'ADVANCE');
+    }
+    return trustedSessionUnits;
+  }, [advance, slice, trustedSessionUnits]);
+
+  const displayedGroupUnits = useMemo(
+    () => displayedSessionUnits.filter((u) => u.kind === 'GROUP'),
+    [displayedSessionUnits],
   );
-  const trustedReformerPtUnits = useMemo(
-    () => trustedSessionUnits.filter((u) => u.kind === 'PT'),
-    [trustedSessionUnits],
+  const displayedReformerPtUnits = useMemo(
+    () => displayedSessionUnits.filter((u) => u.kind === 'PT'),
+    [displayedSessionUnits],
   );
+  const sessionEarnSum = useMemo(
+    () =>
+      displayedSessionUnits.reduce((s, u) => s + (u.earnMinor ?? 0), 0),
+    [displayedSessionUnits],
+  );
+
+  const sessionsSubtitle = useMemo(() => {
+    const parts: string[] = [];
+    if (
+      slice === 'firstHalf' &&
+      advance?.eligible &&
+      advance.accruesFromSessions
+    ) {
+      parts.push('Только занятия в аванс 25-е');
+    } else if (showWaveTags) {
+      parts.push('Метки аванс / ЗП');
+    }
+    if (displayedGroupUnits.length > 0) {
+      let g = `${displayedGroupUnits.length} групповых`;
+      if (groupStats && slice !== 'firstHalf') {
+        g += ` · ср. ${groupStats.avgPeople.toLocaleString('ru-RU', {
+          maximumFractionDigits: 1,
+        })} чел.`;
+      }
+      parts.push(g);
+    }
+    if (displayedReformerPtUnits.length > 0) {
+      parts.push(`${displayedReformerPtUnits.length} инд. реформер`);
+    }
+    if (!displayedSessionUnits.length) {
+      parts.push(
+        advance?.eligible &&
+          advance.accruesFromSessions &&
+          slice === 'firstHalf'
+          ? 'Нет занятий для аванса'
+          : 'Нет подтверждённых',
+      );
+    }
+    if (sessionEarnSum > 0) {
+      parts.push(`начислено ${money(sessionEarnSum, currency)}`);
+    }
+    return parts.join(' · ');
+  }, [
+    advance,
+    currency,
+    displayedGroupUnits.length,
+    displayedReformerPtUnits.length,
+    displayedSessionUnits.length,
+    groupStats,
+    sessionEarnSum,
+    showWaveTags,
+    slice,
+  ]);
+
   const hasMotivationBreakdown =
     summary?.motivationBreakdown != null &&
     (summary.motivationBreakdown.membershipMinor > 0 ||
@@ -135,17 +248,31 @@ export function SelfPayrollView({ role }: Props) {
       summary.motivationBreakdown.shopMinor > 0 ||
       summary.motivationBreakdown.corporateMinor > 0);
 
+  const firstHalfPreset = useMemo(() => {
+    const y = today.getFullYear();
+    const m = today.getMonth();
+    return {
+      from: isoDate(new Date(y, m, 1)),
+      to: isoDate(new Date(y, m, 15)),
+    };
+  }, [today]);
+  const secondHalfPreset = useMemo(() => {
+    const y = today.getFullYear();
+    const m = today.getMonth();
+    return {
+      from: isoDate(new Date(y, m, 16)),
+      to: isoDate(new Date(y, m + 1, 0)),
+    };
+  }, [today]);
+
   const applyHalfMonth = (half: 'first' | 'second') => {
-    const base = new Date(today);
-    const y = base.getFullYear();
-    const m = base.getMonth();
     setData(null);
     if (half === 'first') {
-      setFrom(isoDate(new Date(y, m, 1)));
-      setTo(isoDate(new Date(y, m, 15)));
+      setFrom(firstHalfPreset.from);
+      setTo(firstHalfPreset.to);
     } else {
-      setFrom(isoDate(new Date(y, m, 16)));
-      setTo(isoDate(new Date(y, m + 1, 0)));
+      setFrom(secondHalfPreset.from);
+      setTo(secondHalfPreset.to);
     }
   };
 
@@ -166,14 +293,22 @@ export function SelfPayrollView({ role }: Props) {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              className="btn-secondary text-xs"
+              className={
+                from === firstHalfPreset.from && to === firstHalfPreset.to
+                  ? 'btn-primary text-xs'
+                  : 'btn-secondary text-xs'
+              }
               onClick={() => applyHalfMonth('first')}
             >
               1–15
             </button>
             <button
               type="button"
-              className="btn-secondary text-xs"
+              className={
+                from === secondHalfPreset.from && to === secondHalfPreset.to
+                  ? 'btn-primary text-xs'
+                  : 'btn-secondary text-xs'
+              }
               onClick={() => applyHalfMonth('second')}
             >
               16–конец месяца
@@ -335,6 +470,65 @@ export function SelfPayrollView({ role }: Props) {
               </div>
             ) : null}
           </section>
+
+          {advance?.eligible ? (
+            <section className="card space-y-3 border-emerald-500/20 bg-gradient-to-b from-emerald-500/5 to-transparent">
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wide text-emerald-400/90">
+                  Аванс 25-е · {formatIsoRangeRu(advance.periodFrom, advance.periodTo)}
+                </p>
+                <p className="mt-1 text-2xl font-semibold tabular-nums text-white">
+                  {money(advance.earnedMinor, currency)}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                  {advance.usesFixedAdvance
+                    ? 'Фиксированная выплата на карту по профилю (занятия — в расчёт 15-го).'
+                    : 'Начисление за занятия 1–15, которые входят в аванс (ГП без реформеров).'}
+                </p>
+              </div>
+              <ul className="grid grid-cols-2 gap-2 text-sm">
+                <li className="rounded-lg border border-emerald-500/20 bg-slate-900/60 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">На карту</p>
+                  <p className="tabular-nums text-emerald-200">
+                    {money(advance.cardMinor, currency)}
+                  </p>
+                </li>
+                <li className="rounded-lg border border-slate-700/80 bg-slate-900/60 px-3 py-2">
+                  <p className="text-[11px] text-slate-500">Из кассы</p>
+                  <p className="tabular-nums text-slate-200">
+                    {money(advance.cashMinor, currency)}
+                  </p>
+                </li>
+              </ul>
+              {advance.accruesFromSessions ? (
+                <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-slate-800/80 pt-2 text-sm">
+                  <p className="text-slate-400">
+                    В аванс в выбранном периоде:{' '}
+                    <span className="tabular-nums text-slate-200">
+                      {advance.advanceUnitCount}
+                    </span>{' '}
+                    {advance.advanceUnitCount === 1
+                      ? 'занятие'
+                      : advance.advanceUnitCount < 5
+                        ? 'занятия'
+                        : 'занятий'}
+                  </p>
+                  {advance.advanceEarnMinor > 0 ? (
+                    <p className="tabular-nums text-emerald-300">
+                      {money(advance.advanceEarnMinor, currency)}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+              {advance.hints.length > 0 ? (
+                <ul className="space-y-1 border-t border-slate-800/80 pt-2 text-xs text-slate-500">
+                  {advance.hints.slice(0, 3).map((h) => (
+                    <li key={h}>· {h}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </section>
+          ) : null}
 
           {debt ? (
             <section className="card space-y-2">
@@ -498,7 +692,9 @@ export function SelfPayrollView({ role }: Props) {
             </section>
           ) : null}
 
-          {groupStats || trustedReformerPtUnits.length > 0 ? (
+          {groupStats ||
+          trustedSessionUnits.length > 0 ||
+          (advance?.eligible && advance.accruesFromSessions) ? (
             <section className="card space-y-2">
               <button
                 type="button"
@@ -507,26 +703,7 @@ export function SelfPayrollView({ role }: Props) {
               >
                 <div>
                   <p className="font-medium text-slate-200">Занятия в ЗП</p>
-                  <p className="text-xs text-slate-500">
-                    {trustedGroupUnits.length > 0
-                      ? `${trustedGroupUnits.length} групповых · ср. ${(
-                          groupStats?.avgPeople ?? 0
-                        ).toLocaleString('ru-RU', {
-                          maximumFractionDigits: 1,
-                        })} чел.`
-                      : null}
-                    {trustedGroupUnits.length > 0 &&
-                    trustedReformerPtUnits.length > 0
-                      ? ' · '
-                      : null}
-                    {trustedReformerPtUnits.length > 0
-                      ? `${trustedReformerPtUnits.length} инд. реформер`
-                      : null}
-                    {!trustedGroupUnits.length &&
-                    !trustedReformerPtUnits.length
-                      ? 'Нет подтверждённых'
-                      : null}
-                  </p>
+                  <p className="text-xs text-slate-500">{sessionsSubtitle}</p>
                 </div>
                 <span className="text-slate-400">
                   {groupOpen ? '▾' : '▸'}
@@ -534,12 +711,16 @@ export function SelfPayrollView({ role }: Props) {
               </button>
               {groupOpen ? (
                 <ul className="max-h-72 space-y-1.5 overflow-y-auto border-t border-slate-800 pt-2 text-sm">
-                  {trustedSessionUnits.length === 0 ? (
+                  {displayedSessionUnits.length === 0 ? (
                     <li className="text-slate-500">
-                      Нет подтверждённых занятий за период
+                      {advance?.eligible &&
+                      !advance.accruesFromSessions &&
+                      slice === 'firstHalf'
+                        ? 'Аванс — фиксированная сумма на карту; занятия учитываются в расчёте 15-го'
+                        : 'Нет подтверждённых занятий за период'}
                     </li>
                   ) : (
-                    trustedSessionUnits.map((u) => (
+                    displayedSessionUnits.map((u) => (
                       <li
                         key={u.id}
                         className="flex justify-between gap-2 border-b border-slate-900/80 py-1.5"
@@ -559,13 +740,29 @@ export function SelfPayrollView({ role }: Props) {
                               · {u.roomTitle}
                             </span>
                           ) : null}
+                          {showWaveTags ? (
+                            <PayWaveBadge wave={u.payWave} />
+                          ) : null}
                         </span>
-                        <span className="shrink-0 tabular-nums text-slate-300">
-                          {u.kind === 'PT'
-                            ? u.priceMinor != null
-                              ? money(u.priceMinor, currency)
-                              : '1'
-                            : `пришло ${u.quantity}`}
+                        <span className="shrink-0 text-right tabular-nums text-slate-300">
+                          {u.earnMinor != null && u.earnMinor > 0 ? (
+                            <span className="block text-emerald-300">
+                              {money(u.earnMinor, currency)}
+                            </span>
+                          ) : null}
+                          <span
+                            className={
+                              u.earnMinor != null && u.earnMinor > 0
+                                ? 'text-[11px] text-slate-500'
+                                : undefined
+                            }
+                          >
+                            {u.kind === 'PT'
+                              ? u.priceMinor != null
+                                ? money(u.priceMinor, currency)
+                                : '1'
+                              : `пришло ${u.quantity}`}
+                          </span>
                         </span>
                       </li>
                     ))
@@ -586,6 +783,7 @@ export function SelfPayrollView({ role }: Props) {
                 <p className="text-xs text-slate-500">
                   {summary.workUnits.length} единиц · GREEN{' '}
                   {summary.greenCount}
+                  {showWaveTags ? ' · метки аванс / ЗП' : ''}
                 </p>
               </div>
               <span className="text-slate-400">{unitsOpen ? '▾' : '▸'}</span>
@@ -605,14 +803,30 @@ export function SelfPayrollView({ role }: Props) {
                           {formatDateTime(u.occurredAt).slice(0, 10)}
                         </span>{' '}
                         · {u.title}
+                        {showWaveTags ? (
+                          <PayWaveBadge wave={u.payWave} />
+                        ) : null}
                         {!u.payrollTrusted ? (
                           <span className="ml-1 text-amber-300">· ждёт</span>
                         ) : null}
                       </span>
-                      <span className="shrink-0 tabular-nums text-slate-300">
-                        {u.priceMinor != null
-                          ? money(u.priceMinor, currency)
-                          : `${u.quantity}`}
+                      <span className="shrink-0 text-right tabular-nums text-slate-300">
+                        {u.earnMinor != null && u.earnMinor > 0 ? (
+                          <span className="block text-emerald-300">
+                            {money(u.earnMinor, currency)}
+                          </span>
+                        ) : null}
+                        <span
+                          className={
+                            u.earnMinor != null && u.earnMinor > 0
+                              ? 'text-[11px] text-slate-500'
+                              : undefined
+                          }
+                        >
+                          {u.priceMinor != null
+                            ? money(u.priceMinor, currency)
+                            : `${u.quantity}`}
+                        </span>
                       </span>
                     </li>
                   ))
