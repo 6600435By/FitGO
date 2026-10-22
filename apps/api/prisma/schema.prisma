@@ -523,6 +523,7 @@ model Club {
   discrepancyAcks      DiscrepancyAck[]
   discrepancyTaskRules DiscrepancyTaskRule[]
   segmentCompetitors   SegmentCompetitor[]
+  marketProductHides   MarketProductHide[]
   membershipSaleWindows MembershipSaleWindow[]
   providedDiscountRows ProvidedDiscountRow[]
   providedDiscountSyncStates ProvidedDiscountSyncState[]
@@ -2229,6 +2230,22 @@ model ClubRevenueEntry {
   @@index([clubId, performerExternalId, occurredAt])
   @@index([clubId, isActive, occurredAt])
   @@index([clubId, productExternalId])
+}
+
+/// Products removed from market comparison UI; survive 1C segment re-sync.
+/// New nomenclature from 1C still appears (not in this table).
+model MarketProductHide {
+  id                String   @id @default(cuid())
+  clubId            String
+  /// membership | training | shop | spa | solarium
+  segmentKey        String
+  productExternalId String
+  createdAt         DateTime @default(now())
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, segmentKey, productExternalId])
+  @@index([clubId, segmentKey])
 }
 
 /// Competitor club monitored inside one pricing segment (not corporate).

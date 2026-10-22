@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import type {
   AnalyticsCompareMode,
   BatchUpsertCompetitorPricesDto,
+  HideMarketProductDto,
   PatchSegmentCompetitorDto,
   PricingAnalyticsReport,
   PricingCompetitorCell,
@@ -160,6 +161,7 @@ export class PricingAnalyticsService {
       competitors,
       competitorPrices,
       dataSinceRow,
+      hiddenProducts,
     ] = await Promise.all([
       loadPayrollSegmentSets(this.config),
       loadSegmentPriceLists(this.config),
@@ -176,7 +178,22 @@ export class PricingAnalyticsService {
         orderBy: { occurredAt: 'asc' },
         select: { occurredAt: true },
       }),
+      this.prisma.marketProductHide.findMany({
+        where: { clubId },
+        select: { segmentKey: true, productExternalId: true },
+      }),
     ]);
+
+    const hiddenBySegment = new Map<string, Set<string>>();
+    for (const h of hiddenProducts) {
+      const id = h.productExternalId.toLowerCase();
+      let set = hiddenBySegment.get(h.segmentKey);
+      if (!set) {
+        set = new Set();
+        hiddenBySegment.set(h.segmentKey, set);
+      }
+      set.add(id);
+    }
 
     const saleWindows: SaleWindowInput[] = windowsForYears(
       from,
@@ -418,6 +435,17 @@ export class PricingAnalyticsService {
           curAgg: curAgg.byKey,
           catalogIds: membershipCatalogIds,
         });
+      }
+
+      const hiddenIds = hiddenBySegment.get(segKey);
+      if (hiddenIds?.size) {
+        products = products.filter(
+          (p) =>
+            !(
+              p.productExternalId &&
+              hiddenIds.has(p.productExternalId.toLowerCase())
+            ),
+        );
       }
 
       const marked = markCoreProducts(products);
@@ -1154,6 +1182,50 @@ export class PricingAnalyticsService {
     await this.prisma.segmentCompetitorPrice.deleteMany({
       where: { competitorId: body.competitorId, productExternalId },
     });
+    this.invalidateCache(clubId);
+    return { ok: true };
+  }
+
+  /**
+   * Remove a SKU from the market comparison list. Persists across 1C sync;
+   * new nomenclature still appears. Also clears stored competitor prices for it.
+   */
+  async hideMarketProduct(user: JwtPayload, dto: HideMarketProductDto) {
+    const clubId = requireClubId(user);
+    this.assertProductSegment(dto.segmentKey);
+    const productExternalId = (dto.productExternalId ?? '')
+      .trim()
+      .toLowerCase();
+    if (!productExternalId) {
+      throw new BadRequestException('Нужен productExternalId');
+    }
+    await this.prisma.marketProductHide.upsert({
+      where: {
+        clubId_segmentKey_productExternalId: {
+          clubId,
+          segmentKey: dto.segmentKey,
+          productExternalId,
+        },
+      },
+      create: {
+        clubId,
+        segmentKey: dto.segmentKey,
+        productExternalId,
+      },
+      update: {},
+    });
+    const segmentCompetitors = await this.prisma.segmentCompetitor.findMany({
+      where: { clubId, segmentKey: dto.segmentKey },
+      select: { id: true },
+    });
+    if (segmentCompetitors.length) {
+      await this.prisma.segmentCompetitorPrice.deleteMany({
+        where: {
+          productExternalId,
+          competitorId: { in: segmentCompetitors.map((c) => c.id) },
+        },
+      });
+    }
     this.invalidateCache(clubId);
     return { ok: true };
   }

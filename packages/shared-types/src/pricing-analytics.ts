@@ -251,3 +251,9 @@ export interface UpsertSaleWindowDto {
   to: string;
   segmentKey?: PricingSegmentKey;
 }
+
+/** Hide a SKU from market comparison; persists across 1C sync. */
+export interface HideMarketProductDto {
+  segmentKey: Exclude<PricingSegmentKey, 'corporate'>;
+  productExternalId: string;
+}

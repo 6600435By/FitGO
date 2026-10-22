@@ -58,6 +58,7 @@ import {
   type ManagerEfficiencyBlock,
   type StaffAnalyticsReport,
   type PricingAnalyticsReport,
+  type PricingSegmentKey,
   type UpsertCompetitorPriceDto,
   type UpsertSaleWindowDto,
   type UpsertSegmentCompetitorDto,
@@ -2480,6 +2481,18 @@ export const api = {
     body: { competitorId: string; productExternalId: string },
   ) =>
     request(`/super-admin/analytics/market/competitor-prices`, {
+      method: 'DELETE',
+      body: JSON.stringify(body),
+    }, token),
+
+  analyticsMarketHideProduct: (
+    token: string,
+    body: {
+      segmentKey: Exclude<PricingSegmentKey, 'corporate'>;
+      productExternalId: string;
+    },
+  ) =>
+    request<{ ok: boolean }>(`/super-admin/analytics/market/products`, {
       method: 'DELETE',
       body: JSON.stringify(body),
     }, token),

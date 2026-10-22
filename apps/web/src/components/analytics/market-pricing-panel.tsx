@@ -299,6 +299,17 @@ export function MarketPricingPanel({
               });
             })
           }
+          onHideProduct={(productExternalId) =>
+            void run('hide-product', async () => {
+              await api.analyticsMarketHideProduct(getToken()!, {
+                segmentKey: openBlock.key as Exclude<
+                  PricingSegmentKey,
+                  'corporate'
+                >,
+                productExternalId,
+              });
+            })
+          }
           onError={setErr}
         />
       )}
@@ -463,6 +474,7 @@ function SegmentTable({
   onDeleteClub,
   onSaveClubEdit,
   onDeletePrice,
+  onHideProduct,
   onError,
 }: {
   block: PricingSegmentBlock;
@@ -480,6 +492,7 @@ function SegmentTable({
     },
   ) => Promise<boolean>;
   onDeletePrice: (competitorId: string, productExternalId: string) => void;
+  onHideProduct: (productExternalId: string) => void;
   onError: (msg: string) => void;
 }) {
   const [clubFilter, setClubFilter] = useState<'all' | string>('all');
@@ -579,18 +592,44 @@ function SegmentTable({
     productRows.push(
       <tr key={rowKey} className="border-t border-slate-800 align-top">
         <td className="px-2 py-2">
-          <span className="text-slate-200">{p.productName}</span>
-          {p.isCore && p.salesCount > 0 && (
-            <span className="ml-1 rounded bg-fitgo-500/20 px-1 text-[10px] text-fitgo-300">
-              основа
-            </span>
-          )}
-          {p.discountSharePct != null && (
-            <p className="text-xs text-slate-500">скидка {p.discountSharePct}%</p>
-          )}
-          {p.bridge && (
-            <p className="text-xs text-slate-600">{p.bridge.summary}</p>
-          )}
+          <div className="flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <span className="text-slate-200">{p.productName}</span>
+              {p.isCore && p.salesCount > 0 && (
+                <span className="ml-1 rounded bg-fitgo-500/20 px-1 text-[10px] text-fitgo-300">
+                  основа
+                </span>
+              )}
+              {p.discountSharePct != null && (
+                <p className="text-xs text-slate-500">
+                  скидка {p.discountSharePct}%
+                </p>
+              )}
+              {p.bridge && (
+                <p className="text-xs text-slate-600">{p.bridge.summary}</p>
+              )}
+            </div>
+            {p.productExternalId ? (
+              <button
+                type="button"
+                className="shrink-0 text-xs text-rose-400"
+                disabled={!!busy}
+                title="Убрать из сравнения (не вернётся при синхронизации из 1С)"
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      `Убрать «${p.productName}» из списка сравнения?\nПосле синхронизации из 1С позиция не появится снова. Новые номенклатуры из 1С по-прежнему добавляются.`,
+                    )
+                  ) {
+                    return;
+                  }
+                  onHideProduct(p.productExternalId!);
+                }}
+              >
+                ×
+              </button>
+            ) : null}
+          </div>
         </td>
         <td className="px-2 py-2 tabular-nums">
           {moneyShort(p.listPriceMinor)}
@@ -704,6 +743,13 @@ function SegmentTable({
           </button>
         </div>
       </div>
+
+      {block.key === 'membership' && (
+        <p className="text-xs text-slate-500">
+          × у позиции убирает её из сравнения навсегда (синхронизация из 1С не
+          вернёт). Новые номенклатуры из 1С появляются сами.
+        </p>
+      )}
 
       {block.competitors.length === 0 && (
         <p className="text-sm text-slate-500">

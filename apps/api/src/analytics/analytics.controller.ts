@@ -17,6 +17,7 @@ import type {
   AnalyticsCompareMode,
   AnalyticsDepartment,
   BatchUpsertCompetitorPricesDto,
+  HideMarketProductDto,
   PatchSegmentCompetitorDto,
   UpsertCompetitorPriceDto,
   UpsertSaleWindowDto,
@@ -208,6 +209,14 @@ export class AnalyticsController {
     @Body() body: { competitorId: string; productExternalId: string },
   ) {
     return this.pricing.deleteCompetitorPrice(user, body);
+  }
+
+  @Delete('market/products')
+  hideMarketProduct(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: HideMarketProductDto,
+  ) {
+    return this.pricing.hideMarketProduct(user, body);
   }
 
   @Post('market/sale-windows')
