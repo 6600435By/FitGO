@@ -19,7 +19,12 @@ import {
 import { StaffAnalyticsTable } from '@/components/analytics/staff-analytics-table';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import { hasExplicitQuery } from '@/lib/use-view-memory';
+import {
+  readViewMemory,
+  writeViewMemory,
+} from '@/lib/view-memory';
 
 type Tab = 'club' | 'staff' | 'market';
 
@@ -97,12 +102,55 @@ function filterStaffReport(
   };
 }
 
+type AnalyticsViewMem = {
+  tab: Tab;
+  from: string;
+  to: string;
+  compare: AnalyticsCompareMode;
+  department: AnalyticsDepartment;
+};
+
 function AnalyticsInner() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const ownerId = getUser()?.id ?? '';
 
   const defaults = useMemo(() => monthBounds(), []);
+  const memoryHydrated = useRef(false);
+
+  useEffect(() => {
+    if (!ownerId || memoryHydrated.current) return;
+    memoryHydrated.current = true;
+    const keys = ['tab', 'from', 'to', 'compare', 'department'];
+    if (hasExplicitQuery(searchParams, keys)) {
+      writeViewMemory(ownerId, pathname, 'main', {
+        tab: (searchParams.get('tab') as Tab) || 'club',
+        from: searchParams.get('from') || defaults.from,
+        to: searchParams.get('to') || defaults.to,
+        compare:
+          (searchParams.get('compare') as AnalyticsCompareMode) || 'prev',
+        department:
+          (searchParams.get('department') as AnalyticsDepartment) || 'ALL',
+      } satisfies AnalyticsViewMem);
+      return;
+    }
+    const saved = readViewMemory<AnalyticsViewMem>(ownerId, pathname, 'main');
+    if (!saved) return;
+    const q = new URLSearchParams();
+    q.set('tab', saved.tab || 'club');
+    q.set('from', saved.from || defaults.from);
+    q.set('to', saved.to || defaults.to);
+    if (saved.compare && saved.compare !== 'prev') {
+      q.set('compare', saved.compare);
+    }
+    if (saved.department && saved.department !== 'ALL') {
+      q.set('department', saved.department);
+    }
+    router.replace(`${pathname}?${q.toString()}`, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
+  }, [ownerId]);
+
   const tab = (searchParams.get('tab') as Tab) || 'club';
   const from = searchParams.get('from') || defaults.from;
   const to = searchParams.get('to') || defaults.to;
@@ -139,9 +187,20 @@ function AnalyticsInner() {
         if (v == null || v === '') next.delete(k);
         else next.set(k, v);
       }
+      if (ownerId) {
+        writeViewMemory(ownerId, pathname, 'main', {
+          tab: (next.get('tab') as Tab) || 'club',
+          from: next.get('from') || defaults.from,
+          to: next.get('to') || defaults.to,
+          compare:
+            (next.get('compare') as AnalyticsCompareMode) || 'prev',
+          department:
+            (next.get('department') as AnalyticsDepartment) || 'ALL',
+        } satisfies AnalyticsViewMem);
+      }
       router.replace(`${pathname}?${next.toString()}`);
     },
-    [pathname, router, searchParams],
+    [pathname, router, searchParams, ownerId, defaults.from, defaults.to],
   );
 
   // Club / staff / market report: reload on period / pay / tab / department.

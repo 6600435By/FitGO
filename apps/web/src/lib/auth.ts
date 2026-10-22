@@ -1,5 +1,6 @@
 import { UserRole } from '@fitgo/shared-types';
 import type { AuthUser } from './api';
+import { clearViewMemory } from './view-memory';
 
 const TOKEN_KEY = 'fitgo_token';
 const USER_KEY = 'fitgo_user';
@@ -14,6 +15,7 @@ export function clearAuth() {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  clearViewMemory();
 }
 
 export function getToken(): string | null {

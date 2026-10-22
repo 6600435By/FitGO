@@ -10,10 +10,31 @@ import {
   type BookingControlStatus,
   type GroupApprovalNoteItem,
 } from '@fitgo/shared-types';
+import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminStickyTable } from '@/components/admin/admin-sticky-table';
 import { DateField } from '@/components/ui/date-field';
+import { getUser } from '@/lib/auth';
+import {
+  resolveViewFilters,
+  usePersistViewMemory,
+} from '@/lib/use-view-memory';
+import { isIsoDay } from '@/lib/view-memory';
 import { formatDateTime, formatVisitClock } from '@/lib/utils';
+
+type BookingViewMem = {
+  from: string;
+  to: string;
+  kind: string;
+  status: string;
+  payment: string;
+  payTag: string;
+  flag: string;
+  performerId: string;
+  needsReview: boolean;
+  clientFilter: string;
+  clientIdFilter: string;
+};
 
 export type BookingControlPerformerOption = {
   id: string;
@@ -368,27 +389,100 @@ export function BookingControlPanel({
   showOpsHints = false,
   spaBookingEditHref,
 }: Props) {
-  const [from, setFrom] = useState(
-    initialFrom?.trim() || todayIso(),
+  const pathname = usePathname();
+  const ownerId = getUser()?.id ?? '';
+  const hasDeepLink = Boolean(
+    initialFrom?.trim() ||
+      initialTo?.trim() ||
+      initialSessionKey?.trim() ||
+      initialNeedsReview ||
+      initialKind ||
+      initialStatus ||
+      initialPerformerId?.trim() ||
+      initialPayTag?.trim() ||
+      initialFlag?.trim() ||
+      initialClient?.trim() ||
+      initialClientId?.trim() ||
+      (initialPayment && initialPayment !== 'ALL'),
   );
-  const [to, setTo] = useState(initialTo?.trim() || todayIso());
+
+  const boot = useMemo(() => {
+    const defaults: BookingViewMem = {
+      from: todayIso(),
+      to: todayIso(),
+      kind: fixedKind ?? 'ALL',
+      status: 'ALL',
+      payment: 'ALL',
+      payTag: '',
+      flag: '',
+      performerId: '',
+      needsReview: false,
+      clientFilter: '',
+      clientIdFilter: '',
+    };
+    if (hasDeepLink || detailOnly) {
+      return {
+        ...defaults,
+        from: initialFrom?.trim() || defaults.from,
+        to: initialTo?.trim() || defaults.to,
+        kind: fixedKind ?? initialKind?.toUpperCase() ?? defaults.kind,
+        status: initialStatus?.toUpperCase() || defaults.status,
+        payment: initialPayment || defaults.payment,
+        payTag: initialPayTag?.toUpperCase() || '',
+        flag:
+          initialFlag?.toUpperCase() === 'EXPIRING_PACKAGE' ||
+          initialFlag?.toUpperCase() === 'LATE_ADD'
+            ? initialFlag.toUpperCase()
+            : '',
+        performerId: initialPerformerId?.trim() || '',
+        needsReview: Boolean(initialNeedsReview),
+        clientFilter: initialClient?.trim() || '',
+        clientIdFilter: initialClientId?.trim() || '',
+      };
+    }
+    return resolveViewFilters<BookingViewMem>({
+      userId: ownerId,
+      pathname,
+      slot: 'main',
+      search: new URLSearchParams(),
+      urlKeys: [],
+      fromUrl: () => ({}),
+      defaults,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
+  }, []);
+
+  const [from, setFrom] = useState(() =>
+    isIsoDay(boot.from) ? boot.from : todayIso(),
+  );
+  const [to, setTo] = useState(() =>
+    isIsoDay(boot.to) ? boot.to : todayIso(),
+  );
   const [kind, setKind] = useState<string>(
-    fixedKind ?? initialKind?.toUpperCase() ?? 'ALL',
+    fixedKind ?? (typeof boot.kind === 'string' ? boot.kind : 'ALL'),
   );
   const [status, setStatus] = useState(
-    initialStatus?.toUpperCase() || 'ALL',
+    typeof boot.status === 'string' ? boot.status : 'ALL',
   );
-  const [payment, setPayment] = useState(initialPayment);
-  const [payTag, setPayTag] = useState(initialPayTag?.toUpperCase() || '');
+  const [payment, setPayment] = useState(
+    boot.payment === 'PAID' ||
+      boot.payment === 'DEBT' ||
+      boot.payment === 'GIFT' ||
+      boot.payment === 'ALL'
+      ? boot.payment
+      : 'ALL',
+  );
+  const [payTag, setPayTag] = useState(
+    typeof boot.payTag === 'string' ? boot.payTag : '',
+  );
   const [flag, setFlag] = useState(
-    initialFlag?.toUpperCase() === 'EXPIRING_PACKAGE' ||
-      initialFlag?.toUpperCase() === 'LATE_ADD'
-      ? initialFlag.toUpperCase()
+    boot.flag === 'EXPIRING_PACKAGE' || boot.flag === 'LATE_ADD'
+      ? boot.flag
       : '',
   );
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'SALE' | '1C'>('ALL');
   const [performerId, setPerformerId] = useState(
-    initialPerformerId?.trim() || '',
+    typeof boot.performerId === 'string' ? boot.performerId : '',
   );
   const [performers, setPerformers] = useState<BookingControlPerformerOption[]>(
     [],
@@ -396,13 +490,45 @@ export function BookingControlPanel({
   const [approvalSegment, setApprovalSegment] = useState<
     'pending' | 'done'
   >('pending');
-  const [needsReview, setNeedsReview] = useState(Boolean(initialNeedsReview));
+  const [needsReview, setNeedsReview] = useState(Boolean(boot.needsReview));
   const [clientFilter, setClientFilter] = useState(
-    initialClient?.trim() || '',
+    typeof boot.clientFilter === 'string' ? boot.clientFilter : '',
   );
   const [clientIdFilter, setClientIdFilter] = useState(
-    initialClientId?.trim() || '',
+    typeof boot.clientIdFilter === 'string' ? boot.clientIdFilter : '',
   );
+
+  usePersistViewMemory<BookingViewMem>({
+    enabled: !detailOnly,
+    data: {
+      from,
+      to,
+      kind,
+      status,
+      payment,
+      payTag,
+      flag,
+      performerId,
+      needsReview,
+      clientFilter,
+      clientIdFilter,
+    },
+    toSearchParams: (d) => {
+      const q = new URLSearchParams();
+      if (d.from) q.set('from', d.from);
+      if (d.to) q.set('to', d.to);
+      if (d.kind && d.kind !== 'ALL' && !fixedKind) q.set('kind', d.kind);
+      if (d.status && d.status !== 'ALL') q.set('status', d.status);
+      if (d.payment && d.payment !== 'ALL') q.set('payment', d.payment);
+      if (d.payTag) q.set('payTag', d.payTag);
+      if (d.flag) q.set('flag', d.flag);
+      if (d.performerId) q.set('performerId', d.performerId);
+      if (d.needsReview) q.set('needsReview', '1');
+      if (d.clientFilter) q.set('client', d.clientFilter);
+      if (d.clientIdFilter) q.set('clientId', d.clientIdFilter);
+      return q;
+    },
+  });
   const [notIn1c, setNotIn1c] = useState(false);
   const [items, setItems] = useState<BookingControlListItem[]>([]);
   const [loading, setLoading] = useState(true);

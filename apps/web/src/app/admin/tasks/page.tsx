@@ -9,11 +9,15 @@ import type {
 import { AdminTaskStatus } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { Suspense, useEffect, useMemo, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { BirthdayCallScript } from '@/components/admin/birthday-call-script';
 import { RenewalTaskSheet } from '@/components/admin/renewal-task-sheet';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import {
+  resolveViewFilters,
+  usePersistViewMemory,
+} from '@/lib/use-view-memory';
 import { phoneTelHref } from '@/lib/phone';
 import { formatDate, formatDateTime } from '@/lib/utils';
 
@@ -60,12 +64,89 @@ function CallButton({ phone }: { phone?: string }) {
   );
 }
 
+type AdminTasksViewMem = {
+  group: Group;
+  topic: Topic | null;
+};
+
+function parseAdminTopic(raw: string | null): Topic | null {
+  if (
+    raw === 'membership' ||
+    raw === 'birthday' ||
+    raw === 'staff_debt' ||
+    raw === 'client_debt' ||
+    raw === 'group_approval' ||
+    raw === 'spa_approval' ||
+    raw === 'pt_approval' ||
+    raw === 'installment' ||
+    raw === 'pt_sale_check' ||
+    raw === 'confirmation'
+  ) {
+    return raw;
+  }
+  return null;
+}
+
+function groupFromTopic(t: Topic | null): Group | null {
+  if (!t) return null;
+  if (t === 'staff_debt') return 'staff';
+  if (
+    t === 'membership' ||
+    t === 'birthday' ||
+    t === 'client_debt' ||
+    t === 'installment'
+  ) {
+    return 'clients';
+  }
+  if (
+    t === 'group_approval' ||
+    t === 'spa_approval' ||
+    t === 'pt_approval' ||
+    t === 'pt_sale_check' ||
+    t === 'confirmation'
+  ) {
+    return 'control';
+  }
+  return null;
+}
+
+function parseAdminGroup(raw: string | null): Group | null {
+  if (
+    raw === 'clients' ||
+    raw === 'staff' ||
+    raw === 'manager' ||
+    raw === 'control' ||
+    raw === 'all'
+  ) {
+    return raw;
+  }
+  return null;
+}
+
 function AdminTasksInner() {
   const searchParams = useSearchParams();
+  const pathname = usePathname();
   const router = useRouter();
-  const initialGroup = searchParams.get('group');
-  const initialTopic = searchParams.get('topic');
+  const ownerId = getUser()?.id ?? '';
   const initialTask = searchParams.get('task');
+
+  const boot = (() => {
+    const defaults: AdminTasksViewMem = { group: 'all', topic: null };
+    return resolveViewFilters<AdminTasksViewMem>({
+      userId: ownerId,
+      pathname,
+      slot: 'main',
+      search: searchParams,
+      urlKeys: ['group', 'topic', 'task'],
+      fromUrl: (s) => {
+        const topic = parseAdminTopic(s.get('topic'));
+        const group =
+          parseAdminGroup(s.get('group')) ?? groupFromTopic(topic) ?? 'all';
+        return { group, topic };
+      },
+      defaults,
+    });
+  })();
 
   const [tasks, setTasks] = useState<AdminTaskItem[]>([]);
   const [gpPending, setGpPending] = useState<GroupApprovalPendingTask[]>([]);
@@ -76,52 +157,24 @@ function AdminTasksInner() {
   const [birthdayScanError, setBirthdayScanError] = useState<string | null>(
     null,
   );
-  const resolvedTopic: Topic | null =
-    initialTopic === 'membership' ||
-    initialTopic === 'birthday' ||
-    initialTopic === 'staff_debt' ||
-    initialTopic === 'client_debt' ||
-    initialTopic === 'group_approval' ||
-    initialTopic === 'spa_approval' ||
-    initialTopic === 'pt_approval' ||
-    initialTopic === 'installment' ||
-    initialTopic === 'pt_sale_check' ||
-    initialTopic === 'confirmation'
-      ? (initialTopic as Topic)
-      : null;
-  const groupFromTopic = (t: Topic | null): Group | null => {
-    if (!t) return null;
-    if (t === 'staff_debt') return 'staff';
-    if (
-      t === 'membership' ||
-      t === 'birthday' ||
-      t === 'client_debt' ||
-      t === 'installment'
-    ) {
-      return 'clients';
-    }
-    if (
-      t === 'group_approval' ||
-      t === 'spa_approval' ||
-      t === 'pt_approval' ||
-      t === 'pt_sale_check' ||
-      t === 'confirmation'
-    ) {
-      return 'control';
-    }
-    return null;
-  };
   const [group, setGroup] = useState<Group>(
-    initialGroup === 'clients' ||
-      initialGroup === 'staff' ||
-      initialGroup === 'manager' ||
-      initialGroup === 'control' ||
-      initialGroup === 'all'
-      ? (initialGroup as Group)
-      : (groupFromTopic(resolvedTopic) ?? 'all'),
+    parseAdminGroup(boot.group) ?? 'all',
   );
-  const [topic, setTopic] = useState<Topic | null>(resolvedTopic);
+  const [topic, setTopic] = useState<Topic | null>(
+    boot.topic ? parseAdminTopic(boot.topic) : null,
+  );
   const [openTaskId, setOpenTaskId] = useState<string | null>(initialTask);
+
+  usePersistViewMemory<AdminTasksViewMem>({
+    data: { group, topic },
+    toSearchParams: (d) => {
+      const q = new URLSearchParams();
+      if (d.group && d.group !== 'all') q.set('group', d.group);
+      if (d.topic) q.set('topic', d.topic);
+      if (initialTask) q.set('task', initialTask);
+      return q;
+    },
+  });
   const [expandedDebtId, setExpandedDebtId] = useState<string | null>(null);
   const [debtLines, setDebtLines] = useState<Record<string, AdminDebtLine[]>>({});
   const [debtLoadingId, setDebtLoadingId] = useState<string | null>(null);

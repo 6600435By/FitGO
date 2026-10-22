@@ -11,10 +11,16 @@ import {
   parseMoneyToMinor,
   resolvePayoutFormSplit,
 } from '@fitgo/shared-types';
+import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import {
+  resolveViewFilters,
+  usePersistViewMemory,
+} from '@/lib/use-view-memory';
+import { isIsoDay } from '@/lib/view-memory';
 
 function money(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)}\u00a0${currency}`;
@@ -117,15 +123,79 @@ type Props = {
   onToggle: () => void;
 };
 
+type PayoutViewMem = {
+  payYear: number;
+  payMonth: number;
+  payKind: PayrollPayoutKind;
+  periodFrom: string;
+  periodTo: string;
+  department: Dept;
+  staffId: string;
+};
+
+const PAYOUT_DEPTS: Dept[] = [
+  'ALL',
+  'MANAGER',
+  'ADMIN',
+  'TRAINER',
+  'SPECIALIST',
+  'TECH',
+  'EXTERNAL',
+];
+
 export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
   const today = useMemo(() => new Date(), []);
-  const [payYear, setPayYear] = useState(() => today.getFullYear());
-  const [payMonth, setPayMonth] = useState(() => today.getMonth() + 1);
-  const [payKind, setPayKind] = useState<PayrollPayoutKind>('ADVANCE_HALF');
-  const [periodFrom, setPeriodFrom] = useState('');
-  const [periodTo, setPeriodTo] = useState('');
-  const [department, setDepartment] = useState<Dept>('ALL');
-  const [staffId, setStaffId] = useState('');
+  const pathname = usePathname();
+  const ownerId = getUser()?.id ?? '';
+
+  const boot = useMemo(() => {
+    const defaults: PayoutViewMem = {
+      payYear: today.getFullYear(),
+      payMonth: today.getMonth() + 1,
+      payKind: 'ADVANCE_HALF',
+      periodFrom: '',
+      periodTo: '',
+      department: 'ALL',
+      staffId: '',
+    };
+    return resolveViewFilters<PayoutViewMem>({
+      userId: ownerId,
+      pathname,
+      slot: 'payouts',
+      search: new URLSearchParams(),
+      urlKeys: [],
+      fromUrl: () => ({}),
+      defaults,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
+  }, []);
+
+  const [payYear, setPayYear] = useState(() =>
+    Number.isFinite(boot.payYear) ? boot.payYear : today.getFullYear(),
+  );
+  const [payMonth, setPayMonth] = useState(() =>
+    Number.isFinite(boot.payMonth) && boot.payMonth >= 1 && boot.payMonth <= 12
+      ? boot.payMonth
+      : today.getMonth() + 1,
+  );
+  const [payKind, setPayKind] = useState<PayrollPayoutKind>(() =>
+    boot.payKind === 'MONTH_SETTLEMENT' ? 'MONTH_SETTLEMENT' : 'ADVANCE_HALF',
+  );
+  const [periodFrom, setPeriodFrom] = useState(() =>
+    isIsoDay(boot.periodFrom) ? boot.periodFrom : '',
+  );
+  const [periodTo, setPeriodTo] = useState(() =>
+    isIsoDay(boot.periodTo) ? boot.periodTo : '',
+  );
+  const [department, setDepartment] = useState<Dept>(() =>
+    typeof boot.department === 'string' &&
+    PAYOUT_DEPTS.includes(boot.department)
+      ? boot.department
+      : 'ALL',
+  );
+  const [staffId, setStaffId] = useState(
+    typeof boot.staffId === 'string' ? boot.staffId : '',
+  );
   const [rows, setRows] = useState<PayrollPayoutPreview[]>([]);
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
   const [busy, setBusy] = useState(false);
@@ -151,6 +221,22 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
       ctx: PayoutCtx,
     ) => Promise<void>
   >(async () => {});
+  const keepRestoredPeriod = useRef(
+    isIsoDay(boot.periodFrom) && isIsoDay(boot.periodTo),
+  );
+
+  usePersistViewMemory<PayoutViewMem>({
+    slot: 'payouts',
+    data: {
+      payYear,
+      payMonth,
+      payKind,
+      periodFrom,
+      periodTo,
+      department,
+      staffId,
+    },
+  });
 
   const defaultRange = useMemo(() => {
     return payKind === 'ADVANCE_HALF'
@@ -160,6 +246,13 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
 
   useEffect(() => {
     loadSeq.current += 1;
+    if (keepRestoredPeriod.current) {
+      keepRestoredPeriod.current = false;
+      setRows([]);
+      draftsRef.current = {};
+      setDrafts({});
+      return;
+    }
     setPeriodFrom(defaultRange.from);
     setPeriodTo(defaultRange.to);
     setRows([]);

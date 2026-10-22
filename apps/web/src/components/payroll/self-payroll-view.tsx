@@ -2,11 +2,22 @@
 
 import type { PayrollSelfOverview, WorkUnit } from '@fitgo/shared-types';
 import Link from 'next/link';
-import { useCallback, useMemo, useState } from 'react';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MotivationBreakdownList } from '@/components/payroll/motivation-breakdown-list';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import {
+  resolveViewFilters,
+  usePersistViewMemory,
+} from '@/lib/use-view-memory';
+import {
+  formatCalculatedAt,
+  getPayrollSummaryCache,
+  isIsoDay,
+  setPayrollSummaryCache,
+} from '@/lib/view-memory';
 import { formatDateTime } from '@/lib/utils';
 
 /** Local calendar day as YYYY-MM-DD (never UTC — avoids 1→30 / 16→15 in UTC+3). */
@@ -87,15 +98,57 @@ type Props = {
   role: 'admin' | 'trainer' | 'specialist';
 };
 
+type SelfViewMem = {
+  from: string;
+  to: string;
+};
+
 export function SelfPayrollView({ role }: Props) {
   const today = useMemo(() => new Date(), []);
-  const [from, setFrom] = useState(() => {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const ownerId = getUser()?.id ?? '';
+  const cacheMode = `self-${role}`;
+
+  const boot = useMemo(() => {
     const d = new Date(today);
     d.setDate(1);
-    return isoDate(d);
+    const defaults: SelfViewMem = {
+      from: isoDate(d),
+      to: isoDate(today),
+    };
+    return resolveViewFilters<SelfViewMem>({
+      userId: ownerId,
+      pathname,
+      slot: 'main',
+      search: searchParams,
+      urlKeys: ['from', 'to'],
+      fromUrl: (s) => {
+        const from = s.get('from');
+        const to = s.get('to');
+        return {
+          ...(isIsoDay(from) ? { from } : {}),
+          ...(isIsoDay(to) ? { to } : {}),
+        };
+      },
+      defaults,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
+  }, []);
+
+  const [from, setFrom] = useState(boot.from);
+  const [to, setTo] = useState(boot.to);
+  const [calculatedAt, setCalculatedAt] = useState<number | null>(null);
+  const [data, setData] = useState<PayrollSelfOverview | null>(() => {
+    if (!ownerId) return null;
+    const hit = getPayrollSummaryCache<PayrollSelfOverview>(ownerId, {
+      mode: cacheMode,
+      userId: ownerId,
+      from: boot.from,
+      to: boot.to,
+    });
+    return hit?.summary ?? null;
   });
-  const [to, setTo] = useState(isoDate(today));
-  const [data, setData] = useState<PayrollSelfOverview | null>(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [syncing1c, setSyncing1c] = useState(false);
@@ -103,6 +156,33 @@ export function SelfPayrollView({ role }: Props) {
   const [payoutsOpen, setPayoutsOpen] = useState(false);
   const [unitsOpen, setUnitsOpen] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
+
+  useEffect(() => {
+    if (!ownerId) return;
+    const hit = getPayrollSummaryCache<PayrollSelfOverview>(ownerId, {
+      mode: cacheMode,
+      userId: ownerId,
+      from: boot.from,
+      to: boot.to,
+    });
+    if (hit) setCalculatedAt(hit.calculatedAt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed once
+  }, []);
+
+  usePersistViewMemory<SelfViewMem>({
+    data: { from, to },
+    toSearchParams: (d) => {
+      const q = new URLSearchParams();
+      if (d.from) q.set('from', d.from);
+      if (d.to) q.set('to', d.to);
+      return q;
+    },
+  });
+
+  const clearData = () => {
+    setData(null);
+    setCalculatedAt(null);
+  };
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -112,13 +192,22 @@ export function SelfPayrollView({ role }: Props) {
     try {
       const overview = await api.selfPayrollOverview(token, { from, to });
       setData(overview);
+      const at = Date.now();
+      setCalculatedAt(at);
+      if (ownerId) {
+        setPayrollSummaryCache(
+          ownerId,
+          { mode: cacheMode, userId: ownerId, from, to },
+          overview,
+        );
+      }
     } catch (e) {
-      setData(null);
+      clearData();
       setMessage(e instanceof Error ? e.message : 'Ошибка расчёта');
     } finally {
       setLoading(false);
     }
-  }, [from, to]);
+  }, [from, to, ownerId, cacheMode]);
 
   const refreshFrom1c = async () => {
     if (role !== 'admin') {
@@ -266,7 +355,7 @@ export function SelfPayrollView({ role }: Props) {
   }, [today]);
 
   const applyHalfMonth = (half: 'first' | 'second') => {
-    setData(null);
+    clearData();
     if (half === 'first') {
       setFrom(firstHalfPreset.from);
       setTo(firstHalfPreset.to);
@@ -321,7 +410,7 @@ export function SelfPayrollView({ role }: Props) {
             value={from}
             onChange={(v) => {
               setFrom(v);
-              setData(null);
+              clearData();
             }}
             inputClassName="text-sm"
           />
@@ -330,7 +419,7 @@ export function SelfPayrollView({ role }: Props) {
             value={to}
             onChange={(v) => {
               setTo(v);
-              setData(null);
+              clearData();
             }}
             inputClassName="text-sm"
           />
@@ -361,6 +450,13 @@ export function SelfPayrollView({ role }: Props) {
             </button>
           ) : null}
         </div>
+        {data && calculatedAt != null ? (
+          <p className="text-[11px] text-slate-500">
+            Расчёт на {formatCalculatedAt(calculatedAt)}. «Рассчитать»
+            {role === 'admin' ? ' или «Обновить из 1С»' : ''} — пересчитать
+            заново.
+          </p>
+        ) : null}
       </section>
 
       {message ? (

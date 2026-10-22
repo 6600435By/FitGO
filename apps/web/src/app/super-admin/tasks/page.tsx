@@ -2,11 +2,15 @@
 
 import type { AdminTaskItem, StaffMember } from '@fitgo/shared-types';
 import { AdminTaskStatus, UserRole } from '@fitgo/shared-types';
-import { useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 import { BirthdayCallScript } from '@/components/admin/birthday-call-script';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import {
+  resolveViewFilters,
+  usePersistViewMemory,
+} from '@/lib/use-view-memory';
 import { phoneTelHref } from '@/lib/phone';
 import { formatDateTime } from '@/lib/utils';
 
@@ -66,8 +70,27 @@ function parseTopic(raw: string | null): TopicFilter {
   return 'all';
 }
 
+type TasksViewMem = { topic: TopicFilter };
+
 function SuperAdminTasksInner() {
   const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const ownerId = getUser()?.id ?? '';
+
+  const bootTopic = (() => {
+    const defaults: TasksViewMem = { topic: 'all' };
+    const resolved = resolveViewFilters<TasksViewMem>({
+      userId: ownerId,
+      pathname,
+      slot: 'main',
+      search: searchParams,
+      urlKeys: ['topic'],
+      fromUrl: (s) => ({ topic: parseTopic(s.get('topic')) }),
+      defaults,
+    });
+    return parseTopic(resolved.topic);
+  })();
+
   const [tasks, setTasks] = useState<AdminTaskItem[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -80,9 +103,16 @@ function SuperAdminTasksInner() {
     completionMode: 'INDIVIDUAL' as 'SHARED' | 'INDIVIDUAL',
   });
   const [showForm, setShowForm] = useState(false);
-  const [topic, setTopic] = useState<TopicFilter>(() =>
-    parseTopic(searchParams.get('topic')),
-  );
+  const [topic, setTopic] = useState<TopicFilter>(bootTopic);
+
+  usePersistViewMemory<TasksViewMem>({
+    data: { topic },
+    toSearchParams: (d) => {
+      const q = new URLSearchParams();
+      if (d.topic && d.topic !== 'all') q.set('topic', d.topic);
+      return q;
+    },
+  });
 
   const load = () => {
     const token = getToken();

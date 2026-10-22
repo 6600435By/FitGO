@@ -11,10 +11,20 @@ import type {
   WorkUnit,
 } from '@fitgo/shared-types';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import {
+  resolveViewFilters,
+  usePersistViewMemory,
+} from '@/lib/use-view-memory';
+import {
+  formatCalculatedAt,
+  getPayrollSummaryCache,
+  isIsoDay,
+  setPayrollSummaryCache,
+} from '@/lib/view-memory';
 import { formatDateTime } from '@/lib/utils';
 
 function isoDate(d: Date) {
@@ -22,10 +32,6 @@ function isoDate(d: Date) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
-
-function isIsoDay(s: string | null): s is string {
-  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
 }
 
 function money(minor: number, currency: string) {
@@ -425,25 +431,94 @@ type Props = {
   mode: 'super' | 'admin';
 };
 
+type EmployeeViewMem = {
+  userId: string;
+  from: string;
+  to: string;
+  deptFilter: DeptFilter;
+  employeeReportOpen: boolean;
+  summaryOpen: boolean;
+  payoutsOpen: boolean;
+};
+
+const DEPT_FILTER_IDS: DeptFilter[] = [
+  'ALL',
+  'MANAGER',
+  'ADMIN',
+  'TRAINER',
+  'SPECIALIST',
+  'TECH',
+  'EXTERNAL',
+];
+
+function parseDeptFilter(raw: unknown): DeptFilter {
+  return typeof raw === 'string' &&
+    DEPT_FILTER_IDS.includes(raw as DeptFilter)
+    ? (raw as DeptFilter)
+    : 'ALL';
+}
+
 export function PayrollWorkspace({ mode }: Props) {
   const today = useMemo(() => new Date(), []);
+  const pathname = usePathname();
   const searchParams = useSearchParams();
-  const urlUserId = searchParams.get('userId')?.trim() || '';
-  const urlFrom = searchParams.get('from');
-  const urlTo = searchParams.get('to');
+  const ownerId = getUser()?.id ?? '';
   const urlHydrated = useRef(false);
-  const [staff, setStaff] = useState<StaffPaySummary[]>([]);
-  const [userId, setUserId] = useState(urlUserId);
-  const [from, setFrom] = useState(() => {
-    if (isIsoDay(urlFrom)) return urlFrom;
+
+  const boot = useMemo(() => {
     const d = new Date(today);
     d.setDate(1);
-    return isoDate(d);
-  });
-  const [to, setTo] = useState(() =>
-    isIsoDay(urlTo) ? urlTo : isoDate(today),
+    const defaults: EmployeeViewMem = {
+      userId: '',
+      from: isoDate(d),
+      to: isoDate(today),
+      deptFilter: 'ALL',
+      employeeReportOpen: mode === 'admin',
+      summaryOpen: true,
+      payoutsOpen: false,
+    };
+    return resolveViewFilters<EmployeeViewMem>({
+      userId: ownerId,
+      pathname,
+      slot: 'employee',
+      search: searchParams,
+      urlKeys: ['userId', 'from', 'to'],
+      fromUrl: (s) => {
+        const from = s.get('from');
+        const to = s.get('to');
+        return {
+          userId: s.get('userId')?.trim() || '',
+          ...(isIsoDay(from) ? { from } : {}),
+          ...(isIsoDay(to) ? { to } : {}),
+        };
+      },
+      defaults,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
+  }, []);
+
+  const urlUserId = searchParams.get('userId')?.trim() || '';
+  const [staff, setStaff] = useState<StaffPaySummary[]>([]);
+  const [userId, setUserId] = useState(boot.userId);
+  const [from, setFrom] = useState(boot.from);
+  const [to, setTo] = useState(boot.to);
+  const [summaryCalculatedAt, setSummaryCalculatedAt] = useState<number | null>(
+    null,
   );
-  const [summary, setSummary] = useState<PayrollPeriodSummary | null>(null);
+  const [summary, setSummary] = useState<PayrollPeriodSummary | null>(() => {
+    if (!boot.userId || !ownerId) return null;
+    const hit = getPayrollSummaryCache<PayrollPeriodSummary>(ownerId, {
+      mode,
+      userId: boot.userId,
+      from: boot.from,
+      to: boot.to,
+    });
+    if (hit) {
+      // calculatedAt applied in effect below — keep sync with cache hit
+      return hit.summary;
+    }
+    return null;
+  });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [syncing1c, setSyncing1c] = useState(false);
@@ -453,14 +528,55 @@ export function PayrollWorkspace({ mode }: Props) {
   const [printOpen, setPrintOpen] = useState(false);
   const [printFields, setPrintFields] = useState<PayslipFields>(DEFAULT_PAYSLIP);
   const [docPreview, setDocPreview] = useState('');
-  const [deptFilter, setDeptFilter] = useState<DeptFilter>('ALL');
+  const [deptFilter, setDeptFilter] = useState<DeptFilter>(() =>
+    parseDeptFilter(boot.deptFilter),
+  );
   const [batchIds, setBatchIds] = useState<Set<string>>(new Set());
   const [batchPrinting, setBatchPrinting] = useState(false);
   const canEdit = mode === 'super';
 
-  const [employeeReportOpen, setEmployeeReportOpen] = useState(mode === 'admin');
-  const [summaryOpen, setSummaryOpen] = useState(true);
-  const [payoutsOpen, setPayoutsOpen] = useState(false);
+  const [employeeReportOpen, setEmployeeReportOpen] = useState(
+    Boolean(boot.employeeReportOpen),
+  );
+  const [summaryOpen, setSummaryOpen] = useState(Boolean(boot.summaryOpen));
+  const [payoutsOpen, setPayoutsOpen] = useState(Boolean(boot.payoutsOpen));
+
+  useEffect(() => {
+    if (!boot.userId || !ownerId) return;
+    const hit = getPayrollSummaryCache<PayrollPeriodSummary>(ownerId, {
+      mode,
+      userId: boot.userId,
+      from: boot.from,
+      to: boot.to,
+    });
+    if (hit) setSummaryCalculatedAt(hit.calculatedAt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed once from cache
+  }, []);
+
+  usePersistViewMemory<EmployeeViewMem>({
+    slot: 'employee',
+    data: {
+      userId,
+      from,
+      to,
+      deptFilter,
+      employeeReportOpen,
+      summaryOpen,
+      payoutsOpen,
+    },
+    toSearchParams: (d) => {
+      const q = new URLSearchParams();
+      if (d.userId) q.set('userId', d.userId);
+      if (d.from) q.set('from', d.from);
+      if (d.to) q.set('to', d.to);
+      return q;
+    },
+  });
+
+  const clearSummary = () => {
+    setSummary(null);
+    setSummaryCalculatedAt(null);
+  };
 
   const filteredStaff = useMemo(() => {
     if (deptFilter === 'ALL') return staff;
@@ -539,32 +655,37 @@ export function PayrollWorkspace({ mode }: Props) {
         if (urlUserId && list.some((s) => s.userId === urlUserId)) {
           setUserId(urlUserId);
           urlHydrated.current = true;
-        } else if (!urlUserId && list[0] && !userId) {
+        } else if (boot.userId && list.some((s) => s.userId === boot.userId)) {
+          setUserId(boot.userId);
+        } else if (!urlUserId && !boot.userId && list[0] && !userId) {
           setUserId(list[0].userId);
         }
       })
       .catch((e) => setMessage(e.message || 'Ошибка загрузки сотрудников'));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate once from URL on staff load
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- hydrate once from URL / memory on staff load
   }, [mode]);
 
   useEffect(() => {
     if (!canEdit) return;
     if (filteredStaff.length === 0) {
-      if (!urlUserId) {
+      if (!urlUserId && !boot.userId) {
         setUserId('');
-        setSummary(null);
+        clearSummary();
       }
       return;
     }
     if (!filteredStaff.some((s) => s.userId === userId)) {
-      if (urlUserId && staff.some((s) => s.userId === urlUserId)) {
-        // URL employee is outside current dept filter — keep id, show in full list.
+      if (
+        (urlUserId && staff.some((s) => s.userId === urlUserId)) ||
+        (boot.userId && staff.some((s) => s.userId === boot.userId))
+      ) {
+        // Remembered / URL employee is outside current dept filter — keep id.
         return;
       }
       setUserId(filteredStaff[0]!.userId);
-      setSummary(null);
+      clearSummary();
     }
-  }, [canEdit, filteredStaff, userId, urlUserId, staff]);
+  }, [canEdit, filteredStaff, userId, urlUserId, staff, boot.userId]);
 
   const load = async () => {
     const token = getToken();
@@ -578,8 +699,13 @@ export function PayrollWorkspace({ mode }: Props) {
           ? await api.payrollSummary(token, { userId, from, to })
           : await api.adminPayrollSummary(token, { userId, from, to });
       setSummary(s);
+      const at = Date.now();
+      setSummaryCalculatedAt(at);
+      if (ownerId) {
+        setPayrollSummaryCache(ownerId, { mode, userId, from, to }, s);
+      }
     } catch (e) {
-      setSummary(null);
+      clearSummary();
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     } finally {
       setLoading(false);
@@ -615,6 +741,11 @@ export function PayrollWorkspace({ mode }: Props) {
     try {
       const s = await api.payrollLock(token, { userId, from, to });
       setSummary(s);
+      const at = Date.now();
+      setSummaryCalculatedAt(at);
+      if (ownerId) {
+        setPayrollSummaryCache(ownerId, { mode, userId, from, to }, s);
+      }
       setMessage('Период зафиксирован');
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка lock');
@@ -927,8 +1058,17 @@ export function PayrollWorkspace({ mode }: Props) {
                   to: t,
                 });
                 setSummary(s);
+                const at = Date.now();
+                setSummaryCalculatedAt(at);
+                if (ownerId) {
+                  setPayrollSummaryCache(
+                    ownerId,
+                    { mode, userId: id, from: f, to: t },
+                    s,
+                  );
+                }
               } catch (e) {
-                setSummary(null);
+                clearSummary();
                 setMessage(e instanceof Error ? e.message : 'Ошибка');
               } finally {
                 setLoading(false);
@@ -1005,7 +1145,7 @@ export function PayrollWorkspace({ mode }: Props) {
                 value={userId}
                 onChange={(e) => {
                   setUserId(e.target.value);
-                  setSummary(null);
+                  clearSummary();
                 }}
               >
                 {filteredStaff.length === 0 ? (
@@ -1035,7 +1175,7 @@ export function PayrollWorkspace({ mode }: Props) {
             value={from}
             onChange={(v) => {
               setFrom(v);
-              setSummary(null);
+              clearSummary();
             }}
             inputClassName="text-sm"
           />
@@ -1044,7 +1184,7 @@ export function PayrollWorkspace({ mode }: Props) {
             value={to}
             onChange={(v) => {
               setTo(v);
-              setSummary(null);
+              clearSummary();
             }}
             inputClassName="text-sm"
           />
@@ -1103,6 +1243,13 @@ export function PayrollWorkspace({ mode }: Props) {
             </button>
           )}
         </div>
+
+        {summary && summaryCalculatedAt != null && (
+          <p className="text-[11px] text-slate-500">
+            Расчёт на {formatCalculatedAt(summaryCalculatedAt)}. «Рассчитать» или
+            «Обновить из 1С» — пересчитать заново.
+          </p>
+        )}
 
         {canEdit && filteredStaff.length > 0 && (
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">

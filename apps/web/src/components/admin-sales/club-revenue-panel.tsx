@@ -10,8 +10,41 @@ import type {
 } from '@fitgo/shared-types';
 import { AdminStickyTable } from '@/components/admin/admin-sticky-table';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { DateField } from '@/components/ui/date-field';
+import {
+  hasExplicitQuery,
+  resolveViewFilters,
+  usePersistViewMemory,
+} from '@/lib/use-view-memory';
+import { isIsoDay } from '@/lib/view-memory';
+
+const SALES_URL_KEYS = [
+  'from',
+  'to',
+  'employee',
+  'segment',
+  'debtor',
+  'q',
+  'product',
+  'productId',
+  'op',
+  'payment',
+  'externalId',
+] as const;
+
+type SalesViewMem = {
+  from: string;
+  to: string;
+  operationType: string;
+  paymentMethod: string;
+  employeeExternalId: string;
+  segment: string;
+  debtor: string;
+  q: string;
+  productId: string;
+  productExact: boolean;
+};
 
 const SYSTEM_EMPLOYEE_ID = '__1c__';
 
@@ -522,40 +555,70 @@ export function ClubRevenuePanel() {
   const search = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
+  const ownerId = getUser()?.id ?? '';
   const bounds = useMemo(() => monthBounds(), []);
-  const [from, setFrom] = useState(
-    () => search.get('from') || bounds.from,
-  );
-  const [to, setTo] = useState(() => search.get('to') || bounds.to);
-  const [operationType, setOperationType] = useState(
-    () => search.get('op') || 'all',
-  );
+
+  const boot = useMemo(() => {
+    const defaults: SalesViewMem = {
+      from: bounds.from,
+      to: bounds.to,
+      operationType: 'all',
+      paymentMethod: 'all',
+      employeeExternalId: '',
+      segment: '',
+      debtor: '',
+      q: '',
+      productId: '',
+      productExact: false,
+    };
+    return resolveViewFilters<SalesViewMem>({
+      userId: ownerId,
+      pathname,
+      slot: 'main',
+      search,
+      urlKeys: [...SALES_URL_KEYS],
+      fromUrl: (s) => {
+        const from = s.get('from');
+        const to = s.get('to');
+        const q = s.get('product') || s.get('q') || '';
+        const productId = s.get('productId') || '';
+        return {
+          ...(isIsoDay(from) ? { from } : {}),
+          ...(isIsoDay(to) ? { to } : {}),
+          operationType: s.get('op') || 'all',
+          paymentMethod: s.get('payment') || 'all',
+          employeeExternalId: s.get('employee') || '',
+          segment: s.get('segment') || '',
+          debtor: s.get('debtor') || '',
+          q,
+          productId,
+          productExact:
+            s.get('productExact') === '1' ||
+            s.get('productExact') === 'true' ||
+            Boolean(productId.trim()),
+        };
+      },
+      defaults,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
+  }, []);
+
+  const [from, setFrom] = useState(boot.from);
+  const [to, setTo] = useState(boot.to);
+  const [operationType, setOperationType] = useState(boot.operationType || 'all');
   const [paymentMethod, setPaymentMethod] = useState(
-    () => search.get('payment') || 'all',
+    boot.paymentMethod || 'all',
   );
   const [filterKey, setFilterKey] = useState('all');
   const [employeeExternalId, setEmployeeExternalId] = useState(
-    () => search.get('employee') || '',
+    boot.employeeExternalId || '',
   );
-  const [segment, setSegment] = useState(
-    () => search.get('segment') || '',
-  );
-  const [debtor, setDebtor] = useState(() => search.get('debtor') || '');
-  const [qInput, setQInput] = useState(
-    () => search.get('product') || search.get('q') || '',
-  );
-  const [q, setQ] = useState(
-    () => search.get('product') || search.get('q') || '',
-  );
-  const [productId, setProductId] = useState(
-    () => search.get('productId') || '',
-  );
-  const [productExact, setProductExact] = useState(
-    () =>
-      search.get('productExact') === '1' ||
-      search.get('productExact') === 'true' ||
-      Boolean(search.get('productId')?.trim()),
-  );
+  const [segment, setSegment] = useState(boot.segment || '');
+  const [debtor, setDebtor] = useState(boot.debtor || '');
+  const [qInput, setQInput] = useState(boot.q || '');
+  const [q, setQ] = useState(boot.q || '');
+  const [productId, setProductId] = useState(boot.productId || '');
+  const [productExact, setProductExact] = useState(Boolean(boot.productExact));
   const [data, setData] = useState<ClubRevenueReportResponse | null>(null);
   const [detail, setDetail] = useState<ClubRevenueDetailResponse | null>(null);
   const [error, setError] = useState('');
@@ -563,8 +626,25 @@ export function ClubRevenuePanel() {
   const [backfillHint, setBackfillHint] = useState('');
   const [backfillBusy, setBackfillBusy] = useState(false);
 
+  usePersistViewMemory<SalesViewMem>({
+    data: {
+      from,
+      to,
+      operationType,
+      paymentMethod,
+      employeeExternalId,
+      segment,
+      debtor,
+      q,
+      productId,
+      productExact,
+    },
+  });
+
   // Keep filters in sync when navigating here with query params (ЗП → Продажа).
+  // Bare chip navigation must not wipe restored memory with empty query.
   useEffect(() => {
+    if (!hasExplicitQuery(search, [...SALES_URL_KEYS])) return;
     const nextFrom = search.get('from');
     const nextTo = search.get('to');
     const nextEmp = search.get('employee') || '';

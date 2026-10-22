@@ -7,10 +7,15 @@ import type {
   StaffPaySummary,
 } from '@fitgo/shared-types';
 import { sameSlicePreviousMonth } from '@fitgo/shared-types';
+import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import {
+  resolveViewFilters,
+  usePersistViewMemory,
+} from '@/lib/use-view-memory';
 
 function money(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)}\u00a0${currency}`;
@@ -355,18 +360,64 @@ function PictureStaffTable({
   );
 }
 
+type ClubViewMem = {
+  from: string;
+  to: string;
+  department: Dept;
+};
+
+const CLUB_DEPTS: Dept[] = [
+  'ALL',
+  'MANAGER',
+  'ADMIN',
+  'TRAINER',
+  'SPECIALIST',
+  'TECH',
+  'EXTERNAL',
+];
+
 export function ClubPayrollReportPanel({
   staff = [],
   open,
   onToggle,
   onSelectEmployee,
 }: Props) {
-  const today = new Date();
-  const [from, setFrom] = useState(() =>
-    isoDate(new Date(today.getFullYear(), today.getMonth(), 1)),
+  const today = useMemo(() => new Date(), []);
+  const pathname = usePathname();
+  const ownerId = getUser()?.id ?? '';
+
+  const boot = useMemo(() => {
+    const defaults: ClubViewMem = {
+      from: isoDate(new Date(today.getFullYear(), today.getMonth(), 1)),
+      to: isoDate(today),
+      department: 'ALL',
+    };
+    return resolveViewFilters<ClubViewMem>({
+      userId: ownerId,
+      pathname,
+      slot: 'club',
+      search: new URLSearchParams(),
+      urlKeys: [],
+      fromUrl: () => ({}),
+      defaults,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
+  }, []);
+
+  const [from, setFrom] = useState(boot.from);
+  const [to, setTo] = useState(boot.to);
+  const [department, setDepartment] = useState<Dept>(() =>
+    typeof boot.department === 'string' &&
+    CLUB_DEPTS.includes(boot.department)
+      ? boot.department
+      : 'ALL',
   );
-  const [to, setTo] = useState(isoDate(today));
-  const [department, setDepartment] = useState<Dept>('ALL');
+
+  usePersistViewMemory<ClubViewMem>({
+    slot: 'club',
+    data: { from, to, department },
+  });
+
   const [report, setReport] = useState<ClubPayrollReport | null>(null);
   const [compare, setCompare] = useState<ClubPayrollReport | null>(null);
   const [message, setMessage] = useState('');

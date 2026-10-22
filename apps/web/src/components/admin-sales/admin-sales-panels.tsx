@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState, Fragment } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import type {
   AdminMySalesResponse,
   AdminSaleLineDto,
@@ -12,8 +12,13 @@ import type {
 } from '@fitgo/shared-types';
 import { AdminStickyTable } from '@/components/admin/admin-sticky-table';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { DateField } from '@/components/ui/date-field';
+import {
+  resolveViewFilters,
+  usePersistViewMemory,
+} from '@/lib/use-view-memory';
+import { isIsoDay } from '@/lib/view-memory';
 
 function money(minor: number): string {
   return (minor / 100).toLocaleString('ru-RU', {
@@ -255,34 +260,84 @@ function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
   );
 }
 
+type AdminSalesViewMem = {
+  from: string;
+  to: string;
+  payment: AdminSalePaymentFilter;
+  saleType: AdminSaleType | 'all';
+};
+
 export function AdminMySalesPanel() {
   const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const ownerId = getUser()?.id ?? '';
   const bounds = useMemo(() => monthBounds(), []);
-  const [from, setFrom] = useState(
-    () => searchParams.get('from')?.trim() || bounds.from,
+
+  const boot = useMemo(() => {
+    const defaults: AdminSalesViewMem = {
+      from: bounds.from,
+      to: bounds.to,
+      payment: 'all',
+      saleType: 'all',
+    };
+    return resolveViewFilters<AdminSalesViewMem>({
+      userId: ownerId,
+      pathname,
+      slot: 'main',
+      search: searchParams,
+      urlKeys: ['from', 'to', 'payment'],
+      fromUrl: (s) => {
+        const from = s.get('from')?.trim();
+        const to = s.get('to')?.trim();
+        const p = s.get('payment')?.trim()?.toLowerCase();
+        return {
+          ...(isIsoDay(from) ? { from } : {}),
+          ...(isIsoDay(to) ? { to } : {}),
+          payment:
+            p === 'unpaid' || p === 'paid' || p === 'all' ? p : 'all',
+        };
+      },
+      defaults,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
+  }, []);
+
+  const [from, setFrom] = useState(boot.from);
+  const [to, setTo] = useState(boot.to);
+  const [saleType, setSaleType] = useState<AdminSaleType | 'all'>(
+    boot.saleType === 'all' ||
+      boot.saleType === 'membership' ||
+      boot.saleType === 'massage' ||
+      boot.saleType === 'solarium' ||
+      boot.saleType === 'shop'
+      ? boot.saleType
+      : 'all',
   );
-  const [to, setTo] = useState(
-    () => searchParams.get('to')?.trim() || bounds.to,
+  const [payment, setPayment] = useState<AdminSalePaymentFilter>(() =>
+    boot.payment === 'unpaid' || boot.payment === 'paid' || boot.payment === 'all'
+      ? boot.payment
+      : 'all',
   );
-  const [saleType, setSaleType] = useState<AdminSaleType | 'all'>('all');
-  const [payment, setPayment] = useState<AdminSalePaymentFilter>(() => {
-    const p = searchParams.get('payment')?.trim()?.toLowerCase();
-    if (p === 'unpaid' || p === 'paid' || p === 'all') return p;
-    return 'all';
-  });
   const [activeSegment, setActiveSegment] = useState<SalesSegmentKey | null>(
-    () => {
-      const p = searchParams.get('payment')?.trim()?.toLowerCase();
-      return p === 'unpaid' ? 'unpaid' : null;
-    },
+    () => (boot.payment === 'unpaid' ? 'unpaid' : null),
   );
-  const [listOpen, setListOpen] = useState(() => {
-    const p = searchParams.get('payment')?.trim()?.toLowerCase();
-    return p === 'unpaid' || p === 'paid';
-  });
+  const [listOpen, setListOpen] = useState(
+    () => boot.payment === 'unpaid' || boot.payment === 'paid',
+  );
   const [data, setData] = useState<AdminMySalesResponse | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  usePersistViewMemory<AdminSalesViewMem>({
+    data: { from, to, payment, saleType },
+    toSearchParams: (d) => {
+      const q = new URLSearchParams();
+      if (d.from) q.set('from', d.from);
+      if (d.to) q.set('to', d.to);
+      if (d.payment && d.payment !== 'all') q.set('payment', d.payment);
+      return q;
+    },
+  });
 
   const wantLines =
     listOpen || saleType !== 'all' || payment !== 'all' || Boolean(activeSegment);
