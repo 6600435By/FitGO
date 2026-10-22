@@ -6,11 +6,16 @@ import {
   avgToListRatio,
   buildProductHint,
   builtinAugustWindow,
+  classifyMembershipFamily,
+  compareMembershipCatalogRows,
   discountShareOfListPct,
   dominantSeason,
   isDiscountStuck,
   isFalseSeasonTransitionDrop,
   isFalseSeptemberCashDrop,
+  isGroupReformerTitle,
+  isMembershipMarketExtraTitle,
+  isOneTimeEntryTitle,
   isStaffRelatedDiscount,
   markCoreProducts,
   marketRatio,
@@ -352,6 +357,44 @@ assert.equal(
     isDiscountStuck({ discountSharePct: 20, volumeGrowing: true }),
     false,
   );
+}
+
+{
+  assert.equal(classifyMembershipFamily('Дневной (1 месяц)').key, 'day');
+  assert.equal(classifyMembershipFamily('VIP (3 месяца)').key, 'vip');
+  assert.equal(classifyMembershipFamily('Безлимит (12 месяцев)').key, 'unlimited');
+  assert.equal(
+    classifyMembershipFamily('Безлимит с арендой шкафчика (1 месяц)').key,
+    'unlimited',
+  );
+  assert.equal(
+    classifyMembershipFamily('Карта посещения (8 посещений)').key,
+    'visit_card',
+  );
+  assert.equal(
+    classifyMembershipFamily('Групповое занятие реформер 1').key,
+    'reformer',
+  );
+  assert.equal(
+    classifyMembershipFamily('Групповоое занятие реформер 8').key,
+    'reformer',
+  );
+  assert.equal(classifyMembershipFamily('РАЗОВЫЙ ВХОД').key, 'one_time');
+  assert.equal(classifyMembershipFamily('Легкий старт (1 месяц)').key, 'promo');
+  assert.ok(isGroupReformerTitle('Групповое занятие реформер ПРОБНОЕ'));
+  assert.ok(isOneTimeEntryTitle('РАЗОВЫЙ ВХОД'));
+  assert.ok(isMembershipMarketExtraTitle('Карта посещения (4 посещения)'));
+  assert.equal(
+    isMembershipMarketExtraTitle('Индивидуальное занятие реформер 8'),
+    false,
+  );
+  const sorted = [
+    { productName: 'VIP (1 месяц)' },
+    { productName: 'Дневной (1 месяц)' },
+    { productName: 'РАЗОВЫЙ ВХОД' },
+  ].sort(compareMembershipCatalogRows);
+  assert.equal(sorted[0]!.productName, 'РАЗОВЫЙ ВХОД');
+  assert.equal(sorted[1]!.productName, 'Дневной (1 месяц)');
 }
 
 console.log('pricing-analytics.rules.test.ts: ok');

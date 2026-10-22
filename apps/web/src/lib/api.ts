@@ -2393,6 +2393,20 @@ export const api = {
       body: JSON.stringify(body),
     }, token),
 
+  analyticsMarketPatchCompetitor: (
+    token: string,
+    id: string,
+    body: {
+      name?: string;
+      priceListUrl?: string | null;
+      sortOrder?: number;
+    },
+  ) =>
+    request(`/super-admin/analytics/market/competitors/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }, token),
+
   analyticsMarketDeleteCompetitor: (token: string, id: string) =>
     request(`/super-admin/analytics/market/competitors/${id}`, {
       method: 'DELETE',
@@ -2406,6 +2420,27 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(body),
     }, token),
+
+  analyticsMarketBatchUpsertPrices: (
+    token: string,
+    body: {
+      competitorId: string;
+      prices: Array<{
+        productExternalId: string;
+        priceMinor: number;
+        theirName?: string | null;
+      }>;
+      observedAt?: string;
+    },
+  ) =>
+    request<{ ok: boolean; saved: number }>(
+      `/super-admin/analytics/market/competitor-prices/batch`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      },
+      token,
+    ),
 
   analyticsMarketAddSaleWindow: (
     token: string,

@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -15,6 +16,8 @@ import { UserRole } from '@fitgo/shared-types';
 import type {
   AnalyticsCompareMode,
   AnalyticsDepartment,
+  BatchUpsertCompetitorPricesDto,
+  PatchSegmentCompetitorDto,
   UpsertCompetitorPriceDto,
   UpsertSaleWindowDto,
   UpsertSegmentCompetitorDto,
@@ -166,6 +169,15 @@ export class AnalyticsController {
     return this.pricing.addCompetitor(user, body);
   }
 
+  @Patch('market/competitors/:id')
+  patchCompetitor(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: PatchSegmentCompetitorDto,
+  ) {
+    return this.pricing.patchCompetitor(user, id, body);
+  }
+
   @Delete('market/competitors/:id')
   deleteCompetitor(
     @CurrentUser() user: JwtPayload,
@@ -180,6 +192,14 @@ export class AnalyticsController {
     @Body() body: UpsertCompetitorPriceDto,
   ) {
     return this.pricing.upsertCompetitorPrice(user, body);
+  }
+
+  @Put('market/competitor-prices/batch')
+  batchUpsertCompetitorPrices(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: BatchUpsertCompetitorPricesDto,
+  ) {
+    return this.pricing.batchUpsertCompetitorPrices(user, body);
   }
 
   @Delete('market/competitor-prices')

@@ -6,6 +6,7 @@
 import type {
   PricingBaselineKind,
   PricingHintAction,
+  PricingMembershipFamilyKey,
   PricingSeasonMode,
   PricingSegmentKey,
 } from '@fitgo/shared-types';
@@ -661,4 +662,225 @@ export function isDiscountStuck(opts: {
     opts.discountSharePct >= thr &&
     !opts.volumeGrowing
   );
+}
+
+const MEMBERSHIP_FAMILY_ORDER: PricingMembershipFamilyKey[] = [
+  'one_time',
+  'morning',
+  'day',
+  'weekend',
+  'unlimited',
+  'unified',
+  'vip',
+  'visit_card',
+  'reformer',
+  'promo',
+  'other',
+];
+
+export const MEMBERSHIP_FAMILY_LABELS: Record<
+  PricingMembershipFamilyKey,
+  string
+> = {
+  one_time: 'Разовые',
+  morning: 'Утро',
+  day: 'Дневные',
+  weekend: 'Выходной день',
+  unlimited: 'Безлимит',
+  unified: 'Единый',
+  vip: 'VIP',
+  visit_card: 'Карты посещений',
+  reformer: 'Реформер',
+  promo: 'Акции',
+  other: 'Прочее',
+};
+
+function normMembershipName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/групповоое/g, 'групповое')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Individual reformer PT packs — not membership catalog / group reformer. */
+export function isIndividualReformerTitle(name: string): boolean {
+  const n = normMembershipName(name);
+  return /индивидуальн.*реформер|реформер.*индивидуальн/.test(n);
+}
+
+/** Group reformer packs (incl. typo «Групповоое»). */
+export function isGroupReformerTitle(name: string): boolean {
+  const n = normMembershipName(name);
+  if (isIndividualReformerTitle(n)) return false;
+  return /группов.*реформер|реформер.*групп|реформер\s*пробн/.test(n);
+}
+
+export function isVisitCardTitle(name: string): boolean {
+  const n = normMembershipName(name);
+  return n.includes('карта посещ');
+}
+
+export function isOneTimeEntryTitle(name: string): boolean {
+  const n = normMembershipName(name);
+  if (isGroupReformerTitle(n) || isVisitCardTitle(n)) return false;
+  if (n.includes('разовый вход') || n.includes('разовое вход')) return true;
+  if (n.includes('разовое групповое') || n.includes('разовое групп')) return true;
+  if (n === 'разовое групповое' || n.includes('разовое групповое')) return true;
+  if (/^разов/.test(n) && !n.includes('тренировк')) return true;
+  return false;
+}
+
+/**
+ * SKUs that belong in membership market table even if sale classifier
+ * puts them in training (group reformer / visit cards / one-time).
+ */
+export function isMembershipMarketExtraTitle(name: string): boolean {
+  if (isIndividualReformerTitle(name)) return false;
+  return (
+    isGroupReformerTitle(name) ||
+    isVisitCardTitle(name) ||
+    isOneTimeEntryTitle(name)
+  );
+}
+
+function extractMonths(n: string): number {
+  const m = n.match(
+    /(\d+)\s*(месяц|мес\.?|год|лет)|(\d+)\s*месяц|1\s*год/i,
+  );
+  if (!m) {
+    if (/\b12\s*месяц|\b1\s*год/.test(n)) return 12;
+    return 0;
+  }
+  if (m[0]?.includes('год') || m[2] === 'год' || m[2] === 'лет') {
+    const y = Number(m[1] || 1);
+    return y * 12;
+  }
+  return Number(m[1] || m[3] || 0) || 0;
+}
+
+function extractVisits(n: string): number {
+  const m = n.match(/(\d+)\s*посещ/);
+  if (m) return Number(m[1]) || 0;
+  const pack = n.match(/реформер\s*(\d+)/);
+  if (pack) return Number(pack[1]) || 0;
+  if (/реформер\s*1\b|занятие реформер 1\b/.test(n)) return 1;
+  return 0;
+}
+
+export function classifyMembershipFamily(productName: string): {
+  key: PricingMembershipFamilyKey;
+  label: string;
+  /** Lower = earlier within family. */
+  sortWithin: number;
+} {
+  const n = normMembershipName(productName);
+  const months = extractMonths(n);
+  const visits = extractVisits(n);
+
+  if (isGroupReformerTitle(n)) {
+    const trial = /пробн/.test(n) ? 0 : 100;
+    return {
+      key: 'reformer',
+      label: MEMBERSHIP_FAMILY_LABELS.reformer,
+      sortWithin: trial + visits,
+    };
+  }
+  if (isVisitCardTitle(n)) {
+    return {
+      key: 'visit_card',
+      label: MEMBERSHIP_FAMILY_LABELS.visit_card,
+      sortWithin: visits || 999,
+    };
+  }
+  if (isOneTimeEntryTitle(n)) {
+    return {
+      key: 'one_time',
+      label: MEMBERSHIP_FAMILY_LABELS.one_time,
+      sortWithin: n.includes('детск') ? 20 : n.includes('outdoor') ? 30 : 10,
+    };
+  }
+  if (
+    n.includes('легкий старт') ||
+    n.includes('новогодн') ||
+    n.includes('все включено') ||
+    n.includes('акция') ||
+    n.includes('санта') ||
+    n.includes('23 февраля') ||
+    n.includes('8 марта')
+  ) {
+    return {
+      key: 'promo',
+      label: MEMBERSHIP_FAMILY_LABELS.promo,
+      sortWithin: months || 50,
+    };
+  }
+  if (/\bvip\b/.test(n) || n.startsWith('vip')) {
+    return {
+      key: 'vip',
+      label: MEMBERSHIP_FAMILY_LABELS.vip,
+      sortWithin: months || 99,
+    };
+  }
+  if (n.includes('безлимит')) {
+    return {
+      key: 'unlimited',
+      label: MEMBERSHIP_FAMILY_LABELS.unlimited,
+      sortWithin: (n.includes('шкафчик') ? 50 : 0) + (months || 99),
+    };
+  }
+  if (n.includes('единый')) {
+    return {
+      key: 'unified',
+      label: MEMBERSHIP_FAMILY_LABELS.unified,
+      sortWithin: months || 99,
+    };
+  }
+  if (n.includes('выходн')) {
+    return {
+      key: 'weekend',
+      label: MEMBERSHIP_FAMILY_LABELS.weekend,
+      sortWithin: months || 99,
+    };
+  }
+  if (n.includes('дневн')) {
+    return {
+      key: 'day',
+      label: MEMBERSHIP_FAMILY_LABELS.day,
+      sortWithin: months || 99,
+    };
+  }
+  if (n.includes('утро') || n.startsWith('утр')) {
+    return {
+      key: 'morning',
+      label: MEMBERSHIP_FAMILY_LABELS.morning,
+      sortWithin: months || 99,
+    };
+  }
+  return {
+    key: 'other',
+    label: MEMBERSHIP_FAMILY_LABELS.other,
+    sortWithin: 500 + months,
+  };
+}
+
+export function membershipFamilyOrderIndex(
+  key: PricingMembershipFamilyKey,
+): number {
+  const i = MEMBERSHIP_FAMILY_ORDER.indexOf(key);
+  return i < 0 ? 999 : i;
+}
+
+export function compareMembershipCatalogRows(
+  a: { productName: string; familyKey?: string | null },
+  b: { productName: string; familyKey?: string | null },
+): number {
+  const fa = classifyMembershipFamily(a.productName);
+  const fb = classifyMembershipFamily(b.productName);
+  const oi =
+    membershipFamilyOrderIndex(fa.key) - membershipFamilyOrderIndex(fb.key);
+  if (oi !== 0) return oi;
+  if (fa.sortWithin !== fb.sortWithin) return fa.sortWithin - fb.sortWithin;
+  return a.productName.localeCompare(b.productName, 'ru');
 }

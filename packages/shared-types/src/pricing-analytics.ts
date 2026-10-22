@@ -42,6 +42,8 @@ export interface PricingCompetitorColumn {
   id: string;
   name: string;
   sortOrder: number;
+  /** Club-level price list URL (one per competitor). */
+  priceListUrl: string | null;
 }
 
 export interface PricingCompetitorCell {
@@ -49,8 +51,22 @@ export interface PricingCompetitorCell {
   priceMinor: number | null;
   observedAt: string | null;
   theirName: string | null;
+  /** @deprecated Prefer competitor.priceListUrl; kept for old rows. */
   sourceUrl: string | null;
 }
+
+export type PricingMembershipFamilyKey =
+  | 'one_time'
+  | 'morning'
+  | 'day'
+  | 'weekend'
+  | 'unlimited'
+  | 'unified'
+  | 'vip'
+  | 'visit_card'
+  | 'reformer'
+  | 'promo'
+  | 'other';
 
 export interface PricingProductRow {
   productExternalId: string | null;
@@ -77,6 +93,9 @@ export interface PricingProductRow {
   hintAction: PricingHintAction | null;
   hintText: string | null;
   bridge: PricingRevenueBridge | null;
+  /** Membership catalog family (UI group header). */
+  familyKey?: PricingMembershipFamilyKey | null;
+  familyLabel?: string | null;
 }
 
 export interface PricingSegmentBlock {
@@ -198,6 +217,13 @@ export interface UpsertSegmentCompetitorDto {
   segmentKey: Exclude<PricingSegmentKey, 'corporate'>;
   name: string;
   sortOrder?: number;
+  priceListUrl?: string | null;
+}
+
+export interface PatchSegmentCompetitorDto {
+  name?: string;
+  priceListUrl?: string | null;
+  sortOrder?: number;
 }
 
 export interface UpsertCompetitorPriceDto {
@@ -207,6 +233,16 @@ export interface UpsertCompetitorPriceDto {
   observedAt?: string;
   theirName?: string | null;
   sourceUrl?: string | null;
+}
+
+export interface BatchUpsertCompetitorPricesDto {
+  competitorId: string;
+  prices: Array<{
+    productExternalId: string;
+    priceMinor: number;
+    theirName?: string | null;
+  }>;
+  observedAt?: string;
 }
 
 export interface UpsertSaleWindowDto {

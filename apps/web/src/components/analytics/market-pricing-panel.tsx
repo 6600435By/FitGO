@@ -5,7 +5,7 @@ import type {
   PricingSegmentBlock,
   PricingSegmentKey,
 } from '@fitgo/shared-types';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -55,8 +55,6 @@ export function MarketPricingPanel({
   const [showPromos, setShowPromos] = useState(false);
   const [showStaffDisc, setShowStaffDisc] = useState(false);
   const [showDiscTypes, setShowDiscTypes] = useState(false);
-  const [priceDraft, setPriceDraft] = useState<Record<string, string>>({});
-  const [urlDraft, setUrlDraft] = useState<Record<string, string>>({});
 
   const openBlock = useMemo(
     () => report.segments.find((s) => s.key === openSeg) ?? null,
@@ -64,17 +62,19 @@ export function MarketPricingPanel({
   );
 
   const run = useCallback(
-    async (label: string, fn: () => Promise<unknown>) => {
+    async (label: string, fn: () => Promise<unknown>): Promise<boolean> => {
       const token = getToken();
-      if (!token) return;
+      if (!token) return false;
       setBusy(label);
       setErr('');
       setInfo('');
       try {
         await fn();
         onReload();
+        return true;
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Ошибка');
+        return false;
       } finally {
         setBusy('');
       }
@@ -89,44 +89,6 @@ export function MarketPricingPanel({
       const token = getToken()!;
       await api.analyticsMarketAddCompetitor(token, { segmentKey, name });
       setClubName('');
-    });
-  };
-
-  const savePrice = (
-    competitorId: string,
-    productExternalId: string | null,
-    draftKey: string,
-  ) => {
-    if (!productExternalId) {
-      setErr('У позиции нет UUID номенклатуры — цену конкурента сохранить нельзя');
-      return;
-    }
-    const raw = priceDraft[draftKey]?.trim();
-    if (!raw) return;
-    const major = Number(raw.replace(',', '.'));
-    if (!Number.isFinite(major) || major < 0) {
-      setErr('Некорректная цена');
-      return;
-    }
-    const sourceUrl = urlDraft[draftKey]?.trim() || null;
-    void run('price', async () => {
-      const token = getToken()!;
-      await api.analyticsMarketUpsertPrice(token, {
-        competitorId,
-        productExternalId,
-        priceMinor: Math.round(major * 100),
-        sourceUrl,
-      });
-      setPriceDraft((d) => {
-        const next = { ...d };
-        delete next[draftKey];
-        return next;
-      });
-      setUrlDraft((d) => {
-        const next = { ...d };
-        delete next[draftKey];
-        return next;
-      });
     });
   };
 
@@ -299,15 +261,12 @@ export function MarketPricingPanel({
 
       {openBlock && (
         <SegmentTable
+          key={openBlock.key}
           block={openBlock}
           currency={currency}
           clubName={clubName}
           setClubName={setClubName}
           busy={busy}
-          priceDraft={priceDraft}
-          setPriceDraft={setPriceDraft}
-          urlDraft={urlDraft}
-          setUrlDraft={setUrlDraft}
           onAddClub={() =>
             addClub(openBlock.key as Exclude<PricingSegmentKey, 'corporate'>)
           }
@@ -316,7 +275,22 @@ export function MarketPricingPanel({
               await api.analyticsMarketDeleteCompetitor(getToken()!, id);
             })
           }
-          onSavePrice={savePrice}
+          onSaveClubEdit={(competitorId, payload) =>
+            run('save-club-edit', async () => {
+              const token = getToken()!;
+              if (payload.priceListUrl !== undefined) {
+                await api.analyticsMarketPatchCompetitor(token, competitorId, {
+                  priceListUrl: payload.priceListUrl,
+                });
+              }
+              if (payload.prices.length > 0) {
+                await api.analyticsMarketBatchUpsertPrices(token, {
+                  competitorId,
+                  prices: payload.prices,
+                });
+              }
+            })
+          }
           onDeletePrice={(competitorId, productExternalId) =>
             void run('del-price', async () => {
               await api.analyticsMarketDeletePrice(getToken()!, {
@@ -325,6 +299,7 @@ export function MarketPricingPanel({
               });
             })
           }
+          onError={setErr}
         />
       )}
 
@@ -484,39 +459,233 @@ function SegmentTable({
   clubName,
   setClubName,
   busy,
-  priceDraft,
-  setPriceDraft,
-  urlDraft,
-  setUrlDraft,
   onAddClub,
   onDeleteClub,
-  onSavePrice,
+  onSaveClubEdit,
   onDeletePrice,
+  onError,
 }: {
   block: PricingSegmentBlock;
   currency: string;
   clubName: string;
   setClubName: (v: string) => void;
   busy: string;
-  priceDraft: Record<string, string>;
-  setPriceDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  urlDraft: Record<string, string>;
-  setUrlDraft: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   onAddClub: () => void;
   onDeleteClub: (id: string) => void;
-  onSavePrice: (
+  onSaveClubEdit: (
     competitorId: string,
-    productExternalId: string | null,
-    draftKey: string,
-  ) => void;
+    payload: {
+      priceListUrl?: string | null;
+      prices: Array<{ productExternalId: string; priceMinor: number }>;
+    },
+  ) => Promise<boolean>;
   onDeletePrice: (competitorId: string, productExternalId: string) => void;
+  onError: (msg: string) => void;
 }) {
+  const [clubFilter, setClubFilter] = useState<'all' | string>('all');
+  const [editingClubId, setEditingClubId] = useState<string | null>(null);
+  const [priceDraft, setPriceDraft] = useState<Record<string, string>>({});
+  const [urlDraft, setUrlDraft] = useState<Record<string, string>>({});
+
+  const visibleCompetitors = useMemo(() => {
+    if (clubFilter === 'all') return block.competitors;
+    return block.competitors.filter((c) => c.id === clubFilter);
+  }, [block.competitors, clubFilter]);
+
+  const colCount = 6 + visibleCompetitors.length + 1;
+
+  const startEdit = (competitorId: string) => {
+    const drafts: Record<string, string> = {};
+    for (const p of block.products) {
+      if (!p.productExternalId) continue;
+      const cell = p.competitorCells.find((x) => x.competitorId === competitorId);
+      drafts[p.productExternalId] =
+        cell?.priceMinor != null ? String(cell.priceMinor / 100) : '';
+    }
+    const club = block.competitors.find((c) => c.id === competitorId);
+    setPriceDraft(drafts);
+    setUrlDraft({ [competitorId]: club?.priceListUrl ?? '' });
+    setEditingClubId(competitorId);
+    if (clubFilter === 'all') setClubFilter(competitorId);
+  };
+
+  const cancelEdit = () => {
+    setEditingClubId(null);
+    setPriceDraft({});
+  };
+
+  const saveEdit = (competitorId: string) => {
+    const prices: Array<{ productExternalId: string; priceMinor: number }> =
+      [];
+    for (const [productExternalId, raw] of Object.entries(priceDraft)) {
+      const t = raw.trim();
+      if (!t) continue;
+      const major = Number(t.replace(',', '.'));
+      if (!Number.isFinite(major) || major < 0) {
+        onError('Некорректная цена');
+        return;
+      }
+      prices.push({
+        productExternalId,
+        priceMinor: Math.round(major * 100),
+      });
+    }
+    const url = (urlDraft[competitorId] ?? '').trim();
+    const club = block.competitors.find((c) => c.id === competitorId);
+    const urlChanged = (club?.priceListUrl ?? '') !== url;
+    if (!urlChanged && prices.length === 0) {
+      onError('Нет изменений для сохранения');
+      return;
+    }
+    void onSaveClubEdit(competitorId, {
+      priceListUrl: urlChanged ? url || null : undefined,
+      prices,
+    }).then((ok) => {
+      if (!ok) return;
+      setEditingClubId(null);
+      setPriceDraft({});
+    });
+  };
+
+  const setFilter = (next: 'all' | string) => {
+    setClubFilter(next);
+    if (editingClubId && next !== editingClubId) {
+      cancelEdit();
+    }
+  };
+
+  const productRows: ReactNode[] = [];
+  let lastFamily: string | null = null;
+  for (const p of block.products) {
+    const familyKey = p.familyKey ?? null;
+    const showFamily =
+      block.key === 'membership' &&
+      familyKey &&
+      familyKey !== lastFamily;
+    if (showFamily) lastFamily = familyKey;
+    const rowKey = `${p.productExternalId ?? p.productName}`;
+    if (showFamily) {
+      productRows.push(
+        <tr key={`fam-${familyKey}`} className="border-t border-slate-700">
+          <td
+            colSpan={colCount}
+            className="bg-slate-800/60 px-2 py-1.5 text-xs font-semibold uppercase tracking-wide text-fitgo-300"
+          >
+            {p.familyLabel ?? familyKey}
+          </td>
+        </tr>,
+      );
+    }
+    productRows.push(
+      <tr key={rowKey} className="border-t border-slate-800 align-top">
+        <td className="px-2 py-2">
+          <span className="text-slate-200">{p.productName}</span>
+          {p.isCore && p.salesCount > 0 && (
+            <span className="ml-1 rounded bg-fitgo-500/20 px-1 text-[10px] text-fitgo-300">
+              основа
+            </span>
+          )}
+          {p.discountSharePct != null && (
+            <p className="text-xs text-slate-500">скидка {p.discountSharePct}%</p>
+          )}
+          {p.bridge && (
+            <p className="text-xs text-slate-600">{p.bridge.summary}</p>
+          )}
+        </td>
+        <td className="px-2 py-2 tabular-nums">
+          {moneyShort(p.listPriceMinor)}
+        </td>
+        <td className="px-2 py-2 tabular-nums text-slate-400">
+          {p.avgToListRatio != null
+            ? `${Math.round(p.avgToListRatio * 100)}%`
+            : '—'}
+        </td>
+        <td className="px-2 py-2 tabular-nums">{p.salesCount}</td>
+        <td className="px-2 py-2 tabular-nums">
+          {p.salesCount > 0 ? money(p.revenueMinor, currency) : '—'}
+        </td>
+        <td className="px-2 py-2 tabular-nums text-slate-400">
+          {p.deltaPct != null
+            ? `${p.deltaPct > 0 ? '+' : ''}${p.deltaPct}%`
+            : '—'}
+        </td>
+        {visibleCompetitors.map((c) => {
+          const cell = p.competitorCells.find((x) => x.competitorId === c.id);
+          const stale = isStaleObserved(cell?.observedAt ?? null);
+          const editing = editingClubId === c.id;
+          const draftKey = p.productExternalId ?? '';
+          return (
+            <td key={c.id} className="px-2 py-2">
+              {editing && p.productExternalId ? (
+                <div className="flex gap-1">
+                  <input
+                    className="input w-20 py-0.5 text-xs"
+                    placeholder="цена"
+                    value={priceDraft[draftKey] ?? ''}
+                    onChange={(e) =>
+                      setPriceDraft((d) => ({
+                        ...d,
+                        [draftKey]: e.target.value,
+                      }))
+                    }
+                  />
+                  {cell?.priceMinor != null && (
+                    <button
+                      type="button"
+                      className="px-1 text-[10px] text-rose-400"
+                      disabled={!!busy}
+                      title="Удалить цену"
+                      onClick={() => {
+                        onDeletePrice(c.id, p.productExternalId!);
+                        setPriceDraft((d) => ({
+                          ...d,
+                          [draftKey]: '',
+                        }));
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              ) : cell?.priceMinor != null ? (
+                <span
+                  className={`tabular-nums ${stale ? 'text-slate-500' : ''}`}
+                  title={
+                    cell.observedAt
+                      ? `на ${cell.observedAt}${stale ? ' (старше 90 дн.)' : ''}`
+                      : undefined
+                  }
+                >
+                  {moneyShort(cell.priceMinor)}
+                  {cell.observedAt && (
+                    <span className="ml-1 text-[10px] text-slate-600">
+                      {cell.observedAt.slice(5)}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span className="text-slate-600">—</span>
+              )}
+            </td>
+          );
+        })}
+        <td className="px-2 py-2 text-xs text-slate-400">
+          {p.hintText ?? (p.marketLabel ? p.marketLabel : '—')}
+        </td>
+      </tr>,
+    );
+  }
+
   return (
     <div className="card space-y-3 overflow-x-auto">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold">
           {block.label}
-          {block.topN ? ` — ${block.topN} главных продаж за период` : ''}
+          {block.key === 'membership'
+            ? ' — каталог'
+            : block.topN
+              ? ` — ${block.topN} главных продаж за период`
+              : ''}
         </h3>
         <div className="flex flex-wrap items-center gap-2">
           <input
@@ -538,22 +707,41 @@ function SegmentTable({
 
       {block.competitors.length === 0 && (
         <p className="text-sm text-slate-500">
-          Добавьте клуб, чтобы сравнивать цены. Продажи уже посчитаны.
+          Добавьте клуб, чтобы сравнивать цены.
         </p>
       )}
 
       {block.competitors.length > 0 && (
-        <div className="flex flex-wrap gap-2 text-xs text-slate-400">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <button
+            type="button"
+            className={`rounded-full px-2.5 py-1 ${
+              clubFilter === 'all'
+                ? 'bg-fitgo-500/30 text-fitgo-200'
+                : 'bg-slate-800 text-slate-400'
+            }`}
+            onClick={() => setFilter('all')}
+          >
+            Все
+          </button>
           {block.competitors.map((c) => (
-            <span
-              key={c.id}
-              className="inline-flex items-center gap-1 rounded-full bg-slate-800 px-2 py-1"
-            >
-              {c.name}
+            <span key={c.id} className="inline-flex items-center gap-1">
+              <button
+                type="button"
+                className={`rounded-full px-2.5 py-1 ${
+                  clubFilter === c.id
+                    ? 'bg-fitgo-500/30 text-fitgo-200'
+                    : 'bg-slate-800 text-slate-400'
+                }`}
+                onClick={() => setFilter(c.id)}
+              >
+                {c.name}
+              </button>
               <button
                 type="button"
                 className="text-rose-400"
-                title="Удалить"
+                title="Удалить клуб"
+                disabled={!!busy}
                 onClick={() => onDeleteClub(c.id)}
               >
                 ×
@@ -572,158 +760,78 @@ function SegmentTable({
             <th className="px-2 py-2">Продали</th>
             <th className="px-2 py-2">Выручка</th>
             <th className="px-2 py-2">К базе</th>
-            {block.competitors.map((c) => (
+            {visibleCompetitors.map((c) => (
               <th key={c.id} className="px-2 py-2">
-                {c.name}
+                <div className="space-y-1">
+                  <div>{c.name}</div>
+                  {editingClubId === c.id ? (
+                    <>
+                      <input
+                        className="input w-full py-0.5 text-[10px] font-normal normal-case"
+                        placeholder="ссылка на прайс"
+                        value={urlDraft[c.id] ?? ''}
+                        onChange={(e) =>
+                          setUrlDraft((d) => ({
+                            ...d,
+                            [c.id]: e.target.value,
+                          }))
+                        }
+                      />
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          className="btn-primary px-1.5 py-0.5 text-[10px]"
+                          disabled={!!busy}
+                          onClick={() => saveEdit(c.id)}
+                        >
+                          Сохранить
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary px-1.5 py-0.5 text-[10px]"
+                          disabled={!!busy}
+                          onClick={cancelEdit}
+                        >
+                          Отмена
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {c.priceListUrl ? (
+                        <a
+                          href={c.priceListUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block text-[10px] font-normal normal-case text-fitgo-400"
+                        >
+                          прайс
+                        </a>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn-secondary px-1.5 py-0.5 text-[10px]"
+                        disabled={!!busy || editingClubId != null}
+                        onClick={() => startEdit(c.id)}
+                      >
+                        Изменить
+                      </button>
+                    </>
+                  )}
+                </div>
               </th>
             ))}
             <th className="px-2 py-2">Что сделать</th>
           </tr>
         </thead>
         <tbody>
-          {block.products.map((p) => (
-            <tr
-              key={`${p.productExternalId ?? p.productName}`}
-              className="border-t border-slate-800 align-top"
-            >
-              <td className="px-2 py-2">
-                <span className="text-slate-200">{p.productName}</span>
-                {p.isCore && (
-                  <span className="ml-1 rounded bg-fitgo-500/20 px-1 text-[10px] text-fitgo-300">
-                    основа
-                  </span>
-                )}
-                {p.discountSharePct != null && (
-                  <p className="text-xs text-slate-500">
-                    скидка {p.discountSharePct}%
-                  </p>
-                )}
-                {p.bridge && (
-                  <p className="text-xs text-slate-600">{p.bridge.summary}</p>
-                )}
-              </td>
-              <td className="px-2 py-2 tabular-nums">
-                {moneyShort(p.listPriceMinor)}
-              </td>
-              <td className="px-2 py-2 tabular-nums text-slate-400">
-                {p.avgToListRatio != null
-                  ? `${Math.round(p.avgToListRatio * 100)}%`
-                  : '—'}
-              </td>
-              <td className="px-2 py-2 tabular-nums">{p.salesCount}</td>
-              <td className="px-2 py-2 tabular-nums">
-                {money(p.revenueMinor, currency)}
-              </td>
-              <td className="px-2 py-2 tabular-nums text-slate-400">
-                {p.deltaPct != null
-                  ? `${p.deltaPct > 0 ? '+' : ''}${p.deltaPct}%`
-                  : '—'}
-              </td>
-              {block.competitors.map((c) => {
-                const cell = p.competitorCells.find(
-                  (x) => x.competitorId === c.id,
-                );
-                const draftKey = `${c.id}|${p.productExternalId ?? p.productName}`;
-                const stale = isStaleObserved(cell?.observedAt ?? null);
-                return (
-                  <td key={c.id} className="px-2 py-2">
-                    {cell?.priceMinor != null ? (
-                      <span
-                        className={`tabular-nums ${stale ? 'text-slate-500' : ''}`}
-                        title={
-                          cell.observedAt
-                            ? `на ${cell.observedAt}${stale ? ' (старше 90 дн.)' : ''}`
-                            : undefined
-                        }
-                      >
-                        {moneyShort(cell.priceMinor)}
-                        {cell.observedAt && (
-                          <span className="ml-1 text-[10px] text-slate-600">
-                            {cell.observedAt.slice(5)}
-                          </span>
-                        )}
-                      </span>
-                    ) : (
-                      <span className="text-slate-600">—</span>
-                    )}
-                    {cell?.sourceUrl && (
-                      <a
-                        href={cell.sourceUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="ml-1 text-[10px] text-fitgo-400"
-                      >
-                        ссылка
-                      </a>
-                    )}
-                    <div className="mt-1 flex flex-col gap-1">
-                      <div className="flex gap-1">
-                        <input
-                          className="input w-20 py-0.5 text-xs"
-                          placeholder="цена"
-                          value={priceDraft[draftKey] ?? ''}
-                          onChange={(e) =>
-                            setPriceDraft((d) => ({
-                              ...d,
-                              [draftKey]: e.target.value,
-                            }))
-                          }
-                        />
-                        <button
-                          type="button"
-                          className="btn-secondary px-1.5 py-0.5 text-[10px]"
-                          disabled={!!busy}
-                          onClick={() =>
-                            onSavePrice(
-                              c.id,
-                              p.productExternalId,
-                              draftKey,
-                            )
-                          }
-                        >
-                          ok
-                        </button>
-                        {cell?.priceMinor != null && p.productExternalId && (
-                          <button
-                            type="button"
-                            className="px-1 text-[10px] text-rose-400"
-                            disabled={!!busy}
-                            title="Удалить цену"
-                            onClick={() =>
-                              onDeletePrice(c.id, p.productExternalId!)
-                            }
-                          >
-                            ×
-                          </button>
-                        )}
-                      </div>
-                      <input
-                        className="input w-full py-0.5 text-[10px]"
-                        placeholder="url источника"
-                        value={urlDraft[draftKey] ?? ''}
-                        onChange={(e) =>
-                          setUrlDraft((d) => ({
-                            ...d,
-                            [draftKey]: e.target.value,
-                          }))
-                        }
-                      />
-                    </div>
-                  </td>
-                );
-              })}
-              <td className="px-2 py-2 text-xs text-slate-400">
-                {p.hintText ?? (p.marketLabel ? p.marketLabel : '—')}
-              </td>
-            </tr>
-          ))}
+          {productRows}
           {block.products.length === 0 && (
             <tr>
-              <td
-                colSpan={6 + block.competitors.length}
-                className="px-2 py-4 text-slate-500"
-              >
-                Нет продаж в этом сегменте за период
+              <td colSpan={colCount} className="px-2 py-4 text-slate-500">
+                {block.key === 'membership'
+                  ? 'Каталог абонементов пуст — проверьте сегмент в 1С'
+                  : 'Нет продаж в этом сегменте за период'}
               </td>
             </tr>
           )}

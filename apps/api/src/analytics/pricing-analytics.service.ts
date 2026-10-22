@@ -7,6 +7,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type {
   AnalyticsCompareMode,
+  BatchUpsertCompetitorPricesDto,
+  PatchSegmentCompetitorDto,
   PricingAnalyticsReport,
   PricingCompetitorCell,
   PricingHintCard,
@@ -35,10 +37,13 @@ import {
 import {
   avgToListRatio,
   buildProductHint,
+  classifyMembershipFamily,
+  compareMembershipCatalogRows,
   deltaPct,
   discountShareOfListPct,
   dominantSeason,
   isDiscountStuck,
+  isMembershipMarketExtraTitle,
   isStaffRelatedDiscount,
   markCoreProducts,
   marketRatio,
@@ -60,7 +65,10 @@ import {
   type BuiltHint,
   type SaleWindowInput,
 } from './pricing-analytics.rules';
-import { loadSegmentPriceLists } from './pricing-price-list';
+import {
+  loadSegmentPriceLists,
+  type PricingPriceMap,
+} from './pricing-price-list';
 
 const REPORT_CACHE_TTL_MS = 3 * 60 * 1000;
 /** Re-fetch current calendar month if last sync older than this. */
@@ -378,6 +386,11 @@ export class PricingAnalyticsService {
     const hints: BuiltHint[] = [];
     const segments: PricingSegmentBlock[] = [];
 
+    const membershipCatalogIds = collectMembershipCatalogIds(
+      priceLists.bySegment,
+    );
+    const priceByName = indexPricesByName(priceLists.bySegment);
+
     for (const segKey of PRODUCT_SEGMENTS) {
       const segCompetitors = competitorsBySeg.get(segKey) ?? [];
       let products = [...curAgg.byKey.values()].filter(
@@ -388,17 +401,39 @@ export class PricingAnalyticsService {
         products = takeTopByRevenue(products, SHOP_TOP_N);
       }
 
+      if (segKey === 'training') {
+        products = products.filter(
+          (p) =>
+            !(
+              (p.productExternalId &&
+                membershipCatalogIds.has(p.productExternalId)) ||
+              isMembershipMarketExtraTitle(p.productName)
+            ),
+        );
+      }
+
+      if (segKey === 'membership') {
+        products = buildMembershipCatalogProducts({
+          priceLists: priceLists.bySegment,
+          curAgg: curAgg.byKey,
+          catalogIds: membershipCatalogIds,
+        });
+      }
+
       const marked = markCoreProducts(products);
       const cmpSegRev = cmpAgg.bySegment[segKey] ?? 0;
       const curSegRev = curAgg.bySegment[segKey] ?? 0;
 
       const productRows: PricingProductRow[] = marked.map((p) => {
         const pid = (p.productExternalId ?? '').toLowerCase();
-        const cmp = cmpAgg.byKey.get(aggKey(p.segment, pid, p.productName));
-        const listPrice =
-          (pid && pricesByProduct.get(pid)) ||
-          priceLists.bySegment[segKey]?.get(pid)?.priceMinor ||
-          null;
+        const cmp = findAggForProduct(cmpAgg.byKey, pid, p.productName);
+        const listPrice = resolveListPrice(
+          pid,
+          p.productName,
+          pricesByProduct,
+          priceLists.bySegment[segKey],
+          priceByName,
+        );
         const avgActual =
           p.salesCount > 0
             ? Math.round(p.revenueMinor / p.salesCount)
@@ -408,7 +443,7 @@ export class PricingAnalyticsService {
             ? Math.round(cmp.revenueMinor / cmp.salesCount)
             : 0;
         const bridge =
-          effectiveCmpFrom && cmp
+          effectiveCmpFrom && cmp && p.salesCount > 0
             ? priceVolumeMixBridge({
                 revenueCur: p.revenueMinor,
                 revenueCmp: cmp.revenueMinor,
@@ -426,7 +461,7 @@ export class PricingAnalyticsService {
             priceMinor: cell?.priceMinor ?? null,
             observedAt: cell ? isoDate(cell.observedAt) : null,
             theirName: cell?.theirName ?? null,
-            sourceUrl: cell?.sourceUrl ?? null,
+            sourceUrl: null,
           };
         });
         const filled = cells
@@ -440,36 +475,44 @@ export class PricingAnalyticsService {
             : null;
 
         const volumeDown = Boolean(
-          cmp && p.salesCount < cmp.salesCount,
+          cmp && p.salesCount > 0 && p.salesCount < cmp.salesCount,
         );
-        const volumeFlatOrUp = !cmp || p.salesCount >= cmp.salesCount;
+        const volumeFlatOrUp = !cmp || p.salesCount === 0 || p.salesCount >= cmp.salesCount;
         const volumeGrowing = Boolean(
-          cmp && p.salesCount > cmp.salesCount,
+          cmp && p.salesCount > 0 && p.salesCount > cmp.salesCount,
         );
         const stuck = isDiscountStuck({
           discountSharePct: discShare,
           volumeGrowing,
         });
 
-        const hint = buildProductHint({
-          segmentKey: segKey,
-          productName: p.productName,
-          revenueMinor: p.revenueMinor,
-          listPriceMinor: listPrice,
-          marketRatio: market.ratio,
-          marketLabel: market.label,
-          volumeDown,
-          volumeFlatOrUp,
-          discountSharePct: discountsReallyAvailable ? discShare : null,
-          inMembershipPromo: inPromo && segKey === 'membership',
-          season: inPromo && segKey === 'membership' ? 'promo' : season,
-          // Club-level signals once below — not per SKU.
-          saleNoInflow: false,
-          upsellGap: false,
-          discountStuck: stuck,
-          baselineLabel,
-          ignoredNote: baseline.reasonDropped,
-        });
+        const family =
+          segKey === 'membership'
+            ? classifyMembershipFamily(p.productName)
+            : null;
+
+        const hint =
+          p.salesCount > 0
+            ? buildProductHint({
+                segmentKey: segKey,
+                productName: p.productName,
+                revenueMinor: p.revenueMinor,
+                listPriceMinor: listPrice,
+                marketRatio: market.ratio,
+                marketLabel: market.label,
+                volumeDown,
+                volumeFlatOrUp,
+                discountSharePct: discountsReallyAvailable ? discShare : null,
+                inMembershipPromo: inPromo && segKey === 'membership',
+                season: inPromo && segKey === 'membership' ? 'promo' : season,
+                // Club-level signals once below — not per SKU.
+                saleNoInflow: false,
+                upsellGap: false,
+                discountStuck: stuck,
+                baselineLabel,
+                ignoredNote: baseline.reasonDropped,
+              })
+            : null;
         if (hint) hints.push(hint);
 
         return {
@@ -482,7 +525,7 @@ export class PricingAnalyticsService {
           revenueMinor: p.revenueMinor,
           compareRevenueMinor: cmp?.revenueMinor ?? null,
           deltaPct:
-            effectiveCmpFrom && cmp
+            effectiveCmpFrom && cmp && p.salesCount > 0
               ? deltaPct(p.revenueMinor, cmp.revenueMinor)
               : null,
           isCore: p.isCore,
@@ -495,8 +538,14 @@ export class PricingAnalyticsService {
           hintAction: hint?.action ?? null,
           hintText: hint?.body ?? null,
           bridge,
+          familyKey: family?.key ?? null,
+          familyLabel: family?.label ?? null,
         };
       });
+
+      if (segKey === 'membership') {
+        productRows.sort(compareMembershipCatalogRows);
+      }
 
       // orphan priced shop SKUs outside top-30
       let orphanPricedCount = 0;
@@ -567,6 +616,7 @@ export class PricingAnalyticsService {
           id: c.id,
           name: c.name,
           sortOrder: c.sortOrder,
+          priceListUrl: c.priceListUrl ?? null,
         })),
         products: productRows,
         orphanPricedCount:
@@ -936,16 +986,50 @@ export class PricingAnalyticsService {
     this.assertProductSegment(dto.segmentKey);
     const name = dto.name.trim();
     if (!name) throw new BadRequestException('Укажите название клуба');
+    const url = normalizeOptionalUrl(dto.priceListUrl);
     const row = await this.prisma.segmentCompetitor.create({
       data: {
         clubId,
         segmentKey: dto.segmentKey,
         name,
+        priceListUrl: url,
         sortOrder: dto.sortOrder ?? 0,
       },
     });
     this.invalidateCache(clubId);
     return row;
+  }
+
+  async patchCompetitor(
+    user: JwtPayload,
+    id: string,
+    dto: PatchSegmentCompetitorDto,
+  ) {
+    const clubId = requireClubId(user);
+    const row = await this.prisma.segmentCompetitor.findFirst({
+      where: { id, clubId },
+    });
+    if (!row) throw new NotFoundException('Клуб не найден');
+    const data: {
+      name?: string;
+      priceListUrl?: string | null;
+      sortOrder?: number;
+    } = {};
+    if (dto.name != null) {
+      const name = dto.name.trim();
+      if (!name) throw new BadRequestException('Укажите название клуба');
+      data.name = name;
+    }
+    if (dto.priceListUrl !== undefined) {
+      data.priceListUrl = normalizeOptionalUrl(dto.priceListUrl);
+    }
+    if (dto.sortOrder != null) data.sortOrder = dto.sortOrder;
+    const updated = await this.prisma.segmentCompetitor.update({
+      where: { id },
+      data,
+    });
+    this.invalidateCache(clubId);
+    return updated;
   }
 
   async deleteCompetitor(user: JwtPayload, id: string) {
@@ -1002,6 +1086,59 @@ export class PricingAnalyticsService {
     });
     this.invalidateCache(clubId);
     return row;
+  }
+
+  async batchUpsertCompetitorPrices(
+    user: JwtPayload,
+    dto: BatchUpsertCompetitorPricesDto,
+  ) {
+    const clubId = requireClubId(user);
+    const comp = await this.prisma.segmentCompetitor.findFirst({
+      where: { id: dto.competitorId, clubId },
+    });
+    if (!comp) throw new NotFoundException('Клуб не найден');
+    if (!Array.isArray(dto.prices) || dto.prices.length === 0) {
+      throw new BadRequestException('Нужен список цен');
+    }
+    const observedAt = dto.observedAt
+      ? new Date(`${dto.observedAt}T12:00:00+03:00`)
+      : new Date();
+    let saved = 0;
+    for (const item of dto.prices) {
+      const productExternalId = (item.productExternalId ?? '')
+        .trim()
+        .toLowerCase();
+      if (!productExternalId) continue;
+      if (!Number.isFinite(item.priceMinor) || item.priceMinor < 0) {
+        throw new BadRequestException(
+          `Некорректная цена для ${productExternalId}`,
+        );
+      }
+      await this.prisma.segmentCompetitorPrice.upsert({
+        where: {
+          competitorId_productExternalId: {
+            competitorId: dto.competitorId,
+            productExternalId,
+          },
+        },
+        create: {
+          competitorId: dto.competitorId,
+          productExternalId,
+          priceMinor: Math.round(item.priceMinor),
+          observedAt,
+          theirName: item.theirName ?? null,
+          sourceUrl: null,
+        },
+        update: {
+          priceMinor: Math.round(item.priceMinor),
+          observedAt,
+          theirName: item.theirName ?? null,
+        },
+      });
+      saved += 1;
+    }
+    this.invalidateCache(clubId);
+    return { ok: true, saved };
   }
 
   async deleteCompetitorPrice(
@@ -1466,4 +1603,167 @@ function aggKey(
   productName: string,
 ): AggKey {
   return `${segment}|${productExternalId ?? ''}|${productName.toLowerCase()}`;
+}
+
+function normalizeOptionalUrl(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const t = raw.trim();
+  return t || null;
+}
+
+function normPriceName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/групповоое/g, 'групповое')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function collectMembershipCatalogIds(
+  bySegment: Record<string, PricingPriceMap | undefined>,
+): Set<string> {
+  const ids = new Set<string>();
+  const membership = bySegment.membership;
+  if (membership) {
+    for (const id of membership.keys()) ids.add(id);
+  }
+  for (const map of Object.values(bySegment)) {
+    if (!map) continue;
+    for (const [id, info] of map) {
+      if (isMembershipMarketExtraTitle(info.name)) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function indexPricesByName(
+  bySegment: Record<string, PricingPriceMap | undefined>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const map of Object.values(bySegment)) {
+    if (!map) continue;
+    for (const info of map.values()) {
+      if (info.priceMinor <= 0) continue;
+      const key = normPriceName(info.name);
+      if (!key) continue;
+      if (!out.has(key)) out.set(key, info.priceMinor);
+    }
+  }
+  return out;
+}
+
+function resolveListPrice(
+  pid: string,
+  productName: string,
+  pricesByProduct: Map<string, number>,
+  segmentMap: PricingPriceMap | undefined,
+  priceByName: Map<string, number>,
+): number | null {
+  if (pid) {
+    const byId =
+      pricesByProduct.get(pid) ||
+      segmentMap?.get(pid)?.priceMinor ||
+      null;
+    if (byId && byId > 0) return byId;
+  }
+  const byName = priceByName.get(normPriceName(productName));
+  return byName && byName > 0 ? byName : null;
+}
+
+function findAggForProduct(
+  byKey: Map<AggKey, ProductAgg>,
+  pid: string,
+  productName: string,
+): ProductAgg | undefined {
+  let best: ProductAgg | undefined;
+  const nameKey = productName.toLowerCase();
+  for (const p of byKey.values()) {
+    const matchId = Boolean(pid && p.productExternalId === pid);
+    const matchName =
+      !pid && p.productName.toLowerCase() === nameKey;
+    if (!matchId && !matchName) continue;
+    if (p.segment === 'membership') return p;
+    if (!best) best = p;
+  }
+  return best;
+}
+
+function buildMembershipCatalogProducts(opts: {
+  priceLists: Record<string, PricingPriceMap | undefined>;
+  curAgg: Map<AggKey, ProductAgg>;
+  catalogIds: Set<string>;
+}): ProductAgg[] {
+  const byId = new Map<
+    string,
+    { productExternalId: string; productName: string; listHint: number }
+  >();
+
+  const membership = opts.priceLists.membership;
+  if (membership) {
+    for (const [id, info] of membership) {
+      byId.set(id, {
+        productExternalId: id,
+        productName: info.name,
+        listHint: info.priceMinor,
+      });
+    }
+  }
+  for (const map of Object.values(opts.priceLists)) {
+    if (!map) continue;
+    for (const [id, info] of map) {
+      if (byId.has(id)) continue;
+      if (!isMembershipMarketExtraTitle(info.name)) continue;
+      byId.set(id, {
+        productExternalId: id,
+        productName: info.name,
+        listHint: info.priceMinor,
+      });
+    }
+  }
+
+  const usedSales = new Set<AggKey>();
+  const rows: ProductAgg[] = [];
+
+  for (const item of byId.values()) {
+    const sales = findAggForProduct(
+      opts.curAgg,
+      item.productExternalId,
+      item.productName,
+    );
+    if (sales) {
+      for (const [k, v] of opts.curAgg) {
+        if (v === sales) usedSales.add(k);
+      }
+    }
+    rows.push({
+      productExternalId: item.productExternalId,
+      productName: item.productName,
+      segment: 'membership',
+      revenueMinor: sales?.revenueMinor ?? 0,
+      salesCount: sales?.salesCount ?? 0,
+      clientIds: sales?.clientIds ?? new Set(),
+    });
+  }
+
+  // Period sales not in 1C catalog — keep so revenue does not vanish.
+  for (const [key, p] of opts.curAgg) {
+    if (usedSales.has(key)) continue;
+    if (p.segment === 'membership') {
+      rows.push({ ...p, clientIds: new Set(p.clientIds) });
+      continue;
+    }
+    if (
+      isMembershipMarketExtraTitle(p.productName) &&
+      !(p.productExternalId && opts.catalogIds.has(p.productExternalId))
+    ) {
+      rows.push({
+        ...p,
+        segment: 'membership',
+        clientIds: new Set(p.clientIds),
+      });
+    }
+  }
+
+  return rows;
 }

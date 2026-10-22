@@ -2233,15 +2233,17 @@ model ClubRevenueEntry {
 
 /// Competitor club monitored inside one pricing segment (not corporate).
 model SegmentCompetitor {
-  id         String   @id @default(cuid())
-  clubId     String
+  id           String   @id @default(cuid())
+  clubId       String
   /// membership | training | shop | spa | solarium
-  segmentKey String
-  name       String
-  note       String?
-  sortOrder  Int      @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  segmentKey   String
+  name         String
+  note         String?
+  /// Single price-list URL for the competitor club (not per SKU).
+  priceListUrl String?
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   club   Club                    @relation(fields: [clubId], references: [id], onDelete: Cascade)
   prices SegmentCompetitorPrice[]
