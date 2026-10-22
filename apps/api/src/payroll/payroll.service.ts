@@ -1187,14 +1187,51 @@ export class PayrollService {
           new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime(),
       );
     }
+    // Staff PT: duty hours from График (StaffShift track=TRAINER), not from
+    // approved TrainerDaySheet (legacy; often empty → 0 despite roster + rate).
     if (hasPt) {
-      const shiftPay = await this.ptTimesheet.sumShiftPayMinor(
-        clubId,
-        performerId,
-        from,
-        to,
-      );
-      baseSalaryMinor += shiftPay;
+      const ptHourly =
+        sliceForTrack(profile, 'PT').hourlyRateMinor ||
+        profile?.hourlyRateMinor ||
+        0;
+      if (ptHourly > 0) {
+        const hours = await this.staffRoster.hourlySummary(
+          clubId,
+          performerId,
+          from,
+          to,
+        );
+        const alreadyShiftIds = new Set(
+          workUnits.filter((u) => u.kind === 'SHIFT').map((u) => u.id),
+        );
+        let trainerMinutes = 0;
+        for (const s of hours.shifts) {
+          if (s.track !== 'TRAINER' || alreadyShiftIds.has(s.id)) continue;
+          const mins = s.minutes + (s.overtimeMinutes ?? 0);
+          trainerMinutes += mins;
+          const pay = Math.round((mins / 60) * ptHourly);
+          workUnits.push({
+            id: s.id,
+            kind: 'SHIFT',
+            performerId,
+            title: `Смена TRAINER${s.overtimeMinutes ? ` (+${s.overtimeMinutes} мин)` : ''}`,
+            occurredAt: s.startAt,
+            quantity: Number((mins / 60).toFixed(2)),
+            priceMinor: pay,
+            trustBand: 'GREEN',
+            trustResolution: 'NONE',
+            payrollTrusted: true,
+          });
+        }
+        if (trainerMinutes > 0) {
+          baseSalaryMinor += Math.round((trainerMinutes / 60) * ptHourly);
+          workUnits.sort(
+            (a, b) =>
+              new Date(a.occurredAt).getTime() -
+              new Date(b.occurredAt).getTime(),
+          );
+        }
+      }
     }
 
     const locked = await this.prisma.payrollPeriodLock.findUnique({
