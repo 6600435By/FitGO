@@ -22,6 +22,7 @@ import {
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { FormaScheduleCacheService } from '../club-schedule/forma-schedule-cache.service';
+import { staffOwnsScheduleSlot } from '../club-schedule/trainer-schedule.helpers';
 import { moscowDayKey } from '../club-sync/moscow-time';
 import { VisitSyncService } from '../engagement/visit-sync.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -1447,19 +1448,23 @@ export class PersonalTrainingService {
       const allSlots = await this.formaCache.getClubSchedule(clubId, from, to);
       const dbTrainer = await this.prisma.user.findUnique({
         where: { id: user.sub },
+        select: {
+          externalId: true,
+          employeeCode: true,
+          firstName: true,
+          lastName: true,
+        },
       });
-      const first = dbTrainer?.firstName.trim().toLowerCase() ?? '';
-      const last = dbTrainer?.lastName.trim().toLowerCase() ?? '';
       const slots = !dbTrainer
         ? allSlots
-        : allSlots.filter((slot) => {
-            if (slot.trainerId && slot.trainerId === externalId) return true;
-            const name = slot.trainerName?.toLowerCase() ?? '';
-            return (
-              (first.length > 0 && name.includes(first)) ||
-              (last.length > 0 && name.includes(last))
-            );
-          });
+        : allSlots.filter((slot) =>
+            staffOwnsScheduleSlot(slot, {
+              externalId: dbTrainer.externalId ?? externalId,
+              employeeCode: dbTrainer.employeeCode,
+              firstName: dbTrainer.firstName,
+              lastName: dbTrainer.lastName,
+            }),
+          );
 
       return slots.filter(
         (slot) =>

@@ -3785,14 +3785,45 @@ export class BookingControlService {
   ) {
     const u = await this.prisma.user.findFirst({
       where: { id: userId, clubId },
+      select: {
+        externalId: true,
+        employeeCode: true,
+        firstName: true,
+        lastName: true,
+      },
     });
     if (!u) throw new ForbiddenException('Чужое занятие');
-    const name = `${u.lastName} ${u.firstName}`.trim();
-    const ok =
-      (u.externalId && u.externalId === s.employeeExternalId) ||
-      (s.employeeName &&
-        s.employeeName.trim().toLowerCase() === name.toLowerCase());
-    if (!ok) throw new ForbiddenException('Чужое занятие');
+
+    // Same identity keys as list/sales: 1C employeeExternalId often matches
+    // employeeCode while FitGO externalId stays a Forma UUID.
+    const emp = (s.employeeExternalId ?? '').trim();
+    const codes = [u.externalId, u.employeeCode]
+      .map((c) => c?.trim())
+      .filter((c): c is string => Boolean(c));
+    const codeOk =
+      Boolean(emp) &&
+      codes.some(
+        (c) =>
+          c === emp ||
+          c.replace(/^0+/, '') === emp.replace(/^0+/, ''),
+      );
+
+    const first = u.firstName.trim().toLowerCase();
+    const last = u.lastName.trim().toLowerCase();
+    const empName = (s.employeeName ?? '')
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+    const nameOk =
+      Boolean(empName) &&
+      ((Boolean(last) &&
+        Boolean(first) &&
+        (empName === `${last} ${first}` ||
+          empName === `${first} ${last}` ||
+          (empName.includes(last) && empName.includes(first)))) ||
+        (Boolean(last) && empName === last));
+
+    if (!codeOk && !nameOk) throw new ForbiddenException('Чужое занятие');
   }
 
   private promoteGroupAttendanceFromHeader(

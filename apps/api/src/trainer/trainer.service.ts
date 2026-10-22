@@ -10,6 +10,7 @@ import { requireClubId } from '../auth/require-club-id';
 import { ClientProfileService } from '../client/client-profile.service';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { FormaScheduleCacheService } from '../club-schedule/forma-schedule-cache.service';
+import { staffOwnsScheduleSlot } from '../club-schedule/trainer-schedule.helpers';
 import { addMoscowDays, moscowDayKey } from '../club-sync/moscow-time';
 import { VisitSyncService } from '../engagement/visit-sync.service';
 import { FitnessService } from '../fitness/fitness.service';
@@ -47,16 +48,14 @@ export class TrainerService {
       });
       if (!dbTrainer) return allSlots;
 
-      const first = dbTrainer.firstName.trim().toLowerCase();
-      const last = dbTrainer.lastName.trim().toLowerCase();
-      return allSlots.filter((slot) => {
-        if (slot.trainerId && slot.trainerId === trainerExternalId) return true;
-        const name = slot.trainerName?.toLowerCase() ?? '';
-        return (
-          (first.length > 0 && name.includes(first)) ||
-          (last.length > 0 && name.includes(last))
-        );
-      });
+      return allSlots.filter((slot) =>
+        staffOwnsScheduleSlot(slot, {
+          externalId: dbTrainer.externalId ?? trainerExternalId,
+          employeeCode: dbTrainer.employeeCode,
+          firstName: dbTrainer.firstName,
+          lastName: dbTrainer.lastName,
+        }),
+      );
     } catch {
       return [];
     }

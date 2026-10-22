@@ -28,11 +28,11 @@ import { FormaScheduleCacheService } from './forma-schedule-cache.service';
 import {
   clampScheduleRange,
   inferSlotStatus,
-  isFormaEmployeeId,
   localDayKey,
   mapOnexToClubStatus,
   matchOnexToScheduleSlots,
   slotOverlapsDayRange,
+  staffOwnsScheduleSlot,
 } from './trainer-schedule.helpers';
 
 @Injectable()
@@ -120,7 +120,13 @@ export class ClubScheduleService {
     staffIds: string[],
     staffByExt: Map<
       string,
-      { id: string; firstName: string; lastName: string; externalId: string | null }
+      {
+        id: string;
+        firstName: string;
+        lastName: string;
+        externalId: string | null;
+        employeeCode?: string | null;
+      }
     >,
   ): Promise<ClubScheduleEvent[]> {
     const today = localDayKey();
@@ -241,7 +247,13 @@ export class ClubScheduleService {
       const staffSet = new Set(staffIds);
       const staffUsers = await this.prisma.user.findMany({
         where: { id: { in: staffIds }, clubId },
-        select: { id: true, externalId: true, firstName: true, lastName: true },
+        select: {
+          id: true,
+          externalId: true,
+          employeeCode: true,
+          firstName: true,
+          lastName: true,
+        },
       });
       slots = slots.filter((slot) =>
         this.slotMatchesStaff(slot, staffSet, staffUsers),
@@ -335,24 +347,14 @@ export class ClubScheduleService {
     staffUsers: Array<{
       id: string;
       externalId: string | null;
+      employeeCode?: string | null;
       firstName: string;
       lastName: string;
     }>,
   ): boolean {
     for (const u of staffUsers) {
       if (!staffSet.has(u.id)) continue;
-      if (slot.trainerId && u.externalId && slot.trainerId === u.externalId) {
-        return true;
-      }
-      if (slot.trainerId && isFormaEmployeeId(slot.trainerId) && u.externalId === slot.trainerId) {
-        return true;
-      }
-      const name = slot.trainerName?.toLowerCase() ?? '';
-      const first = u.firstName.trim().toLowerCase();
-      const last = u.lastName.trim().toLowerCase();
-      if ((first && name.includes(first)) || (last && name.includes(last))) {
-        return true;
-      }
+      if (staffOwnsScheduleSlot(slot, u)) return true;
     }
     return false;
   }
@@ -401,7 +403,8 @@ export class ClubScheduleService {
       );
     }
 
-    return events;
+    // Drop rows attributed to another staff user (wrong Forma↔1C link).
+    return events.filter((e) => !e.staffId || e.staffId === user.sub);
   }
 
   /** 1C personal sessions (incl. individual reformer) as schedule PT rows. */
@@ -412,7 +415,13 @@ export class ClubScheduleService {
     staffIds: string[],
     staffByExt: Map<
       string,
-      { id: string; firstName: string; lastName: string; externalId: string | null }
+      {
+        id: string;
+        firstName: string;
+        lastName: string;
+        externalId: string | null;
+        employeeCode?: string | null;
+      }
     >,
   ): Promise<ClubScheduleEvent[]> {
     const staffUsers = staffIds.length
@@ -686,13 +695,20 @@ export class ClubScheduleService {
       select: {
         id: true,
         externalId: true,
+        employeeCode: true,
         firstName: true,
         lastName: true,
       },
     });
     const map = new Map<string, (typeof staff)[0]>();
     for (const u of staff) {
-      if (u.externalId) map.set(u.externalId, u);
+      for (const raw of [u.externalId, u.employeeCode]) {
+        const t = raw?.trim();
+        if (!t) continue;
+        map.set(t, u);
+        const stripped = t.replace(/^0+/, '');
+        if (stripped && stripped !== t) map.set(stripped, u);
+      }
     }
     return map;
   }

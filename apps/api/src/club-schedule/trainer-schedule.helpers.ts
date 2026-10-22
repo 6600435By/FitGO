@@ -94,6 +94,47 @@ export function slotOverlapsDayRange(
   return start < rangeEnd.getTime() && end > rangeStart.getTime();
 }
 
+/**
+ * Own-slot check for trainer schedule surfaces.
+ * Prefer employee id/code; name fallback requires both first and last
+ * (OR on a single part pulled in other trainers' classes).
+ */
+export function staffOwnsScheduleSlot(
+  slot: { trainerId?: string | null; trainerName?: string | null },
+  staff: {
+    externalId?: string | null;
+    employeeCode?: string | null;
+    firstName: string;
+    lastName: string;
+  },
+): boolean {
+  const codes = new Set<string>();
+  for (const raw of [staff.externalId, staff.employeeCode]) {
+    const t = raw?.trim();
+    if (!t) continue;
+    codes.add(t);
+    const stripped = t.replace(/^0+/, '');
+    if (stripped) codes.add(stripped);
+  }
+
+  const slotId = slot.trainerId?.trim();
+  if (slotId) {
+    if (codes.has(slotId) || codes.has(slotId.replace(/^0+/, ''))) {
+      return true;
+    }
+  }
+
+  const name = (slot.trainerName ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!name) return false;
+  const first = staff.firstName.trim().toLowerCase();
+  const last = staff.lastName.trim().toLowerCase();
+  if (!first || !last) return false;
+  return name.includes(first) && name.includes(last);
+}
+
 export async function filterTrainerScheduleSlots(
   prisma: PrismaService,
   slots: ScheduleSlot[],
@@ -107,19 +148,23 @@ export async function filterTrainerScheduleSlots(
 
   const dbTrainer = await prisma.user.findUnique({
     where: { id: user.sub },
+    select: {
+      externalId: true,
+      employeeCode: true,
+      firstName: true,
+      lastName: true,
+    },
   });
   if (!dbTrainer) return slots;
 
-  const first = dbTrainer.firstName.trim();
-  const last = dbTrainer.lastName.trim();
-  return slots.filter((slot) => {
-    if (slot.trainerId === externalId) return true;
-    const name = slot.trainerName?.toLowerCase() ?? '';
-    return (
-      (first && name.includes(first.toLowerCase())) ||
-      (last && name.includes(last.toLowerCase()))
-    );
-  });
+  return slots.filter((slot) =>
+    staffOwnsScheduleSlot(slot, {
+      externalId: dbTrainer.externalId ?? externalId,
+      employeeCode: dbTrainer.employeeCode,
+      firstName: dbTrainer.firstName,
+      lastName: dbTrainer.lastName,
+    }),
+  );
 }
 
 export function mapOnexToClubStatus(
@@ -237,6 +282,14 @@ export function matchOnexToScheduleSlots(
         trainersMatch(slot.trainerName, onex.employeeName),
       );
       chosen = named.length === 1 ? named : [];
+    } else if (
+      candidates.length === 1 &&
+      candidates[0].trainerName &&
+      onex.employeeName &&
+      !trainersMatch(candidates[0].trainerName, onex.employeeName)
+    ) {
+      // Single time+title hit with disagreeing trainers — do not steal the slot.
+      chosen = [];
     }
     if (chosen.length !== 1) continue;
 
