@@ -438,6 +438,17 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
 
   const currency = rows[0]?.currency ?? 'BYN';
 
+  const payoutTotals = useMemo(() => {
+    let cardMinor = 0;
+    let cashMinor = 0;
+    for (const r of rows) {
+      const d = drafts[r.performerId];
+      cardMinor += parseMoneyToMinor(d?.card || '0');
+      cashMinor += parseMoneyToMinor(d?.cash || '0');
+    }
+    return { cardMinor, cashMinor };
+  }, [rows, drafts]);
+
   return (
     <section className="rounded-xl border border-slate-800/80 bg-slate-950/80">
       <button
@@ -703,6 +714,23 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
                     );
                   })}
                 </tbody>
+                <tfoot>
+                  <tr className="border-t border-slate-700 bg-slate-950/90 text-slate-200">
+                    <td
+                      colSpan={5}
+                      className="px-2 py-2 font-medium uppercase tracking-wide text-slate-500"
+                    >
+                      Итого
+                    </td>
+                    <td className="px-2 py-2 tabular-nums font-medium">
+                      {money(payoutTotals.cardMinor, currency)}
+                    </td>
+                    <td className="px-2 py-2 tabular-nums font-medium">
+                      {money(payoutTotals.cashMinor, currency)}
+                    </td>
+                    <td colSpan={2} />
+                  </tr>
+                </tfoot>
               </table>
             </div>
           )}
