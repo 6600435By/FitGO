@@ -11,6 +11,7 @@ import {
   TrustBand,
 } from '@prisma/client';
 import type { FitgoClassSessionRow } from '@fitgo/1c-adapter';
+import { isSpaLikeSessionTitle } from '@fitgo/shared-types';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
@@ -203,7 +204,7 @@ export class ClassSessionsSyncService {
     const startAt = parseDateTime(row.startAt);
     if (!startAt) return { members: 0, journal: false };
     const endAt = row.endAt ? parseDateTime(row.endAt) : null;
-    const kind = mapKind(row.kind);
+    const kind = mapKind(row.kind, row.title);
     const status = mapStatus(row.status);
     const memberAttended = (row.members ?? []).filter(
       (m) => m.attendance === 'ATTENDED',
@@ -709,11 +710,14 @@ function parseDateTime(raw: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function mapKind(k: string): OnexClassKind {
+function mapKind(k: string, title?: string | null): OnexClassKind {
   const u = (k || '').toUpperCase();
-  if (u === 'PT') return OnexClassKind.PT;
   if (u === 'SPA') return OnexClassKind.SPA;
   if (u === 'SOLARIUM') return OnexClassKind.SOLARIUM;
+  // 1C Control often tags massage / bioimpedance as PT — store as SPA.
+  if (u === 'PT') {
+    return isSpaLikeSessionTitle(title) ? OnexClassKind.SPA : OnexClassKind.PT;
+  }
   return OnexClassKind.GROUP;
 }
 

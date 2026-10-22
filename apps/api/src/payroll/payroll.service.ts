@@ -779,6 +779,8 @@ export class PayrollService {
       // here — only conducted write-offs (pack amount / N). Still track remarks.
       if (isPtAllSports) continue;
       if (isMultiVisitPackSale(sale.serviceName, sale.quantity)) continue;
+      // Massage / SPA one-shots are paid via SPA scheme, not PT%.
+      if (isSpaLikeSessionTitle(sale.serviceName)) continue;
       const isReformerPersonal = isReformerPersonalNomenclature(
         sale.serviceName,
         null,

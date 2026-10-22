@@ -2,6 +2,7 @@ import {
   extractPackDateIsoFromBasis,
   extractQuotedPackNameFromBasis,
   isMultiVisitPackSale,
+  isSpaLikeSessionTitle,
   parseListedUnitPriceMajor,
   parsePackVisitCountFromTitle,
 } from '@fitgo/shared-types';
@@ -49,7 +50,10 @@ export type PackUnitPriceMatch = {
 };
 
 /**
- * Солярий / тренажёрный зал — не в Контроле записей (ПТ) и не в merge рейтинга.
+ * Солярий / тренажёрный зал / SPA-массаж — не в Контроле записей (ПТ)
+ * и не в merge рейтинга тренеров.
+ * 1С часто помечает массаж как kind=PT; для продаж исключаем здесь,
+ * для занятий — переклассификация PT→SPA в booking-control / sync.
  * Kind SOLARIUM в Onex не трогаем отдельно.
  */
 export function isExcludedFromPtBookingControl(
@@ -64,6 +68,8 @@ export function isExcludedFromPtBookingControl(
   if (s.includes('соляр')) return true;
   if (s.includes('тренажер')) return true;
   if (/\bзал\b/.test(s) && /тренаж/.test(s)) return true;
+  // Massage / bioimpedance / SPA titles tagged as training in 1C sales.
+  if (isSpaLikeSessionTitle(s)) return true;
   return false;
 }
 

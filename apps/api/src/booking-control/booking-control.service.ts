@@ -35,6 +35,7 @@ import {
   sessionApprovalPhase,
   humanDocumentNumber,
   isSpaAllSportsBioimpedance,
+  isSpaLikeSessionTitle,
   membershipNameFromPaymentBasis,
   spaSettlementLabelRu,
   type BookingControlDetail,
@@ -183,7 +184,16 @@ export class BookingControlService {
             clubId,
             isActive: true,
             startAt: { gte: fromD, lte: toD },
-            ...(kindFilter ? { kind: kindFilter } : {}),
+            // SPA filter also pulls PT: 1C often tags massage as PT until re-sync.
+            ...(kindFilter
+              ? kindFilter === OnexClassKind.SPA
+                ? {
+                    kind: {
+                      in: [OnexClassKind.SPA, OnexClassKind.PT],
+                    },
+                  }
+                : { kind: kindFilter }
+              : {}),
             ...(performerFilterId
               ? performerCodes.length > 0 || performerName
                 ? {
@@ -245,9 +255,16 @@ export class BookingControlService {
     const openKeys = new Set(openRemarks.map((r) => r.sessionKey));
 
     for (const s of onex) {
-      const kind = s.kind as BookingControlKind;
+      let kind = s.kind as BookingControlKind;
+      // 1C Control tags massage / bioimpedance as PT — show and rank as SPA.
+      if (kind === 'PT' && isSpaLikeSessionTitle(s.title)) {
+        kind = 'SPA';
+      }
       // Солярий / тренажёрный зал не смешиваем с ПТ (отдельный kind SOLARIUM остаётся).
       if (kind === 'PT' && isExcludedFromPtBookingControl(s.title)) {
+        continue;
+      }
+      if (kindFilter && kind !== (kindFilter as BookingControlKind)) {
         continue;
       }
       const sessionKey = onexSessionKey(s.externalId);

@@ -16,6 +16,7 @@ import {
   DAY_OF_WEEK_KEYS,
   inferPaymentFromBasis,
   isComplimentarySessionTitle,
+  isSpaLikeSessionTitle,
 } from '@fitgo/shared-types';
 import {
   OnexClassKind,
@@ -1107,7 +1108,9 @@ export class ClubAnalyticsService {
 
     const ptCompleted = sessions.filter(
       (s) =>
-        s.kind === OnexClassKind.PT && s.status === OnexClassStatus.COMPLETED,
+        s.kind === OnexClassKind.PT &&
+        s.status === OnexClassStatus.COMPLETED &&
+        !isSpaLikeSessionTitle(s.title),
     );
     let gift = 0;
     for (const s of ptCompleted) {
@@ -1128,7 +1131,9 @@ export class ClubAnalyticsService {
 
     const spaCompleted = sessions.filter(
       (s) =>
-        s.kind === OnexClassKind.SPA && s.status === OnexClassStatus.COMPLETED,
+        s.status === OnexClassStatus.COMPLETED &&
+        (s.kind === OnexClassKind.SPA ||
+          (s.kind === OnexClassKind.PT && isSpaLikeSessionTitle(s.title))),
     );
     let quota = 0;
     let paid = 0;

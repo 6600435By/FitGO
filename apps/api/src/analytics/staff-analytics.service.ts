@@ -14,6 +14,7 @@ import {
   emptyVisitMix,
   inferPaymentFromBasis,
   isComplimentarySessionTitle,
+  isSpaLikeSessionTitle,
   visitMixFromCounts,
 } from '@fitgo/shared-types';
 import {
@@ -1261,6 +1262,8 @@ export class StaffAnalyticsService {
     const coveredCrm = new Set<string>();
 
     for (const s of onexPt) {
+      // 1C tags massage as PT — do not count SPA specialists in PT KPI.
+      if (isSpaLikeSessionTitle(s.title)) continue;
       const raw = s.employeeExternalId?.trim();
       let uid = raw
         ? byExternal.get(raw) ?? byExternal.get(raw.replace(/^0+/, ''))
