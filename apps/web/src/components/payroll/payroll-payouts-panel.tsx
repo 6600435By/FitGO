@@ -9,8 +9,9 @@ import {
   advanceHalfRange,
   monthSettlementRange,
   parseMoneyToMinor,
+  resolvePayoutFormSplit,
 } from '@fitgo/shared-types';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -44,6 +45,72 @@ type RowDraft = {
   selected: boolean;
 };
 
+type PayoutCtx = {
+  payKind: PayrollPayoutKind;
+  payYear: number;
+  payMonth: number;
+  periodFrom: string;
+  periodTo: string;
+};
+
+type PendingSave = {
+  timer: ReturnType<typeof setTimeout>;
+  card: string;
+  cash: string;
+  ctx: PayoutCtx;
+};
+
+const DRAFT_PREFIX = 'fitgo.payrollPayoutDraft.v1';
+
+function draftStorageKey(ctx: PayoutCtx, userId: string) {
+  return `${DRAFT_PREFIX}|${ctx.payKind}|${ctx.periodFrom}|${ctx.periodTo}|${userId}`;
+}
+
+function readLocalDraft(
+  ctx: PayoutCtx,
+  userId: string,
+): { card: string; cash: string; dirty: boolean } | null {
+  if (typeof sessionStorage === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(draftStorageKey(ctx, userId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      card?: unknown;
+      cash?: unknown;
+      dirty?: unknown;
+    };
+    if (typeof parsed.card !== 'string' || typeof parsed.cash !== 'string') {
+      return null;
+    }
+    return { card: parsed.card, cash: parsed.cash, dirty: parsed.dirty === true };
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalDraft(
+  ctx: PayoutCtx,
+  userId: string,
+  card: string,
+  cash: string,
+  dirty: boolean,
+) {
+  if (typeof sessionStorage === 'undefined') return;
+  sessionStorage.setItem(
+    draftStorageKey(ctx, userId),
+    JSON.stringify({ card, cash, dirty }),
+  );
+}
+
+function clearLocalDraft(ctx: PayoutCtx, userId: string) {
+  if (typeof sessionStorage === 'undefined') return;
+  sessionStorage.removeItem(draftStorageKey(ctx, userId));
+}
+
+function minorInput(minor: number) {
+  return (minor / 100).toFixed(2);
+}
+
 type Props = {
   staff: StaffPaySummary[];
   open: boolean;
@@ -63,6 +130,27 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const ctxRef = useRef<PayoutCtx>({
+    payKind,
+    payYear,
+    payMonth,
+    periodFrom,
+    periodTo,
+  });
+  ctxRef.current = { payKind, payYear, payMonth, periodFrom, periodTo };
+  const pendingSaves = useRef<Record<string, PendingSave>>({});
+  const saveSeq = useRef<Record<string, number>>({});
+  const loadSeq = useRef(0);
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  const persistRef = useRef<
+    (
+      userId: string,
+      card: string,
+      cash: string,
+      ctx: PayoutCtx,
+    ) => Promise<void>
+  >(async () => {});
 
   const defaultRange = useMemo(() => {
     return payKind === 'ADVANCE_HALF'
@@ -71,11 +159,107 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
   }, [payKind, payYear, payMonth]);
 
   useEffect(() => {
+    loadSeq.current += 1;
     setPeriodFrom(defaultRange.from);
     setPeriodTo(defaultRange.to);
     setRows([]);
+    draftsRef.current = {};
     setDrafts({});
   }, [defaultRange.from, defaultRange.to]);
+
+  const persistDraft = async (
+    userId: string,
+    card: string,
+    cash: string,
+    ctx: PayoutCtx,
+  ) => {
+    const token = getToken();
+    if (!token) return;
+    const seq = (saveSeq.current[userId] ?? 0) + 1;
+    saveSeq.current[userId] = seq;
+    try {
+      const dto = await api.payrollPayoutSaveDraft(token, {
+        userId,
+        kind: ctx.payKind,
+        year: ctx.payYear,
+        month: ctx.payMonth,
+        periodFrom: ctx.periodFrom || undefined,
+        periodTo: ctx.periodTo || undefined,
+        cardTransferMinor: parseMoneyToMinor(card || '0'),
+        actualCashMinor: parseMoneyToMinor(cash || '0'),
+      });
+      if (saveSeq.current[userId] !== seq) return;
+      if (!pendingSaves.current[userId]) {
+        writeLocalDraft(ctx, userId, card, cash, false);
+      }
+      const now = ctxRef.current;
+      if (
+        now.payKind !== ctx.payKind ||
+        now.periodFrom !== ctx.periodFrom ||
+        now.periodTo !== ctx.periodTo
+      ) {
+        return;
+      }
+      setRows((prev) =>
+        prev.map((row) =>
+          row.performerId === userId ? { ...row, existingPayout: dto } : row,
+        ),
+      );
+    } catch (e) {
+      if (saveSeq.current[userId] !== seq) return;
+      setMessage(
+        e instanceof Error ? e.message : 'Не удалось сохранить черновик',
+      );
+    }
+  };
+  persistRef.current = persistDraft;
+
+  const scheduleSave = (
+    userId: string,
+    card: string,
+    cash: string,
+    ctxOverride?: PayoutCtx,
+  ) => {
+    const ctx = ctxOverride ?? { ...ctxRef.current };
+    writeLocalDraft(ctx, userId, card, cash, true);
+    const prev = pendingSaves.current[userId];
+    if (prev) clearTimeout(prev.timer);
+    const timer = setTimeout(() => {
+      const pending = pendingSaves.current[userId];
+      if (!pending || pending.timer !== timer) return;
+      delete pendingSaves.current[userId];
+      void persistRef.current(userId, pending.card, pending.cash, pending.ctx);
+    }, 400);
+    pendingSaves.current[userId] = { timer, card, cash, ctx };
+  };
+
+  const flushDraft = (userId: string) => {
+    const pending = pendingSaves.current[userId];
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    delete pendingSaves.current[userId];
+    void persistRef.current(userId, pending.card, pending.cash, pending.ctx);
+  };
+
+  const dropPendingSaves = () => {
+    for (const item of Object.values(pendingSaves.current)) {
+      clearTimeout(item.timer);
+    }
+    pendingSaves.current = {};
+    for (const id of Object.keys(saveSeq.current)) {
+      saveSeq.current[id] = (saveSeq.current[id] ?? 0) + 1;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      for (const [userId, item] of Object.entries(pendingSaves.current)) {
+        clearTimeout(item.timer);
+        void persistRef.current(userId, item.card, item.cash, item.ctx);
+      }
+      pendingSaves.current = {};
+    };
+  }, []);
 
   const filteredStaff = useMemo(() => {
     if (department === 'ALL') return staff;
@@ -111,39 +295,70 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
   const load = async () => {
     const token = getToken();
     if (!token) return;
+    const seq = ++loadSeq.current;
+    const ctx: PayoutCtx = {
+      payKind,
+      payYear,
+      payMonth,
+      periodFrom,
+      periodTo,
+    };
     setBusy(true);
     setMessage('');
     try {
       const list = await api.payrollPayoutBatchPreview(token, {
-        kind: payKind,
-        year: payYear,
-        month: payMonth,
-        periodFrom: periodFrom || undefined,
-        periodTo: periodTo || undefined,
+        kind: ctx.payKind,
+        year: ctx.payYear,
+        month: ctx.payMonth,
+        periodFrom: ctx.periodFrom || undefined,
+        periodTo: ctx.periodTo || undefined,
         department: staffId ? undefined : department,
         userIds: staffId ? [staffId] : undefined,
       });
+      if (seq !== loadSeq.current) return;
       setRows(list);
       const next: Record<string, RowDraft> = {};
       for (const p of list) {
-        const suggested = Math.max(0, p.payableMinor);
-        // 25th: prefill card from profile «Выплата аванса на карту»; cash = remainder.
-        const cardMinor =
-          payKind === 'ADVANCE_HALF' && p.fixedAdvanceMinor > 0
-            ? Math.min(p.fixedAdvanceMinor, suggested)
-            : 0;
+        const paid = p.existingPayout?.status === 'PAID';
+        const split = resolvePayoutFormSplit({
+          kind: ctx.payKind,
+          payableMinor: p.payableMinor,
+          fixedAdvanceMinor: p.fixedAdvanceMinor,
+          saved: p.existingPayout
+            ? {
+                status: p.existingPayout.status,
+                cardTransferMinor: p.existingPayout.cardTransferMinor,
+                actualCashMinor: p.existingPayout.actualCashMinor,
+              }
+            : null,
+        });
+        let card = minorInput(split.cardMinor);
+        let cash = minorInput(split.cashMinor);
+        if (paid) {
+          clearLocalDraft(ctx, p.performerId);
+        } else {
+          const local = readLocalDraft(ctx, p.performerId);
+          const useLocal = Boolean(local && (local.dirty || !split.manual));
+          if (local && useLocal) {
+            card = local.card;
+            cash = local.cash;
+            scheduleSave(p.performerId, card, cash, ctx);
+          }
+        }
         next[p.performerId] = {
-          card: String((cardMinor / 100).toFixed(2)),
-          cash: String(((suggested - cardMinor) / 100).toFixed(2)),
-          selected: p.existingPayout?.status !== 'PAID' && p.payableMinor !== 0,
+          card,
+          cash,
+          selected: !paid && p.payableMinor !== 0,
         };
       }
+      draftsRef.current = next;
       setDrafts(next);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setRows([]);
       setMessage(e instanceof Error ? e.message : 'Ошибка превью');
     } finally {
-      setBusy(false);
+      if (seq === loadSeq.current) setBusy(false);
     }
   };
 
@@ -152,15 +367,22 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
     patch: Partial<RowDraft>,
     payableMinor?: number,
   ) => {
-    setDrafts((prev) => {
-      const cur = prev[userId] ?? { card: '0', cash: '0', selected: false };
-      const next = { ...cur, ...patch };
-      if (patch.card !== undefined && payableMinor !== undefined) {
-        const card = parseMoneyToMinor(patch.card || '0');
-        next.cash = String(((payableMinor - card) / 100).toFixed(2));
-      }
-      return { ...prev, [userId]: next };
-    });
+    const cur = draftsRef.current[userId] ?? {
+      card: '0',
+      cash: '0',
+      selected: false,
+    };
+    const next = { ...cur, ...patch };
+    if (patch.card !== undefined && payableMinor !== undefined) {
+      const card = parseMoneyToMinor(patch.card || '0');
+      next.cash = ((payableMinor - card) / 100).toFixed(2);
+    }
+    const merged = { ...draftsRef.current, [userId]: next };
+    draftsRef.current = merged;
+    setDrafts(merged);
+    if (patch.card !== undefined || patch.cash !== undefined) {
+      scheduleSave(userId, next.card, next.cash);
+    }
   };
 
   const confirmSelected = async () => {
@@ -190,6 +412,7 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
     ) {
       return;
     }
+    dropPendingSaves();
     setBusy(true);
     setMessage('');
     try {
@@ -201,6 +424,9 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
         periodTo: periodTo || undefined,
         items,
       });
+      for (const item of items) {
+        clearLocalDraft(ctxRef.current, item.userId);
+      }
       setMessage(`Подтверждено: ${items.length}`);
       await load();
     } catch (e) {
@@ -346,6 +572,10 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
               Подтвердить выплаты
             </button>
           </div>
+          <p className="text-[11px] text-slate-500">
+            Карта и касса, введённые вручную, сохраняются до подтверждения.
+            После выплаты черновик снимается.
+          </p>
 
           {(periodFrom !== defaultRange.from ||
             periodTo !== defaultRange.to) && (
@@ -386,6 +616,7 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
                     const cash = parseMoneyToMinor(d.cash || '0');
                     const delta = r.payableMinor - (card + cash);
                     const paid = r.existingPayout?.status === 'PAID';
+                    const saved = r.existingPayout?.status === 'DRAFT';
                     return (
                       <tr
                         key={r.performerId}
@@ -435,6 +666,7 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
                                 r.payableMinor,
                               )
                             }
+                            onBlur={() => flushDraft(r.performerId)}
                           />
                         </td>
                         <td className="px-2 py-1">
@@ -448,6 +680,7 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
                                 cash: e.target.value,
                               })
                             }
+                            onBlur={() => flushDraft(r.performerId)}
                           />
                         </td>
                         <td
@@ -464,7 +697,7 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
                             : `${delta > 0 ? '+' : ''}${(delta / 100).toFixed(2)}`}
                         </td>
                         <td className="px-2 py-1 text-[10px] text-slate-500">
-                          {paid ? 'выплачено' : 'черновик'}
+                          {paid ? 'выплачено' : saved ? 'сохранено' : 'черновик'}
                         </td>
                       </tr>
                     );

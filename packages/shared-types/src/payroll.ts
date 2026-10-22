@@ -292,6 +292,42 @@ export function splitAdvanceWave(input: {
   };
 }
 
+/**
+ * Card / cash shown on the payout sheet.
+ * A saved DRAFT (manager typed card or cash) replaces the profile prefill.
+ * PAID keeps the recorded split for the locked row; it is not a working draft.
+ * With no saved row, 25th prefills card from «Выплата аванса на карту».
+ */
+export function resolvePayoutFormSplit(input: {
+  kind: PayrollPayoutKind;
+  payableMinor: number;
+  fixedAdvanceMinor: number;
+  saved?: {
+    status: PayrollPayoutStatus;
+    cardTransferMinor: number;
+    actualCashMinor: number;
+  } | null;
+}): { cardMinor: number; cashMinor: number; manual: boolean } {
+  const saved = input.saved;
+  if (saved && (saved.status === 'DRAFT' || saved.status === 'PAID')) {
+    return {
+      cardMinor: saved.cardTransferMinor,
+      cashMinor: saved.actualCashMinor,
+      manual: saved.status === 'DRAFT',
+    };
+  }
+  const suggested = Math.max(0, Math.round(input.payableMinor));
+  const cardMinor =
+    input.kind === 'ADVANCE_HALF' && input.fixedAdvanceMinor > 0
+      ? Math.min(Math.max(0, Math.round(input.fixedAdvanceMinor)), suggested)
+      : 0;
+  return {
+    cardMinor,
+    cashMinor: suggested - cardMinor,
+    manual: false,
+  };
+}
+
 /** Calendar helpers for Belarus club pay waves. */
 export function advanceHalfRange(year: number, month: number): {
   from: string;

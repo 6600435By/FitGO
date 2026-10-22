@@ -6,6 +6,7 @@ import {
   payProfileForAdvanceHalf,
   payProfileForCalculation,
   resolveFixedAdvanceMinor,
+  resolvePayoutFormSplit,
   splitAdvanceWave,
   trainerPayFlags,
   type StaffPayProfile,
@@ -147,6 +148,54 @@ import {
     ),
     8_000,
   );
+}
+
+{
+  const profile = resolvePayoutFormSplit({
+    kind: 'ADVANCE_HALF',
+    payableMinor: 100_000,
+    fixedAdvanceMinor: 10_000,
+  });
+  assert.equal(profile.cardMinor, 10_000);
+  assert.equal(profile.cashMinor, 90_000);
+  assert.equal(profile.manual, false);
+
+  const settlement = resolvePayoutFormSplit({
+    kind: 'MONTH_SETTLEMENT',
+    payableMinor: 50_000,
+    fixedAdvanceMinor: 10_000,
+  });
+  assert.equal(settlement.cardMinor, 0);
+  assert.equal(settlement.cashMinor, 50_000);
+  assert.equal(settlement.manual, false);
+
+  const draft = resolvePayoutFormSplit({
+    kind: 'ADVANCE_HALF',
+    payableMinor: 100_000,
+    fixedAdvanceMinor: 10_000,
+    saved: {
+      status: 'DRAFT',
+      cardTransferMinor: 15_000,
+      actualCashMinor: 20_000,
+    },
+  });
+  assert.equal(draft.cardMinor, 15_000);
+  assert.equal(draft.cashMinor, 20_000);
+  assert.equal(draft.manual, true);
+
+  const paid = resolvePayoutFormSplit({
+    kind: 'ADVANCE_HALF',
+    payableMinor: 100_000,
+    fixedAdvanceMinor: 10_000,
+    saved: {
+      status: 'PAID',
+      cardTransferMinor: 15_000,
+      actualCashMinor: 85_000,
+    },
+  });
+  assert.equal(paid.cardMinor, 15_000);
+  assert.equal(paid.cashMinor, 85_000);
+  assert.equal(paid.manual, false);
 }
 
 console.log('advance-wave.test.ts: ok');

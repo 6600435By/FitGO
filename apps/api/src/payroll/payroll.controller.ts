@@ -357,6 +357,30 @@ export class PayrollController {
     );
   }
 
+  @Post('payouts/draft')
+  savePayoutDraft(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      userId: string;
+      kind: 'ADVANCE_HALF' | 'MONTH_SETTLEMENT';
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+      cardTransferMinor?: number;
+      actualCashMinor?: number;
+    },
+  ) {
+    if (body.kind !== 'ADVANCE_HALF' && body.kind !== 'MONTH_SETTLEMENT') {
+      throw new BadRequestException('Неверный тип выплаты');
+    }
+    if (!body.userId) {
+      throw new BadRequestException('Не указан сотрудник');
+    }
+    return this.payroll.savePayoutDraft(user, body);
+  }
+
   @Post('payouts/confirm')
   confirmPayout(
     @CurrentUser() user: JwtPayload,

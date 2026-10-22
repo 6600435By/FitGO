@@ -1597,6 +1597,110 @@ export class PayrollService {
     return out;
   }
 
+  /**
+   * Remember card/cash typed on the payout sheet. Does not mark the wave paid
+   * and does not move the staff balance. A later confirm replaces this draft.
+   */
+  async savePayoutDraft(
+    actor: JwtPayload,
+    input: {
+      userId: string;
+      kind: PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+      cardTransferMinor?: number;
+      actualCashMinor?: number;
+    },
+  ): Promise<PayrollPayoutDto> {
+    const clubId = requireClubId(actor);
+    const preview = await this.previewPayout(
+      clubId,
+      input.userId,
+      input.kind,
+      input.year,
+      input.month,
+      { periodFrom: input.periodFrom, periodTo: input.periodTo },
+    );
+    if (preview.existingPayout?.status === 'PAID') {
+      throw new BadRequestException('Эта выплата уже зафиксирована');
+    }
+    const card = Math.max(0, Math.round(input.cardTransferMinor ?? 0));
+    const actualCash = Math.round(
+      input.actualCashMinor ?? preview.payableMinor - card,
+    );
+    const kind =
+      input.kind === 'ADVANCE_HALF'
+        ? PrismaPayoutKind.ADVANCE_HALF
+        : PrismaPayoutKind.MONTH_SETTLEMENT;
+    const periodFrom = new Date(`${preview.periodFrom}T00:00:00`);
+    const periodTo = new Date(`${preview.periodTo}T00:00:00`);
+    const data = {
+      earnedMinor: preview.earnedMinor,
+      priorPaidMinor: preview.priorPaidMinor,
+      totalMinor: preview.totalMinor,
+      cardTransferMinor: card,
+      cashMinor: preview.payableMinor - card,
+      actualCashMinor: actualCash,
+      carryInMinor: preview.carryInMinor,
+      carryOutMinor: preview.payableMinor - (card + actualCash),
+      currency: preview.currency,
+      status: PayrollPayoutStatus.DRAFT,
+      paidAt: null,
+      note: null as string | null,
+    };
+    const identity = {
+      clubId,
+      userId: input.userId,
+      kind,
+      periodFrom,
+      periodTo,
+    };
+
+    const updated = await this.prisma.payrollPayout.updateMany({
+      where: { ...identity, status: { not: PayrollPayoutStatus.PAID } },
+      data,
+    });
+    if (updated.count > 0) {
+      const row = await this.prisma.payrollPayout.findFirst({
+        where: identity,
+        include: { user: true },
+      });
+      if (!row) throw new NotFoundException('Черновик выплаты не найден');
+      return this.mapPayout(row);
+    }
+
+    const paid = await this.prisma.payrollPayout.findFirst({
+      where: { ...identity, status: PayrollPayoutStatus.PAID },
+    });
+    if (paid) {
+      throw new BadRequestException('Эта выплата уже зафиксирована');
+    }
+
+    try {
+      const row = await this.prisma.payrollPayout.create({
+        data: {
+          ...identity,
+          ...data,
+          createdById: actor.sub,
+        },
+        include: { user: true },
+      });
+      return this.mapPayout(row);
+    } catch (e) {
+      if (
+        typeof e === 'object' &&
+        e !== null &&
+        'code' in e &&
+        (e as { code?: string }).code === 'P2002'
+      ) {
+        throw new BadRequestException('Эта выплата уже зафиксирована');
+      }
+      throw e;
+    }
+  }
+
   async confirmPayout(
     actor: JwtPayload,
     input: {

@@ -3581,6 +3581,25 @@ export const api = {
     );
   },
 
+  payrollPayoutSaveDraft: (
+    token: string,
+    body: {
+      userId: string;
+      kind: import('@fitgo/shared-types').PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+      cardTransferMinor?: number;
+      actualCashMinor?: number;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').PayrollPayoutDto>(
+      '/super-admin/payroll/payouts/draft',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
   payrollPayoutConfirm: (
     token: string,
     body: {
