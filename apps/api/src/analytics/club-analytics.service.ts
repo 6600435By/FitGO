@@ -21,6 +21,7 @@ import {
 import {
   OnexClassKind,
   OnexClassStatus,
+  PersonalBookingStatus,
 } from '@prisma/client';
 import {
   classifySaleType,
@@ -32,6 +33,7 @@ import {
 } from '../admin-sales/club-revenue-debt';
 import { ClubRevenueService } from '../admin-sales/club-revenue.service';
 import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
+import { isExcludedFromPtBookingControl } from '../admin-sales/trainer-pt-sales-from-revenue';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { BookingControlService } from '../booking-control/booking-control.service';
@@ -197,14 +199,22 @@ export class ClubAnalyticsService {
       this.debtSnapshot(clubId),
     ]);
 
-    // Wave 2: services are a single OnexClassSession query; rankings still use
-    // booking-control PT list — run sequentially to spare the Prisma pool.
+    // Wave 2: services DB block + booking-control rankings (PT KPI aligned to
+    // ranking session rows). Sequential to spare the Prisma pool.
     const [servicesCur, servicesCmp] = await Promise.all([
       this.servicesBlock(clubId, params.from, params.to),
       this.servicesBlock(clubId, compareFrom, compareTo),
     ]);
-    const { trainerRankings, trainerRankingsPt, trainerRankingsGroup } =
-      await this.trainerRankings(clubId, params.from, params.to);
+    // Rankings and PT KPI share booking-control session rows (not SALE lines).
+    const {
+      trainerRankings,
+      trainerRankingsPt,
+      trainerRankingsGroup,
+      ptClubTotals,
+    } = await this.trainerRankings(clubId, params.from, params.to);
+    // Prefer club-wide totals from the same pass as the rating table.
+    servicesCur.pt.completed = ptClubTotals.completed;
+    servicesCur.pt.giftSharePct = ptClubTotals.giftSharePct;
 
     const money: ClubAnalyticsMoney = {
       revenue: metric(moneyCur.revenueMinor, moneyCmp.revenueMinor, {
@@ -1017,7 +1027,7 @@ export class ClubAnalyticsService {
   private async servicesBlock(clubId: string, from: string, to: string) {
     const { start, end } = rangeBounds(from, to);
 
-    const [sessions, scheduleSlots] = await Promise.all([
+    const [sessions, scheduleSlots, fitgoPt] = await Promise.all([
       this.prisma.onexClassSession.findMany({
         where: {
           clubId,
@@ -1037,6 +1047,7 @@ export class ClubAnalyticsService {
           attendedCount: true,
           bookedCount: true,
           externalId: true,
+          number: true,
           capacity: true,
           startAt: true,
           members: {
@@ -1057,6 +1068,17 @@ export class ClubAnalyticsService {
           title: true,
         },
       }),
+      this.prisma.personalTrainingBooking.findMany({
+        where: {
+          trainer: { clubId },
+          status: PersonalBookingStatus.COMPLETED,
+          startAt: { gte: start, lte: end },
+        },
+        select: {
+          crmDocRef: true,
+          isComplimentary: true,
+        },
+      }),
     ]);
 
     const resolveCapacity = buildCapacityResolver(scheduleSlots);
@@ -1072,7 +1094,8 @@ export class ClubAnalyticsService {
     >();
     for (const s of completed) {
       const cap = resolveCapacity(s);
-      const fill = cap > 0 ? (s.attendedCount / cap) * 100 : 0;
+      // Cap at 100% so overbooked classes don't inflate club avg fill.
+      const fill = cap > 0 ? Math.min(100, (s.attendedCount / cap) * 100) : 0;
       if (cap > 0) {
         fillSum += fill;
         fillN++;
@@ -1106,14 +1129,18 @@ export class ClubAnalyticsService {
       .sort((a, b) => a.fillPct - b.fillPct)
       .slice(0, 5);
 
-    const ptCompleted = sessions.filter(
+    // Same exclusions as booking-control PT list (SPA-like, solarium, gym).
+    const onexPtCompleted = sessions.filter(
       (s) =>
         s.kind === OnexClassKind.PT &&
         s.status === OnexClassStatus.COMPLETED &&
-        !isSpaLikeSessionTitle(s.title),
+        !isExcludedFromPtBookingControl(s.title),
     );
+    const coveredCrm = new Set<string>();
     let gift = 0;
-    for (const s of ptCompleted) {
+    for (const s of onexPtCompleted) {
+      coveredCrm.add(s.externalId);
+      if (s.number) coveredCrm.add(s.number);
       const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
       const payment = inferPaymentFromBasis(primary?.paymentBasis);
       if (
@@ -1124,9 +1151,18 @@ export class ClubAnalyticsService {
         gift++;
       }
     }
+    // FitGO-only PT not already counted via 1C class doc.
+    let fitgoOnly = 0;
+    for (const b of fitgoPt) {
+      const ref = b.crmDocRef?.trim();
+      if (ref && coveredCrm.has(ref)) continue;
+      fitgoOnly++;
+      if (b.isComplimentary) gift++;
+    }
+    const ptCompletedCount = onexPtCompleted.length + fitgoOnly;
     const giftSharePct =
-      ptCompleted.length > 0
-        ? Math.round((gift / ptCompleted.length) * 1000) / 10
+      ptCompletedCount > 0
+        ? Math.round((gift / ptCompletedCount) * 1000) / 10
         : 0;
 
     const spaCompleted = sessions.filter(
@@ -1160,7 +1196,7 @@ export class ClubAnalyticsService {
         bottomDirections,
       },
       pt: {
-        completed: ptCompleted.length,
+        completed: ptCompletedCount,
         giftSharePct,
       },
       spa: {
@@ -1300,6 +1336,9 @@ export class ClubAnalyticsService {
     const trainerKey = (performerId?: string, performerName?: string) =>
       performerId || performerName || 'unknown';
 
+    let ptClubCompleted = 0;
+    let ptClubGift = 0;
+
     for (const i of items) {
       if (i.kind === 'PT' && i.status === 'COMPLETED') {
         const key = trainerKey(i.performerId, i.performerName);
@@ -1313,12 +1352,23 @@ export class ClubAnalyticsService {
           clients: new Set<string>(),
           amountMinor: 0,
         };
-        cur.completed++;
-        if (i.payment === 'GIFT') cur.gift++;
-        else if (i.payment === 'PAID' || i.payment === 'QUOTA') cur.paid++;
-        else if (i.payment === 'DEBT' || i.payment === 'UNKNOWN') cur.debt++;
-        if (i.clientName) cur.clients.add(i.clientName);
+        // SALE lines are one-time revenue, not conducted sessions — keep in sum only.
         cur.amountMinor += i.priceMinor ?? 0;
+        if (i.source !== 'SALE') {
+          cur.completed++;
+          ptClubCompleted++;
+          const isGift =
+            i.payment === 'GIFT' || isComplimentarySessionTitle(i.title);
+          if (isGift) {
+            cur.gift++;
+            ptClubGift++;
+          } else if (i.payment === 'PAID' || i.payment === 'QUOTA') {
+            cur.paid++;
+          } else if (i.payment === 'DEBT' || i.payment === 'UNKNOWN') {
+            cur.debt++;
+          }
+          if (i.clientName) cur.clients.add(i.clientName);
+        }
         ptByKey.set(key, cur);
       } else if (i.kind === 'GROUP') {
         const key = trainerKey(i.performerId, i.performerName);
@@ -1355,6 +1405,7 @@ export class ClubAnalyticsService {
     }
 
     const trainerRankingsPt = [...ptByKey.values()]
+      .filter((t) => t.completed > 0)
       .map((t) => ({
         trainerId: t.trainerId,
         name: t.name,
@@ -1407,7 +1458,17 @@ export class ClubAnalyticsService {
       amountMinor: t.amountMinor,
     }));
 
-    return { trainerRankings, trainerRankingsPt, trainerRankingsGroup };
+    const giftSharePct =
+      ptClubCompleted > 0
+        ? Math.round((ptClubGift / ptClubCompleted) * 1000) / 10
+        : 0;
+
+    return {
+      trainerRankings,
+      trainerRankingsPt,
+      trainerRankingsGroup,
+      ptClubTotals: { completed: ptClubCompleted, giftSharePct },
+    };
   }
 
   private buildInsights(input: {

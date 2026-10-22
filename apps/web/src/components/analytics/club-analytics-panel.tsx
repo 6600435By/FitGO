@@ -406,7 +406,8 @@ export function ClubAnalyticsPanel({
             <div className="card overflow-x-auto">
               <h3 className="mb-1 font-semibold">Рейтинг ПТ</h3>
               <p className="mb-3 text-xs text-slate-500">
-                Занятия и продажи по исполнителю (без солярия и зала)
+                Проведено = занятия (как в KPI); сумма — занятия и разовые
+                продажи (без солярия и зала)
               </p>
               <table className="w-full min-w-[560px] text-sm">
                 <thead className="text-left text-xs text-slate-500">
