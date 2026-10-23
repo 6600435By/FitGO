@@ -14,11 +14,13 @@ import {
   emptyVisitMix,
   inferPaymentFromBasis,
   isComplimentarySessionTitle,
-  isSpaLikeSessionTitle,
+  isMultiVisitPackSale,
+  isPtAllSportsSession,
   visitMixFromCounts,
 } from '@fitgo/shared-types';
 import {
   AdminTaskStatus,
+  AvailabilityBlockStatus,
   OnexClassKind,
   OnexClassMemberAttendance,
   OnexClassStatus,
@@ -26,15 +28,22 @@ import {
   Role,
   SessionRemarkStatus,
   SpaBookingStatus,
-  SpaPaymentType,
   StaffShiftTrack,
 } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollService } from '../payroll/payroll.service';
+import { isExcludedFromPtBookingControl } from '../admin-sales/trainer-pt-sales-from-revenue';
+import { namesMatch } from '../booking-control/spa-document-match';
 import { buildCapacityResolver } from './capacity-resolve';
 import { addDaysIso, assertPeriod, rangeBounds } from './analytics-period';
+import {
+  classifySpaPaymentBucket,
+  isSpaAnalyticsSession,
+  resolveStaffUserId,
+  staffDisplayNames,
+} from './staff-analytics.helpers';
 import { applyStaffFlags } from './staff-analytics.rules';
 import { ClubAnalyticsService } from './club-analytics.service';
 
@@ -720,6 +729,24 @@ export class StaffAnalyticsService {
         // already have roster hours
       }
     }
+    // SPA specialists: published availability blocks (not StaffShiftTrack).
+    const spaBlocks =
+      await this.prisma.specialistAvailabilityBlock.findMany({
+        where: {
+          status: AvailabilityBlockStatus.PUBLISHED,
+          startAt: { lt: end },
+          endAt: { gt: start },
+          specialist: { clubId },
+        },
+        select: { specialistId: true, startAt: true, endAt: true },
+      });
+    for (const b of spaBlocks) {
+      const from = b.startAt < start ? start : b.startAt;
+      const to = b.endAt > end ? end : b.endAt;
+      const hrs = Math.max(0, (to.getTime() - from.getTime()) / 3600000);
+      if (hrs <= 0) continue;
+      map.set(b.specialistId, (map.get(b.specialistId) ?? 0) + hrs);
+    }
     return map;
   }
 
@@ -1247,7 +1274,12 @@ export class StaffAnalyticsService {
           isActive: true,
           occurredAt: { gte: start, lte: end },
         },
-        select: { employeeCode: true, employeeName: true, amount: true },
+        select: {
+          employeeCode: true,
+          employeeName: true,
+          amount: true,
+          serviceName: true,
+        },
       }),
     ]);
 
@@ -1262,22 +1294,14 @@ export class StaffAnalyticsService {
     const coveredCrm = new Set<string>();
 
     for (const s of onexPt) {
-      // 1C tags massage as PT — do not count SPA specialists in PT KPI.
-      if (isSpaLikeSessionTitle(s.title)) continue;
-      const raw = s.employeeExternalId?.trim();
-      let uid = raw
-        ? byExternal.get(raw) ?? byExternal.get(raw.replace(/^0+/, ''))
-        : undefined;
-      if (!uid && s.employeeName) {
-        const name = s.employeeName.trim().toLowerCase();
-        for (const t of all.values()) {
-          const full = `${t.firstName} ${t.lastName}`.trim().toLowerCase();
-          if (full && full === name) {
-            uid = t.id;
-            break;
-          }
-        }
-      }
+      // Same exclusions as club analytics / booking-control PT list.
+      if (isExcludedFromPtBookingControl(s.title)) continue;
+      const uid = resolveStaffUserId(
+        byExternal,
+        all.values(),
+        s.employeeExternalId,
+        s.employeeName,
+      );
       if (!uid) continue;
       const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
       const clientKey = primary?.externalId?.trim() || `sess:${s.externalId}`;
@@ -1319,15 +1343,20 @@ export class StaffAnalyticsService {
 
     for (const t of all.values()) {
       const codes = staffEmployeeCodes(t);
-      const performerName = `${t.firstName} ${t.lastName}`.trim();
+      const nameAliases = staffDisplayNames(t);
       let ptSalesMinor = 0;
       for (const s of sales) {
-        if (
-          (s.employeeCode && codes.some((c) => codesMatch(c, s.employeeCode))) ||
-          (performerName &&
-            (s.employeeName ?? '').trim().toLowerCase() ===
-              performerName.toLowerCase())
-        ) {
+        // Align with payroll: SPA/solarium/gym, multi-visit packs, AllSports packs.
+        if (isExcludedFromPtBookingControl(s.serviceName)) continue;
+        if (isMultiVisitPackSale(s.serviceName)) continue;
+        if (isPtAllSportsSession({ serviceName: s.serviceName })) continue;
+        const byCode =
+          s.employeeCode &&
+          codes.some((c) => codesMatch(c, s.employeeCode));
+        const byName =
+          Boolean(s.employeeName) &&
+          nameAliases.some((n) => namesMatch(n, s.employeeName));
+        if (byCode || byName) {
           ptSalesMinor += Math.round((Number(s.amount) || 0) * 100);
         }
       }
@@ -1351,10 +1380,11 @@ export class StaffAnalyticsService {
       for (const clientId of newClientIds) {
         const first = firstByPair.get(`${t.id}:${clientId}`)!;
         const windowEnd = new Date(first.getTime() + 30 * 86400000);
+        // Paid first session counts; otherwise any paid within 30 days.
         const hasPaid = mine.some(
           (e) =>
             e.clientKey === clientId &&
-            e.startAt > first &&
+            e.startAt >= first &&
             e.startAt <= windowEnd &&
             !e.isGift,
         );
@@ -1440,7 +1470,7 @@ export class StaffAnalyticsService {
     }
 
     const historyStart = rangeBounds(addDaysIso(from, -60), to).start;
-    const [bookings, onexSpa] = await Promise.all([
+    const [bookings, onexRaw] = await Promise.all([
       this.prisma.spaBooking.findMany({
         where: {
           clubId,
@@ -1449,6 +1479,7 @@ export class StaffAnalyticsService {
           startAt: { gte: historyStart, lte: end },
         },
         select: {
+          id: true,
           specialistId: true,
           clientId: true,
           clientExternalId: true,
@@ -1457,77 +1488,162 @@ export class StaffAnalyticsService {
           paymentType: true,
           partnerSource: true,
           priceMinor: true,
+          crmDocRef: true,
         },
         orderBy: { startAt: 'asc' },
       }),
+      // 1C often tags massage as kind=PT — same universe as club analytics SPA.
       this.prisma.onexClassSession.findMany({
         where: {
           clubId,
           isActive: true,
-          kind: OnexClassKind.SPA,
           status: OnexClassStatus.COMPLETED,
-          startAt: { gte: start, lte: end },
+          kind: { in: [OnexClassKind.SPA, OnexClassKind.PT] },
+          startAt: { gte: historyStart, lte: end },
         },
         select: {
+          externalId: true,
+          number: true,
+          kind: true,
+          title: true,
+          startAt: true,
           employeeExternalId: true,
+          employeeName: true,
+          fitgoBookingRef: true,
           members: {
-            select: { attendance: true, cancelled: true, paymentBasis: true },
+            select: {
+              externalId: true,
+              attendance: true,
+              cancelled: true,
+              paymentBasis: true,
+              paySource: true,
+              unitPriceMinor: true,
+            },
           },
         },
+        orderBy: { startAt: 'asc' },
       }),
     ]);
 
+    const onexSpa = onexRaw.filter((s) =>
+      isSpaAnalyticsSession({ kind: s.kind, title: s.title }),
+    );
+
+    type SpaEvt = {
+      specialistId: string;
+      clientKey: string;
+      startAt: Date;
+      pay: 'QUOTA' | 'PAID' | 'PARTNER' | 'UNKNOWN';
+      revenueMinor: number;
+    };
+    const events: SpaEvt[] = [];
     const mixByUser = new Map<string, { abon: number; kp: number }>();
+    const coveredFitgo = new Set<string>();
+    const coveredCrm = new Set<string>();
+
     for (const s of onexSpa) {
-      const raw = s.employeeExternalId?.trim();
-      if (!raw) continue;
-      const uid =
-        byExternal.get(raw) ?? byExternal.get(raw.replace(/^0+/, ''));
+      const uid = resolveStaffUserId(
+        byExternal,
+        specialists,
+        s.employeeExternalId,
+        s.employeeName,
+      );
       if (!uid) continue;
-      const cur = mixByUser.get(uid) ?? { abon: 0, kp: 0 };
-      for (const m of s.members) {
-        if (m.cancelled || m.attendance !== OnexClassMemberAttendance.ATTENDED) {
-          continue;
+      coveredCrm.add(s.externalId);
+      if (s.number) coveredCrm.add(s.number);
+      const fitgoRef = s.fitgoBookingRef?.trim();
+      if (fitgoRef) coveredFitgo.add(fitgoRef);
+
+      const primary =
+        s.members.find(
+          (m) =>
+            !m.cancelled &&
+            m.attendance === OnexClassMemberAttendance.ATTENDED,
+        ) ??
+        s.members.find((m) => !m.cancelled) ??
+        s.members[0];
+      const pay = classifySpaPaymentBucket({
+        paymentBasis: primary?.paymentBasis,
+        paySource: primary?.paySource,
+      });
+      const revenueMinor =
+        pay === 'PAID' ? Math.max(0, primary?.unitPriceMinor ?? 0) : 0;
+      const clientKey =
+        primary?.externalId?.trim() || `sess:${s.externalId}`;
+      events.push({
+        specialistId: uid,
+        clientKey,
+        startAt: s.startAt,
+        pay,
+        revenueMinor,
+      });
+
+      if (s.startAt >= start && s.startAt <= end) {
+        const cur = mixByUser.get(uid) ?? { abon: 0, kp: 0 };
+        for (const m of s.members) {
+          if (
+            m.cancelled ||
+            m.attendance !== OnexClassMemberAttendance.ATTENDED
+          ) {
+            continue;
+          }
+          if (classifySpaVisitMix(m.paymentBasis) === 'ABON') cur.abon++;
+          else cur.kp++;
         }
-        if (classifySpaVisitMix(m.paymentBasis) === 'ABON') cur.abon++;
-        else cur.kp++;
+        mixByUser.set(uid, cur);
       }
-      mixByUser.set(uid, cur);
     }
 
-    const clientKey = (b: (typeof bookings)[0]) =>
+    const fitgoClientKey = (b: (typeof bookings)[0]) =>
       b.clientId ??
       b.clientExternalId ??
       (b.guestPhone ? `phone:${b.guestPhone}` : null);
 
+    for (const b of bookings) {
+      if (coveredFitgo.has(b.id)) continue;
+      const crm = b.crmDocRef?.trim();
+      if (crm && coveredCrm.has(crm)) continue;
+      const pay = classifySpaPaymentBucket({
+        paymentType: b.paymentType,
+        partnerSource: b.partnerSource,
+      });
+      const key = fitgoClientKey(b) ?? `fitgo:${b.id}`;
+      events.push({
+        specialistId: b.specialistId,
+        clientKey: key,
+        startAt: b.startAt,
+        pay,
+        revenueMinor:
+          pay === 'PAID' ? Math.max(0, b.priceMinor ?? 0) : 0,
+      });
+    }
+    events.sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
+
     for (const sp of specialists) {
-      const mine = bookings.filter((b) => b.specialistId === sp.id);
-      const inPeriod = mine.filter((b) => b.startAt >= start && b.startAt <= end);
+      const mine = events.filter((e) => e.specialistId === sp.id);
+      const inPeriod = mine.filter(
+        (e) => e.startAt >= start && e.startAt <= end,
+      );
 
       let quota = 0;
       let paid = 0;
       let allsports = 0;
       let unknown = 0;
       let paidRevenue = 0;
-      for (const b of inPeriod) {
-        const ps = (b.partnerSource ?? '').toUpperCase();
-        if (ps.includes('ALLSPORT')) {
-          allsports++;
-        } else if (b.paymentType === SpaPaymentType.QUOTA) {
-          quota++;
-        } else if (b.paymentType === SpaPaymentType.PAID) {
+      for (const e of inPeriod) {
+        if (e.pay === 'PARTNER') allsports++;
+        else if (e.pay === 'QUOTA') quota++;
+        else if (e.pay === 'PAID') {
           paid++;
-          paidRevenue += b.priceMinor ?? 0;
-        } else {
-          unknown++;
-        }
+          paidRevenue += e.revenueMinor;
+        } else unknown++;
       }
 
       const firstByClient = new Map<string, Date>();
-      for (const b of mine) {
-        const key = clientKey(b);
-        if (!key) continue;
-        if (!firstByClient.has(key)) firstByClient.set(key, b.startAt);
+      for (const e of mine) {
+        if (!firstByClient.has(e.clientKey)) {
+          firstByClient.set(e.clientKey, e.startAt);
+        }
       }
       const newClients: string[] = [];
       for (const [key, first] of firstByClient) {
@@ -1537,14 +1653,12 @@ export class StaffAnalyticsService {
       for (const key of newClients) {
         const first = firstByClient.get(key)!;
         const winEnd = new Date(first.getTime() + 60 * 86400000);
-        const has = mine.some((b) => {
-          const ck = clientKey(b);
-          return (
-            ck === key &&
-            b.startAt > first &&
-            b.startAt <= winEnd
-          );
-        });
+        const has = mine.some(
+          (e) =>
+            e.clientKey === key &&
+            e.startAt > first &&
+            e.startAt <= winEnd,
+        );
         if (has) repeats++;
       }
 

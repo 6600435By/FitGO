@@ -266,7 +266,7 @@ export interface PtTrainerStaffKpi {
   paidSessions: number;
   giftSessions: number;
   newClients: number;
-  /** New clients with ≥1 paid PT within 30d after first session. */
+  /** New clients with ≥1 paid PT within 30d of first session (incl. first if paid). */
   conversionPct: number | null;
   /** Cohort: first PT 60–150d ago; share with PT in days 60–90 after first. */
   retention90Pct: number | null;
