@@ -9,21 +9,109 @@ import {
   ptStatsOriginLabelRu,
   ptStatsPaymentLabelRu,
 } from '@fitgo/shared-types';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+import {
+  resolveViewFilters,
+  usePersistViewMemory,
+} from '@/lib/use-view-memory';
+import { isIsoDay, readViewMemory, writeViewMemory } from '@/lib/view-memory';
 
 export type PtTimesheetStatsAudience = 'trainer' | 'admin' | 'super';
 
-function isoDate(d: Date) {
-  return d.toISOString().slice(0, 10);
+const CLUB_TZ = 'Europe/Minsk';
+
+type TrainerOption = { id: string; name: string };
+type AppliedScope = { from: string; to: string; trainerId: string };
+type StatsMem = { from: string; to: string; trainerId: string };
+
+const reportCache = new Map<string, PtStatsReport>();
+
+function cacheKey(
+  audience: PtTimesheetStatsAudience,
+  from: string,
+  to: string,
+  trainerId: string,
+) {
+  return `${audience}|${from}|${to}|${trainerId}`;
 }
 
-function monthBounds(d = new Date()) {
-  const from = new Date(d.getFullYear(), d.getMonth(), 1);
-  const to = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-  return { from: isoDate(from), to: isoDate(to) };
+function clubParts(d = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: CLUB_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d);
+  const pick = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((p) => p.type === type)?.value ?? '0');
+  return { y: pick('year'), m: pick('month'), d: pick('day') };
+}
+
+function isoFromParts(y: number, m: number, day: number) {
+  return `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function lastDayOfMonth(y: number, m: number) {
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+/** Calendar month in the club timezone (not a rolling UTC window). */
+function monthBounds(ref = new Date()) {
+  const { y, m } = clubParts(ref);
+  return {
+    from: isoFromParts(y, m, 1),
+    to: isoFromParts(y, m, lastDayOfMonth(y, m)),
+  };
+}
+
+function prevMonthBounds(ref = new Date()) {
+  const { y, m } = clubParts(ref);
+  const prev = m === 1 ? { y: y - 1, m: 12 } : { y, m: m - 1 };
+  return {
+    from: isoFromParts(prev.y, prev.m, 1),
+    to: isoFromParts(prev.y, prev.m, lastDayOfMonth(prev.y, prev.m)),
+  };
+}
+
+function weekBounds(ref = new Date()) {
+  const { y, m, d } = clubParts(ref);
+  const noon = new Date(Date.UTC(y, m - 1, d, 12));
+  const day = noon.getUTCDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const mon = new Date(noon);
+  mon.setUTCDate(noon.getUTCDate() + mondayOffset);
+  const sun = new Date(mon);
+  sun.setUTCDate(mon.getUTCDate() + 6);
+  return {
+    from: mon.toISOString().slice(0, 10),
+    to: sun.toISOString().slice(0, 10),
+  };
+}
+
+function shiftIsoDay(iso: string, delta: number) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, (m || 1) - 1, (d || 1) + delta));
+  return dt.toISOString().slice(0, 10);
+}
+
+function clubIsoDay(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  const { y, m, d: day } = clubParts(d);
+  return isoFromParts(y, m, day);
+}
+
+/** Cover both the UTC date and the club calendar day so the row is in range. */
+function daySpan(iso: string) {
+  const utc = /^\d{4}-\d{2}-\d{2}/.test(iso) ? iso.slice(0, 10) : clubIsoDay(iso);
+  const club = clubIsoDay(iso);
+  if (utc === club) return { from: club, to: club };
+  return utc < club ? { from: utc, to: club } : { from: club, to: utc };
 }
 
 function money(minor: number, currency: string) {
@@ -42,18 +130,19 @@ function fmtWhen(iso: string) {
 
 function bookingHref(
   audience: PtTimesheetStatsAudience,
-  sessionKey: string,
-  day: string,
+  line: PtStatsSessionLine,
 ): string {
-  const q = new URLSearchParams({ from: day, to: day });
+  const span = daySpan(line.occurredAt);
+  const q = new URLSearchParams({ from: span.from, to: span.to, kind: 'PT' });
+  if (line.clientName && line.clientName !== '—') q.set('client', line.clientName);
+  if (line.clientId) q.set('clientId', line.clientId);
   if (audience === 'trainer') {
-    q.set('session', sessionKey);
+    q.set('session', line.sessionKey);
     return `/trainer/my-sessions?${q}`;
   }
-  q.set('sessionKey', sessionKey);
-  if (audience === 'super') {
-    return `/super-admin/review-queue?${q}`;
-  }
+  q.set('sessionKey', line.sessionKey);
+  if (line.trainerId) q.set('performerId', line.trainerId);
+  if (audience === 'super') return `/super-admin/review-queue?${q}`;
   return `/admin/booking-control?${q}`;
 }
 
@@ -64,14 +153,48 @@ function saleHref(
   if (audience === 'trainer') return null;
   const base = audience === 'super' ? '/super-admin/sales' : '/admin/sales';
   const q = new URLSearchParams();
-  const day =
-    line.saleOccurredAt?.slice(0, 10) || line.occurredAt.slice(0, 10);
-  q.set('from', day);
-  q.set('to', day);
+  if (line.saleOccurredAt) {
+    const span = daySpan(line.saleOccurredAt);
+    q.set('from', span.from);
+    q.set('to', span.to);
+  } else if (line.origin === 'MEMBERSHIP' || line.origin === 'BLOCK') {
+    const span = daySpan(line.occurredAt);
+    q.set('from', shiftIsoDay(span.from, -120));
+    q.set('to', span.to);
+  } else {
+    const span = daySpan(line.occurredAt);
+    q.set('from', span.from);
+    q.set('to', span.to);
+  }
+  if (line.clientName && line.clientName !== '—') q.set('q', line.clientName);
   if (line.saleExternalId) q.set('externalId', line.saleExternalId);
-  else if (line.clientName) q.set('q', line.clientName);
-  else return null;
+  else if (!q.get('q')) return null;
   return `${base}?${q}`;
+}
+
+export function usePtTimesheetTab() {
+  const pathname = usePathname();
+  const touched = useRef(false);
+  const [tab, setTabState] = useState<'journal' | 'stats' | null>(null);
+
+  useEffect(() => {
+    const id = getUser()?.id ?? '';
+    const saved = id
+      ? readViewMemory<{ tab?: string }>(id, pathname, 'pt-tab')
+      : null;
+    if (!touched.current) {
+      setTabState(saved?.tab === 'stats' ? 'stats' : 'journal');
+    }
+  }, [pathname]);
+
+  const setTab = (next: 'journal' | 'stats') => {
+    touched.current = true;
+    setTabState(next);
+    const id = getUser()?.id ?? '';
+    if (id) writeViewMemory(id, pathname, 'pt-tab', { tab: next });
+  };
+
+  return { tab, setTab };
 }
 
 function StatCard({
@@ -177,67 +300,174 @@ export function PtTimesheetStatsPanel({
 }: {
   audience: PtTimesheetStatsAudience;
 }) {
+  const pathname = usePathname();
+  const ownerId = getUser()?.id ?? '';
   const initial = useMemo(() => monthBounds(), []);
-  const [from, setFrom] = useState(initial.from);
-  const [to, setTo] = useState(initial.to);
-  const [trainerId, setTrainerId] = useState('');
+  const boot = useMemo(() => {
+    const defaults: StatsMem = {
+      from: initial.from,
+      to: initial.to,
+      trainerId: '',
+    };
+    return resolveViewFilters<StatsMem>({
+      userId: ownerId,
+      pathname,
+      slot: 'stats',
+      search: new URLSearchParams(),
+      urlKeys: [],
+      fromUrl: () => ({}),
+      defaults,
+    });
+    // Client memory is applied after mount — getUser() is empty during SSR.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- defaults only
+  }, []);
+  const [from, setFrom] = useState(boot.from);
+  const [to, setTo] = useState(boot.to);
+  const [trainerId, setTrainerId] = useState(boot.trainerId);
+  const [trainerOptions, setTrainerOptions] = useState<TrainerOption[]>([]);
+  const [applied, setApplied] = useState<AppliedScope | null>(null);
   const [report, setReport] = useState<PtStatsReport | null>(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const reqId = useRef(0);
   const canExport = audience === 'admin' || audience === 'super';
   const showTrainerFilter = audience !== 'trainer';
 
-  const load = useCallback(async () => {
-    const token = getToken();
-    if (!token) return;
-    setLoading(true);
-    setMessage('');
-    try {
-      // Admin/SA always load all PT trainers; filter is client-side.
-      const data =
-        audience === 'trainer'
-          ? await api.trainerPtStats(token, from, to)
-          : audience === 'admin'
-            ? await api.adminPtStats(token, from, to)
-            : await api.saPtStats(token, from, to);
-      setReport(data);
-    } catch (e) {
-      setReport(null);
-      setMessage(e instanceof Error ? e.message : 'Ошибка');
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    const id = getUser()?.id ?? '';
+    const saved = id
+      ? readViewMemory<StatsMem>(id, pathname, 'stats')
+      : null;
+    const nextFrom = isIsoDay(saved?.from) ? saved.from : initial.from;
+    const nextTo = isIsoDay(saved?.to) ? saved.to : initial.to;
+    const nextTrainer =
+      typeof saved?.trainerId === 'string' ? saved.trainerId : '';
+    setFrom(nextFrom);
+    setTo(nextTo);
+    setTrainerId(nextTrainer);
+    const hit = reportCache.get(
+      cacheKey(audience, nextFrom, nextTo, nextTrainer),
+    );
+    if (hit) {
+      setReport(hit);
+      setApplied({ from: nextFrom, to: nextTo, trainerId: nextTrainer });
     }
-  }, [audience, from, to]);
+    setHydrated(true);
+  }, [audience, initial.from, initial.to, pathname]);
+
+  usePersistViewMemory<StatsMem>({
+    slot: 'stats',
+    enabled: hydrated,
+    data: { from, to, trainerId },
+  });
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!showTrainerFilter) return;
+    const token = getToken();
+    if (!token) return;
+    let cancel = false;
+    const timer = window.setTimeout(() => {
+      const req =
+        audience === 'admin' ? api.adminPtStatsTrainers : api.saPtStatsTrainers;
+      void req(token, from, to)
+        .then((rows) => {
+          if (!cancel) setTrainerOptions(rows);
+        })
+        .catch(() => {
+          if (!cancel) setTrainerOptions([]);
+        });
+    }, 250);
+    return () => {
+      cancel = true;
+      window.clearTimeout(timer);
+    };
+  }, [audience, from, showTrainerFilter, to]);
+
+  const loadReport = useCallback(
+    async (f: string, t: string, tid: string, fresh = false) => {
+      const token = getToken();
+      if (!token) return;
+      const id = ++reqId.current;
+      const key = cacheKey(audience, f, t, tid);
+      if (!fresh) {
+        const hit = reportCache.get(key);
+        if (hit) {
+          setReport(hit);
+          setApplied({ from: f, to: t, trainerId: tid });
+          setMessage('');
+          setLoading(false);
+          return;
+        }
+      }
+      setLoading(true);
+      setMessage('');
+      try {
+        const data =
+          audience === 'trainer'
+            ? await api.trainerPtStats(token, f, t)
+            : audience === 'admin'
+              ? await api.adminPtStats(token, f, t, tid || undefined)
+              : await api.saPtStats(token, f, t, tid || undefined);
+        if (reqId.current !== id) return;
+        reportCache.set(key, data);
+        if (!tid) {
+          for (const tr of data.trainers) {
+            reportCache.set(cacheKey(audience, f, t, tr.trainerId), {
+              ...data,
+              trainerId: tr.trainerId,
+              trainers: [tr],
+              totals: tr,
+              lines: data.lines.filter((l) => l.trainerId === tr.trainerId),
+              noNextBooking: data.noNextBooking.filter(
+                (g) => g.trainerId === tr.trainerId,
+              ),
+            });
+          }
+        }
+        setReport(data);
+        setApplied({ from: f, to: t, trainerId: tid });
+      } catch (e) {
+        if (reqId.current !== id) return;
+        setReport(null);
+        setMessage(e instanceof Error ? e.message : 'Ошибка');
+      } finally {
+        if (reqId.current === id) setLoading(false);
+      }
+    },
+    [audience],
+  );
+
+  useEffect(() => {
+    if (!applied) return;
+    if (applied.from !== from || applied.to !== to) return;
+    if (applied.trainerId === trainerId) return;
+    // «Все тренеры» считает весь клуб — только по кнопке, чтобы не тормозить.
+    if (!trainerId) return;
+    void loadReport(from, to, trainerId);
+  }, [applied, from, loadReport, to, trainerId]);
 
   const setPreset = (kind: 'week' | 'month' | 'prevMonth') => {
-    const now = new Date();
     if (kind === 'week') {
-      const day = now.getDay();
-      const mondayOffset = day === 0 ? -6 : 1 - day;
-      const mon = new Date(now);
-      mon.setDate(now.getDate() + mondayOffset);
-      const sun = new Date(mon);
-      sun.setDate(mon.getDate() + 6);
-      setFrom(isoDate(mon));
-      setTo(isoDate(sun));
-      return;
-    }
-    if (kind === 'prevMonth') {
-      const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const b = monthBounds(d);
+      const b = weekBounds();
       setFrom(b.from);
       setTo(b.to);
       return;
     }
-    const b = monthBounds(now);
+    if (kind === 'prevMonth') {
+      const b = prevMonthBounds();
+      setFrom(b.from);
+      setTo(b.to);
+      return;
+    }
+    const b = monthBounds();
     setFrom(b.from);
     setTo(b.to);
   };
+
+  const periodDirty =
+    applied != null && (applied.from !== from || applied.to !== to);
 
   const exportXlsx = async () => {
     const token = getToken();
@@ -269,39 +499,122 @@ export function PtTimesheetStatsPanel({
     const w = window.open('', '_blank');
     if (!w) return;
     const currency = report.currency;
-    const head =
-      audience !== 'trainer'
-        ? '<th>Тренер</th>'
-        : '';
-    const rows = report.lines
-      .map((l) => {
-        const trainerCell =
-          audience !== 'trainer'
-            ? `<td>${escapeHtml(l.trainerName)}</td>`
-            : '';
-        return `<tr>
+    const trainers = trainerId
+      ? report.trainers.filter((t) => t.trainerId === trainerId)
+      : report.trainers;
+    const focus =
+      trainers.length === 1
+        ? trainers[0]!
+        : report.totals;
+    const cols: PtStatsTrainerSummary[] =
+      !trainerId && trainers.length > 1
+        ? [...trainers, report.totals]
+        : trainers;
+    const colLabels = cols.map((t, i) =>
+      !trainerId && trainers.length > 1 && i === cols.length - 1
+        ? 'ИТОГО'
+        : t.trainerName,
+    );
+
+    const linesByTrainer = new Map<string, PtStatsSessionLine[]>();
+    for (const l of report.lines) {
+      if (trainerId && l.trainerId !== trainerId) continue;
+      const list = linesByTrainer.get(l.trainerId) ?? [];
+      list.push(l);
+      linesByTrainer.set(l.trainerId, list);
+    }
+
+    const metricRow = (
+      label: string,
+      pick: (t: PtStatsTrainerSummary) => string | number,
+    ) =>
+      `<tr><td>${escapeHtml(label)}</td>${cols
+        .map((t) => `<td>${escapeHtml(String(pick(t)))}</td>`)
+        .join('')}</tr>`;
+
+    const summaryBody = [
+      metricRow('Проведено', (t) => t.sessionsConducted),
+      metricRow('Неявки', (t) => t.noShowCount),
+      metricRow('Отмены', (t) => t.cancelledCount),
+      metricRow('Уникальные клиенты', (t) => t.uniqueClients),
+      metricRow('Новые', (t) => t.newClients),
+      metricRow('Повторные', (t) => t.returningClients),
+      metricRow('На клиента', (t) => t.sessionsPerClient ?? '—'),
+      metricRow('Удержание %', (t) => t.retentionPct ?? '—'),
+      metricRow('Удержание 60–90 %', (t) => t.retention90Pct ?? '—'),
+      metricRow('Конверсия %', (t) => t.conversionPct ?? '—'),
+      metricRow('Абонемент', (t) => t.mix.membership),
+      metricRow('Блок', (t) => t.mix.block),
+      metricRow('Разовые', (t) => t.mix.oneShot),
+      metricRow('Подарок', (t) => t.mix.gift),
+      metricRow('Не распознано', (t) => t.mix.unknown),
+      metricRow('Списано', (t) => t.payments.writtenOff),
+      metricRow('Оплачено', (t) => t.payments.paid),
+      metricRow('Долг', (t) => t.payments.debt),
+      metricRow(`Долг ${currency}`, (t) =>
+        money(t.payments.debtMinor, currency),
+      ),
+      metricRow('Смена мин', (t) => t.shiftMinutes),
+      metricRow('Смена', (t) => money(t.shiftPayMinor, currency)),
+      metricRow('Мотивация', (t) => money(t.sessionMotivationMinor, currency)),
+      metricRow('Итого', (t) => money(t.totalEarnMinor, currency)),
+      metricRow('Лестница %', (t) => t.ladderPercent ?? '—'),
+    ].join('');
+
+    const detailRows = trainers
+      .flatMap((t) => {
+        const lines = [...(linesByTrainer.get(t.trainerId) ?? [])].sort(
+          (a, b) => a.occurredAt.localeCompare(b.occurredAt),
+        );
+        return lines.map(
+          (l) => `<tr>
           <td>${escapeHtml(fmtWhen(l.occurredAt))}</td>
-          ${trainerCell}
+          <td>${escapeHtml(l.trainerName)}</td>
           <td>${escapeHtml(l.clientName)}</td>
           <td>${escapeHtml(ptStatsOriginLabelRu(l.origin))}</td>
           <td>${escapeHtml(ptStatsPaymentLabelRu(l.payment))}</td>
           <td>${money(l.priceMinor, currency)}</td>
           <td>${l.ratePercent ?? '—'}</td>
           <td>${money(l.earnMinor, currency)}</td>
-        </tr>`;
+          <td>${escapeHtml(l.title)}</td>
+        </tr>`,
+        );
       })
       .join('');
+
+    const titleExtra =
+      trainers.length === 1 ? ` · ${escapeHtml(trainers[0]!.trainerName)}` : '';
+
     w.document.write(
       `<!doctype html><html><head><title>Статистика ПТ ${from}—${to}</title>
-      <style>body{font-family:system-ui;padding:16px}table{border-collapse:collapse;width:100%}
-      th,td{border:1px solid #ccc;padding:4px 6px;font-size:12px;text-align:left}
-      h1{font-size:16px}</style></head><body>
-      <h1>Статистика ПТ ${from} — ${to}</h1>
-      <p>Проведено: ${report.totals.sessionsConducted}, начислено: ${money(report.totals.totalEarnMinor, currency)}</p>
-      <table><thead><tr><th>Дата</th>${head}<th>Клиент</th><th>Откуда</th><th>Оплата</th><th>Цена</th><th>%</th><th>Начислено</th></tr></thead>
-      <tbody>${rows}</tbody></table></body></html>`,
+      <style>
+        @page{size:landscape;margin:8mm}
+        *{box-sizing:border-box}
+        body{font-family:system-ui,sans-serif;padding:8px;color:#111;margin:0}
+        h1{font-size:14px;margin:0 0 6px}
+        p{font-size:11px;margin:0 0 10px;color:#444}
+        h2{font-size:12px;margin:12px 0 4px}
+        table{border-collapse:collapse;width:100%;table-layout:fixed}
+        th,td{border:1px solid #bbb;padding:2px 4px;font-size:9px;text-align:left;
+          overflow:hidden;text-overflow:ellipsis;word-break:break-word;vertical-align:top}
+        thead{display:table-header-group}
+        tr{page-break-inside:avoid}
+      </style></head><body>
+      <h1>Статистика ПТ ${from} — ${to}${titleExtra}</h1>
+      <p>Проведено: ${focus.sessionsConducted}, начислено: ${money(focus.totalEarnMinor, currency)}</p>
+      <h2>Общая информация</h2>
+      <table><thead><tr><th>Показатель</th>${colLabels
+        .map((n) => `<th>${escapeHtml(n)}</th>`)
+        .join('')}</tr></thead><tbody>${summaryBody}</tbody></table>
+      <h2>Расшифровка</h2>
+      <table><thead><tr>
+        <th>Дата</th><th>Тренер</th><th>Клиент</th><th>Откуда</th><th>Оплата</th>
+        <th>Цена</th><th>%</th><th>Начислено</th><th>Название</th>
+      </tr></thead><tbody>${detailRows}</tbody></table>
+      </body></html>`,
     );
     w.document.close();
+    w.focus();
     w.print();
   };
 
@@ -372,7 +685,7 @@ export function PtTimesheetStatsPanel({
             Прошлый месяц
           </button>
         </div>
-        {showTrainerFilter && report && report.trainers.length > 0 && (
+        {showTrainerFilter && (
           <label className="flex flex-col gap-1 text-xs text-slate-400">
             Тренер
             <select
@@ -380,15 +693,27 @@ export function PtTimesheetStatsPanel({
               value={trainerId}
               onChange={(e) => setTrainerId(e.target.value)}
             >
-              <option value="">Все</option>
-              {report.trainers.map((t) => (
-                <option key={t.trainerId} value={t.trainerId}>
-                  {t.trainerName}
+              <option value="">Все тренеры</option>
+              {trainerOptions.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
                 </option>
               ))}
+              {trainerId &&
+                !trainerOptions.some((t) => t.id === trainerId) && (
+                  <option value={trainerId}>Выбранный тренер</option>
+                )}
             </select>
           </label>
         )}
+        <button
+          type="button"
+          className="btn-primary px-3 py-1.5 text-sm"
+          disabled={loading}
+          onClick={() => void loadReport(from, to, trainerId, true)}
+        >
+          {loading ? 'Считаю…' : 'Сформировать'}
+        </button>
         {canExport && (
           <div className="ml-auto flex flex-wrap gap-2">
             <button
@@ -417,8 +742,27 @@ export function PtTimesheetStatsPanel({
         </p>
       )}
 
+      {periodDirty && (
+        <p className="text-xs text-slate-500">
+          Период изменён — нажмите «Сформировать». Смена тренера в том же
+          периоде подгружает только его.
+        </p>
+      )}
+
       {loading && (
-        <p className="text-sm text-slate-500">Загрузка статистики…</p>
+        <p className="text-sm text-slate-500">
+          {trainerId
+            ? 'Считаю выбранного тренера…'
+            : 'Считаю всех тренеров — это дольше…'}
+        </p>
+      )}
+
+      {!report && !loading && (
+        <p className="text-sm text-slate-500">
+          Выберите период
+          {showTrainerFilter ? ' и тренера' : ''}, затем нажмите «Сформировать».
+          Отчёт не грузится, пока вы его не запросите.
+        </p>
       )}
 
       {focusSummary && report && (
@@ -575,12 +919,7 @@ export function PtTimesheetStatsPanel({
                     </thead>
                     <tbody>
                       {group.lines.map((l) => {
-                          const day = l.occurredAt.slice(0, 10);
-                          const control = bookingHref(
-                            audience,
-                            l.sessionKey,
-                            day,
-                          );
+                          const control = bookingHref(audience, l);
                           const sale = saleHref(audience, l);
                           return (
                             <tr
@@ -611,21 +950,21 @@ export function PtTimesheetStatsPanel({
                                 {money(l.earnMinor, report.currency)}
                               </td>
                               <td className="px-3 py-2 whitespace-nowrap text-xs">
-                                <a
+                                <Link
                                   href={control}
                                   className="text-fitgo-400 underline"
                                 >
                                   Контроль
-                                </a>
+                                </Link>
                                 {sale && (
                                   <>
                                     {' · '}
-                                    <a
+                                    <Link
                                       href={sale}
                                       className="text-fitgo-400 underline"
                                     >
                                       Продажа
-                                    </a>
+                                    </Link>
                                   </>
                                 )}
                               </td>

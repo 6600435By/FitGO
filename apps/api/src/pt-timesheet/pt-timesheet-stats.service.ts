@@ -300,6 +300,17 @@ export class PtTimesheetStatsService {
     };
   }
 
+  /** Names for the stats picker. Does not build KPIs or payroll. */
+  async listTrainerOptions(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<Array<{ id: string; name: string }>> {
+    this.assertPeriod(from, to);
+    const trainers = await this.resolvePtTrainers(clubId, from, to, null);
+    return trainers.map((t) => ({ id: t.id, name: t.name }));
+  }
+
   async exportXlsx(
     clubId: string,
     from: string,
@@ -311,99 +322,55 @@ export class PtTimesheetStatsService {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'FitGO';
 
-    const summary = wb.addWorksheet('Сводка');
-    summary.addRow(['Период', `${from} — ${to}`]);
-    summary.addRow([]);
-    summary.addRow([
-      'Тренер',
-      'Проведено',
-      'Неявки',
-      'Отмены',
-      'Уникальные',
-      'Новые',
-      'Повторные',
-      'На клиента',
-      'Удержание %',
-      'Удержание 60–90 %',
-      'Конверсия %',
-      'Абонемент',
-      'Блок',
-      'Разовые',
-      'Подарок',
-      'Не распознано',
-      'Списано',
-      'Оплачено',
-      'Долг',
-      'Долг ₽',
-      'Смена мин',
-      'Смена ₽',
-      'Мотивация ₽',
-      'Итого ₽',
-      'Лестница %',
-    ]);
+    // One sheet: metrics as rows (columns = trainers), then session lines
+    // trainer-by-trainer. No sessionKey in the client breakdown.
+    const sheet = wb.addWorksheet('Общая информация');
     const money = (minor: number) => Number((minor / 100).toFixed(2));
-    for (const t of report.trainers) {
-      summary.addRow([
-        t.trainerName,
-        t.sessionsConducted,
-        t.noShowCount,
-        t.cancelledCount,
-        t.uniqueClients,
-        t.newClients,
-        t.returningClients,
-        t.sessionsPerClient ?? '',
-        t.retentionPct ?? '',
-        t.retention90Pct ?? '',
-        t.conversionPct ?? '',
-        t.mix.membership,
-        t.mix.block,
-        t.mix.oneShot,
-        t.mix.gift,
-        t.mix.unknown,
-        t.payments.writtenOff,
-        t.payments.paid,
-        t.payments.debt,
-        money(t.payments.debtMinor),
-        t.shiftMinutes,
-        money(t.shiftPayMinor),
-        money(t.sessionMotivationMinor),
-        money(t.totalEarnMinor),
-        t.ladderPercent ?? '',
-      ]);
-    }
-    if (report.trainers.length > 1) {
-      const t = report.totals;
-      summary.addRow([
-        'ИТОГО',
-        t.sessionsConducted,
-        t.noShowCount,
-        t.cancelledCount,
-        t.uniqueClients,
-        t.newClients,
-        t.returningClients,
-        t.sessionsPerClient ?? '',
-        t.retentionPct ?? '',
-        t.retention90Pct ?? '',
-        t.conversionPct ?? '',
-        t.mix.membership,
-        t.mix.block,
-        t.mix.oneShot,
-        t.mix.gift,
-        t.mix.unknown,
-        t.payments.writtenOff,
-        t.payments.paid,
-        t.payments.debt,
-        money(t.payments.debtMinor),
-        t.shiftMinutes,
-        money(t.shiftPayMinor),
-        money(t.sessionMotivationMinor),
-        money(t.totalEarnMinor),
-        t.ladderPercent ?? '',
-      ]);
-    }
+    const trainers = report.trainers;
+    const cols: PtStatsTrainerSummary[] =
+      trainers.length > 1 ? [...trainers, report.totals] : trainers;
+    const colLabels = cols.map((t, i) =>
+      trainers.length > 1 && i === cols.length - 1 ? 'ИТОГО' : t.trainerName,
+    );
 
-    const detail = wb.addWorksheet('Занятия');
-    detail.addRow([
+    sheet.addRow(['Период', `${from} — ${to}`]);
+    sheet.addRow([]);
+    sheet.addRow(['Показатель', ...colLabels]);
+
+    const metric = (
+      label: string,
+      pick: (t: PtStatsTrainerSummary) => string | number,
+    ) => {
+      sheet.addRow([label, ...cols.map(pick)]);
+    };
+
+    metric('Проведено', (t) => t.sessionsConducted);
+    metric('Неявки', (t) => t.noShowCount);
+    metric('Отмены', (t) => t.cancelledCount);
+    metric('Уникальные клиенты', (t) => t.uniqueClients);
+    metric('Новые', (t) => t.newClients);
+    metric('Повторные', (t) => t.returningClients);
+    metric('На клиента', (t) => t.sessionsPerClient ?? '');
+    metric('Удержание %', (t) => t.retentionPct ?? '');
+    metric('Удержание 60–90 %', (t) => t.retention90Pct ?? '');
+    metric('Конверсия %', (t) => t.conversionPct ?? '');
+    metric('Абонемент', (t) => t.mix.membership);
+    metric('Блок', (t) => t.mix.block);
+    metric('Разовые', (t) => t.mix.oneShot);
+    metric('Подарок', (t) => t.mix.gift);
+    metric('Не распознано', (t) => t.mix.unknown);
+    metric('Списано', (t) => t.payments.writtenOff);
+    metric('Оплачено', (t) => t.payments.paid);
+    metric('Долг', (t) => t.payments.debt);
+    metric('Долг ₽', (t) => money(t.payments.debtMinor));
+    metric('Смена мин', (t) => t.shiftMinutes);
+    metric('Смена ₽', (t) => money(t.shiftPayMinor));
+    metric('Мотивация ₽', (t) => money(t.sessionMotivationMinor));
+    metric('Итого ₽', (t) => money(t.totalEarnMinor));
+    metric('Лестница %', (t) => t.ladderPercent ?? '');
+
+    sheet.addRow([]);
+    sheet.addRow([
       'Дата',
       'Тренер',
       'Клиент',
@@ -413,21 +380,32 @@ export class PtTimesheetStatsService {
       '%',
       'Начислено',
       'Название',
-      'sessionKey',
     ]);
+
+    const linesByTrainer = new Map<string, PtStatsSessionLine[]>();
     for (const line of report.lines) {
-      detail.addRow([
-        line.occurredAt,
-        line.trainerName,
-        line.clientName,
-        ptStatsOriginLabelRu(line.origin),
-        ptStatsPaymentLabelRu(line.payment),
-        money(line.priceMinor),
-        line.ratePercent ?? '',
-        money(line.earnMinor),
-        line.title,
-        line.sessionKey,
-      ]);
+      const list = linesByTrainer.get(line.trainerId) ?? [];
+      list.push(line);
+      linesByTrainer.set(line.trainerId, list);
+    }
+    for (const t of trainers) {
+      const lines = [...(linesByTrainer.get(t.trainerId) ?? [])].sort(
+        (a, b) =>
+          new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime(),
+      );
+      for (const line of lines) {
+        sheet.addRow([
+          line.occurredAt,
+          line.trainerName,
+          line.clientName,
+          ptStatsOriginLabelRu(line.origin),
+          ptStatsPaymentLabelRu(line.payment),
+          money(line.priceMinor),
+          line.ratePercent ?? '',
+          money(line.earnMinor),
+          line.title,
+        ]);
+      }
     }
 
     const buf = await wb.xlsx.writeBuffer();
