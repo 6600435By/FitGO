@@ -1302,44 +1302,12 @@ export class PayrollService {
       }
     }
 
-    const spaKeys = [
-      ...new Set(
-        units
-          .filter((u) => u.kind === 'SPA')
-          .flatMap((u) => {
-            const keys = [unitKey.get(u.id)].filter(Boolean) as string[];
-            if (!String(u.id).startsWith('onex:')) keys.push(String(u.id));
-            return keys;
-          }),
-      ),
-    ];
-    if (spaKeys.length) {
-      const approvedSpa = await this.prisma.sessionApproval.findMany({
-        where: {
-          clubId,
-          kind: 'SPA',
-          bookingId: { in: spaKeys },
-          OR: [
-            { adminApprovedAt: { not: null } },
-            { overrideApprovedAt: { not: null } },
-          ],
-        },
-        select: { bookingId: true },
-      });
-      const approvedSpaIds = new Set(approvedSpa.map((a) => a.bookingId));
-      for (const u of units) {
-        if (u.kind !== 'SPA') continue;
-        // AllSports биоимпеданс: исполнитель + визит/продажа — без отдельного SPA-approval.
-        if (workUnitIsSpaPartnerBio(u)) {
-          u.isSpaAllSportsBioimpedance = true;
-          u.payrollTrusted = true;
-          continue;
-        }
-        const sk = unitKey.get(u.id);
-        const ok =
-          approvedSpaIds.has(String(u.id)) ||
-          (sk ? approvedSpaIds.has(sk) : false);
-        if (!ok) u.payrollTrusted = false;
+    // SPA dual-approve stays in Контроль for ops, but does not gate ЗП:
+    // completed 1C visits must pay unless an open remark holds them (above).
+    for (const u of units) {
+      if (u.kind !== 'SPA') continue;
+      if (workUnitIsSpaPartnerBio(u)) {
+        u.isSpaAllSportsBioimpedance = true;
       }
     }
 

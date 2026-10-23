@@ -859,10 +859,12 @@ function mapItem(item: FitgoAnalyticsSalesItem) {
     operationType === 'personal_burn' ||
     personalAccount !== 0
       ? inferPaymentMethod(cash, card, cashless, Math.abs(personalAccount))
-      : rawPayMethod === 'complimentary'
-        ? 'unknown'
-        : rawPayMethod ||
-          inferPaymentMethod(cash, card, cashless, personalAccount);
+      : freeBioimpedance
+        ? 'complimentary'
+        : rawPayMethod === 'complimentary'
+          ? 'complimentary'
+          : rawPayMethod ||
+            inferPaymentMethod(cash, card, cashless, personalAccount);
 
   const productName =
     operationType === 'personal_burn'
