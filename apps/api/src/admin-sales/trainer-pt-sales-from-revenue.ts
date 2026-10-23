@@ -362,23 +362,24 @@ export async function loadPackSalesForUnitPrice(
     if (rawAmount <= 0) continue;
 
     const qtyFromName = parsePackVisitCountFromTitle(product);
-    const isMassagePack = /массаж|massage|блок\s+массаж/i.test(product);
+    // Multi-visit packs only («Блок массажа 10», «10 ПТ», реформер N).
+    // Never treat one-shot «Массаж классический 50 мин» (75 BYN) as a pack —
+    // matching it with basis N=10 yields 75/10 = 7.50 and underpays SPA.
     const isPack =
       isMultiVisitPackSale(product, qtyFromName) ||
       isReformerPersonalTitle(product) ||
-      isLikelyTrainingProductName(product) ||
-      isMassagePack ||
+      (isLikelyTrainingProductName(product) &&
+        qtyFromName != null &&
+        qtyFromName > 1) ||
       // Debt stub «Продажа 30907…» — still usable with basis date + client match.
       (/^продажа\s+\d+/i.test(product) && saleAmt > 0);
 
     if (!isPack) continue;
-    // One-shot PT (qty 1, no pack marker) — not needed for pack unit recovery.
+    // One-shot PT / SPA (qty 1, no pack marker) — not for pack unit recovery.
     if (
-      qtyFromName == null &&
+      (qtyFromName == null || qtyFromName <= 1) &&
       !isReformerPersonalTitle(product) &&
-      !isMassagePack &&
-      !/^продажа\s+\d+/i.test(product) &&
-      !isMultiVisitPackSale(product)
+      !/^продажа\s+\d+/i.test(product)
     ) {
       continue;
     }
@@ -425,6 +426,8 @@ export function matchPackSaleForUnitPrice(
     score: number;
     externalId?: string;
     occurredAt?: string;
+    serviceName?: string;
+    svcQty?: number | null;
   };
   const cands: Cand[] = [];
 
@@ -439,6 +442,11 @@ export function matchPackSaleForUnitPrice(
         ? sale.quantity
         : parsePackVisitCountFromTitle(svc);
     const day = (sale.occurredAt || '').slice(0, 10);
+    const isDebtStub = /^продажа\s+\d+/.test(svc);
+    // One-shot service lines must never become amount/N (75÷10 → 7.50).
+    const saleIsPack =
+      (svcQty != null && svcQty > 1) || isDebtStub || !svc.trim();
+    if (!saleIsPack) continue;
 
     let score = 0;
     if (quoted && svc && (svc.includes(quoted) || quoted.includes(svc))) {
@@ -462,7 +470,7 @@ export function matchPackSaleForUnitPrice(
       !(svcQty != null && packQty != null && svcQty !== packQty)
     ) {
       // Debt stub «Продажа N» or unnamed row on pack document day.
-      score = /^продажа\s+\d+/.test(svc) || !svc ? 50 : 40;
+      score = isDebtStub || !svc ? 50 : 40;
     } else if (
       title &&
       svc &&
@@ -483,6 +491,8 @@ export function matchPackSaleForUnitPrice(
       score,
       externalId: sale.externalId,
       occurredAt: sale.occurredAt,
+      serviceName: sale.serviceName,
+      svcQty,
     });
   }
 

@@ -426,7 +426,8 @@ export class PayrollService {
       });
       let packSaleExt: string | undefined;
       let packSaleAt: string | undefined;
-      if (unitFromPackage == null && primary?.clientName) {
+      // Prefer paid pack sale / N over 1C unit (often catalog÷N → 75/10=7.50).
+      if (primary?.clientName) {
         const packMatch = matchPackSaleForUnitPrice(
           packSalesForUnit,
           primary.clientName,
@@ -527,6 +528,9 @@ export class PayrollService {
       if (sale.operationType === 'unpaid' && (sale.paidAmount ?? 0) < 0.01) {
         continue;
       }
+      // Multi-visit pack sale («Блок массажа 10») is not SPA motivation —
+      // only conducted write-offs pay (pack amount / N).
+      if (isMultiVisitPackSale(sale.productName)) continue;
       const bioimpedance = isSpaAllSportsBioimpedance({
         serviceExternalId: b.service.externalId,
         title: b.service.name,
@@ -656,7 +660,8 @@ export class PayrollService {
       });
       let packSaleExt: string | undefined;
       let packSaleAt: string | undefined;
-      if (unitFromPackage == null && primary?.clientName) {
+      // Prefer paid pack sale / N (same as SPA massage blocks).
+      if (primary?.clientName) {
         const packMatch = matchPackSaleForUnitPrice(
           packSalesForUnit,
           primary.clientName,
