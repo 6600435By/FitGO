@@ -257,9 +257,11 @@ body {
 .admin-app.admin-theme-light .text-emerald-300\/90,
 .admin-app.admin-theme-light .text-emerald-400,
 .admin-app.admin-theme-light .text-emerald-400\/90,
+.admin-app.admin-theme-light .text-fitgo-100,
+.admin-app.admin-theme-light .text-fitgo-200,
 .admin-app.admin-theme-light .text-fitgo-300,
 .admin-app.admin-theme-light .text-fitgo-400 {
-  color: #047857 !important;
+  color: #0f765c !important;
 }
 
 .admin-app.admin-theme-light .bg-emerald-400\/10,
@@ -364,17 +366,25 @@ body {
   --tw-ring-color: rgb(61 82 72 / 0.3) !important;
 }
 
-/* Soft accent fills */
+/* Soft accent fills — include /25–/30 used by «В журнал» and chat chips */
 .admin-app.admin-theme-light .bg-fitgo-500\/5,
 .admin-app.admin-theme-light .bg-fitgo-500\/10,
 .admin-app.admin-theme-light .bg-fitgo-500\/15,
-.admin-app.admin-theme-light .bg-fitgo-500\/20 {
+.admin-app.admin-theme-light .bg-fitgo-500\/20,
+.admin-app.admin-theme-light .bg-fitgo-500\/25,
+.admin-app.admin-theme-light .bg-fitgo-500\/30 {
   background-color: #e7f6ef !important;
 }
 
 .admin-app.admin-theme-light .border-fitgo-500\/30,
 .admin-app.admin-theme-light .border-fitgo-500\/40 {
   border-color: #a7d7c3 !important;
+}
+
+.admin-app.admin-theme-light .ring-fitgo-400\/40,
+.admin-app.admin-theme-light .ring-fitgo-500\/40,
+.admin-app.admin-theme-light .ring-fitgo-500\/50 {
+  --tw-ring-color: rgb(15 118 92 / 0.35) !important;
 }
 
 .admin-app.admin-theme-light .bg-slate-800,
