@@ -368,8 +368,14 @@ export function StaffPayProfileEditor({
         effectiveFrom: effectiveFromRef.current,
       });
       applyLoadedProfile(row);
+      const from = effectiveFromRef.current;
+      const later = (row.rateVersions ?? []).filter(
+        (v) => v.effectiveFrom > from,
+      );
       setMessage(
-        `Мотивация сохранена с ${formatRateDay(effectiveFromRef.current)}`,
+        later.length
+          ? `Мотивация сохранена с ${formatRateDay(from)}, но с ${formatRateDay(later[0]!.effectiveFrom)} осталась другая версия (закрытый период ЗП) — в расчёте она всё ещё действует.`
+          : `Мотивация сохранена с ${formatRateDay(from)}`,
       );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
@@ -1166,6 +1172,7 @@ export function StaffPayProfileEditor({
           type="button"
           className="btn-secondary"
           disabled={saving || copying || templateBusy}
+          title="Подставить 1-е число текущего месяца в поле слева. Чтобы применить — нажмите «Сохранить мотивацию»."
           onClick={() => setEffectiveFrom(firstOfCurrentMonth())}
         >
           Весь месяц
@@ -1207,6 +1214,10 @@ export function StaffPayProfileEditor({
           </>
         )}
       </div>
+      <p className="text-xs text-slate-500">
+        Выберите дату → «Сохранить мотивацию» — ставки считаются с этой даты.
+        «Весь месяц» только ставит 1-е число в поле (само не сохраняет).
+      </p>
       {(() => {
         const hint = rateVersionsHint(rateVersions);
         return hint ? (

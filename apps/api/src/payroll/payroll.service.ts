@@ -2652,13 +2652,15 @@ export class PayrollService {
       }
     }
     if (!merged) return false;
+    // Month start — same default as manual save — so a mid-month hire
+    // does not create a "с 14.10" version that later overrides 01.10.
     await this.prisma.staffCompensation.create({
       data: {
         clubId,
         userId,
         baseSalaryMinor,
         currency: 'BYN',
-        effectiveFrom: dateOnly(localTodayIso()),
+        effectiveFrom: dateOnly(localMonthStartIso()),
         payProfile: merged as object,
       },
     });
