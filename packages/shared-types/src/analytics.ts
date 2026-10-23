@@ -432,8 +432,15 @@ export interface AdminTaskWorkPersonRow {
   closed: number;
   onTimePct: number | null;
   medianCloseHours: number | null;
+  /** Median hours from create → first claim / IN_PROGRESS. */
+  medianClaimHours: number | null;
   renewalRenewed: number;
   renewalLost: number;
+  /** Closed tasks later returned for rework in period. */
+  reworkCount: number;
+  /** reworkCount / closed when closed > 0. */
+  reworkPct: number | null;
+  cancelled: number;
   /** 0–100 when closed >= 5; otherwise null («мало данных»). */
   rating: number | null;
   rank: number | null;
@@ -448,6 +455,16 @@ export interface AdminTaskWorkUnassignedRow {
   tasks: AdminTaskWorkPersonTask[];
 }
 
+/** Person × topic efficiency cell. */
+export interface AdminTaskWorkMatrixCell {
+  userId: string;
+  topic: AdminTaskWorkTopic;
+  closed: number;
+  onTimePct: number | null;
+  medianCloseHours: number | null;
+  reworkPct: number | null;
+}
+
 export interface AdminTaskWorkReport {
   from: string;
   to: string;
@@ -455,6 +472,8 @@ export interface AdminTaskWorkReport {
   flow: AdminTaskWorkFlowMetrics;
   byTopic: AdminTaskWorkTopicRow[];
   byPerson: AdminTaskWorkPersonRow[];
+  /** Person × topic matrix for manager control. */
+  matrix: AdminTaskWorkMatrixCell[];
   unassigned: AdminTaskWorkUnassignedRow;
   /** Shown in UI so rating is transparent. */
   ratingFormula: string;

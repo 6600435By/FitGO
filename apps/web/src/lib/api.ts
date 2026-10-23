@@ -2198,9 +2198,24 @@ export const api = {
       token,
     ),
 
-  superAdminTasks: (token: string, status?: AdminTaskStatus) => {
-    const q = status ? `?status=${status}` : '';
-    return request<AdminTaskItem[]>(`/super-admin/tasks${q}`, {}, token);
+  superAdminTasks: (
+    token: string,
+    opts?: {
+      status?: AdminTaskStatus;
+      assigneeId?: string;
+      onShift?: boolean;
+    },
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.status) q.set('status', opts.status);
+    if (opts?.assigneeId) q.set('assigneeId', opts.assigneeId);
+    if (opts?.onShift) q.set('onShift', '1');
+    const qs = q.toString();
+    return request<AdminTaskItem[]>(
+      `/super-admin/tasks${qs ? `?${qs}` : ''}`,
+      {},
+      token,
+    );
   },
 
   superAdminCreateTask: (
@@ -2222,11 +2237,64 @@ export const api = {
   superAdminUpdateTask: (
     token: string,
     id: string,
-    data: Partial<{ status: AdminTaskStatus; title: string; description: string; dueAt: string }>,
+    data: Partial<{
+      status: AdminTaskStatus;
+      title: string;
+      description: string;
+      dueAt: string;
+      assigneeId: string | null;
+      comment: string;
+    }>,
   ) =>
     request<AdminTaskItem>(`/super-admin/tasks/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
+    }, token),
+
+  superAdminReworkTask: (
+    token: string,
+    id: string,
+    data: {
+      comment: string;
+      assigneeId?: string;
+      pool?: boolean;
+      dueAt?: string;
+    },
+  ) =>
+    request<AdminTaskItem>(`/super-admin/tasks/${id}/rework`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, token),
+
+  superAdminTaskRules: (token: string) =>
+    request<
+      Array<{
+        source: string;
+        label: string;
+        enabled: boolean;
+        assignMode: 'POOL' | 'USERS' | 'ON_SHIFT';
+        assigneeIds: string[];
+        duePolicy: 'END_OF_DAY' | 'HOURS_BEFORE_EVENT' | 'HOURS_AFTER_CREATE';
+        dueHours?: number | null;
+        params: Record<string, unknown>;
+      }>
+    >('/super-admin/task-rules', {}, token),
+
+  superAdminPutTaskRules: (
+    token: string,
+    rules: Array<{
+      source: string;
+      enabled: boolean;
+      assignMode: 'POOL' | 'USERS' | 'ON_SHIFT';
+      assigneeIds?: string[];
+      duePolicy: 'END_OF_DAY' | 'HOURS_BEFORE_EVENT' | 'HOURS_AFTER_CREATE';
+      dueHours?: number | null;
+      params?: Record<string, unknown>;
+    }>,
+  ) =>
+    request('/super-admin/task-rules', {
+      method: 'PUT',
+      body: JSON.stringify({ rules }),
     }, token),
 
   superAdminOverview: (token: string) =>

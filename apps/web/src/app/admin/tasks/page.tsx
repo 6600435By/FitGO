@@ -44,6 +44,22 @@ type Topic =
   | 'pt_sale_check'
   | 'confirmation';
 
+function ReworkBanner({ task }: { task: AdminTaskItem }) {
+  if ((task.reworkCount ?? 0) <= 0 || task.status === AdminTaskStatus.DONE) {
+    return null;
+  }
+  return (
+    <div className="space-y-1">
+      <span className="inline-block rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-300">
+        Доработка
+      </span>
+      {task.reworkComment ? (
+        <p className="text-sm text-amber-200/90">{task.reworkComment}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function isDueTodayOrOverdue(task: AdminTaskItem): boolean {
   if (task.status === AdminTaskStatus.DONE || task.status === AdminTaskStatus.CANCELLED) {
     return false;
@@ -648,6 +664,7 @@ function AdminTasksInner() {
         {ptSaleCheckTasks.map((task) => (
           <li key={task.id} className="card space-y-2">
             <p className="font-medium">{task.title}</p>
+            <ReworkBanner task={task} />
             {task.description ? (
               <p className="whitespace-pre-line text-sm text-slate-400">
                 {task.description}
@@ -693,6 +710,7 @@ function AdminTasksInner() {
             <div className="flex justify-between gap-2">
               <div>
                 <p className="font-medium">{task.title}</p>
+                <ReworkBanner task={task} />
                 {task.createdBy ? (
                   <p className="text-xs text-slate-500">
                     От: {task.createdBy.firstName} {task.createdBy.lastName}

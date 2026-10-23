@@ -8,7 +8,9 @@ import {
   Prisma,
   Role,
   SpaBookingStatus,
+  StaffShiftTrack,
 } from '@prisma/client';
+import type { AdminTaskRuleSourceKey } from './admin-task-rules.catalog';
 import {
   FitgoAnalyticsHttpProvider,
   isGuestVisitProductName,
@@ -145,26 +147,43 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     }
 
     await this.cancelLegacyPerSaleDebtTasks(clubId, systemUser.id);
-    const debtCreated = await this.syncDebtors(clubId, systemUser.id);
-    const installment = await this.syncInstallmentPayments(
+    const debtEnabled =
+      (await this.isRuleEnabled(clubId, 'CLIENT_DEBT')) ||
+      (await this.isRuleEnabled(clubId, 'STAFF_DEBT'));
+    const debtCreated = debtEnabled
+      ? await this.syncDebtors(clubId, systemUser.id)
+      : 0;
+    const installment = (await this.isRuleEnabled(
       clubId,
-      systemUser.id,
-    );
-    const membership = await this.syncMembershipRenewals(
+      'INSTALLMENT_PAYMENT',
+    ))
+      ? await this.syncInstallmentPayments(clubId, systemUser.id)
+      : 0;
+    const membership = (await this.isRuleEnabled(
       clubId,
-      clubExternalId,
-      systemUser.id,
-    );
-    const birthdays = await this.syncBirthdays(clubId, systemUser.id, dayKey);
-    const confirmations = await this.syncBookingConfirmations(
+      'MEMBERSHIP_EXPIRING',
+    ))
+      ? await this.syncMembershipRenewals(
+          clubId,
+          clubExternalId,
+          systemUser.id,
+        )
+      : { created: 0, closedRenewed: 0, closedLost: 0 };
+    const birthdays = (await this.isRuleEnabled(clubId, 'BIRTHDAY'))
+      ? await this.syncBirthdays(clubId, systemUser.id, dayKey)
+      : { created: 0, skipped: 0 };
+    const confirmations = (await this.isRuleEnabled(
       clubId,
-      systemUser.id,
-      dayKey,
-    );
-    const ptNoPerformer = await this.syncTrainingSalesNoPerformer(
+      'BOOKING_CONFIRM',
+    ))
+      ? await this.syncBookingConfirmations(clubId, systemUser.id, dayKey)
+      : { created: 0 };
+    const ptNoPerformer = (await this.isRuleEnabled(
       clubId,
-      systemUser.id,
-    );
+      'TRAINING_SALE_NO_PERFORMER',
+    ))
+      ? await this.syncTrainingSalesNoPerformer(clubId, systemUser.id)
+      : 0;
 
     this.logger.log(
       `Club ${clubId}: debt +${debtCreated}, installment +${installment}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}, birthday +${birthdays.created} skip ${birthdays.skipped}, confirm +${confirmations.created}, ptNoPerformer +${ptNoPerformer}`,
@@ -180,6 +199,49 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       confirmation: confirmations.created,
       ptNoPerformer,
     };
+  }
+
+  /** Missing rule row = enabled (backwards compatible). */
+  private async isRuleEnabled(
+    clubId: string,
+    source: AdminTaskRuleSourceKey,
+  ): Promise<boolean> {
+    const row = await this.prisma.adminTaskRule.findUnique({
+      where: { clubId_source: { clubId, source } },
+      select: { enabled: true },
+    });
+    return row?.enabled !== false;
+  }
+
+  /** Resolve assignee for a new auto-task from club rule (null = pool). */
+  async resolveRuleAssignee(
+    clubId: string,
+    source: AdminTaskRuleSourceKey,
+  ): Promise<string | null> {
+    const row = await this.prisma.adminTaskRule.findUnique({
+      where: { clubId_source: { clubId, source } },
+    });
+    if (!row || row.assignMode === 'POOL') return null;
+    if (row.assignMode === 'USERS') {
+      return row.assigneeIds[0] ?? null;
+    }
+    // ON_SHIFT — first admin currently on shift
+    const now = new Date();
+    const shift = await this.prisma.staffShift.findFirst({
+      where: {
+        clubId,
+        track: StaffShiftTrack.ADMIN,
+        startAt: { lte: now },
+        endAt: { gte: now },
+        user: {
+          isActive: true,
+          roles: { some: { role: Role.ADMIN } },
+        },
+      },
+      select: { userId: true },
+      orderBy: { startAt: 'asc' },
+    });
+    return shift?.userId ?? null;
   }
 
   private addClubDays(isoDate: string, days: number): string {
@@ -317,6 +379,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       take: 200,
     });
     for (const task of stale) {
+      if (task.suppressAutoClose) continue;
       if (task.dedupeKey?.endsWith(`:${yesterday}`) || !task.dedupeKey?.endsWith(`:${dayKey}`)) {
         await this.prisma.adminTask.update({
           where: { id: task.id },
@@ -334,6 +397,11 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         });
       }
     }
+
+    const birthdayAssigneeId = await this.resolveRuleAssignee(
+      clubId,
+      'BIRTHDAY',
+    );
 
     for (const row of rows) {
       const lastVisit = row.lastVisitAt
@@ -421,10 +489,13 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         data: {
           clubId,
           createdById: systemUserId,
+          assigneeId: birthdayAssigneeId ?? undefined,
           title: `День рождения: ${name}`,
           description: 'Поздравить клиента',
           dueAt: new Date(`${dayKey}T10:00:00+03:00`),
-          status: AdminTaskStatus.OPEN,
+          status: birthdayAssigneeId
+            ? AdminTaskStatus.IN_PROGRESS
+            : AdminTaskStatus.OPEN,
           source: 'BIRTHDAY',
           dedupeKey,
           clientExternalId: row.externalId,
@@ -830,10 +901,11 @@ export class AdminTasksSchedulerService implements OnModuleInit {
           { dedupeKey: { startsWith: 'confirm-spa:' } },
         ],
       },
-      select: { id: true, dedupeKey: true },
+      select: { id: true, dedupeKey: true, suppressAutoClose: true },
       take: 500,
     });
     for (const task of stillOpen) {
+      if (task.suppressAutoClose) continue;
       if (!task.dedupeKey || seenDedupe.has(task.dedupeKey)) continue;
       if (!task.dedupeKey.endsWith(`:${tomorrow}`)) continue;
       await this.prisma.adminTask.update({
@@ -1198,6 +1270,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     }
 
     for (const task of openTasks) {
+      if (task.suppressAutoClose) continue;
       if (!task.dedupeKey || missing.has(task.dedupeKey)) continue;
       await this.prisma.adminTask.update({
         where: { id: task.id },
@@ -1368,6 +1441,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     }
 
     for (const task of openTasks) {
+      if (task.suppressAutoClose) continue;
       if (!task.dedupeKey || seen.has(task.dedupeKey)) continue;
       await this.prisma.adminTask.update({
         where: { id: task.id },

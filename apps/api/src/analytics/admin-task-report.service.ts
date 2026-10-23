@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type {
+  AdminTaskWorkMatrixCell,
   AdminTaskWorkPersonRow,
   AdminTaskWorkPersonTask,
   AdminTaskWorkReport,
@@ -9,6 +10,7 @@ import type {
 } from '@fitgo/shared-types';
 import {
   AdminTaskCompletionMode,
+  AdminTaskEventKind,
   AdminTaskStatus as PrismaAdminTaskStatus,
   Role,
 } from '@prisma/client';
@@ -51,6 +53,7 @@ type DbTask = {
   completionMode: AdminTaskCompletionMode;
   stage: string | null;
   meta: unknown;
+  reworkCount: number;
 };
 
 @Injectable()
@@ -84,13 +87,12 @@ export class AdminTaskReportService {
       this.loadTasks(clubId, prev.start, prev.end),
     ]);
 
-    const closerMap = await this.loadClosers(
-      tasks.filter(
-        (t) =>
-          t.status === PrismaAdminTaskStatus.DONE &&
-          t.groupId &&
-          t.completionMode === AdminTaskCompletionMode.SHARED,
-      ),
+    const closerMap = await this.loadClosers(tasks);
+    const claimAtMap = await this.loadFirstClaimAt(tasks.map((t) => t.id));
+    const reworkIds = await this.loadReworkedTaskIds(
+      tasks.map((t) => t.id),
+      start,
+      end,
     );
 
     const current = this.buildPeriodStats(tasks, start, end, now, closerMap);
@@ -143,13 +145,15 @@ export class AdminTaskReportService {
     }
 
     const byTopic = this.buildByTopic(tasks, start, end, now, closerMap);
-    const { byPerson, unassigned } = this.buildByPerson(
+    const { byPerson, unassigned, matrix } = this.buildByPerson(
       admins,
       tasks,
       start,
       end,
       now,
       closerMap,
+      claimAtMap,
+      reworkIds,
     );
 
     return {
@@ -159,6 +163,7 @@ export class AdminTaskReportService {
       flow,
       byTopic,
       byPerson,
+      matrix,
       unassigned,
       ratingFormula: RATING_FORMULA,
     };
@@ -308,24 +313,34 @@ export class AdminTaskReportService {
         completionMode: true,
         stage: true,
         meta: true,
+        reworkCount: true,
       },
     });
   }
 
+  /**
+   * Human closer only. Auto closes («Авто:…») omitted from map → no person credit.
+   * SHARED: prefer «Выполнил…общее задание»; else first non-auto actor; else assignee.
+   */
   private async loadClosers(
-    sharedDone: Array<{ id: string }>,
+    tasks: DbTask[],
   ): Promise<Map<string, string>> {
     const map = new Map<string, string>();
-    if (!sharedDone.length) return map;
-    const ids = sharedDone.map((t) => t.id);
+    const done = tasks.filter((t) => t.status === PrismaAdminTaskStatus.DONE);
+    if (!done.length) return map;
+    const doneIds = done.map((t) => t.id);
     const events = await this.prisma.adminTaskEvent.findMany({
-      where: { taskId: { in: ids }, actorId: { not: null } },
+      where: { taskId: { in: doneIds }, actorId: { not: null } },
       orderBy: { createdAt: 'asc' },
       select: { taskId: true, actorId: true, comment: true },
     });
-    // Prefer explicit SHARED close («Выполнил…общее задание»), else first actor.
+    const autoClosed = new Set<string>();
     for (const e of events) {
       if (!e.actorId) continue;
+      if (e.comment?.startsWith('Авто:')) {
+        autoClosed.add(e.taskId);
+        continue;
+      }
       const sharedClose =
         e.comment?.includes('общее задание') ||
         e.comment?.includes('Выполнил');
@@ -335,7 +350,56 @@ export class AdminTaskReportService {
         map.set(e.taskId, e.actorId);
       }
     }
+    for (const id of autoClosed) {
+      map.delete(id);
+    }
+    for (const t of done) {
+      if (autoClosed.has(t.id)) continue;
+      if (map.has(t.id)) continue;
+      if (t.assigneeId) map.set(t.id, t.assigneeId);
+    }
     return map;
+  }
+
+  private async loadFirstClaimAt(
+    taskIds: string[],
+  ): Promise<Map<string, Date>> {
+    const map = new Map<string, Date>();
+    if (!taskIds.length) return map;
+    const events = await this.prisma.adminTaskEvent.findMany({
+      where: {
+        taskId: { in: taskIds },
+        OR: [
+          { kind: AdminTaskEventKind.CLAIM },
+          { kind: AdminTaskEventKind.ASSIGN },
+          { comment: { contains: 'Взял' } },
+          { comment: { contains: 'Назначен' } },
+        ],
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { taskId: true, createdAt: true },
+    });
+    for (const e of events) {
+      if (!map.has(e.taskId)) map.set(e.taskId, e.createdAt);
+    }
+    return map;
+  }
+
+  private async loadReworkedTaskIds(
+    taskIds: string[],
+    start: Date,
+    end: Date,
+  ): Promise<Set<string>> {
+    if (!taskIds.length) return new Set();
+    const events = await this.prisma.adminTaskEvent.findMany({
+      where: {
+        taskId: { in: taskIds },
+        kind: AdminTaskEventKind.REWORK,
+        createdAt: { gte: start, lte: end },
+      },
+      select: { taskId: true },
+    });
+    return new Set(events.map((e) => e.taskId));
   }
 
   private topicOf(task: DbTask): AdminTaskWorkTopic {
@@ -351,6 +415,10 @@ export class AdminTaskReportService {
     task: DbTask,
     closerMap: Map<string, string>,
   ): CreditTaskInput {
+    const isDone = task.status === PrismaAdminTaskStatus.DONE;
+    const humanCloser = closerMap.get(task.id) ?? null;
+    // DONE without closerMap entry = system auto-close → no person credit
+    const noHumanCredit = isDone && !closerMap.has(task.id);
     return {
       id: task.id,
       groupId: task.groupId,
@@ -358,10 +426,10 @@ export class AdminTaskReportService {
         task.completionMode === AdminTaskCompletionMode.SHARED
           ? 'SHARED'
           : 'INDIVIDUAL',
-      assigneeId: task.assigneeId,
+      assigneeId: noHumanCredit ? null : task.assigneeId,
       status: task.status,
       completedAt: task.completedAt,
-      closerActorId: closerMap.get(task.id) ?? null,
+      closerActorId: humanCloser,
     };
   }
 
@@ -569,18 +637,24 @@ export class AdminTaskReportService {
     end: Date,
     now: Date,
     closerMap: Map<string, string>,
+    claimAtMap: Map<string, Date>,
+    reworkIds: Set<string>,
   ): {
     byPerson: AdminTaskWorkPersonRow[];
     unassigned: AdminTaskWorkReport['unassigned'];
+    matrix: AdminTaskWorkMatrixCell[];
   } {
     const collapse = collapseSharedGroups(
       tasks.map((t) => this.toCreditInput(t, closerMap)),
     );
     const byId = new Map(tasks.map((t) => [t.id, t]));
-    const creditByRep = new Map(
-      [...collapse.values()].map((g) => [g.taskId, g.creditUserId]),
-    );
-
+    type TopicAcc = {
+      closed: number;
+      onTime: number;
+      withDue: number;
+      closeHours: number[];
+      rework: number;
+    };
     type Acc = {
       openNow: number;
       overdueNow: number;
@@ -588,11 +662,22 @@ export class AdminTaskReportService {
       onTime: number;
       withDue: number;
       closeHours: number[];
+      claimHours: number[];
       renewalRenewed: number;
       renewalLost: number;
+      reworkCount: number;
+      cancelled: number;
       openTasks: AdminTaskWorkPersonTask[];
       closedTasks: AdminTaskWorkPersonTask[];
+      byTopic: Map<AdminTaskWorkTopic, TopicAcc>;
     };
+    const emptyTopic = (): TopicAcc => ({
+      closed: 0,
+      onTime: 0,
+      withDue: 0,
+      closeHours: [],
+      rework: 0,
+    });
     const empty = (): Acc => ({
       openNow: 0,
       overdueNow: 0,
@@ -600,10 +685,14 @@ export class AdminTaskReportService {
       onTime: 0,
       withDue: 0,
       closeHours: [],
+      claimHours: [],
       renewalRenewed: 0,
       renewalLost: 0,
+      reworkCount: 0,
+      cancelled: 0,
       openTasks: [],
       closedTasks: [],
+      byTopic: new Map(),
     });
 
     const byUser = new Map<string, Acc>();
@@ -620,6 +709,15 @@ export class AdminTaskReportService {
       createdAt: t.createdAt.toISOString(),
       overdue,
     });
+
+    const ensureTopic = (acc: Acc, topic: AdminTaskWorkTopic): TopicAcc => {
+      let row = acc.byTopic.get(topic);
+      if (!row) {
+        row = emptyTopic();
+        acc.byTopic.set(topic, row);
+      }
+      return row;
+    };
 
     // Open now — by current assignee (not collapsed credit)
     const openCollapse = collapseSharedGroups(
@@ -652,10 +750,27 @@ export class AdminTaskReportService {
       acc.openTasks.push(item);
     }
 
-    // Closed in period — by credit user
+    // Closed in period — by human credit only (closerMap)
     for (const g of collapse.values()) {
       const t = byId.get(g.taskId);
       if (!t) continue;
+      if (
+        t.status === PrismaAdminTaskStatus.CANCELLED &&
+        t.completedAt &&
+        t.completedAt >= start &&
+        t.completedAt <= end
+      ) {
+        const cancelId = t.assigneeId;
+        if (cancelId) {
+          let acc = byUser.get(cancelId);
+          if (!acc) {
+            acc = empty();
+            byUser.set(cancelId, acc);
+          }
+          acc.cancelled++;
+        }
+        continue;
+      }
       if (
         t.status !== PrismaAdminTaskStatus.DONE ||
         !t.completedAt ||
@@ -664,7 +779,7 @@ export class AdminTaskReportService {
       ) {
         continue;
       }
-      const creditId = creditByRep.get(t.id) ?? t.assigneeId;
+      const creditId = g.creditUserId;
       if (!creditId) continue;
       let acc = byUser.get(creditId);
       if (!acc) {
@@ -678,6 +793,24 @@ export class AdminTaskReportService {
         if (ot) acc.onTime++;
       }
       acc.closeHours.push(closeHours(t.createdAt, t.completedAt));
+      const claimAt = claimAtMap.get(t.id);
+      if (claimAt && claimAt >= t.createdAt) {
+        acc.claimHours.push(closeHours(t.createdAt, claimAt));
+      }
+      if (reworkIds.has(t.id) || t.reworkCount > 0) {
+        // Count rework if event in period OR task was reworked at least once and closed in period
+        if (reworkIds.has(t.id)) acc.reworkCount++;
+      }
+      const topic = this.topicOf(t);
+      const topicAcc = ensureTopic(acc, topic);
+      topicAcc.closed++;
+      if (ot !== null) {
+        topicAcc.withDue++;
+        if (ot) topicAcc.onTime++;
+      }
+      topicAcc.closeHours.push(closeHours(t.createdAt, t.completedAt));
+      if (reworkIds.has(t.id)) topicAcc.rework++;
+
       const overdueDone = Boolean(
         t.dueAt && t.completedAt.getTime() > t.dueAt.getTime(),
       );
@@ -697,7 +830,12 @@ export class AdminTaskReportService {
       const acc = byUser.get(a.id) ?? empty();
       const pct = onTimePct(acc.onTime, acc.withDue);
       const med = median(acc.closeHours);
-      const rating = computeRating(acc.closed, pct, teamMedian);
+      const claimMed = median(acc.claimHours);
+      const reworkPct =
+        acc.closed > 0
+          ? Math.round((acc.reworkCount / acc.closed) * 100)
+          : null;
+      const rating = computeRating(acc.closed, pct, teamMedian, reworkPct);
       return {
         userId: a.id,
         name: `${a.firstName} ${a.lastName}`.trim(),
@@ -706,8 +844,13 @@ export class AdminTaskReportService {
         closed: acc.closed,
         onTimePct: pct,
         medianCloseHours: med != null ? Math.round(med * 10) / 10 : null,
+        medianClaimHours:
+          claimMed != null ? Math.round(claimMed * 10) / 10 : null,
         renewalRenewed: acc.renewalRenewed,
         renewalLost: acc.renewalLost,
+        reworkCount: acc.reworkCount,
+        reworkPct,
+        cancelled: acc.cancelled,
         rating,
         rank: null,
         openTasks: acc.openTasks.slice(0, 50),
@@ -736,8 +879,28 @@ export class AdminTaskReportService {
       }
     }
 
+    const matrix: AdminTaskWorkMatrixCell[] = [];
+    for (const a of admins) {
+      const acc = byUser.get(a.id) ?? empty();
+      for (const topic of TOPIC_ORDER) {
+        const t = acc.byTopic.get(topic) ?? emptyTopic();
+        if (t.closed === 0) continue;
+        const med = median(t.closeHours);
+        matrix.push({
+          userId: a.id,
+          topic,
+          closed: t.closed,
+          onTimePct: onTimePct(t.onTime, t.withDue),
+          medianCloseHours: med != null ? Math.round(med * 10) / 10 : null,
+          reworkPct:
+            t.closed > 0 ? Math.round((t.rework / t.closed) * 100) : null,
+        });
+      }
+    }
+
     return {
       byPerson: rows,
+      matrix,
       unassigned: {
         openNow: unassignedAcc.openNow,
         overdueNow: unassignedAcc.overdueNow,

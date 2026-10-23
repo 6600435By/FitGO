@@ -23,7 +23,12 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { ApplyPresetDto, SetPermissionsDto } from './dto/permissions.dto';
 import { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
-import { CreateAdminTaskDto, UpdateAdminTaskDto } from './dto/task.dto';
+import {
+  CreateAdminTaskDto,
+  PutAdminTaskRulesDto,
+  ReworkAdminTaskDto,
+  UpdateAdminTaskDto,
+} from './dto/task.dto';
 import { AppPresenceService } from '../app-presence/app-presence.service';
 import { BackupStatusService } from './backup-status.service';
 import { SuperAdminAnalyticsService } from './super-admin-analytics.service';
@@ -125,8 +130,13 @@ export class SuperAdminController {
   listTasks(
     @CurrentUser() user: JwtPayload,
     @Query('status') status?: AdminTaskStatus,
+    @Query('assigneeId') assigneeId?: string,
+    @Query('onShift') onShift?: string,
   ) {
-    return this.superAdmin.listTasks(user, status);
+    return this.superAdmin.listTasks(user, status, {
+      assigneeId: assigneeId?.trim() || undefined,
+      onShift: onShift === '1' || onShift === 'true',
+    });
   }
 
   @Post('tasks')
@@ -141,6 +151,28 @@ export class SuperAdminController {
     @Body() dto: UpdateAdminTaskDto,
   ) {
     return this.superAdmin.updateTask(user, id, dto);
+  }
+
+  @Post('tasks/:id/rework')
+  reworkTask(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: ReworkAdminTaskDto,
+  ) {
+    return this.superAdmin.reworkTask(user, id, dto);
+  }
+
+  @Get('task-rules')
+  listTaskRules(@CurrentUser() user: JwtPayload) {
+    return this.superAdmin.listTaskRules(user);
+  }
+
+  @Put('task-rules')
+  putTaskRules(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: PutAdminTaskRulesDto,
+  ) {
+    return this.superAdmin.putTaskRules(user, dto.rules ?? []);
   }
 
   @Get('audit-log')

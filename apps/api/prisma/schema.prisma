@@ -47,6 +47,29 @@ enum AdminTaskCompletionMode {
   INDIVIDUAL
 }
 
+/// Audit trail kind on AdminTaskEvent (STATUS kept for legacy rows without kind).
+enum AdminTaskEventKind {
+  STATUS
+  COMMENT
+  CLAIM
+  ASSIGN
+  REWORK
+}
+
+/// Who receives newly generated auto-tasks for a source.
+enum AdminTaskAssignMode {
+  POOL
+  USERS
+  ON_SHIFT
+}
+
+/// How dueAt is computed for newly generated auto-tasks.
+enum AdminTaskDuePolicy {
+  END_OF_DAY
+  HOURS_BEFORE_EVENT
+  HOURS_AFTER_CREATE
+}
+
 enum ClubCrmLinkStatus {
   LINKED
   PENDING_CRM
@@ -522,6 +545,7 @@ model Club {
   webkassaSyncStates   WebkassaSyncState[]
   discrepancyAcks      DiscrepancyAck[]
   discrepancyTaskRules DiscrepancyTaskRule[]
+  adminTaskRules       AdminTaskRule[]
   segmentCompetitors   SegmentCompetitor[]
   marketProductHides   MarketProductHide[]
   membershipSaleWindows MembershipSaleWindow[]
@@ -1525,6 +1549,10 @@ model AdminTask {
   clientExternalId String?
   /// phone, membershipName, validUntil, docId, debt totals, installment schedule, …
   meta        Json?
+  /// How many times a manager returned this task for rework.
+  reworkCount Int             @default(0)
+  /// After rework, scheduler must not auto-DONE/CANCEL until human closes again.
+  suppressAutoClose Boolean   @default(false)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
@@ -1540,20 +1568,47 @@ model AdminTask {
   @@index([clubId, source, stage])
   @@index([clubId, nextActionAt])
   @@index([clubId, groupId])
+  @@index([clubId, completedAt])
 }
 
 model AdminTaskEvent {
-  id        String   @id @default(cuid())
+  id        String             @id @default(cuid())
   taskId    String
   actorId   String?
+  kind      AdminTaskEventKind @default(STATUS)
   stage     String?
   comment   String?
-  createdAt DateTime @default(now())
+  createdAt DateTime           @default(now())
 
   task  AdminTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
   actor User?     @relation("AdminTaskEventActor", fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([taskId, createdAt])
+  @@index([taskId, kind])
+}
+
+/// Per-club catalog of auto-task generators (debts, birthdays, …). Missing row = enabled defaults.
+model AdminTaskRule {
+  id          String              @id @default(cuid())
+  clubId      String
+  /// CLIENT_DEBT | STAFF_DEBT | MEMBERSHIP_EXPIRING | INSTALLMENT_PAYMENT | BIRTHDAY | BOOKING_CONFIRM | TRAINING_SALE_NO_PERFORMER
+  source      String
+  enabled     Boolean             @default(true)
+  assignMode  AdminTaskAssignMode @default(POOL)
+  /// Used when assignMode = USERS
+  assigneeIds String[]            @default([])
+  duePolicy   AdminTaskDuePolicy  @default(END_OF_DAY)
+  /// Hours for HOURS_BEFORE_EVENT / HOURS_AFTER_CREATE
+  dueHours    Int?
+  /// Generator-specific: minAmount, daysAhead, …
+  params      Json?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, source])
+  @@index([clubId, enabled])
 }
 
 model StaffAuditLog {

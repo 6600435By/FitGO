@@ -1,11 +1,12 @@
 import type { AdminTaskWorkTopic } from '@fitgo/shared-types';
 
 export const RATING_MIN_CLOSED = 5;
-export const RATING_ON_TIME_WEIGHT = 0.6;
-export const RATING_VOLUME_WEIGHT = 0.4;
+export const RATING_ON_TIME_WEIGHT = 0.5;
+export const RATING_VOLUME_WEIGHT = 0.35;
+export const RATING_REWORK_WEIGHT = 0.15;
 
 export const RATING_FORMULA =
-  'Рейтинг = 60% × % в срок + 40% × объём относительно медианы команды. Место — от 5 закрытых за период.';
+  'Рейтинг = 50% × % в срок + 35% × объём относительно медианы команды + 15% × (100 − % доработок). Место — от 5 закрытых за период. Автозакрытие системой не считается.';
 
 export const TOPIC_LABELS: Record<AdminTaskWorkTopic, string> = {
   staff_debt: 'Долг сотрудника',
@@ -148,18 +149,23 @@ export function closeHours(createdAt: Date, completedAt: Date): number {
 /**
  * Rating 0–100. Returns null when closedCount < RATING_MIN_CLOSED.
  * volumeScore = min(100, closed / teamMedianClosed * 100).
+ * reworkScore = 100 − reworkPct (0 when no closed).
  */
 export function computeRating(
   closedCount: number,
   onTimePct: number | null,
   teamMedianClosed: number,
+  reworkPct: number | null = null,
 ): number | null {
   if (closedCount < RATING_MIN_CLOSED) return null;
   const onTimeScore = onTimePct ?? 0;
   const volumeBase = teamMedianClosed > 0 ? teamMedianClosed : 1;
   const volumeScore = Math.min(100, (closedCount / volumeBase) * 100);
+  const reworkScore = Math.max(0, 100 - (reworkPct ?? 0));
   return Math.round(
-    onTimeScore * RATING_ON_TIME_WEIGHT + volumeScore * RATING_VOLUME_WEIGHT,
+    onTimeScore * RATING_ON_TIME_WEIGHT +
+      volumeScore * RATING_VOLUME_WEIGHT +
+      reworkScore * RATING_REWORK_WEIGHT,
   );
 }
 

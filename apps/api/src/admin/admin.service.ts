@@ -20,6 +20,7 @@ import {
 import { AdminPermissionsService } from '../auth/admin-permissions.service';
 import { FeaturesService } from '../features/features.service';
 import {
+  AdminTaskEventKind,
   AdminTaskStatus as PrismaAdminTaskStatus,
   OnexClassStatus,
   PersonalBookingStatus,
@@ -867,6 +868,10 @@ export class AdminService {
       }
     }
 
+    const reworkMeta = await this.loadLatestReworkMeta(
+      tasks.filter((t) => (t.reworkCount ?? 0) > 0).map((t) => t.id),
+    );
+
     const mapped = tasks.map((task) => {
       const item = this.mapTaskItem(
         task,
@@ -888,10 +893,36 @@ export class AdminService {
           };
         }
       }
+      const rw = reworkMeta.get(task.id);
+      if (rw) {
+        item.reworkComment = rw.comment;
+        item.reworkAt = rw.createdAt;
+      }
       return item;
     });
 
     return this.enrichConfirmTasksWithSpaNotes(clubId, mapped);
+  }
+
+  private async loadLatestReworkMeta(taskIds: string[]) {
+    const map = new Map<string, { comment: string; createdAt: string }>();
+    if (!taskIds.length) return map;
+    const events = await this.prisma.adminTaskEvent.findMany({
+      where: {
+        taskId: { in: taskIds },
+        kind: AdminTaskEventKind.REWORK,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { taskId: true, comment: true, createdAt: true },
+    });
+    for (const e of events) {
+      if (map.has(e.taskId)) continue;
+      map.set(e.taskId, {
+        comment: e.comment ?? '',
+        createdAt: e.createdAt.toISOString(),
+      });
+    }
+    return map;
   }
 
   /** Attach live SPA client/visit notes to BOOKING_CONFIRM rows. */
@@ -1499,6 +1530,9 @@ export class AdminService {
         status: status as PrismaAdminTaskStatus,
         completedAt: status === AdminTaskStatus.DONE ? new Date() : null,
         assigneeId: task.assigneeId ?? user.sub,
+        ...(status === AdminTaskStatus.DONE
+          ? { suppressAutoClose: false }
+          : {}),
       },
     });
 
@@ -1526,12 +1560,14 @@ export class AdminService {
           data: {
             status: PrismaAdminTaskStatus.DONE,
             completedAt: new Date(),
+            suppressAutoClose: false,
           },
         });
         await this.prisma.adminTaskEvent.create({
           data: {
             taskId: sib.id,
             actorId: user.sub,
+            kind: AdminTaskEventKind.STATUS,
             comment: `Выполнил: ${actorName} (общее выполнение)`,
           },
         });
@@ -1542,13 +1578,17 @@ export class AdminService {
       data: {
         taskId,
         actorId: user.sub,
+        kind:
+          status === AdminTaskStatus.IN_PROGRESS
+            ? AdminTaskEventKind.CLAIM
+            : AdminTaskEventKind.STATUS,
         comment:
           status === AdminTaskStatus.DONE
             ? comment?.trim()
               ? `Выполнена: ${comment.trim()}`
               : 'Выполнена'
             : status === AdminTaskStatus.IN_PROGRESS
-              ? 'В работу'
+              ? 'Взял в работу'
               : String(status),
       },
     });
@@ -1580,6 +1620,8 @@ export class AdminService {
       relatedSaleId?: string | null;
       groupId?: string | null;
       completionMode?: string | null;
+      reworkCount?: number;
+      suppressAutoClose?: boolean;
       assignee?: { id: string; firstName: string; lastName: string } | null;
       createdBy?: { id: string; firstName: string; lastName: string } | null;
     },
@@ -1719,6 +1761,10 @@ export class AdminService {
                 typeof c.confirmedAt === 'string' ? c.confirmedAt : undefined,
             }))
         : undefined,
+      reworkCount: task.reworkCount ?? 0,
+      suppressAutoClose: task.suppressAutoClose ?? false,
+      reworkComment: undefined as string | undefined,
+      reworkAt: undefined as string | undefined,
     };
   }
 

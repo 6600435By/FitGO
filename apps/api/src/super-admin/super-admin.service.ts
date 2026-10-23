@@ -12,9 +12,11 @@ import {
   UserRole,
 } from '@fitgo/shared-types';
 import {
+  AdminTaskEventKind,
   AdminTaskStatus as PrismaAdminTaskStatus,
   Prisma,
   Role,
+  StaffShiftTrack,
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { adminTaskTopic } from '../admin/task-topic';
@@ -24,9 +26,19 @@ import { AdminPermissionsService } from '../auth/admin-permissions.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminTasksSchedulerService } from './admin-tasks-scheduler.service';
 import { ackDiscrepancyFromTask } from '../discrepancies/discrepancy-task-ack';
-import type { CreateAdminTaskDto } from './dto/task.dto';
+import type {
+  CreateAdminTaskDto,
+  ReworkAdminTaskDto,
+  UpsertAdminTaskRuleDto,
+} from './dto/task.dto';
 import type { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 import { randomBytes } from 'crypto';
+import {
+  ADMIN_TASK_RULE_CATALOG,
+  ADMIN_TASK_RULE_SOURCES,
+  defaultRuleForSource,
+  type AdminTaskRuleSourceKey,
+} from './admin-task-rules.catalog';
 import {
   allocateStaffAppPassword,
   isValidStaffAppPassword,
@@ -544,7 +556,11 @@ export class SuperAdminService implements OnModuleInit {
     return { permissions };
   }
 
-  async listTasks(user: JwtPayload, status?: AdminTaskStatus) {
+  async listTasks(
+    user: JwtPayload,
+    status?: AdminTaskStatus,
+    opts?: { assigneeId?: string; onShift?: boolean },
+  ) {
     const clubId = requireClubId(user);
     // Same merge path as admin queue: cancel legacy per-sale debt:* rows.
     try {
@@ -571,14 +587,38 @@ export class SuperAdminService implements OnModuleInit {
       createdBy: { select: { id: true, firstName: true, lastName: true } },
     } as const;
 
+    let onShiftIds: Set<string> | null = null;
+    if (opts?.onShift) {
+      const now = new Date();
+      const shifts = await this.prisma.staffShift.findMany({
+        where: {
+          clubId,
+          track: StaffShiftTrack.ADMIN,
+          startAt: { lte: now },
+          endAt: { gte: now },
+        },
+        select: { userId: true },
+      });
+      onShiftIds = new Set(shifts.map((s) => s.userId));
+    }
+
+    const assigneeFilter = opts?.assigneeId
+      ? { assigneeId: opts.assigneeId }
+      : {};
+
     // OPEN is the first enum value, so a single take ordered by status
     // drops IN_PROGRESS once the open queue is large. Load them separately.
+    // Also load DONE completed today so manager can send for rework.
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+
     const tasks = status
       ? await this.prisma.adminTask.findMany({
           where: {
             clubId,
             status: status as PrismaAdminTaskStatus,
             ...hideLegacy,
+            ...assigneeFilter,
           },
           include: taskInclude,
           orderBy: [{ dueAt: 'asc' }, { createdAt: 'desc' }],
@@ -591,6 +631,7 @@ export class SuperAdminService implements OnModuleInit {
                 clubId,
                 status: PrismaAdminTaskStatus.IN_PROGRESS,
                 ...hideLegacy,
+                ...assigneeFilter,
               },
               include: taskInclude,
               orderBy: [{ dueAt: 'asc' }, { createdAt: 'desc' }],
@@ -601,15 +642,38 @@ export class SuperAdminService implements OnModuleInit {
                 clubId,
                 status: PrismaAdminTaskStatus.OPEN,
                 ...hideLegacy,
+                ...assigneeFilter,
               },
               include: taskInclude,
               orderBy: [{ dueAt: 'asc' }, { createdAt: 'desc' }],
               take: 400,
             }),
+            this.prisma.adminTask.findMany({
+              where: {
+                clubId,
+                status: PrismaAdminTaskStatus.DONE,
+                completedAt: { gte: dayStart },
+                ...hideLegacy,
+                ...assigneeFilter,
+              },
+              include: taskInclude,
+              orderBy: [{ completedAt: 'desc' }],
+              take: 100,
+            }),
           ])
         ).flat();
 
-    const saleIds = tasks
+    const filtered =
+      onShiftIds == null
+        ? tasks
+        : tasks.filter(
+            (t) =>
+              !t.assigneeId ||
+              onShiftIds!.has(t.assigneeId) ||
+              t.status === PrismaAdminTaskStatus.OPEN,
+          );
+
+    const saleIds = filtered
       .map((task) => task.relatedSaleId)
       .filter((id): id is string => !!id);
     const sales = saleIds.length
@@ -621,7 +685,9 @@ export class SuperAdminService implements OnModuleInit {
     const clientBySale = new Map(sales.map((sale) => [sale.id, sale.clientName]));
 
     const groupIds = [
-      ...new Set(tasks.map((t) => t.groupId).filter((id): id is string => !!id)),
+      ...new Set(
+        filtered.map((t) => t.groupId).filter((id): id is string => !!id),
+      ),
     ];
     const groupStats = new Map<
       string,
@@ -654,7 +720,11 @@ export class SuperAdminService implements OnModuleInit {
       }
     }
 
-    return tasks.map((task) => {
+    const reworkMeta = await this.loadLatestReworkMeta(
+      filtered.filter((t) => t.reworkCount > 0).map((t) => t.id),
+    );
+
+    return filtered.map((task) => {
       const item = this.mapTask(
         task,
         clientBySale.get(task.relatedSaleId ?? '') ?? null,
@@ -669,8 +739,237 @@ export class SuperAdminService implements OnModuleInit {
           };
         }
       }
+      const rw = reworkMeta.get(task.id);
+      if (rw) {
+        item.reworkComment = rw.comment;
+        item.reworkAt = rw.createdAt;
+      }
       return item;
     });
+  }
+
+  async reworkTask(
+    user: JwtPayload,
+    taskId: string,
+    dto: ReworkAdminTaskDto,
+  ) {
+    const clubId = requireClubId(user);
+    const comment = dto.comment.trim();
+    if (comment.length < 2) {
+      throw new BadRequestException('Укажите комментарий для доработки');
+    }
+    const pool = dto.pool === true;
+    if (!pool && !dto.assigneeId?.trim()) {
+      throw new BadRequestException(
+        'Выберите сотрудника или всё подразделение',
+      );
+    }
+
+    const task = await this.prisma.adminTask.findFirst({
+      where: { id: taskId, clubId },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+    if (task.status !== PrismaAdminTaskStatus.DONE) {
+      throw new BadRequestException(
+        'На доработку можно вернуть только выполненную задачу',
+      );
+    }
+
+    let assigneeId: string | null = null;
+    if (!pool) {
+      assigneeId = dto.assigneeId!.trim();
+      await this.ensureClubAdmin(clubId, assigneeId);
+    }
+
+    const dueAt = dto.dueAt
+      ? new Date(dto.dueAt)
+      : (() => {
+          const d = new Date();
+          d.setHours(23, 59, 0, 0);
+          return d;
+        })();
+
+    const needsSuppress = ![
+      'MANAGER',
+      'MANUAL',
+      'DISCREPANCY',
+    ].includes(task.source);
+
+    const updated = await this.prisma.adminTask.update({
+      where: { id: taskId },
+      data: {
+        status: pool
+          ? PrismaAdminTaskStatus.OPEN
+          : PrismaAdminTaskStatus.IN_PROGRESS,
+        assigneeId,
+        completedAt: null,
+        dueAt,
+        nextActionAt: null,
+        reworkCount: { increment: 1 },
+        suppressAutoClose: needsSuppress ? true : false,
+      },
+      include: {
+        assignee: true,
+        createdBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    const targetLabel = pool
+      ? 'общая очередь'
+      : updated.assignee
+        ? `${updated.assignee.firstName} ${updated.assignee.lastName}`.trim()
+        : assigneeId;
+
+    await this.prisma.adminTaskEvent.create({
+      data: {
+        taskId,
+        actorId: user.sub,
+        kind: AdminTaskEventKind.REWORK,
+        comment: `Доработка → ${targetLabel}: ${comment}`,
+      },
+    });
+
+    if (assigneeId) {
+      await this.prisma.notification.create({
+        data: {
+          userId: assigneeId,
+          type: 'GENERAL',
+          title: 'Задача на доработку',
+          body: `${updated.title}: ${comment}`,
+          senderId: user.sub,
+        },
+      });
+    } else {
+      const admins = await this.prisma.user.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          archivedAt: null,
+          roles: { some: { role: Role.ADMIN } },
+        },
+        select: { id: true },
+        take: 40,
+      });
+      for (const a of admins) {
+        await this.prisma.notification.create({
+          data: {
+            userId: a.id,
+            type: 'GENERAL',
+            title: 'Задача на доработку (очередь)',
+            body: `${updated.title}: ${comment}`,
+            senderId: user.sub,
+          },
+        });
+      }
+    }
+
+    await this.logAudit(user, 'TASK_REWORK', taskId, {
+      pool,
+      assigneeId,
+      comment,
+    });
+
+    const item = this.mapTask(updated);
+    item.reworkComment = comment;
+    item.reworkAt = new Date().toISOString();
+    return item;
+  }
+
+  async listTaskRules(user: JwtPayload) {
+    const clubId = requireClubId(user);
+    const rows = await this.prisma.adminTaskRule.findMany({
+      where: { clubId },
+    });
+    const bySource = new Map(rows.map((r) => [r.source, r]));
+    return ADMIN_TASK_RULE_CATALOG.map((cat) => {
+      const row = bySource.get(cat.source);
+      if (!row) return defaultRuleForSource(cat.source);
+      return {
+        source: cat.source,
+        label: cat.label,
+        enabled: row.enabled,
+        assignMode: row.assignMode as 'POOL' | 'USERS' | 'ON_SHIFT',
+        assigneeIds: row.assigneeIds,
+        duePolicy: row.duePolicy as
+          | 'END_OF_DAY'
+          | 'HOURS_BEFORE_EVENT'
+          | 'HOURS_AFTER_CREATE',
+        dueHours: row.dueHours,
+        params: {
+          ...cat.defaultParams,
+          ...((row.params as Record<string, unknown> | null) ?? {}),
+        },
+      };
+    });
+  }
+
+  async putTaskRules(user: JwtPayload, rules: UpsertAdminTaskRuleDto[]) {
+    const clubId = requireClubId(user);
+    for (const rule of rules) {
+      if (!ADMIN_TASK_RULE_SOURCES.has(rule.source as AdminTaskRuleSourceKey)) {
+        throw new BadRequestException(`Неизвестный тип: ${rule.source}`);
+      }
+      if (rule.assignMode === 'USERS') {
+        const ids = rule.assigneeIds ?? [];
+        if (!ids.length) {
+          throw new BadRequestException(
+            `${rule.source}: выберите сотрудников`,
+          );
+        }
+        for (const id of ids) {
+          await this.ensureClubAdmin(clubId, id);
+        }
+      }
+      const paramsJson = (rule.params ?? {}) as Prisma.InputJsonValue;
+      await this.prisma.adminTaskRule.upsert({
+        where: {
+          clubId_source: { clubId, source: rule.source },
+        },
+        create: {
+          clubId,
+          source: rule.source,
+          enabled: rule.enabled,
+          assignMode: rule.assignMode,
+          assigneeIds: rule.assigneeIds ?? [],
+          duePolicy: rule.duePolicy,
+          dueHours: rule.dueHours ?? null,
+          params: paramsJson,
+        },
+        update: {
+          enabled: rule.enabled,
+          assignMode: rule.assignMode,
+          assigneeIds: rule.assigneeIds ?? [],
+          duePolicy: rule.duePolicy,
+          dueHours: rule.dueHours ?? null,
+          params: paramsJson,
+        },
+      });
+    }
+    await this.logAudit(user, 'TASK_RULES_UPDATED', clubId, {
+      count: rules.length,
+    });
+    return this.listTaskRules(user);
+  }
+
+  private async loadLatestReworkMeta(taskIds: string[]) {
+    const map = new Map<string, { comment: string; createdAt: string }>();
+    if (!taskIds.length) return map;
+    const events = await this.prisma.adminTaskEvent.findMany({
+      where: {
+        taskId: { in: taskIds },
+        kind: AdminTaskEventKind.REWORK,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { taskId: true, comment: true, createdAt: true },
+    });
+    for (const e of events) {
+      if (map.has(e.taskId)) continue;
+      map.set(e.taskId, {
+        comment: e.comment ?? '',
+        createdAt: e.createdAt.toISOString(),
+      });
+    }
+    return map;
   }
 
   async createTask(user: JwtPayload, dto: CreateAdminTaskDto) {
@@ -750,6 +1049,8 @@ export class SuperAdminService implements OnModuleInit {
       title?: string;
       description?: string;
       dueAt?: string;
+      assigneeId?: string | null;
+      comment?: string;
     },
   ) {
     const clubId = requireClubId(user);
@@ -761,6 +1062,24 @@ export class SuperAdminService implements OnModuleInit {
     });
     if (!task) throw new NotFoundException('Задача не найдена');
 
+    if (data.status === AdminTaskStatus.CANCELLED) {
+      const c = data.comment?.trim() ?? '';
+      if (c.length < 2) {
+        throw new BadRequestException('Укажите причину отмены');
+      }
+    }
+
+    let nextAssigneeId: string | null | undefined = undefined;
+    if (data.assigneeId !== undefined) {
+      const raw = data.assigneeId?.trim() || null;
+      if (raw) {
+        await this.ensureClubAdmin(clubId, raw);
+        nextAssigneeId = raw;
+      } else {
+        nextAssigneeId = null;
+      }
+    }
+
     const updated = await this.prisma.adminTask.update({
       where: { id: taskId },
       data: {
@@ -771,11 +1090,24 @@ export class SuperAdminService implements OnModuleInit {
         ...(data.dueAt !== undefined
           ? { dueAt: data.dueAt ? new Date(data.dueAt) : null }
           : {}),
+        ...(nextAssigneeId !== undefined
+          ? {
+              assigneeId: nextAssigneeId,
+              ...(nextAssigneeId
+                ? { status: PrismaAdminTaskStatus.IN_PROGRESS }
+                : !data.status
+                  ? { status: PrismaAdminTaskStatus.OPEN }
+                  : {}),
+            }
+          : {}),
         ...(data.status
           ? {
               status: data.status as PrismaAdminTaskStatus,
               completedAt:
                 data.status === AdminTaskStatus.DONE ? new Date() : null,
+              ...(data.status === AdminTaskStatus.DONE
+                ? { suppressAutoClose: false }
+                : {}),
             }
           : {}),
       },
@@ -784,6 +1116,42 @@ export class SuperAdminService implements OnModuleInit {
         createdBy: { select: { id: true, firstName: true, lastName: true } },
       },
     });
+
+    if (nextAssigneeId !== undefined && nextAssigneeId !== task.assigneeId) {
+      const label = updated.assignee
+        ? `${updated.assignee.firstName} ${updated.assignee.lastName}`.trim()
+        : 'общая очередь';
+      await this.prisma.adminTaskEvent.create({
+        data: {
+          taskId,
+          actorId: user.sub,
+          kind: AdminTaskEventKind.ASSIGN,
+          comment: `Назначен: ${label}`,
+        },
+      });
+      if (nextAssigneeId) {
+        await this.prisma.notification.create({
+          data: {
+            userId: nextAssigneeId,
+            type: 'GENERAL',
+            title: 'Назначена задача',
+            body: updated.title,
+            senderId: user.sub,
+          },
+        });
+      }
+    }
+
+    if (data.status === AdminTaskStatus.CANCELLED && data.comment?.trim()) {
+      await this.prisma.adminTaskEvent.create({
+        data: {
+          taskId,
+          actorId: user.sub,
+          kind: AdminTaskEventKind.STATUS,
+          comment: `Отмена: ${data.comment.trim()}`,
+        },
+      });
+    }
 
     if (
       data.status === AdminTaskStatus.DONE &&
@@ -809,19 +1177,29 @@ export class SuperAdminService implements OnModuleInit {
           data: {
             status: PrismaAdminTaskStatus.DONE,
             completedAt: new Date(),
+            suppressAutoClose: false,
           },
         });
         await this.prisma.adminTaskEvent.create({
           data: {
             taskId: sib.id,
             actorId: user.sub,
-            comment: `Выполнил: ${actorName} (общее выполнение)`,
+            kind: AdminTaskEventKind.STATUS,
+            comment: `Выполнил: ${actorName} (общее задание)`,
           },
         });
       }
     }
 
     if (data.status === AdminTaskStatus.DONE) {
+      await this.prisma.adminTaskEvent.create({
+        data: {
+          taskId,
+          actorId: user.sub,
+          kind: AdminTaskEventKind.STATUS,
+          comment: 'Выполнена',
+        },
+      });
       await ackDiscrepancyFromTask(this.prisma, task, user.sub);
     }
 
@@ -954,6 +1332,8 @@ export class SuperAdminService implements OnModuleInit {
       meta?: unknown;
       groupId?: string | null;
       completionMode?: string | null;
+      reworkCount?: number;
+      suppressAutoClose?: boolean;
       assignee: { id: string; firstName: string; lastName: string } | null;
       createdBy?: { id: string; firstName: string; lastName: string } | null;
     },
@@ -1008,6 +1388,10 @@ export class SuperAdminService implements OnModuleInit {
       validUntil:
         typeof meta.validUntil === 'string' ? meta.validUntil : undefined,
       docId: typeof meta.docId === 'string' ? meta.docId : undefined,
+      reworkCount: task.reworkCount ?? 0,
+      suppressAutoClose: task.suppressAutoClose ?? false,
+      reworkComment: undefined as string | undefined,
+      reworkAt: undefined as string | undefined,
     };
   }
 

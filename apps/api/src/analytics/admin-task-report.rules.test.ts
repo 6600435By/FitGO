@@ -50,7 +50,8 @@ assert.equal(
 
 assert.equal(computeRating(RATING_MIN_CLOSED - 1, 100, 5), null);
 assert.equal(computeRating(5, 100, 5), 100);
-assert.equal(computeRating(5, 0, 5), 40);
+assert.equal(computeRating(5, 0, 5), 50);
+assert.equal(computeRating(5, 100, 5, 100), 85);
 
 assert.equal(median([]), null);
 assert.equal(median([1, 3, 2]), 2);

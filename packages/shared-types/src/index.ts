@@ -1162,6 +1162,65 @@ export interface AdminTaskItem {
   /** BOOKING_CONFIRM aggregated clients (reformer / multi) */
   confirmClients?: AdminConfirmClient[];
   roomTitle?: string;
+  /** How many times returned for rework by manager. */
+  reworkCount?: number;
+  /** True while manager rework blocks scheduler auto-close. */
+  suppressAutoClose?: boolean;
+  /** Latest REWORK event comment (manager). */
+  reworkComment?: string;
+  /** ISO time of latest REWORK event. */
+  reworkAt?: string;
+}
+
+/** Lane for manager control inbox. */
+export type AdminTaskLane =
+  | 'attention'
+  | 'pool'
+  | 'assigned'
+  | 'waiting'
+  | 'done_today';
+
+export type AdminTaskEventKind =
+  | 'STATUS'
+  | 'COMMENT'
+  | 'CLAIM'
+  | 'ASSIGN'
+  | 'REWORK';
+
+export type AdminTaskAssignMode = 'POOL' | 'USERS' | 'ON_SHIFT';
+
+export type AdminTaskDuePolicy =
+  | 'END_OF_DAY'
+  | 'HOURS_BEFORE_EVENT'
+  | 'HOURS_AFTER_CREATE';
+
+/** Catalog sources that have a settings row. */
+export type AdminTaskRuleSource =
+  | 'CLIENT_DEBT'
+  | 'STAFF_DEBT'
+  | 'MEMBERSHIP_EXPIRING'
+  | 'INSTALLMENT_PAYMENT'
+  | 'BIRTHDAY'
+  | 'BOOKING_CONFIRM'
+  | 'TRAINING_SALE_NO_PERFORMER';
+
+export interface AdminTaskRuleItem {
+  source: AdminTaskRuleSource;
+  label: string;
+  enabled: boolean;
+  assignMode: AdminTaskAssignMode;
+  assigneeIds: string[];
+  duePolicy: AdminTaskDuePolicy;
+  dueHours?: number | null;
+  params: Record<string, unknown>;
+}
+
+export interface ReworkAdminTaskBody {
+  comment: string;
+  /** Assign to one admin; omit with pool=true for department queue. */
+  assigneeId?: string;
+  pool?: boolean;
+  dueAt?: string;
 }
 
 /** Client row inside a BOOKING_CONFIRM checklist task. */
@@ -1189,6 +1248,7 @@ export interface AdminDebtLine {
 
 export interface AdminTaskEventItem {
   id: string;
+  kind?: AdminTaskEventKind;
   stage?: string;
   comment?: string;
   actorName?: string;
