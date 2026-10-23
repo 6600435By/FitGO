@@ -128,6 +128,29 @@ function fmtWhen(iso: string) {
   });
 }
 
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleTimeString('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: CLUB_TZ,
+  });
+}
+
+function fmtDayHeading(isoDay: string) {
+  const [y, m, d] = isoDay.split('-').map(Number);
+  if (!y || !m || !d) return isoDay;
+  const dt = new Date(Date.UTC(y, m - 1, d, 12));
+  return dt.toLocaleDateString('ru-RU', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+type DetailGroupBy = 'client' | 'date';
+
 function bookingHref(
   audience: PtTimesheetStatsAudience,
   line: PtStatsSessionLine,
@@ -331,6 +354,7 @@ export function PtTimesheetStatsPanel({
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [detailGroupBy, setDetailGroupBy] = useState<DetailGroupBy>('client');
   const reqId = useRef(0);
   const canExport = audience === 'admin' || audience === 'super';
   const showTrainerFilter = audience !== 'trainer';
@@ -637,6 +661,26 @@ export function PtTimesheetStatsPanel({
       .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   }, [report]);
 
+  const linesByDate = useMemo(() => {
+    if (!report) return [];
+    const map = new Map<string, PtStatsSessionLine[]>();
+    for (const l of report.lines) {
+      const day = clubIsoDay(l.occurredAt);
+      const list = map.get(day) ?? [];
+      list.push(l);
+      map.set(day, list);
+    }
+    return [...map.entries()]
+      .map(([key, lines]) => ({
+        key,
+        name: fmtDayHeading(key),
+        lines: [...lines].sort((a, b) =>
+          a.occurredAt.localeCompare(b.occurredAt),
+        ),
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+  }, [report]);
+
   const focusSummary = useMemo(() => {
     if (!report) return null;
     if (trainerId) {
@@ -647,15 +691,16 @@ export function PtTimesheetStatsPanel({
     return report.totals;
   }, [report, trainerId]);
 
-  const visibleLinesByClient = useMemo(() => {
-    if (!trainerId) return linesByClient;
-    return linesByClient
+  const visibleDetailGroups = useMemo(() => {
+    const source = detailGroupBy === 'date' ? linesByDate : linesByClient;
+    if (!trainerId) return source;
+    return source
       .map((g) => ({
         ...g,
         lines: g.lines.filter((l) => l.trainerId === trainerId),
       }))
       .filter((g) => g.lines.length > 0);
-  }, [linesByClient, trainerId]);
+  }, [detailGroupBy, linesByClient, linesByDate, trainerId]);
 
   return (
     <div className="space-y-5">
@@ -872,25 +917,57 @@ export function PtTimesheetStatsPanel({
           })()}
 
           <section className="space-y-3" id="pt-stats-detail">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-medium text-slate-300">
                 Расшифровка (
-                {visibleLinesByClient.reduce((n, g) => n + g.lines.length, 0)})
+                {visibleDetailGroups.reduce((n, g) => n + g.lines.length, 0)})
               </h2>
-              {trainerId && showTrainerFilter && (
-                <button
-                  type="button"
-                  className="text-xs text-fitgo-400 underline"
-                  onClick={() => setTrainerId('')}
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className="inline-flex overflow-hidden rounded-lg border border-slate-700"
+                  role="group"
+                  aria-label="Группировка расшифровки"
                 >
-                  Все тренеры
-                </button>
-              )}
+                  <button
+                    type="button"
+                    className={
+                      detailGroupBy === 'client'
+                        ? 'bg-slate-800 px-2.5 py-1 text-xs font-medium text-white'
+                        : 'px-2.5 py-1 text-xs text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+                    }
+                    aria-pressed={detailGroupBy === 'client'}
+                    onClick={() => setDetailGroupBy('client')}
+                  >
+                    По клиенту
+                  </button>
+                  <button
+                    type="button"
+                    className={
+                      detailGroupBy === 'date'
+                        ? 'border-l border-slate-700 bg-slate-800 px-2.5 py-1 text-xs font-medium text-white'
+                        : 'border-l border-slate-700 px-2.5 py-1 text-xs text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+                    }
+                    aria-pressed={detailGroupBy === 'date'}
+                    onClick={() => setDetailGroupBy('date')}
+                  >
+                    По дате
+                  </button>
+                </span>
+                {trainerId && showTrainerFilter && (
+                  <button
+                    type="button"
+                    className="text-xs text-fitgo-400 underline"
+                    onClick={() => setTrainerId('')}
+                  >
+                    Все тренеры
+                  </button>
+                )}
+              </div>
             </div>
-            {visibleLinesByClient.length === 0 && (
+            {visibleDetailGroups.length === 0 && (
               <p className="text-sm text-slate-500">Нет проведённых ПТ</p>
             )}
-            {visibleLinesByClient.map((group) => (
+            {visibleDetailGroups.map((group) => (
               <div
                 key={group.key}
                 className="overflow-hidden rounded-xl border border-slate-800"
@@ -905,7 +982,12 @@ export function PtTimesheetStatsPanel({
                   <table className="min-w-full text-left text-sm">
                     <thead className="text-[11px] uppercase text-slate-500">
                       <tr>
-                        <th className="px-3 py-1.5 font-medium">Когда</th>
+                        {detailGroupBy === 'date' ? (
+                          <th className="px-3 py-1.5 font-medium">Клиент</th>
+                        ) : null}
+                        <th className="px-3 py-1.5 font-medium">
+                          {detailGroupBy === 'date' ? 'Время' : 'Когда'}
+                        </th>
                         {audience !== 'trainer' && (
                           <th className="px-3 py-1.5 font-medium">Тренер</th>
                         )}
@@ -919,58 +1001,65 @@ export function PtTimesheetStatsPanel({
                     </thead>
                     <tbody>
                       {group.lines.map((l) => {
-                          const control = bookingHref(audience, l);
-                          const sale = saleHref(audience, l);
-                          return (
-                            <tr
-                              key={`${l.sessionKey}-${l.occurredAt}`}
-                              className="border-t border-slate-800/70"
-                            >
-                              <td className="px-3 py-2 whitespace-nowrap text-slate-300">
-                                {fmtWhen(l.occurredAt)}
+                        const control = bookingHref(audience, l);
+                        const sale = saleHref(audience, l);
+                        return (
+                          <tr
+                            key={`${l.sessionKey}-${l.occurredAt}`}
+                            className="border-t border-slate-800/70"
+                          >
+                            {detailGroupBy === 'date' ? (
+                              <td className="px-3 py-2 text-white">
+                                {l.clientName}
                               </td>
-                              {audience !== 'trainer' && (
-                                <td className="px-3 py-2 text-slate-400">
-                                  {l.trainerName}
-                                </td>
-                              )}
-                              <td className="px-3 py-2 text-slate-300">
-                                {ptStatsOriginLabelRu(l.origin)}
-                              </td>
-                              <td className="px-3 py-2 text-slate-300">
-                                {ptStatsPaymentLabelRu(l.payment)}
-                              </td>
-                              <td className="px-3 py-2 text-slate-300">
-                                {money(l.priceMinor, report.currency)}
-                              </td>
+                            ) : null}
+                            <td className="px-3 py-2 whitespace-nowrap text-slate-300">
+                              {detailGroupBy === 'date'
+                                ? fmtTime(l.occurredAt)
+                                : fmtWhen(l.occurredAt)}
+                            </td>
+                            {audience !== 'trainer' && (
                               <td className="px-3 py-2 text-slate-400">
-                                {l.ratePercent ?? '—'}
+                                {l.trainerName}
                               </td>
-                              <td className="px-3 py-2 text-fitgo-300">
-                                {money(l.earnMinor, report.currency)}
-                              </td>
-                              <td className="px-3 py-2 whitespace-nowrap text-xs">
-                                <Link
-                                  href={control}
-                                  className="text-fitgo-400 underline"
-                                >
-                                  Контроль
-                                </Link>
-                                {sale && (
-                                  <>
-                                    {' · '}
-                                    <Link
-                                      href={sale}
-                                      className="text-fitgo-400 underline"
-                                    >
-                                      Продажа
-                                    </Link>
-                                  </>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
+                            )}
+                            <td className="px-3 py-2 text-slate-300">
+                              {ptStatsOriginLabelRu(l.origin)}
+                            </td>
+                            <td className="px-3 py-2 text-slate-300">
+                              {ptStatsPaymentLabelRu(l.payment)}
+                            </td>
+                            <td className="px-3 py-2 text-slate-300">
+                              {money(l.priceMinor, report.currency)}
+                            </td>
+                            <td className="px-3 py-2 text-slate-400">
+                              {l.ratePercent ?? '—'}
+                            </td>
+                            <td className="px-3 py-2 text-fitgo-300">
+                              {money(l.earnMinor, report.currency)}
+                            </td>
+                            <td className="px-3 py-2 whitespace-nowrap text-xs">
+                              <Link
+                                href={control}
+                                className="text-fitgo-400 underline"
+                              >
+                                Контроль
+                              </Link>
+                              {sale && (
+                                <>
+                                  {' · '}
+                                  <Link
+                                    href={sale}
+                                    className="text-fitgo-400 underline"
+                                  >
+                                    Продажа
+                                  </Link>
+                                </>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
