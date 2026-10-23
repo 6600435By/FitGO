@@ -1111,7 +1111,7 @@ export function SpaWeekBoard({
                         }}
                       />
                       <div
-                        className={`pointer-events-none absolute inset-x-0.5 z-30 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-lg ring-2 ${
+                        className={`spa-booking-cell-week pointer-events-none absolute inset-x-0.5 z-30 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-lg ring-2 ${
                           drag.validity === 'invalid'
                             ? 'border-rose-400/60 bg-rose-900/80 ring-rose-400/70'
                             : `${
@@ -1292,7 +1292,7 @@ export function SpaWeekBoard({
                               ? 'Удерживайте и перетащите на другой день или время'
                               : undefined
                           }
-                          className={`absolute z-10 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-sm touch-none ${color} ${
+                          className={`spa-booking-cell-week absolute z-10 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-sm touch-none ${color} ${
                             editable
                               ? 'cursor-grab active:cursor-grabbing'
                               : 'cursor-pointer'
