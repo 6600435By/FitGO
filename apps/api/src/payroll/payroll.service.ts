@@ -1076,16 +1076,23 @@ export class PayrollService {
       (u) => u.trustResolution === 'RESOLVED',
     ).length;
 
-    const compensation = await this.resolveCompensation(
+    const timeline = await this.loadCompensationTimeline(
       clubId,
       performerId,
       from,
       to,
     );
-    const rawProfile = asPayProfile(compensation?.payProfile);
-    const profile = opts?.forAdvanceHalf
-      ? payProfileForAdvanceHalf(rawProfile, trainerFlags)
-      : payProfileForCalculation(rawProfile, trainerFlags);
+    const compensation =
+      this.pickCompensationRow(timeline, to) ??
+      (await this.resolveCompensation(clubId, performerId, from, to));
+    const profileForDay = (isoDay: string) =>
+      this.profileFromCompensationRow(
+        this.pickCompensationRow(timeline, isoDay) ?? compensation,
+        trainerFlags,
+        opts,
+      );
+    // Chips / aggregated sales / stats: scheme at period end.
+    const profile = profileForDay(to);
     const rates = await this.listRates(clubId);
     const sales = await this.resolveStaffSales(
       clubId,
@@ -1094,21 +1101,22 @@ export class PayrollService {
       to,
       profile,
     );
-    const motivationMinor = this.calcMotivation(
+    const motivationMinor = this.calcMotivationVersioned(
       trusted,
       rates,
-      profile,
-      from,
+      profileForDay,
       sales,
+      profile,
     );
-    this.annotateUnitEarnings(workUnits, rates, profile);
+    this.annotateUnitEarningsVersioned(
+      workUnits,
+      rates,
+      profileForDay,
+    );
     const motivationBreakdown = profile
       ? this.calcMotivationBreakdownFromProfile(profile, sales)
       : undefined;
     const groupTrusted = trusted.filter((u) => u.kind === 'GROUP');
-    const hasReformerScheme = allPaySlices(profile).some(
-      (s) => s.track === 'REFORMER',
-    );
     const groupStats =
       groupTrusted.length > 0 ||
       allPaySlices(profile).some(
@@ -1135,14 +1143,18 @@ export class PayrollService {
     );
     const ptStats = ptSlice
       ? (() => {
-          const ptUnits = trusted.filter(
-            (x) =>
-              x.kind === 'PT' &&
-              !x.isPtAllSports &&
-              !(hasReformerScheme && x.isReformerPersonal) &&
-              !(hasReformerScheme && x.roomKey === 'REFORMER') &&
-              !(x.roomKey === 'REFORMER' && x.isReformerPersonal),
-          );
+          const ptUnits = trusted.filter((x) => {
+            if (x.kind !== 'PT' || x.isPtAllSports) return false;
+            const dayProfile = profileForDay(x.occurredAt.slice(0, 10));
+            const dayHasReformer = allPaySlices(dayProfile).some(
+              (s) => s.track === 'REFORMER',
+            );
+            if (dayHasReformer && x.isReformerPersonal) return false;
+            if (dayHasReformer && x.roomKey === 'REFORMER') return false;
+            if (x.roomKey === 'REFORMER' && x.isReformerPersonal) return false;
+            return true;
+          });
+          // Ladder % display: end-of-period tiers × full-period volume.
           return {
             sessionCount: ptUnits.length,
             percent: resolvePtPercent(ptUnits.length, ptSlice.ptPercentTiers),
@@ -1154,8 +1166,6 @@ export class PayrollService {
 
     const fromD = new Date(`${from}T00:00:00`);
     const toD = new Date(`${to}T00:00:00`);
-    const daysInclusive =
-      Math.floor((toD.getTime() - fromD.getTime()) / 86400000) + 1;
     const monthDays = new Date(
       fromD.getFullYear(),
       fromD.getMonth() + 1,
@@ -1168,16 +1178,32 @@ export class PayrollService {
       !slices.some((s) => s.track === 'ADMIN' || s.track === 'MANAGER');
     let baseSalaryMinor =
       compensation && !advanceTechHoursOnly
-        ? Math.round((compensation.baseSalaryMinor * daysInclusive) / monthDays)
+        ? this.prorateBaseSalaryMinor(timeline, from, to, monthDays)
         : 0;
-    const hasPt = slices.some((s) => s.track === 'PT');
-    const hasHourlyDesk = slices.some(
-      (s) =>
-        s.track !== 'PT' &&
-        s.track !== 'CLUB' &&
-        typeof s.hourlyRateMinor === 'number' &&
-        s.hourlyRateMinor > 0,
-    );
+    const hasPtAnywhere = timeline.some((row) => {
+      const p = this.profileFromCompensationRow(row, trainerFlags, opts);
+      return allPaySlices(p).some((s) => s.track === 'PT');
+    });
+    const hasHourlyDeskAnywhere = timeline.some((row) => {
+      const p = this.profileFromCompensationRow(row, trainerFlags, opts);
+      return allPaySlices(p).some(
+        (s) =>
+          s.track !== 'PT' &&
+          s.track !== 'CLUB' &&
+          typeof s.hourlyRateMinor === 'number' &&
+          s.hourlyRateMinor > 0,
+      );
+    });
+    const hasPt = hasPtAnywhere || slices.some((s) => s.track === 'PT');
+    const hasHourlyDesk =
+      hasHourlyDeskAnywhere ||
+      slices.some(
+        (s) =>
+          s.track !== 'PT' &&
+          s.track !== 'CLUB' &&
+          typeof s.hourlyRateMinor === 'number' &&
+          s.hourlyRateMinor > 0,
+      );
     if (hasHourlyDesk) {
       const hours = await this.staffRoster.hourlySummary(
         clubId,
@@ -1185,16 +1211,20 @@ export class PayrollService {
         from,
         to,
       );
-      const deskRate =
-        sliceForTrack(profile, 'ADMIN').hourlyRateMinor ||
-        sliceForTrack(profile, 'TECH').hourlyRateMinor ||
-        sliceForTrack(profile, 'GROUP_TRAINER').hourlyRateMinor ||
-        hours.hourlyRateMinor ||
-        0;
-      baseSalaryMinor += Math.round((hours.totalMinutes / 60) * deskRate);
       for (const s of hours.shifts) {
+        const day = (s.startAt || '').slice(0, 10) || from;
+        const dayProfile = profileForDay(day);
+        const deskRate =
+          (dayProfile
+            ? sliceForTrack(dayProfile, 'ADMIN').hourlyRateMinor ||
+              sliceForTrack(dayProfile, 'TECH').hourlyRateMinor ||
+              sliceForTrack(dayProfile, 'GROUP_TRAINER').hourlyRateMinor
+            : 0) ||
+          hours.hourlyRateMinor ||
+          0;
         const mins = s.minutes + (s.overtimeMinutes ?? 0);
         const pay = Math.round((mins / 60) * deskRate);
+        baseSalaryMinor += pay;
         workUnits.push({
           id: s.id,
           kind: 'SHIFT',
@@ -1216,47 +1246,49 @@ export class PayrollService {
     // Staff PT: duty hours from График (StaffShift track=TRAINER), not from
     // approved TrainerDaySheet (legacy; often empty → 0 despite roster + rate).
     if (hasPt) {
-      const ptHourly =
-        sliceForTrack(profile, 'PT').hourlyRateMinor ||
-        profile?.hourlyRateMinor ||
-        0;
-      if (ptHourly > 0) {
-        const hours = await this.staffRoster.hourlySummary(
-          clubId,
+      const hours = await this.staffRoster.hourlySummary(
+        clubId,
+        performerId,
+        from,
+        to,
+      );
+      const alreadyShiftIds = new Set(
+        workUnits.filter((u) => u.kind === 'SHIFT').map((u) => u.id),
+      );
+      let addedTrainerPay = 0;
+      for (const s of hours.shifts) {
+        if (s.track !== 'TRAINER' || alreadyShiftIds.has(s.id)) continue;
+        const day = (s.startAt || '').slice(0, 10) || from;
+        const dayProfile = profileForDay(day);
+        const ptHourly =
+          (dayProfile
+            ? sliceForTrack(dayProfile, 'PT').hourlyRateMinor ||
+              dayProfile.hourlyRateMinor
+            : 0) || 0;
+        if (ptHourly <= 0) continue;
+        const mins = s.minutes + (s.overtimeMinutes ?? 0);
+        const pay = Math.round((mins / 60) * ptHourly);
+        addedTrainerPay += pay;
+        workUnits.push({
+          id: s.id,
+          kind: 'SHIFT',
           performerId,
-          from,
-          to,
+          title: `Смена TRAINER${s.overtimeMinutes ? ` (+${s.overtimeMinutes} мин)` : ''}`,
+          occurredAt: s.startAt,
+          quantity: Number((mins / 60).toFixed(2)),
+          priceMinor: pay,
+          trustBand: 'GREEN',
+          trustResolution: 'NONE',
+          payrollTrusted: true,
+        });
+      }
+      if (addedTrainerPay > 0) {
+        baseSalaryMinor += addedTrainerPay;
+        workUnits.sort(
+          (a, b) =>
+            new Date(a.occurredAt).getTime() -
+            new Date(b.occurredAt).getTime(),
         );
-        const alreadyShiftIds = new Set(
-          workUnits.filter((u) => u.kind === 'SHIFT').map((u) => u.id),
-        );
-        let trainerMinutes = 0;
-        for (const s of hours.shifts) {
-          if (s.track !== 'TRAINER' || alreadyShiftIds.has(s.id)) continue;
-          const mins = s.minutes + (s.overtimeMinutes ?? 0);
-          trainerMinutes += mins;
-          const pay = Math.round((mins / 60) * ptHourly);
-          workUnits.push({
-            id: s.id,
-            kind: 'SHIFT',
-            performerId,
-            title: `Смена TRAINER${s.overtimeMinutes ? ` (+${s.overtimeMinutes} мин)` : ''}`,
-            occurredAt: s.startAt,
-            quantity: Number((mins / 60).toFixed(2)),
-            priceMinor: pay,
-            trustBand: 'GREEN',
-            trustResolution: 'NONE',
-            payrollTrusted: true,
-          });
-        }
-        if (trainerMinutes > 0) {
-          baseSalaryMinor += Math.round((trainerMinutes / 60) * ptHourly);
-          workUnits.sort(
-            (a, b) =>
-              new Date(a.occurredAt).getTime() -
-              new Date(b.occurredAt).getTime(),
-          );
-        }
       }
     }
 
@@ -1281,6 +1313,8 @@ export class PayrollService {
         'Ставка за час / мотивация не заданы или нет проверенных работ за период',
       );
     }
+    const splitHint = this.rateChangeHint(timeline, from, to);
+    if (splitHint) anomalyHints.push(splitHint);
     if (sales.hint) anomalyHints.push(sales.hint);
 
     if (slices.some((s) => s.track === 'ADMIN')) {
@@ -1435,15 +1469,15 @@ export class PayrollService {
     };
     this.assertPeriod(range.from, range.to);
 
-    // Card advance is a standing profile setting (same source as staff-list
-    // chips). Period-scoped compensation can lag when the field was saved
-    // after periodTo (e.g. set on the 20th while calculating 1–15).
-    const latestCompensation = await this.prisma.staffCompensation.findFirst({
-      where: { clubId, userId },
-      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
-    });
+    // Card advance = version active on the wave date (period end), not a
+    // future raise scheduled after the wave.
+    const waveCompensation = await this.getActiveCompensation(
+      clubId,
+      userId,
+      range.to,
+    );
     const resolvedFixedAdvance = resolveFixedAdvanceMinor(
-      asPayProfile(latestCompensation?.payProfile),
+      asPayProfile(waveCompensation?.payProfile),
       roles.map(String),
       { trainerStaff: Boolean(user.trainerStaff) },
     );
@@ -2028,22 +2062,43 @@ export class PayrollService {
     clubId: string,
     userId: string,
   ): Promise<StaffCompensationDto | null> {
-    const row = await this.prisma.staffCompensation.findFirst({
+    const rows = await this.prisma.staffCompensation.findMany({
       where: { clubId, userId },
       include: { user: true },
-      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+      orderBy: [{ effectiveFrom: 'asc' }, { createdAt: 'asc' }],
     });
-    if (!row) return null;
-    const profile = asPayProfile(row.payProfile);
+    if (!rows.length) return null;
+    const today = new Date().toISOString().slice(0, 10);
+    const asOf =
+      this.pickCompensationRow(rows, today) ?? rows[rows.length - 1]!;
+    const profile = asPayProfile(asOf.payProfile);
+    const rateVersions = rows.map((r) => {
+      const p = asPayProfile(r.payProfile);
+      return {
+        effectiveFrom: r.effectiveFrom.toISOString().slice(0, 10),
+        payChips: payProfileSummary(p),
+      };
+    });
+    // Collapse same-day duplicates (keep last by createdAt — already ascending).
+    const deduped: typeof rateVersions = [];
+    for (const v of rateVersions) {
+      const last = deduped[deduped.length - 1];
+      if (last && last.effectiveFrom === v.effectiveFrom) {
+        deduped[deduped.length - 1] = v;
+      } else {
+        deduped.push(v);
+      }
+    }
     return {
-      id: row.id,
-      userId: row.userId,
-      userName: `${row.user.lastName} ${row.user.firstName}`.trim(),
-      baseSalaryMinor: row.baseSalaryMinor,
-      currency: row.currency,
-      effectiveFrom: row.effectiveFrom.toISOString().slice(0, 10),
+      id: asOf.id,
+      userId: asOf.userId,
+      userName: `${asOf.user.lastName} ${asOf.user.firstName}`.trim(),
+      baseSalaryMinor: asOf.baseSalaryMinor,
+      currency: asOf.currency,
+      effectiveFrom: asOf.effectiveFrom.toISOString().slice(0, 10),
       payProfile: profile,
       payChips: payProfileSummary(profile),
+      rateVersions: deduped,
     };
   }
 
@@ -2059,7 +2114,6 @@ export class PayrollService {
     const clubId = requireClubId(actor);
     const latest = await this.prisma.staffCompensation.findFirst({
       where: { clubId, userId: input.userId },
-      include: { user: true },
       orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
     let payProfile = input.payProfile;
@@ -2089,39 +2143,77 @@ export class PayrollService {
     const baseSalaryMinor =
       input.baseSalaryMinor ?? latest?.baseSalaryMinor ?? 0;
 
-    // Default save updates the latest row in place so mid-month edits
-    // (card advance, rates) apply to the open pay wave. Pass effectiveFrom
-    // explicitly to start a new dated version.
-    if (latest && !input.effectiveFrom) {
-      const row = await this.prisma.staffCompensation.update({
-        where: { id: latest.id },
+    // Dated version: same day updates that row; new day creates a version.
+    // Default (no date) = 1st of current month so a correction covers the open period.
+    const now = new Date();
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const effectiveFrom = input.effectiveFrom?.trim() || monthStart;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) {
+      throw new BadRequestException('effectiveFrom: YYYY-MM-DD');
+    }
+    await this.assertCompensationDateOpen(
+      clubId,
+      input.userId,
+      effectiveFrom,
+    );
+
+    const sameDay = await this.prisma.staffCompensation.findFirst({
+      where: {
+        clubId,
+        userId: input.userId,
+        effectiveFrom: new Date(`${effectiveFrom}T00:00:00`),
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (sameDay) {
+      await this.prisma.staffCompensation.update({
+        where: { id: sameDay.id },
         data: {
           baseSalaryMinor,
           payProfile: payProfile as object,
         },
-        include: { user: true },
       });
-      const profile = asPayProfile(row.payProfile);
-      return {
-        id: row.id,
-        userId: row.userId,
-        userName: `${row.user.lastName} ${row.user.firstName}`.trim(),
-        baseSalaryMinor: row.baseSalaryMinor,
-        currency: row.currency,
-        effectiveFrom: row.effectiveFrom.toISOString().slice(0, 10),
-        payProfile: profile,
-        payChips: payProfileSummary(profile),
-      };
+    } else {
+      await this.prisma.staffCompensation.create({
+        data: {
+          clubId,
+          userId: input.userId,
+          baseSalaryMinor,
+          currency: latest?.currency ?? 'BYN',
+          effectiveFrom: new Date(`${effectiveFrom}T00:00:00`),
+          payProfile: payProfile as object,
+        },
+      });
     }
+    const dto = await this.getStaffPayProfile(clubId, input.userId);
+    if (!dto) throw new NotFoundException('Сотрудник не найден');
+    return dto;
+  }
 
-    const effectiveFrom =
-      input.effectiveFrom ?? new Date().toISOString().slice(0, 10);
-    return this.upsertCompensation(actor, {
-      userId: input.userId,
-      baseSalaryMinor,
-      effectiveFrom,
-      payProfile,
+  /** Refuse saving a rate into a locked payroll period. */
+  private async assertCompensationDateOpen(
+    clubId: string,
+    userId: string,
+    effectiveFrom: string,
+  ) {
+    const day = new Date(`${effectiveFrom}T00:00:00`);
+    const locked = await this.prisma.payrollPeriodLock.findFirst({
+      where: {
+        clubId,
+        userId,
+        periodFrom: { lte: day },
+        periodTo: { gte: day },
+      },
+      orderBy: { periodTo: 'desc' },
     });
+    if (!locked) return;
+    const until = locked.periodTo.toISOString().slice(0, 10);
+    const next = new Date(locked.periodTo);
+    next.setDate(next.getDate() + 1);
+    const openFrom = next.toISOString().slice(0, 10);
+    throw new BadRequestException(
+      `Период до ${until} закрыт — ставка с ${effectiveFrom} недоступна. Выберите дату с ${openFrom}.`,
+    );
   }
 
   async listPayTemplates(clubId: string): Promise<StaffPayTemplateDto[]> {
@@ -2191,6 +2283,7 @@ export class PayrollService {
     actor: JwtPayload,
     userId: string,
     tracks?: StaffPayTrack[],
+    effectiveFrom?: string,
   ): Promise<StaffCompensationDto> {
     const clubId = requireClubId(actor);
     const user = await this.prisma.user.findFirst({
@@ -2235,11 +2328,11 @@ export class PayrollService {
     if (!merged) {
       throw new BadRequestException('Шаблон пуст');
     }
-    return this.upsertCompensation(actor, {
+    return this.saveStaffPayProfile(actor, {
       userId,
       baseSalaryMinor,
-      effectiveFrom: new Date().toISOString().slice(0, 10),
       payProfile: merged,
+      effectiveFrom,
     });
   }
 
@@ -2361,12 +2454,16 @@ export class PayrollService {
     departments: StaffDepartment[],
     tracks?: StaffPayTrack[],
     trainerGroups?: TrainerGroupId[],
+    effectiveFrom?: string,
   ): Promise<{ copied: number; skipped: number }> {
     const clubId = requireClubId(actor);
     const source = await this.getStaffPayProfile(clubId, sourceUserId);
     if (!source?.payProfile) {
       throw new BadRequestException('Сначала сохраните мотивацию у источника');
     }
+    const now = new Date();
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const fromDate = effectiveFrom?.trim() || monthStart;
     if (trainerGroups?.length) {
       const allowed: TrainerGroupId[] = ['GP', 'STAFF', 'CLUB', 'REFORMER'];
       const groups = [...new Set(trainerGroups)].filter((g): g is TrainerGroupId =>
@@ -2376,7 +2473,6 @@ export class PayrollService {
         throw new BadRequestException('Укажите группу тренеров');
       }
       const copiedIds = new Set<string>();
-      const effectiveFrom = new Date().toISOString().slice(0, 10);
       const ordered = (
         ['GP', 'CLUB', 'STAFF', 'REFORMER'] as TrainerGroupId[]
       ).filter((g) => groups.includes(g));
@@ -2415,13 +2511,13 @@ export class PayrollService {
             source.payProfile,
             [track],
           );
-          await this.upsertCompensation(actor, {
+          await this.saveStaffPayProfile(actor, {
             userId: peer.id,
             baseSalaryMinor:
               group === 'STAFF'
                 ? source.baseSalaryMinor
                 : (existing?.baseSalaryMinor ?? 0),
-            effectiveFrom,
+            effectiveFrom: fromDate,
             payProfile: merged,
           });
           copiedIds.add(peer.id);
@@ -2467,7 +2563,6 @@ export class PayrollService {
       select: { id: true },
     });
     let copied = 0;
-    const effectiveFrom = new Date().toISOString().slice(0, 10);
     for (const peer of peers) {
       const existing = await this.getStaffPayProfile(clubId, peer.id);
       const merged = mergePayTracks(
@@ -2475,10 +2570,10 @@ export class PayrollService {
         source.payProfile,
         tracksToCopy,
       );
-      await this.upsertCompensation(actor, {
+      await this.saveStaffPayProfile(actor, {
         userId: peer.id,
         baseSalaryMinor: source.baseSalaryMinor,
-        effectiveFrom,
+        effectiveFrom: fromDate,
         payProfile: merged,
       });
       copied += 1;
@@ -2517,8 +2612,13 @@ export class PayrollService {
         ? users.filter((u) => !isClubTrainerOnlyPayrollSkip(u))
         : users
     ).filter((u) => !u.excludeFromPayrollMotivation);
+    const today = new Date().toISOString().slice(0, 10);
     const comps = await this.prisma.staffCompensation.findMany({
-      where: { clubId, userId: { in: eligible.map((u) => u.id) } },
+      where: {
+        clubId,
+        userId: { in: eligible.map((u) => u.id) },
+        effectiveFrom: { lte: new Date(`${today}T23:59:59`) },
+      },
       orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
     const latest = new Map<string, (typeof comps)[0]>();
@@ -3197,7 +3297,7 @@ export class PayrollService {
     from: string,
     to: string,
   ) {
-    // Prefer rate active by period end (saved mid-month still applies).
+    // Prefer rate active by period end (chips / sales fallback).
     const byEnd = await this.getActiveCompensation(clubId, userId, to);
     if (byEnd) return byEnd;
     const byStart = await this.getActiveCompensation(clubId, userId, from);
@@ -3222,6 +3322,92 @@ export class PayrollService {
       },
       orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
+  }
+
+  /** All versions that can apply inside [from, to] (includes the one active at from). */
+  private async loadCompensationTimeline(
+    clubId: string,
+    userId: string,
+    from: string,
+    to: string,
+  ) {
+    const rows = await this.prisma.staffCompensation.findMany({
+      where: {
+        clubId,
+        userId,
+        effectiveFrom: { lte: new Date(`${to}T23:59:59`) },
+      },
+      orderBy: [{ effectiveFrom: 'asc' }, { createdAt: 'asc' }],
+    });
+    void from;
+    return rows;
+  }
+
+  private pickCompensationRow<
+    T extends { effectiveFrom: Date; createdAt?: Date },
+  >(rows: T[], asOf: string): T | undefined {
+    const asOfMs = new Date(`${asOf}T23:59:59`).getTime();
+    let best: T | undefined;
+    for (const row of rows) {
+      if (row.effectiveFrom.getTime() > asOfMs) break;
+      best = row;
+    }
+    return best;
+  }
+
+  private profileFromCompensationRow(
+    row: { payProfile: unknown } | null | undefined,
+    trainerFlags: ReturnType<typeof trainerPayFlags>,
+    opts?: { forAdvanceHalf?: boolean },
+  ): StaffPayProfile | undefined {
+    const raw = asPayProfile(row?.payProfile);
+    if (!raw) return undefined;
+    return opts?.forAdvanceHalf
+      ? payProfileForAdvanceHalf(raw, trainerFlags)
+      : payProfileForCalculation(raw, trainerFlags);
+  }
+
+  /** Prorate base salary across days when the monthly amount changes mid-period. */
+  private prorateBaseSalaryMinor(
+    rows: Array<{ effectiveFrom: Date; baseSalaryMinor: number }>,
+    from: string,
+    to: string,
+    monthDays: number,
+  ): number {
+    if (!rows.length || monthDays <= 0) return 0;
+    let total = 0;
+    const fromD = new Date(`${from}T00:00:00`);
+    const toD = new Date(`${to}T00:00:00`);
+    for (
+      let d = new Date(fromD);
+      d.getTime() <= toD.getTime();
+      d.setDate(d.getDate() + 1)
+    ) {
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const row = this.pickCompensationRow(rows, iso);
+      if (!row) continue;
+      total += row.baseSalaryMinor / monthDays;
+    }
+    return Math.round(total);
+  }
+
+  /** Hint when two+ rate versions apply inside the payroll period. */
+  private rateChangeHint(
+    rows: Array<{ effectiveFrom: Date }>,
+    from: string,
+    to: string,
+  ): string | undefined {
+    const inRange = rows.filter((r) => {
+      const iso = r.effectiveFrom.toISOString().slice(0, 10);
+      return iso > from && iso <= to;
+    });
+    if (!inRange.length) return undefined;
+    const first = inRange[0]!;
+    const iso = first.effectiveFrom.toISOString().slice(0, 10);
+    const prevDay = new Date(`${iso}T00:00:00`);
+    prevDay.setDate(prevDay.getDate() - 1);
+    const prevIso = prevDay.toISOString().slice(0, 10);
+    return `до ${prevIso} — прежняя ставка, с ${iso} — новая`;
   }
 
   private async listAdjustments(
@@ -3654,6 +3840,347 @@ export class PayrollService {
       }
     }
     return total;
+  }
+
+  /**
+   * Motivation with dated rate versions: each session/shift uses the scheme
+   * active on its day. PT ladder volume is period-wide; % and catalog price
+   * come from that day's version. Aggregated admin/manager sales use salesProfile.
+   */
+  private calcMotivationVersioned(
+    units: WorkUnit[],
+    rates: MotivationRateDto[],
+    profileForDay: (isoDay: string) => StaffPayProfile | undefined,
+    sales?: StaffSalesBreakdown,
+    salesProfile?: StaffPayProfile,
+  ): number {
+    const trusted = units.filter((u) => u.payrollTrusted);
+    if (!trusted.length && !sales) {
+      return this.calcMotivation(units, rates, undefined);
+    }
+    let total = 0;
+    if (salesProfile && sales) {
+      for (const slice of allPaySlices(salesProfile)) {
+        if (slice.track !== 'ADMIN' && slice.track !== 'MANAGER') continue;
+        const cat = this.adminManagerCategoryContributions(slice, sales);
+        total +=
+          cat.membershipMinor +
+          cat.spaMinor +
+          cat.solariumMinor +
+          cat.shopMinor +
+          cat.corporateMinor;
+      }
+    }
+
+    const paidAsdIds = new Set<string>();
+    const paidPtAllSportsIds = new Set<string>();
+
+    const isPtLadderUnit = (u: WorkUnit, dayProfile?: StaffPayProfile) => {
+      if (u.kind !== 'PT' || u.isPtAllSports) return false;
+      const hasReformer = allPaySlices(dayProfile).some(
+        (s) => s.track === 'REFORMER',
+      );
+      if (hasReformer && u.isReformerPersonal) return false;
+      if (hasReformer && u.roomKey === 'REFORMER') return false;
+      if (u.roomKey === 'REFORMER' && u.isReformerPersonal) return false;
+      return true;
+    };
+
+    const ptLadderUnits = trusted.filter((u) =>
+      isPtLadderUnit(u, profileForDay(u.occurredAt.slice(0, 10))),
+    );
+    const ptMonthCount = ptLadderUnits.length;
+
+    for (const u of trusted) {
+      const day = u.occurredAt.slice(0, 10);
+      const profile = profileForDay(day);
+      if (!profile) {
+        const rate = this.pickRate(u, rates);
+        if (!rate) continue;
+        if (rate.rateType === 'FIXED_PER_ATTENDEE') {
+          total += rate.rateValue * u.quantity;
+        } else if (rate.rateType === 'FIXED_PER_SESSION') {
+          total += rate.rateValue;
+        } else if (
+          rate.rateType === 'PERCENT_OF_PRICE' &&
+          u.priceMinor != null
+        ) {
+          total += Math.round((u.priceMinor * rate.rateValue) / 100);
+        }
+        continue;
+      }
+      const slices = allPaySlices(profile);
+      const asdRateMinor = Math.max(
+        0,
+        ...slices.map((s) => s.asdGroupRateMinor ?? 0),
+      );
+      if (asdRateMinor > 0 && u.isAsd && u.quantity >= 1 && !paidAsdIds.has(u.id)) {
+        paidAsdIds.add(u.id);
+        total += asdRateMinor;
+      }
+      const ptAllSportsRate = Math.max(
+        0,
+        ...slices
+          .filter((s) => s.track === 'PT' || s.track === 'CLUB')
+          .map((s) => s.ptAllSportsRateMinor ?? 0),
+      );
+      if (
+        ptAllSportsRate > 0 &&
+        u.kind === 'PT' &&
+        u.isPtAllSports &&
+        !u.isComplimentary &&
+        !paidPtAllSportsIds.has(u.id)
+      ) {
+        paidPtAllSportsIds.add(u.id);
+        total += ptAllSportsRate;
+      }
+
+      for (const slice of slices) {
+        if (slice.track === 'GROUP_TRAINER' && u.kind === 'GROUP') {
+          if (u.isAsd) continue;
+          if (u.roomKey === 'REFORMER') continue;
+          const hasTiers = (slice.groupRateTiers?.length ?? 0) > 0;
+          if (hasTiers || u.roomKey) {
+            total += resolveGroupSessionRateMinor(
+              u.quantity,
+              u.roomKey,
+              slice.groupRateTiers,
+              {
+                rateMinor: slice.groupSessionRateMinor,
+                minAttendees: slice.groupMinAttendees,
+              },
+            );
+          } else {
+            const min = slice.groupMinAttendees ?? 1;
+            if (u.quantity >= min) total += slice.groupSessionRateMinor ?? 0;
+          }
+          if (slice.groupPerAttendeeMinor) {
+            total += slice.groupPerAttendeeMinor * u.quantity;
+          }
+        }
+
+        if (slice.track === 'REFORMER') {
+          if (u.kind === 'GROUP' && u.roomKey === 'REFORMER') {
+            if (!u.isAsd && u.quantity >= 1) {
+              const tiers =
+                (slice.groupRateTiers?.filter((t) => t.roomKey === 'REFORMER')
+                  ?.length ?? 0) > 0
+                  ? slice.groupRateTiers
+                  : DEFAULT_REFORMER_RATE_TIERS;
+              total += resolveGroupSessionRateMinor(
+                u.quantity,
+                'REFORMER',
+                tiers,
+              );
+            }
+          }
+          if (
+            u.kind === 'PT' &&
+            (u.isReformerPersonal || u.roomKey === 'REFORMER') &&
+            !u.isComplimentary &&
+            !u.isPtAllSports
+          ) {
+            const refPct = slice.reformerPersonalPercent ?? 0;
+            const price = u.priceMinor ?? 0;
+            if (refPct > 0 && price > 0) {
+              total += Math.round((price * refPct) / 100);
+            }
+          }
+        }
+
+        if (slice.track === 'SPA' && u.kind === 'SPA') {
+          if (u.isSpaAllSportsBioimpedance && slice.spaPartnerRateMinor) {
+            total += slice.spaPartnerRateMinor;
+          } else {
+            const price = u.priceMinor ?? 0;
+            if (price > 0 && slice.spaSoldPercent) {
+              total += Math.round((price * slice.spaSoldPercent) / 100);
+            } else if (price === 0 && slice.spaQuotaRates?.length) {
+              const title = u.title.toLowerCase();
+              const match = slice.spaQuotaRates.find((r) => {
+                if (r.serviceKey === 'BODY_COMPOSITION')
+                  return /состав|анализ|inbody|compos/i.test(title);
+                if (r.serviceKey === 'CLASSIC_MASSAGE')
+                  return /массаж|massage|класси/i.test(title);
+                return r.serviceKey === u.serviceId;
+              });
+              if (match) total += match.rateMinor;
+            }
+          }
+        }
+
+        if (
+          (slice.track === 'PT' || slice.track === 'CLUB') &&
+          isPtLadderUnit(u, profile) &&
+          !u.isComplimentary
+        ) {
+          const pct = resolvePtPercent(ptMonthCount, slice.ptPercentTiers);
+          const catalog = slice.ptSessionPriceMinor ?? 0;
+          const price =
+            u.priceMinor != null && u.priceMinor > 0 ? u.priceMinor : catalog;
+          if (price > 0) {
+            total += Math.round((price * pct) / 100);
+          }
+        }
+      }
+    }
+    return total;
+  }
+
+  private annotateUnitEarningsVersioned(
+    units: WorkUnit[],
+    rates: MotivationRateDto[],
+    profileForDay: (isoDay: string) => StaffPayProfile | undefined,
+  ): void {
+    const trusted = units.filter((u) => u.payrollTrusted);
+    const isPtLadderUnit = (u: WorkUnit, dayProfile?: StaffPayProfile) => {
+      if (u.kind !== 'PT' || u.isPtAllSports) return false;
+      const hasReformer = allPaySlices(dayProfile).some(
+        (s) => s.track === 'REFORMER',
+      );
+      if (hasReformer && u.isReformerPersonal) return false;
+      if (hasReformer && u.roomKey === 'REFORMER') return false;
+      if (u.roomKey === 'REFORMER' && u.isReformerPersonal) return false;
+      return true;
+    };
+    const ptMonthCount = trusted.filter((u) =>
+      isPtLadderUnit(u, profileForDay(u.occurredAt.slice(0, 10))),
+    ).length;
+    const paidAsdIds = new Set<string>();
+    const paidPtAllSportsIds = new Set<string>();
+
+    for (const u of units) {
+      if (u.kind !== 'SPA' && u.kind !== 'PT' && u.kind !== 'GROUP') continue;
+      if (u.isComplimentary) continue;
+      const day = u.occurredAt.slice(0, 10);
+      const profile = profileForDay(day);
+      if (!profile) {
+        const rate = this.pickRate(u, rates);
+        if (!rate) continue;
+        if (rate.rateType === 'PERCENT_OF_PRICE' && (u.priceMinor ?? 0) > 0) {
+          u.ratePercent = rate.rateValue;
+          u.earnMinor = Math.round((u.priceMinor! * rate.rateValue) / 100);
+        } else if (rate.rateType === 'FIXED_PER_SESSION') {
+          u.earnMinor = rate.rateValue;
+        } else if (rate.rateType === 'FIXED_PER_ATTENDEE') {
+          u.earnMinor = rate.rateValue * u.quantity;
+        }
+        continue;
+      }
+      const slices = allPaySlices(profile);
+      const asdRateMinor = Math.max(
+        0,
+        ...slices.map((s) => s.asdGroupRateMinor ?? 0),
+      );
+      if (asdRateMinor > 0 && u.isAsd && u.quantity >= 1 && !paidAsdIds.has(u.id)) {
+        paidAsdIds.add(u.id);
+        u.earnMinor = asdRateMinor;
+      }
+      const ptAllSportsRate = Math.max(
+        0,
+        ...slices
+          .filter((s) => s.track === 'PT' || s.track === 'CLUB')
+          .map((s) => s.ptAllSportsRateMinor ?? 0),
+      );
+      if (
+        ptAllSportsRate > 0 &&
+        u.kind === 'PT' &&
+        u.isPtAllSports &&
+        !paidPtAllSportsIds.has(u.id)
+      ) {
+        paidPtAllSportsIds.add(u.id);
+        u.earnMinor = ptAllSportsRate;
+      }
+
+      for (const slice of slices) {
+        if (slice.track === 'GROUP_TRAINER' && u.kind === 'GROUP') {
+          if (u.isAsd || u.roomKey === 'REFORMER') continue;
+          const hasTiers = (slice.groupRateTiers?.length ?? 0) > 0;
+          let pay = 0;
+          if (hasTiers || u.roomKey) {
+            pay = resolveGroupSessionRateMinor(
+              u.quantity,
+              u.roomKey,
+              slice.groupRateTiers,
+              {
+                rateMinor: slice.groupSessionRateMinor,
+                minAttendees: slice.groupMinAttendees,
+              },
+            );
+          } else {
+            const min = slice.groupMinAttendees ?? 1;
+            if (u.quantity >= min) pay = slice.groupSessionRateMinor ?? 0;
+          }
+          if (slice.groupPerAttendeeMinor) {
+            pay += slice.groupPerAttendeeMinor * u.quantity;
+          }
+          if (pay > 0) u.earnMinor = pay;
+        }
+        if (slice.track === 'REFORMER') {
+          if (u.kind === 'GROUP' && u.roomKey === 'REFORMER' && !u.isAsd) {
+            if (u.quantity >= 1) {
+              const tiers =
+                (slice.groupRateTiers?.filter((t) => t.roomKey === 'REFORMER')
+                  ?.length ?? 0) > 0
+                  ? slice.groupRateTiers
+                  : DEFAULT_REFORMER_RATE_TIERS;
+              const pay = resolveGroupSessionRateMinor(
+                u.quantity,
+                'REFORMER',
+                tiers,
+              );
+              if (pay > 0) u.earnMinor = pay;
+            }
+          }
+          if (
+            u.kind === 'PT' &&
+            (u.isReformerPersonal || u.roomKey === 'REFORMER') &&
+            !u.isPtAllSports
+          ) {
+            const refPct = slice.reformerPersonalPercent ?? 0;
+            const price = u.priceMinor ?? 0;
+            if (refPct > 0 && price > 0) {
+              u.ratePercent = refPct;
+              u.earnMinor = Math.round((price * refPct) / 100);
+            }
+          }
+        }
+        if (slice.track === 'SPA' && u.kind === 'SPA') {
+          if (u.isSpaAllSportsBioimpedance && slice.spaPartnerRateMinor) {
+            u.earnMinor = slice.spaPartnerRateMinor;
+          } else {
+            const price = u.priceMinor ?? 0;
+            if (price > 0 && slice.spaSoldPercent) {
+              u.ratePercent = slice.spaSoldPercent;
+              u.earnMinor = Math.round((price * slice.spaSoldPercent) / 100);
+            } else if (price === 0 && slice.spaQuotaRates?.length) {
+              const title = u.title.toLowerCase();
+              const match = slice.spaQuotaRates.find((r) => {
+                if (r.serviceKey === 'BODY_COMPOSITION')
+                  return /состав|анализ|inbody|compos/i.test(title);
+                if (r.serviceKey === 'CLASSIC_MASSAGE')
+                  return /массаж|massage|класси/i.test(title);
+                return r.serviceKey === u.serviceId;
+              });
+              if (match && match.rateMinor > 0) u.earnMinor = match.rateMinor;
+            }
+          }
+        }
+        if (
+          (slice.track === 'PT' || slice.track === 'CLUB') &&
+          isPtLadderUnit(u, profile)
+        ) {
+          const pct = resolvePtPercent(ptMonthCount, slice.ptPercentTiers);
+          const catalog = slice.ptSessionPriceMinor ?? 0;
+          const price =
+            u.priceMinor != null && u.priceMinor > 0 ? u.priceMinor : catalog;
+          if (price > 0) {
+            u.ratePercent = pct;
+            u.earnMinor = Math.round((price * pct) / 100);
+          }
+        }
+      }
+    }
   }
 
   private calcMotivationFromProfile(

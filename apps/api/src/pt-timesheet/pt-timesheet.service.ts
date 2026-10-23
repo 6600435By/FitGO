@@ -20,6 +20,7 @@ import {
   isPtAllSportsSession,
   resolveGroupRoomKey,
   resolvePtPercent,
+  sliceForTrack,
   type StaffPayProfile,
   type TrainerDaySheetDto,
   type TrainerDaySheetLineDto,
@@ -1000,13 +1001,24 @@ export class PtTimesheetService {
 
     await this.retryCrmLinkForUnmatchedBookings(clubId, bookings);
 
+    // Rate version active on the sheet day (not a future raise).
     const compensation = await this.prisma.staffCompensation.findFirst({
-      where: { clubId, userId: trainerId },
-      orderBy: { effectiveFrom: 'desc' },
+      where: {
+        clubId,
+        userId: trainerId,
+        effectiveFrom: { lte: new Date(`${dateStr}T23:59:59`) },
+      },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
     const profile = asPayProfile(compensation?.payProfile);
-    const hourlyMinor = profile?.hourlyRateMinor ?? 0;
-    const catalog = profile?.ptSessionPriceMinor ?? 0;
+    const hourlyMinor =
+      sliceForTrack(profile, 'PT').hourlyRateMinor ||
+      profile?.hourlyRateMinor ||
+      0;
+    const catalog =
+      sliceForTrack(profile, 'PT').ptSessionPriceMinor ||
+      profile?.ptSessionPriceMinor ||
+      0;
     // Individual reformer / ALL SPORTS PT — paid via dedicated rates; exclude from % ladder.
     const monthStart = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
     const monthEnd = new Date(
@@ -1061,7 +1073,10 @@ export class PtTimesheetService {
       (b) => !isExcludedFromLadder(b.crmDocRef),
     );
     const monthCount = ladderBookings.length;
-    const pct = resolvePtPercent(monthCount, profile?.ptPercentTiers);
+    const pct = resolvePtPercent(
+      monthCount,
+      profile ? sliceForTrack(profile, 'PT').ptPercentTiers : undefined,
+    );
 
     if (!sheet) {
       sheet = await this.prisma.trainerDaySheet.create({

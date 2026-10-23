@@ -3336,6 +3336,7 @@ export const api = {
         | 'REFORMER'
       >;
       trainerGroups?: Array<'GP' | 'STAFF' | 'CLUB' | 'REFORMER'>;
+      effectiveFrom?: string;
     },
   ) =>
     request<{ copied: number; skipped: number }>(
@@ -3371,6 +3372,7 @@ export const api = {
     userId: string,
     body?: {
       tracks?: import('@fitgo/shared-types').StaffPayTrack[];
+      effectiveFrom?: string;
     },
   ) =>
     request<import('@fitgo/shared-types').StaffCompensationDto>(

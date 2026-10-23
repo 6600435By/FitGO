@@ -15,6 +15,7 @@ import {
   sliceForTrack,
   type GroupRateTier,
   type GroupRoomKey,
+  type StaffCompensationRateVersion,
   type StaffPayProfile,
   type StaffPayTrack,
   type StaffPayTrackSlice,
@@ -24,6 +25,56 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+
+function firstOfCurrentMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+}
+
+function formatRateDay(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  const months = [
+    'янв',
+    'фев',
+    'мар',
+    'апр',
+    'мая',
+    'июн',
+    'июл',
+    'авг',
+    'сен',
+    'окт',
+    'ноя',
+    'дек',
+  ];
+  return `${d} ${months[m - 1]}${y !== new Date().getFullYear() ? ` ${y}` : ''}`;
+}
+
+function rateVersionsHint(
+  versions: StaffCompensationRateVersion[] | undefined,
+): string | null {
+  if (!versions?.length) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const pastOrToday = versions.filter((v) => v.effectiveFrom <= today);
+  const future = versions.filter((v) => v.effectiveFrom > today);
+  const current = pastOrToday[pastOrToday.length - 1];
+  const previous = pastOrToday[pastOrToday.length - 2];
+  const parts: string[] = [];
+  if (previous && current) {
+    parts.push(`С ${formatRateDay(previous.effectiveFrom)} — прежняя`);
+    parts.push(
+      `С ${formatRateDay(current.effectiveFrom)} — эти цифры`,
+    );
+  } else if (current) {
+    parts.push(`С ${formatRateDay(current.effectiveFrom)} — эти цифры`);
+  }
+  const next = future[0];
+  if (next) {
+    parts.push(`с ${formatRateDay(next.effectiveFrom)} — новая`);
+  }
+  return parts.length ? `${parts.join('. ')}.` : null;
+}
 
 const GROUP_ROOM_SECTIONS: { key: GroupRoomKey; label: string }[] = [
   { key: 'GROUP_SMALL', label: 'Малый зал' },
@@ -104,6 +155,10 @@ export function StaffPayProfileEditor({
     Partial<Record<StaffPayTrack, StaffPayTrackSlice>>
   >({});
   const [baseSalary, setBaseSalary] = useState('0');
+  const [effectiveFrom, setEffectiveFrom] = useState(firstOfCurrentMonth);
+  const [rateVersions, setRateVersions] = useState<
+    StaffCompensationRateVersion[]
+  >([]);
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [copying, setCopying] = useState(false);
@@ -112,54 +167,66 @@ export function StaffPayProfileEditor({
   const profileRef = useRef(profile);
   const byTrackRef = useRef(byTrack);
   const baseSalaryRef = useRef(baseSalary);
+  const effectiveFromRef = useRef(effectiveFrom);
   profileRef.current = profile;
   byTrackRef.current = byTrack;
   baseSalaryRef.current = baseSalary;
+  effectiveFromRef.current = effectiveFrom;
+
+  const applyLoadedProfile = (row: Awaited<
+    ReturnType<typeof api.payrollStaffProfile>
+  >) => {
+    if (row?.payProfile) {
+      const packed = row.payProfile;
+      let track =
+        packed.track && allowed.includes(packed.track)
+          ? packed.track
+          : allowed[0] ?? packed.track;
+      const map: Partial<Record<StaffPayTrack, StaffPayTrackSlice>> = {
+        ...(packed.byTrack ?? {}),
+      };
+      for (const t of Object.keys(map) as StaffPayTrack[]) {
+        map[t] = { ...map[t]!, track: t };
+      }
+      map[packed.track] = sliceForTrack(packed, packed.track);
+      const others = allowed.filter((t) => !TRAINER_PAY_TRACKS.includes(t));
+      if (
+        trainerGroupsRef.current &&
+        others.length &&
+        TRAINER_PAY_TRACKS.includes(track)
+      ) {
+        map[track] = sliceForTrack({ ...packed, byTrack: map }, track);
+        track = others[0]!;
+      }
+      setByTrack(map);
+      setProfile(sliceForTrack({ ...packed, byTrack: map }, track));
+    } else if (suggestedTrack && allowed.includes(suggestedTrack)) {
+      setProfile(defaultPayProfile(suggestedTrack));
+      setByTrack({});
+    } else if (allowed[0]) {
+      setProfile(defaultPayProfile(allowed[0]));
+      setByTrack({});
+    }
+    if (row) {
+      setBaseSalary(formatMinor(row.baseSalaryMinor));
+      setRateVersions(row.rateVersions ?? []);
+    } else {
+      setRateVersions([]);
+    }
+  };
 
   useEffect(() => {
     const token = getToken();
     if (!token) return;
     api
       .payrollStaffProfile(token, userId)
-      .then((row) => {
-        if (row?.payProfile) {
-          const packed = row.payProfile;
-          let track =
-            packed.track && allowed.includes(packed.track)
-              ? packed.track
-              : allowed[0] ?? packed.track;
-          const map: Partial<Record<StaffPayTrack, StaffPayTrackSlice>> = {
-            ...(packed.byTrack ?? {}),
-          };
-          for (const t of Object.keys(map) as StaffPayTrack[]) {
-            map[t] = { ...map[t]!, track: t };
-          }
-          map[packed.track] = sliceForTrack(packed, packed.track);
-          const others = allowed.filter((t) => !TRAINER_PAY_TRACKS.includes(t));
-          if (
-            trainerGroupsRef.current &&
-            others.length &&
-            TRAINER_PAY_TRACKS.includes(track)
-          ) {
-            map[track] = sliceForTrack({ ...packed, byTrack: map }, track);
-            track = others[0]!;
-          }
-          setByTrack(map);
-          setProfile(sliceForTrack({ ...packed, byTrack: map }, track));
-        } else if (suggestedTrack && allowed.includes(suggestedTrack)) {
-          setProfile(defaultPayProfile(suggestedTrack));
-          setByTrack({});
-        } else if (allowed[0]) {
-          setProfile(defaultPayProfile(allowed[0]));
-          setByTrack({});
-        }
-        if (row) setBaseSalary(formatMinor(row.baseSalaryMinor));
-      })
+      .then((row) => applyLoadedProfile(row))
       .catch(() => {
         if (suggestedTrack && allowed.includes(suggestedTrack)) {
           setProfile(defaultPayProfile(suggestedTrack));
         }
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload on user/track only
   }, [userId, suggestedTrack, allowed]);
 
   const switchTrack = (track: StaffPayTrack) => {
@@ -290,13 +357,15 @@ export function StaffPayProfileEditor({
     setMessage('');
     try {
       const { payProfile, baseSalaryMinor } = assembleProfile();
-      await api.payrollSaveStaffProfile(token, userId, {
+      const row = await api.payrollSaveStaffProfile(token, userId, {
         baseSalaryMinor,
         payProfile,
+        effectiveFrom: effectiveFromRef.current,
       });
-      setByTrack(payProfile.byTrack ?? {});
-      setProfile(sliceForTrack(payProfile, payProfile.track));
-      setMessage('Мотивация сохранена');
+      applyLoadedProfile(row);
+      setMessage(
+        `Мотивация сохранена с ${formatRateDay(effectiveFromRef.current)}`,
+      );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     } finally {
@@ -366,17 +435,18 @@ export function StaffPayProfileEditor({
     setMessage('');
     try {
       const { payProfile, baseSalaryMinor } = assembleProfile();
+      const from = effectiveFromRef.current;
       await api.payrollSaveStaffProfile(token, userId, {
         baseSalaryMinor,
         payProfile,
+        effectiveFrom: from,
       });
-      setByTrack(payProfile.byTrack ?? {});
-      setProfile(sliceForTrack(payProfile, payProfile.track));
       const result = selectedGroups.length
         ? await api.payrollCopyStaffProfile(token, userId, {
             departments: ['TRAINER'],
             tracks: activeTrainerTracks(groups),
             trainerGroups: selectedGroups,
+            effectiveFrom: from,
           })
         : await api.payrollCopyStaffProfile(token, userId, {
             departments: departmentsForPayTrack(profileRef.current.track).filter(
@@ -390,8 +460,13 @@ export function StaffPayProfileEditor({
                 | 'TECH' => department !== 'EXTERNAL',
             ),
             tracks: [profileRef.current.track],
+            effectiveFrom: from,
           });
-      setMessage(`Скопировано сотрудникам: ${result.copied}.`);
+      const row = await api.payrollStaffProfile(token, userId);
+      applyLoadedProfile(row);
+      setMessage(
+        `Скопировано сотрудникам: ${result.copied} (с ${formatRateDay(from)}).`,
+      );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка копирования');
     } finally {
@@ -429,12 +504,13 @@ export function StaffPayProfileEditor({
     setMessage('');
     try {
       const { payProfile, baseSalaryMinor } = assembleProfile();
-      await api.payrollSaveStaffProfile(token, userId, {
+      const from = effectiveFromRef.current;
+      const row = await api.payrollSaveStaffProfile(token, userId, {
         baseSalaryMinor,
         payProfile,
+        effectiveFrom: from,
       });
-      setByTrack(payProfile.byTrack ?? {});
-      setProfile(sliceForTrack(payProfile, payProfile.track));
+      applyLoadedProfile(row);
       for (const track of tracks) {
         await api.payrollSavePayTemplate(token, {
           track,
@@ -463,7 +539,7 @@ export function StaffPayProfileEditor({
     );
     if (
       !window.confirm(
-        `Применить шаблон клуба к этому сотруднику (${labels.join(', ')})?\n\nТолько его мотивация. Остальных сотрудников не трогаем.`,
+        `Применить шаблон клуба к этому сотруднику (${labels.join(', ')})?\n\nТолько его мотивация с ${formatRateDay(effectiveFromRef.current)}. Остальных сотрудников не трогаем.`,
       )
     ) {
       return;
@@ -471,18 +547,14 @@ export function StaffPayProfileEditor({
     setTemplateBusy(true);
     setMessage('');
     try {
-      const row = await api.payrollApplyPayTemplate(token, userId, { tracks });
-      if (row?.payProfile) {
-        const packed = row.payProfile;
-        const map: Partial<Record<StaffPayTrack, StaffPayTrackSlice>> = {
-          ...(packed.byTrack ?? {}),
-        };
-        map[packed.track] = sliceForTrack(packed, packed.track);
-        setByTrack(map);
-        setProfile(sliceForTrack(packed, packed.track));
-        setBaseSalary(formatMinor(row.baseSalaryMinor));
-      }
-      setMessage('Шаблон применён к этому сотруднику');
+      const row = await api.payrollApplyPayTemplate(token, userId, {
+        tracks,
+        effectiveFrom: effectiveFromRef.current,
+      });
+      applyLoadedProfile(row);
+      setMessage(
+        `Шаблон применён с ${formatRateDay(effectiveFromRef.current)}`,
+      );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка применения шаблона');
     } finally {
@@ -1074,7 +1146,24 @@ export function StaffPayProfileEditor({
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-xs text-slate-400">
+          Ставка действует с
+          <input
+            type="date"
+            className="input"
+            value={effectiveFrom}
+            onChange={(e) => setEffectiveFrom(e.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          className="btn-secondary"
+          disabled={saving || copying || templateBusy}
+          onClick={() => setEffectiveFrom(firstOfCurrentMonth())}
+        >
+          Весь месяц
+        </button>
         <button
           type="button"
           className="btn-primary"
@@ -1112,6 +1201,12 @@ export function StaffPayProfileEditor({
           </>
         )}
       </div>
+      {(() => {
+        const hint = rateVersionsHint(rateVersions);
+        return hint ? (
+          <p className="text-xs text-slate-500">{hint}</p>
+        ) : null;
+      })()}
       {message && <p className="text-sm text-fitgo-300">{message}</p>}
     </div>
   );

@@ -489,9 +489,14 @@ export class StaffRosterService {
       (s, x) => s + x.minutes + x.overtimeMinutes,
       0,
     );
+    // Hourly rate as of period end so mid-period raises match payroll split.
     const compensation = await this.prisma.staffCompensation.findFirst({
-      where: { clubId, userId },
-      orderBy: { effectiveFrom: 'desc' },
+      where: {
+        clubId,
+        userId,
+        effectiveFrom: { lte: toD },
+      },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
     const profile = asPayProfile(compensation?.payProfile);
     const track =

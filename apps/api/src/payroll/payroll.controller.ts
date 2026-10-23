@@ -81,6 +81,7 @@ export class PayrollController {
         | 'REFORMER'
       >;
       trainerGroups?: Array<'GP' | 'STAFF' | 'CLUB' | 'REFORMER'>;
+      effectiveFrom?: string;
     },
   ) {
     return this.payroll.copyStaffPayProfile(
@@ -89,6 +90,7 @@ export class PayrollController {
       body.departments ?? [],
       body.tracks,
       body.trainerGroups,
+      body.effectiveFrom,
     );
   }
 
@@ -121,9 +123,15 @@ export class PayrollController {
     @Body()
     body?: {
       tracks?: Array<StaffPayProfile['track']>;
+      effectiveFrom?: string;
     },
   ) {
-    return this.payroll.applyPayTemplatesToUser(user, userId, body?.tracks);
+    return this.payroll.applyPayTemplatesToUser(
+      user,
+      userId,
+      body?.tracks,
+      body?.effectiveFrom,
+    );
   }
 
   @Patch('staff/:userId/employment')

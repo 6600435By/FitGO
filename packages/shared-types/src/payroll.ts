@@ -72,6 +72,12 @@ export interface WorkUnit {
   payWave?: WorkUnitPayWave;
 }
 
+/** One dated motivation version (for card hint / payroll split). */
+export interface StaffCompensationRateVersion {
+  effectiveFrom: string;
+  payChips?: string[];
+}
+
 export interface StaffCompensationDto {
   id: string;
   userId: string;
@@ -81,6 +87,11 @@ export interface StaffCompensationDto {
   effectiveFrom: string;
   payProfile?: import('./staff-pay').StaffPayProfile;
   payChips?: string[];
+  /**
+   * All dated versions ascending (card hint: previous / current / future).
+   * Profile fields on this DTO are the scheme as of today.
+   */
+  rateVersions?: StaffCompensationRateVersion[];
 }
 
 /** Club-wide default motivation scheme for one pay track (new hires). */
