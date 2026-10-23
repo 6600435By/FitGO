@@ -12,6 +12,7 @@ import {
   isLikelyTrainingProductName,
   isReformerPersonalTitle,
 } from './admin-sales-segments';
+import { isCollectibleClientDebt } from './club-revenue-debt';
 
 /** Row shape shared by payroll and booking-control PT sales. */
 export type TrainerPtSaleRow = {
@@ -113,6 +114,178 @@ export function trainerPtSaleDocKey(r: TrainerPtSaleRow): string {
   const ext = (r.externalId || '').trim();
   if (!ext) return '';
   return (ext.split(':')[0] || ext).toLowerCase();
+}
+
+/** ClubRevenue unpaid row fields used to force DEBT on TrainerPtSale. */
+export type UnpaidDebtRevenueEntry = {
+  documentId?: string | null;
+  externalId: string;
+  productName?: string | null;
+  saleType?: string | null;
+  clientName?: string | null;
+  performerExternalId?: string | null;
+  performerName?: string | null;
+  employeeExternalId?: string | null;
+  employeeName?: string | null;
+  operationType?: string | null;
+  paidAmount?: number | null;
+  personalAccount?: number | null;
+  cash?: number | null;
+  card?: number | null;
+  cashless?: number | null;
+  saleAmount?: number | null;
+  occurredAt: Date;
+  paidAt?: Date | null;
+};
+
+/** True when ClubRevenue row has real money (cash/card/cashless/ЛС/paidAmount). */
+export function clubRevenueHasPaidMoney(e: {
+  paidAmount?: number | null;
+  personalAccount?: number | null;
+  cash?: number | null;
+  card?: number | null;
+  cashless?: number | null;
+}): boolean {
+  return (
+    (Number(e.paidAmount) || 0) > 0.01 ||
+    (Number(e.personalAccount) || 0) > 0.01 ||
+    (Number(e.cash) || 0) + (Number(e.card) || 0) + (Number(e.cashless) || 0) >
+      0.01
+  );
+}
+
+/**
+ * Keys for open unpaid sales in ClubRevenue (scope=debt).
+ * Doc keys: any unpaid collectible (PT / SPA / shop / membership) — match by
+ * sale document wins for every staff track.
+ * Day|client|performer keys: PT + SPA-like (исполнитель), so trainers and
+ * specialists both get DEBT corrected when Integration wrongly marked PAID.
+ */
+export function collectUnpaidPtDebtKeys(
+  entries: UnpaidDebtRevenueEntry[],
+): Set<string> {
+  const keys = new Set<string>();
+  for (const e of entries) {
+    if ((e.operationType ?? '').toLowerCase() !== 'unpaid') continue;
+    if (!isCollectibleClientDebt(e)) continue;
+    if (clubRevenueHasPaidMoney(e)) continue;
+    const product = e.productName ?? '';
+    const saleType = (e.saleType ?? '').toLowerCase();
+    const isPerformerService =
+      saleType === 'training' ||
+      saleType === 'service' ||
+      isLikelyTrainingProductName(product) ||
+      isSpaLikeSessionTitle(product) ||
+      /тренер|персональн|\bпт\b|занятие с|массаж|spa|биоимпедан/i.test(
+        product,
+      ) ||
+      /^продажа\s+\d+/i.test(product.trim());
+    const doc =
+      e.documentId?.trim() ||
+      e.externalId.split(':')[0] ||
+      e.externalId;
+    // Always index by document — covers admin-sold membership/shop debt too
+    // when the same doc appears on a TrainerPtSale / specialist line.
+    if (doc) keys.add(`doc:${doc.toLowerCase()}`);
+    if (!isPerformerService) continue;
+    const when = e.paidAt ?? e.occurredAt;
+    const day = when.toISOString().slice(0, 10);
+    const client = (e.clientName ?? '').trim().toLowerCase();
+    if (!day || !client) continue;
+    const perfCode = e.performerExternalId?.trim();
+    const perfName = e.performerName?.trim();
+    const empCode = e.employeeExternalId?.trim();
+    const empName = e.employeeName?.trim();
+    const performerCode = perfCode || (!perfName ? empCode : undefined);
+    const performerName = perfName || (!perfCode ? empName : undefined);
+    if (performerCode) {
+      keys.add(`${day}|${client}|c:${performerCode.replace(/^0+/, '')}`);
+    }
+    if (performerName) {
+      keys.add(`${day}|${client}|n:${performerName.toLowerCase()}`);
+    }
+  }
+  return keys;
+}
+
+/** Force paymentStatus=DEBT when ClubRevenue still has an open unpaid PT sale. */
+export function applyUnpaidDebtStatusToPtSales<
+  T extends {
+    paymentStatus?: string;
+    occurredAt: string;
+    clientName?: string;
+    employeeCode?: string;
+    employeeName?: string;
+    docRef?: string;
+    externalId?: string;
+  },
+>(sales: T[], unpaidKeys: Set<string>): T[] {
+  if (unpaidKeys.size === 0) return sales;
+  return sales.map((s) => {
+    if ((s.paymentStatus ?? '').toUpperCase() === 'DEBT') return s;
+    const day = (s.occurredAt || '').slice(0, 10);
+    const client = (s.clientName ?? '').trim().toLowerCase();
+    const code = (s.employeeCode ?? '').trim().replace(/^0+/, '');
+    const name = (s.employeeName ?? '').trim().toLowerCase();
+    const doc = (s.docRef || '').trim().toLowerCase();
+    const extRoot = (s.externalId || '').split(/[:#]/)[0]?.trim().toLowerCase();
+    const docRoot = doc.includes('#') ? doc.split('#')[0]! : doc;
+    const hit =
+      (code && unpaidKeys.has(`${day}|${client}|c:${code}`)) ||
+      (name && unpaidKeys.has(`${day}|${client}|n:${name}`)) ||
+      (doc && unpaidKeys.has(`doc:${doc}`)) ||
+      (docRoot && unpaidKeys.has(`doc:${docRoot}`)) ||
+      (extRoot && unpaidKeys.has(`doc:${extRoot}`));
+    if (!hit) return s;
+    return { ...s, paymentStatus: 'DEBT' };
+  });
+}
+
+/**
+ * Downgrade wrongly-PAID TrainerPtSale rows using ClubRevenue unpaid snapshot.
+ * Defense for Integration until republish + already-synced bad PAID rows.
+ */
+export async function overlayPtSaleDebtFromRevenue<T extends TrainerPtSaleRow>(
+  prisma: PrismaService,
+  clubId: string,
+  fromD: Date,
+  toD: Date,
+  sales: T[],
+): Promise<T[]> {
+  if (sales.length === 0) return sales;
+  const entries = await prisma.clubRevenueEntry.findMany({
+    where: {
+      clubId,
+      isActive: true,
+      operationType: 'unpaid',
+      OR: [
+        { occurredAt: { gte: fromD, lte: toD } },
+        { paidAt: { gte: fromD, lte: toD } },
+      ],
+    },
+    select: {
+      documentId: true,
+      externalId: true,
+      productName: true,
+      saleType: true,
+      clientName: true,
+      performerExternalId: true,
+      performerName: true,
+      employeeExternalId: true,
+      employeeName: true,
+      operationType: true,
+      paidAmount: true,
+      personalAccount: true,
+      cash: true,
+      card: true,
+      cashless: true,
+      saleAmount: true,
+      occurredAt: true,
+      paidAt: true,
+    },
+  });
+  const keys = collectUnpaidPtDebtKeys(entries);
+  return applyUnpaidDebtStatusToPtSales(sales, keys);
 }
 
 /** Prefer TrainerPtSale rows; add revenue-only PT lines not already present. */

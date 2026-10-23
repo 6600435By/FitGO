@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { overlayPtSaleDebtFromRevenue } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { addMoscowDays, moscowDayKey } from './moscow-time';
@@ -44,7 +45,19 @@ export class TrainerPtSalesSyncService {
     }
 
     try {
-      const rows = await provider.getTrainerPtSales({ from, to });
+      const raw = await provider.getTrainerPtSales({ from, to });
+      const fromD = new Date(`${from}T00:00:00.000`);
+      const toD = new Date(`${to}T23:59:59.999`);
+      const rows =
+        !Number.isNaN(fromD.getTime()) && !Number.isNaN(toD.getTime())
+          ? await overlayPtSaleDebtFromRevenue(
+              this.prisma,
+              clubId,
+              fromD,
+              toD,
+              raw,
+            )
+          : raw;
       const now = new Date();
       let upserted = 0;
       const seen = new Set<string>();

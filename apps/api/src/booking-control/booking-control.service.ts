@@ -65,6 +65,7 @@ import {
   isExcludedFromPtBookingControl,
   loadTrainerPtSalesFromRevenue,
   mergeTrainerPtSaleRows,
+  overlayPtSaleDebtFromRevenue,
   type TrainerPtSaleRow,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { sessionMatchesFlag } from '../discrepancies/discrepancies-predicates';
@@ -1391,8 +1392,21 @@ export class BookingControlService {
     try {
       const live = await this.fetchTrainerPtSalesLive(from, to);
       if (live.length) {
+        const fromD = new Date(`${from}T00:00:00.000`);
+        const toD = new Date(`${to}T23:59:59.999`);
+        // ClubRevenue unpaid wins over Integration false-PAID (all performers).
+        const reconciled =
+          !Number.isNaN(fromD.getTime()) && !Number.isNaN(toD.getTime())
+            ? await overlayPtSaleDebtFromRevenue(
+                this.prisma,
+                clubId,
+                fromD,
+                toD,
+                live,
+              )
+            : live;
         const now = new Date();
-        for (const row of live) {
+        for (const row of reconciled) {
           // Prefer sale-line key (docRef); client UUID in externalId collapses rows.
           const externalId = row.docRef || row.externalId;
           if (!externalId) continue;
@@ -1434,8 +1448,11 @@ export class BookingControlService {
           ptUpserted += 1;
         }
         const cacheKey = `${clubId}|${from}|${to}`;
-        this.ptSalesCache.set(cacheKey, { at: Date.now(), rows: live });
-        this.indexTrainerPtSales(live);
+        this.ptSalesCache.set(cacheKey, {
+          at: Date.now(),
+          rows: reconciled,
+        });
+        this.indexTrainerPtSales(reconciled);
       }
     } catch (e) {
       ptError = e instanceof Error ? e.message : String(e);
@@ -3310,7 +3327,21 @@ export class BookingControlService {
     }));
     // Integration often leaves ЛС/card composite sales as DEBT; cash register
     // (ClubRevenue) already shows paid.
-    return this.overlayPtSalePaidFromRevenue(clubId, fromD, toD, mapped);
+    const withPaid = await this.overlayPtSalePaidFromRevenue(
+      clubId,
+      fromD,
+      toD,
+      mapped,
+    );
+    // Inverse: wrongly-PAID from Integration when debt remainder missing —
+    // ClubRevenue unpaid (scope=debt) wins so ЗП / контроль don't pay debt.
+    return overlayPtSaleDebtFromRevenue(
+      this.prisma,
+      clubId,
+      fromD,
+      toD,
+      withPaid,
+    );
   }
 
   /**

@@ -98,6 +98,7 @@ import {
   loadPayrollSegmentSets,
 } from '../admin-sales/admin-sales-segments';
 import {
+  clubRevenueHasPaidMoney,
   loadPackSalesForUnitPrice,
   loadTrainerPtSalesFromRevenue,
   matchPackSaleForUnitPrice,
@@ -620,17 +621,23 @@ export class PayrollService {
         where: { clubId, externalId: saleExt, isActive: true },
       });
       if (!sale) continue;
-      if (sale.operationType === 'unpaid' && (sale.paidAmount ?? 0) < 0.01) {
-        continue;
-      }
-      // Multi-visit pack sale («Блок массажа 10») is not SPA motivation —
-      // only conducted write-offs pay (pack amount / N).
-      if (isMultiVisitPackSale(sale.productName)) continue;
       const bioimpedance = isSpaAllSportsBioimpedance({
         serviceExternalId: b.service.externalId,
         title: b.service.name,
       });
-      const amountMajor = Math.max(sale.paidAmount || 0, sale.saleAmount || 0);
+      // Debt / unpaid: never pay SPA from saleAmount. Only real money counts
+      // (same rule as PT one-shots and admin % from SaleTransaction paidAt).
+      if (!clubRevenueHasPaidMoney(sale) && !bioimpedance) continue;
+      // Multi-visit pack sale («Блок массажа 10») is not SPA motivation —
+      // only conducted write-offs pay (pack amount / N).
+      if (isMultiVisitPackSale(sale.productName)) continue;
+      const amountMajor =
+        Number(sale.paidAmount) ||
+        Number(sale.personalAccount) ||
+        (Number(sale.cash) || 0) +
+          (Number(sale.card) || 0) +
+          (Number(sale.cashless) || 0) ||
+        0;
       // Free AllSports биоимпеданс: 0 BYN in 1C, pay spaPartnerRateMinor from profile.
       if (amountMajor < 0.01 && !bioimpedance) continue;
       const priceMinor = Math.round(amountMajor * 100);
@@ -3645,10 +3652,25 @@ export class PayrollService {
     to: string,
   ): Promise<TrainerPtSaleRow[]> {
     const key = `${clubId}|${from}|${to}`;
+    const fromD = new Date(`${from}T00:00:00.000`);
+    const toD = new Date(`${to}T23:59:59.999`);
     const pending = this.fetchTrainerPtSalesLive(from, to)
       .then(async (live) => {
-        if (live.length > 0) return live;
-        return this.loadTrainerPtSalesFromDb(clubId, from, to);
+        if (live.length === 0) {
+          return this.loadTrainerPtSalesFromDb(clubId, from, to);
+        }
+        // Live Integration can still mark DEBT as PAID — same ClubRevenue
+        // unpaid overlay as DB path (all trainers after «Обновить из 1С»).
+        if (Number.isNaN(fromD.getTime()) || Number.isNaN(toD.getTime())) {
+          return live;
+        }
+        return overlayPtSaleDebtFromRevenue(
+          this.prisma,
+          clubId,
+          fromD,
+          toD,
+          live,
+        );
       })
       .finally(() => {
         setTimeout(() => this.ptSalesPeriodCache.delete(key), 120_000);
