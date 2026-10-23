@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { PasswordField } from '@/components/ui/password-field';
 import { api } from '@/lib/api';
 import { getHomePath, saveAuth } from '@/lib/auth';
@@ -12,6 +12,17 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('fitgo_session_expired') === '1') {
+        sessionStorage.removeItem('fitgo_session_expired');
+        setError('Сессия истекла после обновления сервера. Войдите снова.');
+      }
+    } catch {
+      /* private mode */
+    }
+  }, []);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();

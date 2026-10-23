@@ -2,7 +2,7 @@
 
 import { UserRole } from '@fitgo/shared-types';
 import { useRouter } from 'next/navigation';
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { PasswordField } from '@/components/password-field';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { api } from '@/lib/api';
@@ -14,6 +14,17 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('fitgo_session_expired') === '1') {
+        sessionStorage.removeItem('fitgo_session_expired');
+        setError('Сессия истекла после обновления сервера. Войдите снова.');
+      }
+    } catch {
+      /* private mode */
+    }
+  }, []);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();

@@ -252,6 +252,53 @@ export interface NotificationItem {
   createdAt: string;
 }
 
+/** After deploy / JWT rotate, stale tokens return 401 — force re-login once. */
+let handlingUnauthorized = false;
+
+function handleUnauthorized(hadToken: boolean, path: string) {
+  if (!hadToken || path === '/auth/login' || path === '/auth/register') return;
+  if (typeof window === 'undefined') return;
+  if (handlingUnauthorized) return;
+  handlingUnauthorized = true;
+  // Lazy import: auth.ts type-imports from this module.
+  void import('./auth').then(({ clearAuth }) => {
+    clearAuth();
+    try {
+      sessionStorage.setItem('fitgo_session_expired', '1');
+    } catch {
+      /* private mode */
+    }
+    const loc = window.location.pathname;
+    if (!loc.startsWith('/login') && !loc.startsWith('/register')) {
+      window.location.replace('/login');
+    }
+  });
+}
+
+function errorMessageFromBody(
+  body: unknown,
+  status: number,
+): string {
+  const raw =
+    body && typeof body === 'object' && 'message' in body
+      ? (body as { message?: unknown }).message
+      : undefined;
+  if (Array.isArray(raw)) return raw.join('; ');
+  if (typeof raw === 'string' && raw.trim()) return raw;
+  return `Ошибка ${status}`;
+}
+
+async function assertBlobOk(
+  res: Response,
+  token: string,
+  path: string,
+): Promise<void> {
+  if (res.ok) return;
+  if (res.status === 401) handleUnauthorized(true, path);
+  const text = await res.text();
+  throw new Error(xlsxErrorMessage(text, res.status));
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -272,14 +319,11 @@ async function request<T>(
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      handleUnauthorized(Boolean(token), path);
+    }
     const error = await response.json().catch(() => ({}));
-    const raw = error.message;
-    const message = Array.isArray(raw)
-      ? raw.join('; ')
-      : typeof raw === 'string'
-        ? raw
-        : `Ошибка ${response.status}`;
-    throw new Error(message);
+    throw new Error(errorMessageFromBody(error, response.status));
   }
 
   return response.json();
@@ -2426,10 +2470,7 @@ export const api = {
       `${API_URL}/api/super-admin/analytics/staff.xlsx?${q}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(xlsxErrorMessage(text, res.status));
-    }
+    await assertBlobOk(res, token, '/super-admin/analytics/staff.xlsx');
     return res.blob();
   },
 
@@ -2592,10 +2633,7 @@ export const api = {
       `${API_URL}/api/super-admin/analytics/tasks.xlsx?${q}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(xlsxErrorMessage(text, res.status));
-    }
+    await assertBlobOk(res, token, '/super-admin/analytics/tasks.xlsx');
     return res.blob();
   },
 
@@ -2939,11 +2977,14 @@ export const api = {
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!response.ok) {
+      if (response.status === 401) {
+        handleUnauthorized(
+          Boolean(token),
+          `/${base}/booking-control/hall-snapshots/image`,
+        );
+      }
       const error = await response.json().catch(() => ({}));
-      throw new Error(
-        (error as { message?: string }).message ??
-          `Ошибка ${response.status}`,
-      );
+      throw new Error(errorMessageFromBody(error, response.status));
     }
     const blob = await response.blob();
     return URL.createObjectURL(blob);
@@ -3512,10 +3553,7 @@ export const api = {
       `${API_URL}/api/super-admin/payroll/club-summary.xlsx?${q}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(xlsxErrorMessage(text, res.status));
-    }
+    await assertBlobOk(res, token, '/super-admin/payroll/club-summary.xlsx');
     return res.blob();
   },
 
@@ -4116,10 +4154,7 @@ export const api = {
       `${API_URL}/api/admin/pt-timesheet/stats.xlsx?${q}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(xlsxErrorMessage(text, res.status));
-    }
+    await assertBlobOk(res, token, '/admin/pt-timesheet/stats.xlsx');
     return res.blob();
   },
 
@@ -4159,10 +4194,7 @@ export const api = {
       `${API_URL}/api/super-admin/pt-timesheet/stats.xlsx?${q}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(xlsxErrorMessage(text, res.status));
-    }
+    await assertBlobOk(res, token, '/super-admin/pt-timesheet/stats.xlsx');
     return res.blob();
   },
 

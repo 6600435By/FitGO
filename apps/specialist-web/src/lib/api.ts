@@ -23,6 +23,28 @@ export interface LoginResponse {
   user: AuthUser;
 }
 
+/** After deploy / JWT rotate, stale tokens return 401 — force re-login once. */
+let handlingUnauthorized = false;
+
+function handleUnauthorized(hadToken: boolean, path: string) {
+  if (!hadToken || path === '/auth/login' || path === '/auth/register') return;
+  if (typeof window === 'undefined') return;
+  if (handlingUnauthorized) return;
+  handlingUnauthorized = true;
+  void import('./auth').then(({ clearAuth }) => {
+    clearAuth();
+    try {
+      sessionStorage.setItem('fitgo_session_expired', '1');
+    } catch {
+      /* private mode */
+    }
+    const loc = window.location.pathname;
+    if (!loc.startsWith('/login') && !loc.startsWith('/register')) {
+      window.location.replace('/login');
+    }
+  });
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -36,6 +58,9 @@ async function request<T>(
 
   const res = await fetch(`${API_URL}/api${path}`, { ...options, headers });
   if (!res.ok) {
+    if (res.status === 401) {
+      handleUnauthorized(Boolean(token), path);
+    }
     let message = `HTTP ${res.status}`;
     try {
       const body = (await res.json()) as { message?: string | string[] };
