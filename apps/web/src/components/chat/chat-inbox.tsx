@@ -32,7 +32,15 @@ interface ChatInboxProps {
   allowStaffChat?: boolean;
   /** Manager / super-admin can create named group chats */
   allowGroupChat?: boolean;
+  /** Extra classes on the outer shell (e.g. h-full from a flex parent). */
+  className?: string;
 }
+
+/** Fits under app header + bottom nav; parent can override via className. */
+const CHAT_SHELL =
+  'flex min-h-0 flex-col overflow-hidden rounded-2xl bg-slate-900/50 ring-1 ring-slate-800 ' +
+  'h-[calc(100dvh-var(--app-header-h,3.5rem)-11.5rem)] max-h-[36rem] ' +
+  'md:h-[calc(100dvh-var(--app-header-h,3.5rem)-5.5rem)] md:max-h-[42rem]';
 
 function initials(title: string) {
   const parts = title.trim().split(/\s+/);
@@ -66,7 +74,9 @@ export function ChatInbox({
   directThread = false,
   allowStaffChat = role !== 'client',
   allowGroupChat = false,
+  className,
 }: ChatInboxProps) {
+  const shellClass = [CHAT_SHELL, className].filter(Boolean).join(' ');
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessageItem[]>([]);
@@ -430,7 +440,7 @@ export function ChatInbox({
 
   if (loading && !activeId && !directThread) {
     return (
-      <div className="flex h-[calc(100vh-10rem)] min-h-[480px] items-center justify-center rounded-2xl bg-slate-900/50 ring-1 ring-slate-800">
+      <div className={`${shellClass} items-center justify-center`}>
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
       </div>
     );
@@ -438,14 +448,14 @@ export function ChatInbox({
 
   if (loading && directThread && !activeId) {
     return (
-      <div className="flex h-[calc(100vh-10rem)] min-h-[480px] items-center justify-center rounded-2xl bg-slate-900/50 ring-1 ring-slate-800">
+      <div className={`${shellClass} items-center justify-center`}>
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div className="flex h-[calc(100vh-10rem)] min-h-[480px] flex-col overflow-hidden rounded-2xl bg-slate-900/50 ring-1 ring-slate-800">
+    <div className={shellClass}>
       {!activeId ? (
         <>
           <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
@@ -653,7 +663,7 @@ export function ChatInbox({
             <p className="px-4 py-2 text-sm text-red-400">{error}</p>
           )}
 
-          <div className="flex-1 overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
             {conversations.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center px-6 text-center text-slate-400">
                 <p className="text-sm">
@@ -793,15 +803,17 @@ export function ChatInbox({
             ) : null}
           </div>
 
-          <div className="flex-1 overflow-y-auto px-3 py-4">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3">
             {loadingThread ? (
               <div className="flex h-full items-center justify-center">
                 <div className="h-7 w-7 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
               </div>
             ) : messages.length === 0 ? (
-              <p className="py-12 text-center text-sm text-slate-400">
-                Напишите первое сообщение
-              </p>
+              <div className="flex h-full min-h-[5rem] items-end justify-center pb-2">
+                <p className="text-sm text-slate-400">
+                  Напишите первое сообщение ↓
+                </p>
+              </div>
             ) : (
               <div className="space-y-2">
                 {messages.map((message) => (
@@ -840,32 +852,34 @@ export function ChatInbox({
           </div>
 
           {error && activeId && (
-            <p className="px-4 pb-1 text-sm text-red-400">{error}</p>
+            <p className="shrink-0 px-4 pb-1 text-sm text-red-400">{error}</p>
           )}
 
-          <div className="flex items-end gap-2 border-t border-slate-800 bg-slate-900/80 px-3 py-3">
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void handleSend();
-                }
-              }}
-              placeholder="Сообщение..."
-              rows={1}
-              className="max-h-32 min-h-[44px] flex-1 resize-none rounded-2xl bg-slate-800 px-4 py-3 text-sm leading-snug"
-            />
-            <button
-              type="button"
-              onClick={handleSend}
-              disabled={sending || !draft.trim()}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-fitgo-500 text-white transition hover:bg-fitgo-400 disabled:opacity-40"
-              aria-label="Отправить"
-            >
-              <Send className="h-5 w-5" />
-            </button>
+          <div className="shrink-0 border-t border-slate-800 bg-slate-950/90 px-3 py-2.5">
+            <div className="flex items-end gap-2">
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleSend();
+                  }
+                }}
+                placeholder="Написать сообщение…"
+                rows={1}
+                className="max-h-28 min-h-[42px] flex-1 resize-none rounded-2xl border border-slate-700/80 bg-slate-800 px-3.5 py-2.5 text-sm leading-snug text-white placeholder:text-slate-500 focus:border-fitgo-500/50 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={handleSend}
+                disabled={sending || !draft.trim()}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fitgo-500 text-white transition hover:bg-fitgo-400 disabled:opacity-40"
+                aria-label="Отправить"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </>
       )}

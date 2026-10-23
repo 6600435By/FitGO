@@ -1,7 +1,13 @@
 'use client';
 
+import {
+  Building2,
+  CalendarX2,
+  MessageCircle,
+  UsersRound,
+} from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, type NotificationItem } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { trainerCabinetMode } from '@/lib/trainer-cabinet';
@@ -21,6 +27,42 @@ function isCancellation(n: NotificationItem) {
 
 function isPersonalCancellation(n: NotificationItem) {
   return n.title === 'Отмена персональной тренировки';
+}
+
+function ChannelTab({
+  active,
+  label,
+  icon,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  icon: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex min-w-0 flex-1 flex-col items-center gap-1 rounded-xl px-1.5 py-2 transition ${
+        active
+          ? 'bg-fitgo-500 text-white shadow-sm shadow-fitgo-500/25'
+          : 'text-slate-400 hover:bg-slate-800/80 hover:text-slate-200'
+      }`}
+    >
+      <span
+        className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+          active ? 'bg-white/15' : 'bg-slate-800'
+        }`}
+      >
+        {icon}
+      </span>
+      <span className="max-w-full truncate text-[10px] font-medium leading-tight sm:text-[11px]">
+        {label}
+      </span>
+    </button>
+  );
 }
 
 export default function TrainerMessagesPage() {
@@ -63,58 +105,53 @@ export default function TrainerMessagesPage() {
   };
 
   const alertItems = notifications.filter((n) => isCancellation(n));
+  const unreadAlerts = alertItems.filter((n) => !n.read).length;
 
   return (
-    <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Сообщения</h2>
+    <div className="space-y-3">
+      <h2 className="hidden text-xl font-semibold md:block">Сообщения</h2>
 
-      <div className="flex gap-2">
+      <div
+        className={`grid gap-1 rounded-2xl border border-slate-800 bg-slate-950/70 p-1 ${
+          groupOnlyMessaging ? 'grid-cols-3' : 'grid-cols-4'
+        }`}
+        role="tablist"
+        aria-label="Разделы сообщений"
+      >
         {!groupOnlyMessaging ? (
-          <button
-            type="button"
+          <ChannelTab
+            active={tab === 'clients'}
+            label="Клиенты"
+            icon={<MessageCircle className="h-4 w-4" strokeWidth={2} />}
             onClick={() => setTab('clients')}
-            className={`flex-1 rounded-full px-2 py-2 text-sm ${
-              tab === 'clients'
-                ? 'bg-fitgo-500 text-white'
-                : 'bg-slate-800 text-slate-400'
-            }`}
-          >
-            Чат с клиентами
-          </button>
+          />
         ) : null}
-        <button
-          type="button"
+        <ChannelTab
+          active={tab === 'admin'}
+          label="Админ"
+          icon={<Building2 className="h-4 w-4" strokeWidth={2} />}
           onClick={() => setTab('admin')}
-          className={`flex-1 rounded-full px-2 py-2 text-sm ${
-            tab === 'admin'
-              ? 'bg-fitgo-500 text-white'
-              : 'bg-slate-800 text-slate-400'
-          }`}
-        >
-          Админ
-        </button>
-        <button
-          type="button"
+        />
+        <ChannelTab
+          active={tab === 'team'}
+          label="Команда"
+          icon={<UsersRound className="h-4 w-4" strokeWidth={2} />}
           onClick={() => setTab('team')}
-          className={`flex-1 rounded-full px-2 py-2 text-sm ${
-            tab === 'team'
-              ? 'bg-fitgo-500 text-white'
-              : 'bg-slate-800 text-slate-400'
-          }`}
-        >
-          Команда
-        </button>
-        <button
-          type="button"
+        />
+        <ChannelTab
+          active={tab === 'alerts'}
+          label={
+            groupOnlyMessaging
+              ? unreadAlerts > 0
+                ? `Увед. (${unreadAlerts})`
+                : 'Уведомл.'
+              : unreadAlerts > 0
+                ? `Отмены (${unreadAlerts})`
+                : 'Отмены'
+          }
+          icon={<CalendarX2 className="h-4 w-4" strokeWidth={2} />}
           onClick={() => setTab('alerts')}
-          className={`flex-1 rounded-full px-2 py-2 text-sm ${
-            tab === 'alerts'
-              ? 'bg-fitgo-500 text-white'
-              : 'bg-slate-800 text-slate-400'
-          }`}
-        >
-          {groupOnlyMessaging ? 'Уведомления' : 'Отмены'}
-        </button>
+        />
       </div>
 
       {tab === 'clients' && !groupOnlyMessaging ? (
