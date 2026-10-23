@@ -56,6 +56,20 @@ import {
     }),
     'BLOCK',
   );
+  assert.equal(
+    classifyPtSessionOrigin({
+      paymentBasis:
+        'Пакет услуг «Блок массажа 10 новый» 73906 от 08.10.2026',
+    }),
+    'BLOCK',
+  );
+  assert.equal(
+    classifyPtSessionOrigin({
+      paymentBasis:
+        'Членство "Курс массажа 5  (удален)" 72503 от 05.09.2026',
+    }),
+    'BLOCK',
+  );
 }
 
 {

@@ -18,6 +18,7 @@ import {
   splitAdvanceWave,
   isAsdGroupSession,
   isComplimentarySessionTitle,
+  classifyPtSessionOrigin,
   isMultiVisitPackSale,
   isPtAllSportsSession,
   extractPackDateIsoFromBasis,
@@ -417,6 +418,13 @@ export class PayrollService {
       const payment = bioimpedance
         ? 'PARTNER'
         : inferPaymentFromBasis(primary?.paymentBasis);
+      const writeOffOrigin = classifyPtSessionOrigin({
+        paymentBasis: primary?.paymentBasis,
+        sessionTitle: o.title,
+        packageQty: primary?.packageQty,
+      });
+      const isMembershipQuota = writeOffOrigin === 'MEMBERSHIP';
+      const isServiceBlock = writeOffOrigin === 'BLOCK';
       let unitFromPackage = resolvePackageUnitPriceMinor({
         unitPriceMinor: primary?.unitPriceMinor,
         packageAmountMinor: primary?.packageAmountMinor,
@@ -441,7 +449,7 @@ export class PayrollService {
         }
       }
       const packDateIso = extractPackDateIsoFromBasis(primary?.paymentBasis);
-      const priceMinor =
+      let priceMinor =
         unitFromPackage ??
         matched?.priceMinor ??
         matched?.service.priceMinor ??
@@ -453,13 +461,31 @@ export class PayrollService {
       const isPackage =
         (primary?.paySource ?? '').toUpperCase() === 'PACKAGE' ||
         payment === 'QUOTA';
+      // VIP-included quota only → spaQuotaRates (price 0). Massage/PT blocks keep
+      // unit price for spaSoldPercent × unit — never the membership fixed rate.
+      if (
+        payment === 'QUOTA' &&
+        isMembershipQuota &&
+        !bioimpedance &&
+        !(unitFromPackage != null && unitFromPackage > 0)
+      ) {
+        priceMinor = 0;
+      }
+      const packageTitleSuffix = isMembershipQuota
+        ? ' (абонемент)'
+        : isServiceBlock
+          ? ' (блок)'
+          : isPackage
+            ? ' (абонемент)'
+            : '';
       units.push({
         id: matched?.id ?? `onex:${o.id}`,
         kind: 'SPA',
         performerId,
-        title: isPackage && !bioimpedance
-          ? `${o.title || 'SPA'} (абонемент)`
-          : o.title,
+        title:
+          !bioimpedance && packageTitleSuffix
+            ? `${o.title || 'SPA'}${packageTitleSuffix}`
+            : o.title,
         occurredAt: o.startAt.toISOString(),
         quantity: 1,
         priceMinor,
@@ -471,6 +497,8 @@ export class PayrollService {
         serviceExternalId,
         partnerSource: partner,
         isSpaAllSportsBioimpedance: bioimpedance,
+        spaMembershipQuota:
+          !bioimpedance && isPackage ? isMembershipQuota : undefined,
         sessionId: o.id,
         sessionKey: key,
         saleExternalId:
@@ -481,16 +509,6 @@ export class PayrollService {
           packSaleAt ||
           (packDateIso ? `${packDateIso}T12:00:00.000Z` : undefined),
       });
-      // QUOTA without pack unit price → spaQuotaRates. Pack unit (e.g. блок массажа N)
-      // pays via spaSoldPercent × unit, same as PT pack write-offs.
-      if (
-        payment === 'QUOTA' &&
-        units[units.length - 1] &&
-        !bioimpedance &&
-        !(unitFromPackage != null && unitFromPackage > 0)
-      ) {
-        units[units.length - 1].priceMinor = 0;
-      }
     }
 
     // ── SPA from linked reception sales (no 1C visit / onex row) ────────────
@@ -713,14 +731,28 @@ export class PayrollService {
             title: o.title,
           })
         : false;
-      // QUOTA without pack unit → spaQuotaRates (fixed 20р etc.).
+      const writeOffOrigin = classifyPtSessionOrigin({
+        paymentBasis: primary?.paymentBasis,
+        sessionTitle: o.title,
+        packageQty: primary?.packageQty,
+        isComplimentary: isGift,
+      });
+      const isMembershipQuota = writeOffOrigin === 'MEMBERSHIP';
+      const isServiceBlock = writeOffOrigin === 'BLOCK';
+      // VIP-included only → spaQuotaRates. Massage blocks keep unit for %.
       const spaPriceMinor =
         asSpa &&
         payment === 'QUOTA' &&
+        isMembershipQuota &&
         !bioimpedance &&
         !(unitFromPackage != null && unitFromPackage > 0)
           ? 0
           : priceMinor;
+      const packageTitleSuffix = isMembershipQuota
+        ? ' (абонемент)'
+        : isServiceBlock
+          ? ' (блок)'
+          : ' (абонемент)';
       units.push({
         id: matched?.id ?? `onex:${o.id}`,
         kind: asSpa ? 'SPA' : 'PT',
@@ -728,7 +760,7 @@ export class PayrollService {
         title: isGift
           ? 'Подарочная ПТ'
           : isPackage
-            ? `${o.title || (asSpa ? 'SPA' : 'ПТ')} (абонемент)`
+            ? `${o.title || (asSpa ? 'SPA' : 'ПТ')}${packageTitleSuffix}`
             : o.title || (asSpa ? 'SPA' : 'Персональная тренировка'),
         occurredAt: o.startAt.toISOString(),
         quantity: 1,
@@ -760,6 +792,8 @@ export class PayrollService {
         isPtAllSports: asSpa ? false : isPtAllSports,
         isReformerPersonal: asSpa ? false : isReformerPersonal,
         isSpaAllSportsBioimpedance: bioimpedance || undefined,
+        spaMembershipQuota:
+          asSpa && !bioimpedance && isPackage ? isMembershipQuota : undefined,
         saleExternalId: packSaleExt || undefined,
         saleOccurredAt:
           packSaleAt ||
@@ -1316,6 +1350,18 @@ export class PayrollService {
     } else if (!hasHourlyDesk && !hasPt && motivationMinor === 0) {
       anomalyHints.push(
         'Ставка за час / мотивация не заданы или нет проверенных работ за период',
+      );
+    }
+    const spaBlockNoUnit = workUnits.filter(
+      (u) =>
+        u.kind === 'SPA' &&
+        u.spaMembershipQuota === false &&
+        !(u.priceMinor != null && u.priceMinor > 0) &&
+        !u.isSpaAllSportsBioimpedance,
+    ).length;
+    if (spaBlockNoUnit > 0) {
+      anomalyHints.push(
+        `SPA из блока без цены визита: ${spaBlockNoUnit} — не найдена продажа пакета (продажа/N); фикс абонемента не применяется`,
       );
     }
     const splitHint = this.rateChangeHint(timeline, from, to);
@@ -3776,7 +3822,11 @@ export class PayrollService {
           if (price > 0 && slice.spaSoldPercent) {
             u.ratePercent = slice.spaSoldPercent;
             u.earnMinor = Math.round((price * slice.spaSoldPercent) / 100);
-          } else if (price === 0 && slice.spaQuotaRates?.length) {
+          } else if (
+            price === 0 &&
+            u.spaMembershipQuota === true &&
+            slice.spaQuotaRates?.length
+          ) {
             const title = u.title.toLowerCase();
             const match = slice.spaQuotaRates.find((r) => {
               if (r.serviceKey === 'BODY_COMPOSITION')
@@ -4000,7 +4050,11 @@ export class PayrollService {
             const price = u.priceMinor ?? 0;
             if (price > 0 && slice.spaSoldPercent) {
               total += Math.round((price * slice.spaSoldPercent) / 100);
-            } else if (price === 0 && slice.spaQuotaRates?.length) {
+            } else if (
+              price === 0 &&
+              u.spaMembershipQuota === true &&
+              slice.spaQuotaRates?.length
+            ) {
               const title = u.title.toLowerCase();
               const match = slice.spaQuotaRates.find((r) => {
                 if (r.serviceKey === 'BODY_COMPOSITION')
@@ -4158,7 +4212,11 @@ export class PayrollService {
             if (price > 0 && slice.spaSoldPercent) {
               u.ratePercent = slice.spaSoldPercent;
               u.earnMinor = Math.round((price * slice.spaSoldPercent) / 100);
-            } else if (price === 0 && slice.spaQuotaRates?.length) {
+            } else if (
+              price === 0 &&
+              u.spaMembershipQuota === true &&
+              slice.spaQuotaRates?.length
+            ) {
               const title = u.title.toLowerCase();
               const match = slice.spaQuotaRates.find((r) => {
                 if (r.serviceKey === 'BODY_COMPOSITION')
@@ -4316,7 +4374,11 @@ export class PayrollService {
           const price = u.priceMinor ?? 0;
           if (price > 0 && slice.spaSoldPercent) {
             total += Math.round((price * slice.spaSoldPercent) / 100);
-          } else if (price === 0 && slice.spaQuotaRates?.length) {
+          } else if (
+            price === 0 &&
+            u.spaMembershipQuota === true &&
+            slice.spaQuotaRates?.length
+          ) {
             const title = u.title.toLowerCase();
             const match = slice.spaQuotaRates.find((r) => {
               if (r.serviceKey === 'BODY_COMPOSITION')

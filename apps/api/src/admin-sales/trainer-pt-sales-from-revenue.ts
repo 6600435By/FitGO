@@ -408,13 +408,16 @@ export function matchPackSaleForUnitPrice(
   paymentBasis?: string | null,
   sessionTitle?: string | null,
 ): PackUnitPriceMatch | undefined {
-  const client = clientName.trim().toLowerCase();
+  const normName = (s: string) =>
+    s.trim().toLowerCase().replace(/ё/g, 'е').replace(/\s+/g, ' ');
+  const client = normName(clientName);
   if (!client) return undefined;
-  const basis = (paymentBasis ?? '').toLowerCase();
-  const title = (sessionTitle ?? '').toLowerCase();
+  const basis = (paymentBasis ?? '').toLowerCase().replace(/ё/g, 'е');
+  const title = (sessionTitle ?? '').toLowerCase().replace(/ё/g, 'е');
   const quoted = (extractQuotedPackNameFromBasis(paymentBasis) ?? '')
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/ё/g, 'е');
   const packQty =
     parsePackVisitCountFromTitle(paymentBasis) ??
     parsePackVisitCountFromTitle(quoted) ??
@@ -432,7 +435,7 @@ export function matchPackSaleForUnitPrice(
   const cands: Cand[] = [];
 
   for (const sale of sales) {
-    const saleClient = (sale.clientName ?? '').trim().toLowerCase();
+    const saleClient = normName(sale.clientName ?? '');
     if (!saleClient || saleClient !== client) continue;
     const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
     if (amountMinor <= 0) continue;

@@ -152,7 +152,7 @@ function unitSaleHref(u: WorkUnit, mode: 'admin' | 'super'): string | null {
     q.set('q', u.title.trim());
   } else if (u.clientName?.trim()) {
     // Pack/абонемент write-off: sale is usually earlier than the visit.
-    const looksPack = /\(абонемент\)|абонемент|пакет|блок/i.test(
+    const looksPack = /\(абонемент\)|\(блок\)|абонемент|пакет|блок/i.test(
       u.title ?? '',
     );
     if (saleDay) {
@@ -401,7 +401,7 @@ const TRACK_HINT: Record<string, string> = {
   ADMIN: 'Часы + % абонементов/доп/магазин/корпо + премии/штрафы (без безнала)',
   MANAGER: 'Оклад + % абонементов/доп клуба + корпо + премии/штрафы (без безнала)',
   GROUP_TRAINER: 'Тиры ставка×зал×люди (из расписания)',
-  SPA: '% услуг + абонемент + биоимпеданс AllSports + премии/штрафы',
+  SPA: '% услуг + блок массажа + фикс из абонемента + биоимпеданс AllSports',
   TECH: 'Часы смены + премии/штрафы отдельно',
   PT: '% от оплаченных ПТ (ступени по объёму; подарки в счёт)',
   CLUB: '% ПТ клубных тренеров, без оклада и аванса',

@@ -2068,7 +2068,10 @@ export function BookingControlPanel({
                       {kindRu(selected.kind)} · {statusRu(selected.status)}
                       {selected.number ? ` · № ${selected.number}` : ''}
                       {selected.payTag
-                        ? ` · ${payTagLabelRu(selected.payTag)}`
+                        ? ` · ${payTagLabelRu(selected.payTag, {
+                            packageName:
+                              selected.spaSettlement?.membershipName,
+                          })}`
                         : ''}
                       {selected.history && selected.history.length > 0 ? (
                         <span className="relative ml-1.5 inline-block">
@@ -2315,7 +2318,10 @@ export function BookingControlPanel({
                   >
                     {paymentLabelRu(selected.payment)}
                     {selected.payTag
-                      ? ` · ${payTagLabelRu(selected.payTag)}`
+                      ? ` · ${payTagLabelRu(selected.payTag, {
+                          packageName:
+                            selected.spaSettlement?.membershipName,
+                        })}`
                       : ''}
                     {detailPriceMinor != null
                       ? ` · ${(detailPriceMinor / 100).toFixed(2)} BYN`

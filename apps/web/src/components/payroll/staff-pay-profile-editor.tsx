@@ -979,10 +979,11 @@ export function StaffPayProfileEditor({
       {profile.track === 'SPA' && (
         <div className="space-y-3">
           <p className="text-xs leading-relaxed text-slate-500">
-            % от оплаченных услуг + фикс из абонемента + фикс за услугу
-            «Allsports БИОИМПЕДАНС» (по номенклатуре 1С). 25-го — продажи и
-            ставки за 1–15; сумма «на карту» уходит в колонку «Карта», остаток
-            — из кассы. 15-го — остаток месяца минус подтверждённый аванс.
+            % от оплаченных услуг и списаний из блока массажа (цена визита =
+            продажа пакета / N). Фикс ниже — только для услуг, включённых в
+            абонемент (VIP / Все включено), не для блока. Плюс фикс
+            «Allsports БИОИМПЕДАНС». 25-го — 1–15; 15-го — остаток месяца минус
+            аванс.
           </p>
           <PercentField
             label="% от проведённых / оплаченных платных услуг"
@@ -1012,7 +1013,7 @@ export function StaffPayProfileEditor({
             }
           />
           <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            Ставка за услугу из абонемента
+            Ставка за услугу из абонемента (не из блока)
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
             {(profile.spaQuotaRates ?? DEFAULT_SPA_QUOTA_RATES).map((r, i) => (

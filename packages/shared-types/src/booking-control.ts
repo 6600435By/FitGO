@@ -228,15 +228,37 @@ export function humanDocumentNumber(raw?: string | null): string | undefined {
   return v;
 }
 
+/** Multi-visit service pack title (massage/PT block), not VIP membership. */
+export function isServiceBlockPackageName(
+  name: string | null | undefined,
+): boolean {
+  const s = (name ?? '').trim();
+  if (!s) return false;
+  // Lazy import avoided — pack count lives in staff-pay; keep a light local check.
+  const n = s
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ');
+  if (/(?:блок\s+)?массаж[а]?\s+\d{1,3}/.test(n)) return true;
+  if (/курс\s+массаж[ае]?\s*\d{1,3}/.test(n)) return true;
+  if (/(?:^|[^\d])\d{1,3}\s*пт(?![a-zа-яё])/.test(n)) return true;
+  if (/реформер\s*\d{1,3}/.test(n)) return true;
+  return false;
+}
+
 export function spaSettlementLabelRu(
   status: SpaSettlementStatus | undefined,
   membershipName?: string | null,
 ): string {
   switch (status) {
-    case 'QUOTA_CONSUMED':
-      return membershipName?.trim()
-        ? `Списано с абонемента · ${membershipName.trim()}`
-        : 'Списано с абонемента';
+    case 'QUOTA_CONSUMED': {
+      const name = membershipName?.trim();
+      if (!name) return 'Списано с абонемента';
+      if (isServiceBlockPackageName(name)) {
+        return `Списано с блока · ${name}`;
+      }
+      return `Списано с абонемента · ${name}`;
+    }
     case 'AWAITING_PAYMENT':
       return 'Ждёт оплаты в 1С';
     case 'PAID':
@@ -405,9 +427,14 @@ export function inferPayTag(input: {
   return undefined;
 }
 
-export function payTagLabelRu(t: BookingControlPayTag | undefined): string {
+export function payTagLabelRu(
+  t: BookingControlPayTag | undefined,
+  opts?: { packageName?: string | null },
+): string {
   if (t === 'SALE') return 'продажа';
-  if (t === 'PACKAGE') return 'абонемент';
+  if (t === 'PACKAGE') {
+    return isServiceBlockPackageName(opts?.packageName) ? 'блок' : 'абонемент';
+  }
   return '';
 }
 

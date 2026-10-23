@@ -59,6 +59,12 @@ export interface WorkUnit {
   isAsd?: boolean;
   /** SPA «Allsports БИОИМПЕДАНС» — fixed spaPartnerRateMinor. */
   isSpaAllSportsBioimpedance?: boolean;
+  /**
+   * SPA write-off from club membership (VIP / Все включено) → spaQuotaRates.
+   * False for multi-visit massage/training blocks → spaSoldPercent × unit.
+   * Omitted for cash / partner one-shots.
+   */
+  spaMembershipQuota?: boolean;
   /** PT «Занятие с тренером ALL SPORTS» — fixed ptAllSportsRateMinor. */
   isPtAllSports?: boolean;
   /** Individual reformer session (nomenclature in segment). */

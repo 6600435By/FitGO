@@ -1061,6 +1061,21 @@ export function classifyPtSessionOrigin(input: {
   const quoted = extractQuotedPackNameFromBasis(basis)?.toLowerCase() ?? '';
   const title = (quoted || lower).replace(/ё/g, 'е');
 
+  // Countable multi-visit packs first («Блок массажа 10», «Курс массажа 5»,
+  // «10 ПТ») — even when 1C wraps them as «Членство …». Otherwise SPA payroll
+  // treats them as VIP-included quota (fixed spaQuotaRates).
+  const packCount =
+    parsePackVisitCountFromTitle(basis) ??
+    parsePackVisitCountFromTitle(quoted) ??
+    parsePackVisitCountFromTitle(input.sessionTitle) ??
+    (input.packageQty != null && input.packageQty > 0
+      ? input.packageQty
+      : null);
+  if (packCount != null && packCount > 1) return 'BLOCK';
+  if (packCount === 1 && (lower.includes('пакет услуг') || /пт|реформер|массаж/.test(title))) {
+    return 'ONE_SHOT';
+  }
+
   const isVip =
     /^vip\b/.test(title) ||
     title.startsWith('vip(') ||
@@ -1075,16 +1090,7 @@ export function classifyPtSessionOrigin(input: {
     title.includes('легкий старт');
   if (membershipHint) return 'MEMBERSHIP';
 
-  const packCount =
-    parsePackVisitCountFromTitle(basis) ??
-    parsePackVisitCountFromTitle(quoted) ??
-    parsePackVisitCountFromTitle(input.sessionTitle) ??
-    (input.packageQty != null && input.packageQty > 0
-      ? input.packageQty
-      : null);
-
   if (lower.includes('пакет услуг') || packCount != null) {
-    if (packCount != null && packCount > 1) return 'BLOCK';
     if (packCount === 1) return 'ONE_SHOT';
     if (lower.includes('пакет услуг')) return 'BLOCK';
   }
