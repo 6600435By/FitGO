@@ -230,6 +230,8 @@ export interface GroupTrainerProgramKpi {
   cancelledSessions: number;
   bookedTotal: number;
   attendedTotal: number;
+  /** Distinct ATTENDED clients on this program in the period. */
+  uniqueClients: number;
   cancelRatePct: number | null;
   /** Mean attended/capacity × 100 when capacity known. */
   fillPct: number | null;
@@ -242,6 +244,8 @@ export interface GroupTrainerStaffKpi {
   bookedTotal: number;
   /** Sum of attendedCount on completed sessions (confirmed arrivals). */
   attendedTotal: number;
+  /** Distinct ATTENDED clients across completed group sessions in the period. */
+  uniqueClients: number;
   avgAttendees: number;
   avgFillPct: number | null;
   cancelRatePct: number | null;
@@ -265,6 +269,8 @@ export interface PtTrainerStaffKpi {
   sessionsConducted: number;
   paidSessions: number;
   giftSessions: number;
+  /** Distinct clients with ≥1 PT in the selected period (sessions + one-shot sales). */
+  uniqueClients: number;
   newClients: number;
   /** New clients with ≥1 paid PT within 30d of first session (incl. first if paid). */
   conversionPct: number | null;

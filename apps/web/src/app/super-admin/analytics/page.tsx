@@ -41,13 +41,9 @@ function monthBounds(ref = new Date()) {
   return { from: isoDate(from), to: isoDate(to) };
 }
 
-function staffCacheKey(
-  from: string,
-  to: string,
-  includePay: boolean,
-  department: AnalyticsDepartment,
-) {
-  return `${from}|${to}|pay:${includePay ? 1 : 0}|dept:${department}`;
+/** Department is filtered client-side — one server payload per period/pay. */
+function staffCacheKey(from: string, to: string, includePay: boolean) {
+  return `${from}|${to}|pay:${includePay ? 1 : 0}`;
 }
 
 function clubCacheKey(
@@ -175,6 +171,8 @@ function AnalyticsInner() {
   const staffCache = useRef(new Map<string, StaffAnalyticsReport>());
   const marketCache = useRef(new Map<string, PricingAnalyticsReport>());
   const managerCache = useRef(new Map<string, ManagerEfficiencyBlock>());
+  const staffAllRef = useRef(staffAll);
+  staffAllRef.current = staffAll;
 
   useEffect(() => {
     setShowPay(readPayVisibility());
@@ -203,7 +201,8 @@ function AnalyticsInner() {
     [pathname, router, searchParams, ownerId, defaults.from, defaults.to],
   );
 
-  // Club / staff / market report: reload on period / pay / tab / department.
+  // Club / staff / market: reload on period / pay / tab.
+  // Staff departments filter client-side from one ALL payload (no refetch).
   useEffect(() => {
     const token = getToken();
     if (!token) return;
@@ -255,7 +254,7 @@ function AnalyticsInner() {
             setMarket(data);
           }
         } else {
-          const key = staffCacheKey(from, to, showPay, department);
+          const key = staffCacheKey(from, to, showPay);
           const hit = staffCache.current.get(key);
           if (hit) {
             if (!cancelled) {
@@ -264,12 +263,13 @@ function AnalyticsInner() {
             }
             return;
           }
-          setLoading(true);
+          // Keep previous table visible while refetching a new period.
+          if (!staffAllRef.current) setLoading(true);
           const data = await api.analyticsStaff(token, {
             from,
             to,
             includePay: showPay,
-            department: department === 'ALL' ? undefined : department,
+            // Always ALL — ГП/ПТ/SPA switches are free client filters.
           });
           if (!cancelled) {
             staffCache.current.set(key, data);
@@ -291,7 +291,7 @@ function AnalyticsInner() {
     return () => {
       cancelled = true;
     };
-  }, [tab, from, to, compare, showPay, department, marketReload]);
+  }, [tab, from, to, compare, showPay, marketReload]);
 
   // Manager efficiency: only when staff tab + ALL or MANAGER.
   useEffect(() => {
@@ -457,44 +457,50 @@ function AnalyticsInner() {
 
       {error && <p className="text-red-400">{error}</p>}
 
-      {loading && (
+      {loading && !(tab === 'staff' && staffView) && !(tab === 'club' && club) && !(tab === 'market' && market) && (
         <div className="flex justify-center py-12">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
         </div>
       )}
 
-      {!loading && tab === 'club' && club && (
-        <ClubAnalyticsPanel report={club} showPay={showPay} />
+      {tab === 'club' && club && (
+        <div className={loading ? 'opacity-60 pointer-events-none' : undefined}>
+          <ClubAnalyticsPanel report={club} showPay={showPay} />
+        </div>
       )}
 
-      {!loading && tab === 'market' && market && (
-        <MarketPricingPanel
-          report={market}
-          onReload={() => {
-            marketCache.current.clear();
-            setMarketReload((n) => n + 1);
-          }}
-        />
+      {tab === 'market' && market && (
+        <div className={loading ? 'opacity-60 pointer-events-none' : undefined}>
+          <MarketPricingPanel
+            report={market}
+            onReload={() => {
+              marketCache.current.clear();
+              setMarketReload((n) => n + 1);
+            }}
+          />
+        </div>
       )}
 
-      {!loading && tab === 'staff' && staffView && (
-        <StaffAnalyticsTable
-          report={staffView}
-          department={department}
-          onDepartmentChange={(d) => setParams({ department: d })}
-          onExport={onExport}
-          exporting={exporting}
-          showPay={showPay}
-          managerEfficiency={
-            department === 'ALL' || department === 'MANAGER'
-              ? managerEff
-              : null
-          }
-          managerLoading={
-            (department === 'ALL' || department === 'MANAGER') &&
-            managerLoading
-          }
-        />
+      {tab === 'staff' && staffView && (
+        <div className={loading ? 'opacity-60 pointer-events-none' : undefined}>
+          <StaffAnalyticsTable
+            report={staffView}
+            department={department}
+            onDepartmentChange={(d) => setParams({ department: d })}
+            onExport={onExport}
+            exporting={exporting}
+            showPay={showPay}
+            managerEfficiency={
+              department === 'ALL' || department === 'MANAGER'
+                ? managerEff
+                : null
+            }
+            managerLoading={
+              (department === 'ALL' || department === 'MANAGER') &&
+              managerLoading
+            }
+          />
+        </div>
       )}
     </div>
   );

@@ -464,6 +464,7 @@ export class StaffAnalyticsService {
               'Отменено',
               'Записалось',
               'Пришло',
+              'Уник.',
               'Абон %',
               'КП %',
               'Заполн. %',
@@ -475,6 +476,7 @@ export class StaffAnalyticsService {
                 'ПТ',
                 'Платные',
                 'Подарки',
+                'Уник.',
                 'Новые',
                 'Конверсия %',
                 'Удерж. 90 %',
@@ -524,6 +526,7 @@ export class StaffAnalyticsService {
         k.cancelledSessions,
         k.bookedTotal,
         k.attendedTotal,
+        k.uniqueClients,
         k.abonPct ?? '',
         k.kpPct ?? '',
         k.avgFillPct ?? '',
@@ -535,6 +538,7 @@ export class StaffAnalyticsService {
         k.sessionsConducted,
         k.paidSessions,
         k.giftSessions,
+        k.uniqueClients,
         k.newClients,
         k.conversionPct ?? '',
         k.retention90Pct ?? '',
@@ -603,6 +607,7 @@ export class StaffAnalyticsService {
           sessionsConducted: 0,
           bookedTotal: 0,
           attendedTotal: 0,
+          uniqueClients: 0,
           avgAttendees: 0,
           avgFillPct: null,
           cancelRatePct: null,
@@ -618,6 +623,7 @@ export class StaffAnalyticsService {
           sessionsConducted: 0,
           paidSessions: 0,
           giftSessions: 0,
+          uniqueClients: 0,
           newClients: 0,
           conversionPct: null,
           retention90Pct: null,
@@ -1022,7 +1028,13 @@ export class StaffAnalyticsService {
         capacity: true,
         startAt: true,
         members: {
-          select: { attendance: true, cancelled: true, paymentBasis: true },
+          select: {
+            attendance: true,
+            cancelled: true,
+            paymentBasis: true,
+            externalId: true,
+            clientName: true,
+          },
         },
       },
     });
@@ -1036,6 +1048,16 @@ export class StaffAnalyticsService {
       },
     });
     const resolveCapacity = buildCapacityResolver(slots);
+
+    const clientKeyOf = (m: {
+      externalId?: string | null;
+      clientName?: string | null;
+    }) => {
+      const ext = m.externalId?.trim();
+      if (ext) return ext;
+      const name = m.clientName?.trim().toLowerCase();
+      return name ? `name:${name}` : null;
+    };
 
     const map = new Map<string, StaffDepartmentKpi>();
     const buckets = new Map<string, { sessions: typeof sessions }>();
@@ -1066,6 +1088,7 @@ export class StaffAnalyticsService {
       let noShow = 0;
       let abonVisits = 0;
       let kpVisits = 0;
+      const uniqueAll = new Set<string>();
       type ProgAcc = {
         sessionsConducted: number;
         cancelledSessions: number;
@@ -1075,6 +1098,7 @@ export class StaffAnalyticsService {
         memberTotal: number;
         fillSum: number;
         fillN: number;
+        uniqueClients: Set<string>;
       };
       const emptyProg = (): ProgAcc => ({
         sessionsConducted: 0,
@@ -1085,6 +1109,7 @@ export class StaffAnalyticsService {
         memberTotal: 0,
         fillSum: 0,
         fillN: 0,
+        uniqueClients: new Set(),
       });
       const byTitle = new Map<string, ProgAcc>();
       for (const s of list) {
@@ -1115,6 +1140,13 @@ export class StaffAnalyticsService {
           ) {
             if (classifyGroupVisitMix(m.paymentBasis) === 'ABON') abonVisits++;
             else kpVisits++;
+            const ck = clientKeyOf(m);
+            if (ck) {
+              uniqueAll.add(ck);
+              const prog = byTitle.get(s.title) ?? emptyProg();
+              prog.uniqueClients.add(ck);
+              byTitle.set(s.title, prog);
+            }
           }
         }
         const cur = byTitle.get(s.title) ?? emptyProg();
@@ -1137,6 +1169,7 @@ export class StaffAnalyticsService {
           cancelledSessions: v.cancelledSessions,
           bookedTotal: v.bookedTotal,
           attendedTotal: v.attendedTotal,
+          uniqueClients: v.uniqueClients.size,
           cancelRatePct:
             v.bookedTotal + v.memberCancelled > 0
               ? Math.round(
@@ -1163,6 +1196,7 @@ export class StaffAnalyticsService {
         sessionsConducted: completed.length,
         bookedTotal: booked,
         attendedTotal: attendedSum,
+        uniqueClients: uniqueAll.size,
         avgAttendees:
           completed.length > 0
             ? Math.round((attendedSum / completed.length) * 10) / 10
@@ -1244,6 +1278,7 @@ export class StaffAnalyticsService {
           members: {
             select: {
               externalId: true,
+              clientName: true,
               cancelled: true,
               paymentBasis: true,
               paySource: true,
@@ -1257,7 +1292,6 @@ export class StaffAnalyticsService {
           trainerId: { in: [...all.keys()] },
           status: PersonalBookingStatus.COMPLETED,
           startAt: { gte: historyStartDate, lte: end },
-          crmDocRef: { not: null },
         },
         select: {
           trainerId: true,
@@ -1268,17 +1302,23 @@ export class StaffAnalyticsService {
         },
         orderBy: { startAt: 'asc' },
       }),
+      // History window too: one-shot sales count as PT (same as Контроль / ЗП).
       this.prisma.trainerPtSale.findMany({
         where: {
           clubId,
           isActive: true,
-          occurredAt: { gte: start, lte: end },
+          occurredAt: { gte: historyStartDate, lte: end },
         },
         select: {
           employeeCode: true,
           employeeName: true,
           amount: true,
           serviceName: true,
+          clientName: true,
+          externalId: true,
+          docRef: true,
+          occurredAt: true,
+          paymentStatus: true,
         },
       }),
     ]);
@@ -1292,6 +1332,19 @@ export class StaffAnalyticsService {
     };
     const events: PtEvt[] = [];
     const coveredCrm = new Set<string>();
+    /** trainerId|YYYY-MM-DD|clientName — avoid counting sale + class for same visit. */
+    const coveredDayClient = new Set<string>();
+
+    const markDayClient = (
+      trainerId: string,
+      startAt: Date,
+      clientName: string | null | undefined,
+    ) => {
+      const name = clientName?.trim().toLowerCase();
+      if (!name) return;
+      const day = startAt.toISOString().slice(0, 10);
+      coveredDayClient.add(`${trainerId}|${day}|${name}`);
+    };
 
     for (const s of onexPt) {
       // Same exclusions as club analytics / booking-control PT list.
@@ -1304,7 +1357,11 @@ export class StaffAnalyticsService {
       );
       if (!uid) continue;
       const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
-      const clientKey = primary?.externalId?.trim() || `sess:${s.externalId}`;
+      const clientKey =
+        primary?.externalId?.trim() ||
+        (primary?.clientName?.trim()
+          ? `name:${primary.clientName.trim().toLowerCase()}`
+          : `sess:${s.externalId}`);
       const payment = inferPaymentFromBasis(primary?.paymentBasis);
       const isGift =
         payment === 'GIFT' ||
@@ -1319,9 +1376,10 @@ export class StaffAnalyticsService {
       });
       coveredCrm.add(s.externalId);
       if (s.number) coveredCrm.add(s.number);
+      markDayClient(uid, s.startAt, primary?.clientName);
     }
 
-    // FitGO-only PT not already counted via 1C class doc (avoid double count).
+    // FitGO PT not already counted via 1C class doc (avoid double count).
     for (const b of fitgoBookings) {
       const ref = b.crmDocRef?.trim();
       if (ref && coveredCrm.has(ref)) continue;
@@ -1332,7 +1390,48 @@ export class StaffAnalyticsService {
         isGift: b.isComplimentary,
         externalId: ref || `fitgo:${b.trainerId}:${b.startAt.toISOString()}`,
       });
+      if (ref) coveredCrm.add(ref);
     }
+
+    // One-shot PT from 1C sale lines (no class doc) — same universe as Контроль.
+    const seenSaleUnits = new Set<string>();
+    for (const s of sales) {
+      if (isExcludedFromPtBookingControl(s.serviceName)) continue;
+      if (isMultiVisitPackSale(s.serviceName)) continue;
+      if (isPtAllSportsSession({ serviceName: s.serviceName })) continue;
+      const uid = resolveStaffUserId(
+        byExternal,
+        all.values(),
+        s.employeeCode,
+        s.employeeName,
+      );
+      if (!uid) continue;
+      const docKey =
+        (s.docRef || s.externalId || '').trim().toLowerCase() ||
+        `${s.occurredAt.toISOString().slice(0, 10)}-${(s.clientName ?? '').trim().toLowerCase()}`;
+      const unitId = `ptsale:${docKey}`;
+      if (seenSaleUnits.has(unitId)) continue;
+      if (s.docRef && coveredCrm.has(s.docRef.trim())) continue;
+      if (s.externalId && coveredCrm.has(s.externalId.trim())) continue;
+      const clientName = s.clientName?.trim().toLowerCase() || '';
+      const day = s.occurredAt.toISOString().slice(0, 10);
+      if (clientName && coveredDayClient.has(`${uid}|${day}|${clientName}`)) {
+        continue;
+      }
+      seenSaleUnits.add(unitId);
+      const clientKey = clientName
+        ? `name:${clientName}`
+        : `sale:${docKey}`;
+      events.push({
+        trainerId: uid,
+        clientKey,
+        startAt: s.occurredAt,
+        isGift: isComplimentarySessionTitle(s.serviceName),
+        externalId: unitId,
+      });
+      if (clientName) coveredDayClient.add(`${uid}|${day}|${clientName}`);
+    }
+
     events.sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
 
     const firstByPair = new Map<string, Date>();
@@ -1346,6 +1445,7 @@ export class StaffAnalyticsService {
       const nameAliases = staffDisplayNames(t);
       let ptSalesMinor = 0;
       for (const s of sales) {
+        if (s.occurredAt < start || s.occurredAt > end) continue;
         // Align with payroll: SPA/solarium/gym, multi-visit packs, AllSports packs.
         if (isExcludedFromPtBookingControl(s.serviceName)) continue;
         if (isMultiVisitPackSale(s.serviceName)) continue;
@@ -1367,6 +1467,7 @@ export class StaffAnalyticsService {
       );
       const gift = inPeriod.filter((e) => e.isGift).length;
       const paid = inPeriod.length - gift;
+      const uniqueClients = new Set(inPeriod.map((e) => e.clientKey)).size;
 
       const newClientIds: string[] = [];
       for (const [key, first] of firstByPair) {
@@ -1434,6 +1535,7 @@ export class StaffAnalyticsService {
         sessionsConducted: inPeriod.length,
         paidSessions: paid,
         giftSessions: gift,
+        uniqueClients,
         newClients: newClientIds.length,
         conversionPct,
         retention90Pct,

@@ -185,6 +185,12 @@ function kpiCells(
         <td className="px-2 py-2 text-right">{k.cancelledSessions}</td>
         <td className="px-2 py-2 text-right">{k.bookedTotal}</td>
         <td className="px-2 py-2 text-right">{k.attendedTotal}</td>
+        <td
+          className="px-2 py-2 text-right"
+          title="Уникальные клиенты с явкой"
+        >
+          {k.uniqueClients}
+        </td>
         <td className="px-2 py-2 text-right" title={mixTitle}>
           {k.abonPct != null ? `${k.abonPct}%` : '—'}
         </td>
@@ -211,6 +217,12 @@ function kpiCells(
       <>
         <td className="px-2 py-2 text-right">
           <CountCell value={k.sessionsConducted} href={controlHref('PT')} />
+        </td>
+        <td
+          className="px-2 py-2 text-right"
+          title="Уникальные клиенты за период"
+        >
+          {k.uniqueClients}
         </td>
         <td className="px-2 py-2 text-right">{k.newClients}</td>
         <td
@@ -313,6 +325,7 @@ function kpiHeaders(dept: AnalyticsDepartment) {
       'Отменено',
       'Записалось',
       'Пришло',
+      'Уник.',
       'Абон %',
       'КП %',
       'Заполн.',
@@ -321,7 +334,7 @@ function kpiHeaders(dept: AnalyticsDepartment) {
     ];
   }
   if (dept === 'PT_TRAINER') {
-    return ['ПТ', 'Новые', 'Конв.', 'Удерж.90', 'Активн.', 'Продажи'];
+    return ['ПТ', 'Уник.', 'Новые', 'Конв.', 'Удерж.90', 'Активн.', 'Продажи'];
   }
   if (dept === 'SPECIALIST') {
     return [
@@ -617,6 +630,7 @@ function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
                 <th className="px-2 py-1 text-right">Отменено</th>
                 <th className="px-2 py-1 text-right">Записалось</th>
                 <th className="px-2 py-1 text-right">Пришло</th>
+                <th className="px-2 py-1 text-right">Уник.</th>
                 <th className="px-2 py-1 text-right">Заполн.</th>
                 <th className="px-2 py-1 text-right">Отмены</th>
               </tr>
@@ -629,6 +643,7 @@ function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
                   <td className="px-2 py-1 text-right">{p.cancelledSessions}</td>
                   <td className="px-2 py-1 text-right">{p.bookedTotal}</td>
                   <td className="px-2 py-1 text-right">{p.attendedTotal}</td>
+                  <td className="px-2 py-1 text-right">{p.uniqueClients}</td>
                   <td className="px-2 py-1 text-right">
                     {p.fillPct != null ? `${p.fillPct}%` : '—'}
                   </td>
@@ -643,9 +658,10 @@ function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
       )}
       {k.kind === 'PT_TRAINER' && (
         <p>
-          Платные {k.paidSessions}, подарочные {k.giftSessions}. Конверсия —
-          доля новых клиентов с платной ПТ за 30 дней после первой.
-          Удержание 90 дн. — когорта{' '}
+          Платные {k.paidSessions}, подарочные {k.giftSessions}, уникальных{' '}
+          {k.uniqueClients} (занятия 1С + разовые продажи). Конверсия — доля
+          новых клиентов с платной ПТ за 30 дней после первой. Удержание 90
+          дн. — когорта{' '}
           {k.retentionCohortFrom
             ? `${k.retentionCohortFrom}…${k.retentionCohortTo}`
             : 'н/д'}
