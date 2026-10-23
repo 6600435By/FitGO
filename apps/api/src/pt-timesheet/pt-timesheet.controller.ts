@@ -120,6 +120,15 @@ export class AdminPtTimesheetController {
     private readonly stats: PtTimesheetStatsService,
   ) {}
 
+  @Get('stats/trainers')
+  adminStatsTrainers(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.stats.listTrainerOptions(requireClubId(user), from, to);
+  }
+
   @Get('stats')
   adminStats(
     @CurrentUser() user: JwtPayload,
@@ -229,6 +238,15 @@ export class SuperAdminPtTimesheetController {
     private readonly svc: PtTimesheetService,
     private readonly stats: PtTimesheetStatsService,
   ) {}
+
+  @Get('stats/trainers')
+  saStatsTrainers(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.stats.listTrainerOptions(requireClubId(user), from, to);
+  }
 
   @Get('stats')
   saStats(

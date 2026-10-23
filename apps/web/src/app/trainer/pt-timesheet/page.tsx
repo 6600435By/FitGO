@@ -6,7 +6,10 @@ import type {
 } from '@fitgo/shared-types';
 import { clientIssueLabel } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
-import { PtTimesheetStatsPanel } from '@/components/pt-timesheet/pt-timesheet-stats-panel';
+import {
+  PtTimesheetStatsPanel,
+  usePtTimesheetTab,
+} from '@/components/pt-timesheet/pt-timesheet-stats-panel';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -21,7 +24,9 @@ function money(minor: number, currency: string) {
 
 export default function TrainerPtTimesheetPage() {
   const today = useMemo(() => isoDate(new Date()), []);
-  const [tab, setTab] = useState<'journal' | 'stats'>('journal');
+  const { tab, setTab } = usePtTimesheetTab();
+  const [statsMounted, setStatsMounted] = useState(false);
+  const shown = tab ?? 'journal';
   const [date, setDate] = useState(today);
   const [sheet, setSheet] = useState<TrainerDaySheetDto | null>(null);
   const [shifts, setShifts] = useState<TrainerShiftDto[]>([]);
@@ -50,6 +55,10 @@ export default function TrainerPtTimesheetPage() {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     }
   };
+
+  useEffect(() => {
+    if (tab === 'stats') setStatsMounted(true);
+  }, [tab]);
 
   useEffect(() => {
     if (tab !== 'journal') return;
@@ -94,7 +103,7 @@ export default function TrainerPtTimesheetPage() {
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold text-white">Табель ПТ</h1>
         <p className="text-sm text-slate-400">
-          {tab === 'journal'
+          {shown === 'journal'
             ? 'Дневной журнал. Без телефона клиента записать нельзя. Late-add и ошибочный телефон — исключения.'
             : 'Статистика проведённых ПТ за период: микс оплат, клиенты, мотивация и смены.'}
         </p>
@@ -104,7 +113,7 @@ export default function TrainerPtTimesheetPage() {
         <button
           type="button"
           className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
-            tab === 'journal'
+            shown === 'journal'
               ? 'bg-fitgo-600 text-white'
               : 'text-slate-400 hover:text-white'
           }`}
@@ -115,7 +124,7 @@ export default function TrainerPtTimesheetPage() {
         <button
           type="button"
           className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
-            tab === 'stats'
+            shown === 'stats'
               ? 'bg-fitgo-600 text-white'
               : 'text-slate-400 hover:text-white'
           }`}
@@ -125,7 +134,11 @@ export default function TrainerPtTimesheetPage() {
         </button>
       </div>
 
-      {tab === 'stats' && <PtTimesheetStatsPanel audience="trainer" />}
+      {statsMounted && (
+        <div className={tab === 'stats' ? undefined : 'hidden'}>
+          <PtTimesheetStatsPanel audience="trainer" />
+        </div>
+      )}
 
       {tab === 'journal' && (
         <>

@@ -2,7 +2,10 @@
 
 import type { TrainerDaySheetDto } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
-import { PtTimesheetStatsPanel } from '@/components/pt-timesheet/pt-timesheet-stats-panel';
+import {
+  PtTimesheetStatsPanel,
+  usePtTimesheetTab,
+} from '@/components/pt-timesheet/pt-timesheet-stats-panel';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -11,7 +14,9 @@ function money(minor: number, currency: string) {
 }
 
 export default function SuperAdminPtTimesheetPage() {
-  const [tab, setTab] = useState<'journal' | 'stats'>('journal');
+  const { tab, setTab } = usePtTimesheetTab();
+  const [statsMounted, setStatsMounted] = useState(false);
+  const shown = tab ?? 'journal';
   const [sheets, setSheets] = useState<TrainerDaySheetDto[]>([]);
   const [selected, setSelected] = useState<TrainerDaySheetDto | null>(null);
   const [forceIds, setForceIds] = useState<string[]>([]);
@@ -24,6 +29,10 @@ export default function SuperAdminPtTimesheetPage() {
   };
 
   useEffect(() => {
+    if (tab === 'stats') setStatsMounted(true);
+  }, [tab]);
+
+  useEffect(() => {
     if (tab !== 'journal') return;
     load().catch((e) => setMessage(e.message));
   }, [tab]);
@@ -33,7 +42,7 @@ export default function SuperAdminPtTimesheetPage() {
       <header>
         <h1 className="text-2xl font-semibold text-white">Табели ПТ → ЗП</h1>
         <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
-          {tab === 'journal'
+          {shown === 'journal'
             ? 'Финальная проверка. Неоплаченное не в мотивации, кроме force-pay.'
             : 'Статистика проведённых ПТ по тренерам клуба.'}
         </p>
@@ -43,7 +52,7 @@ export default function SuperAdminPtTimesheetPage() {
         <button
           type="button"
           className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
-            tab === 'journal'
+            shown === 'journal'
               ? 'bg-fitgo-600 text-white'
               : 'text-slate-400 hover:text-white'
           }`}
@@ -54,7 +63,7 @@ export default function SuperAdminPtTimesheetPage() {
         <button
           type="button"
           className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
-            tab === 'stats'
+            shown === 'stats'
               ? 'bg-fitgo-600 text-white'
               : 'text-slate-400 hover:text-white'
           }`}
@@ -64,7 +73,11 @@ export default function SuperAdminPtTimesheetPage() {
         </button>
       </div>
 
-      {tab === 'stats' && <PtTimesheetStatsPanel audience="super" />}
+      {statsMounted && (
+        <div className={tab === 'stats' ? undefined : 'hidden'}>
+          <PtTimesheetStatsPanel audience="super" />
+        </div>
+      )}
 
       {tab === 'journal' && (
         <>

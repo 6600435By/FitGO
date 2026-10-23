@@ -499,6 +499,56 @@ export function BookingControlPanel({
     typeof boot.clientIdFilter === 'string' ? boot.clientIdFilter : '',
   );
 
+  // Deep link from табель / ЗП: useSearchParams can be empty on the first
+  // paint of a static page, and saved filters would hide the session.
+  useEffect(() => {
+    const live = new URLSearchParams(window.location.search);
+    const sessionKey =
+      live.get('sessionKey')?.trim() || live.get('session')?.trim() || '';
+    const fromL = live.get('from')?.trim() || '';
+    const toL = live.get('to')?.trim() || '';
+    const drill = Boolean(sessionKey);
+    if (!drill && !isIsoDay(fromL) && !isIsoDay(toL) && !live.get('client') && !live.get('performerId')) {
+      return;
+    }
+    if (isIsoDay(fromL)) setFrom(fromL);
+    if (isIsoDay(toL)) setTo(toL);
+    const kindL = live.get('kind')?.trim().toUpperCase();
+    if (kindL && !fixedKind) setKind(kindL);
+    const statusL = live.get('status')?.trim().toUpperCase();
+    if (statusL) setStatus(statusL);
+    else if (drill) setStatus('ALL');
+    const paymentL = live.get('payment')?.trim().toUpperCase();
+    if (
+      paymentL === 'PAID' ||
+      paymentL === 'DEBT' ||
+      paymentL === 'GIFT' ||
+      paymentL === 'ALL'
+    ) {
+      setPayment(paymentL);
+    } else if (drill) {
+      setPayment('ALL');
+    }
+    if (live.has('performerId')) {
+      setPerformerId(live.get('performerId')?.trim() || '');
+    }
+    if (live.has('client')) setClientFilter(live.get('client')?.trim() || '');
+    if (live.has('clientId')) {
+      setClientIdFilter(live.get('clientId')?.trim() || '');
+    }
+    if (live.has('payTag')) {
+      setPayTag(live.get('payTag')?.trim().toUpperCase() || '');
+    } else if (drill) setPayTag('');
+    if (live.has('flag')) {
+      setFlag(live.get('flag')?.trim().toUpperCase() || '');
+    } else if (drill) setFlag('');
+    if (drill && live.get('needsReview') !== '1' && live.get('needsReview') !== 'true') {
+      setNeedsReview(false);
+    }
+    if (sessionKey) void openDetail(sessionKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once from the address bar
+  }, []);
+
   usePersistViewMemory<BookingViewMem>({
     enabled: !detailOnly,
     data: {
@@ -527,6 +577,13 @@ export function BookingControlPanel({
       if (d.needsReview) q.set('needsReview', '1');
       if (d.clientFilter) q.set('client', d.clientFilter);
       if (d.clientIdFilter) q.set('clientId', d.clientIdFilter);
+      if (typeof window !== 'undefined') {
+        const live = new URLSearchParams(window.location.search);
+        const sessionKey = live.get('sessionKey')?.trim();
+        const session = live.get('session')?.trim();
+        if (sessionKey) q.set('sessionKey', sessionKey);
+        else if (session) q.set('session', session);
+      }
       return q;
     },
   });

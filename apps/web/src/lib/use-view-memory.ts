@@ -1,10 +1,11 @@
 'use client';
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { getUser } from '@/lib/auth';
 import {
   hasExplicitQuery,
+  isIsoDay,
   readViewMemory,
   writeViewMemory,
 } from '@/lib/view-memory';
@@ -47,6 +48,37 @@ type PersistOpts<T extends JsonRecord> = {
   enabled?: boolean;
 };
 
+const DRILL_KEYS = [
+  'sessionKey',
+  'session',
+  'externalId',
+  'client',
+  'clientId',
+  'performerId',
+  'q',
+  'product',
+  'kind',
+];
+
+/**
+ * True when the address bar still has a deep link the in-memory filters
+ * have not copied yet. The first persist must not replace that URL.
+ */
+function liveCarriesUnappliedDrill(
+  live: URLSearchParams,
+  next: URLSearchParams,
+): boolean {
+  for (const key of DRILL_KEYS) {
+    const value = live.get(key)?.trim();
+    if (value && next.get(key) !== value) return true;
+  }
+  const liveFrom = live.get('from');
+  const liveTo = live.get('to');
+  if (isIsoDay(liveFrom) && next.get('from') !== liveFrom) return true;
+  if (isIsoDay(liveTo) && next.get('to') !== liveTo) return true;
+  return false;
+}
+
 /**
  * Write filter memory on change and mirror into the URL via replace.
  */
@@ -61,14 +93,26 @@ export function usePersistViewMemory<T extends JsonRecord>({
   const searchParams = useSearchParams();
   const ownerId = getUser()?.id ?? '';
   const serialized = JSON.stringify(data);
+  const primed = useRef(false);
 
   useEffect(() => {
     if (!enabled || !ownerId) return;
+    const next = toSearchParams ? toSearchParams(data) : null;
+    if (!primed.current) {
+      primed.current = true;
+      if (next && typeof window !== 'undefined') {
+        const live = new URLSearchParams(window.location.search);
+        if (liveCarriesUnappliedDrill(live, next)) return;
+      }
+    }
     writeViewMemory(ownerId, pathname, slot, data);
-    if (!toSearchParams) return;
-    const next = toSearchParams(data);
+    if (!next) return;
     const qs = next.toString();
-    if (qs === searchParams.toString()) return;
+    const liveQs =
+      typeof window !== 'undefined'
+        ? window.location.search.replace(/^\?/, '')
+        : searchParams.toString();
+    if (qs === liveQs || qs === searchParams.toString()) return;
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- persist on serialized snapshot
   }, [serialized, enabled, ownerId, pathname, slot]);

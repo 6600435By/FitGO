@@ -641,37 +641,78 @@ export function ClubRevenuePanel() {
     },
   });
 
+  const applySalesQuery = useCallback(
+    (source: URLSearchParams) => {
+      if (!hasExplicitQuery(source, [...SALES_URL_KEYS])) return;
+      const nextFrom = source.get('from');
+      const nextTo = source.get('to');
+      const nextEmp = source.get('employee') || '';
+      const nextSeg = source.get('segment') || '';
+      const nextDebtor = source.get('debtor') || '';
+      const nextQ = source.get('product') || source.get('q') || '';
+      const nextProductId = source.get('productId') || '';
+      const nextExact =
+        source.get('productExact') === '1' ||
+        source.get('productExact') === 'true' ||
+        Boolean(nextProductId.trim());
+      const drill = Boolean(
+        nextQ.trim() ||
+          (source.get('externalId') || '').trim() ||
+          nextProductId.trim(),
+      );
+      const nextOp = drill ? source.get('op') || 'all' : source.get('op');
+      const nextPay = drill
+        ? source.get('payment') || 'all'
+        : source.get('payment');
+      if (nextFrom && isIsoDay(nextFrom) && nextFrom !== from) setFrom(nextFrom);
+      if (nextTo && isIsoDay(nextTo) && nextTo !== to) setTo(nextTo);
+      if (nextEmp !== employeeExternalId) setEmployeeExternalId(nextEmp);
+      if (nextSeg !== segment) setSegment(nextSeg);
+      if (nextDebtor !== debtor) setDebtor(nextDebtor);
+      if (nextQ !== q) {
+        setQ(nextQ);
+        setQInput(nextQ);
+      }
+      if (nextProductId !== productId) setProductId(nextProductId);
+      if (nextExact !== productExact) setProductExact(nextExact);
+      if (nextOp && nextOp !== operationType) setOperationType(nextOp);
+      if (nextPay && nextPay !== paymentMethod) setPaymentMethod(nextPay);
+    },
+    [
+      debtor,
+      employeeExternalId,
+      from,
+      operationType,
+      paymentMethod,
+      productExact,
+      productId,
+      q,
+      segment,
+      to,
+    ],
+  );
+
+  // Address bar is authoritative on arrival (табель / ЗП), even when
+  // useSearchParams is still empty and view-memory already filled state.
+  useEffect(() => {
+    const live = new URLSearchParams(window.location.search);
+    applySalesQuery(live);
+    if (
+      live.get('q')?.trim() ||
+      live.get('externalId')?.trim() ||
+      live.get('product')?.trim()
+    ) {
+      setFilterKey('all');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
+  }, []);
+
   // Keep filters in sync when navigating here with query params (ЗП → Продажа).
   // Bare chip navigation must not wipe restored memory with empty query.
   useEffect(() => {
     if (!hasExplicitQuery(search, [...SALES_URL_KEYS])) return;
-    const nextFrom = search.get('from');
-    const nextTo = search.get('to');
-    const nextEmp = search.get('employee') || '';
-    const nextSeg = search.get('segment') || '';
-    const nextDebtor = search.get('debtor') || '';
-    const nextQ = search.get('product') || search.get('q') || '';
-    const nextProductId = search.get('productId') || '';
-    const nextExact =
-      search.get('productExact') === '1' ||
-      search.get('productExact') === 'true' ||
-      Boolean(nextProductId.trim());
-    if (nextFrom && nextFrom !== from) setFrom(nextFrom);
-    if (nextTo && nextTo !== to) setTo(nextTo);
-    if (nextEmp !== employeeExternalId) setEmployeeExternalId(nextEmp);
-    if (nextSeg !== segment) setSegment(nextSeg);
-    if (nextDebtor !== debtor) setDebtor(nextDebtor);
-    // Only sync search draft when applied query in URL changed (deep-link /
-    // external nav). Do not overwrite unfinished typing when other filters
-    // rewrite the URL.
-    if (nextQ !== q) {
-      setQ(nextQ);
-      setQInput(nextQ);
-    }
-    if (nextProductId !== productId) setProductId(nextProductId);
-    if (nextExact !== productExact) setProductExact(nextExact);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- URL is source on external nav
-  }, [search]);
+    applySalesQuery(new URLSearchParams(search.toString()));
+  }, [applySalesQuery, search]);
 
   const applySearch = useCallback(() => {
     const next = qInput.trim();
@@ -683,6 +724,21 @@ export function ClubRevenuePanel() {
   }, [qInput, q]);
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const live = new URLSearchParams(window.location.search);
+      if (hasExplicitQuery(live, [...SALES_URL_KEYS])) {
+        const liveFrom = live.get('from');
+        const liveTo = live.get('to');
+        const liveQ = (live.get('product') || live.get('q') || '').trim();
+        const liveEmp = live.get('employee') || '';
+        const drifted =
+          (isIsoDay(liveFrom) && liveFrom !== from) ||
+          (isIsoDay(liveTo) && liveTo !== to) ||
+          liveQ !== q.trim() ||
+          liveEmp !== (employeeExternalId || '');
+        if (drifted) return;
+      }
+    }
     const next = new URLSearchParams();
     next.set('from', from);
     next.set('to', to);
@@ -699,7 +755,12 @@ export function ClubRevenuePanel() {
     if (productId.trim()) next.set('productId', productId.trim());
     if (productExact && q.trim()) next.set('productExact', '1');
     // Preserve deep-link from ЗП so detail + list stay open after filter rewrite.
-    const ext = search.get('externalId')?.trim();
+    const ext =
+      search.get('externalId')?.trim() ||
+      (typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('externalId')?.trim()
+        : '') ||
+      '';
     if (ext) next.set('externalId', ext);
     const qs = next.toString();
     const current = search.toString();

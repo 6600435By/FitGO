@@ -4051,6 +4051,15 @@ export const api = {
       token,
     ),
 
+  adminPtStatsTrainers: (token: string, from: string, to: string) => {
+    const q = new URLSearchParams({ from, to });
+    return request<Array<{ id: string; name: string }>>(
+      `/admin/pt-timesheet/stats/trainers?${q}`,
+      {},
+      token,
+    );
+  },
+
   adminPtStats: (
     token: string,
     from: string,
@@ -4083,6 +4092,15 @@ export const api = {
       throw new Error(xlsxErrorMessage(text, res.status));
     }
     return res.blob();
+  },
+
+  saPtStatsTrainers: (token: string, from: string, to: string) => {
+    const q = new URLSearchParams({ from, to });
+    return request<Array<{ id: string; name: string }>>(
+      `/super-admin/pt-timesheet/stats/trainers?${q}`,
+      {},
+      token,
+    );
   },
 
   saPtStats: (

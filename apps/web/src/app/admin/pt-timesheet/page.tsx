@@ -6,12 +6,17 @@ import type {
 } from '@fitgo/shared-types';
 import { clientIssueLabel } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
-import { PtTimesheetStatsPanel } from '@/components/pt-timesheet/pt-timesheet-stats-panel';
+import {
+  PtTimesheetStatsPanel,
+  usePtTimesheetTab,
+} from '@/components/pt-timesheet/pt-timesheet-stats-panel';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
 export default function AdminPtTimesheetPage() {
-  const [tab, setTab] = useState<'journal' | 'stats'>('journal');
+  const { tab, setTab } = usePtTimesheetTab();
+  const [statsMounted, setStatsMounted] = useState(false);
+  const shown = tab ?? 'journal';
   const [issues, setIssues] = useState<PtClientIssueQueueItem[]>([]);
   const [sheets, setSheets] = useState<TrainerDaySheetDto[]>([]);
   const [selected, setSelected] = useState<TrainerDaySheetDto | null>(null);
@@ -30,6 +35,10 @@ export default function AdminPtTimesheetPage() {
   };
 
   useEffect(() => {
+    if (tab === 'stats') setStatsMounted(true);
+  }, [tab]);
+
+  useEffect(() => {
     if (tab !== 'journal') return;
     load().catch((e) => setMessage(e.message));
   }, [tab]);
@@ -39,7 +48,7 @@ export default function AdminPtTimesheetPage() {
       <header>
         <h1 className="text-2xl font-semibold text-white">Табели ПТ</h1>
         <p className="text-sm text-slate-400">
-          {tab === 'journal'
+          {shown === 'journal'
             ? 'Очередь ошибочных телефонов / late-add и утверждение дневных табелей.'
             : 'Статистика проведённых ПТ по тренерам: микс оплат, клиенты, мотивация.'}
         </p>
@@ -49,7 +58,7 @@ export default function AdminPtTimesheetPage() {
         <button
           type="button"
           className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
-            tab === 'journal'
+            shown === 'journal'
               ? 'bg-fitgo-600 text-white'
               : 'text-slate-400 hover:text-white'
           }`}
@@ -60,7 +69,7 @@ export default function AdminPtTimesheetPage() {
         <button
           type="button"
           className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
-            tab === 'stats'
+            shown === 'stats'
               ? 'bg-fitgo-600 text-white'
               : 'text-slate-400 hover:text-white'
           }`}
@@ -70,7 +79,11 @@ export default function AdminPtTimesheetPage() {
         </button>
       </div>
 
-      {tab === 'stats' && <PtTimesheetStatsPanel audience="admin" />}
+      {statsMounted && (
+        <div className={tab === 'stats' ? undefined : 'hidden'}>
+          <PtTimesheetStatsPanel audience="admin" />
+        </div>
+      )}
 
       {tab === 'journal' && (
         <>

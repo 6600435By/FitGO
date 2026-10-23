@@ -141,6 +141,26 @@ function lineStatus(line: AdminSaleLineDto, overdueCutoff: number) {
   return { unpaid, overdue };
 }
 
+function filterSaleLines(
+  lines: AdminSaleLineDto[],
+  clientQuery: string,
+  externalQuery: string,
+) {
+  const client = clientQuery.trim().toLowerCase();
+  const ext = externalQuery.trim();
+  if (ext) {
+    const byExt = lines.filter((line) => line.externalSaleId === ext);
+    if (byExt.length) return byExt;
+  }
+  if (client) {
+    const byClient = lines.filter((line) =>
+      (line.clientName ?? '').toLowerCase().includes(client),
+    );
+    if (byClient.length) return byClient;
+  }
+  return lines;
+}
+
 function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -324,9 +344,25 @@ export function AdminMySalesPanel() {
   const [listOpen, setListOpen] = useState(
     () => boot.payment === 'unpaid' || boot.payment === 'paid',
   );
+  const [clientQuery, setClientQuery] = useState('');
+  const [externalQuery, setExternalQuery] = useState('');
   const [data, setData] = useState<AdminMySalesResponse | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const live = new URLSearchParams(window.location.search);
+    const fromL = live.get('from')?.trim() || '';
+    const toL = live.get('to')?.trim() || '';
+    const qL = live.get('q')?.trim() || '';
+    const ext = live.get('externalId')?.trim() || '';
+    if (!isIsoDay(fromL) && !isIsoDay(toL) && !qL && !ext) return;
+    if (isIsoDay(fromL)) setFrom(fromL);
+    if (isIsoDay(toL)) setTo(toL);
+    if (qL) setClientQuery(qL);
+    if (ext) setExternalQuery(ext);
+    if (qL || ext) setListOpen(true);
+  }, []);
 
   usePersistViewMemory<AdminSalesViewMem>({
     data: { from, to, payment, saleType },
@@ -340,7 +376,11 @@ export function AdminMySalesPanel() {
   });
 
   const wantLines =
-    listOpen || saleType !== 'all' || payment !== 'all' || Boolean(activeSegment);
+    listOpen ||
+    saleType !== 'all' ||
+    payment !== 'all' ||
+    Boolean(activeSegment) ||
+    Boolean(clientQuery || externalQuery);
 
   const load = useCallback(
     async (includeLines: boolean) => {
@@ -498,7 +538,9 @@ export function AdminMySalesPanel() {
             loading ? (
               <p className="text-sm text-slate-500">Загрузка списка…</p>
             ) : (
-              <LinesTable lines={data.lines} />
+              <LinesTable
+                lines={filterSaleLines(data.lines, clientQuery, externalQuery)}
+              />
             )
           ) : (
             <p className="text-sm text-slate-500">
