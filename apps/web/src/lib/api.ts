@@ -3913,64 +3913,6 @@ export const api = {
       revenueStatus: string | null;
     }>('/super-admin/sales/sync-status', {}, token),
 
-  superAdminSalesBackfill: (
-    token: string,
-    body?: {
-      from?: string;
-      to?: string;
-      sealedUntil?: string;
-      mode?: 'full' | 'mutable-refresh';
-    },
-  ) =>
-    request<{
-      status: 'started' | 'running';
-      running: boolean;
-      error: string | null;
-      hint: string | null;
-      cursor: {
-        phase: string;
-        nextDay: string;
-        daysDone: number;
-        daysTotal: number;
-        planFrom: string;
-        planTo: string;
-        sealedUntil: string;
-        mutablePass: number;
-        note: string | null;
-      } | null;
-    }>('/super-admin/sales/backfill', { method: 'POST', body: JSON.stringify(body ?? {}) }, token),
-
-  superAdminSalesBackfillStatus: (token: string) =>
-    request<{
-      running: boolean;
-      jobStatus: string | null;
-      error: string | null;
-      hint: string | null;
-      lastRunAt: string | null;
-      lastSuccessAt: string | null;
-      cursor: {
-        phase: string;
-        nextDay: string;
-        daysDone: number;
-        daysTotal: number;
-        planFrom: string;
-        planTo: string;
-        sealedUntil: string;
-        upsertedSales: number;
-        upsertedRevenue: number;
-        lastChunkFrom: string | null;
-        lastChunkTo: string | null;
-        mutablePass: number;
-        note: string | null;
-      } | null;
-    }>('/super-admin/sales/backfill-status', {}, token),
-
-  superAdminSalesBackfillStop: (token: string) =>
-    request<unknown>('/super-admin/sales/backfill/stop', { method: 'POST' }, token),
-
-  superAdminSalesBackfillResume: (token: string) =>
-    request<unknown>('/super-admin/sales/backfill/resume', { method: 'POST' }, token),
-
   superAdminClubSales: (
     token: string,
     params: {

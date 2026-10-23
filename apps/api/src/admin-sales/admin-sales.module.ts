@@ -11,6 +11,7 @@ import { AdminSalesService } from './admin-sales.service';
 import { AdminSalesSyncService } from './admin-sales-sync.service';
 import { ClubRevenueService } from './club-revenue.service';
 import { ClubRevenueSyncService } from './club-revenue-sync.service';
+import { SalesBackfillOnceScheduler } from './sales-backfill-once.scheduler';
 import { SalesBackfillService } from './sales-backfill.service';
 
 @Module({
@@ -23,6 +24,7 @@ import { SalesBackfillService } from './sales-backfill.service';
     ClubRevenueService,
     ClubRevenueSyncService,
     SalesBackfillService,
+    SalesBackfillOnceScheduler,
   ],
   exports: [
     AdminSalesService,

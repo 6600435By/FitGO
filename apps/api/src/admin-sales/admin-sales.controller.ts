@@ -201,9 +201,8 @@ export class SuperAdminSalesController {
   }
 
   /**
-   * Historical load 2018–sealed (no debt) then 2025–to (still no debt).
-   * Operational sync keeps current window + debt. Re-run mutable after 1C cleanup:
-   * `{ "mode": "mutable-refresh" }`.
+   * Historical sales/revenue range (no debt). Used by SALES_HISTORY_ONCE scheduler
+   * (`mutable-refresh` from 2025-01-01). Not exposed in the sales UI.
    */
   @Post('backfill')
   startBackfill(

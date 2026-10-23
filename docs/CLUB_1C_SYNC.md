@@ -36,6 +36,10 @@ UI: `DataFreshness` shows **«Данные на dd.MM.yyyy HH:mm»** (Europe/Mos
 
 03:00–04:00 Europe/Moscow, once per club (`ClubSyncRun.nightKey`). A run that starts in the window **finishes** within the 40 min budget even after 04:00. If the API was down during the window, the same scheduler starts a one-shot **catch-up FULL** after 04:00 (same `nightKey`, skipped if SUCCESS/PARTIAL already exists). Env: `ENABLE_CLUB_SYNC_CRON` (default on). Legacy `ENABLE_*_CRON` for sales/class/tasks are no-ops while club sync is enabled.
 
+## One-shot sales history (analytics)
+
+Nightly FULL only re-reads ~60 days of sales/revenue. For club analytics that need **2025-01-01 → yesterday**, set `SALES_HISTORY_ONCE=true` on the Windows API host (leave unset on Mac). `SalesBackfillOnceScheduler` starts a mutable-only backfill in **23:00–03:00 Moscow**, yields while LIGHT/FULL is running, resumes after API restart from the saved cursor, and does not start a second pass after `phase=done`. Debt stays on the operational sync. Years **2018–2024** are not loaded — run a separate full backfill later if needed.
+
 ## Schema extras
 
 After `pnpm db:push` apply:
@@ -60,7 +64,7 @@ Analytics «Персонал» and payroll club summary must **not** call live 1
 - Integration HTTP gate: max 3 concurrent; Analytics: max 2; identical GETs single-flight
 - Trainer roster / admin at-risk → `ClubMembershipSnapshot` + visits in Postgres
 - Booking-control list → PT sales from `TrainerPtSale` only; live 1C on «Обновить из 1С»
-- Chat / sync-status / sales backfill polls pause while the browser tab is hidden
+- Chat / sync-status polls pause while the browser tab is hidden
 
 `DATABASE_URL` should include `connection_limit=10` on the shared Windows box (see `fitgo-api.env.example`).
 

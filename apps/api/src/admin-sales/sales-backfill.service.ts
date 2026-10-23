@@ -4,16 +4,19 @@ import { AdminSalesSyncService } from './admin-sales-sync.service';
 import { ClubRevenueSyncService } from './club-revenue-sync.service';
 import { eachUtcDay } from './sales-sync-window';
 
-const RESOURCE_KEY = 'sales_backfill';
+export const RESOURCE_KEY = 'sales_backfill';
 
 /** Closed years after debt cleanup — load once, no debt/change-log. */
 export const DEFAULT_SEALED_UNTIL = '2024-12-31';
 export const DEFAULT_BACKFILL_FROM = '2018-01-01';
+/** One-shot analytics history (SALES_HISTORY_ONCE) — mutable years only. */
+export const HISTORY_ONCE_FROM = '2025-01-01';
 
 const SEALED_DAYS_PER_TICK = 10;
 const MUTABLE_DAYS_PER_TICK = 5;
 const DELAY_MS_BETWEEN_DAYS = 400;
 const PAUSE_MS_BETWEEN_CHUNKS = 8_000;
+const YIELD_OPS_MS = 30_000;
 const ORPHAN_MS = 30 * 60 * 1000;
 
 export type BackfillPhase = 'sealed' | 'mutable' | 'done';
@@ -110,7 +113,9 @@ export class SalesBackfillService {
     if (planFrom > planTo) {
       throw new BadRequestException('from must be ≤ to');
     }
-    if (sealedUntil < planFrom) {
+    // full: sealedUntil is inside [from, to]. mutable-refresh: sealedUntil is the
+    // day before the live range (may be < from when from is already 2025-01-01).
+    if (mode === 'full' && sealedUntil < planFrom) {
       throw new BadRequestException('sealedUntil must be ≥ from');
     }
 
@@ -145,8 +150,7 @@ export class SalesBackfillService {
         lastChunkFrom: null,
         lastChunkTo: null,
         mutablePass: (existing?.mutablePass ?? 0) + 1,
-        note:
-          'Повтор 2025–2026 после правок долгов в 1С. Закрытые годы не трогаем.',
+        note: 'Загрузка 2025–вчера (без долгов; долг — обычный синк).',
       };
     } else {
       cursor = {
@@ -197,8 +201,7 @@ export class SalesBackfillService {
     });
     const cursor = parseCursor(row?.cursor);
     if (cursor && cursor.phase !== 'done') {
-      cursor.note =
-        'Остановлено вручную. Нажмите «Продолжить» — с того же дня.';
+      cursor.note = 'Остановлено вручную. Курсор сохранён — можно resume.';
     }
     await this.prisma.salesSyncState.upsert({
       where: { clubId_resourceKey: { clubId, resourceKey: RESOURCE_KEY } },
@@ -228,7 +231,7 @@ export class SalesBackfillService {
     const cursor = parseCursor(row?.cursor);
     if (!cursor || cursor.phase === 'done') {
       throw new BadRequestException(
-        'Нет незавершённой загрузки — нажмите «2018→сейчас» или «Только 2025–26».',
+        'Нет незавершённой загрузки истории продаж.',
       );
     }
     if (this.inFlight.has(clubId)) {
@@ -263,8 +266,9 @@ export class SalesBackfillService {
         });
         if (!row || row.lastStatus !== 'running') break;
         if (await this.operationalSyncBusy(clubId)) {
-          await this.pauseForOps(clubId, row.id);
-          break;
+          await this.yieldForOps(clubId, row.id);
+          await sleep(YIELD_OPS_MS);
+          continue;
         }
 
         const cursor = parseCursor(row.cursor);
@@ -284,9 +288,7 @@ export class SalesBackfillService {
         if (!chunk) {
           cursor.phase = 'done';
           cursor.note =
-            cursor.mutablePass > 0
-              ? 'Готово. После чистки долгов 2025–2026 в 1С нажмите «Только 2025–26».'
-              : 'Готово. Закрытые годы залиты; после правок 2025–2026 в 1С — «Только 2025–26».';
+            'Готово. История 2025–вчера в кэше. Долги и сегодня — обычный синк.';
           await this.prisma.salesSyncState.update({
             where: { id: row.id },
             data: {
@@ -341,12 +343,12 @@ export class SalesBackfillService {
         if (cursor.nextDay > cursor.planTo) {
           cursor.phase = 'done';
           cursor.note =
-            'Готово. Долги и последние дни — «Обновить из 1С» сверху. После чистки 2025–2026 в 1С — «Только 2025–26».';
+            'Готово. История 2025–вчера в кэше. Долги и сегодня — обычный синк.';
         } else if (cursor.nextDay > cursor.sealedUntil) {
           cursor.phase = 'mutable';
           if (!cursor.mutablePass) cursor.mutablePass = 1;
           cursor.note =
-            'Закрытые годы готовы. Идёт 2025–2026 (без долгов; долг — обычный синк).';
+            'Идёт 2025–2026 (без долгов; долг — обычный синк).';
         } else {
           cursor.phase = 'sealed';
         }
@@ -381,25 +383,28 @@ export class SalesBackfillService {
     }
   }
 
-  private async pauseForOps(clubId: string, stateId: string) {
+  /** Keep running; wait for LIGHT/FULL to finish, then continue same cursor. */
+  private async yieldForOps(clubId: string, stateId: string) {
     const row = await this.prisma.salesSyncState.findUnique({
       where: { id: stateId },
     });
     const cursor = parseCursor(row?.cursor);
     if (cursor) {
       cursor.note =
-        'Пауза: идёт «Обновить из 1С». После него нажмите «Продолжить».';
+        'Ждём окончания обычного синка («Обновить из 1С» / ночной FULL), затем продолжим.';
     }
     await this.prisma.salesSyncState.update({
       where: { id: stateId },
       data: {
-        lastStatus: 'paused',
+        lastStatus: 'running',
         lastRunAt: new Date(),
         lastError: null,
         ...(cursor ? { cursor: JSON.stringify(cursor) } : {}),
       },
     });
-    this.logger.warn(`Backfill paused club=${clubId} — operational sync busy`);
+    this.logger.warn(
+      `Backfill yielding club=${clubId} — operational sync busy`,
+    );
   }
 
   private async operationalSyncBusy(clubId: string): Promise<boolean> {
@@ -429,11 +434,25 @@ export class SalesBackfillService {
       data: {
         lastStatus: 'error',
         lastError:
-          'Загрузка истории прервана (перезапуск API). Нажмите «Продолжить».',
+          'Загрузка истории прервана (перезапуск API). Планировщик продолжит с курсора.',
         lastRunAt: new Date(),
       },
     });
   }
+}
+
+/** True when one-shot 2025→yesterday history already finished. */
+export function isHistoryOnceDone(cursor: BackfillCursor | null): boolean {
+  return !!cursor && cursor.phase === 'done' && cursor.planFrom >= HISTORY_ONCE_FROM;
+}
+
+/** Incomplete cursor already inside the mutable history range. */
+export function isHistoryOnceResumable(cursor: BackfillCursor | null): boolean {
+  return (
+    !!cursor &&
+    cursor.phase !== 'done' &&
+    cursor.nextDay >= HISTORY_ONCE_FROM
+  );
 }
 
 function nextChunk(
@@ -475,11 +494,7 @@ function hintFor(
   status: string | null,
 ): string | null {
   if (!cursor) {
-    return (
-      'Архив ещё не загружали. Нужны старые продажи в FitGO — нажмите «2018→сейчас» ' +
-      '(закрытые годы до 31.12.2024 заливаются один раз; 2025–вчера — потом). ' +
-      'Долги и сегодняшние дни подтянет обычное «Обновить из 1С» сверху.'
-    );
+    return 'История 2025–вчера ещё не загружалась (SALES_HISTORY_ONCE).';
   }
   if (status === 'running') {
     const phaseRu =
@@ -488,24 +503,21 @@ function hintFor(
         : cursor.phase === 'mutable'
           ? '2025–сейчас'
           : cursor.phase;
-    return `Идёт загрузка (${phaseRu}): день ${cursor.nextDay} (${cursor.daysDone}/${cursor.daysTotal}). Можно «Стоп».`;
+    return `Идёт загрузка (${phaseRu}): день ${cursor.nextDay} (${cursor.daysDone}/${cursor.daysTotal}).`;
   }
   if (status === 'paused') {
-    return (
-      cursor.note ??
-      'Пауза: идёт обычное «Обновить из 1С». После него нажмите «Продолжить».'
-    );
+    return cursor.note ?? 'Пауза: идёт обычный синк.';
   }
   if (status === 'stopped') {
-    return 'Остановлено. «Продолжить» — с того же дня, или «2018→сейчас» заново.';
+    return 'Остановлено. Курсор сохранён.';
   }
   if (status === 'error') {
-    return 'Ошибка загрузки. «Продолжить» с того же дня или запустите снова.';
+    return 'Ошибка загрузки. Планировщик продолжит с курсора.';
   }
   if (cursor.phase === 'done') {
     return (
       cursor.note ??
-      'Готово. После чистки долгов 2025–2026 в 1С нажмите «Только 2025–26».'
+      'Готово. История 2025–вчера в кэше.'
     );
   }
   return cursor.note;

@@ -623,8 +623,6 @@ export function ClubRevenuePanel() {
   const [detail, setDetail] = useState<ClubRevenueDetailResponse | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [backfillHint, setBackfillHint] = useState('');
-  const [backfillBusy, setBackfillBusy] = useState(false);
 
   usePersistViewMemory<SalesViewMem>({
     data: {
@@ -860,37 +858,6 @@ export function ClubRevenuePanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-fetch on externalId
   }, [search]);
 
-  const refreshBackfill = useCallback(async () => {
-    const token = getToken();
-    if (!token) return;
-    try {
-      const s = await api.superAdminSalesBackfillStatus(token);
-      setBackfillBusy(!!s.running);
-      const c = s.cursor;
-      const prog = c
-        ? `${c.daysDone}/${c.daysTotal} · ${c.phase} · след. ${c.nextDay}`
-        : '';
-      setBackfillHint(
-        [s.hint, prog, s.error].filter(Boolean).join(' — ') || '',
-      );
-    } catch {
-      /* ignore */
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshBackfill();
-  }, [refreshBackfill]);
-
-  useEffect(() => {
-    if (!backfillBusy) return;
-    const id = setInterval(() => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      void refreshBackfill();
-    }, 4000);
-    return () => clearInterval(id);
-  }, [backfillBusy, refreshBackfill]);
-
   const applyFilter = (
     key: string,
     nextOp: string,
@@ -954,36 +921,6 @@ export function ClubRevenuePanel() {
     }
   };
 
-  const runBackfill = async (mode: 'full' | 'mutable-refresh') => {
-    const token = getToken();
-    if (!token) return;
-    const label =
-      mode === 'full'
-        ? 'Загрузить историю 2018–2024 (закрытые) и затем 2025–вчера? Долги не тянем — их подтянет обычный синк. 1С будет нагружена кусками с паузами (часы).'
-        : 'Перечитать только 2025–вчера после чистки долгов в 1С? Закрытые годы не трогаем.';
-    if (!window.confirm(label)) return;
-    setError('');
-    try {
-      await api.superAdminSalesBackfill(token, { mode });
-      setBackfillBusy(true);
-      await refreshBackfill();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка backfill');
-    }
-  };
-
-  const stopOrResumeBackfill = async (action: 'stop' | 'resume') => {
-    const token = getToken();
-    if (!token) return;
-    try {
-      if (action === 'stop') await api.superAdminSalesBackfillStop(token);
-      else await api.superAdminSalesBackfillResume(token);
-      await refreshBackfill();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка backfill');
-    }
-  };
-
   return (
     <div className="space-y-4">
       <div>
@@ -992,48 +929,6 @@ export function ClubRevenuePanel() {
           Продажи · выручка · лицевые счета. Цифры в карточках — фильтры списка.
           Свежие дни — кнопка «Обновить из 1С» сверху страницы.
         </p>
-      </div>
-
-      <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium text-slate-300">История из 1С</span>
-          <button
-            type="button"
-            className="btn-ghost text-xs"
-            disabled={backfillBusy}
-            onClick={() => void runBackfill('full')}
-            title="Разовая загрузка архива продаж с 2018 (часы, нагрузка на 1С)"
-          >
-            2018→сейчас
-          </button>
-          <button
-            type="button"
-            className="btn-ghost text-xs"
-            disabled={backfillBusy}
-            onClick={() => void runBackfill('mutable-refresh')}
-            title="Перечитать только 2025–вчера после правок долгов в 1С"
-          >
-            Только 2025–26
-          </button>
-          {backfillBusy ? (
-            <button
-              type="button"
-              className="btn-ghost text-xs"
-              onClick={() => void stopOrResumeBackfill('stop')}
-            >
-              Стоп
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn-ghost text-xs"
-              onClick={() => void stopOrResumeBackfill('resume')}
-            >
-              Продолжить
-            </button>
-          )}
-        </div>
-        {backfillHint ? <p className="mt-1 text-slate-500">{backfillHint}</p> : null}
       </div>
 
       <div className="card grid grid-cols-1 items-end gap-3 sm:grid-cols-[auto_minmax(11rem,1fr)_minmax(11rem,1fr)]">
