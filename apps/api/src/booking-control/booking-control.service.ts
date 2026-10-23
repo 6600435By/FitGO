@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -9,10 +10,15 @@ import {
   OnexClassMemberAttendance,
   OnexClassStatus,
   PersonalBookingStatus,
+  Role,
   ServicePaymentStatus,
+  ServicePerformanceStatus,
+  ServicePresenceStatus,
+  ServiceUsageStatus,
   SessionApprovalKind,
   SessionRemarkKind,
   SessionRemarkStatus,
+  SpaBookingOrigin,
   SpaBookingStatus,
   SpaOneCLinkStatus,
   SpaPaymentType,
@@ -83,6 +89,8 @@ import {
   paidSaleSettlementLabel,
   saleAmountMajor,
   saleIsComplimentaryPartner,
+  namesMatch,
+  serviceNamesMatch,
   type SpaBookingMatchInput,
   type SpaOnexCandidate,
   type SpaSaleCandidate,
@@ -110,6 +118,8 @@ type ListFilters = {
   clientId?: string;
   /** SPA rows not yet linked to 1C (source FITGO). */
   notIn1c?: boolean;
+  /** 1C SPA visits with no FitGO journal booking. */
+  missingJournal?: boolean;
 };
 
 @Injectable()
@@ -482,7 +492,8 @@ export class BookingControlService {
       }
     }
 
-    // Quota day-merge: FitGO journal + 1C write-off same day (client+specialist).
+    // Day-merge: FitGO journal + 1C visit same day (client+specialist).
+    // Includes PT-tagged massage (1C often stores SPA as PT until re-sync).
     if (!kindFilter || kindFilter === OnexClassKind.SPA) {
       const matchedOnexExt = new Set(
         items
@@ -493,11 +504,19 @@ export class BookingControlService {
       const dayPairs = buildSpaDayMergePairs({
         bookings: allSpa.map((b) => this.toSpaMatchInput(b)),
         onexSessions: onex
-          .filter((o) => o.kind === OnexClassKind.SPA)
+          .filter(
+            (o) =>
+              o.kind === OnexClassKind.SPA ||
+              (o.kind === OnexClassKind.PT && isSpaLikeSessionTitle(o.title)),
+          )
           .map((o) => this.toSpaOnexCandidate(o)),
         alreadyMatchedBookingIds: matchedSpaIds,
         alreadyMatchedOnexIds: matchedOnexExt,
       });
+      const pendingCrmLinks: Array<{
+        bookingId: string;
+        onexExternalId: string;
+      }> = [];
       for (const pair of dayPairs) {
         matchedSpaIds.add(pair.bookingId);
         const booking = allSpa.find((b) => b.id === pair.bookingId);
@@ -513,16 +532,24 @@ export class BookingControlService {
           item.oneCLinked = true;
         }
         if (booking && !booking.crmDocRef) {
-          void this.prisma.spaBooking
-            .update({
-              where: { id: booking.id },
-              data: {
-                crmDocRef: pair.onexExternalId,
-                oneCLinkStatus: SpaOneCLinkStatus.LINKED,
-              },
-            })
-            .catch(() => undefined);
+          pendingCrmLinks.push(pair);
+          booking.crmDocRef = pair.onexExternalId;
         }
+      }
+      if (pendingCrmLinks.length) {
+        await Promise.all(
+          pendingCrmLinks.map((pair) =>
+            this.prisma.spaBooking
+              .update({
+                where: { id: pair.bookingId },
+                data: {
+                  crmDocRef: pair.onexExternalId,
+                  oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+                },
+              })
+              .catch(() => undefined),
+          ),
+        );
       }
     }
 
@@ -737,6 +764,20 @@ export class BookingControlService {
           i.kind === 'SPA' && i.source === 'FITGO' && !i.oneCLinked,
       );
     }
+    // Mark 1C SPA without a journal link before optional missingJournal filter.
+    out = out.map((i) => {
+      if (
+        i.kind === 'SPA' &&
+        i.source === '1C' &&
+        !i.fitgoBookingId
+      ) {
+        return { ...i, missingJournal: true };
+      }
+      return i;
+    });
+    if (filters.missingJournal) {
+      out = out.filter((i) => i.missingJournal);
+    }
     if (filters.clientId?.trim() || filters.client?.trim()) {
       out = await this.filterByClient(
         clubId,
@@ -916,7 +957,11 @@ export class BookingControlService {
         await this.assertOwnOnex(clubId, viewer.userId, s);
       }
 
-      const kind = s.kind as BookingControlKind;
+      let kind = s.kind as BookingControlKind;
+      // Same as list: massage / SPA often arrives from 1C as PT.
+      if (kind === 'PT' && isSpaLikeSessionTitle(s.title)) {
+        kind = 'SPA';
+      }
       const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
       const matched =
         kind === 'PT' || kind === 'SPA'
@@ -925,6 +970,7 @@ export class BookingControlService {
               kind,
               s,
               primary?.externalId,
+              primary?.clientName,
             )
           : null;
 
@@ -1173,6 +1219,7 @@ export class BookingControlService {
             spaSettlement?.status === 'PAID' ||
             spaSettlement?.status === 'AWAITING_PAYMENT',
         ),
+        missingJournal: kind === 'SPA' && !matched?.id,
         history,
       };
     }
@@ -4269,8 +4316,13 @@ export class BookingControlService {
             payTag: 'PACKAGE',
           };
         }
-        const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId);
-        if (dayHit) return dayHit;
+        if (booking) {
+          const dayHit = await this.tryLinkSpaVisitByDay(
+            booking,
+            input.clubId,
+          );
+          if (dayHit) return dayHit;
+        }
         return {
           settlement: {
             status: 'NOT_IN_1C',
@@ -4972,9 +5024,22 @@ export class BookingControlService {
     const ext = onexExternalId.trim();
     if (!ext) throw new BadRequestException('Укажите занятие 1С');
     const onex = await this.prisma.onexClassSession.findFirst({
-      where: { clubId, externalId: ext, kind: OnexClassKind.SPA, isActive: true },
+      where: {
+        clubId,
+        externalId: ext,
+        isActive: true,
+        OR: [
+          { kind: OnexClassKind.SPA },
+          { kind: OnexClassKind.PT },
+        ],
+      },
     });
-    if (!onex) throw new NotFoundException('Занятие 1С не найдено');
+    if (
+      !onex ||
+      (onex.kind === OnexClassKind.PT && !isSpaLikeSessionTitle(onex.title))
+    ) {
+      throw new NotFoundException('Занятие 1С не найдено');
+    }
     await this.prisma.spaBooking.update({
       where: { id: bookingId },
       data: {
@@ -4983,6 +5048,392 @@ export class BookingControlService {
       },
     });
     return this.detail(clubId, onexSessionKey(ext));
+  }
+
+  /**
+   * Create a FitGO journal SpaBooking from an existing 1C visit.
+   * Does not post anything back to 1C — the visit is already written off.
+   */
+  async adoptSpaToJournal(
+    user: JwtPayload,
+    sessionKey: string,
+    opts?: { serviceId?: string; ownOnly?: boolean },
+  ): Promise<BookingControlDetail> {
+    const clubId = requireClubId(user);
+    const parsed = parseSessionKey(sessionKey);
+    if (!parsed || parsed.source !== '1C') {
+      throw new BadRequestException('Нужен sessionKey занятия 1С');
+    }
+    const onex = await this.prisma.onexClassSession.findFirst({
+      where: { clubId, externalId: parsed.id, isActive: true },
+      include: { members: true },
+    });
+    if (!onex) throw new NotFoundException('Занятие 1С не найдено');
+    const isSpa =
+      onex.kind === OnexClassKind.SPA ||
+      (onex.kind === OnexClassKind.PT && isSpaLikeSessionTitle(onex.title));
+    if (!isSpa) {
+      throw new BadRequestException('В журнал можно добавить только SPA');
+    }
+
+    if (opts?.ownOnly) {
+      const me = await this.prisma.user.findFirst({
+        where: { id: user.sub, clubId },
+        select: { externalId: true, employeeCode: true },
+      });
+      const codes = [me?.externalId, me?.employeeCode]
+        .map((c) => c?.trim())
+        .filter(Boolean) as string[];
+      const emp = onex.employeeExternalId?.trim();
+      if (!emp || !codes.some((c) => c === emp || c.replace(/^0+/, '') === emp.replace(/^0+/, ''))) {
+        throw new ForbiddenException('Можно добавить только своё занятие');
+      }
+    }
+
+    if (onex.fitgoBookingRef?.trim()) {
+      const existing = await this.prisma.spaBooking.findFirst({
+        where: {
+          clubId,
+          id: onex.fitgoBookingRef.trim(),
+          status: { not: SpaBookingStatus.CANCELLED },
+        },
+      });
+      if (existing) {
+        return this.detail(clubId, onexSessionKey(onex.externalId));
+      }
+    }
+    const byRef = await this.prisma.spaBooking.findFirst({
+      where: {
+        clubId,
+        OR: [
+          { crmDocRef: onex.externalId },
+          ...(onex.number ? [{ crmDocRef: onex.number }] : []),
+        ],
+        status: { not: SpaBookingStatus.CANCELLED },
+      },
+    });
+    if (byRef) {
+      if (!onex.fitgoBookingRef) {
+        await this.prisma.onexClassSession.update({
+          where: { id: onex.id },
+          data: { fitgoBookingRef: byRef.id },
+        });
+      }
+      return this.detail(clubId, onexSessionKey(onex.externalId));
+    }
+
+    const specialist = await this.resolveSpaSpecialist(
+      clubId,
+      onex.employeeExternalId,
+      onex.employeeName,
+    );
+    if (!specialist) {
+      throw new BadRequestException(
+        'Специалист не найден в FitGO — привяжите сотрудника к клубу',
+      );
+    }
+
+    const primary =
+      onex.members.find((m) => !m.cancelled) ?? onex.members[0];
+    const clientExt = primary?.externalId?.trim() || undefined;
+    let clientId: string | null = null;
+    let guestName: string | null = null;
+    let clientExternalId: string | null = null;
+    if (clientExt) {
+      clientExternalId = clientExt;
+      const client = await this.prisma.user.findFirst({
+        where: { clubId, externalId: clientExt },
+        select: { id: true },
+      });
+      if (client) clientId = client.id;
+      else guestName = primary?.clientName?.trim() || 'Клиент 1С';
+    } else if (primary?.clientName?.trim()) {
+      guestName = primary.clientName.trim();
+    } else {
+      throw new BadRequestException('В занятии 1С нет клиента');
+    }
+
+    const service = await this.resolveSpaServiceForAdopt(
+      clubId,
+      onex.title,
+      onex.serviceExternalId,
+      opts?.serviceId,
+      specialist.id,
+    );
+
+    const durationMin = Math.max(
+      1,
+      onex.durationMin ??
+        service.durationMin + (service.bufferMin ?? 0),
+    );
+    const startAt = onex.startAt;
+    const endAt =
+      onex.endAt ??
+      new Date(startAt.getTime() + durationMin * 60_000);
+
+    const overlap = await this.prisma.spaBooking.findFirst({
+      where: {
+        specialistId: specialist.id,
+        status: { notIn: [SpaBookingStatus.CANCELLED, SpaBookingStatus.FAILED] },
+        startAt: { lt: endAt },
+        endAt: { gt: startAt },
+      },
+      select: { id: true, startAt: true },
+    });
+    if (overlap) {
+      throw new ConflictException(
+        'Слот журнала пересекается с другой записью — сдвиньте или освободите время',
+      );
+    }
+
+    const payment = inferPaymentFromBasis(primary?.paymentBasis);
+    const payTag = inferPayTag({
+      paySource: primary?.paySource,
+      payment,
+      source: '1C',
+    });
+    const paymentType =
+      payTag === 'PACKAGE' || payment === 'QUOTA'
+        ? SpaPaymentType.QUOTA
+        : SpaPaymentType.PAID;
+    const completed =
+      onex.status === OnexClassStatus.COMPLETED ||
+      String(onex.status).toUpperCase() === 'COMPLETED';
+    const origin = (user.roles ?? []).includes(UserRole.SPECIALIST)
+      ? SpaBookingOrigin.SPECIALIST_ASSIGNED
+      : SpaBookingOrigin.ADMIN_ASSIGNED;
+    const membershipName = membershipNameFromPaymentBasis(
+      primary?.paymentBasis,
+    );
+
+    const booking = await this.prisma.spaBooking.create({
+      data: {
+        clubId,
+        specialistId: specialist.id,
+        clientId,
+        guestName,
+        clientExternalId,
+        oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+        serviceId: service.id,
+        startAt,
+        endAt,
+        status: completed
+          ? SpaBookingStatus.COMPLETED
+          : SpaBookingStatus.CONFIRMED,
+        origin,
+        paymentType,
+        priceMinor: primary?.unitPriceMinor ?? service.priceMinor ?? null,
+        membershipServiceName: membershipName ?? null,
+        crmDocRef: onex.externalId,
+        consumedInCrmAt: completed ? onex.startAt : null,
+        bookedByUserId: user.sub,
+        paymentStatus:
+          payment === 'DEBT'
+            ? ServicePaymentStatus.DEBT
+            : payment === 'PAID' || payment === 'QUOTA' || payment === 'PARTNER'
+              ? ServicePaymentStatus.PAID
+              : ServicePaymentStatus.N_A,
+        usageStatus: completed
+          ? ServiceUsageStatus.CONSUMED
+          : ServiceUsageStatus.BOOKED,
+        presenceStatus: completed
+          ? ServicePresenceStatus.VERIFIED_1C
+          : ServicePresenceStatus.PENDING,
+        performanceStatus: completed
+          ? ServicePerformanceStatus.CONFIRMED_BY_PERFORMER
+          : ServicePerformanceStatus.PENDING,
+        eligibleForMotivation: completed,
+        specialistCompletedAt: completed ? onex.startAt : null,
+        paidAt:
+          payment === 'PAID' || payment === 'QUOTA' || payment === 'PARTNER'
+            ? onex.startAt
+            : null,
+      },
+    });
+
+    await this.prisma.onexClassSession.update({
+      where: { id: onex.id },
+      data: { fitgoBookingRef: booking.id },
+    });
+
+    return this.detail(clubId, onexSessionKey(onex.externalId));
+  }
+
+  /** Adopt all unambiguous missing-journal SPA rows for the given keys. */
+  async bulkAdoptSpaToJournal(
+    user: JwtPayload,
+    sessionKeys: string[],
+    opts?: { ownOnly?: boolean },
+  ): Promise<{
+    added: number;
+    skipped: Array<{ sessionKey: string; reason: string }>;
+  }> {
+    const keys = [...new Set(sessionKeys.map((k) => k.trim()).filter(Boolean))];
+    if (!keys.length) {
+      throw new BadRequestException('Не выбраны занятия');
+    }
+    let added = 0;
+    const skipped: Array<{ sessionKey: string; reason: string }> = [];
+    for (const sessionKey of keys) {
+      try {
+        await this.adoptSpaToJournal(user, sessionKey, {
+          ownOnly: opts?.ownOnly,
+        });
+        added += 1;
+      } catch (e) {
+        let reason = 'Не удалось добавить';
+        if (e instanceof BadRequestException || e instanceof ConflictException) {
+          const res = e.getResponse();
+          reason =
+            typeof res === 'string'
+              ? res
+              : typeof res === 'object' &&
+                  res &&
+                  'message' in res
+                ? Array.isArray((res as { message: unknown }).message)
+                  ? String(
+                      ((res as { message: string[] }).message)[0] ?? reason,
+                    )
+                  : String((res as { message: string }).message)
+                : e.message;
+        } else if (e instanceof Error) {
+          reason = e.message;
+        }
+        skipped.push({ sessionKey, reason });
+      }
+    }
+    return { added, skipped };
+  }
+
+  private async resolveSpaSpecialist(
+    clubId: string,
+    employeeExternalId: string | null | undefined,
+    employeeName: string | null | undefined,
+  ): Promise<{ id: string } | null> {
+    const ext = employeeExternalId?.trim();
+    if (ext) {
+      const byExt = await this.prisma.user.findFirst({
+        where: {
+          clubId,
+          OR: [
+            { externalId: ext },
+            { employeeCode: ext },
+            { externalId: ext.replace(/^0+/, '') },
+            { employeeCode: ext.replace(/^0+/, '') },
+          ],
+        },
+        select: { id: true },
+      });
+      if (byExt) return byExt;
+    }
+    const name = employeeName?.trim();
+    if (!name) return null;
+    const staff = await this.prisma.user.findMany({
+      where: {
+        clubId,
+        roles: {
+          some: { role: { in: [Role.SPECIALIST, Role.TRAINER] } },
+        },
+      },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    const hit = staff.find((u) =>
+      namesMatch(`${u.lastName} ${u.firstName}`.trim(), name),
+    );
+    return hit ? { id: hit.id } : null;
+  }
+
+  private async resolveSpaServiceForAdopt(
+    clubId: string,
+    title: string,
+    serviceExternalId: string | null | undefined,
+    serviceId: string | undefined,
+    specialistId: string,
+  ): Promise<{
+    id: string;
+    durationMin: number;
+    bufferMin: number;
+    priceMinor: number | null;
+  }> {
+    if (serviceId?.trim()) {
+      const s = await this.prisma.spaService.findFirst({
+        where: { id: serviceId.trim(), clubId, active: true },
+        select: {
+          id: true,
+          durationMin: true,
+          bufferMin: true,
+          priceMinor: true,
+        },
+      });
+      if (!s) throw new BadRequestException('Услуга не найдена');
+      const linked = await this.prisma.specialistService.findUnique({
+        where: {
+          specialistId_serviceId: {
+            specialistId,
+            serviceId: s.id,
+          },
+        },
+      });
+      if (!linked) {
+        throw new BadRequestException(
+          'Специалист не оказывает выбранную услугу',
+        );
+      }
+      return s;
+    }
+    const ext = serviceExternalId?.trim();
+    if (ext) {
+      const byExt = await this.prisma.spaService.findFirst({
+        where: { clubId, externalId: ext, active: true },
+        select: {
+          id: true,
+          durationMin: true,
+          bufferMin: true,
+          priceMinor: true,
+        },
+      });
+      if (byExt) {
+        const linked = await this.prisma.specialistService.findUnique({
+          where: {
+            specialistId_serviceId: {
+              specialistId,
+              serviceId: byExt.id,
+            },
+          },
+        });
+        if (linked) return byExt;
+      }
+    }
+    const catalog = await this.prisma.spaService.findMany({
+      where: { clubId, active: true },
+      select: {
+        id: true,
+        name: true,
+        durationMin: true,
+        bufferMin: true,
+        priceMinor: true,
+      },
+    });
+    const linkedIds = new Set(
+      (
+        await this.prisma.specialistService.findMany({
+          where: { specialistId },
+          select: { serviceId: true },
+        })
+      ).map((r) => r.serviceId),
+    );
+    const matches = catalog.filter(
+      (s) => linkedIds.has(s.id) && serviceNamesMatch(title, s.name),
+    );
+    if (matches.length === 1) return matches[0]!;
+    if (matches.length === 0) {
+      throw new BadRequestException(
+        `Не найдена услуга каталога для «${title}» — выберите вручную`,
+      );
+    }
+    throw new BadRequestException(
+      `Несколько услуг подходят под «${title}» — выберите вручную`,
+    );
   }
 
   private matchSpaInMemory(
@@ -5040,9 +5491,26 @@ export class BookingControlService {
     });
   }
 
+  private onexKindMatchesControl(
+    o: { kind: OnexClassKind; title?: string | null },
+    kind: 'PT' | 'SPA',
+  ): boolean {
+    if (o.kind === kind) return true;
+    // Massage / SPA often stored as PT in 1C until re-sync.
+    if (
+      kind === 'SPA' &&
+      o.kind === OnexClassKind.PT &&
+      isSpaLikeSessionTitle(o.title)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   private onexExistsInMemory(
     onex: Array<{
       kind: OnexClassKind;
+      title?: string | null;
       externalId: string;
       number: string | null;
       startAt: Date;
@@ -5059,7 +5527,12 @@ export class BookingControlService {
   ): boolean {
     if (fitgoBookingId?.trim()) {
       const id = fitgoBookingId.trim();
-      if (onex.some((o) => o.kind === kind && o.fitgoBookingRef === id)) {
+      if (
+        onex.some(
+          (o) =>
+            this.onexKindMatchesControl(o, kind) && o.fitgoBookingRef === id,
+        )
+      ) {
         return true;
       }
     }
@@ -5068,7 +5541,7 @@ export class BookingControlService {
       if (
         onex.some(
           (o) =>
-            o.kind === kind &&
+            this.onexKindMatchesControl(o, kind) &&
             (o.externalId === ref || o.number === ref),
         )
       ) {
@@ -5077,7 +5550,7 @@ export class BookingControlService {
     }
     const windowMs = 3 * 60 * 1000;
     return onex.some((o) => {
-      if (o.kind !== kind) return false;
+      if (!this.onexKindMatchesControl(o, kind)) return false;
       if (Math.abs(o.startAt.getTime() - startAt.getTime()) > windowMs) {
         return false;
       }
@@ -5110,6 +5583,7 @@ export class BookingControlService {
       fitgoBookingRef?: string | null;
     },
     clientExternalId: string | undefined,
+    clientName?: string | null,
   ) {
     const windowMs = 3 * 60 * 1000;
     const from = new Date(session.startAt.getTime() - windowMs);
@@ -5167,7 +5641,7 @@ export class BookingControlService {
       });
       if (byRef) return byRef;
     }
-    return this.prisma.spaBooking.findFirst({
+    const near = await this.prisma.spaBooking.findFirst({
       where: {
         clubId,
         startAt: { gte: from, lte: to },
@@ -5190,5 +5664,69 @@ export class BookingControlService {
           : {}),
       },
     });
+    if (near) return near;
+
+    // Same calendar day (Minsk) when journal slot ≠ 1C write-off time.
+    const day = minskDayKey(session.startAt);
+    const dayStart = new Date(`${day}T00:00:00+03:00`);
+    const dayEnd = new Date(`${day}T23:59:59.999+03:00`);
+    const dayBookings = await this.prisma.spaBooking.findMany({
+      where: {
+        clubId,
+        startAt: { gte: dayStart, lte: dayEnd },
+        status: { not: SpaBookingStatus.CANCELLED },
+        crmDocRef: null,
+        ...(session.employeeExternalId
+          ? {
+              specialist: {
+                clubId,
+                OR: [
+                  { externalId: session.employeeExternalId },
+                  { employeeCode: session.employeeExternalId },
+                ],
+              },
+            }
+          : {}),
+      },
+      include: {
+        client: { select: { externalId: true, firstName: true, lastName: true } },
+        specialist: {
+          select: {
+            externalId: true,
+            employeeCode: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+        service: { select: { name: true, externalId: true } },
+      },
+    });
+    if (!dayBookings.length) return null;
+    const onexCand: SpaOnexCandidate = {
+      externalId: session.externalId,
+      number: session.number,
+      startAt: session.startAt,
+      title: session.title,
+      employeeExternalId: session.employeeExternalId,
+      status: 'COMPLETED',
+      fitgoBookingRef: session.fitgoBookingRef,
+      members:
+        clientExternalId || clientName?.trim()
+          ? [
+              {
+                externalId: clientExternalId ?? '',
+                clientName: clientName?.trim() || '',
+              },
+            ]
+          : [],
+    };
+    const pairs = buildSpaDayMergePairs({
+      bookings: dayBookings.map((b) => this.toSpaMatchInput(b)),
+      onexSessions: [onexCand],
+      alreadyMatchedBookingIds: new Set(),
+      alreadyMatchedOnexIds: new Set(),
+    });
+    if (pairs.length !== 1) return null;
+    return dayBookings.find((b) => b.id === pairs[0]!.bookingId) ?? null;
   }
 }

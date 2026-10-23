@@ -95,6 +95,19 @@ export function createBookingControlApi(
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlSpaUnlink(token, base, bookingId);
     },
+    adoptSpaToJournal: async (sessionKey, serviceId) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlSpaAdoptJournal(token, base, {
+        sessionKey,
+        serviceId,
+      });
+    },
+    bulkAdoptSpaToJournal: async (sessionKeys) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlSpaAdoptJournalBulk(token, base, sessionKeys);
+    },
     updateSpaService: async (bookingId, serviceId) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');

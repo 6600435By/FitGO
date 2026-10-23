@@ -31,6 +31,7 @@ function SpecialistMySessionsInner() {
         client?: string;
         clientId?: string;
         notIn1c?: boolean;
+        missingJournal?: boolean;
       }) => {
         const token = getToken();
         if (!token) return [];
@@ -62,6 +63,23 @@ function SpecialistMySessionsInner() {
           'specialist',
           sessionKey,
           comment,
+        );
+      },
+      adoptSpaToJournal: async (sessionKey: string, serviceId?: string) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlSpaAdoptJournal(token, 'specialist', {
+          sessionKey,
+          serviceId,
+        });
+      },
+      bulkAdoptSpaToJournal: async (sessionKeys: string[]) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlSpaAdoptJournalBulk(
+          token,
+          'specialist',
+          sessionKeys,
         );
       },
       updateSpaService: async (bookingId: string, serviceId: string) => {

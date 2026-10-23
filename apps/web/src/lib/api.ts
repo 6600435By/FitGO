@@ -2658,6 +2658,7 @@ export const api = {
       client?: string;
       clientId?: string;
       notIn1c?: boolean;
+      missingJournal?: boolean;
     },
   ) => {
     const q = new URLSearchParams({ from: params.from, to: params.to });
@@ -2672,6 +2673,7 @@ export const api = {
     if (params.client?.trim()) q.set('client', params.client.trim());
     if (params.clientId?.trim()) q.set('clientId', params.clientId.trim());
     if (params.notIn1c) q.set('notIn1c', '1');
+    if (params.missingJournal) q.set('missingJournal', '1');
     return request<import('@fitgo/shared-types').BookingControlListItem[]>(
       `/${base}/booking-control?${q}`,
       {},
@@ -2852,6 +2854,31 @@ export const api = {
     request<import('@fitgo/shared-types').BookingControlDetail>(
       `/${base}/booking-control/spa-unlink`,
       { method: 'POST', body: JSON.stringify({ bookingId }) },
+      token,
+    ),
+
+  bookingControlSpaAdoptJournal: (
+    token: string,
+    base: 'super-admin' | 'admin' | 'specialist',
+    body: { sessionKey: string; serviceId?: string },
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/spa-adopt-journal`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  bookingControlSpaAdoptJournalBulk: (
+    token: string,
+    base: 'super-admin' | 'admin' | 'specialist',
+    sessionKeys: string[],
+  ) =>
+    request<{
+      added: number;
+      skipped: Array<{ sessionKey: string; reason: string }>;
+    }>(
+      `/${base}/booking-control/spa-adopt-journal-bulk`,
+      { method: 'POST', body: JSON.stringify({ sessionKeys }) },
       token,
     ),
 

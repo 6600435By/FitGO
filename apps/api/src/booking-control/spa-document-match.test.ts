@@ -11,6 +11,7 @@ import {
   minskDayKey,
   namesMatch,
   paidSaleSettlementLabel,
+  serviceNamesMatch,
   type SpaBookingMatchInput,
   type SpaOnexCandidate,
   type SpaSaleCandidate,
@@ -182,6 +183,87 @@ function sale(
   });
   assert.equal(r.kind, 'hint');
   if (r.kind === 'hint') assert.equal(r.hint.kind, 'VISIT_MULTIPLE');
+}
+
+// --- Service titles: journal vs 1C nomenclature ---
+{
+  assert.equal(
+    serviceNamesMatch(
+      'Массаж классический общий 50 мин',
+      'Массаж классический 50 мин',
+    ),
+    true,
+  );
+}
+
+// --- Paid (non-quota) day merge when times differ > 3 min ---
+{
+  const fitgo = booking({
+    id: 'b-zaitseva',
+    startAt: new Date('2026-10-23T09:00:00.000Z'),
+    paymentType: 'PAID',
+    clientExternalId: 'cli-zai',
+    clientName: 'Зайцева Татьяна',
+    serviceName: 'Массаж классический 50 мин',
+  });
+  const onex: SpaOnexCandidate = {
+    externalId: 'onex-zai',
+    number: '456',
+    startAt: new Date('2026-10-23T11:37:00.000Z'),
+    title: 'Массаж классический общий 50 мин',
+    employeeExternalId: '42',
+    status: 'COMPLETED',
+    members: [
+      {
+        externalId: 'cli-zai',
+        clientName: 'Зайцева Татьяна',
+        paySource: 'PACKAGE',
+      },
+    ],
+  };
+  const pairs = buildSpaDayMergePairs({
+    bookings: [fitgo],
+    onexSessions: [onex],
+    alreadyMatchedBookingIds: new Set(),
+    alreadyMatchedOnexIds: new Set(),
+  });
+  assert.deepEqual(pairs, [
+    { bookingId: 'b-zaitseva', onexExternalId: 'onex-zai' },
+  ]);
+}
+
+// --- Two FitGO bookings same client/day → no auto pair (contested) ---
+{
+  const a = booking({
+    id: 'b-a',
+    startAt: new Date('2026-10-23T09:00:00.000Z'),
+    paymentType: 'PAID',
+    clientExternalId: 'cli-dup',
+    clientName: 'Дубль Клиент',
+  });
+  const b = booking({
+    id: 'b-b',
+    startAt: new Date('2026-10-23T14:00:00.000Z'),
+    paymentType: 'PAID',
+    clientExternalId: 'cli-dup',
+    clientName: 'Дубль Клиент',
+  });
+  const onex: SpaOnexCandidate = {
+    externalId: 'onex-dup',
+    number: '789',
+    startAt: new Date('2026-10-23T11:00:00.000Z'),
+    title: 'Массаж',
+    employeeExternalId: '42',
+    status: 'COMPLETED',
+    members: [{ externalId: 'cli-dup', clientName: 'Дубль Клиент' }],
+  };
+  const pairs = buildSpaDayMergePairs({
+    bookings: [a, b],
+    onexSessions: [onex],
+    alreadyMatchedBookingIds: new Set(),
+    alreadyMatchedOnexIds: new Set(),
+  });
+  assert.deepEqual(pairs, []);
 }
 
 // Free AllSports биоимпеданс (0 BYN) auto-links and counts as PAID

@@ -55,6 +55,7 @@ export type BookingControlApi = {
     client?: string;
     clientId?: string;
     notIn1c?: boolean;
+    missingJournal?: boolean;
   }) => Promise<BookingControlListItem[]>;
   detail: (sessionKey: string) => Promise<BookingControlDetail>;
   openRemark: (
@@ -129,6 +130,18 @@ export type BookingControlApi = {
   ) => Promise<BookingControlDetail>;
   /** Admin: clear linked sale / soft crmDocRef. */
   unlinkSpaDocument?: (bookingId: string) => Promise<BookingControlDetail>;
+  /** Create FitGO journal row from a 1C SPA visit (no re-post to 1C). */
+  adoptSpaToJournal?: (
+    sessionKey: string,
+    serviceId?: string,
+  ) => Promise<BookingControlDetail>;
+  /** Adopt unambiguous missing-journal rows. */
+  bulkAdoptSpaToJournal?: (
+    sessionKeys: string[],
+  ) => Promise<{
+    added: number;
+    skipped: Array<{ sessionKey: string; reason: string }>;
+  }>;
 };
 
 type Props = {
@@ -588,6 +601,7 @@ export function BookingControlPanel({
     },
   });
   const [notIn1c, setNotIn1c] = useState(false);
+  const [missingJournal, setMissingJournal] = useState(false);
   const [items, setItems] = useState<BookingControlListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
@@ -595,6 +609,9 @@ export function BookingControlPanel({
   const [bulkRole, setBulkRole] = useState<'trainer' | 'admin'>('admin');
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [adoptBusyKey, setAdoptBusyKey] = useState<string | null>(null);
+  const [adoptServiceId, setAdoptServiceId] = useState('');
+  const [bulkAdoptBusy, setBulkAdoptBusy] = useState(false);
   const [pendingGroupsOpen, setPendingGroupsOpen] = useState(false);
   const [message, setMessage] = useState('');
   const [selected, setSelected] = useState<BookingControlDetail | null>(null);
@@ -724,6 +741,7 @@ export function BookingControlPanel({
           ? { clientId: clientIdFilter.trim() }
           : {}),
         ...(notIn1c ? { notIn1c: true } : {}),
+        ...(missingJournal ? { missingJournal: true } : {}),
       })
       .then(setItems)
       .catch((e) =>
@@ -744,6 +762,7 @@ export function BookingControlPanel({
     clientFilter,
     clientIdFilter,
     notIn1c,
+    missingJournal,
     fixedKind,
     detailOnly,
   ]);
@@ -890,6 +909,7 @@ export function BookingControlPanel({
 
   const applyDetail = (d: BookingControlDetail) => {
     setSelected(d);
+    setAdoptServiceId('');
     setLinkPhone(d.guestPhone ?? '');
     setComment(d.groupApproval?.trainerComment ?? '');
     const seen = new Set(
@@ -1057,6 +1077,56 @@ export function BookingControlPanel({
       setMessage(e instanceof Error ? e.message : 'Не удалось отвязать');
     } finally {
       setLinkDocBusy(false);
+    }
+  };
+
+  const adoptToJournal = async (sessionKey: string, serviceId?: string) => {
+    if (!api.adoptSpaToJournal) return;
+    setAdoptBusyKey(sessionKey);
+    setMessage('');
+    try {
+      const d = await api.adoptSpaToJournal(
+        sessionKey,
+        serviceId?.trim() || undefined,
+      );
+      setSelected(d);
+      setAdoptServiceId('');
+      await load();
+      setMessage('Добавлено в журнал');
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : 'Не удалось добавить в журнал',
+      );
+    } finally {
+      setAdoptBusyKey(null);
+    }
+  };
+
+  const bulkAdoptMissingJournal = async () => {
+    if (!api.bulkAdoptSpaToJournal) return;
+    const keys = visible
+      .filter((i) => i.missingJournal && i.source === '1C' && i.kind === 'SPA')
+      .map((i) => i.sessionKey);
+    if (!keys.length) {
+      setMessage('Нет записей без журнала в текущем списке');
+      return;
+    }
+    setBulkAdoptBusy(true);
+    setMessage('');
+    try {
+      const res = await api.bulkAdoptSpaToJournal(keys);
+      await load();
+      const skipNote =
+        res.skipped.length > 0
+          ? ` · пропущено ${res.skipped.length} (нужен выбор услуги или занят слот)`
+          : '';
+      setMessage(`В журнал: ${res.added}${skipNote}`);
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : 'Не удалось добавить в журнал',
+      );
+    } finally {
+      setBulkAdoptBusy(false);
     }
   };
 
@@ -1637,6 +1707,15 @@ export function BookingControlPanel({
             />
             Нет в 1С
           </label>
+          <label className="col-span-2 flex h-11 items-center gap-2 text-sm text-slate-300 md:col-span-1">
+            <input
+              type="checkbox"
+              className="h-4 w-4 shrink-0"
+              checked={missingJournal}
+              onChange={(e) => setMissingJournal(e.target.checked)}
+            />
+            Нет в журнале
+          </label>
           {flag ? (
             <div className="col-span-2 flex h-11 items-center md:col-span-2">
               <button
@@ -1674,6 +1753,22 @@ export function BookingControlPanel({
             >
               Месяц
             </button>
+            {api.bulkAdoptSpaToJournal ? (
+              <button
+                type="button"
+                className="btn-secondary px-3 py-2 text-sm"
+                disabled={
+                  bulkAdoptBusy ||
+                  !visible.some((i) => i.missingJournal)
+                }
+                title="Добавить в журнал все однозначные записи из 1С без дубля"
+                onClick={() => void bulkAdoptMissingJournal()}
+              >
+                {bulkAdoptBusy
+                  ? 'Добавляем…'
+                  : 'Добавить все однозначные в журнал'}
+              </button>
+            ) : null}
             {api.refreshFrom1c ? (
               <button
                 type="button"
@@ -1859,7 +1954,12 @@ export function BookingControlPanel({
                         ? ` · ${item.performerName}`
                         : ''}
                     </p>
-                    {pay !== '—' || item.needsReview || item.approvalLabel || item.source === 'SALE' || item.source === 'FITGO' ? (
+                    {pay !== '—' ||
+                    item.needsReview ||
+                    item.approvalLabel ||
+                    item.source === 'SALE' ||
+                    item.source === 'FITGO' ||
+                    item.missingJournal ? (
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {pay !== '—' ? (
                           <span
@@ -1882,6 +1982,11 @@ export function BookingControlPanel({
                             нет в 1С
                           </span>
                         ) : null}
+                        {item.missingJournal ? (
+                          <span className={hintBadgeClass('notIn1c')}>
+                            нет в журнале
+                          </span>
+                        ) : null}
                         {item.needsReview ? (
                           <span className="rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] text-rose-300 ring-1 ring-inset ring-rose-400/30">
                             проверка
@@ -1895,6 +2000,21 @@ export function BookingControlPanel({
                           >
                             {item.approvalLabel}
                           </span>
+                        ) : null}
+                        {item.missingJournal && api.adoptSpaToJournal ? (
+                          <button
+                            type="button"
+                            className="rounded bg-fitgo-500/25 px-1.5 py-0.5 text-[10px] text-fitgo-200 ring-1 ring-inset ring-fitgo-400/40"
+                            disabled={adoptBusyKey === item.sessionKey}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void adoptToJournal(item.sessionKey);
+                            }}
+                          >
+                            {adoptBusyKey === item.sessionKey
+                              ? '…'
+                              : 'В журнал'}
+                          </button>
                         ) : null}
                       </div>
                     ) : null}
@@ -1950,6 +2070,11 @@ export function BookingControlPanel({
                             нет в 1С
                           </span>
                         ) : null}
+                        {item.missingJournal ? (
+                          <span className={hintBadgeClass('notIn1c', true)}>
+                            нет в журнале
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2 text-white">
                         <span className="block max-w-[16rem] truncate" title={title}>
@@ -1975,6 +2100,21 @@ export function BookingControlPanel({
                           >
                             {item.approvalLabel}
                           </span>
+                        ) : null}
+                        {item.missingJournal && api.adoptSpaToJournal ? (
+                          <button
+                            type="button"
+                            className="ml-1 rounded bg-fitgo-500/25 px-1.5 py-0.5 text-[10px] text-fitgo-200 ring-1 ring-inset ring-fitgo-400/40"
+                            disabled={adoptBusyKey === item.sessionKey}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void adoptToJournal(item.sessionKey);
+                            }}
+                          >
+                            {adoptBusyKey === item.sessionKey
+                              ? '…'
+                              : 'В журнал'}
+                          </button>
                         ) : null}
                       </td>
                       <td className="max-w-[12rem] truncate px-3 py-2 text-slate-300">
@@ -2212,6 +2352,12 @@ export function BookingControlPanel({
                           attendanceOf(selected).noShow}
                       </span>
                     </p>
+                    {selected.missingJournal ? (
+                      <p className={`mt-2 ${HINT_PANEL_COLOR.notIn1c}`}>
+                        Есть в 1С, нет в журнале FitGO. Добавьте запись — дубль
+                        в контроле исчезнет, повторного списания в 1С не будет.
+                      </p>
+                    ) : null}
                   </div>
                   <div className="flex shrink-0 gap-2">
                     {canViewHallPhotos &&
@@ -2235,6 +2381,44 @@ export function BookingControlPanel({
                     </button>
                   </div>
                 </div>
+                {selected.missingJournal && api.adoptSpaToJournal ? (
+                  <div className="flex flex-wrap items-end gap-2 rounded-xl border border-orange-500/35 bg-orange-500/10 p-3">
+                    {api.listSpaServices ? (
+                      <label className="min-w-[12rem] flex-1 space-y-1 text-sm">
+                        <span className="text-[11px] text-slate-500">
+                          Услуга (если не подобралась сама)
+                        </span>
+                        <select
+                          className="input"
+                          value={adoptServiceId}
+                          onChange={(e) => setAdoptServiceId(e.target.value)}
+                        >
+                          <option value="">Авто</option>
+                          {spaServices.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="btn-primary text-sm"
+                      disabled={adoptBusyKey === selected.sessionKey}
+                      onClick={() =>
+                        void adoptToJournal(
+                          selected.sessionKey,
+                          adoptServiceId || undefined,
+                        )
+                      }
+                    >
+                      {adoptBusyKey === selected.sessionKey
+                        ? 'Добавляем…'
+                        : 'Добавить в журнал'}
+                    </button>
+                  </div>
+                ) : null}
                 {photosOpen && (
                   <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
                     <div className="flex items-center justify-between gap-2">

@@ -161,6 +161,16 @@ export function namesMatch(
   return ga === gb || ga.startsWith(gb) || gb.startsWith(ga);
 }
 
+/** Drop duration / filler so «классический общий 50 мин» ≈ «классический 50 мин». */
+export function serviceNameCore(s: string | null | undefined): string {
+  // Avoid \\b — it does not treat Cyrillic as word chars in JS.
+  return normalizeLabel(s)
+    .replace(/(^|\s)\d+\s*(мин|min|м)(?=\s|$)/gi, ' ')
+    .replace(/(^|\s)(общий|общая|общие|массаж)(?=\s|$)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function serviceNamesMatch(
   a?: string | null,
   b?: string | null,
@@ -169,7 +179,12 @@ export function serviceNamesMatch(
   const nb = normalizeLabel(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
-  // Strip common duration suffixes for near-match (still not auto without exact).
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const ca = serviceNameCore(a);
+  const cb = serviceNameCore(b);
+  if (!ca || !cb) return false;
+  if (ca === cb) return true;
+  if (ca.includes(cb) || cb.includes(ca)) return true;
   return false;
 }
 
@@ -563,6 +578,7 @@ export function matchSpaVisitByDay(input: {
 /**
  * Build day-merge pairs for list dedup.
  * One booking ↔ one onex per day|specialist|client bucket.
+ * Any payment type (quota, paid, partner) — journal slot time often differs from 1C.
  */
 export function buildSpaDayMergePairs(input: {
   bookings: SpaBookingMatchInput[];
@@ -574,13 +590,9 @@ export function buildSpaDayMergePairs(input: {
   const takenOnex = new Set(input.alreadyMatchedOnexIds);
   const takenBooking = new Set(input.alreadyMatchedBookingIds);
 
-  const quotaBookings = input.bookings.filter(
-    (b) =>
-      !takenBooking.has(b.id) &&
-      String(b.paymentType).toUpperCase() === 'QUOTA',
-  );
+  const openBookings = input.bookings.filter((b) => !takenBooking.has(b.id));
 
-  for (const b of quotaBookings) {
+  for (const b of openBookings) {
     const result = matchSpaVisitByDay({
       booking: b,
       onexSessions: input.onexSessions,
@@ -590,7 +602,7 @@ export function buildSpaDayMergePairs(input: {
     // Ensure this onex is not the only candidate for another unmatched booking
     // that would also auto-match the same session — skip if another booking claims it.
     let contested = false;
-    for (const other of quotaBookings) {
+    for (const other of openBookings) {
       if (other.id === b.id) continue;
       if (takenBooking.has(other.id)) continue;
       const otherHit = matchSpaVisitByDay({

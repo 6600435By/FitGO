@@ -126,6 +126,11 @@ export interface BookingControlListItem {
   oneCLinked?: boolean;
   /** ClubRevenueEntry.externalId when SPA is linked to a reception sale. */
   linkedSaleExternalId?: string;
+  /**
+   * 1C SPA visit with no matching FitGO journal row.
+   * When true, UI shows «нет в журнале» and «Добавить в журнал».
+   */
+  missingJournal?: boolean;
 }
 
 /** Live settlement of SPA vs 1C (quota write-off or reception payment). */
@@ -345,6 +350,8 @@ export interface BookingControlListQuery {
   clientId?: string;
   /** SPA rows not yet linked to 1C (source FITGO). */
   notIn1c?: boolean;
+  /** 1C SPA visits with no FitGO journal booking. */
+  missingJournal?: boolean;
 }
 
 export function onexSessionKey(externalId: string): string {

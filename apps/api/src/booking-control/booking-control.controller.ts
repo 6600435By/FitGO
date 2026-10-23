@@ -35,6 +35,8 @@ type ListQuery = {
   clientId?: string;
   /** SPA not linked to 1C */
   notIn1c?: string;
+  /** 1C SPA without FitGO journal */
+  missingJournal?: string;
 };
 
 @Controller()
@@ -339,6 +341,31 @@ export class BookingControlController {
     return this.bookingControl.unlinkSpaDocument(user, body.bookingId ?? '');
   }
 
+  @Post('admin/booking-control/spa-adopt-journal')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  adoptSpaJournalAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; serviceId?: string },
+  ) {
+    return this.bookingControl.adoptSpaToJournal(
+      user,
+      body.sessionKey ?? '',
+      { serviceId: body.serviceId },
+    );
+  }
+
+  @Post('admin/booking-control/spa-adopt-journal-bulk')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  bulkAdoptSpaJournalAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKeys?: string[] },
+  ) {
+    return this.bookingControl.bulkAdoptSpaToJournal(
+      user,
+      body.sessionKeys ?? [],
+    );
+  }
+
   @Post('super-admin/booking-control/spa-link-sale')
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   linkSpaSaleSuper(
@@ -378,6 +405,31 @@ export class BookingControlController {
     @Body() body: { bookingId?: string },
   ) {
     return this.bookingControl.unlinkSpaDocument(user, body.bookingId ?? '');
+  }
+
+  @Post('super-admin/booking-control/spa-adopt-journal')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adoptSpaJournalSuper(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; serviceId?: string },
+  ) {
+    return this.bookingControl.adoptSpaToJournal(
+      user,
+      body.sessionKey ?? '',
+      { serviceId: body.serviceId },
+    );
+  }
+
+  @Post('super-admin/booking-control/spa-adopt-journal-bulk')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  bulkAdoptSpaJournalSuper(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKeys?: string[] },
+  ) {
+    return this.bookingControl.bulkAdoptSpaToJournal(
+      user,
+      body.sessionKeys ?? [],
+    );
   }
 
   @Get('trainer/booking-control')
@@ -504,6 +556,32 @@ export class BookingControlController {
     );
   }
 
+  @Post('specialist/booking-control/spa-adopt-journal')
+  @Roles(UserRole.SPECIALIST)
+  adoptSpaJournalSpecialist(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; serviceId?: string },
+  ) {
+    return this.bookingControl.adoptSpaToJournal(
+      user,
+      body.sessionKey ?? '',
+      { serviceId: body.serviceId, ownOnly: true },
+    );
+  }
+
+  @Post('specialist/booking-control/spa-adopt-journal-bulk')
+  @Roles(UserRole.SPECIALIST)
+  bulkAdoptSpaJournalSpecialist(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKeys?: string[] },
+  ) {
+    return this.bookingControl.bulkAdoptSpaToJournal(
+      user,
+      body.sessionKeys ?? [],
+      { ownOnly: true },
+    );
+  }
+
   @Post('specialist/booking-control/approve')
   @Roles(UserRole.SPECIALIST)
   approveSpecialist(
@@ -561,6 +639,8 @@ export class BookingControlController {
       client: query.client?.trim() || undefined,
       clientId: query.clientId?.trim() || undefined,
       notIn1c: query.notIn1c === '1' || query.notIn1c === 'true',
+      missingJournal:
+        query.missingJournal === '1' || query.missingJournal === 'true',
     });
   }
 }
