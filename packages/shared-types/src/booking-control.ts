@@ -412,6 +412,8 @@ export function inferPaymentFromBasis(
 ): BookingControlPayment {
   const b = (basis ?? '').trim().toLowerCase();
   if (!b) return 'UNKNOWN';
+  // Free AllSports биоимпеданс often has «беспл.» in basis — still PARTNER, not gift.
+  if (/биоимпеданс|bio.?imped/.test(b)) return 'PARTNER';
   if (/подарок|gift|комплимент|бесплат/.test(b)) return 'GIFT';
   if (/allsports|all.?sports/.test(b)) return 'PARTNER';
   if (/членств|абонемент|пакет|квот|безлимит/.test(b)) return 'QUOTA';

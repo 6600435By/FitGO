@@ -1153,7 +1153,10 @@ export function classifyPtStatsPayment(input: {
 export function isComplimentarySessionTitle(
   title: string | null | undefined,
 ): boolean {
-  return /подароч|gift|комплимент|бесплат/i.test(title ?? '');
+  const t = title ?? '';
+  // Free AllSports биоимпеданс uses «беспл.» / complimentary sale — not a gift PT.
+  if (/биоимпеданс|bio.?imped/i.test(t)) return false;
+  return /подароч|gift|комплимент|бесплат/i.test(t);
 }
 
 export type PackageUnitPriceInput = {

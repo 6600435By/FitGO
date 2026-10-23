@@ -227,6 +227,57 @@ function saleMatchesTrainer(
   return Boolean(name && saleName && name === saleName);
 }
 
+/** Partner bio row — flag, title, or AllSports partnerSource. */
+function workUnitIsSpaPartnerBio(u: WorkUnit): boolean {
+  if (u.isSpaAllSportsBioimpedance) return true;
+  if (
+    isSpaAllSportsBioimpedance({
+      serviceExternalId: u.serviceExternalId,
+      title: u.title,
+    })
+  ) {
+    return true;
+  }
+  return (
+    u.partnerSource?.toUpperCase() === 'ALLSPORTS' &&
+    /биоимпеданс|bio.?imped/i.test(u.title ?? '')
+  );
+}
+
+function revenueMatchesSpaPerformer(
+  sale: {
+    performerExternalId?: string | null;
+    performerName?: string | null;
+    employeeExternalId?: string | null;
+    employeeName?: string | null;
+  },
+  codes: string[],
+  performerName: string,
+): boolean {
+  // Prefer Исполнитель (line), not manager/author on the document header.
+  if (
+    sale.performerExternalId &&
+    codes.some((c) => codesMatch(c, sale.performerExternalId))
+  ) {
+    return true;
+  }
+  const perfName = (sale.performerName ?? '').trim().toLowerCase();
+  const name = performerName.trim().toLowerCase();
+  if (name && perfName && (name === perfName || perfName.startsWith(name.split(' ')[0]!))) {
+    return true;
+  }
+  // Fallback when 1C left performer empty — only if employee is the specialist.
+  if (
+    !sale.performerExternalId?.trim() &&
+    !sale.performerName?.trim() &&
+    sale.employeeExternalId &&
+    codes.some((c) => codesMatch(c, sale.employeeExternalId))
+  ) {
+    return true;
+  }
+  return false;
+}
+
 const SECTION_LABELS: Record<ClubPayrollSectionId, string> = {
   MANAGER: 'Управляющий',
   ADMIN: 'Администраторы',
@@ -718,6 +769,88 @@ export class PayrollService {
       spaPaidViaOnex.add(b.id);
     }
 
+    // Free AllSports биоимпеданс from ClubRevenue by Исполнитель (sale alone).
+    // Sale doc has manager + performer; motivation goes to performer, not author.
+    if (isSpecialist) {
+      const bioRevenue = await this.prisma.clubRevenueEntry.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          occurredAt: { gte: fromD, lte: toD },
+          OR: [
+            { productName: { contains: 'биоимпеданс', mode: 'insensitive' } },
+            { productName: { contains: 'bioimped', mode: 'insensitive' } },
+          ],
+        },
+      });
+      const takenSaleExt = new Set(
+        units
+          .filter((u) => u.kind === 'SPA' && u.saleExternalId)
+          .map((u) => u.saleExternalId!.trim()),
+      );
+      const takenDayClient = new Set(
+        units
+          .filter((u) => u.kind === 'SPA')
+          .map((u) => {
+            const day = u.occurredAt.slice(0, 10);
+            const client = (u.clientName ?? '').trim().toLowerCase();
+            return `${day}|${client}`;
+          }),
+      );
+      for (const sale of bioRevenue) {
+        if (
+          !isSpaAllSportsBioimpedance({
+            serviceExternalId: sale.productExternalId,
+            title: sale.productName,
+          })
+        ) {
+          continue;
+        }
+        if (!revenueMatchesSpaPerformer(sale, performerCodes, performerName)) {
+          continue;
+        }
+        const money =
+          Math.abs(Number(sale.saleAmount) || 0) +
+          Math.abs(Number(sale.paidAmount) || 0) +
+          Math.abs(Number(sale.amount) || 0) +
+          Math.abs(Number(sale.cash) || 0) +
+          Math.abs(Number(sale.card) || 0) +
+          Math.abs(Number(sale.cashless) || 0) +
+          Math.abs(Number(sale.personalAccount) || 0);
+        // Paid bioimpedance (rare) is handled via linked SpaBooking / onex %.
+        if (money > 0.01) continue;
+        const saleExt = sale.externalId?.trim();
+        if (saleExt && takenSaleExt.has(saleExt)) continue;
+        const day = sale.occurredAt.toISOString().slice(0, 10);
+        const client = (sale.clientName ?? '').trim().toLowerCase();
+        const dayClient = `${day}|${client}`;
+        if (client && takenDayClient.has(dayClient)) continue;
+        const unitId = `revbio:${saleExt || sale.id}`;
+        if (spaPaidViaOnex.has(unitId)) continue;
+        units.push({
+          id: unitId,
+          kind: 'SPA',
+          performerId,
+          title: sale.productName || 'Allsports БИОИМПЕДАНС',
+          occurredAt: sale.occurredAt.toISOString(),
+          quantity: 1,
+          priceMinor: 0,
+          trustBand: 'GREEN',
+          trustResolution: 'NONE',
+          payrollTrusted: true,
+          clientName: sale.clientName ?? undefined,
+          serviceExternalId: sale.productExternalId ?? undefined,
+          partnerSource: 'ALLSPORTS',
+          isSpaAllSportsBioimpedance: true,
+          sessionKey: fitgoSessionKey('SPA', unitId),
+          saleExternalId: saleExt || undefined,
+        });
+        spaPaidViaOnex.add(unitId);
+        if (saleExt) takenSaleExt.add(saleExt);
+        if (client) takenDayClient.add(dayClient);
+      }
+    }
+
     // ── PT from 1C class docs (block/package → unitPriceMinor = blockPrice/N) ─
     // SOLARIUM never enters trainer payroll (admin % of paid solarium sales only).
     const onexPt = await this.prisma.onexClassSession.findMany({
@@ -757,7 +890,15 @@ export class PayrollService {
       const key = onexSessionKey(o.externalId);
       remarkKeys.push(key);
       const primary = o.members.find((m) => !m.cancelled) ?? o.members[0];
-      const payment = inferPaymentFromBasis(primary?.paymentBasis);
+      const serviceExternalIdEarly = o.serviceExternalId ?? undefined;
+      const bioimpedanceEarly = isSpaAllSportsBioimpedance({
+        serviceExternalId: serviceExternalIdEarly,
+        title: o.title,
+      });
+      // Free AllSports биоимпеданс: never treat as gift PT even if basis has «беспл.»
+      const payment = bioimpedanceEarly
+        ? 'PARTNER'
+        : inferPaymentFromBasis(primary?.paymentBasis);
       const paySource = (primary?.paySource ?? '').toUpperCase();
       const matched = await this.prisma.personalTrainingBooking.findFirst({
         where: {
@@ -770,10 +911,11 @@ export class PayrollService {
         include: { client: true },
       });
       const isGift =
-        payment === 'GIFT' ||
-        matched?.isComplimentary === true ||
-        isComplimentarySessionTitle(o.title) ||
-        isComplimentarySessionTitle(primary?.paymentBasis);
+        !bioimpedanceEarly &&
+        (payment === 'GIFT' ||
+          matched?.isComplimentary === true ||
+          isComplimentarySessionTitle(o.title) ||
+          isComplimentarySessionTitle(primary?.paymentBasis));
       let unitFromPackage = resolvePackageUnitPriceMinor({
         unitPriceMinor: primary?.unitPriceMinor,
         packageAmountMinor: primary?.packageAmountMinor,
@@ -813,7 +955,7 @@ export class PayrollService {
         : (unitFromPackage ?? matched?.priceMinor ?? undefined);
       const roomTitle = o.roomTitle ?? undefined;
       const roomKey = resolveGroupRoomKey(roomTitle);
-      const serviceExternalId = o.serviceExternalId ?? undefined;
+      const serviceExternalId = serviceExternalIdEarly;
       const isPtAllSports = isPtAllSportsSession({
         serviceExternalId,
         title: o.title,
@@ -824,18 +966,13 @@ export class PayrollService {
           serviceExternalId,
           payrollSegments,
         ) || roomKey === 'REFORMER';
-      // 1C often stores massage as kind=PT — pay via SPA scheme for specialists.
+      // 1C often stores massage / биоимпеданс as kind=PT — pay via SPA scheme.
       const asSpa =
         isSpecialist &&
-        !isGift &&
-        isSpaLikeSessionTitle(o.title) &&
-        !isReformerPersonal;
-      const bioimpedance = asSpa
-        ? isSpaAllSportsBioimpedance({
-            serviceExternalId,
-            title: o.title,
-          })
-        : false;
+        !isReformerPersonal &&
+        (bioimpedanceEarly ||
+          (!isGift && isSpaLikeSessionTitle(o.title)));
+      const bioimpedance = asSpa && bioimpedanceEarly;
       const writeOffOrigin = classifyPtSessionOrigin({
         paymentBasis: primary?.paymentBasis,
         sessionTitle: o.title,
@@ -1192,6 +1329,12 @@ export class PayrollService {
       const approvedSpaIds = new Set(approvedSpa.map((a) => a.bookingId));
       for (const u of units) {
         if (u.kind !== 'SPA') continue;
+        // AllSports биоимпеданс: исполнитель + визит/продажа — без отдельного SPA-approval.
+        if (workUnitIsSpaPartnerBio(u)) {
+          u.isSpaAllSportsBioimpedance = true;
+          u.payrollTrusted = true;
+          continue;
+        }
         const sk = unitKey.get(u.id);
         const ok =
           approvedSpaIds.has(String(u.id)) ||
@@ -4022,9 +4165,13 @@ export class PayrollService {
 
       if (slice.track === 'SPA') {
         for (const u of units.filter((x) => x.kind === 'SPA')) {
-          if (u.isComplimentary) continue;
-          if (u.isSpaAllSportsBioimpedance && slice.spaPartnerRateMinor) {
-            u.earnMinor = slice.spaPartnerRateMinor;
+          const partnerBio = workUnitIsSpaPartnerBio(u);
+          if (u.isComplimentary && !partnerBio) continue;
+          if (partnerBio) {
+            u.isSpaAllSportsBioimpedance = true;
+            if (slice.spaPartnerRateMinor) {
+              u.earnMinor = slice.spaPartnerRateMinor;
+            }
             continue;
           }
           const price = u.priceMinor ?? 0;
@@ -4039,7 +4186,9 @@ export class PayrollService {
             const title = u.title.toLowerCase();
             const match = slice.spaQuotaRates.find((r) => {
               if (r.serviceKey === 'BODY_COMPOSITION')
-                return /состав|анализ|inbody|compos/i.test(title);
+                return /состав|анализ|inbody|compos|биоимпеданс|bio.?imped/i.test(
+                  title,
+                );
               if (r.serviceKey === 'CLASSIC_MASSAGE')
                 return /массаж|massage|класс/i.test(title);
               return r.serviceKey === u.serviceId;
@@ -4253,9 +4402,9 @@ export class PayrollService {
         }
 
         if (slice.track === 'SPA' && u.kind === 'SPA') {
-          if (u.isSpaAllSportsBioimpedance && slice.spaPartnerRateMinor) {
+          if (workUnitIsSpaPartnerBio(u) && slice.spaPartnerRateMinor) {
             total += slice.spaPartnerRateMinor;
-          } else {
+          } else if (!workUnitIsSpaPartnerBio(u)) {
             const price = u.priceMinor ?? 0;
             if (price > 0 && slice.spaSoldPercent) {
               total += Math.round((price * slice.spaSoldPercent) / 100);
@@ -4267,7 +4416,9 @@ export class PayrollService {
               const title = u.title.toLowerCase();
               const match = slice.spaQuotaRates.find((r) => {
                 if (r.serviceKey === 'BODY_COMPOSITION')
-                  return /состав|анализ|inbody|compos/i.test(title);
+                  return /состав|анализ|inbody|compos|биоимпеданс|bio.?imped/i.test(
+                    title,
+                  );
                 if (r.serviceKey === 'CLASSIC_MASSAGE')
                   return /массаж|massage|класси/i.test(title);
                 return r.serviceKey === u.serviceId;
@@ -4319,7 +4470,8 @@ export class PayrollService {
 
     for (const u of units) {
       if (u.kind !== 'SPA' && u.kind !== 'PT' && u.kind !== 'GROUP') continue;
-      if (u.isComplimentary) continue;
+      const partnerBio = workUnitIsSpaPartnerBio(u);
+      if (u.isComplimentary && !partnerBio) continue;
       const day = u.occurredAt.slice(0, 10);
       const profile = profileForDay(day);
       if (!profile) {
@@ -4414,8 +4566,11 @@ export class PayrollService {
           }
         }
         if (slice.track === 'SPA' && u.kind === 'SPA') {
-          if (u.isSpaAllSportsBioimpedance && slice.spaPartnerRateMinor) {
-            u.earnMinor = slice.spaPartnerRateMinor;
+          if (partnerBio) {
+            u.isSpaAllSportsBioimpedance = true;
+            if (slice.spaPartnerRateMinor) {
+              u.earnMinor = slice.spaPartnerRateMinor;
+            }
           } else {
             const price = u.priceMinor ?? 0;
             if (price > 0 && slice.spaSoldPercent) {
@@ -4429,7 +4584,9 @@ export class PayrollService {
               const title = u.title.toLowerCase();
               const match = slice.spaQuotaRates.find((r) => {
                 if (r.serviceKey === 'BODY_COMPOSITION')
-                  return /состав|анализ|inbody|compos/i.test(title);
+                  return /состав|анализ|inbody|compos|биоимпеданс|bio.?imped/i.test(
+                    title,
+                  );
                 if (r.serviceKey === 'CLASSIC_MASSAGE')
                   return /массаж|massage|класси/i.test(title);
                 return r.serviceKey === u.serviceId;
@@ -4576,8 +4733,8 @@ export class PayrollService {
 
       if (slice.track === 'SPA') {
         for (const u of trusted.filter((x) => x.kind === 'SPA')) {
-          if (u.isSpaAllSportsBioimpedance && slice.spaPartnerRateMinor) {
-            total += slice.spaPartnerRateMinor;
+          if (workUnitIsSpaPartnerBio(u)) {
+            if (slice.spaPartnerRateMinor) total += slice.spaPartnerRateMinor;
             continue;
           }
           const price = u.priceMinor ?? 0;
@@ -4591,7 +4748,9 @@ export class PayrollService {
             const title = u.title.toLowerCase();
             const match = slice.spaQuotaRates.find((r) => {
               if (r.serviceKey === 'BODY_COMPOSITION')
-                return /состав|анализ|inbody|compos/i.test(title);
+                return /состав|анализ|inbody|compos|биоимпеданс|bio.?imped/i.test(
+                  title,
+                );
               if (r.serviceKey === 'CLASSIC_MASSAGE')
                 return /массаж|massage|класси/i.test(title);
               return r.serviceKey === u.serviceId;
