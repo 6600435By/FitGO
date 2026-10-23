@@ -551,7 +551,9 @@ export class ClubSyncOrchestrator {
       } else {
         await runStep('admin_sales', async () => {
           if (isFull) {
-            const r = await this.salesSync.syncClub(clubId, 'incremental');
+            // 60-day lookback — late/free 1C lines (e.g. :free bio) outside
+            // the LIGHT 2-day overlap must still land in ClubRevenueEntry.
+            const r = await this.salesSync.syncClub(clubId, 'full');
             return { rows: r.upserted, from: r.from, to: r.to };
           }
           const r = await this.salesSync.syncClubQuick(clubId);
@@ -560,7 +562,7 @@ export class ClubSyncOrchestrator {
 
         await runStep('club_revenue', async () => {
           if (isFull) {
-            const r = await this.revenueSync.syncClub(clubId, 'incremental');
+            const r = await this.revenueSync.syncClub(clubId, 'full');
             return { rows: r.upserted, from: r.from, to: r.to };
           }
           const r = await this.revenueSync.syncClubQuick(clubId);
