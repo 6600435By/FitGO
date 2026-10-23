@@ -114,6 +114,13 @@ import {
   resolveSpaCatalogUnitMinor,
   type SpaBlockSaleDoc,
 } from './spa-block-unit-price';
+import {
+  dateOnly,
+  localMonthStartIso,
+  localTodayIso,
+  rateChangeHintText,
+  utcDateKey,
+} from './payroll-dates';
 
 function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -2236,7 +2243,7 @@ export class PayrollService {
         userId: input.userId,
         baseSalaryMinor: input.baseSalaryMinor,
         currency: input.currency ?? 'BYN',
-        effectiveFrom: new Date(`${input.effectiveFrom}T00:00:00`),
+        effectiveFrom: dateOnly(input.effectiveFrom),
         ...(input.payProfile
           ? { payProfile: input.payProfile as object }
           : {}),
@@ -2266,14 +2273,14 @@ export class PayrollService {
       orderBy: [{ effectiveFrom: 'asc' }, { createdAt: 'asc' }],
     });
     if (!rows.length) return null;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localTodayIso();
     const asOf =
       this.pickCompensationRow(rows, today) ?? rows[rows.length - 1]!;
     const profile = asPayProfile(asOf.payProfile);
     const rateVersions = rows.map((r) => {
       const p = asPayProfile(r.payProfile);
       return {
-        effectiveFrom: r.effectiveFrom.toISOString().slice(0, 10),
+        effectiveFrom: utcDateKey(r.effectiveFrom),
         payChips: payProfileSummary(p),
       };
     });
@@ -2293,7 +2300,7 @@ export class PayrollService {
       userName: `${asOf.user.lastName} ${asOf.user.firstName}`.trim(),
       baseSalaryMinor: asOf.baseSalaryMinor,
       currency: asOf.currency,
-      effectiveFrom: asOf.effectiveFrom.toISOString().slice(0, 10),
+      effectiveFrom: utcDateKey(asOf.effectiveFrom),
       payProfile: profile,
       payChips: payProfileSummary(profile),
       rateVersions: deduped,
@@ -2343,9 +2350,7 @@ export class PayrollService {
 
     // Dated version: same day updates that row; new day creates a version.
     // Default (no date) = 1st of current month so a correction covers the open period.
-    const now = new Date();
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-    const effectiveFrom = input.effectiveFrom?.trim() || monthStart;
+    const effectiveFrom = input.effectiveFrom?.trim() || localMonthStartIso();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) {
       throw new BadRequestException('effectiveFrom: YYYY-MM-DD');
     }
@@ -2355,11 +2360,12 @@ export class PayrollService {
       effectiveFrom,
     );
 
+    const fromDate = dateOnly(effectiveFrom);
     const sameDay = await this.prisma.staffCompensation.findFirst({
       where: {
         clubId,
         userId: input.userId,
-        effectiveFrom: new Date(`${effectiveFrom}T00:00:00`),
+        effectiveFrom: fromDate,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -2378,14 +2384,53 @@ export class PayrollService {
           userId: input.userId,
           baseSalaryMinor,
           currency: latest?.currency ?? 'BYN',
-          effectiveFrom: new Date(`${effectiveFrom}T00:00:00`),
+          effectiveFrom: fromDate,
           payProfile: payProfile as object,
         },
       });
     }
+    // "Действует с D" means this scheme from D forward — drop later unlocked
+    // versions so an accidental mid-month row (e.g. 14.10) no longer overrides.
+    await this.supersedeLaterCompensationVersions(
+      clubId,
+      input.userId,
+      effectiveFrom,
+    );
     const dto = await this.getStaffPayProfile(clubId, input.userId);
     if (!dto) throw new NotFoundException('Сотрудник не найден');
     return dto;
+  }
+
+  /**
+   * Delete compensation versions after `effectiveFrom` that sit on open
+   * (unlocked) days. Locked-period versions are kept.
+   */
+  private async supersedeLaterCompensationVersions(
+    clubId: string,
+    userId: string,
+    effectiveFrom: string,
+  ) {
+    const later = await this.prisma.staffCompensation.findMany({
+      where: {
+        clubId,
+        userId,
+        effectiveFrom: { gt: dateOnly(effectiveFrom) },
+      },
+      select: { id: true, effectiveFrom: true },
+    });
+    for (const row of later) {
+      const iso = utcDateKey(row.effectiveFrom);
+      const locked = await this.prisma.payrollPeriodLock.findFirst({
+        where: {
+          clubId,
+          userId,
+          periodFrom: { lte: dateOnly(iso) },
+          periodTo: { gte: dateOnly(iso) },
+        },
+      });
+      if (locked) continue;
+      await this.prisma.staffCompensation.delete({ where: { id: row.id } });
+    }
   }
 
   /** Refuse saving a rate into a locked payroll period. */
@@ -2394,7 +2439,7 @@ export class PayrollService {
     userId: string,
     effectiveFrom: string,
   ) {
-    const day = new Date(`${effectiveFrom}T00:00:00`);
+    const day = dateOnly(effectiveFrom);
     const locked = await this.prisma.payrollPeriodLock.findFirst({
       where: {
         clubId,
@@ -2405,10 +2450,12 @@ export class PayrollService {
       orderBy: { periodTo: 'desc' },
     });
     if (!locked) return;
-    const until = locked.periodTo.toISOString().slice(0, 10);
-    const next = new Date(locked.periodTo);
-    next.setDate(next.getDate() + 1);
-    const openFrom = next.toISOString().slice(0, 10);
+    const until = utcDateKey(locked.periodTo);
+    const openFrom = (() => {
+      const next = dateOnly(until);
+      next.setUTCDate(next.getUTCDate() + 1);
+      return utcDateKey(next);
+    })();
     throw new BadRequestException(
       `Период до ${until} закрыт — ставка с ${effectiveFrom} недоступна. Выберите дату с ${openFrom}.`,
     );
@@ -2605,15 +2652,13 @@ export class PayrollService {
       }
     }
     if (!merged) return false;
-    const effectiveFrom = new Date();
-    effectiveFrom.setHours(0, 0, 0, 0);
     await this.prisma.staffCompensation.create({
       data: {
         clubId,
         userId,
         baseSalaryMinor,
         currency: 'BYN',
-        effectiveFrom,
+        effectiveFrom: dateOnly(localTodayIso()),
         payProfile: merged as object,
       },
     });
@@ -2659,9 +2704,7 @@ export class PayrollService {
     if (!source?.payProfile) {
       throw new BadRequestException('Сначала сохраните мотивацию у источника');
     }
-    const now = new Date();
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-    const fromDate = effectiveFrom?.trim() || monthStart;
+    const fromDate = effectiveFrom?.trim() || localMonthStartIso();
     if (trainerGroups?.length) {
       const allowed: TrainerGroupId[] = ['GP', 'STAFF', 'CLUB', 'REFORMER'];
       const groups = [...new Set(trainerGroups)].filter((g): g is TrainerGroupId =>
@@ -2810,12 +2853,12 @@ export class PayrollService {
         ? users.filter((u) => !isClubTrainerOnlyPayrollSkip(u))
         : users
     ).filter((u) => !u.excludeFromPayrollMotivation);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localTodayIso();
     const comps = await this.prisma.staffCompensation.findMany({
       where: {
         clubId,
         userId: { in: eligible.map((u) => u.id) },
-        effectiveFrom: { lte: new Date(`${today}T23:59:59`) },
+        effectiveFrom: { lte: dateOnly(today) },
       },
       orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
@@ -2874,7 +2917,7 @@ export class PayrollService {
         userName: `${r.user.lastName} ${r.user.firstName}`.trim(),
         baseSalaryMinor: r.baseSalaryMinor,
         currency: r.currency,
-        effectiveFrom: r.effectiveFrom.toISOString().slice(0, 10),
+        effectiveFrom: utcDateKey(r.effectiveFrom),
         payProfile: profile,
         payChips: payProfileSummary(profile),
       };
@@ -2901,7 +2944,7 @@ export class PayrollService {
         rateType: input.rateType,
         rateValue: input.rateValue,
         currency: input.currency ?? 'BYN',
-        effectiveFrom: new Date(`${input.effectiveFrom}T00:00:00`),
+        effectiveFrom: dateOnly(input.effectiveFrom),
       },
     });
     return {
@@ -2927,7 +2970,7 @@ export class PayrollService {
       rateType: r.rateType,
       rateValue: r.rateValue,
       currency: r.currency,
-      effectiveFrom: r.effectiveFrom.toISOString().slice(0, 10),
+      effectiveFrom: utcDateKey(r.effectiveFrom),
     }));
   }
 
@@ -3516,7 +3559,7 @@ export class PayrollService {
       where: {
         clubId,
         userId,
-        effectiveFrom: { lte: new Date(`${asOf}T23:59:59`) },
+        effectiveFrom: { lte: dateOnly(asOf) },
       },
       orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
@@ -3533,7 +3576,7 @@ export class PayrollService {
       where: {
         clubId,
         userId,
-        effectiveFrom: { lte: new Date(`${to}T23:59:59`) },
+        effectiveFrom: { lte: dateOnly(to) },
       },
       orderBy: [{ effectiveFrom: 'asc' }, { createdAt: 'asc' }],
     });
@@ -3544,10 +3587,9 @@ export class PayrollService {
   private pickCompensationRow<
     T extends { effectiveFrom: Date; createdAt?: Date },
   >(rows: T[], asOf: string): T | undefined {
-    const asOfMs = new Date(`${asOf}T23:59:59`).getTime();
     let best: T | undefined;
     for (const row of rows) {
-      if (row.effectiveFrom.getTime() > asOfMs) break;
+      if (utcDateKey(row.effectiveFrom) > asOf) break;
       best = row;
     }
     return best;
@@ -3595,17 +3637,11 @@ export class PayrollService {
     from: string,
     to: string,
   ): string | undefined {
-    const inRange = rows.filter((r) => {
-      const iso = r.effectiveFrom.toISOString().slice(0, 10);
-      return iso > from && iso <= to;
-    });
-    if (!inRange.length) return undefined;
-    const first = inRange[0]!;
-    const iso = first.effectiveFrom.toISOString().slice(0, 10);
-    const prevDay = new Date(`${iso}T00:00:00`);
-    prevDay.setDate(prevDay.getDate() - 1);
-    const prevIso = prevDay.toISOString().slice(0, 10);
-    return `до ${prevIso} — прежняя ставка, с ${iso} — новая`;
+    return rateChangeHintText(
+      rows.map((r) => utcDateKey(r.effectiveFrom)),
+      from,
+      to,
+    );
   }
 
   private async listAdjustments(

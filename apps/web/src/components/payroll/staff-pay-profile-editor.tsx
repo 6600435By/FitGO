@@ -51,11 +51,16 @@ function formatRateDay(iso: string): string {
   return `${d} ${months[m - 1]}${y !== new Date().getFullYear() ? ` ${y}` : ''}`;
 }
 
+function localTodayIso(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
 function rateVersionsHint(
   versions: StaffCompensationRateVersion[] | undefined,
 ): string | null {
   if (!versions?.length) return null;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localTodayIso();
   const pastOrToday = versions.filter((v) => v.effectiveFrom <= today);
   const future = versions.filter((v) => v.effectiveFrom > today);
   const current = pastOrToday[pastOrToday.length - 1];
