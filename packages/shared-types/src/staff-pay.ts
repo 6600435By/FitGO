@@ -902,6 +902,18 @@ export function resolvePtPercent(
 }
 
 /**
+ * Pack discount for SPA massage blocks when sale amount is unknown.
+ * Block of 5 → 5%, block of 10 → 10%; other N → N% clamped to 0…10.
+ */
+export function spaBlockDiscountPct(visitCount: number): number {
+  const n = Math.round(Number(visitCount) || 0);
+  if (n <= 0) return 0;
+  if (n === 5) return 5;
+  if (n === 10) return 10;
+  return Math.min(10, Math.max(0, n));
+}
+
+/**
  * Visit count encoded in pack nomenclature / paymentBasis.
  * Examples: «10 ПТ (50р.)», «Индивидуальное занятие реформер 8», «Курс массажа 5».
  * Returns null when the title is not a countable multi/single pack label.

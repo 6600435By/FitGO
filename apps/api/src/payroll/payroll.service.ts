@@ -102,9 +102,17 @@ import {
   loadTrainerPtSalesFromRevenue,
   matchPackSaleForUnitPrice,
   mergeTrainerPtSaleRows,
+  overlayPtSaleDebtFromRevenue,
   trainerPtSaleDocKey,
   type TrainerPtSaleRow,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
+import {
+  buildPacksSameDayMap,
+  loadSpaBlockSales,
+  resolveSpaBlockUnitPrice,
+  resolveSpaCatalogUnitMinor,
+  type SpaBlockSaleDoc,
+} from './spa-block-unit-price';
 
 function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -377,6 +385,26 @@ export class PayrollService {
       performer && needsPackUnitSales
         ? await loadPackSalesForUnitPrice(this.prisma, clubId, fromD, toD)
         : [];
+    // Massage SaleTransaction docs for SPA block write-offs (sale lives on
+    // «Продажа», not on ЧленствоПакетУслуг — member packageAmount is empty).
+    const spaBlockSales: SpaBlockSaleDoc[] =
+      performer && isSpecialist
+        ? await loadSpaBlockSales(this.prisma, clubId, fromD, toD)
+        : [];
+    const spaCatalogCache = new Map<string, number | undefined>();
+    const resolveSpaCatalogCached = async (
+      serviceExternalId?: string | null,
+      serviceId?: string | null,
+    ): Promise<number | undefined> => {
+      const key = `${serviceExternalId ?? ''}|${serviceId ?? ''}`;
+      if (spaCatalogCache.has(key)) return spaCatalogCache.get(key);
+      const v = await resolveSpaCatalogUnitMinor(this.prisma, clubId, {
+        serviceExternalId,
+        serviceId,
+      });
+      spaCatalogCache.set(key, v);
+      return v;
+    };
 
     // ── SPA from 1C (Onex) — FitGO-only never pays ─────────────────────────
     const onexSpa = await this.prisma.onexClassSession.findMany({
@@ -391,6 +419,17 @@ export class PayrollService {
       include: { members: true },
       orderBy: { startAt: 'asc' },
     });
+    const spaPacksSameDay = buildPacksSameDayMap(
+      onexSpa.flatMap((o) =>
+        o.members
+          .filter((m) => !m.cancelled)
+          .map((m) => ({
+            clientName: m.clientName,
+            paymentBasis: m.paymentBasis,
+            packageDocId: m.packageDocId,
+          })),
+      ),
+    );
     for (const o of onexSpa) {
       const key = onexSessionKey(o.externalId);
       remarkKeys.push(key);
@@ -454,6 +493,43 @@ export class PayrollService {
         matched?.priceMinor ??
         matched?.service.priceMinor ??
         undefined;
+      let spaBlockPriceSource: WorkUnit['spaBlockPriceSource'];
+      let trustBand: WorkUnit['trustBand'] = 'GREEN';
+      // Block write-off without 1C unit → SaleTransaction / N, else catalog −%.
+      if (
+        isServiceBlock &&
+        !bioimpedance &&
+        !(priceMinor != null && priceMinor > 0) &&
+        primary?.clientName
+      ) {
+        const clientKey = `${primary.clientName
+          .trim()
+          .toLowerCase()
+          .replace(/ё/g, 'е')
+          .replace(/\s+/g, ' ')}|${packDateIso ?? ''}`;
+        const catalogUnitMinor = await resolveSpaCatalogCached(
+          serviceExternalId,
+          matched?.serviceId,
+        );
+        const blockMatch = resolveSpaBlockUnitPrice({
+          sales: spaBlockSales,
+          clientName: primary.clientName,
+          paymentBasis: primary.paymentBasis,
+          sessionTitle: o.title,
+          packsSameDay: spaPacksSameDay.get(clientKey) ?? 1,
+          catalogUnitMinor,
+        });
+        if (blockMatch) {
+          priceMinor = blockMatch.unitPriceMinor;
+          spaBlockPriceSource = blockMatch.source;
+          if (blockMatch.source === 'SALE') {
+            packSaleExt = blockMatch.externalId ?? packSaleExt;
+            packSaleAt = blockMatch.occurredAt ?? packSaleAt;
+          } else {
+            trustBand = 'AMBER';
+          }
+        }
+      }
       const partner =
         payment === 'PARTNER' || bioimpedance
           ? 'ALLSPORTS'
@@ -467,7 +543,7 @@ export class PayrollService {
         payment === 'QUOTA' &&
         isMembershipQuota &&
         !bioimpedance &&
-        !(unitFromPackage != null && unitFromPackage > 0)
+        !(priceMinor != null && priceMinor > 0)
       ) {
         priceMinor = 0;
       }
@@ -489,7 +565,7 @@ export class PayrollService {
         occurredAt: o.startAt.toISOString(),
         quantity: 1,
         priceMinor,
-        trustBand: 'GREEN',
+        trustBand,
         trustResolution: 'NONE',
         payrollTrusted: paymentCountsForMoney(payment) || bioimpedance,
         clientName: primary?.clientName,
@@ -499,6 +575,7 @@ export class PayrollService {
         isSpaAllSportsBioimpedance: bioimpedance,
         spaMembershipQuota:
           !bioimpedance && isPackage ? isMembershipQuota : undefined,
+        spaBlockPriceSource,
         sessionId: o.id,
         sessionKey: key,
         saleExternalId:
@@ -641,6 +718,20 @@ export class PayrollService {
       include: { members: true },
       orderBy: { startAt: 'asc' },
     });
+    // SPA-like PT rows (massage stored as kind=PT) share pack-day counts.
+    for (const [k, n] of buildPacksSameDayMap(
+      onexPt.flatMap((o) =>
+        o.members
+          .filter((m) => !m.cancelled)
+          .map((m) => ({
+            clientName: m.clientName,
+            paymentBasis: m.paymentBasis,
+            packageDocId: m.packageDocId,
+          })),
+      ),
+    )) {
+      spaPacksSameDay.set(k, Math.max(spaPacksSameDay.get(k) ?? 0, n));
+    }
     // Load sales early: skip multi-visit packs in sale pay; also fill unit = sale/N
     // when class members lack packageAmount (legacy sync).
     const trainerPtSales =
@@ -739,15 +830,55 @@ export class PayrollService {
       });
       const isMembershipQuota = writeOffOrigin === 'MEMBERSHIP';
       const isServiceBlock = writeOffOrigin === 'BLOCK';
+      let spaPriceMinor = priceMinor;
+      let spaBlockPriceSource: WorkUnit['spaBlockPriceSource'];
+      let trustBand: WorkUnit['trustBand'] = 'GREEN';
+      if (
+        asSpa &&
+        isServiceBlock &&
+        !bioimpedance &&
+        !isGift &&
+        !(spaPriceMinor != null && spaPriceMinor > 0) &&
+        primary?.clientName
+      ) {
+        const clientKey = `${primary.clientName
+          .trim()
+          .toLowerCase()
+          .replace(/ё/g, 'е')
+          .replace(/\s+/g, ' ')}|${packDateIso ?? ''}`;
+        const catalogUnitMinor = await resolveSpaCatalogCached(
+          serviceExternalId,
+          undefined,
+        );
+        const blockMatch = resolveSpaBlockUnitPrice({
+          sales: spaBlockSales,
+          clientName: primary.clientName,
+          paymentBasis: primary.paymentBasis,
+          sessionTitle: o.title,
+          packsSameDay: spaPacksSameDay.get(clientKey) ?? 1,
+          catalogUnitMinor,
+        });
+        if (blockMatch) {
+          spaPriceMinor = blockMatch.unitPriceMinor;
+          spaBlockPriceSource = blockMatch.source;
+          if (blockMatch.source === 'SALE') {
+            packSaleExt = blockMatch.externalId ?? packSaleExt;
+            packSaleAt = blockMatch.occurredAt ?? packSaleAt;
+          } else {
+            trustBand = 'AMBER';
+          }
+        }
+      }
       // VIP-included only → spaQuotaRates. Massage blocks keep unit for %.
-      const spaPriceMinor =
+      if (
         asSpa &&
         payment === 'QUOTA' &&
         isMembershipQuota &&
         !bioimpedance &&
-        !(unitFromPackage != null && unitFromPackage > 0)
-          ? 0
-          : priceMinor;
+        !(spaPriceMinor != null && spaPriceMinor > 0)
+      ) {
+        spaPriceMinor = 0;
+      }
       const packageTitleSuffix = isMembershipQuota
         ? ' (абонемент)'
         : isServiceBlock
@@ -766,7 +897,7 @@ export class PayrollService {
         quantity: 1,
         priceMinor: asSpa ? spaPriceMinor : priceMinor,
         isComplimentary: isGift,
-        trustBand: 'GREEN',
+        trustBand,
         trustResolution: 'NONE',
         payrollTrusted: Boolean(
           asSpa
@@ -794,6 +925,7 @@ export class PayrollService {
         isSpaAllSportsBioimpedance: bioimpedance || undefined,
         spaMembershipQuota:
           asSpa && !bioimpedance && isPackage ? isMembershipQuota : undefined,
+        spaBlockPriceSource: asSpa ? spaBlockPriceSource : undefined,
         saleExternalId: packSaleExt || undefined,
         saleOccurredAt:
           packSaleAt ||
@@ -1352,6 +1484,14 @@ export class PayrollService {
         'Ставка за час / мотивация не заданы или нет проверенных работ за период',
       );
     }
+    const spaBlockCatalog = workUnits.filter(
+      (u) => u.kind === 'SPA' && u.spaBlockPriceSource === 'CATALOG',
+    ).length;
+    if (spaBlockCatalog > 0) {
+      anomalyHints.push(
+        `SPA из блока по каталогу: ${spaBlockCatalog} — продажи нет в периоде, проверьте оплату`,
+      );
+    }
     const spaBlockNoUnit = workUnits.filter(
       (u) =>
         u.kind === 'SPA' &&
@@ -1361,7 +1501,7 @@ export class PayrollService {
     ).length;
     if (spaBlockNoUnit > 0) {
       anomalyHints.push(
-        `SPA из блока без цены визита: ${spaBlockNoUnit} — не найдена продажа пакета (продажа/N); фикс абонемента не применяется`,
+        `SPA из блока без цены: ${spaBlockNoUnit} визитов (нет продажи и каталожной цены)`,
       );
     }
     const splitHint = this.rateChangeHint(timeline, from, to);
@@ -3593,7 +3733,16 @@ export class PayrollService {
       fromD,
       toD,
     );
-    return mergeTrainerPtSaleRows(fromPt, fromRevenue);
+    const merged = mergeTrainerPtSaleRows(fromPt, fromRevenue);
+    // Integration may mark unpaid PT as PAID when debt remainder is missing —
+    // ClubRevenue unpaid wins so debt never enters ЗП.
+    return overlayPtSaleDebtFromRevenue(
+      this.prisma,
+      clubId,
+      fromD,
+      toD,
+      merged,
+    );
   }
 
   /**

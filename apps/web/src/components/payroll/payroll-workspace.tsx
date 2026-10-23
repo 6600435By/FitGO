@@ -1659,6 +1659,11 @@ export function PayrollWorkspace({ mode }: Props) {
                       {u.isComplimentary && (
                         <span className="text-violet-300">подарок</span>
                       )}
+                      {u.spaBlockPriceSource === 'CATALOG' && (
+                        <span className="text-amber-300">
+                          каталог −N%, проверить оплату
+                        </span>
+                      )}
                       <span
                         className={
                           u.payrollTrusted && !u.isComplimentary
@@ -1760,6 +1765,11 @@ export function PayrollWorkspace({ mode }: Props) {
                           {u.isComplimentary ? (
                             <span className="ml-1 text-violet-300">
                               · подарок
+                            </span>
+                          ) : null}
+                          {u.spaBlockPriceSource === 'CATALOG' ? (
+                            <span className="ml-1 text-amber-300">
+                              · каталог −N%, проверить оплату
                             </span>
                           ) : null}
                           {u.clientName ? (

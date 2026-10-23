@@ -65,6 +65,11 @@ export interface WorkUnit {
    * Omitted for cash / partner one-shots.
    */
   spaMembershipQuota?: boolean;
+  /**
+   * How SPA block unit price was recovered when 1C member lacked packageAmount.
+   * SALE = document amount / N; CATALOG = 1C catalog × (1 − block discount).
+   */
+  spaBlockPriceSource?: 'SALE' | 'CATALOG';
   /** PT «Занятие с тренером ALL SPORTS» — fixed ptAllSportsRateMinor. */
   isPtAllSports?: boolean;
   /** Individual reformer session (nomenclature in segment). */
