@@ -16,6 +16,8 @@ import {
   DAY_OF_WEEK_KEYS,
   inferPaymentFromBasis,
   isComplimentarySessionTitle,
+  isMultiVisitPackSale,
+  isPtAllSportsSession,
   isSpaLikeSessionTitle,
 } from '@fitgo/shared-types';
 import {
@@ -205,7 +207,7 @@ export class ClubAnalyticsService {
       this.servicesBlock(clubId, params.from, params.to),
       this.servicesBlock(clubId, compareFrom, compareTo),
     ]);
-    // Rankings and PT KPI share booking-control session rows (not SALE lines).
+    // Rankings + PT KPI: same universe as Персонал ПТ (занятия + разовые SALE).
     const {
       trainerRankings,
       trainerRankingsPt,
@@ -1339,38 +1341,102 @@ export class ClubAnalyticsService {
     let ptClubCompleted = 0;
     let ptClubGift = 0;
 
-    for (const i of items) {
-      if (i.kind === 'PT' && i.status === 'COMPLETED') {
-        const key = trainerKey(i.performerId, i.performerName);
-        const cur = ptByKey.get(key) ?? {
-          trainerId: i.performerId || key,
-          name: i.performerName || '—',
-          completed: 0,
-          paid: 0,
-          debt: 0,
-          gift: 0,
-          clients: new Set<string>(),
-          amountMinor: 0,
-        };
-        // SALE lines are one-time revenue, not conducted sessions — keep in sum only.
+    // Same as Персонал: class/FitGO first, then one-shot SALE (dedupe day+client / doc).
+    const coveredCrm = new Set<string>();
+    const coveredDayClient = new Set<string>();
+    const markDayClient = (
+      trainerKeyVal: string,
+      startAt: string,
+      clientName: string | null | undefined,
+    ) => {
+      const name = clientName?.trim().toLowerCase();
+      if (!name || name === '—') return;
+      const day = startAt.slice(0, 10);
+      coveredDayClient.add(`${trainerKeyVal}|${day}|${name}`);
+    };
+
+    const bumpPt = (
+      i: (typeof items)[number],
+      key: string,
+      opts: { countSession: boolean; addAmount: boolean },
+    ) => {
+      const cur = ptByKey.get(key) ?? {
+        trainerId: i.performerId || key,
+        name: i.performerName || '—',
+        completed: 0,
+        paid: 0,
+        debt: 0,
+        gift: 0,
+        clients: new Set<string>(),
+        amountMinor: 0,
+      };
+      if (opts.addAmount) {
         cur.amountMinor += i.priceMinor ?? 0;
-        if (i.source !== 'SALE') {
-          cur.completed++;
-          ptClubCompleted++;
-          const isGift =
-            i.payment === 'GIFT' || isComplimentarySessionTitle(i.title);
-          if (isGift) {
-            cur.gift++;
-            ptClubGift++;
-          } else if (i.payment === 'PAID' || i.payment === 'QUOTA') {
-            cur.paid++;
-          } else if (i.payment === 'DEBT' || i.payment === 'UNKNOWN') {
-            cur.debt++;
-          }
-          if (i.clientName) cur.clients.add(i.clientName);
+      }
+      if (opts.countSession) {
+        cur.completed++;
+        ptClubCompleted++;
+        const isGift =
+          i.payment === 'GIFT' || isComplimentarySessionTitle(i.title);
+        if (isGift) {
+          cur.gift++;
+          ptClubGift++;
+        } else if (i.payment === 'PAID' || i.payment === 'QUOTA') {
+          cur.paid++;
+        } else if (i.payment === 'DEBT' || i.payment === 'UNKNOWN') {
+          cur.debt++;
         }
-        ptByKey.set(key, cur);
-      } else if (i.kind === 'GROUP') {
+        if (i.clientName) cur.clients.add(i.clientName);
+      }
+      ptByKey.set(key, cur);
+    };
+
+    for (const i of items) {
+      if (i.kind === 'PT' && i.status === 'COMPLETED' && i.source !== 'SALE') {
+        const key = trainerKey(i.performerId, i.performerName);
+        bumpPt(i, key, { countSession: true, addAmount: true });
+        if (i.number) coveredCrm.add(i.number.trim());
+        if (i.sessionKey.startsWith('1c:')) {
+          coveredCrm.add(i.sessionKey.slice(3));
+        }
+        markDayClient(key, i.startAt, i.clientName);
+      }
+    }
+
+    for (const i of items) {
+      if (i.kind !== 'PT' || i.status !== 'COMPLETED' || i.source !== 'SALE') {
+        continue;
+      }
+      // Align with staff analytics / payroll: skip packs and AllSports.
+      if (isMultiVisitPackSale(i.title)) continue;
+      if (isPtAllSportsSession({ serviceName: i.title })) continue;
+      const key = trainerKey(i.performerId, i.performerName);
+      const doc = (i.number || '').trim();
+      const saleIdMatch = /^sale:PT:(.+)$/i.exec(i.sessionKey);
+      const saleId = saleIdMatch
+        ? decodeURIComponent(saleIdMatch[1]).trim()
+        : '';
+      if (doc && coveredCrm.has(doc)) continue;
+      if (saleId && coveredCrm.has(saleId)) continue;
+      const clientName = i.clientName?.trim().toLowerCase() || '';
+      const day = i.startAt.slice(0, 10);
+      if (
+        clientName &&
+        clientName !== '—' &&
+        coveredDayClient.has(`${key}|${day}|${clientName}`)
+      ) {
+        // Class already counted this visit — keep SALE in amount only.
+        bumpPt(i, key, { countSession: false, addAmount: true });
+        continue;
+      }
+      bumpPt(i, key, { countSession: true, addAmount: true });
+      if (doc) coveredCrm.add(doc);
+      if (saleId) coveredCrm.add(saleId);
+      markDayClient(key, i.startAt, i.clientName);
+    }
+
+    for (const i of items) {
+      if (i.kind === 'GROUP') {
         const key = trainerKey(i.performerId, i.performerName);
         const cur = gpByKey.get(key) ?? {
           trainerId: i.performerId || key,
