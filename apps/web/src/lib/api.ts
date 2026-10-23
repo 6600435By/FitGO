@@ -4044,6 +4044,81 @@ export const api = {
       token,
     ),
 
+  trainerPtStats: (token: string, from: string, to: string) =>
+    request<import('@fitgo/shared-types').PtStatsReport>(
+      `/trainer/pt-timesheet/stats?from=${from}&to=${to}`,
+      {},
+      token,
+    ),
+
+  adminPtStats: (
+    token: string,
+    from: string,
+    to: string,
+    trainerId?: string,
+  ) => {
+    const q = new URLSearchParams({ from, to });
+    if (trainerId) q.set('trainerId', trainerId);
+    return request<import('@fitgo/shared-types').PtStatsReport>(
+      `/admin/pt-timesheet/stats?${q}`,
+      {},
+      token,
+    );
+  },
+
+  adminPtStatsXlsx: async (
+    token: string,
+    from: string,
+    to: string,
+    trainerId?: string,
+  ) => {
+    const q = new URLSearchParams({ from, to });
+    if (trainerId) q.set('trainerId', trainerId);
+    const res = await fetch(
+      `${API_URL}/api/admin/pt-timesheet/stats.xlsx?${q}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(xlsxErrorMessage(text, res.status));
+    }
+    return res.blob();
+  },
+
+  saPtStats: (
+    token: string,
+    from: string,
+    to: string,
+    trainerId?: string,
+  ) => {
+    const q = new URLSearchParams({ from, to });
+    if (trainerId) q.set('trainerId', trainerId);
+    return request<import('@fitgo/shared-types').PtStatsReport>(
+      `/super-admin/pt-timesheet/stats?${q}`,
+      {},
+      token,
+    );
+  },
+
+  saPtStatsXlsx: async (
+    token: string,
+    from: string,
+    to: string,
+    trainerId?: string,
+  ) => {
+    const q = new URLSearchParams({ from, to });
+    if (trainerId) q.set('trainerId', trainerId);
+    const res = await fetch(
+      `${API_URL}/api/super-admin/pt-timesheet/stats.xlsx?${q}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(xlsxErrorMessage(text, res.status));
+    }
+    return res.blob();
+  },
+
   adminPtClientIssues: (token: string) =>
     request<import('@fitgo/shared-types').PtClientIssueQueueItem[]>(
       '/admin/pt-timesheet/client-issues',

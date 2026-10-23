@@ -6,6 +6,7 @@ import type {
 } from '@fitgo/shared-types';
 import { clientIssueLabel } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
+import { PtTimesheetStatsPanel } from '@/components/pt-timesheet/pt-timesheet-stats-panel';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -20,6 +21,7 @@ function money(minor: number, currency: string) {
 
 export default function TrainerPtTimesheetPage() {
   const today = useMemo(() => isoDate(new Date()), []);
+  const [tab, setTab] = useState<'journal' | 'stats'>('journal');
   const [date, setDate] = useState(today);
   const [sheet, setSheet] = useState<TrainerDaySheetDto | null>(null);
   const [shifts, setShifts] = useState<TrainerShiftDto[]>([]);
@@ -50,8 +52,9 @@ export default function TrainerPtTimesheetPage() {
   };
 
   useEffect(() => {
+    if (tab !== 'journal') return;
     load();
-  }, [date]);
+  }, [date, tab]);
 
   const submit = async () => {
     const token = getToken();
@@ -91,11 +94,41 @@ export default function TrainerPtTimesheetPage() {
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold text-white">Табель ПТ</h1>
         <p className="text-sm text-slate-400">
-          Отчёт собирается из журнала записи. Без телефона клиента записать
-          нельзя. Late-add и ошибочный телефон — исключения.
+          {tab === 'journal'
+            ? 'Дневной журнал. Без телефона клиента записать нельзя. Late-add и ошибочный телефон — исключения.'
+            : 'Статистика проведённых ПТ за период: микс оплат, клиенты, мотивация и смены.'}
         </p>
       </header>
 
+      <div className="flex gap-1 rounded-xl border border-slate-800 p-1">
+        <button
+          type="button"
+          className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
+            tab === 'journal'
+              ? 'bg-fitgo-600 text-white'
+              : 'text-slate-400 hover:text-white'
+          }`}
+          onClick={() => setTab('journal')}
+        >
+          Журнал
+        </button>
+        <button
+          type="button"
+          className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
+            tab === 'stats'
+              ? 'bg-fitgo-600 text-white'
+              : 'text-slate-400 hover:text-white'
+          }`}
+          onClick={() => setTab('stats')}
+        >
+          Статистика
+        </button>
+      </div>
+
+      {tab === 'stats' && <PtTimesheetStatsPanel audience="trainer" />}
+
+      {tab === 'journal' && (
+        <>
       <DateField
         label="Дата"
         value={date}
@@ -328,6 +361,8 @@ export default function TrainerPtTimesheetPage() {
               Подтвердить и отправить админу
             </button>
           )}
+        </>
+      )}
         </>
       )}
     </div>

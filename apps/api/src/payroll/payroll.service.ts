@@ -80,7 +80,6 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { GroupSessionService } from '../group-session/group-session.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { PtTimesheetService } from '../pt-timesheet/pt-timesheet.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { StaffRosterService } from '../staff-roster/staff-roster.service';
 import { AdminSalesService } from '../admin-sales/admin-sales.service';
@@ -111,6 +110,31 @@ function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   const p = raw as StaffPayProfile;
   if (!p.track) return undefined;
   return p;
+}
+
+/** Inclusive calendar months that overlap [from, to] (ISO dates). */
+function calendarMonthsOverlapping(
+  from: string,
+  to: string,
+): Array<{ from: string; to: string }> {
+  const out: Array<{ from: string; to: string }> = [];
+  const [fy, fm] = from.split('-').map(Number);
+  const [ty, tm] = to.split('-').map(Number);
+  if (!fy || !fm || !ty || !tm) return out;
+  let y = fy;
+  let m = fm;
+  while (y < ty || (y === ty && m <= tm)) {
+    const monthFrom = `${y}-${String(m).padStart(2, '0')}-01`;
+    const lastDay = new Date(y, m, 0).getDate();
+    const monthTo = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    out.push({ from: monthFrom, to: monthTo });
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+  }
+  return out;
 }
 
 /**
@@ -289,7 +313,6 @@ export class PayrollService {
     private readonly prisma: PrismaService,
     private readonly serviceUsage: ServiceUsageService,
     private readonly groupSessions: GroupSessionService,
-    private readonly ptTimesheet: PtTimesheetService,
     private readonly staffRoster: StaffRosterService,
     private readonly adminSales: AdminSalesService,
     private readonly classSessionsSync: ClassSessionsSyncService,
@@ -3334,6 +3357,94 @@ export class PayrollService {
       toD,
     );
     return mergeTrainerPtSaleRows(fromPt, fromRevenue);
+  }
+
+  /**
+   * PT work units in [from, to] with earnMinor from the calendar-month ladder
+   * (full month volume), matching ЗП when the report period is a partial month.
+   */
+  async listPtUnitsWithMonthLadder(
+    clubId: string,
+    performerId: string,
+    from: string,
+    to: string,
+  ): Promise<{
+    units: WorkUnit[];
+    profile?: StaffPayProfile;
+    ladderPercent: number | null;
+  }> {
+    this.assertPeriod(from, to);
+    const performer = await this.prisma.user.findFirst({
+      where: { id: performerId, clubId },
+      include: { roles: true },
+    });
+    if (!performer) throw new NotFoundException('Сотрудник не найден');
+    const trainerFlags = trainerPayFlags({
+      roles: performer.roles.map((r) => r.role),
+      groupPrograms: performer.groupPrograms,
+      trainerStaff: performer.trainerStaff,
+      trainerClub: performer.trainerClub,
+      trainerReformers: performer.trainerReformers,
+      trainerGroupsSet: performer.trainerGroupsSet,
+    });
+    const compensation = await this.resolveCompensation(
+      clubId,
+      performerId,
+      from,
+      to,
+    );
+    const profile = payProfileForCalculation(
+      asPayProfile(compensation?.payProfile),
+      trainerFlags,
+    );
+    const rates = await this.listRates(clubId);
+    const months = calendarMonthsOverlapping(from, to);
+    const out: WorkUnit[] = [];
+    let ladderPercent: number | null = null;
+    const hasReformerScheme = allPaySlices(profile).some(
+      (s) => s.track === 'REFORMER',
+    );
+    const ptSlice = allPaySlices(profile).find(
+      (s) => s.track === 'PT' || s.track === 'CLUB',
+    );
+
+    for (const m of months) {
+      const monthUnits = await this.listWorkUnits(
+        clubId,
+        performerId,
+        m.from,
+        m.to,
+      );
+      this.annotateUnitEarnings(monthUnits, rates, profile);
+      if (ptSlice) {
+        const trustedPt = monthUnits.filter(
+          (x) =>
+            x.payrollTrusted &&
+            x.kind === 'PT' &&
+            !x.isPtAllSports &&
+            !(hasReformerScheme && x.isReformerPersonal) &&
+            !(hasReformerScheme && x.roomKey === 'REFORMER') &&
+            !(x.roomKey === 'REFORMER' && x.isReformerPersonal),
+        );
+        const pct = resolvePtPercent(
+          trustedPt.length,
+          ptSlice.ptPercentTiers,
+        );
+        if (ladderPercent == null || pct > ladderPercent) {
+          ladderPercent = pct;
+        }
+      }
+      for (const u of monthUnits) {
+        if (u.kind !== 'PT') continue;
+        const day = u.occurredAt.slice(0, 10);
+        if (day >= from && day <= to) out.push(u);
+      }
+    }
+    out.sort(
+      (a, b) =>
+        new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime(),
+    );
+    return { units: out, profile, ladderPercent };
   }
 
   /**

@@ -6,10 +6,12 @@ import type {
 } from '@fitgo/shared-types';
 import { clientIssueLabel } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
+import { PtTimesheetStatsPanel } from '@/components/pt-timesheet/pt-timesheet-stats-panel';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
 export default function AdminPtTimesheetPage() {
+  const [tab, setTab] = useState<'journal' | 'stats'>('journal');
   const [issues, setIssues] = useState<PtClientIssueQueueItem[]>([]);
   const [sheets, setSheets] = useState<TrainerDaySheetDto[]>([]);
   const [selected, setSelected] = useState<TrainerDaySheetDto | null>(null);
@@ -28,18 +30,50 @@ export default function AdminPtTimesheetPage() {
   };
 
   useEffect(() => {
+    if (tab !== 'journal') return;
     load().catch((e) => setMessage(e.message));
-  }, []);
+  }, [tab]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 pb-8">
       <header>
         <h1 className="text-2xl font-semibold text-white">Табели ПТ</h1>
         <p className="text-sm text-slate-400">
-          Очередь ошибочных телефонов / late-add и утверждение дневных табелей.
+          {tab === 'journal'
+            ? 'Очередь ошибочных телефонов / late-add и утверждение дневных табелей.'
+            : 'Статистика проведённых ПТ по тренерам: микс оплат, клиенты, мотивация.'}
         </p>
       </header>
 
+      <div className="flex gap-1 rounded-xl border border-slate-800 p-1">
+        <button
+          type="button"
+          className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
+            tab === 'journal'
+              ? 'bg-fitgo-600 text-white'
+              : 'text-slate-400 hover:text-white'
+          }`}
+          onClick={() => setTab('journal')}
+        >
+          Журнал
+        </button>
+        <button
+          type="button"
+          className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
+            tab === 'stats'
+              ? 'bg-fitgo-600 text-white'
+              : 'text-slate-400 hover:text-white'
+          }`}
+          onClick={() => setTab('stats')}
+        >
+          Статистика
+        </button>
+      </div>
+
+      {tab === 'stats' && <PtTimesheetStatsPanel audience="admin" />}
+
+      {tab === 'journal' && (
+        <>
       {message && (
         <p className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-200">
           {message}
@@ -301,6 +335,8 @@ export default function AdminPtTimesheetPage() {
             Утвердить табель
           </button>
         </section>
+      )}
+        </>
       )}
 
     </div>

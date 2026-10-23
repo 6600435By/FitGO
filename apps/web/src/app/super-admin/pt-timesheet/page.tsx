@@ -2,6 +2,7 @@
 
 import type { TrainerDaySheetDto } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
+import { PtTimesheetStatsPanel } from '@/components/pt-timesheet/pt-timesheet-stats-panel';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -10,6 +11,7 @@ function money(minor: number, currency: string) {
 }
 
 export default function SuperAdminPtTimesheetPage() {
+  const [tab, setTab] = useState<'journal' | 'stats'>('journal');
   const [sheets, setSheets] = useState<TrainerDaySheetDto[]>([]);
   const [selected, setSelected] = useState<TrainerDaySheetDto | null>(null);
   const [forceIds, setForceIds] = useState<string[]>([]);
@@ -22,18 +24,50 @@ export default function SuperAdminPtTimesheetPage() {
   };
 
   useEffect(() => {
+    if (tab !== 'journal') return;
     load().catch((e) => setMessage(e.message));
-  }, []);
+  }, [tab]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-5 pb-8">
       <header>
         <h1 className="text-2xl font-semibold text-white">Табели ПТ → ЗП</h1>
         <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
-          Финальная проверка. Неоплаченное не в мотивации, кроме force-pay.
+          {tab === 'journal'
+            ? 'Финальная проверка. Неоплаченное не в мотивации, кроме force-pay.'
+            : 'Статистика проведённых ПТ по тренерам клуба.'}
         </p>
       </header>
 
+      <div className="flex gap-1 rounded-xl border border-slate-800 p-1">
+        <button
+          type="button"
+          className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
+            tab === 'journal'
+              ? 'bg-fitgo-600 text-white'
+              : 'text-slate-400 hover:text-white'
+          }`}
+          onClick={() => setTab('journal')}
+        >
+          Журнал
+        </button>
+        <button
+          type="button"
+          className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
+            tab === 'stats'
+              ? 'bg-fitgo-600 text-white'
+              : 'text-slate-400 hover:text-white'
+          }`}
+          onClick={() => setTab('stats')}
+        >
+          Статистика
+        </button>
+      </div>
+
+      {tab === 'stats' && <PtTimesheetStatsPanel audience="super" />}
+
+      {tab === 'journal' && (
+        <>
       {message && (
         <p className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-200">
           {message}
@@ -156,6 +190,8 @@ export default function SuperAdminPtTimesheetPage() {
             </button>
           </div>
         </section>
+      )}
+        </>
       )}
     </div>
   );

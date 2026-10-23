@@ -7,6 +7,8 @@ import {
   Patch,
   Post,
   Query,
+  Res,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { UserRole } from '@fitgo/shared-types';
@@ -17,13 +19,28 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { PtTimesheetStatsService } from './pt-timesheet-stats.service';
 import { PtTimesheetService } from './pt-timesheet.service';
 
 @Controller('trainer/pt-timesheet')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.TRAINER)
 export class TrainerPtTimesheetController {
-  constructor(private readonly svc: PtTimesheetService) {}
+  constructor(
+    private readonly svc: PtTimesheetService,
+    private readonly stats: PtTimesheetStatsService,
+  ) {}
+
+  @Get('stats')
+  trainerStats(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.stats.getReport(requireClubId(user), from, to, {
+      trainerId: user.sub,
+    });
+  }
 
   @Get('shifts')
   shifts(
@@ -98,7 +115,45 @@ export class TrainerPtTimesheetController {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
 export class AdminPtTimesheetController {
-  constructor(private readonly svc: PtTimesheetService) {}
+  constructor(
+    private readonly svc: PtTimesheetService,
+    private readonly stats: PtTimesheetStatsService,
+  ) {}
+
+  @Get('stats')
+  adminStats(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('trainerId') trainerId?: string,
+  ) {
+    return this.stats.getReport(requireClubId(user), from, to, {
+      trainerId: trainerId?.trim() || null,
+    });
+  }
+
+  @Get('stats.xlsx')
+  async adminStatsXlsx(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('trainerId') trainerId?: string,
+    @Res({ passthrough: true })
+    res?: { setHeader: (k: string, v: string) => void },
+  ) {
+    const buf = await this.stats.exportXlsx(requireClubId(user), from, to, {
+      trainerId: trainerId?.trim() || null,
+    });
+    res?.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res?.setHeader(
+      'Content-Disposition',
+      `attachment; filename="pt_stats_${from}_${to}.xlsx"`,
+    );
+    return new StreamableFile(buf);
+  }
 
   @Get('client-issues')
   clientIssues(@CurrentUser() user: JwtPayload) {
@@ -170,7 +225,45 @@ export class AdminPtTimesheetController {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
 export class SuperAdminPtTimesheetController {
-  constructor(private readonly svc: PtTimesheetService) {}
+  constructor(
+    private readonly svc: PtTimesheetService,
+    private readonly stats: PtTimesheetStatsService,
+  ) {}
+
+  @Get('stats')
+  saStats(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('trainerId') trainerId?: string,
+  ) {
+    return this.stats.getReport(requireClubId(user), from, to, {
+      trainerId: trainerId?.trim() || null,
+    });
+  }
+
+  @Get('stats.xlsx')
+  async saStatsXlsx(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('trainerId') trainerId?: string,
+    @Res({ passthrough: true })
+    res?: { setHeader: (k: string, v: string) => void },
+  ) {
+    const buf = await this.stats.exportXlsx(requireClubId(user), from, to, {
+      trainerId: trainerId?.trim() || null,
+    });
+    res?.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res?.setHeader(
+      'Content-Disposition',
+      `attachment; filename="pt_stats_${from}_${to}.xlsx"`,
+    );
+    return new StreamableFile(buf);
+  }
 
   @Get('sheets')
   listSheets(

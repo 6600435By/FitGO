@@ -1028,6 +1028,110 @@ export function isMultiVisitPackSale(
   return fromName != null && fromName > 1;
 }
 
+/**
+ * Classify conducted PT funding for timesheet stats.
+ * 1C `paySource` is often PACKAGE whenever paymentBasis is set — use basis text.
+ */
+export function classifyPtSessionOrigin(input: {
+  paymentBasis?: string | null;
+  sessionTitle?: string | null;
+  packageQty?: number | null;
+  /** True when the row comes from a one-shot TrainerPtSale (not a class write-off). */
+  fromSaleLine?: boolean;
+  isComplimentary?: boolean;
+}): import('./pt-timesheet').PtStatsOrigin {
+  if (
+    input.isComplimentary ||
+    isComplimentarySessionTitle(input.paymentBasis) ||
+    isComplimentarySessionTitle(input.sessionTitle)
+  ) {
+    return 'GIFT';
+  }
+  if (input.fromSaleLine) return 'ONE_SHOT';
+
+  const basis = (input.paymentBasis ?? '').trim();
+  if (!basis) return 'UNKNOWN';
+
+  const lower = basis
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ');
+  if (/подарок|gift|комплимент|бесплат/.test(lower)) return 'GIFT';
+
+  const quoted = extractQuotedPackNameFromBasis(basis)?.toLowerCase() ?? '';
+  const title = (quoted || lower).replace(/ё/g, 'е');
+
+  const isVip =
+    /^vip\b/.test(title) ||
+    title.startsWith('vip(') ||
+    title.startsWith('vip ');
+  const membershipHint =
+    lower.startsWith('членств') ||
+    (lower.includes('членств') && !lower.includes('пакет услуг')) ||
+    isVip ||
+    title.includes('единый') ||
+    title.includes('безлимит') ||
+    title.includes('все включено') ||
+    title.includes('легкий старт');
+  if (membershipHint) return 'MEMBERSHIP';
+
+  const packCount =
+    parsePackVisitCountFromTitle(basis) ??
+    parsePackVisitCountFromTitle(quoted) ??
+    parsePackVisitCountFromTitle(input.sessionTitle) ??
+    (input.packageQty != null && input.packageQty > 0
+      ? input.packageQty
+      : null);
+
+  if (lower.includes('пакет услуг') || packCount != null) {
+    if (packCount != null && packCount > 1) return 'BLOCK';
+    if (packCount === 1) return 'ONE_SHOT';
+    if (lower.includes('пакет услуг')) return 'BLOCK';
+  }
+
+  if (/долг|рассроч/.test(lower)) return 'ONE_SHOT';
+  if (/оплач|нал|карт|безнал|лс|лицевой|продаж/.test(lower)) {
+    return 'ONE_SHOT';
+  }
+  if (/абонемент|квот/.test(lower)) return 'MEMBERSHIP';
+
+  return 'UNKNOWN';
+}
+
+/** Settlement label for a stats line (axis separate from origin). */
+export function classifyPtStatsPayment(input: {
+  origin: import('./pt-timesheet').PtStatsOrigin;
+  paymentBasis?: string | null;
+  isComplimentary?: boolean;
+  /** Sale line paymentStatus when from TrainerPtSale. */
+  salePaymentStatus?: string | null;
+  payrollTrusted?: boolean;
+}): import('./pt-timesheet').PtStatsPayment {
+  if (
+    input.isComplimentary ||
+    input.origin === 'GIFT' ||
+    isComplimentarySessionTitle(input.paymentBasis)
+  ) {
+    return 'GIFT';
+  }
+  const sale = (input.salePaymentStatus ?? '').toUpperCase();
+  if (sale === 'DEBT' || sale === 'UNPAID') return 'DEBT';
+  if (sale === 'PAID') return 'PAID';
+
+  const basis = (input.paymentBasis ?? '').trim().toLowerCase();
+  if (/долг|рассроч/.test(basis)) return 'DEBT';
+  if (input.origin === 'MEMBERSHIP' || input.origin === 'BLOCK') {
+    return 'WRITTEN_OFF';
+  }
+  if (input.origin === 'ONE_SHOT') {
+    if (input.payrollTrusted === false) return 'DEBT';
+    return 'PAID';
+  }
+  if (!basis) return 'UNKNOWN';
+  if (/оплач|нал|карт|безнал|лс|лицевой|продаж/.test(basis)) return 'PAID';
+  return 'UNKNOWN';
+}
+
 export function isComplimentarySessionTitle(
   title: string | null | undefined,
 ): boolean {
