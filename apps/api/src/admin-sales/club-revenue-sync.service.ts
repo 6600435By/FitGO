@@ -450,8 +450,13 @@ export class ClubRevenueSyncService {
       },
       select: { id: true, externalId: true },
     });
+    // Keep :free: partner sales (AllSports биоимпеданс) even if this pass
+    // missed /sales — cash scope never returns 0 BYN lines.
     const toDeactivate = existing
-      .filter((r) => !seen.has(r.externalId))
+      .filter(
+        (r) =>
+          !seen.has(r.externalId) && !r.externalId.includes(':free:'),
+      )
       .map((r) => r.id);
     let deactivated = 0;
     if (toDeactivate.length) {
@@ -489,7 +494,9 @@ export class ClubRevenueSyncService {
     }
 
     if (!options.skipLegacyCleanup) {
-      // Old payment/deposit rows without :cash: (pre-scope export) — not unpaid.
+      // Old payment/deposit rows without :cash: (pre-scope export).
+      // Never touch unpaid, :free: partner sales, or operationType=sale
+      // (0 BYN AllSports биоимпеданс from scope=sales — no :cash: key).
       const legacy = await this.prisma.clubRevenueEntry.updateMany({
         where: {
           clubId,
@@ -501,10 +508,14 @@ export class ClubRevenueSyncService {
               'personal_deposit',
               'personal_credit',
               'personal_burn',
-              'sale',
             ],
           },
-          NOT: { externalId: { contains: ':cash:' } },
+          NOT: {
+            OR: [
+              { externalId: { contains: ':cash:' } },
+              { externalId: { contains: ':free:' } },
+            ],
+          },
         },
         data: { isActive: false, syncedAt: new Date() },
       });

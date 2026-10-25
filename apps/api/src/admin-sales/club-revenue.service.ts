@@ -331,8 +331,18 @@ export class ClubRevenueService {
           saleAmount: { lte: 0.009 },
           paidAmount: { lte: 0.009 },
           OR: [
-            { productName: { contains: 'биоимпеданс', mode: 'insensitive' } },
-            { productName: { contains: 'bioimped', mode: 'insensitive' } },
+            {
+              productName: {
+                contains: 'биоимпеданс',
+                mode: 'insensitive' as const,
+              },
+            },
+            {
+              productName: {
+                contains: 'bioimped',
+                mode: 'insensitive' as const,
+              },
+            },
             { countsTowardMotivation: true },
           ],
         },
