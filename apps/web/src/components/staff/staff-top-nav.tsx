@@ -34,7 +34,7 @@ export function StaffTopNavLinks({ items }: { items: StaffTopNavItem[] }) {
             key={item.href}
             href={item.href}
             className={cn(
-              'relative shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium transition',
+              'relative shrink-0 rounded-lg px-2.5 py-1 text-xs font-medium transition touch-manipulation',
               active
                 ? 'bg-fitgo-500/20 text-fitgo-300'
                 : 'text-slate-400 hover:text-white',

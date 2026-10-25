@@ -230,18 +230,25 @@ export function AppShell({
     ?.replace(/^https?:\/\//, '')
     .replace(/\/$/, '');
 
+  // Fill width in phone landscape (and md+ when wide). Plain max-w-lg leaves
+  // empty side gutters after rotate on trainers / clients.
   const shellWidth = wide
-    ? 'mx-auto min-h-screen w-full max-w-lg md:max-w-none'
-    : 'mx-auto min-h-screen max-w-lg';
+    ? 'mx-auto min-h-dvh w-full max-w-lg md:max-w-none phone-land:max-w-none'
+    : 'mx-auto min-h-dvh w-full max-w-lg phone-land:max-w-none';
   const navWidth = wide
-    ? 'mx-auto w-full max-w-lg md:max-w-none'
-    : 'mx-auto max-w-lg';
+    ? 'mx-auto w-full max-w-lg md:max-w-none phone-land:max-w-none'
+    : 'mx-auto w-full max-w-lg phone-land:max-w-none';
 
   // Include notch / status bar: PWA standalone uses viewport-fit=cover +
   // apple-mobile-web-app-status-bar-style=black-translucent.
   const headerH = adminChrome
     ? '[--app-header-h:calc(2.5rem+env(safe-area-inset-top,0px))]'
     : '[--app-header-h:calc(5.5rem+env(safe-area-inset-top,0px))]';
+
+  // Solid header (no backdrop-blur): iOS PWA + translucent status bar otherwise
+  // smears the bar (esp. iPhone 12) and can break hit-testing after rotate.
+  const headerSafeX =
+    'pl-[max(0.75rem,env(safe-area-inset-left,0px))] pr-[max(0.75rem,env(safe-area-inset-right,0px))] md:pl-[max(1rem,env(safe-area-inset-left,0px))] md:pr-[max(1rem,env(safe-area-inset-right,0px))]';
 
   return (
     <div
@@ -255,23 +262,24 @@ export function AppShell({
             : bottomNavMdOnly
               ? 'pb-6'
               : adminChrome
-                ? 'pb-24 md:pb-6'
+                ? 'pb-24 md:pb-6 phone-land:pb-24'
                 : 'pb-24',
       )}
     >
       {adminChrome ? (
         <header
           className={cn(
-            'admin-chrome admin-chrome-bar sticky top-0 z-30 border-b border-slate-800 bg-slate-950/95 pt-[env(safe-area-inset-top,0px)] backdrop-blur',
+            'admin-chrome admin-chrome-bar sticky top-0 z-30 border-b border-slate-800 bg-slate-950 pt-[env(safe-area-inset-top,0px)]',
+            headerSafeX,
             hideHeader && 'pointer-events-none invisible absolute',
           )}
         >
-          <div className="flex h-10 items-center gap-2 px-3 md:px-4">
+          <div className="flex h-10 items-center gap-2">
             {canGoBack ? (
               <button
                 type="button"
                 onClick={goBack}
-                className="admin-chrome-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 hover:text-white"
+                className="admin-chrome-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 text-slate-300 touch-manipulation hover:bg-slate-800 hover:text-white"
                 aria-label="Назад"
                 title="Назад"
               >
@@ -281,7 +289,7 @@ export function AppShell({
             {brandHref ? (
               <Link
                 href={brandHref}
-                className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-fitgo-400 hover:text-fitgo-300"
+                className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-fitgo-400 touch-manipulation hover:text-fitgo-300"
               >
                 FITGO
               </Link>
@@ -294,9 +302,12 @@ export function AppShell({
               <div
                 className={cn(
                   'min-w-0 flex-1 items-center gap-1 overflow-x-auto',
-                  topNavAlways ? 'flex' : 'hidden md:flex',
+                  // phone-land: stay on bottom nav — md width alone is not desktop
+                  topNavAlways
+                    ? 'flex'
+                    : 'hidden md:flex phone-land:!hidden',
                   bottomNavMdOnly
-                    ? 'justify-start md:justify-center'
+                    ? 'justify-start md:justify-center phone-land:justify-start'
                     : 'md:justify-start',
                 )}
               >
@@ -310,7 +321,7 @@ export function AppShell({
               <button
                 type="button"
                 onClick={logout}
-                className="admin-chrome-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-white"
+                className="admin-chrome-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 text-slate-400 touch-manipulation hover:bg-slate-800 hover:text-white"
                 aria-label="Выйти"
                 title="Выйти"
               >
@@ -322,7 +333,7 @@ export function AppShell({
             <div
               className={cn(
                 'border-t border-slate-800/80 px-2 py-1.5',
-                !bottomNavMdOnly && 'md:hidden',
+                !bottomNavMdOnly && 'md:hidden phone-land:!block',
               )}
             >
               {mobileSubNav}
@@ -332,7 +343,8 @@ export function AppShell({
       ) : (
         <header
           className={cn(
-            'admin-chrome sticky top-0 z-10 min-h-[var(--app-header-h)] border-b border-slate-800 bg-slate-950/90 px-4 pb-4 pt-[calc(1rem+env(safe-area-inset-top,0px))] backdrop-blur md:px-6',
+            'admin-chrome sticky top-0 z-30 min-h-[var(--app-header-h)] border-b border-slate-800 bg-slate-950 pb-4 pt-[calc(1rem+env(safe-area-inset-top,0px))]',
+            headerSafeX,
             hideHeader && 'pointer-events-none invisible absolute',
           )}
         >
@@ -342,7 +354,7 @@ export function AppShell({
                 <button
                   type="button"
                   onClick={goBack}
-                  className="admin-chrome-btn mt-0.5 shrink-0 rounded-xl border border-slate-700 p-2 text-slate-300 hover:bg-slate-800 hover:text-white"
+                  className="admin-chrome-btn mt-0.5 shrink-0 rounded-xl border border-slate-700 p-2 text-slate-300 touch-manipulation hover:bg-slate-800 hover:text-white"
                   aria-label="Назад"
                   title="Назад"
                 >
@@ -357,7 +369,7 @@ export function AppShell({
                   <button
                     type="button"
                     onClick={() => setClubOpen(true)}
-                    className="group flex max-w-full items-center gap-1 text-left"
+                    className="group flex max-w-full items-center gap-1 text-left touch-manipulation"
                     aria-haspopup="dialog"
                     aria-expanded={clubOpen}
                   >
@@ -381,7 +393,7 @@ export function AppShell({
               <button
                 type="button"
                 onClick={logout}
-                className="admin-chrome-btn shrink-0 rounded-xl border border-slate-700 p-2 text-slate-400 hover:bg-slate-800 hover:text-white"
+                className="admin-chrome-btn shrink-0 rounded-xl border border-slate-700 p-2 text-slate-400 touch-manipulation hover:bg-slate-800 hover:text-white"
                 aria-label="Выйти"
               >
                 <LogOut className="h-5 w-5" />
@@ -405,17 +417,22 @@ export function AppShell({
 
       <nav
         className={cn(
-          'admin-chrome fixed bottom-0 left-0 right-0 border-t border-slate-800 bg-slate-950/95 backdrop-blur',
+          'admin-chrome fixed bottom-0 left-0 right-0 z-20 border-t border-slate-800 bg-slate-950',
           'pb-[env(safe-area-inset-bottom)]',
+          'pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]',
           hideBottomNav && 'hidden',
           bottomNavMdOnly && 'hidden',
-          !hideBottomNav && !bottomNavMdOnly && adminChrome && 'md:hidden',
+          // Keep bottom nav on phone landscape even when width ≥ md
+          !hideBottomNav &&
+            !bottomNavMdOnly &&
+            adminChrome &&
+            'md:hidden phone-land:!block',
         )}
       >
         <div
           className={cn(
             navWidth,
-            'flex items-stretch gap-0.5 px-1.5 pt-1.5 pb-1.5 md:justify-start md:gap-1 md:overflow-x-auto md:px-2',
+            'flex items-stretch gap-0.5 px-1.5 pt-1.5 pb-1.5 md:justify-start md:gap-1 md:overflow-x-auto md:px-2 phone-land:!justify-stretch phone-land:!gap-0.5 phone-land:!overflow-visible phone-land:!px-1.5',
           )}
         >
           {navItems.map((item) => {
@@ -425,7 +442,7 @@ export function AppShell({
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  'relative flex min-h-12 min-w-0 flex-1 items-center justify-center rounded-xl px-1 py-2 text-center text-[11px] font-medium leading-tight transition md:min-h-0 md:flex-none md:shrink-0 md:px-3 md:text-sm',
+                  'relative flex min-h-12 min-w-0 flex-1 items-center justify-center rounded-xl px-1 py-2 text-center text-[11px] font-medium leading-tight transition touch-manipulation md:min-h-0 md:flex-none md:shrink-0 md:px-3 md:text-sm phone-land:!min-h-12 phone-land:!flex-1 phone-land:!px-1 phone-land:!text-[11px]',
                   active
                     ? 'bg-fitgo-500/20 text-fitgo-300'
                     : 'text-slate-400 hover:text-white',
@@ -447,7 +464,7 @@ export function AppShell({
                 key={`desk-${item.href}`}
                 href={item.href}
                 className={cn(
-                  'relative hidden shrink-0 rounded-xl px-3 py-2 text-center text-sm transition md:inline-flex md:items-center',
+                  'relative hidden shrink-0 rounded-xl px-3 py-2 text-center text-sm transition md:inline-flex md:items-center phone-land:!hidden',
                   active
                     ? 'bg-fitgo-500/20 text-fitgo-300'
                     : 'text-slate-400 hover:text-white',
@@ -467,7 +484,7 @@ export function AppShell({
               type="button"
               onClick={() => setMoreOpen(true)}
               className={cn(
-                'flex min-h-12 min-w-0 flex-1 items-center justify-center rounded-xl px-1 py-2 text-center text-[11px] font-medium leading-tight transition md:hidden',
+                'flex min-h-12 min-w-0 flex-1 items-center justify-center rounded-xl px-1 py-2 text-center text-[11px] font-medium leading-tight transition touch-manipulation md:hidden phone-land:!flex',
                 moreActive
                   ? 'bg-fitgo-500/20 text-fitgo-300'
                   : 'text-slate-400 hover:text-white',

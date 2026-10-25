@@ -1,4 +1,5 @@
 import type { Config } from 'tailwindcss';
+import plugin from 'tailwindcss/plugin';
 
 const config: Config = {
   content: ['./src/**/*.{js,ts,jsx,tsx,mdx}'],
@@ -20,7 +21,16 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    plugin(({ addVariant }) => {
+      // Phone landscape is often ≥768px wide, so Tailwind `md:` treats it as
+      // desktop. Keep mobile chrome (bottom nav, phone-width rules) instead.
+      addVariant(
+        'phone-land',
+        '@media (orientation: landscape) and (max-height: 500px)',
+      );
+    }),
+  ],
 };
 
 export default config;
