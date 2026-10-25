@@ -47,8 +47,8 @@ export class ClubScheduleController {
   }
 
   /**
-   * Trainer schedule: own GROUP (GP), or reformer-hall GROUP+PT when
-   * «Реформеры» is set. Performer is always the current trainer.
+   * Trainer schedule: own GROUP / PT according to staff flags and optional
+   * `types` filter. Performer is always the current trainer.
    */
   @Get('trainer/club-schedule')
   @Roles(UserRole.TRAINER)
@@ -58,6 +58,7 @@ export class ClubScheduleController {
     return this.clubSchedule.listForTrainer(user, {
       from: query.from,
       to: query.to,
+      types: query.types,
       status: query.status,
       approval: query.approval,
     });

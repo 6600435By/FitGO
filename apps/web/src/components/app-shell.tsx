@@ -262,8 +262,8 @@ export function AppShell({
             : bottomNavMdOnly
               ? 'pb-6'
               : adminChrome
-                ? 'pb-24 md:pb-6 phone-land:pb-24'
-                : 'pb-24',
+                ? 'pb-24 md:pb-6 phone-land:pb-14'
+                : 'pb-24 phone-land:pb-14',
       )}
     >
       {adminChrome ? (
@@ -432,7 +432,7 @@ export function AppShell({
         <div
           className={cn(
             navWidth,
-            'flex items-stretch gap-0.5 px-1.5 pt-1.5 pb-1.5 md:justify-start md:gap-1 md:overflow-x-auto md:px-2 phone-land:!justify-stretch phone-land:!gap-0.5 phone-land:!overflow-visible phone-land:!px-1.5',
+            'flex items-stretch gap-0.5 px-1.5 pt-1.5 pb-1.5 md:justify-start md:gap-1 md:overflow-x-auto md:px-2 phone-land:!justify-stretch phone-land:!gap-0.5 phone-land:!overflow-visible phone-land:!px-1 phone-land:!pt-1 phone-land:!pb-1',
           )}
         >
           {navItems.map((item) => {
@@ -442,13 +442,15 @@ export function AppShell({
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  'relative flex min-h-12 min-w-0 flex-1 items-center justify-center rounded-xl px-1 py-2 text-center text-[11px] font-medium leading-tight transition touch-manipulation md:min-h-0 md:flex-none md:shrink-0 md:px-3 md:text-sm phone-land:!min-h-12 phone-land:!flex-1 phone-land:!px-1 phone-land:!text-[11px]',
+                  'relative flex min-h-12 min-w-0 flex-1 items-center justify-center rounded-xl px-1 py-2 text-center text-[11px] font-medium leading-tight transition touch-manipulation md:min-h-0 md:flex-none md:shrink-0 md:px-3 md:text-sm phone-land:!min-h-8 phone-land:!flex-1 phone-land:!px-0.5 phone-land:!py-1 phone-land:!text-[10px]',
                   active
                     ? 'bg-fitgo-500/20 text-fitgo-300'
                     : 'text-slate-400 hover:text-white',
                 )}
               >
-                <span className="line-clamp-2">{item.label}</span>
+                <span className="line-clamp-2 phone-land:line-clamp-1">
+                  {item.label}
+                </span>
                 {item.badge != null && item.badge > 0 ? (
                   <span className="absolute right-0.5 top-0.5 inline-flex min-w-[1.1rem] justify-center rounded-full bg-fitgo-500 px-1 text-[9px] font-semibold leading-4 text-white">
                     {item.badge > 99 ? '99+' : item.badge}
@@ -484,7 +486,7 @@ export function AppShell({
               type="button"
               onClick={() => setMoreOpen(true)}
               className={cn(
-                'flex min-h-12 min-w-0 flex-1 items-center justify-center rounded-xl px-1 py-2 text-center text-[11px] font-medium leading-tight transition touch-manipulation md:hidden phone-land:!flex',
+                'flex min-h-12 min-w-0 flex-1 items-center justify-center rounded-xl px-1 py-2 text-center text-[11px] font-medium leading-tight transition touch-manipulation md:hidden phone-land:!flex phone-land:!min-h-8 phone-land:!px-0.5 phone-land:!py-1 phone-land:!text-[10px]',
                 moreActive
                   ? 'bg-fitgo-500/20 text-fitgo-300'
                   : 'text-slate-400 hover:text-white',
@@ -492,7 +494,9 @@ export function AppShell({
               aria-haspopup="dialog"
               aria-expanded={moreOpen}
             >
-              {moreLabel}
+              <span className="line-clamp-2 phone-land:line-clamp-1">
+                {moreLabel}
+              </span>
             </button>
           ) : null}
         </div>

@@ -13,7 +13,17 @@ export interface FloorStaffHomeSession {
   subtitle?: string;
   booked?: number;
   capacity?: number;
+  /** GROUP / PT when both appear on the trainer home list. */
+  kind?: 'GROUP' | 'PT' | 'SPA';
   status: 'UPCOMING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED';
+}
+
+/** Conducted session counts for the current month (through today). */
+export interface FloorStaffConductedCounts {
+  from: string;
+  to: string;
+  group: number;
+  pt: number;
 }
 
 export interface FloorStaffControlItem {
@@ -72,5 +82,7 @@ export interface FloorStaffHome {
   };
   control: FloorStaffControlQueue;
   month: FloorStaffMonthStats;
+  /** Trainer: completed GP / PT counts for deep-links into booking control. */
+  conducted?: FloorStaffConductedCounts;
   spa?: FloorStaffSpaExtras;
 }

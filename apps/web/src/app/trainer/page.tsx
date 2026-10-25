@@ -154,10 +154,18 @@ function PtTrainerHome() {
 
 export default function TrainerHomePage() {
   const user = getUser();
-  const { groupCabinet } = trainerCabinetMode(user);
+  const { groupCabinet, showPt, showGp } = trainerCabinetMode(user);
 
-  if (groupCabinet) {
-    return <FloorStaffHomePage role="gp" />;
+  // Floor home: GP / reformers / PT (conducted counts + today list).
+  if (groupCabinet || showPt) {
+    return (
+      <FloorStaffHomePage
+        role="gp"
+        scheduleHref={
+          showGp ? '/trainer/gp-schedule' : '/trainer/schedule'
+        }
+      />
+    );
   }
 
   return <PtTrainerHome />;

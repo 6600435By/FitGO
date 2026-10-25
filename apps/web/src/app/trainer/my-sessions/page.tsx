@@ -10,12 +10,11 @@ import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 function TrainerMySessionsInner() {
   const searchParams = useSearchParams();
   const user = getUser();
-  const { groupCabinet, isGp, isReformer } = trainerCabinetMode(user);
-  // GP-only: groups. Reformer: GROUP+PT (API filters to reformer hall).
+  const { groupCabinet, showPt, isReformer } = trainerCabinetMode(user);
+  // Pure GP (no PT / reformers): only GROUP. Otherwise All / GP / PT filter.
+  const allowKindFilter = showPt || isReformer;
   const fixedKind =
-    groupCabinet && isGp && !isReformer
-      ? ('GROUP' as const)
-      : undefined;
+    groupCabinet && !allowKindFilter ? ('GROUP' as const) : undefined;
   const initialFrom = searchParams.get('from')?.trim() || undefined;
   const initialTo = searchParams.get('to')?.trim() || undefined;
   const initialNeedsReview =
@@ -27,6 +26,22 @@ function TrainerMySessionsInner() {
   const initialSessionKey = searchParams.get('session')?.trim() || undefined;
   const initialClient = searchParams.get('client')?.trim() || undefined;
   const initialClientId = searchParams.get('clientId')?.trim() || undefined;
+  const kindRaw = searchParams.get('kind')?.trim()?.toUpperCase();
+  const initialKind =
+    kindRaw === 'GROUP' || kindRaw === 'PT' || kindRaw === 'ALL'
+      ? kindRaw
+      : undefined;
+  const statusRaw = searchParams.get('status')?.trim()?.toUpperCase();
+  const initialStatus =
+    statusRaw === 'COMPLETED' ||
+    statusRaw === 'SCHEDULED' ||
+    statusRaw === 'CANCELLED' ||
+    statusRaw === 'ALL'
+      ? statusRaw
+      : undefined;
+  const initialConducted =
+    searchParams.get('conducted') === '1' ||
+    searchParams.get('conducted') === 'true';
 
   const panelApi = useMemo(() => createTrainerBookingControlApi(), []);
 
@@ -44,6 +59,7 @@ function TrainerMySessionsInner() {
       approvalActor="performer"
       canViewHallPhotos
       fixedKind={fixedKind}
+      trainerKindFilter={allowKindFilter}
       approvalSegments={groupCabinet}
       initialFrom={initialFrom}
       initialTo={initialTo}
@@ -52,6 +68,9 @@ function TrainerMySessionsInner() {
       initialSessionKey={initialSessionKey}
       initialClient={initialClient}
       initialClientId={initialClientId}
+      initialKind={initialKind}
+      initialStatus={initialStatus}
+      initialConducted={initialConducted}
     />
   );
 }

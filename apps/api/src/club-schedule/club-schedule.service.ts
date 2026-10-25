@@ -361,13 +361,14 @@ export class ClubScheduleService {
 
   /**
    * Trainer schedule: own GROUP (all rooms if GP / reformer hall if reformer-only)
-   * plus own PT in the reformer hall when the Reformers flag is on.
+   * plus own PT when trainerStaff / trainerClub or Reformers is on.
    */
   async listForTrainer(
     user: JwtPayload,
     query: {
       from?: string;
       to?: string;
+      types?: string;
       status?: string;
       approval?: string;
     },
@@ -375,10 +376,40 @@ export class ClubScheduleService {
     const clubId = requireClubId(user);
     const me = await this.prisma.user.findUnique({
       where: { id: user.sub },
-      select: { groupPrograms: true, trainerReformers: true },
+      select: {
+        groupPrograms: true,
+        trainerReformers: true,
+        trainerStaff: true,
+        trainerClub: true,
+      },
     });
     const isReformer = Boolean(me?.trainerReformers);
     const isGp = Boolean(me?.groupPrograms);
+    const hasPt = Boolean(me?.trainerStaff || me?.trainerClub);
+    const allowPt = hasPt || isReformer;
+
+    const requested = (query.types ?? '')
+      .split(',')
+      .map((t) => t.trim().toUpperCase())
+      .filter(Boolean);
+    let types: string;
+    if (!allowPt) {
+      types = 'GROUP';
+    } else if (requested.length === 0 || requested.includes('GROUP,PT')) {
+      types = 'GROUP,PT';
+    } else if (requested.length === 1 && requested[0] === 'GROUP') {
+      types = 'GROUP';
+    } else if (requested.length === 1 && requested[0] === 'PT') {
+      types = 'PT';
+    } else if (
+      requested.includes('GROUP') &&
+      requested.includes('PT') &&
+      requested.length === 2
+    ) {
+      types = 'GROUP,PT';
+    } else {
+      types = 'GROUP,PT';
+    }
 
     let events = await this.list(
       clubId,
@@ -387,12 +418,18 @@ export class ClubScheduleService {
         to: query.to,
         status: query.status,
         approval: query.approval,
-        types: isReformer ? 'GROUP,PT' : 'GROUP',
+        types,
         staffIds: user.sub,
       }),
     );
 
-    if (isReformer && !isGp) {
+    if (isReformer && hasPt) {
+      events = events.filter(
+        (e) =>
+          e.type === 'PT' ||
+          (e.type === 'GROUP' && (isGp || isReformerHallSession(e.roomTitle, e.title))),
+      );
+    } else if (isReformer && !isGp) {
       events = events.filter((e) =>
         isReformerHallSession(e.roomTitle, e.title),
       );

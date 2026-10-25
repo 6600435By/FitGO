@@ -184,6 +184,16 @@ type Props = {
   initialClientId?: string;
   /** Hide kind filter (specialist SPA-only) */
   fixedKind?: BookingControlKind;
+  /**
+   * Trainer surface: All / GP / PT chips instead of the full kind select
+   * (no SPA / solarium).
+   */
+  trainerKindFilter?: boolean;
+  /**
+   * Deep-link from home «провёл за месяц»: show completed list without
+   * cutting by «На контроле / Прошли контроль» segments.
+   */
+  initialConducted?: boolean;
   title?: string;
   subtitle?: string;
   /**
@@ -394,6 +404,8 @@ export function BookingControlPanel({
   initialClient,
   initialClientId,
   fixedKind,
+  trainerKindFilter = false,
+  initialConducted = false,
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
   detailOnly = false,
@@ -412,6 +424,7 @@ export function BookingControlPanel({
       initialNeedsReview ||
       initialKind ||
       initialStatus ||
+      initialConducted ||
       initialPerformerId?.trim() ||
       initialPayTag?.trim() ||
       initialFlag?.trim() ||
@@ -440,7 +453,9 @@ export function BookingControlPanel({
         from: initialFrom?.trim() || defaults.from,
         to: initialTo?.trim() || defaults.to,
         kind: fixedKind ?? initialKind?.toUpperCase() ?? defaults.kind,
-        status: initialStatus?.toUpperCase() || defaults.status,
+        status:
+          initialStatus?.toUpperCase() ||
+          (initialConducted ? 'COMPLETED' : defaults.status),
         payment: initialPayment || defaults.payment,
         payTag: initialPayTag?.toUpperCase() || '',
         flag:
@@ -504,6 +519,7 @@ export function BookingControlPanel({
   const [approvalSegment, setApprovalSegment] = useState<
     'pending' | 'done'
   >('pending');
+  const [conductedMode, setConductedMode] = useState(Boolean(initialConducted));
   const [needsReview, setNeedsReview] = useState(Boolean(boot.needsReview));
   const [clientFilter, setClientFilter] = useState(
     typeof boot.clientFilter === 'string' ? boot.clientFilter : '',
@@ -835,7 +851,10 @@ export function BookingControlPanel({
 
   const visible = useMemo(() => {
     let rows = items;
-    if (sourceFilter === 'SALE') {
+    // Home «провёл» counts exclude one-off PT sales rows.
+    if (conductedMode) {
+      rows = rows.filter((i) => i.source !== 'SALE' && i.payTag !== 'SALE');
+    } else if (sourceFilter === 'SALE') {
       rows = rows.filter((i) => i.source === 'SALE' || i.payTag === 'SALE');
     } else if (sourceFilter === '1C') {
       rows = rows.filter((i) => i.source !== 'SALE');
@@ -859,7 +878,7 @@ export function BookingControlPanel({
         return false;
       });
     }
-    if (approvalSegments) {
+    if (approvalSegments && !conductedMode) {
       rows = rows.filter((i) => {
         if (new Date(i.startAt).getTime() > nowMs) return false;
         if (i.status === 'CANCELLED') return false;
@@ -881,6 +900,7 @@ export function BookingControlPanel({
     performerOptions,
     approvalSegments,
     approvalSegment,
+    conductedMode,
     nowMs,
   ]);
 
@@ -1474,6 +1494,34 @@ export function BookingControlPanel({
     setTo(todayIso());
   };
 
+  const clearConductedMode = () => {
+    setConductedMode(false);
+    setStatus('ALL');
+    setNeedsReview(false);
+    const d = todayIso();
+    setFrom(d);
+    setTo(d);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      for (const key of [
+        'conducted',
+        'kind',
+        'status',
+        'from',
+        'to',
+        'needsReview',
+      ]) {
+        url.searchParams.delete(key);
+      }
+      const next = url.searchParams.toString();
+      window.history.replaceState(
+        {},
+        '',
+        next ? `${url.pathname}?${next}` : url.pathname,
+      );
+    }
+  };
+
   const refreshPeriodFrom1c = async () => {
     if (!api.refreshFrom1c || refreshBusy) return;
     setRefreshBusy(true);
@@ -1542,7 +1590,20 @@ export function BookingControlPanel({
         ) : null}
       </div>
 
-      {approvalSegments ? (
+      {conductedMode ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-full bg-fitgo-500/15 px-3 py-1 text-xs font-medium text-fitgo-300">
+            Проведённые за месяц
+          </span>
+          <button
+            type="button"
+            onClick={clearConductedMode}
+            className="text-xs text-slate-400 underline-offset-2 hover:text-fitgo-400 hover:underline"
+          >
+            сбросить
+          </button>
+        </div>
+      ) : approvalSegments ? (
         <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
@@ -1577,6 +1638,29 @@ export function BookingControlPanel({
         </div>
       ) : null}
 
+      {trainerKindFilter && !fixedKind ? (
+        <div className="flex flex-wrap gap-2">
+          {(
+            [
+              ['ALL', 'Все'],
+              ['GROUP', 'ГП'],
+              ['PT', 'ПТ'],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={
+                kind === value ? 'btn-primary text-xs' : 'btn-secondary text-xs'
+              }
+              onClick={() => setKind(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
         <div className="grid grid-cols-2 items-end gap-2 md:grid-cols-4">
           <DateField
@@ -1593,7 +1677,7 @@ export function BookingControlPanel({
             className="min-w-0"
             inputClassName="text-sm"
           />
-          {!fixedKind && (
+          {!fixedKind && !trainerKindFilter && (
             <label className="min-w-0 text-[11px] text-slate-500">
               Вид
               <select

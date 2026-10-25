@@ -3,6 +3,7 @@ import {
   OnexClassKind,
   OnexClassMemberAttendance,
   OnexClassStatus,
+  PersonalBookingStatus,
   SessionApprovalKind,
   SpaBookingStatus,
   SpaPaymentType,
@@ -435,38 +436,49 @@ export class FloorStaffHomeService {
         employeeCode: true,
         groupPrograms: true,
         trainerReformers: true,
+        trainerStaff: true,
+        trainerClub: true,
       },
     });
-    if (!me?.groupPrograms && !me?.trainerReformers) {
+    const isReformer = Boolean(me?.trainerReformers);
+    const isGp = Boolean(me?.groupPrograms);
+    const hasPt = Boolean(me?.trainerStaff || me?.trainerClub);
+    if (!isGp && !isReformer && !hasPt) {
       throw new ForbiddenException(
-        'Доступно тренерам групповых программ и реформеров',
+        'Доступно тренерам групповых программ, реформеров и ПТ',
       );
     }
-    const staffName = `${me.firstName} ${me.lastName}`.trim();
+    const staffName = `${me?.firstName ?? ''} ${me?.lastName ?? ''}`.trim();
     const performerCodes = [
       ...new Set(
-        [me.externalId, me.employeeCode]
+        [me?.externalId, me?.employeeCode]
           .map((c) => c?.trim())
           .filter((c): c is string => !!c),
       ),
     ];
-    if (!performerCodes.length) {
+    // FitGO PT uses trainerId — still load home when 1C codes are missing.
+    if (!performerCodes.length && !hasPt) {
       return this.emptyGpHome(staffName, today, cur, prev);
     }
 
-    const isReformer = Boolean(me.trainerReformers);
-    const isGp = Boolean(me.groupPrograms);
-    const kinds = isReformer
-      ? [OnexClassKind.GROUP, OnexClassKind.PT]
-      : [OnexClassKind.GROUP];
+    const kinds: OnexClassKind[] = [];
+    if (isGp || isReformer) kinds.push(OnexClassKind.GROUP);
+    if (hasPt || isReformer) kinds.push(OnexClassKind.PT);
+    if (!kinds.length) kinds.push(OnexClassKind.GROUP);
 
     const keepSession = (s: {
       kind: OnexClassKind;
       roomTitle: string | null;
       title: string;
     }) => {
+      if (s.kind === OnexClassKind.PT) {
+        if (hasPt) return true;
+        if (isReformer) return isReformerHallSession(s.roomTitle, s.title);
+        return false;
+      }
+      if (!isGp && !isReformer) return false;
       if (!isReformer) return true;
-      if (isGp && s.kind === OnexClassKind.GROUP) return true;
+      if (isGp) return true;
       return isReformerHallSession(s.roomTitle, s.title);
     };
 
@@ -474,63 +486,92 @@ export class FloorStaffHomeService {
       clubId,
       isActive: true,
       kind: { in: kinds },
-      employeeExternalId: { in: performerCodes },
+      ...(performerCodes.length
+        ? { employeeExternalId: { in: performerCodes } }
+        : { employeeExternalId: '__none__' }),
     };
 
-    const [todayRaw, curRaw, prevRaw, slots] = await Promise.all([
-      this.prisma.onexClassSession.findMany({
-        where: {
-          ...performerWhere,
-          startAt: { gte: dayStart, lte: dayEnd },
-        },
-        orderBy: { startAt: 'asc' },
-      }),
-      this.prisma.onexClassSession.findMany({
-        where: {
-          ...performerWhere,
-          startAt: { gte: cur.start, lte: cur.end },
-        },
-        select: {
-          kind: true,
-          externalId: true,
-          status: true,
-          title: true,
-          roomTitle: true,
-          attendedCount: true,
-          bookedCount: true,
-          capacity: true,
-          members: {
-            select: { attendance: true, cancelled: true },
+    const monthThroughToday = { gte: cur.start, lte: dayEnd };
+    const prevMonthThroughEnd = { gte: prev.start, lte: prev.end };
+
+    const [todayRaw, curRaw, prevRaw, slots, todayFitgoPt, curFitgoPt] =
+      await Promise.all([
+        this.prisma.onexClassSession.findMany({
+          where: {
+            ...performerWhere,
+            startAt: { gte: dayStart, lte: dayEnd },
           },
-        },
-      }),
-      this.prisma.onexClassSession.findMany({
-        where: {
-          ...performerWhere,
-          startAt: { gte: prev.start, lte: prev.end },
-        },
-        select: {
-          kind: true,
-          externalId: true,
-          status: true,
-          title: true,
-          roomTitle: true,
-          attendedCount: true,
-          bookedCount: true,
-          capacity: true,
-          members: {
-            select: { attendance: true, cancelled: true },
+          orderBy: { startAt: 'asc' },
+        }),
+        this.prisma.onexClassSession.findMany({
+          where: {
+            ...performerWhere,
+            startAt: monthThroughToday,
           },
-        },
-      }),
-      this.prisma.clubScheduleSlot.findMany({
-        where: {
-          clubId,
-          startAt: { gte: prev.start, lte: cur.end },
-        },
-        select: { externalId: true, capacity: true },
-      }),
-    ]);
+          select: {
+            kind: true,
+            externalId: true,
+            status: true,
+            title: true,
+            roomTitle: true,
+            attendedCount: true,
+            bookedCount: true,
+            capacity: true,
+            members: {
+              select: { attendance: true, cancelled: true },
+            },
+          },
+        }),
+        this.prisma.onexClassSession.findMany({
+          where: {
+            ...performerWhere,
+            startAt: prevMonthThroughEnd,
+          },
+          select: {
+            kind: true,
+            externalId: true,
+            status: true,
+            title: true,
+            roomTitle: true,
+            attendedCount: true,
+            bookedCount: true,
+            capacity: true,
+            members: {
+              select: { attendance: true, cancelled: true },
+            },
+          },
+        }),
+        this.prisma.clubScheduleSlot.findMany({
+          where: {
+            clubId,
+            startAt: { gte: prev.start, lte: cur.end },
+          },
+          select: { externalId: true, capacity: true },
+        }),
+        hasPt
+          ? this.prisma.personalTrainingBooking.findMany({
+              where: {
+                trainerId: user.sub,
+                status: { not: PersonalBookingStatus.CANCELLED },
+                startAt: { gte: dayStart, lte: dayEnd },
+              },
+              include: {
+                client: { select: { firstName: true, lastName: true } },
+              },
+              orderBy: { startAt: 'asc' },
+            })
+          : Promise.resolve([]),
+        hasPt
+          ? this.prisma.personalTrainingBooking.findMany({
+              where: {
+                trainerId: user.sub,
+                status: PersonalBookingStatus.COMPLETED,
+                startAt: monthThroughToday,
+              },
+              select: { id: true, crmDocRef: true },
+            })
+          : Promise.resolve([]),
+      ]);
 
     const todaySessions = todayRaw.filter(keepSession);
     const curSessions = curRaw.filter(keepSession);
@@ -538,7 +579,7 @@ export class FloorStaffHomeService {
 
     const cap = new Map(slots.map((s) => [s.externalId, s.capacity]));
 
-    const sessions: FloorStaffHomeSession[] = todaySessions.map((s) => ({
+    const onexToday: FloorStaffHomeSession[] = todaySessions.map((s) => ({
       id: s.id,
       sessionKey: `1c:${s.externalId}`,
       title: s.title,
@@ -547,6 +588,7 @@ export class FloorStaffHomeService {
       subtitle: s.roomTitle ?? undefined,
       booked: s.bookedCount,
       capacity: s.capacity ?? cap.get(s.externalId) ?? undefined,
+      kind: s.kind === OnexClassKind.PT ? 'PT' : 'GROUP',
       status: sessionStatus(
         s.startAt,
         s.endAt,
@@ -554,6 +596,47 @@ export class FloorStaffHomeService {
         now,
       ),
     }));
+
+    const fitgoToday: FloorStaffHomeSession[] = todayFitgoPt.map((b) => {
+      const clientName = b.client
+        ? `${b.client.firstName} ${b.client.lastName}`.trim()
+        : undefined;
+      return {
+        id: b.id,
+        sessionKey: `fitgo:PT:${b.id}`,
+        title: b.isComplimentary
+          ? 'Подарочная ПТ'
+          : 'Персональная тренировка',
+        startAt: b.startAt.toISOString(),
+        endAt: b.endAt.toISOString(),
+        subtitle: clientName,
+        kind: 'PT' as const,
+        status: sessionStatus(
+          b.startAt,
+          b.endAt,
+          b.status === PersonalBookingStatus.CANCELLED,
+          now,
+        ),
+      };
+    });
+
+    // Prefer Onex row when the same PT is also in FitGO (crmDocRef link).
+    const onexExtToday = new Set(
+      todaySessions
+        .filter((s) => s.kind === OnexClassKind.PT)
+        .map((s) => s.externalId),
+    );
+    const fitgoTodayDedup = fitgoToday.filter((s) => {
+      const booking = todayFitgoPt.find((b) => b.id === s.id);
+      const ref = booking?.crmDocRef?.trim();
+      if (!ref) return true;
+      const bare = ref.startsWith('1c:') ? ref.slice(3) : ref;
+      return !onexExtToday.has(bare) && !onexExtToday.has(ref);
+    });
+
+    const sessions = [...onexToday, ...fitgoTodayDedup].sort((a, b) =>
+      a.startAt.localeCompare(b.startAt),
+    );
 
     const next =
       sessions.find((s) => s.status === 'IN_PROGRESS' || s.status === 'UPCOMING') ??
@@ -603,6 +686,9 @@ export class FloorStaffHomeService {
       });
     }
 
+    const gpOnly = <T extends { kind: OnexClassKind }>(list: T[]) =>
+      list.filter((s) => s.kind === OnexClassKind.GROUP);
+
     const gpStats = (list: typeof curSessions) => {
       const completed = list.filter(
         (s) => s.status === OnexClassStatus.COMPLETED,
@@ -645,8 +731,37 @@ export class FloorStaffHomeService {
       };
     };
 
-    const curStats = gpStats(curSessions);
-    const prevStats = gpStats(prevSessions);
+    const countPtConducted = (
+      onexList: typeof curSessions,
+      fitgoList: Array<{ crmDocRef: string | null }>,
+    ) => {
+      const onexPt = onexList.filter(
+        (s) =>
+          s.kind === OnexClassKind.PT &&
+          s.status === OnexClassStatus.COMPLETED,
+      );
+      const onexIds = new Set(onexPt.map((s) => s.externalId));
+      let fitgoExtra = 0;
+      for (const b of fitgoList) {
+        const ref = b.crmDocRef?.trim();
+        if (!ref) {
+          fitgoExtra++;
+          continue;
+        }
+        const bare = ref.startsWith('1c:') ? ref.slice(3) : ref;
+        if (!onexIds.has(bare) && !onexIds.has(ref)) fitgoExtra++;
+      }
+      return onexPt.length + fitgoExtra;
+    };
+
+    const curGpStats = gpStats(gpOnly(curSessions));
+    const prevGpStats = gpStats(gpOnly(prevSessions));
+    const conductedGroup = curSessions.filter(
+      (s) =>
+        s.kind === OnexClassKind.GROUP &&
+        s.status === OnexClassStatus.COMPLETED,
+    ).length;
+    const conductedPt = countPtConducted(curSessions, curFitgoPt);
 
     return {
       role: 'GROUP_TRAINER',
@@ -662,40 +777,46 @@ export class FloorStaffHomeService {
         pendingAdmin,
         queue: pendingMeItems.slice(0, 3),
       },
+      conducted: {
+        from: cur.from,
+        to: today,
+        group: conductedGroup,
+        pt: conductedPt,
+      },
       month: {
         from: cur.from,
         to: cur.to,
         previousFrom: prev.from,
         previousTo: prev.to,
-        metrics: [
-          metric(
-            'Занятий',
-            curStats.sessionsConducted,
-            prevStats.sessionsConducted,
-            'шт.',
-          ),
-          metric(
-            'Средняя явка',
-            curStats.avgAttendees,
-            prevStats.avgAttendees,
-            'чел.',
-          ),
-          metric(
-            'Заполняемость',
-            curStats.avgFillPct,
-            prevStats.avgFillPct,
-            '%',
-          ),
-        ],
-        footnote: [
-          curStats.cancelledSessions > 0
-            ? `Отмен ${curStats.cancelledSessions}`
-            : null,
-          curStats.noShowPct != null ? `Неявки ${curStats.noShowPct}%` : null,
-          curStats.topTitle ? `Чаще всего: ${curStats.topTitle}` : null,
-        ]
-          .filter(Boolean)
-          .join(' · ') || undefined,
+        metrics: isGp
+          ? [
+              metric(
+                'Средняя явка',
+                curGpStats.avgAttendees,
+                prevGpStats.avgAttendees,
+                'чел.',
+              ),
+              metric(
+                'Заполняемость',
+                curGpStats.avgFillPct,
+                prevGpStats.avgFillPct,
+                '%',
+              ),
+            ]
+          : [],
+        footnote: isGp
+          ? [
+              curGpStats.cancelledSessions > 0
+                ? `Отмен ${curGpStats.cancelledSessions}`
+                : null,
+              curGpStats.noShowPct != null
+                ? `Неявки ${curGpStats.noShowPct}%`
+                : null,
+              curGpStats.topTitle ? `Чаще всего: ${curGpStats.topTitle}` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ') || undefined
+          : undefined,
       },
     };
   }
@@ -711,13 +832,13 @@ export class FloorStaffHomeService {
       staffName,
       today: { date: today, count: 0, next: null, sessions: [] },
       control: { pendingMe: 0, pendingAdmin: 0, queue: [] },
+      conducted: { from: cur.from, to: today, group: 0, pt: 0 },
       month: {
         from: cur.from,
         to: cur.to,
         previousFrom: prev.from,
         previousTo: prev.to,
         metrics: [
-          metric('Занятий', 0, 0, 'шт.'),
           metric('Средняя явка', 0, 0, 'чел.'),
           metric('Заполняемость', null, null, '%'),
         ],

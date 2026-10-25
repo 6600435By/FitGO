@@ -106,6 +106,8 @@ function SessionRow({
     session.status === 'DONE' && session.sessionKey
       ? controlHref(session)
       : scheduleHref;
+  const kindLabel =
+    session.kind === 'PT' ? 'ПТ' : session.kind === 'GROUP' ? 'ГП' : null;
 
   return (
     <Link
@@ -129,6 +131,11 @@ function SessionRow({
       </span>
       <div className="min-w-0 flex-1">
         <p className={cn('truncate font-medium', muted && 'text-slate-400')}>
+          {kindLabel ? (
+            <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              {kindLabel}
+            </span>
+          ) : null}
           {session.title}
         </p>
         {session.subtitle ? (
@@ -149,7 +156,14 @@ function SessionRow({
   );
 }
 
-export function FloorStaffHomePage({ role }: { role: FloorHomeRole }) {
+export function FloorStaffHomePage({
+  role,
+  scheduleHref,
+}: {
+  role: FloorHomeRole;
+  /** Override schedule deep-link (PT calendar vs club GP schedule). */
+  scheduleHref?: string;
+}) {
   const [data, setData] = useState<FloorStaffHome | null>(null);
   const [error, setError] = useState('');
 
@@ -180,11 +194,16 @@ export function FloorStaffHomePage({ role }: { role: FloorHomeRole }) {
   }
 
   const scheduleBase =
-    role === 'specialist' ? '/specialist/schedule' : '/trainer/gp-schedule';
+    scheduleHref ??
+    (role === 'specialist' ? '/specialist/schedule' : '/trainer/gp-schedule');
   const controlBase =
     role === 'specialist'
       ? '/specialist/my-sessions'
       : '/trainer/my-sessions';
+  const showGroupConducted =
+    (data.conducted?.group ?? 0) > 0 ||
+    data.today.sessions.some((s) => s.kind === 'GROUP') ||
+    data.month.metrics.some((m) => m.label === 'Средняя явка');
   const reviewHref = `${controlBase}?needsReview=1`;
   const controlSessionHref = (s: FloorStaffHomeSession) =>
     s.sessionKey
@@ -393,24 +412,62 @@ export function FloorStaffHomePage({ role }: { role: FloorHomeRole }) {
             </div>
           ) : null}
 
-          <div className="card !p-3.5 sm:!p-4">
-            <p className="mb-3 text-sm font-semibold">
-              Месяц{' '}
-              <span className="font-normal text-slate-500">
-                vs прошлый
-              </span>
-            </p>
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-1">
-              {data.month.metrics.map((m) => (
-                <MetricCard key={m.label} m={m} />
-              ))}
+          {data.conducted && role === 'gp' ? (
+            <div
+              className={cn(
+                'grid gap-2.5',
+                showGroupConducted ? 'grid-cols-2' : 'grid-cols-1',
+              )}
+            >
+              <Link
+                href={`${controlBase}?kind=PT&status=COMPLETED&from=${encodeURIComponent(data.conducted.from)}&to=${encodeURIComponent(data.conducted.to)}&conducted=1`}
+                className="card !p-3 block transition hover:border-fitgo-500/40 sm:!p-3.5"
+              >
+                <p className="stat-label text-xs">ПТ за месяц</p>
+                <p className="stat-value text-xl sm:text-2xl">
+                  {data.conducted.pt}
+                </p>
+                <p className="mt-0.5 text-[11px] text-slate-500">
+                  в контроль →
+                </p>
+              </Link>
+              {showGroupConducted ? (
+                <Link
+                  href={`${controlBase}?kind=GROUP&status=COMPLETED&from=${encodeURIComponent(data.conducted.from)}&to=${encodeURIComponent(data.conducted.to)}&conducted=1`}
+                  className="card !p-3 block transition hover:border-fitgo-500/40 sm:!p-3.5"
+                >
+                  <p className="stat-label text-xs">ГП за месяц</p>
+                  <p className="stat-value text-xl sm:text-2xl">
+                    {data.conducted.group}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    в контроль →
+                  </p>
+                </Link>
+              ) : null}
             </div>
-            {data.month.footnote ? (
-              <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-                {data.month.footnote}
+          ) : null}
+
+          {data.month.metrics.length > 0 ? (
+            <div className="card !p-3.5 sm:!p-4">
+              <p className="mb-3 text-sm font-semibold">
+                Месяц{' '}
+                <span className="font-normal text-slate-500">
+                  vs прошлый
+                </span>
               </p>
-            ) : null}
-          </div>
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-1">
+                {data.month.metrics.map((m) => (
+                  <MetricCard key={m.label} m={m} />
+                ))}
+              </div>
+              {data.month.footnote ? (
+                <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+                  {data.month.footnote}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

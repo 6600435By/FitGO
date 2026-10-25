@@ -449,28 +449,39 @@ export class BookingControlController {
 
     const me = await this.prisma.user.findUnique({
       where: { id: user.sub },
-      select: { trainerReformers: true, groupPrograms: true },
+      select: {
+        trainerReformers: true,
+        groupPrograms: true,
+        trainerStaff: true,
+        trainerClub: true,
+      },
     });
     const isReformer = Boolean(me?.trainerReformers);
     const isGp = Boolean(me?.groupPrograms);
-    // Reformers need GROUP+PT; GP-only stays on GROUP when the UI asks for it.
-    const kind =
-      isReformer && (!query.kind || query.kind.toUpperCase() === 'GROUP')
-        ? 'ALL'
-        : query.kind;
+    const hasPt = Boolean(me?.trainerStaff || me?.trainerClub);
 
     const items = await this.list(clubId, {
       ...query,
-      kind,
+      kind: query.kind,
       performerId: user.sub,
       _own: true,
     });
 
-    if (!isReformer) return items;
+    // Trainers never see SPA / solarium in booking control.
+    const noSpa = items.filter(
+      (item) => item.kind !== 'SPA' && item.kind !== 'SOLARIUM',
+    );
 
-    return items.filter((item) => {
-      if (item.kind === 'SPA') return false;
+    if (!isReformer) return noSpa;
+
+    return noSpa.filter((item) => {
       const hall = isReformerHallSession(item.roomTitle, item.title);
+      if (hasPt) {
+        // Own PT everywhere; GROUP all rooms if GP, else reformer hall only.
+        if (item.kind === 'PT') return true;
+        if (item.kind === 'GROUP') return isGp || hall;
+        return false;
+      }
       if (isGp) {
         return item.kind === 'GROUP' || hall;
       }
