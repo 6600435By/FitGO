@@ -1,6 +1,11 @@
 import { ConfigService } from '@nestjs/config';
-import type { AdminSaleType } from '@fitgo/shared-types';
+import {
+  isReformerPersonalTitle,
+  type AdminSaleType,
+} from '@fitgo/shared-types';
 import { normalizeSaleType } from './admin-sales.util';
+
+export { isReformerPersonalTitle };
 
 /**
  * Nomenclature segments (e1cib → UUID as in Integration / club 1C).
@@ -221,15 +226,6 @@ export async function loadPayrollSegmentSets(
   } catch {
     return cache?.sets ?? null;
   }
-}
-
-/** Title match for individual reformer (conducted session or pack SKU). */
-export function isReformerPersonalTitle(
-  productName: string | null | undefined,
-): boolean {
-  return /индивидуальн.*реформер|реформер.*индивидуальн/i.test(
-    productName ?? '',
-  );
 }
 
 /** Match nomenclature against «Индивидуальные Реформер» segment. */

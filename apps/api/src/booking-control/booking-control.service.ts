@@ -27,6 +27,7 @@ import { requireClubId } from '../auth/require-club-id';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  filterControlByHall,
   fitgoSessionKey,
   groupApprovalLabelRu,
   groupApprovalPayrollEligible,
@@ -110,6 +111,10 @@ type ListFilters = {
   payTag?: string;
   /** Discrepancy deep-link: EXPIRING_PACKAGE | LATE_ADD */
   flag?: 'EXPIRING_PACKAGE' | 'LATE_ADD';
+  /** Reformer hall (room/title). */
+  hall?: 'REFORMER';
+  /** Personal reformer PT only. */
+  reformer?: 'personal';
   /** Skip live 1C PT-sales fetch (dashboard KPI / counts). */
   skipExternal?: boolean;
   /** Substring match on clientName (case-insensitive). */
@@ -785,6 +790,9 @@ export class BookingControlService {
         filters.clientId?.trim(),
         filters.client?.trim(),
       );
+    }
+    if (filters.hall || filters.reformer) {
+      out = filterControlByHall(out, filters.hall, filters.reformer);
     }
 
     return out.sort(

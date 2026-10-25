@@ -18,6 +18,8 @@ import {
   isComplimentarySessionTitle,
   isMultiVisitPackSale,
   isPtAllSportsSession,
+  isReformerHallSession,
+  isReformerPersonalTitle,
   isSpaLikeSessionTitle,
 } from '@fitgo/shared-types';
 import {
@@ -1318,6 +1320,9 @@ export class ClubAnalyticsService {
       paid: number;
       debt: number;
       gift: number;
+      reformerPersonal: number;
+      giftClients: Set<string>;
+      paidAfterGift: Set<string>;
       clients: Set<string>;
       amountMinor: number;
     };
@@ -1330,6 +1335,7 @@ export class ClubAnalyticsService {
       arrivedTotal: number;
       fillSum: number;
       fillN: number;
+      reformerGroup: number;
       clients: Set<string>;
     };
     const ptByKey = new Map<string, PtAcc>();
@@ -1367,6 +1373,9 @@ export class ClubAnalyticsService {
         paid: 0,
         debt: 0,
         gift: 0,
+        reformerPersonal: 0,
+        giftClients: new Set<string>(),
+        paidAfterGift: new Set<string>(),
         clients: new Set<string>(),
         amountMinor: 0,
       };
@@ -1378,14 +1387,20 @@ export class ClubAnalyticsService {
         ptClubCompleted++;
         const isGift =
           i.payment === 'GIFT' || isComplimentarySessionTitle(i.title);
+        const client = i.clientName?.trim().toLowerCase() || '';
         if (isGift) {
           cur.gift++;
           ptClubGift++;
+          if (client) cur.giftClients.add(client);
         } else if (i.payment === 'PAID' || i.payment === 'QUOTA') {
           cur.paid++;
+          if (client && cur.giftClients.has(client)) {
+            cur.paidAfterGift.add(client);
+          }
         } else if (i.payment === 'DEBT' || i.payment === 'UNKNOWN') {
           cur.debt++;
         }
+        if (isReformerPersonalTitle(i.title)) cur.reformerPersonal++;
         if (i.clientName) cur.clients.add(i.clientName);
       }
       ptByKey.set(key, cur);
@@ -1447,12 +1462,16 @@ export class ClubAnalyticsService {
           arrivedTotal: 0,
           fillSum: 0,
           fillN: 0,
+          reformerGroup: 0,
           clients: new Set<string>(),
         };
         if (i.status === 'CANCELLED') {
           cur.cancelled++;
         } else if (i.status === 'COMPLETED') {
           cur.sessions++;
+          if (isReformerHallSession(i.roomTitle, i.title)) {
+            cur.reformerGroup++;
+          }
           cur.bookedTotal += i.bookedCount ?? 0;
           cur.arrivedTotal += i.arrivedCount ?? i.attendeeCount ?? 0;
           const ext = i.sessionKey.startsWith('1c:')
@@ -1472,17 +1491,27 @@ export class ClubAnalyticsService {
 
     const trainerRankingsPt = [...ptByKey.values()]
       .filter((t) => t.completed > 0)
-      .map((t) => ({
-        trainerId: t.trainerId,
-        name: t.name,
-        score: t.completed * 2 + t.clients.size,
-        completed: t.completed,
-        paid: t.paid,
-        debt: t.debt,
-        gift: t.gift,
-        activeClients: t.clients.size,
-        amountMinor: t.amountMinor,
-      }))
+      .map((t) => {
+        const gifted = t.giftClients.size;
+        const converted = t.paidAfterGift.size;
+        return {
+          trainerId: t.trainerId,
+          name: t.name,
+          score: t.completed * 2 + t.clients.size,
+          completed: t.completed,
+          paid: t.paid,
+          debt: t.debt,
+          gift: t.gift,
+          activeClients: t.clients.size,
+          amountMinor: t.amountMinor,
+          giftToPaidPct:
+            gifted > 0
+              ? Math.round((converted / gifted) * 1000) / 10
+              : null,
+          reformerPersonal:
+            t.reformerPersonal > 0 ? t.reformerPersonal : undefined,
+        };
+      })
       .sort(
         (a, b) =>
           b.completed - a.completed || b.amountMinor - a.amountMinor,
@@ -1503,6 +1532,8 @@ export class ClubAnalyticsService {
           cancelRatePct:
             denom > 0 ? Math.round((t.cancelled / denom) * 100) : null,
           activeClients: t.clients.size,
+          reformerGroup:
+            t.reformerGroup > 0 ? t.reformerGroup : undefined,
         };
       })
       .sort(

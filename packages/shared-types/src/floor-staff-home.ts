@@ -1,5 +1,7 @@
 /** Home dashboard for SPA specialists and group-program trainers. */
 
+import type { TrainerMonthAnalytics } from './trainer-month-analytics';
+
 export type FloorStaffRole = 'SPECIALIST' | 'GROUP_TRAINER';
 
 export interface FloorStaffHomeSession {
@@ -84,5 +86,7 @@ export interface FloorStaffHome {
   month: FloorStaffMonthStats;
   /** Trainer: completed GP / PT counts for deep-links into booking control. */
   conducted?: FloorStaffConductedCounts;
+  /** Trainer month analytics (booking-control aligned). */
+  monthAnalytics?: TrainerMonthAnalytics;
   spa?: FloorStaffSpaExtras;
 }

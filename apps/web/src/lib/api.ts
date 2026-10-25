@@ -2693,6 +2693,8 @@ export const api = {
       performerId?: string;
       payTag?: string;
       flag?: string;
+      hall?: string;
+      reformer?: string;
       client?: string;
       clientId?: string;
       notIn1c?: boolean;
@@ -2708,6 +2710,8 @@ export const api = {
     if (params.performerId) q.set('performerId', params.performerId);
     if (params.payTag) q.set('payTag', params.payTag);
     if (params.flag) q.set('flag', params.flag);
+    if (params.hall) q.set('hall', params.hall);
+    if (params.reformer) q.set('reformer', params.reformer);
     if (params.client?.trim()) q.set('client', params.client.trim());
     if (params.clientId?.trim()) q.set('clientId', params.clientId.trim());
     if (params.notIn1c) q.set('notIn1c', '1');

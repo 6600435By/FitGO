@@ -46,6 +46,7 @@ import {
 } from './staff-analytics.helpers';
 import { applyStaffFlags } from './staff-analytics.rules';
 import { ClubAnalyticsService } from './club-analytics.service';
+import { TrainerMonthAnalyticsService } from './trainer-month-analytics.service';
 
 type StaffUser = {
   id: string;
@@ -94,6 +95,7 @@ export class StaffAnalyticsService {
     private readonly prisma: PrismaService,
     private readonly payroll: PayrollService,
     private readonly clubAnalytics: ClubAnalyticsService,
+    private readonly trainerMonth: TrainerMonthAnalyticsService,
   ) {}
 
   async getStaffReport(
@@ -179,6 +181,15 @@ export class StaffAnalyticsService {
         ? Promise.resolve(this.payMapFromSummary(paySummary))
         : emptyPay,
     ]);
+
+    if (needPt && ptKpis.size > 0) {
+      await this.enrichPtMonthExtras(
+        clubId,
+        params.from,
+        params.to,
+        ptKpis,
+      );
+    }
 
     const rows: StaffKpiRow[] = [];
 
@@ -482,6 +493,11 @@ export class StaffAnalyticsService {
                 'Удерж. 90 %',
                 'Активные',
                 'Продажи ПТ',
+                'Подарок→оплата',
+                'Ступень %',
+                'До след.',
+                'Реф. гр.',
+                'Реф. инд.',
               ]
             : dept === 'SPECIALIST'
               ? [
@@ -544,6 +560,13 @@ export class StaffAnalyticsService {
         k.retention90Pct ?? '',
         k.activeClients30d,
         k.ptSalesMinor / 100,
+        k.giftToPaid
+          ? `${k.giftToPaid.convertedClients}/${k.giftToPaid.giftedClients}`
+          : '',
+        k.ladder?.percent ?? '',
+        k.ladder?.remaining ?? '',
+        k.reformerGroupSessions ?? '',
+        k.reformerPersonalSessions ?? '',
       ];
     } else if (k.kind === 'SPECIALIST') {
       kpi = [
@@ -572,6 +595,46 @@ export class StaffAnalyticsService {
         ]
       : [];
     return [...base, ...kpi, ...pay];
+  }
+
+  private async enrichPtMonthExtras(
+    clubId: string,
+    from: string,
+    to: string,
+    ptKpis: Map<string, StaffDepartmentKpi>,
+  ) {
+    const ids = [...ptKpis.entries()]
+      .filter(
+        ([, k]) =>
+          k.kind === 'PT_TRAINER' &&
+          (k.sessionsConducted > 0 || k.giftSessions > 0),
+      )
+      .map(([id]) => id);
+    if (!ids.length) return;
+    const settled = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const extras = await this.trainerMonth.extrasForPeriod(
+            clubId,
+            id,
+            from,
+            to,
+          );
+          return { id, extras };
+        } catch {
+          return { id, extras: null };
+        }
+      }),
+    );
+    for (const { id, extras } of settled) {
+      if (!extras) continue;
+      const k = ptKpis.get(id);
+      if (!k || k.kind !== 'PT_TRAINER') continue;
+      k.giftToPaid = extras.giftToPaid;
+      k.ladder = extras.ladder ?? undefined;
+      k.reformerGroupSessions = extras.reformerGroupSessions;
+      k.reformerPersonalSessions = extras.reformerPersonalSessions;
+    }
   }
 
   private emptyKpi(dept: StaffKpiRow['department']): StaffDepartmentKpi {

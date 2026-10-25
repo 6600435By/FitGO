@@ -9,6 +9,7 @@ import { AnalyticsController } from './analytics.controller';
 import { ClubAnalyticsService } from './club-analytics.service';
 import { PricingAnalyticsService } from './pricing-analytics.service';
 import { StaffAnalyticsService } from './staff-analytics.service';
+import { TrainerMonthAnalyticsService } from './trainer-month-analytics.service';
 
 @Module({
   imports: [
@@ -24,12 +25,14 @@ import { StaffAnalyticsService } from './staff-analytics.service';
     StaffAnalyticsService,
     AdminTaskReportService,
     PricingAnalyticsService,
+    TrainerMonthAnalyticsService,
   ],
   exports: [
     ClubAnalyticsService,
     StaffAnalyticsService,
     AdminTaskReportService,
     PricingAnalyticsService,
+    TrainerMonthAnalyticsService,
   ],
 })
 export class AnalyticsModule {}

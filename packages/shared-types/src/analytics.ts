@@ -166,6 +166,10 @@ export interface ClubAnalyticsReport {
     gift: number;
     activeClients: number;
     amountMinor: number;
+    giftToPaidPct?: number | null;
+    ladderPercent?: number | null;
+    ladderRemaining?: number | null;
+    reformerPersonal?: number;
   }>;
   /** Top group-program trainers for the period. */
   trainerRankingsGroup: Array<{
@@ -179,6 +183,7 @@ export interface ClubAnalyticsReport {
     avgFillPct: number | null;
     cancelRatePct: number | null;
     activeClients: number;
+    reformerGroup?: number;
   }>;
   integrationHealth?: {
     provider: string;
@@ -280,6 +285,26 @@ export interface PtTrainerStaffKpi {
   retentionCohortTo: string | null;
   activeClients30d: number;
   ptSalesMinor: number;
+  /**
+   * Gift clients in period who later had PAID/QUOTA PT or a training sale
+   * (not the 30d new-client conversionPct).
+   */
+  giftToPaid?: {
+    giftedClients: number;
+    convertedClients: number;
+    pct: number | null;
+  };
+  /** PT % ladder from payroll-trusted volume in the calendar month of `to`. */
+  ladder?: {
+    volumeCount: number;
+    percent: number;
+    remaining: number | null;
+    isTop: boolean;
+  };
+  /** Completed group sessions in reformer hall. */
+  reformerGroupSessions?: number;
+  /** Completed personal reformer PT (title match). */
+  reformerPersonalSessions?: number;
 }
 
 export interface SpaStaffKpi {

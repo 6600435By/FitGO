@@ -52,6 +52,8 @@ export type BookingControlApi = {
     performerId?: string;
     payTag?: string;
     flag?: string;
+    hall?: string;
+    reformer?: string;
     client?: string;
     clientId?: string;
     notIn1c?: boolean;
@@ -194,6 +196,10 @@ type Props = {
    * cutting by «На контроле / Прошли контроль» segments.
    */
   initialConducted?: boolean;
+  /** Reformer hall deep-link. */
+  initialHall?: 'REFORMER';
+  /** Personal reformer PT deep-link. */
+  initialReformer?: 'personal';
   title?: string;
   subtitle?: string;
   /**
@@ -406,6 +412,8 @@ export function BookingControlPanel({
   fixedKind,
   trainerKindFilter = false,
   initialConducted = false,
+  initialHall,
+  initialReformer,
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
   detailOnly = false,
@@ -520,6 +528,12 @@ export function BookingControlPanel({
     'pending' | 'done'
   >('pending');
   const [conductedMode, setConductedMode] = useState(Boolean(initialConducted));
+  const [hallFilter, setHallFilter] = useState<'REFORMER' | ''>(
+    initialHall === 'REFORMER' ? 'REFORMER' : '',
+  );
+  const [reformerFilter, setReformerFilter] = useState<'personal' | ''>(
+    initialReformer === 'personal' ? 'personal' : '',
+  );
   const [needsReview, setNeedsReview] = useState(Boolean(boot.needsReview));
   const [clientFilter, setClientFilter] = useState(
     typeof boot.clientFilter === 'string' ? boot.clientFilter : '',
@@ -574,6 +588,16 @@ export function BookingControlPanel({
     if (drill && live.get('needsReview') !== '1' && live.get('needsReview') !== 'true') {
       setNeedsReview(false);
     }
+    const hallL = live.get('hall')?.trim().toUpperCase();
+    if (hallL === 'REFORMER') setHallFilter('REFORMER');
+    const reformerL = live.get('reformer')?.trim().toLowerCase();
+    if (reformerL === 'personal') setReformerFilter('personal');
+    if (
+      live.get('conducted') === '1' ||
+      live.get('conducted') === 'true'
+    ) {
+      setConductedMode(true);
+    }
     if (sessionKey) void openDetail(sessionKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once from the address bar
   }, []);
@@ -612,6 +636,11 @@ export function BookingControlPanel({
         const session = live.get('session')?.trim();
         if (sessionKey) q.set('sessionKey', sessionKey);
         else if (session) q.set('session', session);
+        const hall = live.get('hall')?.trim().toUpperCase();
+        if (hall === 'REFORMER') q.set('hall', 'REFORMER');
+        const reformer = live.get('reformer')?.trim().toLowerCase();
+        if (reformer === 'personal') q.set('reformer', 'personal');
+        if (live.get('conducted') === '1') q.set('conducted', '1');
       }
       return q;
     },
@@ -752,6 +781,8 @@ export function BookingControlPanel({
         ...(performerId ? { performerId } : {}),
         ...(payTag ? { payTag } : {}),
         ...(flag ? { flag } : {}),
+        ...(hallFilter ? { hall: hallFilter } : {}),
+        ...(reformerFilter ? { reformer: reformerFilter } : {}),
         ...(clientFilter.trim() ? { client: clientFilter.trim() } : {}),
         ...(clientIdFilter.trim()
           ? { clientId: clientIdFilter.trim() }
@@ -779,6 +810,8 @@ export function BookingControlPanel({
     clientIdFilter,
     notIn1c,
     missingJournal,
+    hallFilter,
+    reformerFilter,
     fixedKind,
     detailOnly,
   ]);

@@ -4,12 +4,14 @@ import type {
   FloorStaffHome,
   FloorStaffHomeSession,
   FloorStaffMonthMetric,
+  TrainerMonthAnalytics,
 } from '@fitgo/shared-types';
 import {
   CalendarCheck,
   ClipboardCheck,
   Clock,
   ListTodo,
+  Percent,
   TrendingDown,
   TrendingUp,
   Users,
@@ -41,8 +43,35 @@ function formatDelta(current: number | null, previous: number | null) {
   return { text: `${pct}%`, tone: 'down' as const };
 }
 
+function DeltaBadge({
+  current,
+  previous,
+}: {
+  current: number | null;
+  previous: number | null;
+}) {
+  const delta = formatDelta(current, previous);
+  if (!delta) return null;
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-0.5 font-medium',
+        delta.tone === 'up' && 'text-emerald-400/90',
+        delta.tone === 'down' && 'text-slate-400',
+        delta.tone === 'flat' && 'text-slate-500',
+      )}
+    >
+      {delta.tone === 'up' ? (
+        <TrendingUp className="h-3 w-3" />
+      ) : delta.tone === 'down' ? (
+        <TrendingDown className="h-3 w-3" />
+      ) : null}
+      {delta.text}
+    </span>
+  );
+}
+
 function MetricCard({ m }: { m: FloorStaffMonthMetric }) {
-  const delta = formatDelta(m.value, m.previous);
   const valueText =
     m.value == null
       ? '—'
@@ -69,24 +98,243 @@ function MetricCard({ m }: { m: FloorStaffMonthMetric }) {
       </p>
       <div className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
         <span>прошл. {prevText}</span>
-        {delta ? (
-          <span
-            className={cn(
-              'inline-flex items-center gap-0.5 font-medium',
-              delta.tone === 'up' && 'text-emerald-400/90',
-              delta.tone === 'down' && 'text-slate-400',
-              delta.tone === 'flat' && 'text-slate-500',
-            )}
+        <DeltaBadge current={m.value} previous={m.previous} />
+      </div>
+    </div>
+  );
+}
+
+function syncLabel(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function MonthAnalyticsBlock({
+  a,
+  controlBase,
+  showGroup,
+}: {
+  a: TrainerMonthAnalytics;
+  controlBase: string;
+  showGroup: boolean;
+}) {
+  const range = `from=${encodeURIComponent(a.from)}&to=${encodeURIComponent(a.to)}&conducted=1`;
+  const ptHref = `${controlBase}?kind=PT&status=COMPLETED&${range}`;
+  const groupHref = `${controlBase}?kind=GROUP&status=COMPLETED&${range}`;
+  const giftHref = `${controlBase}?kind=PT&status=COMPLETED&payment=GIFT&${range}`;
+  const reformerGroupHref = `${controlBase}?kind=GROUP&status=COMPLETED&hall=REFORMER&${range}`;
+  const reformerPersonalHref = `${controlBase}?kind=PT&status=COMPLETED&reformer=personal&${range}`;
+  const sync = syncLabel(a.syncedAt);
+  const ladderProgress =
+    a.ladder && a.ladder.nextMinSessions != null && a.ladder.nextMinSessions > 0
+      ? Math.min(
+          100,
+          Math.round((a.ladder.volumeCount / a.ladder.nextMinSessions) * 100),
+        )
+      : a.ladder?.isTop
+        ? 100
+        : 0;
+
+  return (
+    <div className="card !p-3.5 space-y-3 sm:!p-4">
+      <p className="text-sm font-semibold">
+        Месяц{' '}
+        <span className="font-normal text-slate-500">
+          vs те же дни прошлого
+        </span>
+      </p>
+
+      <div
+        className={cn(
+          'grid gap-2',
+          showGroup || a.gift.count > 0 ? 'grid-cols-2' : 'grid-cols-1',
+        )}
+      >
+        <Link
+          href={ptHref}
+          className="rounded-xl border border-slate-800 bg-slate-800/40 px-2.5 py-2 transition hover:border-fitgo-500/40"
+        >
+          <p className="stat-label text-[11px]">ПТ</p>
+          <p className="stat-value text-xl leading-tight">{a.pt.count}</p>
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+            <DeltaBadge current={a.pt.count} previous={a.pt.previous} />
+            {a.pt.gift > 0 ? <span>из них под. {a.pt.gift}</span> : null}
+          </div>
+        </Link>
+        {showGroup ? (
+          <Link
+            href={groupHref}
+            className="rounded-xl border border-slate-800 bg-slate-800/40 px-2.5 py-2 transition hover:border-fitgo-500/40"
           >
-            {delta.tone === 'up' ? (
-              <TrendingUp className="h-3 w-3" />
-            ) : delta.tone === 'down' ? (
-              <TrendingDown className="h-3 w-3" />
-            ) : null}
-            {delta.text}
-          </span>
+            <p className="stat-label text-[11px]">ГП</p>
+            <p className="stat-value text-xl leading-tight">{a.group.count}</p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+              <DeltaBadge
+                current={a.group.count}
+                previous={a.group.previous}
+              />
+              {a.group.avgAttendees != null ? (
+                <span>явка {a.group.avgAttendees}</span>
+              ) : null}
+              {a.group.avgFillPct != null ? (
+                <span>зап. {a.group.avgFillPct}%</span>
+              ) : null}
+            </div>
+          </Link>
+        ) : null}
+        {a.gift.count > 0 ? (
+          <Link
+            href={giftHref}
+            className="rounded-xl border border-slate-800 bg-slate-800/40 px-2.5 py-2 transition hover:border-fitgo-500/40"
+          >
+            <p className="stat-label text-[11px]">Подарочные</p>
+            <p className="stat-value text-xl leading-tight">{a.gift.count}</p>
+            <div className="mt-0.5 text-[11px] text-slate-500">
+              <DeltaBadge current={a.gift.count} previous={a.gift.previous} />
+            </div>
+          </Link>
+        ) : null}
+        {a.uniqueClients.total > 0 ? (
+          <div className="rounded-xl border border-slate-800 bg-slate-800/40 px-2.5 py-2">
+            <p className="stat-label text-[11px]">Уникальные</p>
+            <p className="stat-value text-xl leading-tight">
+              {a.uniqueClients.total}
+            </p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+              <DeltaBadge
+                current={a.uniqueClients.total}
+                previous={a.uniqueClients.previous}
+              />
+              {a.uniqueClients.pt > 0 && a.uniqueClients.group > 0 ? (
+                <span>
+                  ПТ {a.uniqueClients.pt} · ГП {a.uniqueClients.group}
+                </span>
+              ) : null}
+            </div>
+          </div>
         ) : null}
       </div>
+
+      {a.reformer &&
+      (a.reformer.group > 0 ||
+        a.reformer.personal > 0 ||
+        a.reformer.previousGroup > 0 ||
+        a.reformer.previousPersonal > 0) ? (
+        <div className="grid grid-cols-2 gap-2">
+          <Link
+            href={reformerGroupHref}
+            className="rounded-xl border border-slate-800/80 px-2.5 py-2 text-sm transition hover:border-fitgo-500/40"
+          >
+            <p className="text-[11px] text-slate-500">Реформер · группы</p>
+            <p className="font-semibold text-slate-100">{a.reformer.group}</p>
+            <span className="text-[11px] text-slate-500">
+              <DeltaBadge
+                current={a.reformer.group}
+                previous={a.reformer.previousGroup}
+              />
+            </span>
+          </Link>
+          <Link
+            href={reformerPersonalHref}
+            className="rounded-xl border border-slate-800/80 px-2.5 py-2 text-sm transition hover:border-fitgo-500/40"
+          >
+            <p className="text-[11px] text-slate-500">Реформер · инд.</p>
+            <p className="font-semibold text-slate-100">
+              {a.reformer.personal}
+            </p>
+            <span className="text-[11px] text-slate-500">
+              <DeltaBadge
+                current={a.reformer.personal}
+                previous={a.reformer.previousPersonal}
+              />
+            </span>
+          </Link>
+        </div>
+      ) : null}
+
+      {a.shiftHours != null ? (
+        <Link
+          href="/trainer/shifts"
+          className="flex items-center justify-between rounded-xl border border-slate-800/80 px-2.5 py-2 text-sm transition hover:border-fitgo-500/40"
+        >
+          <span className="flex items-center gap-1.5 text-slate-400">
+            <Clock className="h-3.5 w-3.5" />
+            Смены
+          </span>
+          <span className="flex items-center gap-2 text-[11px] text-slate-500">
+            <span className="text-sm font-semibold text-slate-100">
+              {a.shiftHours} ч
+            </span>
+            <DeltaBadge
+              current={a.shiftHours}
+              previous={a.previousShiftHours}
+            />
+          </span>
+        </Link>
+      ) : null}
+
+      {a.giftConversion && a.giftConversion.giftedClients > 0 ? (
+        <div className="rounded-xl border border-slate-800/80 px-2.5 py-2">
+          <p className="text-[11px] text-slate-500">Подарок → оплата</p>
+          <p className="mt-0.5 text-sm font-semibold text-slate-100">
+            {a.giftConversion.convertedClients} из{' '}
+            {a.giftConversion.giftedClients}
+            {a.giftConversion.pct != null
+              ? ` · ${a.giftConversion.pct}%`
+              : ''}
+          </p>
+          <div className="mt-0.5 text-[11px] text-slate-500">
+            <DeltaBadge
+              current={a.giftConversion.pct}
+              previous={a.giftConversion.previousPct}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {a.ladder ? (
+        <div className="rounded-xl border border-slate-800/80 px-2.5 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
+              <Percent className="h-3.5 w-3.5" />
+              Ступень %
+            </p>
+            <p className="text-sm font-semibold text-fitgo-400">
+              {a.ladder.percent}%
+            </p>
+          </div>
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            {a.ladder.isTop
+              ? `${a.ladder.percent}% · верхняя ступень · ${a.ladder.volumeCount} в объёме`
+              : `ещё ${a.ladder.remaining} до ${a.ladder.nextMinSessions} (${a.ladder.volumeCount} в объёме)`}
+          </p>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800">
+            <div
+              className="h-full rounded-full bg-fitgo-500/80"
+              style={{ width: `${ladderProgress}%` }}
+            />
+          </div>
+          {a.ladder.volumeCount !== a.pt.count ? (
+            <p className="mt-1.5 text-[10px] leading-snug text-slate-600">
+              В лестницу не входят AllSports и инд. реформер (при схеме
+              реформера).
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {sync ? (
+        <p className="text-[10px] text-slate-600">
+          по синхронизации занятий · {sync}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -201,7 +449,7 @@ export function FloorStaffHomePage({
       ? '/specialist/my-sessions'
       : '/trainer/my-sessions';
   const showGroupConducted =
-    (data.conducted?.group ?? 0) > 0 ||
+    (data.monthAnalytics?.group.count ?? data.conducted?.group ?? 0) > 0 ||
     data.today.sessions.some((s) => s.kind === 'GROUP') ||
     data.month.metrics.some((m) => m.label === 'Средняя явка');
   const reviewHref = `${controlBase}?needsReview=1`;
@@ -412,43 +660,15 @@ export function FloorStaffHomePage({
             </div>
           ) : null}
 
-          {data.conducted && role === 'gp' ? (
-            <div
-              className={cn(
-                'grid gap-2.5',
-                showGroupConducted ? 'grid-cols-2' : 'grid-cols-1',
-              )}
-            >
-              <Link
-                href={`${controlBase}?kind=PT&status=COMPLETED&from=${encodeURIComponent(data.conducted.from)}&to=${encodeURIComponent(data.conducted.to)}&conducted=1`}
-                className="card !p-3 block transition hover:border-fitgo-500/40 sm:!p-3.5"
-              >
-                <p className="stat-label text-xs">ПТ за месяц</p>
-                <p className="stat-value text-xl sm:text-2xl">
-                  {data.conducted.pt}
-                </p>
-                <p className="mt-0.5 text-[11px] text-slate-500">
-                  в контроль →
-                </p>
-              </Link>
-              {showGroupConducted ? (
-                <Link
-                  href={`${controlBase}?kind=GROUP&status=COMPLETED&from=${encodeURIComponent(data.conducted.from)}&to=${encodeURIComponent(data.conducted.to)}&conducted=1`}
-                  className="card !p-3 block transition hover:border-fitgo-500/40 sm:!p-3.5"
-                >
-                  <p className="stat-label text-xs">ГП за месяц</p>
-                  <p className="stat-value text-xl sm:text-2xl">
-                    {data.conducted.group}
-                  </p>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    в контроль →
-                  </p>
-                </Link>
-              ) : null}
-            </div>
+          {data.monthAnalytics && role === 'gp' ? (
+            <MonthAnalyticsBlock
+              a={data.monthAnalytics}
+              controlBase={controlBase}
+              showGroup={showGroupConducted}
+            />
           ) : null}
 
-          {data.month.metrics.length > 0 ? (
+          {role === 'specialist' && data.month.metrics.length > 0 ? (
             <div className="card !p-3.5 sm:!p-4">
               <p className="mb-3 text-sm font-semibold">
                 Месяц{' '}
@@ -467,6 +687,14 @@ export function FloorStaffHomePage({
                 </p>
               ) : null}
             </div>
+          ) : null}
+
+          {data.monthAnalytics &&
+          role === 'gp' &&
+          data.month.footnote ? (
+            <p className="px-0.5 text-[11px] leading-relaxed text-slate-500">
+              {data.month.footnote}
+            </p>
           ) : null}
         </div>
       </div>

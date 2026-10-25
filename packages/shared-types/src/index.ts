@@ -625,6 +625,7 @@ export * from './analytics';
 export * from './pricing-analytics';
 export * from './visit-mix';
 export * from './floor-staff-home';
+export * from './trainer-month-analytics';
 export * from './discrepancies';
 export * from './admin-home-layout';
 export * from './spa-board-slots';

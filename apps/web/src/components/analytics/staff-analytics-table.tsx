@@ -666,6 +666,16 @@ function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
             ? `${k.retentionCohortFrom}…${k.retentionCohortTo}`
             : 'н/д'}
           .
+          {k.giftToPaid && k.giftToPaid.giftedClients > 0
+            ? ` Подарок→оплата: ${k.giftToPaid.convertedClients} из ${k.giftToPaid.giftedClients}${k.giftToPaid.pct != null ? ` (${k.giftToPaid.pct}%)` : ''}.`
+            : ''}
+          {k.ladder
+            ? ` Ступень ${k.ladder.percent}%${k.ladder.isTop ? ' (верх)' : k.ladder.remaining != null ? `, ещё ${k.ladder.remaining}` : ''} · объём ${k.ladder.volumeCount}.`
+            : ''}
+          {(k.reformerGroupSessions ?? 0) > 0 ||
+          (k.reformerPersonalSessions ?? 0) > 0
+            ? ` Реформер: группы ${k.reformerGroupSessions ?? 0}, инд. ${k.reformerPersonalSessions ?? 0}.`
+            : ''}
         </p>
       )}
       {k.kind === 'SPECIALIST' && (

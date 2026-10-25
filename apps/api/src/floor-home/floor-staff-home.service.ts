@@ -17,9 +17,11 @@ import type {
   FloorStaffMonthMetric,
 } from '@fitgo/shared-types';
 import { isReformerHallSession } from '@fitgo/shared-types';
+import { TrainerMonthAnalyticsService } from '../analytics/trainer-month-analytics.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { PrismaService } from '../prisma/prisma.service';
+import { sameDayPreviousMonthWindow } from '@fitgo/shared-types';
 
 function pad2(n: number) {
   return String(n).padStart(2, '0');
@@ -83,7 +85,10 @@ function metric(
 
 @Injectable()
 export class FloorStaffHomeService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly trainerMonth: TrainerMonthAnalyticsService,
+  ) {}
 
   async getSpecialistHome(user: JwtPayload): Promise<FloorStaffHome> {
     const clubId = requireClubId(user);
@@ -492,90 +497,58 @@ export class FloorStaffHomeService {
     };
 
     const monthThroughToday = { gte: cur.start, lte: dayEnd };
-    const prevMonthThroughEnd = { gte: prev.start, lte: prev.end };
 
-    const [todayRaw, curRaw, prevRaw, slots, todayFitgoPt, curFitgoPt] =
-      await Promise.all([
-        this.prisma.onexClassSession.findMany({
-          where: {
-            ...performerWhere,
-            startAt: { gte: dayStart, lte: dayEnd },
+    const [todayRaw, curRaw, slots, todayFitgoPt] = await Promise.all([
+      this.prisma.onexClassSession.findMany({
+        where: {
+          ...performerWhere,
+          startAt: { gte: dayStart, lte: dayEnd },
+        },
+        orderBy: { startAt: 'asc' },
+      }),
+      this.prisma.onexClassSession.findMany({
+        where: {
+          ...performerWhere,
+          startAt: monthThroughToday,
+        },
+        select: {
+          kind: true,
+          externalId: true,
+          status: true,
+          title: true,
+          roomTitle: true,
+          attendedCount: true,
+          bookedCount: true,
+          capacity: true,
+          members: {
+            select: { attendance: true, cancelled: true },
           },
-          orderBy: { startAt: 'asc' },
-        }),
-        this.prisma.onexClassSession.findMany({
-          where: {
-            ...performerWhere,
-            startAt: monthThroughToday,
-          },
-          select: {
-            kind: true,
-            externalId: true,
-            status: true,
-            title: true,
-            roomTitle: true,
-            attendedCount: true,
-            bookedCount: true,
-            capacity: true,
-            members: {
-              select: { attendance: true, cancelled: true },
+        },
+      }),
+      this.prisma.clubScheduleSlot.findMany({
+        where: {
+          clubId,
+          startAt: { gte: dayStart, lte: dayEnd },
+        },
+        select: { externalId: true, capacity: true },
+      }),
+      hasPt
+        ? this.prisma.personalTrainingBooking.findMany({
+            where: {
+              trainerId: user.sub,
+              status: { not: PersonalBookingStatus.CANCELLED },
+              startAt: { gte: dayStart, lte: dayEnd },
             },
-          },
-        }),
-        this.prisma.onexClassSession.findMany({
-          where: {
-            ...performerWhere,
-            startAt: prevMonthThroughEnd,
-          },
-          select: {
-            kind: true,
-            externalId: true,
-            status: true,
-            title: true,
-            roomTitle: true,
-            attendedCount: true,
-            bookedCount: true,
-            capacity: true,
-            members: {
-              select: { attendance: true, cancelled: true },
+            include: {
+              client: { select: { firstName: true, lastName: true } },
             },
-          },
-        }),
-        this.prisma.clubScheduleSlot.findMany({
-          where: {
-            clubId,
-            startAt: { gte: prev.start, lte: cur.end },
-          },
-          select: { externalId: true, capacity: true },
-        }),
-        hasPt
-          ? this.prisma.personalTrainingBooking.findMany({
-              where: {
-                trainerId: user.sub,
-                status: { not: PersonalBookingStatus.CANCELLED },
-                startAt: { gte: dayStart, lte: dayEnd },
-              },
-              include: {
-                client: { select: { firstName: true, lastName: true } },
-              },
-              orderBy: { startAt: 'asc' },
-            })
-          : Promise.resolve([]),
-        hasPt
-          ? this.prisma.personalTrainingBooking.findMany({
-              where: {
-                trainerId: user.sub,
-                status: PersonalBookingStatus.COMPLETED,
-                startAt: monthThroughToday,
-              },
-              select: { id: true, crmDocRef: true },
-            })
-          : Promise.resolve([]),
-      ]);
+            orderBy: { startAt: 'asc' },
+          })
+        : Promise.resolve([]),
+    ]);
 
     const todaySessions = todayRaw.filter(keepSession);
     const curSessions = curRaw.filter(keepSession);
-    const prevSessions = prevRaw.filter(keepSession);
 
     const cap = new Map(slots.map((s) => [s.externalId, s.capacity]));
 
@@ -731,37 +704,15 @@ export class FloorStaffHomeService {
       };
     };
 
-    const countPtConducted = (
-      onexList: typeof curSessions,
-      fitgoList: Array<{ crmDocRef: string | null }>,
-    ) => {
-      const onexPt = onexList.filter(
-        (s) =>
-          s.kind === OnexClassKind.PT &&
-          s.status === OnexClassStatus.COMPLETED,
-      );
-      const onexIds = new Set(onexPt.map((s) => s.externalId));
-      let fitgoExtra = 0;
-      for (const b of fitgoList) {
-        const ref = b.crmDocRef?.trim();
-        if (!ref) {
-          fitgoExtra++;
-          continue;
-        }
-        const bare = ref.startsWith('1c:') ? ref.slice(3) : ref;
-        if (!onexIds.has(bare) && !onexIds.has(ref)) fitgoExtra++;
-      }
-      return onexPt.length + fitgoExtra;
-    };
-
     const curGpStats = gpStats(gpOnly(curSessions));
-    const prevGpStats = gpStats(gpOnly(prevSessions));
-    const conductedGroup = curSessions.filter(
-      (s) =>
-        s.kind === OnexClassKind.GROUP &&
-        s.status === OnexClassStatus.COMPLETED,
-    ).length;
-    const conductedPt = countPtConducted(curSessions, curFitgoPt);
+    const monthAnalytics = await this.trainerMonth.forTrainer(
+      clubId,
+      user.sub,
+      cur.from,
+      today,
+      { showReformer: isReformer },
+    );
+    const sameDayPrev = sameDayPreviousMonthWindow(cur.from, today);
 
     return {
       role: 'GROUP_TRAINER',
@@ -778,28 +729,29 @@ export class FloorStaffHomeService {
         queue: pendingMeItems.slice(0, 3),
       },
       conducted: {
-        from: cur.from,
-        to: today,
-        group: conductedGroup,
-        pt: conductedPt,
+        from: monthAnalytics.from,
+        to: monthAnalytics.to,
+        group: monthAnalytics.group.count,
+        pt: monthAnalytics.pt.count,
       },
+      monthAnalytics,
       month: {
-        from: cur.from,
-        to: cur.to,
-        previousFrom: prev.from,
-        previousTo: prev.to,
+        from: monthAnalytics.from,
+        to: monthAnalytics.to,
+        previousFrom: sameDayPrev.previousFrom,
+        previousTo: sameDayPrev.previousTo,
         metrics: isGp
           ? [
               metric(
                 'Средняя явка',
-                curGpStats.avgAttendees,
-                prevGpStats.avgAttendees,
+                monthAnalytics.group.avgAttendees,
+                monthAnalytics.group.previousAvgAttendees,
                 'чел.',
               ),
               metric(
                 'Заполняемость',
-                curGpStats.avgFillPct,
-                prevGpStats.avgFillPct,
+                monthAnalytics.group.avgFillPct,
+                monthAnalytics.group.previousAvgFillPct,
                 '%',
               ),
             ]

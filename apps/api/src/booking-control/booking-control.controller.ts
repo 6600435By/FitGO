@@ -28,6 +28,10 @@ type ListQuery = {
   payTag?: string;
   /** EXPIRING_PACKAGE | LATE_ADD — discrepancy deep-link */
   flag?: string;
+  /** REFORMER — hall deep-link */
+  hall?: string;
+  /** personal — individual reformer PT */
+  reformer?: string;
   sessionKey?: string;
   /** Client name substring */
   client?: string;
@@ -635,6 +639,11 @@ export class BookingControlController {
       flagRaw === 'EXPIRING_PACKAGE' || flagRaw === 'LATE_ADD'
         ? flagRaw
         : undefined;
+    const hallRaw = query.hall?.trim()?.toUpperCase();
+    const hall = hallRaw === 'REFORMER' ? ('REFORMER' as const) : undefined;
+    const reformerRaw = query.reformer?.trim()?.toLowerCase();
+    const reformer =
+      reformerRaw === 'personal' ? ('personal' as const) : undefined;
     return this.bookingControl.list(clubId, {
       from,
       to,
@@ -643,6 +652,8 @@ export class BookingControlController {
       payment,
       payTag: query.payTag?.trim() || undefined,
       flag,
+      hall,
+      reformer,
       needsReview:
         query.needsReview === '1' || query.needsReview === 'true',
       performerId: query._own ? undefined : query.performerId,

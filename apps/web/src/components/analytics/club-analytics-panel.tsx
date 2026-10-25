@@ -427,6 +427,7 @@ export function ClubAnalyticsPanel({
                     : report.trainerRankings.map((t) => ({
                         trainerId: t.trainerId,
                         name: t.name,
+                        score: t.score,
                         completed: t.completedPt,
                         paid: t.paidPt,
                         debt: t.debtPt,
@@ -434,7 +435,20 @@ export function ClubAnalyticsPanel({
                         activeClients: t.activeClients,
                         amountMinor: t.amountMinor,
                       }))
-                  ).map((t, i) => (
+                  ).map((t, i) => {
+                    const row = t as {
+                      giftToPaidPct?: number | null;
+                      reformerPersonal?: number;
+                    };
+                    const giftPct =
+                      typeof row.giftToPaidPct === 'number'
+                        ? row.giftToPaidPct
+                        : null;
+                    const refPersonal =
+                      typeof row.reformerPersonal === 'number'
+                        ? row.reformerPersonal
+                        : 0;
+                    return (
                     <tr key={t.trainerId} className="border-t border-slate-800">
                       <td className="py-2 pr-2">
                         <Link
@@ -447,6 +461,15 @@ export function ClubAnalyticsPanel({
                         >
                           {i + 1}. {t.name}
                         </Link>
+                        {giftPct != null ? (
+                          <p className="text-[10px] text-slate-500">
+                            {`под→опл. ${giftPct}%${refPersonal ? ` · реф.инд. ${refPersonal}` : ''}`}
+                          </p>
+                        ) : refPersonal > 0 ? (
+                          <p className="text-[10px] text-slate-500">
+                            {`реф.инд. ${refPersonal}`}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="py-2 pr-2 text-right">
                         <Link
@@ -492,7 +515,8 @@ export function ClubAnalyticsPanel({
                         {money(t.amountMinor, currency)}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -530,6 +554,11 @@ export function ClubAnalyticsPanel({
                         >
                           {i + 1}. {t.name}
                         </Link>
+                        {t.reformerGroup ? (
+                          <p className="text-[10px] text-slate-500">
+                            реформер {t.reformerGroup}
+                          </p>
+                        ) : null}
                       </td>
                       <td className="py-2 pr-2 text-right">
                         <Link

@@ -343,7 +343,11 @@ export interface BookingControlListQuery {
   performerId?: string;
   status?: BookingControlStatus | 'ALL';
   needsReview?: boolean;
-  payment?: 'PAID' | 'DEBT' | 'ALL';
+  payment?: 'PAID' | 'DEBT' | 'GIFT' | 'ALL';
+  /** Reformer hall deep-link (room/title). */
+  hall?: 'REFORMER';
+  /** Personal reformer PT only (title match). */
+  reformer?: 'personal';
   /** Substring match on clientName (case-insensitive). */
   client?: string;
   /** Exact FitGO client user id, or match guest by same normalized name. */

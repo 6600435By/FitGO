@@ -22,7 +22,11 @@ function TrainerMySessionsInner() {
     searchParams.get('needsReview') === 'true';
   const paymentRaw = searchParams.get('payment')?.trim()?.toUpperCase();
   const initialPayment =
-    paymentRaw === 'DEBT' || paymentRaw === 'PAID' ? paymentRaw : 'ALL';
+    paymentRaw === 'DEBT' ||
+    paymentRaw === 'PAID' ||
+    paymentRaw === 'GIFT'
+      ? paymentRaw
+      : 'ALL';
   const initialSessionKey = searchParams.get('session')?.trim() || undefined;
   const initialClient = searchParams.get('client')?.trim() || undefined;
   const initialClientId = searchParams.get('clientId')?.trim() || undefined;
@@ -42,6 +46,11 @@ function TrainerMySessionsInner() {
   const initialConducted =
     searchParams.get('conducted') === '1' ||
     searchParams.get('conducted') === 'true';
+  const hallRaw = searchParams.get('hall')?.trim()?.toUpperCase();
+  const initialHall = hallRaw === 'REFORMER' ? hallRaw : undefined;
+  const reformerRaw = searchParams.get('reformer')?.trim()?.toLowerCase();
+  const initialReformer =
+    reformerRaw === 'personal' ? reformerRaw : undefined;
 
   const panelApi = useMemo(() => createTrainerBookingControlApi(), []);
 
@@ -71,6 +80,8 @@ function TrainerMySessionsInner() {
       initialKind={initialKind}
       initialStatus={initialStatus}
       initialConducted={initialConducted}
+      initialHall={initialHall}
+      initialReformer={initialReformer}
     />
   );
 }
