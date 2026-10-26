@@ -1170,33 +1170,80 @@ export type PackageUnitPriceInput = {
 };
 
 /**
+ * List unit × (1 − pack discount%). Club rule: 5 → 5%, 10 → 10% (same as SPA blocks).
+ * Used when 1C membership stores list totals (50×10=500) while sale was discounted (450).
+ */
+export function applyPackListUnitDiscountMinor(
+  listUnitMinor: number,
+  packQty: number,
+): number {
+  if (!(listUnitMinor > 0) || !(packQty > 1)) {
+    return Math.round(Math.max(0, listUnitMinor));
+  }
+  const pct = spaBlockDiscountPct(packQty);
+  return Math.round((listUnitMinor * (100 - pct)) / 100);
+}
+
+/**
  * Per-conducted-visit price (minor) for PT / reformer / SPA pack write-offs.
- * Prefer 1C unit → listed unit in basis/title → packageAmount/qty for countable
- * packs only («N ПТ», «реформер N», «курс массажа N») — never VIP membership ÷ all quotas.
+ * Prefer packageAmount/qty when the membership already has a discounted total;
+ * when amount/unit equals list×N (or listed «(50р.)»), apply pack discount
+ * (5→5%, 10→10%). Never VIP membership ÷ all quotas.
  */
 export function resolvePackageUnitPriceMinor(
   input: PackageUnitPriceInput,
 ): number | undefined {
-  const unit = input.unitPriceMinor ?? 0;
-  if (unit > 0) return Math.round(unit);
-
-  const listedMajor =
-    parseListedUnitPriceMajor(input.paymentBasis) ??
-    parseListedUnitPriceMajor(input.sessionTitle);
-  if (listedMajor != null && listedMajor > 0) {
-    return Math.round(listedMajor * 100);
-  }
-
   const countableQty =
     parsePackVisitCountFromTitle(input.paymentBasis) ??
     parsePackVisitCountFromTitle(input.sessionTitle);
-  if (countableQty == null || countableQty <= 0) return undefined;
-
-  const pkgAmt = input.packageAmountMinor ?? 0;
   const qty =
     input.packageQty != null && input.packageQty > 0
       ? input.packageQty
-      : countableQty;
-  if (pkgAmt > 0 && qty > 0) return Math.round(pkgAmt / qty);
+      : countableQty != null && countableQty > 0
+        ? countableQty
+        : null;
+  const pkgAmt = input.packageAmountMinor ?? 0;
+  const unit = input.unitPriceMinor ?? 0;
+  const listedMajor =
+    parseListedUnitPriceMajor(input.paymentBasis) ??
+    parseListedUnitPriceMajor(input.sessionTitle);
+  const listedMinor =
+    listedMajor != null && listedMajor > 0
+      ? Math.round(listedMajor * 100)
+      : 0;
+
+  // Membership often stores list total (50×10=500) while sale was 450 (−10%).
+  if (pkgAmt > 0 && qty != null && qty > 0) {
+    const fromPkg = Math.round(pkgAmt / qty);
+    if (qty > 1 && listedMinor > 0) {
+      const listTotal = listedMinor * qty;
+      // Within 1 minor per visit → treat as list, apply pack discount.
+      if (Math.abs(pkgAmt - listTotal) <= qty) {
+        return applyPackListUnitDiscountMinor(listedMinor, qty);
+      }
+    }
+    return fromPkg;
+  }
+
+  if (unit > 0) {
+    // 1C unit == listed catalog on a countable pack → list price, discount it.
+    if (
+      qty != null &&
+      qty > 1 &&
+      listedMinor > 0 &&
+      Math.abs(unit - listedMinor) <= 1
+    ) {
+      return applyPackListUnitDiscountMinor(unit, qty);
+    }
+    return Math.round(unit);
+  }
+
+  if (listedMinor > 0) {
+    if (qty != null && qty > 1) {
+      return applyPackListUnitDiscountMinor(listedMinor, qty);
+    }
+    return listedMinor;
+  }
+
   return undefined;
 }

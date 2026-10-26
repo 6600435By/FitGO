@@ -44,6 +44,7 @@ import {
   isSpaAllSportsBioimpedance,
   isSpaLikeSessionTitle,
   membershipNameFromPaymentBasis,
+  resolvePackageUnitPriceMinor,
   spaSettlementLabelRu,
   type BookingControlDetail,
   type BookingControlHistoryEvent,
@@ -382,7 +383,13 @@ export class BookingControlService {
         payTag,
         needsReview: openKeys.has(sessionKey),
         fitgoBookingId,
-        priceMinor: primaryMember?.unitPriceMinor ?? undefined,
+        priceMinor: resolvePackageUnitPriceMinor({
+          unitPriceMinor: primaryMember?.unitPriceMinor,
+          packageAmountMinor: primaryMember?.packageAmountMinor,
+          packageQty: primaryMember?.packageQty,
+          paymentBasis: primaryMember?.paymentBasis,
+          sessionTitle: s.title,
+        }),
       });
     }
 
@@ -1026,7 +1033,13 @@ export class BookingControlService {
               source: '1C',
             })
           : undefined;
-      const unitPrice = primary?.unitPriceMinor ?? undefined;
+      const unitPrice = resolvePackageUnitPriceMinor({
+        unitPriceMinor: primary?.unitPriceMinor,
+        packageAmountMinor: primary?.packageAmountMinor,
+        packageQty: primary?.packageQty,
+        paymentBasis: primary?.paymentBasis,
+        sessionTitle: s.title,
+      });
       const matchedPrice = matched
         ? (matched as { priceMinor?: number | null }).priceMinor ?? undefined
         : undefined;
@@ -5606,7 +5619,16 @@ export class BookingControlService {
           : SpaBookingStatus.CONFIRMED,
         origin,
         paymentType,
-        priceMinor: primary?.unitPriceMinor ?? service.priceMinor ?? null,
+        priceMinor:
+          resolvePackageUnitPriceMinor({
+            unitPriceMinor: primary?.unitPriceMinor,
+            packageAmountMinor: primary?.packageAmountMinor,
+            packageQty: primary?.packageQty,
+            paymentBasis: primary?.paymentBasis,
+            sessionTitle: onex.title,
+          }) ??
+          service.priceMinor ??
+          null,
         membershipServiceName: membershipName ?? null,
         crmDocRef: onex.externalId,
         consumedInCrmAt: completed ? onex.startAt : null,
