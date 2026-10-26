@@ -27,6 +27,9 @@ export interface BookingControlRemark {
   status: 'OPEN' | 'CLOSED';
   staffComment: string;
   staffName: string;
+  /** Who should check and mark «Отработано» (manager/SA assignment). */
+  assigneeId?: string;
+  assigneeName?: string;
   adminComment?: string;
   adminName?: string;
   createdAt: string;

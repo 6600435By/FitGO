@@ -1,10 +1,11 @@
 'use client';
 
+import { UserRole } from '@fitgo/shared-types';
 import { Suspense, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { createBookingControlApi } from '@/lib/booking-control-api';
 
 function AdminBookingControlInner() {
@@ -43,10 +44,18 @@ function AdminBookingControlInner() {
     };
   }, []);
 
+  const canAssignRemark = useMemo(() => {
+    const roles = getUser()?.roles ?? [];
+    return (
+      roles.includes(UserRole.SUPER_ADMIN) || roles.includes(UserRole.MANAGER)
+    );
+  }, []);
+
   return (
     <BookingControlPanel
       api={panelApi}
       canResolve
+      canAssignRemark={canAssignRemark}
       canMarkAttendance
       canApproveGroup
       approvalActor="admin"

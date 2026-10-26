@@ -19,15 +19,36 @@ export function createBookingControlApi(
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlDetail(token, base, sessionKey);
     },
-    openRemark: async (sessionKey, comment) => {
+    openRemark: async (sessionKey, comment, assigneeId) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');
-      return api.bookingControlRemark(token, base, sessionKey, comment);
+      return api.bookingControlRemark(
+        token,
+        base,
+        sessionKey,
+        comment,
+        assigneeId,
+      );
     },
     resolveRemark: async (sessionKey, adminComment) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlResolve(token, base, sessionKey, adminComment);
+    },
+    listRemarkAssignees: async () => {
+      const token = getToken();
+      if (!token) return [];
+      return api.bookingControlRemarkAssignees(token, base);
+    },
+    assignRemark: async (sessionKey, assigneeId) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlAssignRemark(
+        token,
+        base,
+        sessionKey,
+        assigneeId,
+      );
     },
     listPerformers: async () => {
       const token = getToken();

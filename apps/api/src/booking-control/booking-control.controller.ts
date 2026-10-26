@@ -79,16 +79,37 @@ export class BookingControlController {
     return this.list(requireClubId(user), query);
   }
 
+  @Get('super-admin/booking-control/remark-assignees')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  remarkAssigneesSuperAdmin(@CurrentUser() user: JwtPayload) {
+    return this.bookingControl.listRemarkAssignees(user);
+  }
+
   @Post('super-admin/booking-control/remark')
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   openRemarkSuperAdmin(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { sessionKey?: string; comment?: string },
+    @Body()
+    body: { sessionKey?: string; comment?: string; assigneeId?: string },
   ) {
     return this.bookingControl.openRemark(
       user,
       body.sessionKey ?? '',
       body.comment ?? '',
+      body.assigneeId,
+    );
+  }
+
+  @Post('super-admin/booking-control/assign-remark')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  assignRemarkSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; assigneeId?: string | null },
+  ) {
+    return this.bookingControl.assignRemark(
+      user,
+      body.sessionKey ?? '',
+      body.assigneeId ?? null,
     );
   }
 
@@ -101,7 +122,7 @@ export class BookingControlController {
     return this.bookingControl.resolveRemark(
       user,
       body.sessionKey ?? '',
-      body.adminComment ?? '',
+      body.adminComment,
     );
   }
 
@@ -208,16 +229,37 @@ export class BookingControlController {
     return this.list(requireClubId(user), query);
   }
 
+  @Get('admin/booking-control/remark-assignees')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  remarkAssigneesAdmin(@CurrentUser() user: JwtPayload) {
+    return this.bookingControl.listRemarkAssignees(user);
+  }
+
   @Post('admin/booking-control/remark')
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
   openRemarkAdmin(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { sessionKey?: string; comment?: string },
+    @Body()
+    body: { sessionKey?: string; comment?: string; assigneeId?: string },
   ) {
     return this.bookingControl.openRemark(
       user,
       body.sessionKey ?? '',
       body.comment ?? '',
+      body.assigneeId,
+    );
+  }
+
+  @Post('admin/booking-control/assign-remark')
+  @Roles(UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  assignRemarkAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; assigneeId?: string | null },
+  ) {
+    return this.bookingControl.assignRemark(
+      user,
+      body.sessionKey ?? '',
+      body.assigneeId ?? null,
     );
   }
 
@@ -230,7 +272,7 @@ export class BookingControlController {
     return this.bookingControl.resolveRemark(
       user,
       body.sessionKey ?? '',
-      body.adminComment ?? '',
+      body.adminComment,
     );
   }
 

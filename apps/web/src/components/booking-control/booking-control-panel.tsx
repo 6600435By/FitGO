@@ -63,10 +63,18 @@ export type BookingControlApi = {
   openRemark: (
     sessionKey: string,
     comment: string,
+    assigneeId?: string,
   ) => Promise<unknown>;
   resolveRemark?: (
     sessionKey: string,
-    adminComment: string,
+    adminComment?: string,
+  ) => Promise<unknown>;
+  /** Club admins/managers for remark assignee picker (manager/SA). */
+  listRemarkAssignees?: () => Promise<BookingControlPerformerOption[]>;
+  /** Manager/SA: set who should check and mark «Отработано». */
+  assignRemark?: (
+    sessionKey: string,
+    assigneeId: string | null,
   ) => Promise<unknown>;
   /** Staff for «Сотрудник» filter (admin / SA). */
   listPerformers?: () => Promise<BookingControlPerformerOption[]>;
@@ -158,6 +166,8 @@ type Props = {
   api: BookingControlApi;
   /** Admin can resolve remarks */
   canResolve?: boolean;
+  /** Manager / SA: pick who should check and mark «Отработано» */
+  canAssignRemark?: boolean;
   /** Admin/manager/SA: mark GROUP attendance and refresh from 1C */
   canMarkAttendance?: boolean;
   /** Trainer: checkboxes for who was present */
@@ -398,6 +408,7 @@ function spaPendingLabel(
 export function BookingControlPanel({
   api,
   canResolve = false,
+  canAssignRemark = false,
   canMarkAttendance = false,
   canTrainerSeen = false,
   canApproveGroup = false,
@@ -670,6 +681,11 @@ export function BookingControlPanel({
   const [selected, setSelected] = useState<BookingControlDetail | null>(null);
   const [comment, setComment] = useState('');
   const [adminComment, setAdminComment] = useState('');
+  const [remarkAssignees, setRemarkAssignees] = useState<
+    BookingControlPerformerOption[]
+  >([]);
+  const [remarkAssigneeId, setRemarkAssigneeId] = useState('');
+  const [assignBusy, setAssignBusy] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
   const [photosOpen, setPhotosOpen] = useState(false);
@@ -868,6 +884,22 @@ export function BookingControlPanel({
   }, [api, detailOnly]);
 
   useEffect(() => {
+    if (!canAssignRemark || !api.listRemarkAssignees) return;
+    let cancelled = false;
+    api
+      .listRemarkAssignees()
+      .then((rows) => {
+        if (!cancelled) setRemarkAssignees(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setRemarkAssignees([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, canAssignRemark]);
+
+  useEffect(() => {
     if (!initialSessionKey) return;
     void openDetail(initialSessionKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- open once from URL
@@ -996,6 +1028,7 @@ export function BookingControlPanel({
     setAdoptServiceId('');
     setLinkPhone(d.guestPhone ?? '');
     setComment(d.groupApproval?.trainerComment ?? '');
+    setRemarkAssigneeId(d.remark?.assigneeId ?? '');
     const seen = new Set(
       d.groupApproval?.trainerSeenClientIds ??
         d.members.filter((m) => m.trainerSeen).map((m) => m.externalId),
@@ -1010,6 +1043,7 @@ export function BookingControlPanel({
     flushPendingTrainerSeen();
     setComment('');
     setAdminComment('');
+    setRemarkAssigneeId('');
     setHistoryOpen(false);
     setApprovalNotesOpen(false);
     setDetailError('');
@@ -1346,9 +1380,20 @@ export function BookingControlPanel({
   const submitRemark = async () => {
     if (!selected || !comment.trim()) return;
     try {
-      await api.openRemark(selected.sessionKey, comment.trim());
-      setMessage('Замечание отправлено — занятие на проверке');
+      await api.openRemark(
+        selected.sessionKey,
+        comment.trim(),
+        canAssignRemark && remarkAssigneeId
+          ? remarkAssigneeId
+          : undefined,
+      );
+      setMessage(
+        canAssignRemark && remarkAssigneeId
+          ? 'Отправлено на проверку выбранному сотруднику'
+          : 'Замечание отправлено — занятие на проверке',
+      );
       setComment('');
+      setRemarkAssigneeId('');
       await openDetail(selected.sessionKey);
       load();
     } catch (e) {
@@ -1356,12 +1401,32 @@ export function BookingControlPanel({
     }
   };
 
-  const resolve = async () => {
-    if (!selected || !api.resolveRemark || !adminComment.trim()) return;
+  const assignOpenRemark = async () => {
+    if (!selected || !api.assignRemark || !remarkAssigneeId) return;
+    setAssignBusy(true);
+    setMessage('');
     try {
-      await api.resolveRemark(selected.sessionKey, adminComment.trim());
+      await api.assignRemark(selected.sessionKey, remarkAssigneeId);
+      setMessage('Исполнитель назначен — запись на проверке у него');
+      await openDetail(selected.sessionKey);
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка назначения');
+    } finally {
+      setAssignBusy(false);
+    }
+  };
+
+  const resolve = async () => {
+    if (!selected || !api.resolveRemark) return;
+    try {
+      await api.resolveRemark(
+        selected.sessionKey,
+        adminComment.trim() || undefined,
+      );
       setMessage('Замечание отработано');
       setAdminComment('');
+      setRemarkAssigneeId('');
       await openDetail(selected.sessionKey);
       load();
     } catch (e) {
@@ -3151,6 +3216,12 @@ export function BookingControlPanel({
                     <p className="mt-1 text-slate-300">
                       {selected.remark.staffName}: {selected.remark.staffComment}
                     </p>
+                    {selected.remark.assigneeName ? (
+                      <p className="mt-1 text-xs text-amber-200/90">
+                        Проверить / отработать:{' '}
+                        {selected.remark.assigneeName}
+                      </p>
+                    ) : null}
                     {holdPreview?.line ? (
                       <p className="mt-2 whitespace-pre-wrap font-mono text-[11px] leading-snug text-slate-400">
                         {holdPreview.line.replace(/\t/g, ' · ')}
@@ -3174,6 +3245,25 @@ export function BookingControlPanel({
                       value={comment}
                       onChange={(e) => setComment(e.target.value)}
                     />
+                    {canAssignRemark &&
+                    api.assignRemark &&
+                    remarkAssignees.length > 0 ? (
+                      <label className="block text-xs text-slate-500">
+                        Кто должен проверить и отработать
+                        <select
+                          className="input mt-1 block w-full text-sm"
+                          value={remarkAssigneeId}
+                          onChange={(e) => setRemarkAssigneeId(e.target.value)}
+                        >
+                          <option value="">Общая очередь</option>
+                          {remarkAssignees.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                     <button
                       type="button"
                       className="btn-secondary w-full text-sm"
@@ -3198,17 +3288,47 @@ export function BookingControlPanel({
                   selected.remark?.status === 'OPEN' &&
                   api.resolveRemark && (
                     <div className="space-y-2 border-t border-slate-800 pt-3">
+                      {canAssignRemark &&
+                      api.assignRemark &&
+                      remarkAssignees.length > 0 ? (
+                        <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+                          <p className="text-xs font-medium text-slate-300">
+                            На доработку — кто проверит
+                          </p>
+                          <select
+                            className="input w-full text-sm"
+                            value={remarkAssigneeId}
+                            onChange={(e) =>
+                              setRemarkAssigneeId(e.target.value)
+                            }
+                          >
+                            <option value="">Выберите сотрудника</option>
+                            {remarkAssignees.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className="btn-secondary w-full text-sm"
+                            onClick={() => void assignOpenRemark()}
+                            disabled={assignBusy || !remarkAssigneeId}
+                          >
+                            {assignBusy ? 'Назначаем…' : 'Передать на проверку'}
+                          </button>
+                        </div>
+                      ) : null}
                       <textarea
                         className="input min-h-[4rem] w-full text-sm"
-                        placeholder="Ответ администратора"
+                        placeholder="Ответ администратора (необязательно)"
                         value={adminComment}
                         onChange={(e) => setAdminComment(e.target.value)}
                       />
                       <button
                         type="button"
                         className="btn-primary w-full text-sm"
-                        onClick={resolve}
-                        disabled={!adminComment.trim()}
+                        onClick={() => void resolve()}
                       >
                         Отработано
                       </button>
@@ -3221,19 +3341,54 @@ export function BookingControlPanel({
                     <p className="mt-1 text-slate-300">
                       {selected.remark.staffName}: {selected.remark.staffComment}
                     </p>
+                    {selected.remark.assigneeName ? (
+                      <p className="mt-1 text-xs text-amber-200/90">
+                        Проверить / отработать:{' '}
+                        {selected.remark.assigneeName}
+                      </p>
+                    ) : null}
                     {canResolve && api.resolveRemark ? (
                       <div className="mt-2 space-y-2">
+                        {canAssignRemark &&
+                        api.assignRemark &&
+                        remarkAssignees.length > 0 ? (
+                          <div className="space-y-2">
+                            <select
+                              className="input w-full text-sm"
+                              value={remarkAssigneeId}
+                              onChange={(e) =>
+                                setRemarkAssigneeId(e.target.value)
+                              }
+                            >
+                              <option value="">Выберите сотрудника</option>
+                              {remarkAssignees.map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {a.name}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className="btn-secondary w-full text-sm"
+                              onClick={() => void assignOpenRemark()}
+                              disabled={assignBusy || !remarkAssigneeId}
+                            >
+                              {assignBusy
+                                ? 'Назначаем…'
+                                : 'Передать на проверку'}
+                            </button>
+                          </div>
+                        ) : null}
                         <textarea
                           className="input min-h-[3rem] w-full text-sm"
-                          placeholder="Ответ администратора"
+                          placeholder="Ответ администратора (необязательно)"
                           value={adminComment}
                           onChange={(e) => setAdminComment(e.target.value)}
                         />
                         <button
                           type="button"
                           className="btn-primary w-full text-sm"
-                          onClick={resolve}
-                          disabled={!adminComment.trim()}
+                          onClick={() => void resolve()}
                         >
                           Отработано
                         </button>

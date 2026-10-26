@@ -954,10 +954,7 @@ export class BookingControlService {
           : [canonicalKey, sessionKey];
       const remarks = await this.prisma.sessionRemark.findMany({
         where: { clubId, sessionKey: { in: remarkKeys } },
-        include: {
-          staff: { select: { firstName: true, lastName: true } },
-          admin: { select: { firstName: true, lastName: true } },
-        },
+        include: this.remarkInclude,
         orderBy: { createdAt: 'desc' },
       });
       const mappedRemarks = remarks.map((r) => this.mapRemark(r));
@@ -1256,10 +1253,7 @@ export class BookingControlService {
 
     const remarks = await this.prisma.sessionRemark.findMany({
       where: { clubId, sessionKey },
-      include: {
-        staff: { select: { firstName: true, lastName: true } },
-        admin: { select: { firstName: true, lastName: true } },
-      },
+      include: this.remarkInclude,
       orderBy: { createdAt: 'desc' },
     });
     const mappedRemarks = remarks.map((r) => this.mapRemark(r));
@@ -2640,10 +2634,42 @@ export class BookingControlService {
     return new Set(rows.map((r) => r.sessionKey));
   }
 
+  private readonly remarkInclude = {
+    staff: { select: { firstName: true, lastName: true } },
+    admin: { select: { firstName: true, lastName: true } },
+    assignee: { select: { firstName: true, lastName: true } },
+  } as const;
+
+  /** Club admins / managers who can be asked to check a remark. */
+  async listRemarkAssignees(
+    actor: JwtPayload,
+  ): Promise<Array<{ id: string; name: string }>> {
+    const clubId = requireClubId(actor);
+    if (!this.isAdminLike(actor)) {
+      throw new ForbiddenException('Только администратор');
+    }
+    const rows = await this.prisma.user.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        roles: {
+          some: { role: { in: [Role.ADMIN, Role.MANAGER] } },
+        },
+      },
+      select: { id: true, firstName: true, lastName: true },
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+    });
+    return rows.map((u) => ({
+      id: u.id,
+      name: `${u.lastName} ${u.firstName}`.trim(),
+    }));
+  }
+
   async openRemark(
     actor: JwtPayload,
     sessionKey: string,
     comment: string,
+    assigneeId?: string | null,
   ): Promise<BookingControlRemark> {
     const clubId = requireClubId(actor);
     const text = comment?.trim();
@@ -2680,6 +2706,20 @@ export class BookingControlService {
           ? SessionRemarkKind.PT
           : (kindParsed.kind as SessionRemarkKind);
 
+    let resolvedAssigneeId: string | null = null;
+    const wantedAssignee = assigneeId?.trim() || null;
+    if (wantedAssignee) {
+      if (!this.isManagerLike(actor)) {
+        throw new ForbiddenException(
+          'Назначить исполнителя может управляющий или супер-админ',
+        );
+      }
+      resolvedAssigneeId = await this.ensureRemarkAssignee(
+        clubId,
+        wantedAssignee,
+      );
+    }
+
     const row = await this.prisma.sessionRemark.create({
       data: {
         clubId,
@@ -2688,32 +2728,97 @@ export class BookingControlService {
         status: SessionRemarkStatus.OPEN,
         staffComment: text,
         staffId: actor.sub,
+        assigneeId: resolvedAssigneeId,
       },
-      include: {
-        staff: { select: { firstName: true, lastName: true } },
-        admin: { select: { firstName: true, lastName: true } },
+      include: this.remarkInclude,
+    });
+
+    if (resolvedAssigneeId && resolvedAssigneeId !== actor.sub) {
+      await this.notifyRemarkAssignee(
+        resolvedAssigneeId,
+        actor.sub,
+        detail.title,
+        text,
+      );
+    }
+
+    return this.mapRemark(row);
+  }
+
+  /**
+   * Manager / SA: assign or reassign who should check and mark «Отработано».
+   * Soft assignment — any admin can still resolve.
+   */
+  async assignRemark(
+    actor: JwtPayload,
+    sessionKey: string,
+    assigneeId: string | null,
+  ): Promise<BookingControlRemark> {
+    const clubId = requireClubId(actor);
+    if (!this.isManagerLike(actor)) {
+      throw new ForbiddenException(
+        'Назначить исполнителя может управляющий или супер-админ',
+      );
+    }
+    if (!sessionKey?.trim()) {
+      throw new BadRequestException('Не указано занятие');
+    }
+
+    const detail = await this.detail(clubId, sessionKey);
+    const open = await this.prisma.sessionRemark.findFirst({
+      where: {
+        clubId,
+        sessionKey: detail.sessionKey,
+        status: SessionRemarkStatus.OPEN,
       },
     });
+    if (!open) throw new NotFoundException('Открытое замечание не найдено');
+
+    const raw = assigneeId?.trim() || null;
+    const nextAssigneeId = raw
+      ? await this.ensureRemarkAssignee(clubId, raw)
+      : null;
+
+    const row = await this.prisma.sessionRemark.update({
+      where: { id: open.id },
+      data: { assigneeId: nextAssigneeId },
+      include: this.remarkInclude,
+    });
+
+    if (nextAssigneeId && nextAssigneeId !== actor.sub) {
+      await this.notifyRemarkAssignee(
+        nextAssigneeId,
+        actor.sub,
+        detail.title,
+        open.staffComment,
+      );
+    }
+
     return this.mapRemark(row);
   }
 
   async resolveRemark(
     actor: JwtPayload,
     sessionKey: string,
-    adminComment: string,
+    adminComment?: string | null,
   ): Promise<BookingControlRemark> {
     const clubId = requireClubId(actor);
     if (!this.isAdminLike(actor)) {
       throw new ForbiddenException('Только администратор');
     }
-    const text = adminComment?.trim();
-    if (!text) throw new BadRequestException('Укажите ответ');
+    // Comment optional — empty → «Отработано» (button was blocked by required text).
+    const text = adminComment?.trim() || 'Отработано';
     if (!sessionKey?.trim()) {
       throw new BadRequestException('Не указано занятие');
     }
 
+    const detail = await this.detail(clubId, sessionKey);
     const open = await this.prisma.sessionRemark.findFirst({
-      where: { clubId, sessionKey, status: SessionRemarkStatus.OPEN },
+      where: {
+        clubId,
+        sessionKey: detail.sessionKey,
+        status: SessionRemarkStatus.OPEN,
+      },
     });
     if (!open) throw new NotFoundException('Открытое замечание не найдено');
 
@@ -2725,10 +2830,7 @@ export class BookingControlService {
         adminId: actor.sub,
         closedAt: new Date(),
       },
-      include: {
-        staff: { select: { firstName: true, lastName: true } },
-        admin: { select: { firstName: true, lastName: true } },
-      },
+      include: this.remarkInclude,
     });
     return this.mapRemark(row);
   }
@@ -2763,6 +2865,13 @@ export class BookingControlService {
       roles.includes(UserRole.SUPER_ADMIN) ||
       roles.includes(UserRole.MANAGER) ||
       roles.includes(UserRole.ADMIN)
+    );
+  }
+
+  private isManagerLike(actor: JwtPayload): boolean {
+    const roles = actor.roles ?? [];
+    return (
+      roles.includes(UserRole.SUPER_ADMIN) || roles.includes(UserRole.MANAGER)
     );
   }
 
@@ -3286,17 +3395,23 @@ export class BookingControlService {
     id: string;
     status: SessionRemarkStatus;
     staffComment: string;
+    assigneeId?: string | null;
     adminComment: string | null;
     createdAt: Date;
     closedAt: Date | null;
     staff: { firstName: string; lastName: string };
     admin: { firstName: string; lastName: string } | null;
+    assignee?: { firstName: string; lastName: string } | null;
   }): BookingControlRemark {
     return {
       id: r.id,
       status: r.status === SessionRemarkStatus.OPEN ? 'OPEN' : 'CLOSED',
       staffComment: r.staffComment,
       staffName: `${r.staff.lastName} ${r.staff.firstName}`.trim(),
+      assigneeId: r.assigneeId ?? undefined,
+      assigneeName: r.assignee
+        ? `${r.assignee.lastName} ${r.assignee.firstName}`.trim()
+        : undefined,
       adminComment: r.adminComment ?? undefined,
       adminName: r.admin
         ? `${r.admin.lastName} ${r.admin.firstName}`.trim()
@@ -3304,6 +3419,48 @@ export class BookingControlService {
       createdAt: r.createdAt.toISOString(),
       closedAt: r.closedAt?.toISOString(),
     };
+  }
+
+  private async ensureRemarkAssignee(
+    clubId: string,
+    userId: string,
+  ): Promise<string> {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        id: userId,
+        clubId,
+        isActive: true,
+        roles: { some: { role: { in: [Role.ADMIN, Role.MANAGER] } } },
+      },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new BadRequestException(
+        'Исполнитель должен быть администратором или управляющим клуба',
+      );
+    }
+    return user.id;
+  }
+
+  private async notifyRemarkAssignee(
+    assigneeId: string,
+    senderId: string,
+    sessionTitle: string,
+    comment: string,
+  ) {
+    try {
+      await this.prisma.notification.create({
+        data: {
+          userId: assigneeId,
+          type: 'GENERAL',
+          title: 'Запись на проверку',
+          body: `${sessionTitle}: ${comment}`.slice(0, 400),
+          senderId,
+        },
+      });
+    } catch {
+      /* non-fatal */
+    }
   }
 
   private async loadStaffMap(clubId: string) {

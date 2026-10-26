@@ -59,6 +59,7 @@ function SuperAdminBookingControlInner() {
     <BookingControlPanel
       api={panelApi}
       canResolve
+      canAssignRemark
       canMarkAttendance
       canApproveGroup
       approvalActor="override"

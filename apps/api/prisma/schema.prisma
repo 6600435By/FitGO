@@ -712,6 +712,7 @@ model User {
   staffShifts             StaffShift[]            @relation("StaffShifts")
   sessionRemarksStaff     SessionRemark[]         @relation("SessionRemarkStaff")
   sessionRemarksAdmin     SessionRemark[]         @relation("SessionRemarkAdmin")
+  sessionRemarksAssignee  SessionRemark[]         @relation("SessionRemarkAssignee")
   groupApprovalsTrainer   GroupClassApproval[]    @relation("GroupApprovalTrainer")
   groupApprovalsAdmin     GroupClassApproval[]    @relation("GroupApprovalAdmin")
   groupApprovalsOverride  GroupClassApproval[]    @relation("GroupApprovalOverride")
@@ -2809,19 +2810,23 @@ model SessionRemark {
   status        SessionRemarkStatus  @default(OPEN)
   staffComment  String
   staffId       String
+  /// Admin/manager who should check and mark «Отработано» (soft assignment).
+  assigneeId    String?
   adminComment  String?
   adminId       String?
   closedAt      DateTime?
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
 
-  club  Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
-  staff User @relation("SessionRemarkStaff", fields: [staffId], references: [id], onDelete: Cascade)
-  admin User? @relation("SessionRemarkAdmin", fields: [adminId], references: [id], onDelete: SetNull)
+  club     Club  @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  staff    User  @relation("SessionRemarkStaff", fields: [staffId], references: [id], onDelete: Cascade)
+  assignee User? @relation("SessionRemarkAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  admin    User? @relation("SessionRemarkAdmin", fields: [adminId], references: [id], onDelete: SetNull)
 
   @@index([clubId, status, createdAt])
   @@index([clubId, sessionKey, status])
   @@index([staffId])
+  @@index([assigneeId])
 }
 
 enum HallClassSnapshotStatus {

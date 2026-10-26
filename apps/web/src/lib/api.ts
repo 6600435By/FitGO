@@ -2739,12 +2739,42 @@ export const api = {
     base: 'super-admin' | 'admin' | 'trainer' | 'specialist',
     sessionKey: string,
     comment: string,
+    assigneeId?: string,
   ) =>
     request<import('@fitgo/shared-types').BookingControlRemark>(
       `/${base}/booking-control/remark`,
       {
         method: 'POST',
-        body: JSON.stringify({ sessionKey, comment }),
+        body: JSON.stringify({
+          sessionKey,
+          comment,
+          ...(assigneeId ? { assigneeId } : {}),
+        }),
+      },
+      token,
+    ),
+
+  bookingControlRemarkAssignees: (
+    token: string,
+    base: 'super-admin' | 'admin',
+  ) =>
+    request<Array<{ id: string; name: string }>>(
+      `/${base}/booking-control/remark-assignees`,
+      {},
+      token,
+    ),
+
+  bookingControlAssignRemark: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    sessionKey: string,
+    assigneeId: string | null,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlRemark>(
+      `/${base}/booking-control/assign-remark`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sessionKey, assigneeId }),
       },
       token,
     ),
@@ -2753,13 +2783,16 @@ export const api = {
     token: string,
     base: 'super-admin' | 'admin',
     sessionKey: string,
-    adminComment: string,
+    adminComment?: string,
   ) =>
     request<import('@fitgo/shared-types').BookingControlRemark>(
       `/${base}/booking-control/resolve`,
       {
         method: 'POST',
-        body: JSON.stringify({ sessionKey, adminComment }),
+        body: JSON.stringify({
+          sessionKey,
+          ...(adminComment?.trim() ? { adminComment: adminComment.trim() } : {}),
+        }),
       },
       token,
     ),
