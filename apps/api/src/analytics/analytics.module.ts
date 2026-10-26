@@ -7,6 +7,7 @@ import { PayrollModule } from '../payroll/payroll.module';
 import { AdminTaskReportService } from './admin-task-report.service';
 import { AnalyticsController } from './analytics.controller';
 import { ClubAnalyticsService } from './club-analytics.service';
+import { MembershipEfficiencyService } from './membership-efficiency.service';
 import { PricingAnalyticsService } from './pricing-analytics.service';
 import { StaffAnalyticsService } from './staff-analytics.service';
 import { TrainerMonthAnalyticsService } from './trainer-month-analytics.service';
@@ -26,6 +27,7 @@ import { TrainerMonthAnalyticsService } from './trainer-month-analytics.service'
     AdminTaskReportService,
     PricingAnalyticsService,
     TrainerMonthAnalyticsService,
+    MembershipEfficiencyService,
   ],
   exports: [
     ClubAnalyticsService,
@@ -33,6 +35,7 @@ import { TrainerMonthAnalyticsService } from './trainer-month-analytics.service'
     AdminTaskReportService,
     PricingAnalyticsService,
     TrainerMonthAnalyticsService,
+    MembershipEfficiencyService,
   ],
 })
 export class AnalyticsModule {}

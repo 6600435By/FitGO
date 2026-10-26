@@ -509,3 +509,253 @@ export interface AdminTaskWorkReport {
   /** Shown in UI so rating is transparent. */
   ratingFormula: string;
 }
+
+// ── Membership efficiency (абонементы) ──────────────────────────────────────
+
+export type MembershipEfficiencyBasis = 'ended' | 'active';
+export type MembershipEfficiencyView = 'retail' | 'cost';
+export type MembershipUtilizationSegment =
+  | 'max'
+  | 'normal'
+  | 'under'
+  | 'sleeping';
+
+/** One membership product family (VIP, Единый, …). */
+export interface MembershipFamilyConfig {
+  id: string;
+  label: string;
+  /** Case-insensitive substrings matched against productName / paymentBasis. */
+  namePatterns: string[];
+  /** Fallback term in months when not parsed from title. */
+  defaultMonths: number;
+  includesGp: boolean;
+  includesGym: boolean;
+  /** Massage visits included per month of term. */
+  massageQuotaPerMonth: number;
+  /** Solarium minutes included per month of term. */
+  solariumMinutesPerMonth: number;
+  /** Personal account credit per month (major currency, e.g. 16 BYN). */
+  personalAccountPerMonthMajor: number;
+}
+
+export interface MembershipEconomicsSettings {
+  families: MembershipFamilyConfig[];
+  /** Retail price of one massage (minor). Null = derive from sales. */
+  massageRetailMinor: number | null;
+  /** Retail price per solarium minute (minor). */
+  solariumMinuteRetailMinor: number | null;
+  /** Club cost of one massage (minor). Null = SPA motivation rate. */
+  massageCostMinor: number | null;
+  /** Club cost per solarium minute (minor). */
+  solariumMinuteCostMinor: number | null;
+  /** Fraction of PA spend that is club COGS (0–1). */
+  personalAccountCogsShare: number;
+  /** Overhead per visit (minor), optional. */
+  overheadPerVisitMinor: number;
+  /** Target GP visits per week for utilization index. */
+  normVisitsPerWeek: number;
+  /** Utilization segment boundaries on index (visits/week ÷ norm). */
+  segmentThresholds: {
+    max: number;
+    normal: number;
+    under: number;
+  };
+  /** Days without visit → sleeping. */
+  sleepingDays: number;
+}
+
+export interface MembershipDataQuality {
+  /** Share of ATTENDED GROUP visits with packageDocId (0–1). */
+  packageDocCoverage: number;
+  /** Share of membership instances with a matched sale (0–1). */
+  saleMatchCoverage: number;
+  /** Share of VIP-like instances with PA credit found (0–1). */
+  personalAccountCoverage: number;
+  warning: string | null;
+}
+
+export interface MembershipPriceAllocation {
+  paidMinor: number;
+  personalAccountAllocatedMinor: number;
+  massageAllocatedMinor: number;
+  solariumAllocatedMinor: number;
+  accessMinor: number;
+  accessGpMinor: number;
+  accessGymMinor: number;
+}
+
+export interface MembershipUsageFacts {
+  gpVisits: number;
+  gymVisits: number;
+  massageUsed: number;
+  solariumMinutesUsed: number;
+  /** PA spent (positive minor). */
+  personalAccountSpentMinor: number;
+  /** PA burned / expired (positive minor). */
+  personalAccountBurnedMinor: number;
+  massageQuota: number;
+  solariumMinutesQuota: number;
+  personalAccountCreditedMinor: number;
+}
+
+export interface MembershipCostBreakdown {
+  trainerMinor: number;
+  massageMinor: number;
+  solariumMinor: number;
+  personalAccountCogsMinor: number;
+  overheadMinor: number;
+  totalMinor: number;
+}
+
+export interface MembershipFamilyRow {
+  familyId: string;
+  label: string;
+  count: number;
+  avgPaidMinor: number;
+  avgMonths: number;
+  avgGpPerMonth: number;
+  avgGymPerMonth: number;
+  avgGpCostPerVisitMinor: number | null;
+  avgTrainerPerVisitMinor: number | null;
+  avgMarginPerVisitMinor: number | null;
+  marginPct: number | null;
+  massageUsePct: number | null;
+  solariumUsePct: number | null;
+  personalAccountUsePct: number | null;
+  burnedMinor: number;
+  burnedPctOfPaid: number | null;
+  /** Visits after which cumulative trainer cost exceeds GP access share. */
+  breakevenVisits: number | null;
+  status: 'green' | 'yellow' | 'red';
+}
+
+export interface MembershipVisitBucket {
+  key: string;
+  label: string;
+  count: number;
+  /** Inclusive min GP visits/month for this bucket. */
+  minPerMonth: number;
+  maxPerMonth: number | null;
+}
+
+export interface MembershipWaterfallStep {
+  key: string;
+  label: string;
+  /** Signed delta in minor (first step = paid, then negative costs). */
+  deltaMinor: number;
+  runningMinor: number;
+}
+
+export interface MembershipServicePromiseRow {
+  key: 'gp' | 'gym' | 'massage' | 'solarium' | 'personalAccount';
+  label: string;
+  promisedMinor: number;
+  usedMinor: number;
+  burnedMinor: number;
+}
+
+export interface MembershipEfficiencyKpis {
+  avgPaidMinor: AnalyticMetric;
+  avgGpPerMonth: AnalyticMetric;
+  gpCostPerVisitMinor: AnalyticMetric;
+  trainerPerVisitMinor: AnalyticMetric;
+  marginPerVisitMinor: AnalyticMetric;
+  burnedMinor: AnalyticMetric;
+}
+
+export interface MembershipEfficiencyReport {
+  from: string;
+  to: string;
+  basis: MembershipEfficiencyBasis;
+  view: MembershipEfficiencyView;
+  currency: string;
+  instanceCount: number;
+  kpis: MembershipEfficiencyKpis;
+  families: MembershipFamilyRow[];
+  waterfall: MembershipWaterfallStep[];
+  servicePromise: MembershipServicePromiseRow[];
+  visitDistribution: MembershipVisitBucket[];
+  /** Average breakeven GP visits (club). */
+  breakevenVisits: number | null;
+  insights: AnalyticInsight[];
+  dataQuality: MembershipDataQuality;
+  settings: MembershipEconomicsSettings;
+}
+
+export interface MembershipClassEfficiencyRow {
+  title: string;
+  sessions: number;
+  avgAttended: number;
+  avgFillPct: number | null;
+  earnMinor: number;
+  economicRevenueMinor: number;
+  marginMinor: number;
+  marginPerPersonMinor: number | null;
+  belowBreakeven: boolean;
+  minPeopleForBreakeven: number | null;
+}
+
+export interface MembershipTrainerEfficiencyRow {
+  trainerId: string;
+  name: string;
+  sessions: number;
+  avgAttended: number;
+  avgFillPct: number | null;
+  earnMinor: number;
+  economicRevenueMinor: number;
+  marginMinor: number;
+  marginPerPersonMinor: number | null;
+  belowBreakevenShare: number | null;
+  classes: MembershipClassEfficiencyRow[];
+}
+
+export interface MembershipTrainersReport {
+  from: string;
+  to: string;
+  basis: MembershipEfficiencyBasis;
+  currency: string;
+  trainers: MembershipTrainerEfficiencyRow[];
+}
+
+export interface MembershipClientRow {
+  clientExternalId: string;
+  clientName: string;
+  familyId: string;
+  familyLabel: string;
+  packageDocId: string;
+  productName: string;
+  paidMinor: number;
+  priceEstimated: boolean;
+  startDate: string | null;
+  endDate: string | null;
+  months: number;
+  gpVisits: number;
+  gymVisits: number;
+  gpPerMonth: number;
+  segment: MembershipUtilizationSegment;
+  massageUsed: number;
+  massageQuota: number;
+  solariumMinutesUsed: number;
+  solariumMinutesQuota: number;
+  personalAccountSpentMinor: number;
+  personalAccountBurnedMinor: number;
+  valueReceivedMinor: number;
+  burnedMinor: number;
+  gpCostPerVisitMinor: number | null;
+  trainerCostMinor: number;
+  marginMinor: number;
+  lastVisitDate: string | null;
+  endsWithin30d: boolean;
+}
+
+export interface MembershipClientsReport {
+  from: string;
+  to: string;
+  basis: MembershipEfficiencyBasis;
+  currency: string;
+  total: number;
+  page: number;
+  pageSize: number;
+  clients: MembershipClientRow[];
+  bySegment: Record<MembershipUtilizationSegment, number>;
+}

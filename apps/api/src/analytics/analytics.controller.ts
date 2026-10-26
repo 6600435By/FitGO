@@ -18,6 +18,10 @@ import type {
   AnalyticsDepartment,
   BatchUpsertCompetitorPricesDto,
   HideMarketProductDto,
+  MembershipEconomicsSettings,
+  MembershipEfficiencyBasis,
+  MembershipEfficiencyView,
+  MembershipUtilizationSegment,
   PatchSegmentCompetitorDto,
   UpsertCompetitorPriceDto,
   UpsertSaleWindowDto,
@@ -31,6 +35,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { AdminTaskReportService } from './admin-task-report.service';
 import { ClubAnalyticsService } from './club-analytics.service';
+import { MembershipEfficiencyService } from './membership-efficiency.service';
 import { PricingAnalyticsService } from './pricing-analytics.service';
 import { StaffAnalyticsService } from './staff-analytics.service';
 
@@ -43,6 +48,7 @@ export class AnalyticsController {
     private readonly staff: StaffAnalyticsService,
     private readonly taskReport: AdminTaskReportService,
     private readonly pricing: PricingAnalyticsService,
+    private readonly memberships: MembershipEfficiencyService,
   ) {}
 
   @Get('club')
@@ -241,5 +247,124 @@ export class AnalyticsController {
     @Body() body: { from: string; to: string },
   ) {
     return this.pricing.refreshDiscounts(user, body);
+  }
+
+  // ── Membership efficiency (SUPER_ADMIN only for now) ──────────────────────
+
+  @Get('memberships')
+  @Roles(UserRole.SUPER_ADMIN)
+  membershipsReport(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('basis') basis?: MembershipEfficiencyBasis,
+    @Query('view') view?: MembershipEfficiencyView,
+    @Query('family') family?: string | string[],
+  ) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    return this.memberships.getReport(user, { from, to, basis, view, family });
+  }
+
+  @Get('memberships/trainers')
+  @Roles(UserRole.SUPER_ADMIN)
+  membershipsTrainers(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('basis') basis?: MembershipEfficiencyBasis,
+    @Query('family') family?: string | string[],
+  ) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    return this.memberships.getTrainersReport(user, {
+      from,
+      to,
+      basis,
+      family,
+    });
+  }
+
+  @Get('memberships/clients')
+  @Roles(UserRole.SUPER_ADMIN)
+  membershipsClients(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('basis') basis?: MembershipEfficiencyBasis,
+    @Query('family') family?: string | string[],
+    @Query('segment') segment?: MembershipUtilizationSegment | 'ALL',
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('sort') sort?: string,
+  ) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    return this.memberships.getClientsReport(user, {
+      from,
+      to,
+      basis,
+      family,
+      segment,
+      page: page ? Number(page) : undefined,
+      pageSize: pageSize ? Number(pageSize) : undefined,
+      sort,
+    });
+  }
+
+  @Get('memberships.xlsx')
+  @Roles(UserRole.SUPER_ADMIN)
+  async membershipsXlsx(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('basis') basis?: MembershipEfficiencyBasis,
+    @Query('view') view?: MembershipEfficiencyView,
+    @Query('family') family?: string | string[],
+    @Res() res?: Response,
+  ) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    const buf = await this.memberships.exportXlsx(user, {
+      from,
+      to,
+      basis,
+      view,
+      family,
+    });
+    res!.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res!.setHeader(
+      'Content-Disposition',
+      `attachment; filename="analytics_memberships_${from}_${to}.xlsx"`,
+    );
+    res!.send(buf);
+  }
+
+  @Get('memberships/settings')
+  @Roles(UserRole.SUPER_ADMIN)
+  membershipsSettingsGet(@CurrentUser() user: JwtPayload) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    return this.memberships.getSettings(user);
+  }
+
+  @Put('memberships/settings')
+  @Roles(UserRole.SUPER_ADMIN)
+  membershipsSettingsPut(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: Partial<MembershipEconomicsSettings>,
+  ) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    return this.memberships.putSettings(user, body);
   }
 }

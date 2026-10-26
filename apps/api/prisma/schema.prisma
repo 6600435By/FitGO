@@ -552,6 +552,7 @@ model Club {
   providedDiscountRows ProvidedDiscountRow[]
   providedDiscountSyncStates ProvidedDiscountSyncState[]
   providedDiscountMonths ProvidedDiscountMonth[]
+  membershipEconomicsSettings MembershipEconomicsSettings?
 }
 
 model ClubTheme {
@@ -3054,4 +3055,16 @@ model SpecialistServiceDebt {
   @@index([clubId, occurredAt])
   @@index([clubId, employeeCode, occurredAt])
   @@index([clubId, isActive, occurredAt])
+}
+
+/// Club settings for membership (абонемент) efficiency analytics.
+model MembershipEconomicsSettings {
+  id        String   @id @default(cuid())
+  clubId    String   @unique
+  /// MembershipEconomicsSettings JSON from @fitgo/shared-types
+  json      Json
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
 }

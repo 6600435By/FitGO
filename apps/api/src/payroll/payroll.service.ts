@@ -4241,6 +4241,109 @@ export class PayrollService {
   }
 
   /**
+   * Club-wide GROUP session earnings for membership efficiency.
+   * Key = 1C appointment / Onex externalId (without `1c:` prefix).
+   */
+  async listGroupSessionEarningsForClub(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<
+    Map<
+      string,
+      {
+        earnMinor: number;
+        quantity: number;
+        title: string;
+        trainerUserId: string;
+        occurredAt: string;
+        roomTitle?: string;
+        sessionKey: string;
+      }
+    >
+  > {
+    this.assertPeriod(from, to);
+    const staff = await this.listStaffPaySummaries(clubId, {
+      excludeClubTrainerOnly: true,
+    });
+    const groupStaff = staff.filter(
+      (s) =>
+        s.track === 'GROUP_TRAINER' ||
+        s.track === 'REFORMER' ||
+        s.roles.includes('TRAINER'),
+    );
+    const rates = await this.listRates(clubId);
+    const out = new Map<
+      string,
+      {
+        earnMinor: number;
+        quantity: number;
+        title: string;
+        trainerUserId: string;
+        occurredAt: string;
+        roomTitle?: string;
+        sessionKey: string;
+      }
+    >();
+
+    for (const s of groupStaff) {
+      const performer = await this.prisma.user.findFirst({
+        where: { id: s.userId, clubId },
+        include: { roles: true },
+      });
+      if (!performer) continue;
+      const trainerFlags = trainerPayFlags({
+        roles: performer.roles.map((r) => r.role),
+        groupPrograms: performer.groupPrograms,
+        trainerStaff: performer.trainerStaff,
+        trainerClub: performer.trainerClub,
+        trainerReformers: performer.trainerReformers,
+        trainerGroupsSet: performer.trainerGroupsSet,
+      });
+      if (!trainerFlags.gp && !trainerFlags.reformers) continue;
+
+      const units = await this.listWorkUnits(clubId, s.userId, from, to);
+      const groupUnits = units.filter((u) => u.kind === 'GROUP');
+      if (!groupUnits.length) continue;
+
+      const timeline = await this.loadCompensationTimeline(
+        clubId,
+        s.userId,
+        from,
+        to,
+      );
+      const compensation =
+        this.pickCompensationRow(timeline, to) ??
+        (await this.resolveCompensation(clubId, s.userId, from, to));
+      const profileForDay = (isoDay: string) =>
+        this.profileFromCompensationRow(
+          this.pickCompensationRow(timeline, isoDay) ?? compensation,
+          trainerFlags,
+        );
+      this.annotateUnitEarningsVersioned(groupUnits, rates, profileForDay);
+
+      for (const u of groupUnits) {
+        const sk = u.sessionKey ?? '';
+        const externalId = sk.startsWith('1c:') ? sk.slice(3) : sk;
+        if (!externalId) continue;
+        const prev = out.get(externalId);
+        const earn = u.earnMinor ?? 0;
+        if (prev && prev.earnMinor >= earn) continue;
+        out.set(externalId, {
+          earnMinor: earn,
+          quantity: u.quantity,
+          title: u.title,
+          trainerUserId: s.userId,
+          occurredAt: u.occurredAt,
+          roomTitle: u.roomTitle,
+          sessionKey: sk,
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
    * Fill earnMinor / ratePercent on PT+SPA+GROUP lines for the payroll table.
    * Mirrors calcMotivationFromProfile (and legacy rates) per unit.
    * Annotates untrusted rows too (display); totals still use payrollTrusted only.

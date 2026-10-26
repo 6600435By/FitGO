@@ -58,6 +58,13 @@ import {
   type ManagerEfficiencyBlock,
   type StaffAnalyticsReport,
   type PricingAnalyticsReport,
+  type MembershipEfficiencyReport,
+  type MembershipTrainersReport,
+  type MembershipClientsReport,
+  type MembershipEconomicsSettings,
+  type MembershipEfficiencyBasis,
+  type MembershipEfficiencyView,
+  type MembershipUtilizationSegment,
   type PricingSegmentKey,
   type UpsertCompetitorPriceDto,
   type UpsertSaleWindowDto,
@@ -2493,6 +2500,124 @@ export const api = {
       token,
     );
   },
+
+  analyticsMemberships: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      basis?: MembershipEfficiencyBasis;
+      view?: MembershipEfficiencyView;
+      family?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.basis) q.set('basis', params.basis);
+    if (params.view) q.set('view', params.view);
+    if (params.family) q.set('family', params.family);
+    return request<MembershipEfficiencyReport>(
+      `/super-admin/analytics/memberships?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsMembershipsTrainers: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      basis?: MembershipEfficiencyBasis;
+      family?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.basis) q.set('basis', params.basis);
+    if (params.family) q.set('family', params.family);
+    return request<MembershipTrainersReport>(
+      `/super-admin/analytics/memberships/trainers?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsMembershipsClients: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      basis?: MembershipEfficiencyBasis;
+      family?: string;
+      segment?: MembershipUtilizationSegment;
+      page?: number;
+      pageSize?: number;
+      sort?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.basis) q.set('basis', params.basis);
+    if (params.family) q.set('family', params.family);
+    if (params.segment) q.set('segment', params.segment);
+    if (params.page) q.set('page', String(params.page));
+    if (params.pageSize) q.set('pageSize', String(params.pageSize));
+    if (params.sort) q.set('sort', params.sort);
+    return request<MembershipClientsReport>(
+      `/super-admin/analytics/memberships/clients?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsMembershipsXlsx: async (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      basis?: MembershipEfficiencyBasis;
+      view?: MembershipEfficiencyView;
+      family?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.basis) q.set('basis', params.basis);
+    if (params.view) q.set('view', params.view);
+    if (params.family) q.set('family', params.family);
+    const res = await fetch(
+      `${API_URL}/api/super-admin/analytics/memberships.xlsx?${q}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    await assertBlobOk(res, token, '/super-admin/analytics/memberships.xlsx');
+    return res.blob();
+  },
+
+  analyticsMembershipsSettingsGet: (token: string) =>
+    request<MembershipEconomicsSettings>(
+      `/super-admin/analytics/memberships/settings`,
+      {},
+      token,
+    ),
+
+  analyticsMembershipsSettingsPut: (
+    token: string,
+    body: Partial<MembershipEconomicsSettings>,
+  ) =>
+    request<MembershipEconomicsSettings>(
+      `/super-admin/analytics/memberships/settings`,
+      { method: 'PUT', body: JSON.stringify(body) },
+      token,
+    ),
 
   analyticsMarketAddCompetitor: (
     token: string,

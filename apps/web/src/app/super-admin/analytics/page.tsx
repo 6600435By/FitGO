@@ -12,6 +12,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ClubAnalyticsPanel } from '@/components/analytics/club-analytics-panel';
 import { MarketPricingPanel } from '@/components/analytics/market-pricing-panel';
+import { MembershipEfficiencyPanel } from '@/components/analytics/membership-efficiency-panel';
 import {
   PayVisibilityToggle,
   readPayVisibility,
@@ -25,8 +26,9 @@ import {
   readViewMemory,
   writeViewMemory,
 } from '@/lib/view-memory';
+import { UserRole } from '@fitgo/shared-types';
 
-type Tab = 'club' | 'staff' | 'market';
+type Tab = 'club' | 'staff' | 'market' | 'memberships';
 
 function isoDate(d: Date) {
   const y = d.getFullYear();
@@ -153,6 +155,9 @@ function AnalyticsInner() {
   const compare = (searchParams.get('compare') as AnalyticsCompareMode) || 'prev';
   const department =
     (searchParams.get('department') as AnalyticsDepartment) || 'ALL';
+  const isSuperAdmin = Boolean(
+    getUser()?.roles?.includes(UserRole.SUPER_ADMIN),
+  );
 
   const [showPay, setShowPay] = useState(false);
   const [club, setClub] = useState<ClubAnalyticsReport | null>(null);
@@ -211,6 +216,10 @@ function AnalyticsInner() {
 
     const run = async () => {
       try {
+        if (tab === 'memberships') {
+          if (!cancelled) setLoading(false);
+          return;
+        }
         if (tab === 'club') {
           const key = clubCacheKey(from, to, compare, showPay);
           const hit = clubCache.current.get(key);
@@ -376,11 +385,18 @@ function AnalyticsInner() {
       <div className="flex flex-wrap gap-2">
         {(
           [
-            { id: 'club' as const, label: 'Клуб' },
-            { id: 'staff' as const, label: 'Персонал' },
-            { id: 'market' as const, label: 'Рынок и цены' },
+            { id: 'club' as const, label: 'Клуб', superOnly: false },
+            { id: 'staff' as const, label: 'Персонал', superOnly: false },
+            { id: 'market' as const, label: 'Рынок и цены', superOnly: false },
+            {
+              id: 'memberships' as const,
+              label: 'Абонементы',
+              superOnly: true,
+            },
           ] as const
-        ).map((t) => (
+        )
+          .filter((t) => !t.superOnly || isSuperAdmin)
+          .map((t) => (
           <button
             key={t.id}
             type="button"
@@ -450,16 +466,33 @@ function AnalyticsInner() {
             90 дн.
           </button>
         </div>
-        {tab !== 'market' && (
+        {tab !== 'market' && tab !== 'memberships' && (
           <PayVisibilityToggle show={showPay} onChange={setShowPay} />
         )}
       </div>
 
       {error && <p className="text-red-400">{error}</p>}
 
-      {loading && !(tab === 'staff' && staffView) && !(tab === 'club' && club) && !(tab === 'market' && market) && (
+      {loading &&
+        tab !== 'memberships' &&
+        !(tab === 'staff' && staffView) &&
+        !(tab === 'club' && club) &&
+        !(tab === 'market' && market) && (
         <div className="flex justify-center py-12">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+        </div>
+      )}
+
+      {tab === 'memberships' && isSuperAdmin && (
+        <MembershipEfficiencyPanel
+          from={from}
+          to={to}
+          onError={setError}
+        />
+      )}
+      {tab === 'memberships' && !isSuperAdmin && (
+        <div className="card text-sm text-slate-400">
+          Раздел «Абонементы» пока только для супер-админа.
         </div>
       )}
 
