@@ -1,13 +1,25 @@
 'use client';
 
-import type { PayrollSelfOverview, WorkUnit } from '@fitgo/shared-types';
+import type {
+  ClubRevenueDetailResponse,
+  PayrollSelfOverview,
+  WorkUnit,
+} from '@fitgo/shared-types';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { SaleDetailDrawer } from '@/components/admin-sales/sale-detail-drawer';
+import {
+  BookingControlPanel,
+  type BookingControlApi,
+} from '@/components/booking-control/booking-control-panel';
 import { MotivationBreakdownList } from '@/components/payroll/motivation-breakdown-list';
+import { TrustBandDot } from '@/components/payroll/trust-band-dot';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
+import { createBookingControlApi } from '@/lib/booking-control-api';
+import { createTrainerBookingControlApi } from '@/lib/trainer-booking-control-api';
 import {
   resolveViewFilters,
   usePersistViewMemory,
@@ -19,6 +31,42 @@ import {
   setPayrollSummaryCache,
 } from '@/lib/view-memory';
 import { formatDateTime } from '@/lib/utils';
+
+function createSpecialistBookingControlApi(): BookingControlApi {
+  return {
+    list: async (params) => {
+      const token = getToken();
+      if (!token) return [];
+      return api.bookingControlList(token, 'specialist', {
+        ...params,
+        kind: 'SPA',
+      });
+    },
+    detail: async (sessionKey) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlDetail(token, 'specialist', sessionKey);
+    },
+    openRemark: async (sessionKey, comment) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlRemark(token, 'specialist', sessionKey, comment);
+    },
+    approveGroup: async (sessionKey, comment) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlApprove(token, 'specialist', sessionKey, comment);
+    },
+  };
+}
+
+function selfBookingApi(
+  role: 'admin' | 'trainer' | 'specialist',
+): BookingControlApi {
+  if (role === 'admin') return createBookingControlApi('admin');
+  if (role === 'trainer') return createTrainerBookingControlApi();
+  return createSpecialistBookingControlApi();
+}
 
 /** Local calendar day as YYYY-MM-DD (never UTC — avoids 1→30 / 16→15 in UTC+3). */
 function isoDate(d: Date) {
@@ -156,6 +204,41 @@ export function SelfPayrollView({ role }: Props) {
   const [payoutsOpen, setPayoutsOpen] = useState(false);
   const [unitsOpen, setUnitsOpen] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
+  const [peekSession, setPeekSession] = useState<{
+    sessionKey: string;
+    from: string;
+    to: string;
+  } | null>(null);
+  const [saleDetail, setSaleDetail] =
+    useState<ClubRevenueDetailResponse | null>(null);
+  const [saleDetailLoading, setSaleDetailLoading] = useState(false);
+
+  const bookingPeekApi = useMemo(() => selfBookingApi(role), [role]);
+
+  const openSalePeek = useCallback(
+    async (externalId: string) => {
+      const token = getToken();
+      if (!token) return;
+      setSaleDetailLoading(true);
+      try {
+        const d =
+          role === 'specialist'
+            ? await api.specialistPayrollSaleDetail(token, externalId, {
+                from,
+                to,
+              })
+            : await api.selfPayrollSaleDetail(token, externalId, { from, to });
+        setSaleDetail(d);
+      } catch (e) {
+        setMessage(
+          e instanceof Error ? e.message : 'Не удалось открыть продажу',
+        );
+      } finally {
+        setSaleDetailLoading(false);
+      }
+    },
+    [from, to, role],
+  );
 
   useEffect(() => {
     if (!ownerId) return;
@@ -839,25 +922,46 @@ export function SelfPayrollView({ role }: Props) {
                           {showWaveTags ? (
                             <PayWaveBadge wave={u.payWave} />
                           ) : null}
-                        </span>
-                        <span className="shrink-0 text-right tabular-nums text-slate-300">
-                          {u.earnMinor != null && u.earnMinor > 0 ? (
-                            <span className="block text-emerald-300">
-                              {money(u.earnMinor, currency)}
-                            </span>
+                          {u.sessionKey ? (
+                            <button
+                              type="button"
+                              className="ml-1 text-[11px] text-sky-300 hover:underline"
+                              onClick={() =>
+                                setPeekSession({
+                                  sessionKey: u.sessionKey!,
+                                  from: u.occurredAt.slice(0, 10),
+                                  to: u.occurredAt.slice(0, 10),
+                                })
+                              }
+                            >
+                              контроль
+                            </button>
                           ) : null}
-                          <span
-                            className={
-                              u.earnMinor != null && u.earnMinor > 0
-                                ? 'text-[11px] text-slate-500'
-                                : undefined
-                            }
-                          >
-                            {u.kind === 'PT'
-                              ? u.priceMinor != null
-                                ? money(u.priceMinor, currency)
-                                : '1'
-                              : `пришло ${u.quantity}`}
+                        </span>
+                        <span className="flex shrink-0 items-start gap-2 text-right tabular-nums text-slate-300">
+                          <TrustBandDot
+                            trustBand={u.trustBand}
+                            trustHints={u.trustHints}
+                          />
+                          <span>
+                            {u.earnMinor != null && u.earnMinor > 0 ? (
+                              <span className="block text-emerald-300">
+                                {money(u.earnMinor, currency)}
+                              </span>
+                            ) : null}
+                            <span
+                              className={
+                                u.earnMinor != null && u.earnMinor > 0
+                                  ? 'text-[11px] text-slate-500'
+                                  : undefined
+                              }
+                            >
+                              {u.kind === 'PT'
+                                ? u.priceMinor != null
+                                  ? money(u.priceMinor, currency)
+                                  : '1'
+                                : `пришло ${u.quantity}`}
+                            </span>
                           </span>
                         </span>
                       </li>
@@ -877,7 +981,7 @@ export function SelfPayrollView({ role }: Props) {
               <div>
                 <p className="font-medium text-slate-200">Детализация работ</p>
                 <p className="text-xs text-slate-500">
-                  {summary.workUnits.length} единиц · GREEN{' '}
+                  {summary.workUnits.length} единиц · без замечаний{' '}
                   {summary.greenCount}
                   {showWaveTags ? ' · метки аванс / ЗП' : ''}
                 </p>
@@ -905,23 +1009,56 @@ export function SelfPayrollView({ role }: Props) {
                         {!u.payrollTrusted ? (
                           <span className="ml-1 text-amber-300">· ждёт</span>
                         ) : null}
-                      </span>
-                      <span className="shrink-0 text-right tabular-nums text-slate-300">
-                        {u.earnMinor != null && u.earnMinor > 0 ? (
-                          <span className="block text-emerald-300">
-                            {money(u.earnMinor, currency)}
-                          </span>
+                        {u.sessionKey ? (
+                          <button
+                            type="button"
+                            className="ml-1 text-[11px] text-sky-300 hover:underline"
+                            onClick={() =>
+                              setPeekSession({
+                                sessionKey: u.sessionKey!,
+                                from: u.occurredAt.slice(0, 10),
+                                to: u.occurredAt.slice(0, 10),
+                              })
+                            }
+                          >
+                            контроль
+                          </button>
                         ) : null}
-                        <span
-                          className={
-                            u.earnMinor != null && u.earnMinor > 0
-                              ? 'text-[11px] text-slate-500'
-                              : undefined
-                          }
-                        >
-                          {u.priceMinor != null
-                            ? money(u.priceMinor, currency)
-                            : `${u.quantity}`}
+                        {u.saleExternalId?.trim() ? (
+                          <button
+                            type="button"
+                            className="ml-1 text-[11px] text-sky-300 hover:underline"
+                            disabled={saleDetailLoading}
+                            onClick={() =>
+                              void openSalePeek(u.saleExternalId!.trim())
+                            }
+                          >
+                            продажа
+                          </button>
+                        ) : null}
+                      </span>
+                      <span className="flex shrink-0 items-start gap-2 text-right tabular-nums text-slate-300">
+                        <TrustBandDot
+                          trustBand={u.trustBand}
+                          trustHints={u.trustHints}
+                        />
+                        <span>
+                          {u.earnMinor != null && u.earnMinor > 0 ? (
+                            <span className="block text-emerald-300">
+                              {money(u.earnMinor, currency)}
+                            </span>
+                          ) : null}
+                          <span
+                            className={
+                              u.earnMinor != null && u.earnMinor > 0
+                                ? 'text-[11px] text-slate-500'
+                                : undefined
+                            }
+                          >
+                            {u.priceMinor != null
+                              ? money(u.priceMinor, currency)
+                              : `${u.quantity}`}
+                          </span>
                         </span>
                       </span>
                     </li>
@@ -931,6 +1068,37 @@ export function SelfPayrollView({ role }: Props) {
             ) : null}
           </section>
         </>
+      ) : null}
+
+      {peekSession ? (
+        <BookingControlPanel
+          key={peekSession.sessionKey}
+          api={bookingPeekApi}
+          canResolve={role === 'admin'}
+          canMarkAttendance={role === 'admin'}
+          canTrainerSeen={role === 'trainer'}
+          canApproveGroup
+          approvalActor={
+            role === 'admin' ? 'admin' : 'performer'
+          }
+          canReturnApproval={role === 'admin'}
+          canViewHallPhotos
+          detailOnly
+          initialSessionKey={peekSession.sessionKey}
+          initialFrom={peekSession.from}
+          initialTo={peekSession.to}
+          onDetailClose={() => {
+            setPeekSession(null);
+            void load();
+          }}
+        />
+      ) : null}
+
+      {saleDetail ? (
+        <SaleDetailDrawer
+          detail={saleDetail}
+          onClose={() => setSaleDetail(null)}
+        />
       ) : null}
     </div>
   );

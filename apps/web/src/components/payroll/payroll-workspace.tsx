@@ -1,10 +1,14 @@
 'use client';
 
+import { SaleDetailDrawer } from '@/components/admin-sales/sale-detail-drawer';
+import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { ClubPayrollReportPanel } from '@/components/payroll/club-payroll-report';
 import { MotivationBreakdownList } from '@/components/payroll/motivation-breakdown-list';
 import { PayrollPayoutsPanel } from '@/components/payroll/payroll-payouts-panel';
+import { TrustBandDot } from '@/components/payroll/trust-band-dot';
 import { DateField } from '@/components/ui/date-field';
 import type {
+  ClubRevenueDetailResponse,
   PayrollAdjustmentDto,
   PayrollPeriodSummary,
   StaffPaySummary,
@@ -12,9 +16,10 @@ import type {
 } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
+import { createBookingControlApi } from '@/lib/booking-control-api';
 import {
   resolveViewFilters,
   usePersistViewMemory,
@@ -36,12 +41,6 @@ function isoDate(d: Date) {
 
 function money(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)}\u00a0${currency}`;
-}
-
-function bandDot(band: string) {
-  if (band === 'GREEN') return 'bg-emerald-400';
-  if (band === 'RED') return 'bg-red-400';
-  return 'bg-amber-300';
 }
 
 /** Client-paid amount for PT/SPA lines; dash when free / unknown. */
@@ -116,42 +115,27 @@ function shiftIsoDays(isoDay: string, deltaDays: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-function unitBookingHref(
-  u: WorkUnit,
-  mode: 'admin' | 'super',
-): string | null {
-  if (!u.sessionKey) return null;
-  const base =
-    mode === 'super' ? '/super-admin/review-queue' : '/admin/booking-control';
-  const q = new URLSearchParams({ sessionKey: u.sessionKey });
-  const day = unitDayIso(u);
-  if (day) {
-    q.set('from', day);
-    q.set('to', day);
-  }
-  return `${base}?${q.toString()}`;
+/** True when sale opens as a single-document card (no tab switch). */
+function unitHasSalePeek(u: WorkUnit): boolean {
+  return Boolean(u.saleExternalId?.trim());
 }
 
-function unitSaleHref(u: WorkUnit, mode: 'admin' | 'super'): string | null {
+/**
+ * Sales list deep-link when there is no single externalId (search by client /
+ * program). Label in UI: «Список».
+ */
+function unitSaleListHref(u: WorkUnit, mode: 'admin' | 'super'): string | null {
   if (u.kind !== 'SPA' && u.kind !== 'PT' && u.kind !== 'GROUP') return null;
+  if (unitHasSalePeek(u)) return null;
   const sessionDay = unitDayIso(u);
   const saleDay = u.saleOccurredAt?.slice(0, 10) || undefined;
   const q = new URLSearchParams();
-  if (u.saleExternalId) {
-    const d = saleDay || sessionDay;
-    if (d) {
-      q.set('from', d);
-      q.set('to', d);
-    }
-    q.set('externalId', u.saleExternalId);
-  } else if (u.kind === 'GROUP') {
-    // Group class: open sales for the same day filtered by program title.
+  if (u.kind === 'GROUP') {
     if (!u.title?.trim() || !sessionDay) return null;
     q.set('from', sessionDay);
     q.set('to', sessionDay);
     q.set('q', u.title.trim());
   } else if (u.clientName?.trim()) {
-    // Pack/абонемент write-off: sale is usually earlier than the visit.
     const looksPack = /\(абонемент\)|\(блок\)|абонемент|пакет|блок/i.test(
       u.title ?? '',
     );
@@ -540,6 +524,34 @@ export function PayrollWorkspace({ mode }: Props) {
   );
   const [summaryOpen, setSummaryOpen] = useState(Boolean(boot.summaryOpen));
   const [payoutsOpen, setPayoutsOpen] = useState(Boolean(boot.payoutsOpen));
+  const [peekSession, setPeekSession] = useState<{
+    sessionKey: string;
+    from: string;
+    to: string;
+  } | null>(null);
+  const [saleDetail, setSaleDetail] =
+    useState<ClubRevenueDetailResponse | null>(null);
+  const [saleDetailLoading, setSaleDetailLoading] = useState(false);
+
+  const bookingPeekApi = useMemo(
+    () =>
+      createBookingControlApi(mode === 'super' ? 'super-admin' : 'admin'),
+    [mode],
+  );
+
+  const openSalePeek = useCallback(async (externalId: string) => {
+    const token = getToken();
+    if (!token) return;
+    setSaleDetailLoading(true);
+    try {
+      const d = await api.superAdminClubSaleDetail(token, externalId);
+      setSaleDetail(d);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось открыть продажу');
+    } finally {
+      setSaleDetailLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!boot.userId || !ownerId) return;
@@ -1425,7 +1437,10 @@ export function PayrollWorkspace({ mode }: Props) {
               нестыковок: {summary.openExceptions}
             </span>
             <span className="text-slate-500">
-              GREEN {summary.greenCount} · RESOLVED {summary.resolvedCount}
+              без замечаний {summary.greenCount}
+              {summary.resolvedCount > 0
+                ? ` · принято ${summary.resolvedCount}`
+                : ''}
             </span>
             {summary.locked && (
               <span className="rounded-full bg-fitgo-500/15 px-2 py-0.5 text-xs text-fitgo-300">
@@ -1650,12 +1665,10 @@ export function PayrollWorkspace({ mode }: Props) {
                           {money(u.priceMinor, summary.currency)}
                         </span>
                       )}
-                      <span className="inline-flex items-center gap-1">
-                        <i
-                          className={`h-2 w-2 rounded-full ${bandDot(u.trustBand)}`}
-                        />
-                        {u.trustBand}
-                      </span>
+                      <TrustBandDot
+                        trustBand={u.trustBand}
+                        trustHints={u.trustHints}
+                      />
                       {u.isComplimentary && (
                         <span className="text-violet-300">подарок</span>
                       )}
@@ -1679,22 +1692,42 @@ export function PayrollWorkspace({ mode }: Props) {
                       </span>
                     </div>
                     {unitShowsPayCols(u) &&
-                      (unitBookingHref(u, mode) || unitSaleHref(u, mode)) && (
+                      (u.sessionKey ||
+                        unitHasSalePeek(u) ||
+                        unitSaleListHref(u, mode)) && (
                         <div className="mt-2 flex flex-wrap gap-3 text-xs">
-                          {unitBookingHref(u, mode) ? (
-                            <Link
-                              href={unitBookingHref(u, mode)!}
+                          {u.sessionKey ? (
+                            <button
+                              type="button"
                               className="text-sky-300 hover:underline"
+                              onClick={() =>
+                                setPeekSession({
+                                  sessionKey: u.sessionKey!,
+                                  from: unitDayIso(u),
+                                  to: unitDayIso(u),
+                                })
+                              }
                             >
                               Контроль
-                            </Link>
+                            </button>
                           ) : null}
-                          {unitSaleHref(u, mode) ? (
-                            <Link
-                              href={unitSaleHref(u, mode)!}
+                          {unitHasSalePeek(u) ? (
+                            <button
+                              type="button"
                               className="text-sky-300 hover:underline"
+                              disabled={saleDetailLoading}
+                              onClick={() =>
+                                void openSalePeek(u.saleExternalId!.trim())
+                              }
                             >
                               Продажа
+                            </button>
+                          ) : unitSaleListHref(u, mode) ? (
+                            <Link
+                              href={unitSaleListHref(u, mode)!}
+                              className="text-sky-300 hover:underline"
+                            >
+                              Список
                             </Link>
                           ) : null}
                         </div>
@@ -1748,8 +1781,7 @@ export function PayrollWorkspace({ mode }: Props) {
                 </thead>
                 <tbody>
                   {summary.workUnits.map((u) => {
-                    const bookingHref = unitBookingHref(u, mode);
-                    const saleHref = unitSaleHref(u, mode);
+                    const saleListHref = unitSaleListHref(u, mode);
                     const showPayCols = unitShowsPayCols(u);
                     return (
                       <tr
@@ -1798,12 +1830,10 @@ export function PayrollWorkspace({ mode }: Props) {
                             : '—'}
                         </td>
                         <td className="px-4 py-2.5">
-                          <span className="inline-flex items-center gap-1.5">
-                            <i
-                              className={`h-2 w-2 rounded-full ${bandDot(u.trustBand)}`}
-                            />
-                            {u.trustBand}
-                          </span>
+                          <TrustBandDot
+                            trustBand={u.trustBand}
+                            trustHints={u.trustHints}
+                          />
                         </td>
                         <td className="px-4 py-2.5">
                           {u.isComplimentary ? (
@@ -1817,22 +1847,40 @@ export function PayrollWorkspace({ mode }: Props) {
                         <td className="px-4 py-2.5">
                           {showPayCols ? (
                             <span className="inline-flex flex-wrap gap-2 text-xs">
-                              {bookingHref ? (
-                                <Link
-                                  href={bookingHref}
+                              {u.sessionKey ? (
+                                <button
+                                  type="button"
                                   className="text-sky-300 hover:underline"
+                                  onClick={() =>
+                                    setPeekSession({
+                                      sessionKey: u.sessionKey!,
+                                      from: unitDayIso(u),
+                                      to: unitDayIso(u),
+                                    })
+                                  }
                                 >
                                   Контроль
-                                </Link>
+                                </button>
                               ) : (
                                 <span className="text-slate-600">Контроль</span>
                               )}
-                              {saleHref ? (
-                                <Link
-                                  href={saleHref}
+                              {unitHasSalePeek(u) ? (
+                                <button
+                                  type="button"
                                   className="text-sky-300 hover:underline"
+                                  disabled={saleDetailLoading}
+                                  onClick={() =>
+                                    void openSalePeek(u.saleExternalId!.trim())
+                                  }
                                 >
                                   Продажа
+                                </button>
+                              ) : saleListHref ? (
+                                <Link
+                                  href={saleListHref}
+                                  className="text-sky-300 hover:underline"
+                                >
+                                  Список
                                 </Link>
                               ) : (
                                 <span className="text-slate-600">Продажа</span>
@@ -2015,6 +2063,35 @@ export function PayrollWorkspace({ mode }: Props) {
           </div>
         </div>
       )}
+
+      {peekSession ? (
+        <BookingControlPanel
+          key={peekSession.sessionKey}
+          api={bookingPeekApi}
+          canResolve={mode === 'super'}
+          canMarkAttendance
+          canApproveGroup
+          approvalActor={mode === 'super' ? 'override' : 'admin'}
+          canReturnApproval
+          canViewHallPhotos
+          canBulkApprove={mode === 'super'}
+          detailOnly
+          initialSessionKey={peekSession.sessionKey}
+          initialFrom={peekSession.from}
+          initialTo={peekSession.to}
+          onDetailClose={() => {
+            setPeekSession(null);
+            void load();
+          }}
+        />
+      ) : null}
+
+      {saleDetail ? (
+        <SaleDetailDrawer
+          detail={saleDetail}
+          onClose={() => setSaleDetail(null)}
+        />
+      ) : null}
     </div>
   );
 }

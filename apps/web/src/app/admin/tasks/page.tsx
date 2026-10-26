@@ -7,13 +7,14 @@ import type {
   GroupApprovalPendingTask,
 } from '@fitgo/shared-types';
 import { AdminTaskStatus } from '@fitgo/shared-types';
-import Link from 'next/link';
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { BirthdayCallScript } from '@/components/admin/birthday-call-script';
 import { RenewalTaskSheet } from '@/components/admin/renewal-task-sheet';
+import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
+import { createBookingControlApi } from '@/lib/booking-control-api';
 import {
   resolveViewFilters,
   usePersistViewMemory,
@@ -195,6 +196,12 @@ function AdminTasksInner() {
   const [debtLines, setDebtLines] = useState<Record<string, AdminDebtLine[]>>({});
   const [debtLoadingId, setDebtLoadingId] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState<Record<string, string>>({});
+  const [peekSession, setPeekSession] = useState<{
+    sessionKey: string;
+    from?: string;
+    to?: string;
+  } | null>(null);
+  const bookingPeekApi = useMemo(() => createBookingControlApi('admin'), []);
 
   const load = () => {
     const token = getToken();
@@ -479,12 +486,19 @@ function AdminTasksInner() {
               </p>
             ) : null}
             <div className="mt-3">
-              <Link
-                href={`/admin/booking-control?sessionKey=${encodeURIComponent(item.sessionKey)}`}
+              <button
+                type="button"
                 className="btn-primary inline-flex text-xs"
+                onClick={() =>
+                  setPeekSession({
+                    sessionKey: item.sessionKey,
+                    from: item.startAt?.slice(0, 10),
+                    to: item.startAt?.slice(0, 10),
+                  })
+                }
               >
                 Открыть карточку
-              </Link>
+              </button>
             </div>
           </li>
         ))}
@@ -943,12 +957,13 @@ function AdminTasksInner() {
                 </>
               )}
               {sessionKey ? (
-                <Link
-                  href={`/admin/booking-control?sessionKey=${encodeURIComponent(sessionKey)}`}
+                <button
+                  type="button"
                   className="btn-secondary inline-flex w-full items-center justify-center text-xs"
+                  onClick={() => setPeekSession({ sessionKey })}
                 >
                   К записи
-                </Link>
+                </button>
               ) : null}
             </li>
           );
@@ -1210,6 +1225,27 @@ function AdminTasksInner() {
           taskId={openTaskId}
           onClose={() => setOpenTaskId(null)}
           onUpdated={load}
+        />
+      ) : null}
+
+      {peekSession ? (
+        <BookingControlPanel
+          key={peekSession.sessionKey}
+          api={bookingPeekApi}
+          canResolve
+          canMarkAttendance
+          canApproveGroup
+          approvalActor="admin"
+          canReturnApproval
+          canViewHallPhotos
+          detailOnly
+          initialSessionKey={peekSession.sessionKey}
+          initialFrom={peekSession.from}
+          initialTo={peekSession.to}
+          onDetailClose={() => {
+            setPeekSession(null);
+            load();
+          }}
         />
       ) : null}
     </div>

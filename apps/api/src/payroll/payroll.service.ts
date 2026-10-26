@@ -63,7 +63,9 @@ import {
   type StaffPayTrackSlice,
   type StaffSalesBreakdown,
   type WorkUnit,
+  worstTrustBand,
 } from '@fitgo/shared-types';
+import type { TrustBand as SharedTrustBand } from '@fitgo/shared-types';
 import {
   GroupClassSessionStatus,
   MotivationRateKind,
@@ -84,6 +86,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { StaffRosterService } from '../staff-roster/staff-roster.service';
 import { AdminSalesService } from '../admin-sales/admin-sales.service';
+import { ClubRevenueService } from '../admin-sales/club-revenue.service';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import { BookingControlService } from '../booking-control/booking-control.service';
 import { FitnessService } from '../fitness/fitness.service';
@@ -127,6 +130,36 @@ function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   const p = raw as StaffPayProfile;
   if (!p.track) return undefined;
   return p;
+}
+
+/** Append a payroll trust hint and raise the band (worst wins). */
+function pushWorkUnitTrust(
+  u: WorkUnit,
+  band: SharedTrustBand,
+  hint: string,
+): void {
+  const hints = u.trustHints ? [...u.trustHints] : [];
+  if (!hints.includes(hint)) hints.push(hint);
+  u.trustHints = hints;
+  u.trustBand = worstTrustBand([u.trustBand, band]);
+}
+
+/** Default / payment / catalog hints after remark and GROUP gates. */
+function finalizeWorkUnitTrust(u: WorkUnit): void {
+  if (u.spaBlockPriceSource === 'CATALOG') {
+    pushWorkUnitTrust(u, 'AMBER', 'Цена из каталога, сверьте оплату');
+  }
+  if (u.isComplimentary) {
+    if (!u.trustHints?.length) u.trustHints = [];
+    return;
+  }
+  if (u.payrollTrusted) {
+    if (!u.trustHints?.length) u.trustHints = ['В расчёте'];
+    return;
+  }
+  if (!u.trustHints?.length) {
+    pushWorkUnitTrust(u, 'AMBER', 'Не в расчёте');
+  }
 }
 
 /** Inclusive calendar months that overlap [from, to] (ISO dates). */
@@ -383,6 +416,7 @@ export class PayrollService {
     private readonly groupSessions: GroupSessionService,
     private readonly staffRoster: StaffRosterService,
     private readonly adminSales: AdminSalesService,
+    private readonly clubRevenue: ClubRevenueService,
     private readonly classSessionsSync: ClassSessionsSyncService,
     private readonly bookingControl: BookingControlService,
     private readonly fitness: FitnessService,
@@ -613,7 +647,8 @@ export class PayrollService {
           : isPackage
             ? ' (абонемент)'
             : '';
-      units.push({
+      const spaMoneyOk = paymentCountsForMoney(payment) || bioimpedance;
+      const spaUnit: WorkUnit = {
         id: matched?.id ?? `onex:${o.id}`,
         kind: 'SPA',
         performerId,
@@ -626,7 +661,7 @@ export class PayrollService {
         priceMinor,
         trustBand,
         trustResolution: 'NONE',
-        payrollTrusted: paymentCountsForMoney(payment) || bioimpedance,
+        payrollTrusted: spaMoneyOk,
         clientName: primary?.clientName,
         serviceId: matched?.serviceId,
         serviceExternalId,
@@ -644,7 +679,17 @@ export class PayrollService {
         saleOccurredAt:
           packSaleAt ||
           (packDateIso ? `${packDateIso}T12:00:00.000Z` : undefined),
-      });
+      };
+      if (!spaMoneyOk) {
+        pushWorkUnitTrust(
+          spaUnit,
+          'RED',
+          payment === 'DEBT'
+            ? 'Долг, в расчёт не входит'
+            : 'Оплата не в расчёте',
+        );
+      }
+      units.push(spaUnit);
     }
 
     // ── SPA from linked reception sales (no 1C visit / onex row) ────────────
@@ -1035,7 +1080,10 @@ export class PayrollService {
         : isServiceBlock
           ? ' (блок)'
           : ' (абонемент)';
-      units.push({
+      const ptSpaTrusted = Boolean(
+        asSpa ? paymentCountsForMoney(payment) || bioimpedance : trusted,
+      );
+      const ptSpaUnit: WorkUnit = {
         id: matched?.id ?? `onex:${o.id}`,
         kind: asSpa ? 'SPA' : 'PT',
         performerId,
@@ -1050,11 +1098,7 @@ export class PayrollService {
         isComplimentary: isGift,
         trustBand,
         trustResolution: 'NONE',
-        payrollTrusted: Boolean(
-          asSpa
-            ? paymentCountsForMoney(payment) || bioimpedance
-            : trusted,
-        ),
+        payrollTrusted: ptSpaTrusted,
         clientName:
           primary?.clientName ??
           (matched
@@ -1081,7 +1125,17 @@ export class PayrollService {
         saleOccurredAt:
           packSaleAt ||
           (packDateIso ? `${packDateIso}T12:00:00.000Z` : undefined),
-      });
+      };
+      if (!ptSpaTrusted && !isGift) {
+        pushWorkUnitTrust(
+          ptSpaUnit,
+          'RED',
+          payment === 'DEBT'
+            ? 'Долг, в расчёт не входит'
+            : 'Оплата не в расчёте',
+        );
+      }
+      units.push(ptSpaUnit);
       if (
         trusted &&
         !asSpa &&
@@ -1296,19 +1350,25 @@ export class PayrollService {
     for (const u of units) {
       const sk = unitKey.get(u.id) ?? u.sessionKey;
       if (sk && !u.sessionKey) u.sessionKey = sk;
-      if (sk && openKeys.has(sk)) u.payrollTrusted = false;
+      if (sk && openKeys.has(sk)) {
+        u.payrollTrusted = false;
+        pushWorkUnitTrust(u, 'RED', 'Открыто замечание');
+      }
       if (u.kind === 'GROUP') {
-        if (!sk || !approvedGroupKeys.has(sk)) u.payrollTrusted = false;
+        if (!sk || !approvedGroupKeys.has(sk)) {
+          u.payrollTrusted = false;
+          pushWorkUnitTrust(u, 'AMBER', 'Групповое не подтверждено');
+        }
       }
     }
 
     // SPA dual-approve stays in Контроль for ops, but does not gate ЗП:
     // completed 1C visits must pay unless an open remark holds them (above).
     for (const u of units) {
-      if (u.kind !== 'SPA') continue;
-      if (workUnitIsSpaPartnerBio(u)) {
+      if (u.kind === 'SPA' && workUnitIsSpaPartnerBio(u)) {
         u.isSpaAllSportsBioimpedance = true;
       }
+      finalizeWorkUnitTrust(u);
     }
 
     return units.sort(
@@ -1531,6 +1591,7 @@ export class PayrollService {
           priceMinor: pay,
           trustBand: 'GREEN',
           trustResolution: 'NONE',
+          trustHints: ['В расчёте'],
           payrollTrusted: true,
         });
       }
@@ -1575,6 +1636,7 @@ export class PayrollService {
           priceMinor: pay,
           trustBand: 'GREEN',
           trustResolution: 'NONE',
+          trustHints: ['В расчёте'],
           payrollTrusted: true,
         });
       }
@@ -3483,6 +3545,31 @@ export class PayrollService {
         sales: isAdmin ? '/admin/sales' : undefined,
       },
     };
+  }
+
+  /**
+   * Sale card for self-payroll peek: only when `externalId` is linked to a
+   * work unit of this performer in [from, to] (or sale day within padded range).
+   */
+  async getLinkedSaleDetail(
+    clubId: string,
+    performerId: string,
+    externalId: string,
+    from: string,
+    to: string,
+  ) {
+    this.assertPeriod(from, to);
+    const id = externalId.trim();
+    if (!id) throw new BadRequestException('externalId required');
+
+    const units = await this.listWorkUnits(clubId, performerId, from, to);
+    const linked = units.some(
+      (u) => (u.saleExternalId ?? '').trim() === id,
+    );
+    if (!linked) {
+      throw new ForbiddenException('Продажа не связана с вашими работами');
+    }
+    return this.clubRevenue.detail(clubId, id);
   }
 
   /** Club calendar day YYYY-MM-DD (Europe/Minsk). */

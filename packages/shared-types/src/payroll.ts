@@ -46,6 +46,11 @@ export interface WorkUnit {
   isComplimentary?: boolean;
   trustBand: TrustBand;
   trustResolution: TrustResolution;
+  /**
+   * Human-readable reasons for the trust band (payroll UI tooltip).
+   * Empty / omitted when band is GREEN and the line is in payroll → UI shows «В расчёте».
+   */
+  trustHints?: string[];
   payrollTrusted: boolean;
   clientName?: string;
   serviceId?: string;

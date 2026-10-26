@@ -3830,6 +3830,33 @@ export const api = {
     );
   },
 
+  /** Sale card linked to a work unit on self payroll (admin/trainer/specialist). */
+  selfPayrollSaleDetail: (
+    token: string,
+    externalId: string,
+    params: { from: string; to: string },
+  ) => {
+    const q = new URLSearchParams(params);
+    return request<import('@fitgo/shared-types').ClubRevenueDetailResponse>(
+      `/me/payroll/sale/${encodeURIComponent(externalId)}?${q}`,
+      {},
+      token,
+    );
+  },
+
+  specialistPayrollSaleDetail: (
+    token: string,
+    externalId: string,
+    params: { from: string; to: string },
+  ) => {
+    const q = new URLSearchParams(params);
+    return request<import('@fitgo/shared-types').ClubRevenueDetailResponse>(
+      `/specialist/payroll/sale/${encodeURIComponent(externalId)}?${q}`,
+      {},
+      token,
+    );
+  },
+
   adminMySales: (
     token: string,
     params: {

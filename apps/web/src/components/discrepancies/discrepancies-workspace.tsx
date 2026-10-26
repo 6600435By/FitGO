@@ -20,9 +20,11 @@ import {
   DISCREPANCY_SEGMENT_TITLES,
   discrepancyClubDay,
 } from '@fitgo/shared-types';
+import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
+import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import { DateField } from '@/components/ui/date-field';
+import { createBookingControlApi } from '@/lib/booking-control-api';
 import { AutoTasksSettings, TaskButton } from './discrepancy-tasks';
 
 type TaskLinks = Map<string, DiscrepancyTaskLink>;
@@ -160,6 +162,15 @@ export function DiscrepanciesWorkspace() {
   const [showAuto, setShowAuto] = useState(false);
   /** Skip summary refetch when only the tab changes (same period/employee). */
   const summaryKeyRef = useRef('');
+  const [peekSession, setPeekSession] = useState<{
+    sessionKey: string;
+    from: string;
+    to: string;
+  } | null>(null);
+  const bookingPeekApi = useMemo(
+    () => createBookingControlApi('super-admin'),
+    [],
+  );
 
   const setParams = useCallback(
     (patch: Record<string, string | null | undefined>) => {
@@ -492,6 +503,13 @@ export function DiscrepanciesWorkspace() {
           }
           links={links}
           onTask={load}
+          onOpenSession={(sessionKey, day) =>
+            setPeekSession({
+              sessionKey,
+              from: day || from,
+              to: day || to,
+            })
+          }
         />
       ) : tab === 'pt' && pt ? (
         <PerformerTab
@@ -504,6 +522,13 @@ export function DiscrepanciesWorkspace() {
           }
           links={links}
           onTask={load}
+          onOpenSession={(sessionKey, day) =>
+            setPeekSession({
+              sessionKey,
+              from: day || from,
+              to: day || to,
+            })
+          }
         />
       ) : tab === 'gp' && group ? (
         <GroupTab
@@ -515,10 +540,39 @@ export function DiscrepanciesWorkspace() {
           }
           links={links}
           onTask={load}
+          onOpenSession={(sessionKey, day) =>
+            setPeekSession({
+              sessionKey,
+              from: day || from,
+              to: day || to,
+            })
+          }
         />
       ) : (
         <p className="text-sm text-slate-500">Нет данных</p>
       )}
+
+      {peekSession ? (
+        <BookingControlPanel
+          key={peekSession.sessionKey}
+          api={bookingPeekApi}
+          canResolve
+          canMarkAttendance
+          canApproveGroup
+          approvalActor="override"
+          canReturnApproval
+          canViewHallPhotos
+          canBulkApprove
+          detailOnly
+          initialSessionKey={peekSession.sessionKey}
+          initialFrom={peekSession.from}
+          initialTo={peekSession.to}
+          onDetailClose={() => {
+            setPeekSession(null);
+            load();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1119,6 +1173,7 @@ function PerformerTab({
   onAck,
   links,
   onTask,
+  onOpenSession,
 }: {
   kind: 'SPA' | 'PT';
   data: DiscrepancySpaPtResponse;
@@ -1127,6 +1182,7 @@ function PerformerTab({
   onAck: (itemKey: string, fingerprint: string) => void;
   links: TaskLinks;
   onTask: () => void;
+  onOpenSession: (sessionKey: string, day?: string) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -1218,16 +1274,22 @@ function PerformerTab({
                       key={s.sessionKey}
                       className="flex flex-wrap items-baseline justify-between gap-2"
                     >
-                      <Link
-                        className="text-slate-300 hover:text-emerald-400"
-                        href={`/super-admin/review-queue?sessionKey=${encodeURIComponent(s.sessionKey)}`}
+                      <button
+                        type="button"
+                        className="text-left text-slate-300 hover:text-emerald-400"
+                        onClick={() =>
+                          onOpenSession(
+                            s.sessionKey,
+                            s.startAt?.slice(0, 10),
+                          )
+                        }
                       >
                         {new Date(s.startAt).toLocaleString('ru-RU')} · {s.title}
                         {s.clientNames.length
                           ? ` · ${s.clientNames.join(', ')}`
                           : ''}
                         {s.approximate ? ' ≈' : ''}
-                      </Link>
+                      </button>
                       <span className="shrink-0">
                         {s.writeOffCount}
                         {s.redCount ? (
@@ -1256,6 +1318,7 @@ function GroupTab({
   onAck,
   links,
   onTask,
+  onOpenSession,
 }: {
   data: DiscrepancyGroupResponse;
   from: string;
@@ -1263,6 +1326,7 @@ function GroupTab({
   onAck: (itemKey: string, fingerprint: string) => void;
   links: TaskLinks;
   onTask: () => void;
+  onOpenSession: (sessionKey: string, day?: string) => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -1317,13 +1381,19 @@ function GroupTab({
                   {p.sessions.map((s) => (
                     <li key={s.sessionKey} className="space-y-1">
                       <div className="flex justify-between gap-2">
-                        <Link
-                          className="text-slate-300 hover:text-emerald-400"
-                          href={`/super-admin/review-queue?sessionKey=${encodeURIComponent(s.sessionKey)}`}
+                        <button
+                          type="button"
+                          className="text-left text-slate-300 hover:text-emerald-400"
+                          onClick={() =>
+                            onOpenSession(
+                              s.sessionKey,
+                              s.startAt?.slice(0, 10),
+                            )
+                          }
                         >
                           {new Date(s.startAt).toLocaleString('ru-RU')} ·{' '}
                           {s.title}
-                        </Link>
+                        </button>
                         <span>
                           старт {s.bookedAtStart} → факт {s.confirmed} · +
                           {s.lateAdds}

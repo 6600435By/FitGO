@@ -499,6 +499,25 @@ export class SpecialistPayrollController {
     }
     return this.payroll.getSelfOverview(user, from, to);
   }
+
+  @Get('sale/:externalId')
+  saleDetail(
+    @CurrentUser() user: JwtPayload,
+    @Param('externalId') externalId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    if (!from || !to) {
+      throw new BadRequestException('from and to are required (YYYY-MM-DD)');
+    }
+    return this.payroll.getLinkedSaleDetail(
+      requireClubId(user),
+      user.sub,
+      decodeURIComponent(externalId),
+      from,
+      to,
+    );
+  }
 }
 
 /** Self payroll for admin / trainer (GP|staff) / specialist. */
@@ -518,5 +537,24 @@ export class SelfPayrollController {
       throw new BadRequestException('from and to are required (YYYY-MM-DD)');
     }
     return this.payroll.getSelfOverview(user, from, to);
+  }
+
+  @Get('sale/:externalId')
+  saleDetail(
+    @CurrentUser() user: JwtPayload,
+    @Param('externalId') externalId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    if (!from || !to) {
+      throw new BadRequestException('from and to are required (YYYY-MM-DD)');
+    }
+    return this.payroll.getLinkedSaleDetail(
+      requireClubId(user),
+      user.sub,
+      decodeURIComponent(externalId),
+      from,
+      to,
+    );
   }
 }
