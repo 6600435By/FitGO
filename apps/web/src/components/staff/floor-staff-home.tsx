@@ -673,7 +673,7 @@ export function FloorStaffHomePage({
               <p className="mb-3 text-sm font-semibold">
                 Месяц{' '}
                 <span className="font-normal text-slate-500">
-                  vs прошлый
+                  vs те же дни прошлого
                 </span>
               </p>
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-1">

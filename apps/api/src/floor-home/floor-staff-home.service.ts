@@ -96,7 +96,10 @@ export class FloorStaffHomeService {
     const today = localDateKey(now);
     const { start: dayStart, end: dayEnd } = dayBounds(today);
     const cur = monthBounds(now);
-    const prev = monthBounds(previousMonth(now));
+    // Same day-of-month window as trainer home (fair MoM while month is open).
+    const sameDayPrev = sameDayPreviousMonthWindow(cur.from, today);
+    const prevStart = dayBounds(sameDayPrev.previousFrom).start;
+    const prevEnd = dayBounds(sameDayPrev.previousTo).end;
 
     const me = await this.prisma.user.findUnique({
       where: { id: user.sub },
@@ -104,11 +107,23 @@ export class FloorStaffHomeService {
     });
     const staffName = `${me?.firstName ?? ''} ${me?.lastName ?? ''}`.trim();
 
+    // Month ops stats must match the board: CONFIRMED stays until 1C consume.
     const activeStatuses: SpaBookingStatus[] = [
       SpaBookingStatus.CONFIRMED,
       SpaBookingStatus.COMPLETED,
       SpaBookingStatus.PENDING_1C,
     ];
+
+    const bookingStatSelect = {
+      id: true,
+      startAt: true,
+      endAt: true,
+      clientId: true,
+      clientExternalId: true,
+      guestPhone: true,
+      paymentType: true,
+      partnerSource: true,
+    } as const;
 
     const [todayBookings, monthBookings, prevBookings, workSlots, waitlistCount, approvals] =
       await Promise.all([
@@ -129,37 +144,19 @@ export class FloorStaffHomeService {
           where: {
             clubId,
             specialistId: user.sub,
-            status: SpaBookingStatus.COMPLETED,
-            startAt: { gte: cur.start, lte: cur.end },
+            status: { in: activeStatuses },
+            startAt: { gte: cur.start, lte: dayEnd },
           },
-          select: {
-            id: true,
-            startAt: true,
-            endAt: true,
-            clientId: true,
-            clientExternalId: true,
-            guestPhone: true,
-            paymentType: true,
-            partnerSource: true,
-          },
+          select: bookingStatSelect,
         }),
         this.prisma.spaBooking.findMany({
           where: {
             clubId,
             specialistId: user.sub,
-            status: SpaBookingStatus.COMPLETED,
-            startAt: { gte: prev.start, lte: prev.end },
+            status: { in: activeStatuses },
+            startAt: { gte: prevStart, lte: prevEnd },
           },
-          select: {
-            id: true,
-            startAt: true,
-            endAt: true,
-            clientId: true,
-            clientExternalId: true,
-            guestPhone: true,
-            paymentType: true,
-            partnerSource: true,
-          },
+          select: bookingStatSelect,
         }),
         this.prisma.specialistWorkSlot.findMany({
           where: { specialistId: user.sub },
@@ -248,7 +245,11 @@ export class FloorStaffHomeService {
       });
     }
 
-    const spaMonth = (list: typeof monthBookings) => {
+    const spaMonth = (
+      list: typeof monthBookings,
+      periodStart: Date,
+      periodEnd: Date,
+    ) => {
       const servicesTotal = list.length;
       const days = new Set(list.map((b) => localDateKey(b.startAt)));
       const avgPerWorkDay =
@@ -262,11 +263,10 @@ export class FloorStaffHomeService {
           Math.round((b.endAt.getTime() - b.startAt.getTime()) / 60_000),
         );
       }
-      // Scheduled minutes: work slots × calendar days in month matching weekday
+      // Scheduled minutes: work slots × calendar days in period matching weekday
       let scheduledMins = 0;
-      const cursor = new Date(list === monthBookings ? cur.start : prev.start);
-      const endBound = list === monthBookings ? cur.end : prev.end;
-      while (cursor <= endBound) {
+      const cursor = new Date(periodStart);
+      while (cursor <= periodEnd) {
         const dow = cursor.getDay();
         for (const slot of workSlots.filter((s) => s.dayOfWeek === dow)) {
           scheduledMins += Math.max(
@@ -281,24 +281,17 @@ export class FloorStaffHomeService {
           ? Math.round((bookedMins / scheduledMins) * 1000) / 10
           : null;
 
-      const clientKey = (b: (typeof list)[0]) =>
-        b.clientId ??
-        b.clientExternalId ??
-        (b.guestPhone ? `phone:${b.guestPhone}` : null);
-
-      // New clients in this period (first ever completed booking in period)
-      // Use all completed history for first-seen — approximate with both months + today
-      return { servicesTotal, avgPerWorkDay, utilPct, clientKey };
+      return { servicesTotal, avgPerWorkDay, utilPct };
     };
 
-    // For repeat % need history — load first booking dates for clients in period
-    const historyStart = new Date(prev.start.getTime() - 90 * 86400_000);
+    // First-seen / repeat: any active booking (CONFIRMED stays until 1C consume)
+    const historyStart = new Date(prevStart.getTime() - 90 * 86400_000);
     const history = await this.prisma.spaBooking.findMany({
       where: {
         clubId,
         specialistId: user.sub,
-        status: SpaBookingStatus.COMPLETED,
-        startAt: { gte: historyStart, lte: cur.end },
+        status: { in: activeStatuses },
+        startAt: { gte: historyStart, lte: dayEnd },
       },
       select: {
         clientId: true,
@@ -325,7 +318,7 @@ export class FloorStaffHomeService {
       start: Date,
       end: Date,
     ) => {
-      const base = spaMonth(list);
+      const base = spaMonth(list, start, end);
       let quota = 0;
       let paid = 0;
       for (const b of list) {
@@ -353,8 +346,8 @@ export class FloorStaffHomeService {
       return { ...base, quota, paid, newClients: newClients.length, repeatPct };
     };
 
-    const curStats = spaPeriodStats(monthBookings, cur.start, cur.end);
-    const prevStats = spaPeriodStats(prevBookings, prev.start, prev.end);
+    const curStats = spaPeriodStats(monthBookings, cur.start, dayEnd);
+    const prevStats = spaPeriodStats(prevBookings, prevStart, prevEnd);
 
     // Free windows today
     const dow = now.getDay();
@@ -384,9 +377,9 @@ export class FloorStaffHomeService {
       },
       month: {
         from: cur.from,
-        to: cur.to,
-        previousFrom: prev.from,
-        previousTo: prev.to,
+        to: today,
+        previousFrom: sameDayPrev.previousFrom,
+        previousTo: sameDayPrev.previousTo,
         metrics: [
           metric(
             'Услуг',
