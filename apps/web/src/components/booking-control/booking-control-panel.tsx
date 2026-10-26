@@ -947,9 +947,9 @@ export function BookingControlPanel({
 
   const visible = useMemo(() => {
     let rows = items;
-    // Home «провёл» counts exclude one-off PT sales rows.
+    // Home «провёл» = all completed rows in range (incl. разовые ПТ из продаж).
     if (conductedMode) {
-      rows = rows.filter((i) => i.source !== 'SALE' && i.payTag !== 'SALE');
+      // no source cut — SALE PT count in ЗП / лестница / home card
     } else if (sourceFilter === 'SALE') {
       rows = rows.filter((i) => i.source === 'SALE' || i.payTag === 'SALE');
     } else if (sourceFilter === '1C') {
@@ -978,6 +978,20 @@ export function BookingControlPanel({
       rows = rows.filter((i) => {
         if (new Date(i.startAt).getTime() > nowMs) return false;
         if (i.status === 'CANCELLED') return false;
+        // PT chip: GP approval tabs don't apply — show all own past PT.
+        if (kind === 'PT' && i.kind === 'PT') return true;
+        // Mixed «Все»: PT without phase → «Прошли»; remarks / pending → «На контроле».
+        if (i.kind === 'PT') {
+          if (i.needsReview) return approvalSegment === 'pending';
+          if (
+            i.approvalPhase === 'PENDING_TRAINER' ||
+            i.approvalPhase === 'PENDING_ADMIN' ||
+            i.approvalPhase === 'PENDING_PERFORMER'
+          ) {
+            return approvalSegment === 'pending';
+          }
+          return approvalSegment === 'done';
+        }
         if (approvalSegment === 'done') {
           return i.approvalPhase === 'APPROVED';
         }
@@ -997,6 +1011,7 @@ export function BookingControlPanel({
     approvalSegments,
     approvalSegment,
     conductedMode,
+    kind,
     nowMs,
   ]);
 

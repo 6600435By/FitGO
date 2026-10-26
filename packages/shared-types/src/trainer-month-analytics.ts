@@ -48,12 +48,15 @@ export function sameDayPreviousMonthWindow(
   };
 }
 
-/** Matches booking-control panel `conducted=1` client filter. */
-export function isConductedControlRow(item: {
+/**
+ * Matches booking-control panel `conducted=1` client filter.
+ * Includes one-off PT from sales (source/payTag SALE) — same units as ЗП/лестница.
+ */
+export function isConductedControlRow(_item?: {
   source?: string | null;
   payTag?: string | null;
 }): boolean {
-  return item.source !== 'SALE' && item.payTag !== 'SALE';
+  return true;
 }
 
 export function controlClientKey(item: {

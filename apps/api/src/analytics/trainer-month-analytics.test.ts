@@ -27,10 +27,10 @@ import {
   assert.equal(w.previousTo, '2026-02-28');
 }
 
-// --- conducted filter ---
+// --- conducted filter (incl. one-off PT sales — align with ЗП / лестница) ---
 assert.equal(isConductedControlRow({ source: '1C', payTag: 'PACKAGE' }), true);
-assert.equal(isConductedControlRow({ source: 'SALE', payTag: 'SALE' }), false);
-assert.equal(isConductedControlRow({ source: '1C', payTag: 'SALE' }), false);
+assert.equal(isConductedControlRow({ source: 'SALE', payTag: 'SALE' }), true);
+assert.equal(isConductedControlRow({ source: '1C', payTag: 'SALE' }), true);
 
 // --- summarize ---
 {

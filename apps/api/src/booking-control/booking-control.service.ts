@@ -156,7 +156,6 @@ export class BookingControlService {
     const performerFilterId =
       filters.restrictPerformerId ?? filters.performerId;
 
-    let performerExt: string | undefined;
     let performerCodes: string[] = [];
     let performerName: string | undefined;
     /** FitGO user id when filter resolved to a staff user (not a raw 1C code). */
@@ -168,7 +167,6 @@ export class BookingControlService {
       const codeSet = new Set<string>();
       if (u) {
         fitgoPerformerUserId = u.id;
-        performerExt = u.externalId ?? u.employeeCode ?? undefined;
         for (const raw of [u.externalId, u.employeeCode]) {
           const t = raw?.trim();
           if (!t) continue;
@@ -181,7 +179,6 @@ export class BookingControlService {
         // Deep-link from Нестыковки: 1C employeeExternalId for staff not in FitGO.
         const ext = performerFilterId.trim();
         if (!ext) return [];
-        performerExt = ext;
         codeSet.add(ext);
         const stripped = ext.replace(/^0+/, '');
         if (stripped) codeSet.add(stripped);
@@ -400,7 +397,7 @@ export class BookingControlService {
           !this.saleMatchesPerformerFilter(
             sale,
             performerFilterId,
-            performerExt,
+            performerCodes,
             performerName,
             staffByExt,
           )
@@ -3959,7 +3956,7 @@ export class BookingControlService {
   private saleMatchesPerformerFilter(
     sale: SpecialistServiceDebt,
     performerFilterId: string | undefined,
-    performerExt: string | undefined,
+    performerCodes: string[],
     performerName: string | undefined,
     staffByExt: Map<
       string,
@@ -3967,24 +3964,39 @@ export class BookingControlService {
     >,
   ): boolean {
     if (!performerFilterId) return true;
-    if (performerExt && sale.employeeCode) {
-      const a = performerExt.replace(/^0+/, '');
-      const b = sale.employeeCode.replace(/^0+/, '');
-      if (a && b && a === b) return true;
-      if (sale.employeeCode === performerExt) return true;
+    const saleCode = (sale.employeeCode ?? '').trim();
+    // Same as payroll saleMatchesTrainer: match any staff code (UUID / табельный),
+    // not only primary externalId — trainers often have empty Forma UUID.
+    if (saleCode && performerCodes.length) {
+      const saleStripped = saleCode.replace(/^0+/, '');
+      for (const c of performerCodes) {
+        if (c === saleCode) return true;
+        const cs = c.replace(/^0+/, '');
+        if (cs && saleStripped && cs === saleStripped) return true;
+      }
     }
     if (performerName && sale.employeeName) {
+      const saleName = sale.employeeName.trim().toLowerCase().replace(/\s+/g, ' ');
+      const want = performerName.trim().toLowerCase().replace(/\s+/g, ' ');
+      if (saleName === want) return true;
+      // «Имя Фамилия» vs «Фамилия Имя» / с отчеством
+      const parts = want.split(' ').filter(Boolean);
       if (
-        sale.employeeName.trim().toLowerCase() ===
-        performerName.trim().toLowerCase()
+        parts.length >= 2 &&
+        saleName.includes(parts[0]!) &&
+        saleName.includes(parts[1]!)
       ) {
         return true;
       }
     }
-    const byCode = sale.employeeCode
-      ? staffByExt.get(sale.employeeCode)
-      : undefined;
-    if (byCode?.id === performerFilterId) return true;
+    if (saleCode) {
+      const byCode =
+        staffByExt.get(saleCode) ||
+        staffByExt.get(saleCode.replace(/^0+/, ''));
+      if (byCode?.id === performerFilterId) return true;
+    }
+    const byName = this.findStaffIdByName(staffByExt, sale.employeeName);
+    if (byName === performerFilterId) return true;
     return false;
   }
 
