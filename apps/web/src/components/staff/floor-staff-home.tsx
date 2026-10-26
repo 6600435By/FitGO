@@ -25,6 +25,17 @@ import { cn, formatDateTime } from '@/lib/utils';
 
 type FloorHomeRole = 'specialist' | 'gp';
 
+/** Same window as FloorStaffHomeService pendingMe (past sessions awaiting mark). */
+const CONTROL_PENDING_LOOKBACK_DAYS = 45;
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function daysAgoIso(n: number) {
+  return new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+}
+
 function timeHm(iso: string) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
@@ -452,7 +463,12 @@ export function FloorStaffHomePage({
     (data.monthAnalytics?.group.count ?? data.conducted?.group ?? 0) > 0 ||
     data.today.sessions.some((s) => s.kind === 'GROUP') ||
     data.month.metrics.some((m) => m.label === 'Средняя явка');
-  const reviewHref = `${controlBase}?needsReview=1`;
+  // pendingMe is counted over ~45 days; control UI defaults to «today» unless
+  // from/to are in the URL — without them the widget showed 9 and the list 0.
+  const controlFrom = daysAgoIso(CONTROL_PENDING_LOOKBACK_DAYS);
+  const controlTo = todayIso();
+  const controlPendingQs = `from=${encodeURIComponent(controlFrom)}&to=${encodeURIComponent(controlTo)}&needsReview=1`;
+  const reviewHref = `${controlBase}?${controlPendingQs}`;
   const controlSessionHref = (s: FloorStaffHomeSession) =>
     s.sessionKey
       ? `${controlBase}?session=${encodeURIComponent(s.sessionKey)}`
@@ -645,7 +661,7 @@ export function FloorStaffHomePage({
                 {data.control.queue.map((item) => (
                   <li key={item.sessionKey}>
                     <Link
-                      href={`${controlBase}?session=${encodeURIComponent(item.sessionKey)}&needsReview=1`}
+                      href={`${controlBase}?session=${encodeURIComponent(item.sessionKey)}&${controlPendingQs}`}
                       className="block rounded-lg bg-slate-800/50 px-2.5 py-2 text-sm transition hover:bg-slate-800"
                     >
                       <p className="font-medium">{item.title}</p>

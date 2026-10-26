@@ -461,8 +461,10 @@ export function BookingControlPanel({
   );
 
   const boot = useMemo(() => {
+    // «На контроле» backlog matches home pendingMe (~45 days), not only today.
+    const pendingLookbackFrom = daysAgoIso(45);
     const defaults: BookingViewMem = {
-      from: todayIso(),
+      from: approvalSegments ? pendingLookbackFrom : todayIso(),
       to: todayIso(),
       kind: fixedKind ?? 'ALL',
       status: 'ALL',
@@ -475,9 +477,12 @@ export function BookingControlPanel({
       clientIdFilter: '',
     };
     if (hasDeepLink || detailOnly) {
+      const needsAttention = Boolean(initialNeedsReview);
       return {
         ...defaults,
-        from: initialFrom?.trim() || defaults.from,
+        from:
+          initialFrom?.trim() ||
+          (needsAttention ? pendingLookbackFrom : defaults.from),
         to: initialTo?.trim() || defaults.to,
         kind: fixedKind ?? initialKind?.toUpperCase() ?? defaults.kind,
         status:
@@ -491,7 +496,7 @@ export function BookingControlPanel({
             ? initialFlag.toUpperCase()
             : '',
         performerId: initialPerformerId?.trim() || '',
-        needsReview: Boolean(initialNeedsReview),
+        needsReview: needsAttention,
         clientFilter: initialClient?.trim() || '',
         clientIdFilter: initialClientId?.trim() || '',
       };
@@ -569,12 +574,24 @@ export function BookingControlPanel({
       live.get('sessionKey')?.trim() || live.get('session')?.trim() || '';
     const fromL = live.get('from')?.trim() || '';
     const toL = live.get('to')?.trim() || '';
+    const needsReviewL =
+      live.get('needsReview') === '1' || live.get('needsReview') === 'true';
     const drill = Boolean(sessionKey);
-    if (!drill && !isIsoDay(fromL) && !isIsoDay(toL) && !live.get('client') && !live.get('performerId')) {
+    if (
+      !drill &&
+      !isIsoDay(fromL) &&
+      !isIsoDay(toL) &&
+      !needsReviewL &&
+      !live.get('client') &&
+      !live.get('performerId')
+    ) {
       return;
     }
     if (isIsoDay(fromL)) setFrom(fromL);
+    else if (needsReviewL) setFrom(daysAgoIso(45));
     if (isIsoDay(toL)) setTo(toL);
+    else if (needsReviewL) setTo(todayIso());
+    if (needsReviewL) setNeedsReview(true);
     const kindL = live.get('kind')?.trim().toUpperCase();
     if (kindL && !fixedKind) setKind(kindL);
     const statusL = live.get('status')?.trim().toUpperCase();
@@ -2149,7 +2166,12 @@ export function BookingControlPanel({
       {loading ? (
         <p className="text-slate-400">Загрузка…</p>
       ) : visible.length === 0 ? (
-        <p className="text-slate-400">Нет записей за период</p>
+        <p className="text-slate-400">
+          Нет записей за период
+          {approvalSegments && approvalSegment === 'pending' && from === to
+            ? ' — на контроле могут быть занятия за прошлые дни: нажмите «Неделя» или «Месяц»'
+            : ''}
+        </p>
       ) : (
         <>
           <ul className="space-y-2 md:hidden">
