@@ -608,22 +608,26 @@ export class FloorStaffHomeService {
       sessions.find((s) => s.status === 'IN_PROGRESS' || s.status === 'UPCOMING') ??
       null;
 
-    // Control queue — past sessions without trainer approval
-    const pastRaw = await this.prisma.onexClassSession.findMany({
+    // Control queue — only GROUP uses groupClassApproval (trainer → admin).
+    // 1C PT (incl. gift) must not appear here: no trainer-confirm action, and
+    // wrongly counting them made home show «9» while the card had nothing to tap.
+    const pendingLookback = new Date(now.getTime() - 45 * 86400_000);
+    const pastGroupRaw = await this.prisma.onexClassSession.findMany({
       where: {
         ...performerWhere,
+        kind: OnexClassKind.GROUP,
         status: { not: OnexClassStatus.CANCELLED },
         startAt: {
-          gte: new Date(now.getTime() - 45 * 86400_000),
+          gte: pendingLookback,
           lte: now,
         },
       },
       orderBy: { startAt: 'asc' },
       take: 200,
     });
-    const pastSessions = pastRaw.filter(keepSession);
+    const pastGroups = pastGroupRaw.filter(keepSession);
 
-    const sessionKeys = pastSessions.map((s) => `1c:${s.externalId}`);
+    const sessionKeys = pastGroups.map((s) => `1c:${s.externalId}`);
     const approvals = sessionKeys.length
       ? await this.prisma.groupClassApproval.findMany({
           where: { clubId, sessionKey: { in: sessionKeys } },
@@ -633,7 +637,7 @@ export class FloorStaffHomeService {
 
     const pendingMeItems: FloorStaffControlItem[] = [];
     let pendingAdmin = 0;
-    for (const s of pastSessions) {
+    for (const s of pastGroups) {
       if (s.status === OnexClassStatus.SCHEDULED && s.endAt && s.endAt > now) {
         continue;
       }
@@ -650,6 +654,54 @@ export class FloorStaffHomeService {
         startAt: s.startAt.toISOString(),
         subtitle: s.roomTitle ?? undefined,
       });
+    }
+
+    // FitGO PT — SessionApproval (performer → admin). Skip gifts: no trainer
+    // mark required (same sticky «Подарочная ПТ» that clogged the old queue).
+    if (hasPt) {
+      const pastPt = await this.prisma.personalTrainingBooking.findMany({
+        where: {
+          trainerId: user.sub,
+          isComplimentary: false,
+          status: { not: PersonalBookingStatus.CANCELLED },
+          startAt: { gte: pendingLookback, lte: now },
+          endAt: { lte: now },
+        },
+        include: {
+          client: { select: { firstName: true, lastName: true } },
+        },
+        orderBy: { startAt: 'asc' },
+        take: 200,
+      });
+      const ptIds = pastPt.map((b) => b.id);
+      const ptApprovals = ptIds.length
+        ? await this.prisma.sessionApproval.findMany({
+            where: {
+              clubId,
+              kind: SessionApprovalKind.PT,
+              bookingId: { in: ptIds },
+            },
+          })
+        : [];
+      const ptApprovalById = new Map(ptApprovals.map((a) => [a.bookingId, a]));
+      for (const b of pastPt) {
+        const row = ptApprovalById.get(b.id);
+        if (row?.overrideApprovedAt || row?.adminApprovedAt) continue;
+        if (row?.performerConfirmedAt) {
+          pendingAdmin++;
+          continue;
+        }
+        const clientName = b.client
+          ? `${b.client.firstName} ${b.client.lastName}`.trim()
+          : undefined;
+        pendingMeItems.push({
+          sessionKey: `fitgo:PT:${b.id}`,
+          title: 'Персональная тренировка',
+          startAt: b.startAt.toISOString(),
+          subtitle: clientName,
+        });
+      }
+      pendingMeItems.sort((a, b) => a.startAt.localeCompare(b.startAt));
     }
 
     const gpOnly = <T extends { kind: OnexClassKind }>(list: T[]) =>

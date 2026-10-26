@@ -1556,11 +1556,36 @@ export function BookingControlPanel({
 
   const canConfirmSelected = (() => {
     if (!canApproveGroup || !api.approveGroup || !selected) return false;
-    if (selected.kind === 'SPA') {
+    if (selected.kind === 'SPA' || selected.kind === 'PT') {
+      // FitGO PT/SPA (and 1C rows with fitgoBookingId) use SessionApproval.
+      // Pure 1C PT without FitGO link has no phase — not confirmable here.
       const phase = selected.approvalPhase;
-      if (!phase || phase === 'APPROVED') return false;
+      const canPt =
+        selected.kind === 'PT' &&
+        Boolean(selected.fitgoBookingId || selected.source === 'FITGO');
+      if (selected.kind === 'PT' && !canPt) return false;
+      if (!phase || phase === 'APPROVED') {
+        // No row yet → performer still needs to confirm (same as SPA list).
+        if (
+          selected.kind === 'PT' &&
+          canPt &&
+          approvalActor === 'performer' &&
+          selected.status !== 'CANCELLED'
+        ) {
+          return true;
+        }
+        if (selected.kind === 'SPA' && !phase && approvalActor === 'performer') {
+          return true;
+        }
+        return false;
+      }
       if (approvalActor === 'override') return true;
-      if (approvalActor === 'performer') return phase === 'PENDING_PERFORMER';
+      if (approvalActor === 'performer') {
+        return (
+          phase === 'PENDING_PERFORMER' ||
+          phase === 'PENDING_TRAINER'
+        );
+      }
       return phase === 'PENDING_ADMIN';
     }
     if (selected.kind === 'GROUP' && selected.source === '1C') {
@@ -3166,7 +3191,6 @@ export function BookingControlPanel({
                 )}
                 {selected.kind === 'SPA' &&
                 selected.status !== 'CANCELLED' &&
-                selected.approvalPhase &&
                 selected.approvalPhase !== 'APPROVED'
                   ? (() => {
                       const spaLabel = spaPendingLabel(
@@ -3177,6 +3201,45 @@ export function BookingControlPanel({
                       return (
                         <div className={`space-y-2 ${HINT_PANEL_COLOR[spaTone]}`}>
                           <p className={HINT_TEXT_COLOR[spaTone]}>{spaLabel}</p>
+                          {canConfirmSelected ? (
+                            <button
+                              type="button"
+                              className="btn-primary w-full text-sm"
+                              onClick={() => void approveGroup()}
+                              disabled={approveBusy}
+                            >
+                              {approveBusy ? 'Подтверждаем…' : 'Подтвердить'}
+                            </button>
+                          ) : null}
+                        </div>
+                      );
+                    })()
+                  : null}
+                {selected.kind === 'PT' &&
+                selected.status !== 'CANCELLED' &&
+                selected.approvalPhase !== 'APPROVED'
+                  ? (() => {
+                      const hasFitgo =
+                        Boolean(selected.fitgoBookingId) ||
+                        selected.source === 'FITGO';
+                      if (!hasFitgo) {
+                        return (
+                          <p className="rounded-xl border border-slate-700/60 bg-slate-900/50 px-3 py-2 text-sm text-slate-400">
+                            ПТ из журнала 1С не требует вашей отметки — явка уже
+                            в 1С. Замечание ниже только если нужна проверка
+                            администратора.
+                          </p>
+                        );
+                      }
+                      const ptLabel =
+                        selected.approvalLabel ||
+                        (selected.approvalPhase === 'PENDING_ADMIN'
+                          ? 'Ждёт администратора'
+                          : 'Ждёт вашей отметки');
+                      const ptTone = approvalHintTone(ptLabel);
+                      return (
+                        <div className={`space-y-2 ${HINT_PANEL_COLOR[ptTone]}`}>
+                          <p className={HINT_TEXT_COLOR[ptTone]}>{ptLabel}</p>
                           {canConfirmSelected ? (
                             <button
                               type="button"

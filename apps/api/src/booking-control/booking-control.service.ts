@@ -709,7 +709,9 @@ export class BookingControlService {
       );
       out = out.map((item) => {
         if (item.kind !== 'PT' && item.kind !== 'SPA') return item;
-        if (item.kind === 'PT' && !item.fitgoBookingId) return item;
+        if (item.kind === 'PT' && !item.fitgoBookingId && item.source !== 'FITGO') {
+          return item;
+        }
         if (item.status === 'CANCELLED') return item;
         const endMs = item.endAt
           ? new Date(item.endAt).getTime()
@@ -720,7 +722,8 @@ export class BookingControlService {
           (item.kind === 'SPA'
             ? approvalByKey.get(`SPA:${item.sessionKey}`)
             : undefined);
-        if (!row && item.kind !== 'SPA') return item;
+        // PT/SPA without a row still wait for performer (same as SPA onex).
+        if (!row && item.kind === 'PT' && !item.fitgoBookingId) return item;
         const phase = row
           ? this.sessionApproval.phase(row)
           : 'PENDING_PERFORMER';
@@ -730,7 +733,9 @@ export class BookingControlService {
           approvalLabel:
             item.kind === 'SPA' && phase === 'PENDING_PERFORMER'
               ? 'Ждёт специалиста'
-              : sessionApprovalLabelRu(phase),
+              : item.kind === 'PT' && phase === 'PENDING_PERFORMER'
+                ? 'Ждёт тренера'
+                : sessionApprovalLabelRu(phase),
         };
       });
     }
@@ -1067,12 +1072,16 @@ export class BookingControlService {
         | SessionApprovalPhase
         | undefined = groupApproval?.phase;
       let approvalLabel = groupApprovalLabelRu(groupApproval?.phase);
-      if (kind === 'SPA') {
-        const approvalId = matched?.id ?? canonicalKey;
+      if (kind === 'SPA' || (kind === 'PT' && matched?.id)) {
+        const approvalId =
+          kind === 'SPA' ? matched?.id ?? canonicalKey : matched!.id;
         const row = await this.prisma.sessionApproval.findUnique({
           where: {
             kind_bookingId: {
-              kind: SessionApprovalKind.SPA,
+              kind:
+                kind === 'SPA'
+                  ? SessionApprovalKind.SPA
+                  : SessionApprovalKind.PT,
               bookingId: approvalId,
             },
           },
@@ -1084,14 +1093,16 @@ export class BookingControlService {
           controlStatus !== 'CANCELLED' &&
           (controlStatus !== 'SCHEDULED' || ended)
         ) {
-          const spaPhase: SessionApprovalPhase = row
+          const phase: SessionApprovalPhase = row
             ? this.sessionApproval.phase(row)
             : 'PENDING_PERFORMER';
-          approvalPhase = spaPhase;
+          approvalPhase = phase;
           approvalLabel =
-            spaPhase === 'PENDING_PERFORMER'
+            kind === 'SPA' && phase === 'PENDING_PERFORMER'
               ? 'Ждёт специалиста'
-              : sessionApprovalLabelRu(spaPhase);
+              : kind === 'PT' && phase === 'PENDING_PERFORMER'
+                ? 'Ждёт тренера'
+                : sessionApprovalLabelRu(phase);
         }
       }
 
@@ -1307,6 +1318,11 @@ export class BookingControlService {
         arrived: this.paymentImpliesArrived(payment),
       });
       const approval = await this.loadSessionApprovalInfo(clubId, 'PT', b.id);
+      const ended = b.endAt.getTime() <= Date.now();
+      const ptPhase =
+        status !== 'CANCELLED' && (status !== 'SCHEDULED' || ended)
+          ? approval?.phase ?? ('PENDING_PERFORMER' as const)
+          : approval?.phase;
       const performerName = `${b.trainer.lastName} ${b.trainer.firstName}`.trim();
       const history = await this.buildBookingHistory({
         source: 'FITGO',
@@ -1338,8 +1354,11 @@ export class BookingControlService {
         payment,
         needsReview: Boolean(open),
         fitgoBookingId: b.id,
-        approvalPhase: approval?.phase,
-        approvalLabel: sessionApprovalLabelRu(approval?.phase),
+        approvalPhase: ptPhase,
+        approvalLabel:
+          ptPhase === 'PENDING_PERFORMER'
+            ? 'Ждёт тренера'
+            : sessionApprovalLabelRu(ptPhase),
         members: [],
         remark: open,
         remarksHistory: mappedRemarks,
@@ -1771,13 +1790,27 @@ export class BookingControlService {
 
     const clubId = requireClubId(actor);
     if (parsed?.source === '1C') {
-      const onexSpa = await this.findOnexSessionForControl(
+      const onex = await this.findOnexSessionForControl(
         clubId,
         parsed.id,
         'narrow',
       );
-      if (onexSpa?.kind === OnexClassKind.SPA) {
-        return this.approveSpaFromOnex(actor, onexSpa, comment);
+      if (onex?.kind === OnexClassKind.SPA) {
+        return this.approveSpaFromOnex(actor, onex, comment);
+      }
+      if (onex?.kind === OnexClassKind.PT) {
+        const matched = await this.findMatchingFitgoBooking(
+          clubId,
+          'PT',
+          onex,
+          undefined,
+        );
+        if (matched) {
+          return this.approveFitgoBooking(actor, 'PT', matched.id, comment);
+        }
+        throw new BadRequestException(
+          'ПТ из 1С без записи FitGO не требует подтверждения тренера',
+        );
       }
     }
     const session = await this.requireGroupOnex(clubId, sessionKey);
