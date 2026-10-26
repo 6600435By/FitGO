@@ -173,7 +173,9 @@ export type SpaLinkHintKind =
   | 'SALE_OTHER_PERFORMER'
   | 'SALE_MULTIPLE'
   | 'VISIT_MULTIPLE'
-  | 'LINKED';
+  | 'LINKED'
+  /** Already linked; admin may pick another sale (e.g. open remark). */
+  | 'RELINK';
 
 export interface SpaLinkCandidate {
   kind: 'sale' | 'visit';

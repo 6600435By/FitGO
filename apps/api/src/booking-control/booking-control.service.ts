@@ -83,6 +83,7 @@ import {
   awaitingPaymentLabel,
   buildSpaDayMergePairs,
   debtSearchWindow,
+  autoSaleAsHint,
   matchSpaSale,
   matchSpaVisitByDay,
   minskDayKey,
@@ -92,6 +93,7 @@ import {
   saleIsComplimentaryPartner,
   namesMatch,
   serviceNamesMatch,
+  toSaleCandidate,
   type SpaBookingMatchInput,
   type SpaOnexCandidate,
   type SpaSaleCandidate,
@@ -1134,6 +1136,26 @@ export class BookingControlService {
         spaOneCTitle = settled.oneCTitle;
         spaLinkedSaleId = settled.linkedSaleExternalId;
         spaServiceId = spaBooking?.serviceId ?? spaBooking?.service?.id;
+        if (
+          open &&
+          spaBooking &&
+          spaLinkedSaleId &&
+          (!spaLinkHint || spaLinkHint.kind === 'LINKED')
+        ) {
+          spaLinkHint =
+            (await this.buildSpaRelinkHint(clubId, {
+              id: spaBooking.id,
+              paymentType: spaBooking.paymentType,
+              crmDocRef: spaBooking.crmDocRef,
+              linkedSaleExternalId: spaLinkedSaleId,
+              startAt: spaBooking.startAt,
+              clientExternalId: spaBooking.clientExternalId,
+              guestName: spaBooking.guestName,
+              client: spaBooking.client,
+              specialist: spaBooking.specialist,
+              service: spaBooking.service,
+            })) ?? spaLinkHint;
+        }
         // Sale / quota write-off ⇒ client arrived (doc may stay SCHEDULED).
         if (
           this.paymentImpliesArrived(spaPayment) ||
@@ -1349,6 +1371,7 @@ export class BookingControlService {
           consumedInCrmAt: b.consumedInCrmAt,
           crmDocRef: b.crmDocRef,
           linkedSaleExternalId: b.linkedSaleExternalId,
+          saleAutoLinkBlocked: b.saleAutoLinkBlocked,
           startAt: b.startAt,
           partnerSource: b.partnerSource,
           client: b.client,
@@ -1382,6 +1405,26 @@ export class BookingControlService {
       });
       const linkedSale =
         settled.linkedSaleExternalId ?? b.linkedSaleExternalId ?? undefined;
+      let spaLinkHint = settled.hint;
+      if (
+        open &&
+        linkedSale &&
+        (!spaLinkHint || spaLinkHint.kind === 'LINKED')
+      ) {
+        spaLinkHint =
+          (await this.buildSpaRelinkHint(clubId, {
+            id: b.id,
+            paymentType: b.paymentType,
+            crmDocRef: b.crmDocRef,
+            linkedSaleExternalId: linkedSale,
+            startAt: b.startAt,
+            clientExternalId: b.clientExternalId,
+            guestName: b.guestName,
+            client: b.client,
+            specialist: b.specialist,
+            service: b.service,
+          })) ?? spaLinkHint;
+      }
       return {
         sessionKey,
         kind: 'SPA',
@@ -1415,7 +1458,7 @@ export class BookingControlService {
         crmDocRef: b.crmDocRef ?? undefined,
         priceMinor: b.priceMinor ?? b.service.priceMinor,
         spaSettlement: settled.settlement,
-        spaLinkHint: settled.hint,
+        spaLinkHint,
         oneCTitle: settled.oneCTitle,
         linkedSaleExternalId: linkedSale,
         serviceId: b.serviceId,
@@ -4070,6 +4113,7 @@ export class BookingControlService {
       consumedInCrmAt: Date | null;
       crmDocRef: string | null;
       linkedSaleExternalId?: string | null;
+      saleAutoLinkBlocked?: boolean | null;
       startAt: Date;
       partnerSource?: string | null;
       clientExternalId?: string | null;
@@ -4669,6 +4713,7 @@ export class BookingControlService {
       consumedInCrmAt: Date | null;
       crmDocRef: string | null;
       linkedSaleExternalId?: string | null;
+      saleAutoLinkBlocked?: boolean | null;
       startAt: Date;
       clientExternalId?: string | null;
       membershipServiceName?: string | null;
@@ -4699,12 +4744,13 @@ export class BookingControlService {
     linkedSaleExternalId?: string;
   } | null> {
     if (!clubId || !booking?.id) return null;
+    const blockAuto = Boolean(booking.saleAutoLinkBlocked);
     const matchInput = this.toSpaMatchInput({
       id: booking.id,
       startAt: booking.startAt,
       paymentType: booking.paymentType,
       crmDocRef: booking.crmDocRef,
-      linkedSaleExternalId: booking.linkedSaleExternalId,
+      linkedSaleExternalId: blockAuto ? null : booking.linkedSaleExternalId,
       clientExternalId: booking.clientExternalId,
       guestName: booking.guestName,
       client: booking.client,
@@ -4744,9 +4790,27 @@ export class BookingControlService {
       sales,
       takenSaleIds,
       serviceIdByProduct: serviceMap,
+      blockAutoLink: blockAuto,
     });
 
     if (result.kind === 'auto') {
+      if (blockAuto) {
+        return {
+          settlement: {
+            status: 'NOT_IN_1C',
+            label: spaSettlementLabelRu('NOT_IN_1C'),
+            source: 'local',
+            editableInApp: true,
+          },
+          payment: 'UNKNOWN',
+          payTag: 'SALE',
+          hint: autoSaleAsHint(
+            result.sale,
+            serviceMap,
+            'Документ отвязан — выберите продажу',
+          ),
+        };
+      }
       const sale = result.sale;
       const complimentary = saleIsComplimentaryPartner(sale);
       const partnerPay =
@@ -4763,6 +4827,7 @@ export class BookingControlService {
             data: {
               linkedSaleExternalId: sale.externalId,
               oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+              saleAutoLinkBlocked: false,
               ...(partnerPay ? { partnerSource: 'ALLSPORTS' } : {}),
               paymentStatus:
                 result.paymentStatus === 'PAID'
@@ -4819,7 +4884,146 @@ export class BookingControlService {
         hint: result.hint,
       };
     }
+    if (blockAuto) {
+      return {
+        settlement: {
+          status: 'NOT_IN_1C',
+          label: spaSettlementLabelRu('NOT_IN_1C'),
+          source: 'local',
+          editableInApp: true,
+        },
+        payment: 'UNKNOWN',
+        payTag: 'SALE',
+        hint: {
+          kind: 'SALE_MULTIPLE',
+          message: 'Документ отвязан — выберите продажу',
+          candidates: sales
+            .filter((s) => !takenSaleIds.has(s.externalId))
+            .slice(0, 8)
+            .map((s) => {
+              let serviceId: string | undefined;
+              if (s.productExternalId?.trim()) {
+                serviceId = serviceMap.get(s.productExternalId.trim());
+              }
+              if (!serviceId) {
+                const key = normalizeLabel(s.productName);
+                if (key) serviceId = serviceMap.get(`name:${key}`);
+              }
+              return toSaleCandidate(s, serviceId);
+            }),
+        },
+      };
+    }
     return null;
+  }
+
+  /** Candidates to replace a wrong linked sale (open remark / admin relink). */
+  private async buildSpaRelinkHint(
+    clubId: string,
+    booking: {
+      id: string;
+      paymentType: SpaPaymentType;
+      crmDocRef: string | null;
+      linkedSaleExternalId?: string | null;
+      startAt: Date;
+      clientExternalId?: string | null;
+      guestName?: string | null;
+      client?: {
+        externalId: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+      } | null;
+      specialist?: {
+        externalId: string | null;
+        employeeCode?: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+      } | null;
+      service?: {
+        id?: string;
+        name?: string;
+        externalId?: string | null;
+      } | null;
+    },
+  ): Promise<SpaLinkHint | undefined> {
+    const current = booking.linkedSaleExternalId?.trim();
+    if (!current) return undefined;
+    const matchInput = this.toSpaMatchInput({
+      id: booking.id,
+      startAt: booking.startAt,
+      paymentType: booking.paymentType,
+      crmDocRef: booking.crmDocRef,
+      linkedSaleExternalId: null,
+      clientExternalId: booking.clientExternalId,
+      guestName: booking.guestName,
+      client: booking.client,
+      specialist: booking.specialist ?? {
+        externalId: null,
+        employeeCode: null,
+        firstName: null,
+        lastName: null,
+      },
+      service: {
+        name: booking.service?.name ?? '',
+        externalId: booking.service?.externalId,
+      },
+    });
+    const [sales, serviceMap, taken] = await Promise.all([
+      this.loadSpaSaleCandidates(clubId, {
+        ...matchInput,
+        linkedSaleExternalId: current,
+      }),
+      this.spaServiceIdByProduct(clubId),
+      this.prisma.spaBooking.findMany({
+        where: {
+          clubId,
+          linkedSaleExternalId: { not: null },
+          id: { not: booking.id },
+        },
+        select: { linkedSaleExternalId: true },
+      }),
+    ]);
+    const takenSaleIds = new Set(
+      taken
+        .map((t) => t.linkedSaleExternalId?.trim())
+        .filter((x): x is string => Boolean(x)),
+    );
+    const result = matchSpaSale({
+      booking: matchInput,
+      sales,
+      takenSaleIds,
+      serviceIdByProduct: serviceMap,
+      blockAutoLink: true,
+    });
+    let candidates =
+      result.kind === 'hint'
+        ? result.hint.candidates
+        : result.kind === 'auto'
+          ? autoSaleAsHint(result.sale, serviceMap).candidates
+          : sales
+              .filter((s) => !takenSaleIds.has(s.externalId))
+              .slice(0, 8)
+              .map((s) => {
+                let serviceId: string | undefined;
+                if (s.productExternalId?.trim()) {
+                  serviceId = serviceMap.get(s.productExternalId.trim());
+                }
+                if (!serviceId) {
+                  const key = normalizeLabel(s.productName);
+                  if (key) serviceId = serviceMap.get(`name:${key}`);
+                }
+                return toSaleCandidate(s, serviceId);
+              });
+    // Prefer alternatives; keep current if it is the only row so admin still sees it.
+    const others = candidates.filter((c) => c.externalId !== current);
+    if (others.length) candidates = others;
+    if (!candidates.length) return undefined;
+    return {
+      kind: 'RELINK',
+      message:
+        'Привязана неверная продажа? Выберите другую — замечание останется открытым',
+      candidates,
+    };
   }
 
   private async tryLinkSpaVisitByDay(
@@ -4986,6 +5190,7 @@ export class BookingControlService {
       data: {
         linkedSaleExternalId: saleId,
         oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+        saleAutoLinkBlocked: false,
         ...(opts?.applyServiceId
           ? { serviceId: opts.applyServiceId }
           : {}),
@@ -5010,6 +5215,7 @@ export class BookingControlService {
       where: { id: bookingId },
       data: {
         linkedSaleExternalId: null,
+        saleAutoLinkBlocked: true,
         ...(booking.consumedInCrmAt
           ? {}
           : { crmDocRef: null, oneCLinkStatus: SpaOneCLinkStatus.NOT_LINKED }),
@@ -5053,6 +5259,7 @@ export class BookingControlService {
       data: {
         crmDocRef: ext,
         oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+        saleAutoLinkBlocked: false,
       },
     });
     return this.detail(clubId, onexSessionKey(ext));

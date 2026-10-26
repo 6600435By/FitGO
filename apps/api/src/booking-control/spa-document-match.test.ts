@@ -65,6 +65,22 @@ function sale(
   }
 }
 
+// --- After admin unlink: blockAutoLink must not return auto ---
+{
+  const visit = new Date('2026-10-19T07:00:00.000Z');
+  const b = booking({ id: 'b-unlink', startAt: visit });
+  const s = sale({
+    externalId: 'sale-unlink',
+    occurredAt: new Date('2026-10-19T06:57:00.000Z'),
+  });
+  const r = matchSpaSale({ booking: b, sales: [s], blockAutoLink: true });
+  assert.equal(r.kind, 'hint');
+  if (r.kind === 'hint') {
+    assert.equal(r.hint.kind, 'SALE_MULTIPLE');
+    assert.equal(r.hint.candidates[0]?.externalId, 'sale-unlink');
+  }
+}
+
 // --- Debt sold another day, paid later still links by document ---
 {
   const visit = new Date('2026-10-19T07:00:00.000Z');

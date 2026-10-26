@@ -3818,6 +3818,21 @@ export const api = {
     );
   },
 
+  payrollHoldPreview: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    sessionKey: string,
+  ) => {
+    const q = new URLSearchParams({ sessionKey });
+    return request<{
+      line: string;
+      held: boolean;
+      earnMinor?: number;
+      ratePercent?: number;
+      priceMinor?: number;
+    } | null>(`/${base}/payroll/hold-preview?${q}`, {}, token);
+  },
+
   selfPayrollOverview: (
     token: string,
     params: { from: string; to: string },

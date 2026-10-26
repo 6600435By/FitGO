@@ -132,6 +132,14 @@ export type BookingControlApi = {
   ) => Promise<BookingControlDetail>;
   /** Admin: clear linked sale / soft crmDocRef. */
   unlinkSpaDocument?: (bookingId: string) => Promise<BookingControlDetail>;
+  /** Payroll line under «На проверке» (held from motivation). */
+  payrollHoldPreview?: (sessionKey: string) => Promise<{
+    line: string;
+    held: boolean;
+    earnMinor?: number;
+    ratePercent?: number;
+    priceMinor?: number;
+  } | null>;
   /** Create FitGO journal row from a 1C SPA visit (no re-post to 1C). */
   adoptSpaToJournal?: (
     sessionKey: string,
@@ -691,9 +699,32 @@ export function BookingControlPanel({
   const [serviceBusy, setServiceBusy] = useState(false);
   const [linkDocBusy, setLinkDocBusy] = useState(false);
   const [refreshBusy, setRefreshBusy] = useState(false);
+  const [holdPreview, setHoldPreview] = useState<{
+    line: string;
+    held: boolean;
+  } | null>(null);
 
   const showSpaLinkHints =
     approvalActor === 'admin' || approvalActor === 'override';
+
+  useEffect(() => {
+    if (!selected?.remark || !api.payrollHoldPreview) {
+      setHoldPreview(null);
+      return;
+    }
+    let cancelled = false;
+    void api
+      .payrollHoldPreview(selected.sessionKey)
+      .then((p) => {
+        if (!cancelled) setHoldPreview(p);
+      })
+      .catch(() => {
+        if (!cancelled) setHoldPreview(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.sessionKey, selected?.remark?.id, api.payrollHoldPreview]);
 
   const groupSessionEndMs = (d: {
     startAt: string;
@@ -1126,6 +1157,11 @@ export function BookingControlPanel({
       const d = await api.unlinkSpaDocument(selected.fitgoBookingId);
       setSelected(d);
       load();
+      setMessage(
+        d.spaLinkHint?.candidates?.length
+          ? 'Документ отвязан — выберите продажу'
+          : 'Документ отвязан',
+      );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Не удалось отвязать');
     } finally {
@@ -2679,11 +2715,7 @@ export function BookingControlPanel({
                           {c.kind === 'sale' &&
                           api.linkSpaSale &&
                           selected.fitgoBookingId &&
-                          selected.spaLinkHint &&
-                          selected.spaLinkHint.kind !==
-                            'SALE_NO_PERFORMER' &&
-                          selected.spaLinkHint.kind !==
-                            'SALE_OTHER_PERFORMER' ? (
+                          selected.spaLinkHint ? (
                             <span className="inline-flex flex-wrap gap-1">
                               {selected.spaLinkHint.kind ===
                                 'SALE_OTHER_NOMENCLATURE' &&
@@ -2710,7 +2742,10 @@ export function BookingControlPanel({
                                   void linkSelectedSale(c.externalId)
                                 }
                               >
-                                Привязать
+                                {selected.spaLinkHint.kind === 'RELINK' ||
+                                selected.linkedSaleExternalId
+                                  ? 'Заменить'
+                                  : 'Привязать'}
                               </button>
                             </span>
                           ) : null}
@@ -3115,6 +3150,16 @@ export function BookingControlPanel({
                     <p className="font-medium text-rose-200">На проверке</p>
                     <p className="mt-1 text-slate-300">
                       {selected.remark.staffName}: {selected.remark.staffComment}
+                    </p>
+                    {holdPreview?.line ? (
+                      <p className="mt-2 whitespace-pre-wrap font-mono text-[11px] leading-snug text-slate-400">
+                        {holdPreview.line.replace(/\t/g, ' · ')}
+                      </p>
+                    ) : null}
+                    <p className="mt-1 text-xs text-rose-200/80">
+                      {holdPreview?.held !== false
+                        ? 'Снято с расчёта ЗП до «Отработано»'
+                        : 'В расчёте ЗП (замечание ещё не учтено — обновите)'}
                     </p>
                   </div>
                 )}

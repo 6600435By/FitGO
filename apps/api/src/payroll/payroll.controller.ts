@@ -177,6 +177,21 @@ export class PayrollController {
     );
   }
 
+  /** Booking-control «На проверке» — payroll line preview for a session. */
+  @Get('hold-preview')
+  holdPreview(
+    @CurrentUser() user: JwtPayload,
+    @Query('sessionKey') sessionKey: string,
+  ) {
+    if (!sessionKey?.trim()) {
+      throw new BadRequestException('sessionKey обязателен');
+    }
+    return this.payroll.holdPreviewForSession(
+      requireClubId(user),
+      sessionKey.trim(),
+    );
+  }
+
   @Get('club-summary')
   clubSummary(
     @CurrentUser() user: JwtPayload,
@@ -460,6 +475,21 @@ export class AdminPayrollController {
       user.sub,
       from,
       to,
+    );
+  }
+
+  /** Club-wide: used from booking-control review card (not limited to self ЗП). */
+  @Get('hold-preview')
+  holdPreview(
+    @CurrentUser() user: JwtPayload,
+    @Query('sessionKey') sessionKey: string,
+  ) {
+    if (!sessionKey?.trim()) {
+      throw new BadRequestException('sessionKey обязателен');
+    }
+    return this.payroll.holdPreviewForSession(
+      requireClubId(user),
+      sessionKey.trim(),
     );
   }
 }

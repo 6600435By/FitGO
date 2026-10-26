@@ -541,6 +541,9 @@ export class PayrollService {
         },
         include: { service: true, client: true },
       });
+      if (matched?.id) {
+        remarkKeys.push(fitgoSessionKey('SPA', matched.id));
+      }
       const serviceExternalId =
         o.serviceExternalId ?? matched?.service.externalId ?? undefined;
       const bioimpedance = isSpaAllSportsBioimpedance({
@@ -772,6 +775,7 @@ export class PayrollService {
         sessionKey: fitgoSessionKey('SPA', b.id),
         saleExternalId: saleExt,
       });
+      remarkKeys.push(fitgoSessionKey('SPA', b.id));
       spaPaidViaOnex.add(b.id);
     }
 
@@ -814,6 +818,7 @@ export class PayrollService {
         sessionKey: fitgoSessionKey('SPA', b.id),
         saleExternalId: b.linkedSaleExternalId?.trim() || undefined,
       });
+      remarkKeys.push(fitgoSessionKey('SPA', b.id));
       spaPaidViaOnex.add(b.id);
     }
 
@@ -893,6 +898,7 @@ export class PayrollService {
           sessionKey: fitgoSessionKey('SPA', unitId),
           saleExternalId: saleExt || undefined,
         });
+        remarkKeys.push(fitgoSessionKey('SPA', unitId));
         spaPaidViaOnex.add(unitId);
         if (saleExt) takenSaleExt.add(saleExt);
         if (client) takenDayClient.add(dayClient);
@@ -1361,7 +1367,18 @@ export class PayrollService {
     for (const u of units) {
       const sk = unitKey.get(u.id) ?? u.sessionKey;
       if (sk && !u.sessionKey) u.sessionKey = sk;
-      if (sk && openKeys.has(sk)) {
+      const remarkAliases = [sk, u.sessionKey].filter(
+        (k): k is string => Boolean(k),
+      );
+      if (
+        u.kind === 'SPA' &&
+        u.id &&
+        !String(u.id).startsWith('onex:') &&
+        !String(u.id).startsWith('revbio:')
+      ) {
+        remarkAliases.push(fitgoSessionKey('SPA', u.id));
+      }
+      if (remarkAliases.some((k) => openKeys.has(k))) {
         u.payrollTrusted = false;
         pushWorkUnitTrust(u, 'RED', 'Открыто замечание');
       }
@@ -1770,6 +1787,127 @@ export class PayrollService {
         : {}),
       ...(groupStats ? { groupStats } : {}),
       ...(ptStats ? { ptStats } : {}),
+    };
+  }
+
+  /**
+   * Compact payroll line for booking-control «На проверке» banner.
+   * Totals still exclude held units; line shows annotated earn for context.
+   */
+  async holdPreviewForSession(
+    clubId: string,
+    sessionKey: string,
+  ): Promise<{
+    line: string;
+    held: boolean;
+    earnMinor?: number;
+    ratePercent?: number;
+    priceMinor?: number;
+  } | null> {
+    const key = sessionKey?.trim();
+    if (!key) return null;
+    const detail = await this.bookingControl.detail(clubId, key);
+    let performerId = detail.performerId;
+    if (!performerId && detail.fitgoBookingId && detail.kind === 'SPA') {
+      const b = await this.prisma.spaBooking.findFirst({
+        where: { id: detail.fitgoBookingId, clubId },
+        select: { specialistId: true },
+      });
+      performerId = b?.specialistId;
+    }
+    if (!performerId && detail.kind === 'SPA' && detail.source === '1C') {
+      const parsed = key.startsWith('1c:') ? key.slice(3) : null;
+      if (parsed) {
+        const onex = await this.prisma.onexClassSession.findFirst({
+          where: { clubId, externalId: parsed, isActive: true },
+          select: { employeeExternalId: true, employeeName: true },
+        });
+        if (onex?.employeeExternalId) {
+          const u = await this.prisma.user.findFirst({
+            where: {
+              clubId,
+              OR: [
+                { externalId: onex.employeeExternalId },
+                { employeeCode: onex.employeeExternalId },
+              ],
+            },
+            select: { id: true },
+          });
+          performerId = u?.id;
+        }
+      }
+    }
+    if (!performerId) return null;
+
+    const day = detail.startAt.slice(0, 10);
+    const summary = await this.getPeriodSummary(
+      clubId,
+      performerId,
+      day,
+      day,
+    );
+    const aliases = new Set<string>([detail.sessionKey, key].filter(Boolean));
+    if (detail.fitgoBookingId) {
+      aliases.add(fitgoSessionKey('SPA', detail.fitgoBookingId));
+      aliases.add(fitgoSessionKey('PT', detail.fitgoBookingId));
+    }
+    const unit = summary.workUnits.find(
+      (u) => u.sessionKey && aliases.has(u.sessionKey),
+    );
+    if (!unit) {
+      // Fallback from detail fields when unit not in payroll day window.
+      const when = new Date(detail.startAt).toLocaleString('ru-RU', {
+        day: 'numeric',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'Europe/Minsk',
+      });
+      const price =
+        detail.priceMinor != null
+          ? `${(detail.priceMinor / 100).toFixed(2)} BYN`
+          : '—';
+      const who = detail.clientName?.trim() || detail.performerName;
+      return {
+        line: `${when}\t${detail.kind}\t${detail.title}${
+          who ? ` · ${who}` : ''
+        }\t1\t${price}`,
+        held: Boolean(detail.remark?.status === 'OPEN'),
+        priceMinor: detail.priceMinor ?? undefined,
+      };
+    }
+
+    const when = new Date(unit.occurredAt).toLocaleString('ru-RU', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'Europe/Minsk',
+    });
+    const price =
+      unit.priceMinor != null
+        ? `${(unit.priceMinor / 100).toFixed(2)} BYN`
+        : '—';
+    let earn = '—';
+    if (unit.earnMinor != null) {
+      if (unit.ratePercent != null && (unit.priceMinor ?? 0) > 0) {
+        earn = `${unit.ratePercent}% · ${(unit.earnMinor / 100).toFixed(2)} BYN`;
+      } else {
+        earn = `${(unit.earnMinor / 100).toFixed(2)} BYN`;
+      }
+    }
+    const who = unit.clientName?.trim() || detail.clientName?.trim();
+    const title = who ? `${unit.title} · ${who}` : unit.title;
+    const held =
+      !unit.payrollTrusted ||
+      Boolean(detail.remark?.status === 'OPEN') ||
+      (unit.trustHints ?? []).some((h) => /замечание/i.test(h));
+    return {
+      line: `${when}\t${unit.kind}\t${title}\t${unit.quantity}\t${price}\t${earn}`,
+      held,
+      earnMinor: unit.earnMinor,
+      ratePercent: unit.ratePercent,
+      priceMinor: unit.priceMinor,
     };
   }
 

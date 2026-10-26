@@ -1802,6 +1802,8 @@ model SpaBooking {
   crmDocRef              String?
   /// Linked 1C sale line (`ClubRevenueEntry.externalId`) when reception sold without bookingRef.
   linkedSaleExternalId   String?
+  /// After admin «Отвязать» — do not auto-relink the same sale on detail().
+  saleAutoLinkBlocked    Boolean          @default(false)
   cancelledBy            SpaCancelledBy?
   cancelledAt            DateTime?
   controlLevel           ServiceControlLevel   @default(BASE)

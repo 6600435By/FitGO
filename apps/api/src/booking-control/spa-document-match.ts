@@ -321,7 +321,7 @@ function formatSaleLabel(sale: SpaSaleCandidate): string {
   return `${name}${money}`;
 }
 
-function toSaleCandidate(
+export function toSaleCandidate(
   sale: SpaSaleCandidate,
   serviceId?: string,
 ): SpaLinkCandidate {
@@ -338,6 +338,29 @@ function toSaleCandidate(
   };
 }
 
+/** Turn an auto single-sale match into a pick-list hint (manual unlink / relink). */
+export function autoSaleAsHint(
+  sale: SpaSaleCandidate,
+  serviceIdByProduct?: Map<string, string>,
+  message = 'Выберите документ продажи',
+): SpaLinkHint {
+  let serviceId: string | undefined;
+  if (serviceIdByProduct) {
+    if (sale.productExternalId?.trim()) {
+      serviceId = serviceIdByProduct.get(sale.productExternalId.trim());
+    }
+    if (!serviceId) {
+      const key = normalizeLabel(sale.productName);
+      if (key) serviceId = serviceIdByProduct.get(`name:${key}`);
+    }
+  }
+  return {
+    kind: 'SALE_MULTIPLE',
+    message,
+    candidates: [toSaleCandidate(sale, serviceId)],
+  };
+}
+
 /**
  * Rank sales for a FitGO SPA booking.
  * Auto only when exactly one candidate has client + performer + same service.
@@ -349,9 +372,15 @@ export function matchSpaSale(input: {
   takenSaleIds?: Set<string>;
   /** Map productExternalId / normalized product name → SpaService.id */
   serviceIdByProduct?: Map<string, string>;
+  /**
+   * When true, ignore existing linkedSaleExternalId short-circuit and never
+   * return auto (convert to hint) — used after admin unlink / for RELINK list.
+   */
+  blockAutoLink?: boolean;
 }): SpaSaleMatchResult {
-  const { booking, sales, takenSaleIds, serviceIdByProduct } = input;
-  if (booking.linkedSaleExternalId?.trim()) {
+  const { booking, sales, takenSaleIds, serviceIdByProduct, blockAutoLink } =
+    input;
+  if (!blockAutoLink && booking.linkedSaleExternalId?.trim()) {
     const linked = sales.find(
       (s) => s.externalId === booking.linkedSaleExternalId,
     );
@@ -404,10 +433,21 @@ export function matchSpaSale(input: {
     (s) => performerMatchesBooking(s, booking) && nomenclatureMatches(s, booking),
   );
   if (exact.length === 1) {
+    const only = exact[0]!;
+    if (blockAutoLink) {
+      return {
+        kind: 'hint',
+        hint: autoSaleAsHint(
+          only,
+          serviceIdByProduct,
+          'Документ отвязан — выберите продажу',
+        ),
+      };
+    }
     return {
       kind: 'auto',
-      sale: exact[0]!,
-      paymentStatus: salePaymentStatus(exact[0]!),
+      sale: only,
+      paymentStatus: salePaymentStatus(only),
     };
   }
   if (exact.length > 1) {
