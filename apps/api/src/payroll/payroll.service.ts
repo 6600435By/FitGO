@@ -566,8 +566,10 @@ export class PayrollService {
       });
       let packSaleExt: string | undefined;
       let packSaleAt: string | undefined;
-      // Prefer paid pack sale / N over 1C unit (often catalog÷N → 75/10=7.50).
-      if (primary?.clientName) {
+      // ClubRevenue «Блок массажа 10» is an umbrella SKU — same name for лицо
+      // and классика; picking max(day) underpays one of them. Service-line
+      // SaleTransaction matching below handles SPA blocks instead.
+      if (primary?.clientName && !isServiceBlock) {
         const packMatch = matchPackSaleForUnitPrice(
           packSalesForUnit,
           primary.clientName,
@@ -611,6 +613,7 @@ export class PayrollService {
           sessionTitle: o.title,
           packsSameDay: spaPacksSameDay.get(clientKey) ?? 1,
           catalogUnitMinor,
+          serviceExternalId,
         });
         if (blockMatch) {
           priceMinor = blockMatch.unitPriceMinor;
@@ -961,6 +964,17 @@ export class PayrollService {
           matched?.isComplimentary === true ||
           isComplimentarySessionTitle(o.title) ||
           isComplimentarySessionTitle(primary?.paymentBasis));
+      const writeOffOriginEarly = classifyPtSessionOrigin({
+        paymentBasis: primary?.paymentBasis,
+        sessionTitle: o.title,
+        packageQty: primary?.packageQty,
+        isComplimentary: isGift,
+      });
+      const isServiceBlockEarly = writeOffOriginEarly === 'BLOCK';
+      const asSpaEarly =
+        isSpecialist &&
+        (bioimpedanceEarly ||
+          (!isGift && isSpaLikeSessionTitle(o.title)));
       let unitFromPackage = resolvePackageUnitPriceMinor({
         unitPriceMinor: primary?.unitPriceMinor,
         packageAmountMinor: primary?.packageAmountMinor,
@@ -970,8 +984,9 @@ export class PayrollService {
       });
       let packSaleExt: string | undefined;
       let packSaleAt: string | undefined;
-      // Prefer paid pack sale / N (same as SPA massage blocks).
-      if (primary?.clientName) {
+      // PT training packs: ClubRevenue sale/N. SPA-like massage stored as PT:
+      // skip umbrella pack match (same as kind=SPA path).
+      if (primary?.clientName && !(asSpaEarly && isServiceBlockEarly)) {
         const packMatch = matchPackSaleForUnitPrice(
           packSalesForUnit,
           primary.clientName,
@@ -1018,12 +1033,7 @@ export class PayrollService {
         (bioimpedanceEarly ||
           (!isGift && isSpaLikeSessionTitle(o.title)));
       const bioimpedance = asSpa && bioimpedanceEarly;
-      const writeOffOrigin = classifyPtSessionOrigin({
-        paymentBasis: primary?.paymentBasis,
-        sessionTitle: o.title,
-        packageQty: primary?.packageQty,
-        isComplimentary: isGift,
-      });
+      const writeOffOrigin = writeOffOriginEarly;
       const isMembershipQuota = writeOffOrigin === 'MEMBERSHIP';
       const isServiceBlock = writeOffOrigin === 'BLOCK';
       let spaPriceMinor = priceMinor;
@@ -1053,6 +1063,7 @@ export class PayrollService {
           sessionTitle: o.title,
           packsSameDay: spaPacksSameDay.get(clientKey) ?? 1,
           catalogUnitMinor,
+          serviceExternalId,
         });
         if (blockMatch) {
           spaPriceMinor = blockMatch.unitPriceMinor;

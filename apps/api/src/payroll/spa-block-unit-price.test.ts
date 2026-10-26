@@ -212,4 +212,92 @@ import {
   assert.equal(modeOneShotPriceMinor([450, 90, 90, 5]), 9000);
 }
 
+{
+  // Князева: ЛС 855 + лицо 405 + классика 450 + разовый 75 в один день.
+  // Bug was 855÷3÷10 = 28.50 for every visit. Must pick service lines.
+  const docs = groupMassageSalesToDocs([
+    {
+      externalSaleId:
+        'ac3c9231-a79f-11f1-8deb-a45d36c32cf1:pa:b8db14c8:20260903170003:personal_credit:u2026-09-03',
+      clientName: 'Князева Алёна',
+      soldAt: new Date('2026-09-03T17:00:03Z'),
+      amount: 855,
+      productName: 'Прочие поступления (начисление на ЛС)',
+      productExternalId: null,
+      isActive: false,
+    },
+    {
+      externalSaleId: 'a56fbc45-54e9-4ca7-9db9-d1513dcd12b4',
+      clientName: 'Князева Алёна',
+      soldAt: new Date('2026-09-03T14:00:12Z'),
+      amount: 405,
+      productName: 'Массаж лица 25 мин',
+      productExternalId: '72233094-a555-11e8-80e8-7085c20c362e',
+      isActive: false,
+    },
+    {
+      externalSaleId: 'a7381403-8180-441f-8b46-53118c863a60',
+      clientName: 'Князева Алёна',
+      soldAt: new Date('2026-09-03T14:02:49Z'),
+      amount: 450,
+      productName: 'Массаж классический 25 мин',
+      productExternalId: '7223308a-a555-11e8-80e8-7085c20c362e',
+      isActive: false,
+    },
+    {
+      externalSaleId: 'b89c4c2e-b0ee-4eec-a4ad-72eb7560a744',
+      clientName: 'Князева Алёна',
+      soldAt: new Date('2026-09-03T14:05:23Z'),
+      amount: 75,
+      productName: 'Массаж классический 50 мин',
+      productExternalId: '72233086-a555-11e8-80e8-7085c20c362e',
+      isActive: false,
+    },
+  ]);
+  // ЛС + one-shot dropped; two pack lines remain.
+  assert.equal(docs.length, 2);
+
+  const face = resolveSpaBlockUnitPrice({
+    sales: docs,
+    clientName: 'Князева Алёна',
+    paymentBasis:
+      'Пакет услуг "Блок массажа 10 новый" 1 от 03.09.2026',
+    sessionTitle: 'Массаж лица 25 мин',
+    packsSameDay: 3,
+    catalogUnitMinor: 4500,
+    serviceExternalId: '72233094-a555-11e8-80e8-7085c20c362e',
+  });
+  assert.ok(face);
+  assert.equal(face!.source, 'SALE');
+  assert.equal(face!.unitPriceMinor, 4050); // 405/10
+
+  const classic = resolveSpaBlockUnitPrice({
+    sales: docs,
+    clientName: 'Князева Алёна',
+    paymentBasis:
+      'Пакет услуг "Блок массажа 10 новый" 2 от 03.09.2026',
+    sessionTitle: 'Массаж классический 25 мин',
+    packsSameDay: 3,
+    catalogUnitMinor: 4500,
+    serviceExternalId: '7223308a-a555-11e8-80e8-7085c20c362e',
+  });
+  assert.ok(classic);
+  assert.equal(classic!.source, 'SALE');
+  assert.equal(classic!.unitPriceMinor, 4500); // 450/10
+
+  // «Массаж из блока» / курс 5 — не брать чужую линию 450÷5.
+  const orphan = resolveSpaBlockUnitPrice({
+    sales: docs,
+    clientName: 'Князева Алёна',
+    paymentBasis:
+      'Членство "Курс массажа 5  (удален)" 72101 от 03.09.2026',
+    sessionTitle: 'Массаж из блока (удален)',
+    packsSameDay: 3,
+    catalogUnitMinor: 5700,
+  });
+  assert.ok(orphan);
+  assert.equal(orphan!.source, 'CATALOG');
+  assert.equal(orphan!.unitPriceMinor, 5415); // 57 × 0.95
+}
+
 console.log('spa-block-unit-price.test.ts: ok');

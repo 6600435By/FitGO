@@ -47,6 +47,82 @@ function normName(s: string): string {
     .replace(/\s+/g, ' ');
 }
 
+/**
+ * ЛС deposit/credit/burn rows are often saleType=massage (same cash day as
+ * pack sales) but are NOT pack documents. Matching them as amount/N underpays
+ * (Князева: 855÷3÷10 = 28.50 instead of 405/10 or 450/10).
+ */
+export function isSpaBlockMoneyNoise(
+  productName?: string | null,
+  externalSaleId?: string | null,
+): boolean {
+  const id = (externalSaleId ?? '').toLowerCase();
+  if (
+    id.includes(':pa:') ||
+    id.includes('personal_deposit') ||
+    id.includes('personal_credit') ||
+    id.includes('personal_burn')
+  ) {
+    return true;
+  }
+  const n = normName(productName ?? '');
+  if (!n) return false;
+  if (n.includes('лицевой счет') || n.includes('лицевого счета')) return true;
+  if (n.includes('прочие поступления')) return true;
+  if (n.startsWith('взнос на')) return true;
+  if (n.includes('сгорание')) return true;
+  return false;
+}
+
+/** One-shot visit line (75 BYN) — must not become a pack total for /N. */
+export function isLikelyOneShotMassageAmount(
+  amountMajor: number,
+  productName?: string | null,
+): boolean {
+  const a = Number(amountMajor) || 0;
+  if (a < ONE_SHOT_MIN_MAJOR || a > ONE_SHOT_MAX_MAJOR) return false;
+  const qty = parsePackVisitCountFromTitle(productName);
+  if (qty != null && qty > 1) return false;
+  return true;
+}
+
+/** Score how well a sale product matches the conducted session title. */
+export function spaSaleTitleAffinity(
+  productName: string | null | undefined,
+  sessionTitle: string | null | undefined,
+): number {
+  const prod = normName(productName ?? '');
+  const title = normName(sessionTitle ?? '')
+    .replace(/\s*\(блок\)\s*$/i, '')
+    .replace(/\s*\(абонемент\)\s*$/i, '')
+    .trim();
+  if (!prod || !title) return 0;
+  if (prod === title) return 100;
+  if (title.includes(prod) || prod.includes(title)) return 90;
+  // Shared distinctive tokens (лица / классический / коррекции…) beyond «массаж».
+  const stop = new Set([
+    'массаж',
+    'массажа',
+    'мин',
+    'минуты',
+    'минут',
+    'блок',
+    'удален',
+    'удалён',
+    'из',
+  ]);
+  const tokens = (s: string) =>
+    s
+      .split(/[^a-zа-я0-9]+/)
+      .filter((t) => t.length >= 3 && !stop.has(t) && !/^\d+$/.test(t));
+  const pt = new Set(tokens(prod));
+  const tt = tokens(title);
+  let hit = 0;
+  for (const t of tt) if (pt.has(t)) hit += 1;
+  if (hit > 0) return 50 + hit * 10;
+  return 0;
+}
+
 /** Document UUID = prefix of SaleTransaction.externalSaleId before first `:`. */
 export function saleDocumentId(externalSaleId: string): string {
   const s = (externalSaleId ?? '').trim();
@@ -65,8 +141,9 @@ function saleIdSuffix(externalSaleId: string): string | null {
 }
 
 /**
- * Group massage SaleTransaction rows into one doc per sale UUID.
- * Prefer base row (no :u/:p suffix); else sum latest unpaid+paid snapshot.
+ * Group massage SaleTransaction rows into one doc per sale UUID + product line.
+ * Prefer base row (no :u/:p suffix); else largest snapshot.
+ * Multi-line sales (лицо + классический in one UUID) stay separate lines.
  */
 export function groupMassageSalesToDocs(
   rows: Array<{
@@ -90,38 +167,43 @@ export function groupMassageSalesToDocs(
     /** Max amount seen on any snapshot (u often = full sale; p = paid slice). */
     maxAmount: number;
   };
-  const byDoc = new Map<string, Acc>();
+  const byLine = new Map<string, Acc>();
 
   for (const r of rows) {
+    if (isSpaBlockMoneyNoise(r.productName, r.externalSaleId)) continue;
     const documentId = saleDocumentId(r.externalSaleId);
     if (!documentId) continue;
     const client = (r.clientName ?? '').trim();
     if (!client) continue;
     const amount = Number(r.amount) || 0;
     if (amount <= 0) continue;
+    const productExternalId = (r.productExternalId ?? '').trim() || undefined;
+    const productName = (r.productName ?? '').trim() || undefined;
+    // Keep face vs classic lines apart even when 1C shares one sale UUID.
+    const lineKey = `${documentId}|${productExternalId ?? productName ?? ''}`;
 
-    let acc = byDoc.get(documentId);
+    let acc = byLine.get(lineKey);
     if (!acc) {
       acc = {
         documentId,
         clientName: client,
         soldAt: r.soldAt,
-        productName: r.productName ?? undefined,
-        productExternalId: r.productExternalId ?? undefined,
+        productName,
+        productExternalId,
         maxAmount: 0,
       };
-      byDoc.set(documentId, acc);
+      byLine.set(lineKey, acc);
     }
     if (r.soldAt < acc.soldAt) acc.soldAt = r.soldAt;
-    if (!acc.productName && r.productName) acc.productName = r.productName;
-    if (!acc.productExternalId && r.productExternalId) {
-      acc.productExternalId = r.productExternalId;
+    if (!acc.productName && productName) acc.productName = productName;
+    if (!acc.productExternalId && productExternalId) {
+      acc.productExternalId = productExternalId;
     }
     if (amount > acc.maxAmount) acc.maxAmount = amount;
 
     const suffix = saleIdSuffix(r.externalSaleId);
     if (!suffix) {
-      // Bare document id — authoritative full amount.
+      // Bare document id — authoritative full amount for this line.
       if (acc.baseAmount == null || amount > acc.baseAmount) {
         acc.baseAmount = amount;
       }
@@ -129,10 +211,11 @@ export function groupMassageSalesToDocs(
   }
 
   const out: SpaBlockSaleDoc[] = [];
-  for (const acc of byDoc.values()) {
+  for (const acc of byLine.values()) {
     // Prefer bare-id row; else largest snapshot (unpaid u often holds full pack).
     const amountMajor = acc.baseAmount ?? acc.maxAmount;
     if (amountMajor <= 0) continue;
+    if (isLikelyOneShotMassageAmount(amountMajor, acc.productName)) continue;
     out.push({
       documentId: acc.documentId,
       clientName: acc.clientName,
@@ -223,6 +306,8 @@ export function matchSpaBlockSale(input: {
   sessionTitle?: string | null;
   packsSameDay?: number;
   catalogUnitMinor?: number | null;
+  /** Conducted service nomenclature UUID when known. */
+  serviceExternalId?: string | null;
 }): SpaBlockUnitMatch | undefined {
   const client = normName(input.clientName);
   if (!client) return undefined;
@@ -242,10 +327,41 @@ export function matchSpaBlockSale(input: {
   });
   if (!cands.length) return undefined;
 
-  // Prefer larger amount (covers multi-pack docs); then any.
-  cands.sort((a, b) => b.amountMinor - a.amountMinor);
-  const best = cands[0]!;
-  let unit = Math.round(best.amountMinor / packsSameDay / packQty);
+  const svcExt = (input.serviceExternalId ?? '').trim();
+  const scored = cands.map((s) => {
+    const extMatch =
+      !!svcExt &&
+      !!s.productExternalId &&
+      s.productExternalId === svcExt;
+    const aff = spaSaleTitleAffinity(s.productName, input.sessionTitle);
+    return { s, extMatch, aff };
+  });
+  // Prefer sale line for this service (лицо vs классический), not max(day).
+  const matched = scored.filter((x) => x.extMatch || x.aff >= 50);
+  // Several pack lines same day and none match this visit → catalog fallback
+  // (avoid 450÷5 on «Массаж из блока» when only лицо/классика were sold).
+  if (!matched.length && scored.length > 1) return undefined;
+  const pool = matched.length ? matched : scored;
+  pool.sort(
+    (a, b) =>
+      Number(b.extMatch) - Number(a.extMatch) ||
+      b.aff - a.aff ||
+      b.s.amountMinor - a.s.amountMinor,
+  );
+  const bestRow = pool[0]!;
+  const best = bestRow.s;
+
+  // Split one payment across same-day packs only when there is a single
+  // pack-sized sale that day (Костюченко 1170 на 2 курса). Separate lines
+  // (405 лицо + 450 классика) must NOT be divided by packsSameDay.
+  const splitAcrossPacks =
+    packsSameDay > 1 &&
+    scored.length === 1 &&
+    !bestRow.extMatch &&
+    bestRow.aff < 50;
+  const divisor = splitAcrossPacks ? packsSameDay : 1;
+
+  let unit = Math.round(best.amountMinor / divisor / packQty);
   if (unit <= 0) return undefined;
 
   const catalog = input.catalogUnitMinor ?? 0;
@@ -356,6 +472,7 @@ export function resolveSpaBlockUnitPrice(input: {
   sessionTitle?: string | null;
   packsSameDay?: number;
   catalogUnitMinor?: number | null;
+  serviceExternalId?: string | null;
 }): SpaBlockUnitMatch | undefined {
   const packQty = packQtyFromBasis(input.paymentBasis, input.sessionTitle);
   const fromSale = matchSpaBlockSale(input);
