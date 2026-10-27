@@ -464,6 +464,7 @@ export function ClubRevenuePanel() {
   const [detail, setDetail] = useState<ClubRevenueDetailResponse | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   usePersistViewMemory<SalesViewMem>({
     data: {
@@ -760,14 +761,55 @@ export function ClubRevenuePanel() {
     }
   };
 
+  const exportXlsx = async () => {
+    const token = getToken();
+    if (!token) return;
+    setExporting(true);
+    setError('');
+    try {
+      const blob = await api.superAdminClubSalesXlsx(token, {
+        from,
+        to,
+        operationType,
+        paymentMethod,
+        employeeExternalId: employeeExternalId || undefined,
+        q: q.trim() || undefined,
+        productId: productId.trim() || undefined,
+        productExact: productExact || undefined,
+        segment: segment || undefined,
+        debtor: debtor || undefined,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `sales_${from}_${to}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка Excel');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Продажи клуба</h1>
-        <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
-          Продажи · выручка · лицевые счета. Цифры в карточках — фильтры списка.
-          Свежие дни — кнопка «Обновить из 1С» сверху страницы.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">Продажи клуба</h1>
+          <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
+            Продажи · выручка · лицевые счета. Цифры в карточках — фильтры списка.
+            Свежие дни — кнопка «Обновить из 1С» сверху страницы.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn-secondary shrink-0 px-3 py-2 text-sm"
+          disabled={exporting || loading}
+          onClick={() => void exportXlsx()}
+        >
+          {exporting ? 'Выгрузка…' : 'Выгрузка в Excel'}
+        </button>
       </div>
 
       <div className="card grid grid-cols-1 items-end gap-3 sm:grid-cols-[auto_minmax(11rem,1fr)_minmax(11rem,1fr)]">

@@ -4167,6 +4167,42 @@ export const api = {
       token,
     ),
 
+  superAdminClubSalesXlsx: async (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      operationType?: string;
+      paymentMethod?: string;
+      employeeExternalId?: string;
+      q?: string;
+      productId?: string;
+      productExact?: boolean;
+      segment?: string;
+      debtor?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({ from: params.from, to: params.to });
+    if (params.operationType && params.operationType !== 'all')
+      q.set('operationType', params.operationType);
+    if (params.paymentMethod && params.paymentMethod !== 'all')
+      q.set('paymentMethod', params.paymentMethod);
+    if (params.employeeExternalId)
+      q.set('employeeExternalId', params.employeeExternalId);
+    if (params.q) q.set('q', params.q);
+    if (params.productId) q.set('productId', params.productId);
+    if (params.productExact) q.set('productExact', '1');
+    if (params.segment && params.segment !== 'all')
+      q.set('segment', params.segment);
+    if (params.debtor) q.set('debtor', params.debtor);
+    const res = await fetch(
+      `${API_URL}/api/super-admin/sales/club.xlsx?${q}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    await assertBlobOk(res, token, '/super-admin/sales/club.xlsx');
+    return res.blob();
+  },
+
   superAdminClubSalesManualAdd: (
     token: string,
     body: {

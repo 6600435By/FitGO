@@ -8,6 +8,8 @@ import {
   Param,
   Post,
   Query,
+  Res,
+  StreamableFile,
   UseGuards,
 } from '@nestjs/common';
 import { UserRole } from '@fitgo/shared-types';
@@ -124,6 +126,49 @@ export class SuperAdminSalesController {
       segment,
       debtor,
     });
+  }
+
+  @Get('club.xlsx')
+  async clubReportXlsx(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('operationType') operationType?: string,
+    @Query('paymentMethod') paymentMethod?: string,
+    @Query('employeeExternalId') employeeExternalId?: string,
+    @Query('q') q?: string,
+    @Query('productId') productId?: string,
+    @Query('productExact') productExact?: string,
+    @Query('segment') segment?: string,
+    @Query('debtor') debtor?: string,
+    @Res({ passthrough: true })
+    res?: { setHeader: (k: string, v: string) => void },
+  ) {
+    assertPeriod(from, to);
+    const buf = await this.clubRevenue.exportXlsx(requireClubId(user), {
+      from,
+      to,
+      operationType,
+      paymentMethod,
+      employeeExternalId,
+      q,
+      productExternalId: productId,
+      productExact:
+        productExact === '1' ||
+        productExact === 'true' ||
+        Boolean(productId?.trim()),
+      segment,
+      debtor,
+    });
+    res?.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res?.setHeader(
+      'Content-Disposition',
+      `attachment; filename="sales_${from}_${to}.xlsx"`,
+    );
+    return new StreamableFile(buf);
   }
 
   @Get('club/:id')

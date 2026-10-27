@@ -190,6 +190,8 @@ export class ClubRevenueService {
       productExact?: boolean;
       segment?: string;
       debtor?: string;
+      /** Cap table rows (UI default 2000). Pass a higher value for Excel. */
+      lineLimit?: number;
     },
   ): Promise<ClubRevenueReportResponse> {
     const from = new Date(`${params.from}T00:00:00.000Z`);
@@ -557,7 +559,11 @@ export class ClubRevenueService {
       });
     }
 
-    const lines = lineRows.slice(0, 2000).map((r) => {
+    const lineLimit =
+      params.lineLimit != null && params.lineLimit > 0
+        ? params.lineLimit
+        : 2000;
+    const lines = lineRows.slice(0, lineLimit).map((r) => {
       const line = this.toLine(r, from, to);
       if (payPart === 'cash') {
         line.amountMinor = toMinor(r.cash);
@@ -914,6 +920,132 @@ export class ClubRevenueService {
       })),
     });
     return summary.revenue.totalMinor;
+  }
+
+  /**
+   * Excel for the sales table with the same filters/period as the UI list.
+   * Caps at 50k rows (UI list is 2k).
+   */
+  async exportXlsx(
+    clubId: string,
+    params: {
+      from: string;
+      to: string;
+      operationType?: string;
+      paymentMethod?: string;
+      employeeExternalId?: string;
+      q?: string;
+      productExternalId?: string;
+      productExact?: boolean;
+      segment?: string;
+      debtor?: string;
+    },
+  ): Promise<Buffer> {
+    const report = await this.report(clubId, {
+      ...params,
+      lineLimit: 50_000,
+    });
+    const ExcelJS = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'FitGO';
+    const ws = wb.addWorksheet('Продажи');
+    const money = (minor: number) => Number((minor / 100).toFixed(2));
+    const paymentRu = (m: string) => {
+      switch (m) {
+        case 'cash':
+          return 'Наличные';
+        case 'card':
+          return 'Карта';
+        case 'cashless':
+          return 'Безнал';
+        case 'personalAccount':
+          return 'Лицевой счёт';
+        case 'mixed':
+          return 'Смешанная';
+        default:
+          return 'Не указан';
+      }
+    };
+    const lineAmount = (line: ClubRevenueLineDto): number => {
+      if (line.operationType === 'personal_burn') return line.amountMinor;
+      if (line.operationType === 'refund') {
+        return -Math.abs(line.refundAmountMinor || line.amountMinor);
+      }
+      if (line.operationType === 'unpaid') return line.saleAmountMinor;
+      if (line.paidAmountMinor) return line.paidAmountMinor;
+      return line.amountMinor;
+    };
+    const fmtWhen = (iso: string | null) => {
+      if (!iso) return '';
+      return new Date(iso).toLocaleString('ru-RU', {
+        timeZone: 'Europe/Minsk',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    };
+
+    ws.addRow(['Период', `${report.from} — ${report.to}`]);
+    ws.addRow([
+      'Выручка',
+      money(report.summary.revenue.totalMinor),
+      'Нал',
+      money(report.summary.revenue.cashMinor),
+      'Карта',
+      money(report.summary.revenue.cardMinor),
+    ]);
+    ws.addRow([]);
+    const headers = [
+      'Дата',
+      'Клиент',
+      'Операция',
+      'Товар',
+      'Сотрудник',
+      'Оплата',
+      'Сумма',
+      'Нал',
+      'Карта',
+      'Безнал',
+      'ЛС',
+    ];
+    ws.addRow(headers);
+    ws.views = [{ state: 'frozen', ySplit: 4 }];
+    ws.autoFilter = {
+      from: { row: 4, column: 1 },
+      to: { row: 4, column: headers.length },
+    };
+
+    for (const line of report.lines) {
+      const emp =
+        line.employeeExternalId === SYSTEM_EMPLOYEE_ID ||
+        line.employeeName === SYSTEM_EMPLOYEE_NAME
+          ? SYSTEM_EMPLOYEE_NAME
+          : line.employeeName?.trim() || SYSTEM_EMPLOYEE_NAME;
+      ws.addRow([
+        fmtWhen(line.paidAt || line.occurredAt),
+        line.clientName ?? '',
+        line.statusLabel,
+        line.productName ?? '',
+        emp,
+        paymentRu(line.paymentMethod),
+        money(lineAmount(line)),
+        money(line.split.cashMinor),
+        money(line.split.cardMinor),
+        money(line.split.cashlessMinor),
+        money(line.split.personalAccountMinor),
+      ]);
+    }
+
+    ws.getColumn(7).numFmt = '#,##0.00';
+    ws.getColumn(8).numFmt = '#,##0.00';
+    ws.getColumn(9).numFmt = '#,##0.00';
+    ws.getColumn(10).numFmt = '#,##0.00';
+    ws.getColumn(11).numFmt = '#,##0.00';
+
+    const buf = await wb.xlsx.writeBuffer();
+    return Buffer.from(buf);
   }
 
   private buildSummary(input: {
