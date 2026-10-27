@@ -498,7 +498,11 @@ export function SpaBookingEditDialog({
         <div className="space-y-3 rounded-xl border border-white/5 bg-slate-900/40 p-3">
           <p className="text-sm font-medium text-slate-300">Запись</p>
           <label className="block space-y-1 text-sm">
-            <span className="text-slate-400">Услуга</span>
+            <span className="text-slate-400">
+              {form.paymentType === 'QUOTA'
+                ? 'Услуга (слот / длительность)'
+                : 'Услуга'}
+            </span>
             <select
               className="input"
               value={form.serviceId}
@@ -509,15 +513,28 @@ export function SpaBookingEditDialog({
             >
               {bookable.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.name} · {s.durationMin} мин ·{' '}
-                  {formatPrice(s.priceMinor, s.currency)}
+                  {form.paymentType === 'QUOTA'
+                    ? `${s.name} · ${s.durationMin} мин · абонемент`
+                    : `${s.name} · ${s.durationMin} мин · ${formatPrice(s.priceMinor, s.currency)}`}
                 </option>
               ))}
             </select>
+            {form.paymentType === 'QUOTA' && booking?.membershipServiceName ? (
+              <p className="text-xs text-emerald-300/90">
+                Основание абонемента: {booking.membershipServiceName}
+              </p>
+            ) : form.paymentType === 'QUOTA' ? (
+              <p className="text-xs text-amber-300/90">
+                Строка абонемента не указана — в журнале только слот каталога.
+              </p>
+            ) : null}
             {selected ? (
               <p className="text-xs text-slate-500">
                 {selected.durationMin} мин
                 {selected.bufferMin ? ` + перерыв ${selected.bufferMin}` : ''}
+                {form.paymentType === 'PAID'
+                  ? ` · ${formatPrice(selected.priceMinor, selected.currency)}`
+                  : ''}
               </p>
             ) : null}
           </label>

@@ -1036,7 +1036,14 @@ export function AdminSpaWorkspace() {
               <li key={b.id} className="card space-y-2 text-sm">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <p className="font-medium">{b.serviceName}</p>
+                    <p className="font-medium">
+                      {b.membershipServiceName ?? b.serviceName}
+                    </p>
+                    {b.membershipServiceName && b.serviceName ? (
+                      <p className="text-xs text-slate-500">
+                        Слот: {b.serviceName}
+                      </p>
+                    ) : null}
                     <p className="text-slate-300">
                       {b.clientName} → {b.specialistName}
                     </p>

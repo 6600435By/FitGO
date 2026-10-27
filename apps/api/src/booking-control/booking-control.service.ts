@@ -5634,11 +5634,12 @@ export class BookingControlService {
       payment,
       source: '1C',
     });
-    // Membership add-on titles without «N мин» (VIP massage / bodycomp) are
-    // always quota write-offs — same idea as gift PT / solarium in a pack.
-    const membershipQuota =
+    // VIP pack lines («Массаж классический общий») vs paid multi-visit packs.
+    const membershipIncluded =
       Boolean(service.membershipQuotaName) ||
-      isMembershipIncludedSpaTitle(onex.title) ||
+      isMembershipIncludedSpaTitle(onex.title);
+    const membershipQuota =
+      membershipIncluded ||
       payTag === 'PACKAGE' ||
       payment === 'QUOTA';
     const paymentType = membershipQuota
@@ -5655,6 +5656,18 @@ export class BookingControlService {
     const membershipServiceName = membershipQuota
       ? (service.membershipQuotaName ?? (onex.title.trim() || null))
       : null;
+    // VIP included → no catalog/list price. Paid packs keep unit from 1C.
+    const priceMinor = membershipIncluded
+      ? null
+      : resolvePackageUnitPriceMinor({
+          unitPriceMinor: primary?.unitPriceMinor,
+          packageAmountMinor: primary?.packageAmountMinor,
+          packageQty: primary?.packageQty,
+          paymentBasis: primary?.paymentBasis,
+          sessionTitle: onex.title,
+        }) ??
+        (membershipQuota ? null : service.priceMinor) ??
+        null;
 
     const booking = await this.prisma.spaBooking.create({
       data: {
@@ -5672,16 +5685,7 @@ export class BookingControlService {
           : SpaBookingStatus.CONFIRMED,
         origin,
         paymentType,
-        priceMinor:
-          resolvePackageUnitPriceMinor({
-            unitPriceMinor: primary?.unitPriceMinor,
-            packageAmountMinor: primary?.packageAmountMinor,
-            packageQty: primary?.packageQty,
-            paymentBasis: primary?.paymentBasis,
-            sessionTitle: onex.title,
-          }) ??
-          (membershipQuota ? null : service.priceMinor) ??
-          null,
+        priceMinor,
         membershipServiceName,
         crmDocRef: onex.externalId,
         consumedInCrmAt: completed ? onex.startAt : null,

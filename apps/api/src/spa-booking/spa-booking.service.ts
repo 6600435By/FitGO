@@ -2480,6 +2480,18 @@ export class SpaBookingService {
     ) {
       // Keep existing membership name unless caller overrides; re-validate rule lightly.
       priceMinor = 0;
+      if (!membershipServiceName?.trim()) {
+        const quotaHit = await this.prisma.spaQuotaRule.findFirst({
+          where: {
+            clubId,
+            services: { some: { serviceId } },
+          },
+          select: { membershipServiceName: true },
+          orderBy: { membershipServiceName: 'asc' },
+        });
+        membershipServiceName =
+          quotaHit?.membershipServiceName?.trim() || null;
+      }
     }
 
     try {
@@ -3088,6 +3100,8 @@ export class SpaBookingService {
         guestPhone: b.guestPhone ?? undefined,
         serviceId: b.serviceId,
         serviceName: b.service.name,
+        priceMinor: b.priceMinor,
+        membershipServiceName: b.membershipServiceName ?? undefined,
         status: b.status as SpaBoardBooking['status'],
         paymentType: b.paymentType as SpaBoardBooking['paymentType'],
         oneCLinkStatus: b.oneCLinkStatus as SpaBoardBooking['oneCLinkStatus'],

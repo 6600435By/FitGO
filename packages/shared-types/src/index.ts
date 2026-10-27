@@ -1489,6 +1489,10 @@ export interface SpaBoardBooking {
   guestPhone?: string;
   serviceId?: string;
   serviceName?: string;
+  /** Booking price (null/0 for membership quota write-offs). */
+  priceMinor?: number | null;
+  /** 1C membership pack line («Массаж классический общий»), when paymentType=QUOTA. */
+  membershipServiceName?: string;
   status?: SpaBookingStatus;
   paymentType?: SpaPaymentType;
   /** CRM counterparty link at booking time. */
