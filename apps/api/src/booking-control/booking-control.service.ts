@@ -5574,15 +5574,31 @@ export class BookingControlService {
     const clientExt = primary?.externalId?.trim() || undefined;
     let clientId: string | null = null;
     let guestName: string | null = null;
+    let guestPhone: string | null = null;
     let clientExternalId: string | null = null;
     if (clientExt) {
       clientExternalId = clientExt;
       const client = await this.prisma.user.findFirst({
         where: { clubId, externalId: clientExt },
-        select: { id: true },
+        select: { id: true, phone: true },
       });
-      if (client) clientId = client.id;
-      else guestName = primary?.clientName?.trim() || 'Клиент 1С';
+      if (client) {
+        clientId = client.id;
+        guestPhone = client.phone?.trim() || null;
+      } else {
+        guestName = primary?.clientName?.trim() || 'Клиент 1С';
+      }
+      if (!guestPhone) {
+        try {
+          const profile = await this.fitness
+            .getProvider()
+            .getClientProfile(clientExt);
+          const fromCrm = profile?.phone?.trim();
+          if (fromCrm) guestPhone = fromCrm;
+        } catch {
+          /* 1C phone is best-effort — FIO/link still ok */
+        }
+      }
     } else if (primary?.clientName?.trim()) {
       guestName = primary.clientName.trim();
     } else {
@@ -5675,6 +5691,7 @@ export class BookingControlService {
         specialistId: specialist.id,
         clientId,
         guestName,
+        guestPhone,
         clientExternalId,
         oneCLinkStatus: SpaOneCLinkStatus.LINKED,
         serviceId: service.id,

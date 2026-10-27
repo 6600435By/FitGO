@@ -3097,7 +3097,7 @@ export class SpaBookingService {
         clientId: b.clientId ?? undefined,
         clientName: this.spaClientName(b.client, b.guestName),
         guestName: b.guestName ?? undefined,
-        guestPhone: b.guestPhone ?? undefined,
+        guestPhone: b.guestPhone ?? b.client?.phone ?? undefined,
         serviceId: b.serviceId,
         serviceName: b.service.name,
         priceMinor: b.priceMinor,
