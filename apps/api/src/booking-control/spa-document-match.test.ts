@@ -265,6 +265,38 @@ function sale(
   assert.equal(pickBestServiceByDuration(catalog, fromTitle)?.id, '50');
 }
 
+// --- VIP pack title ↔ retail SKUs when SpaQuotaRule missing (Auto) ---
+{
+  assert.equal(
+    serviceNamesMatch(
+      'Массаж классический общий',
+      'Классический спа-массаж 50 мин',
+    ),
+    true,
+  );
+  assert.equal(
+    serviceNamesMatch(
+      'Массаж классический общий',
+      'Расслабляющий спа-массаж 50 мин',
+    ),
+    false,
+  );
+  const vipHits = [
+    'Классический спа-массаж 25 мин',
+    'Классический спа-массаж 40 мин',
+    'Классический спа-массаж 50 мин',
+    'Классический спа-массаж 80 мин',
+    'Расслабляющий спа-массаж 50 мин',
+    'Бандажирование + спа-массаж',
+  ].filter((name) => serviceNamesMatch('Массаж классический общий', name));
+  assert.deepEqual(vipHits, [
+    'Классический спа-массаж 25 мин',
+    'Классический спа-массаж 40 мин',
+    'Классический спа-массаж 50 мин',
+    'Классический спа-массаж 80 мин',
+  ]);
+}
+
 // --- Paid (non-quota) day merge when times differ > 3 min ---
 {
   const fitgo = booking({

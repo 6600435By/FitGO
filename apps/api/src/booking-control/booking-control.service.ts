@@ -47,7 +47,6 @@ import {
   membershipNameFromPaymentBasis,
   resolvePackageUnitPriceMinor,
   spaSettlementLabelRu,
-  spaTitleHasDurationMin,
   type BookingControlDetail,
   type BookingControlHistoryEvent,
   type BookingControlKind,
@@ -6030,14 +6029,12 @@ export class BookingControlService {
       ).map((r) => r.serviceId),
     );
 
-    // Timed retail titles: fuzzy name match. Membership titles without minutes
-    // already tried SpaQuotaRule — avoid mapping them onto every «классический» SKU.
-    const allowFuzzy =
-      spaTitleHasDurationMin(title) || !isMembershipIncludedSpaTitle(title);
+    // Fuzzy name match against retail catalog. Membership pack lines
+    // («Массаж классический общий») already tried SpaQuotaRule above; if the
+    // club has no rule yet, still map via serviceNamesMatch + duration
+    // (60 мин визита → «Классический спа-массаж 50 мин»), not exact title.
     const nameMatches = (s: { name: string }) =>
-      allowFuzzy
-        ? serviceNamesMatch(title, s.name)
-        : normalizeLabel(s.name) === normalizeLabel(title);
+      serviceNamesMatch(title, s.name);
 
     const linkedMatches = catalog.filter(
       (s) => linkedIds.has(s.id) && nameMatches(s),
@@ -6052,7 +6049,7 @@ export class BookingControlService {
     if (catalogMatches.length === 0) {
       throw new BadRequestException(
         isMembershipIncludedSpaTitle(title)
-          ? `Нет правила квоты / услуги для «${title}» — настройте SpaQuotaRule или выберите услугу вручную`
+          ? `Нет услуги каталога для «${title}» — выберите вручную или настройте квоту SPA`
           : `Не найдена услуга каталога для «${title}» — выберите вручную`,
       );
     }
