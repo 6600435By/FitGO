@@ -115,7 +115,8 @@ export type PtStatsOrigin =
 
 /**
  * Settlement axis (independent of origin):
- * WRITTEN_OFF — quota from membership/block; PAID — cash sale; DEBT; GIFT; UNKNOWN.
+ * WRITTEN_OFF — quota from membership/block (incl. gift PT in VIP);
+ * PAID — cash sale; DEBT; GIFT — club compliment without pack write-off; UNKNOWN.
  */
 export type PtStatsPayment =
   | 'WRITTEN_OFF'

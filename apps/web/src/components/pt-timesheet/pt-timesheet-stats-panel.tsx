@@ -281,7 +281,7 @@ function summaryCards(
         value={`${s.mix.membership} / ${s.mix.block} / ${s.mix.oneShot}`}
         hint={
           s.mix.gift || s.mix.unknown
-            ? `подарок ${s.mix.gift}, н/р ${s.mix.unknown}`
+            ? `комплимент клуба ${s.mix.gift}, не распознано ${s.mix.unknown}`
             : undefined
         }
       />

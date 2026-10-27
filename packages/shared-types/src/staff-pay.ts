@@ -1044,6 +1044,10 @@ export function isMultiVisitPackSale(
 /**
  * Classify conducted PT funding for timesheet stats.
  * 1C `paySource` is often PACKAGE whenever paymentBasis is set — use basis text.
+ *
+ * Gift PT included in VIP («Подарочная ПТ с тренером») is still MEMBERSHIP when
+ * paymentBasis is a membership write-off — complimentary for payroll, but АБОН
+ * in the mix. Pure club compliments without a pack/membership basis stay GIFT.
  */
 export function classifyPtSessionOrigin(input: {
   paymentBasis?: string | null;
@@ -1053,23 +1057,11 @@ export function classifyPtSessionOrigin(input: {
   fromSaleLine?: boolean;
   isComplimentary?: boolean;
 }): import('./pt-timesheet').PtStatsOrigin {
-  if (
-    input.isComplimentary ||
-    isComplimentarySessionTitle(input.paymentBasis) ||
-    isComplimentarySessionTitle(input.sessionTitle)
-  ) {
-    return 'GIFT';
-  }
-  if (input.fromSaleLine) return 'ONE_SHOT';
-
   const basis = (input.paymentBasis ?? '').trim();
-  if (!basis) return 'UNKNOWN';
-
   const lower = basis
     .toLowerCase()
     .replace(/ё/g, 'е')
     .replace(/\s+/g, ' ');
-  if (/подарок|gift|комплимент|бесплат/.test(lower)) return 'GIFT';
 
   const quoted = extractQuotedPackNameFromBasis(basis)?.toLowerCase() ?? '';
   const title = (quoted || lower).replace(/ё/g, 'е');
@@ -1085,7 +1077,10 @@ export function classifyPtSessionOrigin(input: {
       ? input.packageQty
       : null);
   if (packCount != null && packCount > 1) return 'BLOCK';
-  if (packCount === 1 && (lower.includes('пакет услуг') || /пт|реформер|массаж/.test(title))) {
+  if (
+    packCount === 1 &&
+    (lower.includes('пакет услуг') || /пт|реформер|массаж/.test(title))
+  ) {
     return 'ONE_SHOT';
   }
 
@@ -1108,11 +1103,25 @@ export function classifyPtSessionOrigin(input: {
     if (lower.includes('пакет услуг')) return 'BLOCK';
   }
 
+  if (/абонемент|квот/.test(lower)) return 'MEMBERSHIP';
+
+  // Complimentary / gift titles only when not already a membership/block write-off.
+  if (
+    input.isComplimentary ||
+    isComplimentarySessionTitle(input.paymentBasis) ||
+    isComplimentarySessionTitle(input.sessionTitle) ||
+    (basis.length > 0 && /подарок|gift|комплимент|бесплат/.test(lower))
+  ) {
+    return 'GIFT';
+  }
+
+  if (input.fromSaleLine) return 'ONE_SHOT';
+  if (!basis) return 'UNKNOWN';
+
   if (/долг|рассроч/.test(lower)) return 'ONE_SHOT';
   if (/оплач|нал|карт|безнал|лс|лицевой|продаж/.test(lower)) {
     return 'ONE_SHOT';
   }
-  if (/абонемент|квот/.test(lower)) return 'MEMBERSHIP';
 
   return 'UNKNOWN';
 }
@@ -1126,6 +1135,10 @@ export function classifyPtStatsPayment(input: {
   salePaymentStatus?: string | null;
   payrollTrusted?: boolean;
 }): import('./pt-timesheet').PtStatsPayment {
+  // Membership/block quota write-off first — gift PT in VIP still «списано».
+  if (input.origin === 'MEMBERSHIP' || input.origin === 'BLOCK') {
+    return 'WRITTEN_OFF';
+  }
   if (
     input.isComplimentary ||
     input.origin === 'GIFT' ||
@@ -1139,9 +1152,6 @@ export function classifyPtStatsPayment(input: {
 
   const basis = (input.paymentBasis ?? '').trim().toLowerCase();
   if (/долг|рассроч/.test(basis)) return 'DEBT';
-  if (input.origin === 'MEMBERSHIP' || input.origin === 'BLOCK') {
-    return 'WRITTEN_OFF';
-  }
   if (input.origin === 'ONE_SHOT') {
     if (input.payrollTrusted === false) return 'DEBT';
     return 'PAID';

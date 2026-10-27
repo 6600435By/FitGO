@@ -95,12 +95,21 @@ import {
 }
 
 {
+  // Gift PT written off from VIP membership → АБОН, not the gift bucket.
   assert.equal(
     classifyPtSessionOrigin({
       isComplimentary: true,
       paymentBasis: 'Членство "VIP"',
     }),
-    'GIFT',
+    'MEMBERSHIP',
+  );
+  assert.equal(
+    classifyPtSessionOrigin({
+      isComplimentary: true,
+      paymentBasis: 'Членство "VIP ( 6 месяцев )" 65958 от 02.03.2026',
+      sessionTitle: 'Подарочная ПТ с тренером',
+    }),
+    'MEMBERSHIP',
   );
   assert.equal(
     classifyPtSessionOrigin({
@@ -111,6 +120,13 @@ import {
   assert.equal(
     classifyPtSessionOrigin({
       sessionTitle: 'Комплимент от клуба',
+    }),
+    'GIFT',
+  );
+  assert.equal(
+    classifyPtSessionOrigin({
+      isComplimentary: true,
+      sessionTitle: 'Подарочная ПТ с тренером',
     }),
     'GIFT',
   );
@@ -157,6 +173,14 @@ import {
       isComplimentary: true,
     }),
     'GIFT',
+  );
+  assert.equal(
+    classifyPtStatsPayment({
+      origin: 'MEMBERSHIP',
+      isComplimentary: true,
+      paymentBasis: 'Членство "VIP"',
+    }),
+    'WRITTEN_OFF',
   );
 }
 
