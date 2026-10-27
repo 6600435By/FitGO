@@ -8,7 +8,7 @@ function RedirectInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   useEffect(() => {
-    const q = new URLSearchParams(searchParams.toString());
+    const q = new URLSearchParams(window.location.search);
     q.set('tab', 'stats');
     router.replace(`/super-admin/tasks?${q.toString()}`);
   }, [router, searchParams]);

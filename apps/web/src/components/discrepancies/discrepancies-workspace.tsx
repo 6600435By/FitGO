@@ -174,14 +174,15 @@ export function DiscrepanciesWorkspace() {
 
   const setParams = useCallback(
     (patch: Record<string, string | null | undefined>) => {
-      const next = new URLSearchParams(search.toString());
+      // Live bar — React searchParams lags the previous replace.
+      const next = new URLSearchParams(window.location.search);
       for (const [k, v] of Object.entries(patch)) {
         if (v == null || v === '') next.delete(k);
         else next.set(k, v);
       }
       router.replace(`${pathname}?${next.toString()}`);
     },
-    [pathname, router, search],
+    [pathname, router],
   );
 
   const applyPreset = (id: string) => {

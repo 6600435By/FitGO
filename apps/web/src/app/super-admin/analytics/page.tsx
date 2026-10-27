@@ -185,7 +185,8 @@ function AnalyticsInner() {
 
   const setParams = useCallback(
     (patch: Record<string, string | undefined>) => {
-      const next = new URLSearchParams(searchParams.toString());
+      // Live bar — React searchParams lags the previous replace.
+      const next = new URLSearchParams(window.location.search);
       for (const [k, v] of Object.entries(patch)) {
         if (v == null || v === '') next.delete(k);
         else next.set(k, v);
@@ -203,7 +204,7 @@ function AnalyticsInner() {
       }
       router.replace(`${pathname}?${next.toString()}`);
     },
-    [pathname, router, searchParams, ownerId, defaults.from, defaults.to],
+    [pathname, router, ownerId, defaults.from, defaults.to],
   );
 
   // Club / staff / market: reload on period / pay / tab.

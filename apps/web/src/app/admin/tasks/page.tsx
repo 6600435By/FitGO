@@ -243,7 +243,8 @@ function AdminTasksInner() {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString());
+    // Live address bar — React searchParams can lag behind the last replace.
+    const params = new URLSearchParams(window.location.search);
     if (group === 'all') params.delete('group');
     else params.set('group', group);
     if (topic) params.set('topic', topic);
@@ -251,8 +252,10 @@ function AdminTasksInner() {
     if (openTaskId) params.set('task', openTaskId);
     else params.delete('task');
     const qs = params.toString();
+    const live = window.location.search.replace(/^\?/, '');
+    if (qs === live) return;
     router.replace(qs ? `/admin/tasks?${qs}` : '/admin/tasks', { scroll: false });
-  }, [group, topic, openTaskId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [group, topic, openTaskId, router]);
 
   const selectGroup = (next: Group) => {
     setGroup(next);

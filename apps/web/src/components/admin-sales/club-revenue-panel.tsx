@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ClubRevenueDetailResponse,
   ClubRevenueLineDto,
@@ -480,56 +480,50 @@ export function ClubRevenuePanel() {
     },
   });
 
-  const applySalesQuery = useCallback(
-    (source: URLSearchParams) => {
-      if (!hasExplicitQuery(source, [...SALES_URL_KEYS])) return;
-      const nextFrom = source.get('from');
-      const nextTo = source.get('to');
-      const nextEmp = source.get('employee') || '';
-      const nextSeg = source.get('segment') || '';
-      const nextDebtor = source.get('debtor') || '';
-      const nextQ = source.get('product') || source.get('q') || '';
-      const nextProductId = source.get('productId') || '';
-      const nextExact =
-        source.get('productExact') === '1' ||
-        source.get('productExact') === 'true' ||
-        Boolean(nextProductId.trim());
-      const drill = Boolean(
-        nextQ.trim() ||
-          (source.get('externalId') || '').trim() ||
-          nextProductId.trim(),
-      );
-      const nextOp = drill ? source.get('op') || 'all' : source.get('op');
-      const nextPay = drill
-        ? source.get('payment') || 'all'
-        : source.get('payment');
-      if (nextFrom && isIsoDay(nextFrom) && nextFrom !== from) setFrom(nextFrom);
-      if (nextTo && isIsoDay(nextTo) && nextTo !== to) setTo(nextTo);
-      if (nextEmp !== employeeExternalId) setEmployeeExternalId(nextEmp);
-      if (nextSeg !== segment) setSegment(nextSeg);
-      if (nextDebtor !== debtor) setDebtor(nextDebtor);
-      if (nextQ !== q) {
-        setQ(nextQ);
-        setQInput(nextQ);
-      }
-      if (nextProductId !== productId) setProductId(nextProductId);
-      if (nextExact !== productExact) setProductExact(nextExact);
-      if (nextOp && nextOp !== operationType) setOperationType(nextOp);
-      if (nextPay && nextPay !== paymentMethod) setPaymentMethod(nextPay);
-    },
-    [
-      debtor,
-      employeeExternalId,
-      from,
-      operationType,
-      paymentMethod,
-      productExact,
-      productId,
-      q,
-      segment,
-      to,
-    ],
-  );
+  // Stable: functional setters only — never close over filter state, so a
+  // late URL→state apply cannot compare against a stale `operationType` etc.
+  const applySalesQuery = useCallback((source: URLSearchParams) => {
+    if (!hasExplicitQuery(source, [...SALES_URL_KEYS])) return;
+    const nextFrom = source.get('from');
+    const nextTo = source.get('to');
+    const nextEmp = source.get('employee') || '';
+    const nextSeg = source.get('segment') || '';
+    const nextDebtor = source.get('debtor') || '';
+    const nextQ = source.get('product') || source.get('q') || '';
+    const nextProductId = source.get('productId') || '';
+    const nextExact =
+      source.get('productExact') === '1' ||
+      source.get('productExact') === 'true' ||
+      Boolean(nextProductId.trim());
+    const drill = Boolean(
+      nextQ.trim() ||
+        (source.get('externalId') || '').trim() ||
+        nextProductId.trim(),
+    );
+    const nextOp = drill ? source.get('op') || 'all' : source.get('op');
+    const nextPay = drill
+      ? source.get('payment') || 'all'
+      : source.get('payment');
+    if (nextFrom && isIsoDay(nextFrom)) {
+      setFrom((prev) => (nextFrom !== prev ? nextFrom : prev));
+    }
+    if (nextTo && isIsoDay(nextTo)) {
+      setTo((prev) => (nextTo !== prev ? nextTo : prev));
+    }
+    setEmployeeExternalId((prev) => (nextEmp !== prev ? nextEmp : prev));
+    setSegment((prev) => (nextSeg !== prev ? nextSeg : prev));
+    setDebtor((prev) => (nextDebtor !== prev ? nextDebtor : prev));
+    setQ((prev) => (nextQ !== prev ? nextQ : prev));
+    setQInput((prev) => (nextQ !== prev ? nextQ : prev));
+    setProductId((prev) => (nextProductId !== prev ? nextProductId : prev));
+    setProductExact((prev) => (nextExact !== prev ? nextExact : prev));
+    if (nextOp) {
+      setOperationType((prev) => (nextOp !== prev ? nextOp : prev));
+    }
+    if (nextPay) {
+      setPaymentMethod((prev) => (nextPay !== prev ? nextPay : prev));
+    }
+  }, []);
 
   // Address bar is authoritative on arrival (табель / ЗП), even when
   // useSearchParams is still empty and view-memory already filled state.
@@ -543,11 +537,12 @@ export function ClubRevenuePanel() {
     ) {
       setFilterKey('all');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
-  }, []);
+  }, [applySalesQuery]);
 
   // Keep filters in sync when navigating here with query params (ЗП → Продажа).
   // Bare chip navigation must not wipe restored memory with empty query.
+  // Depend on search only — never re-apply a still-stale address bar after
+  // a chip click (that used to snap `op` back, e.g. personal_deposit).
   useEffect(() => {
     if (!hasExplicitQuery(search, [...SALES_URL_KEYS])) return;
     applySalesQuery(new URLSearchParams(search.toString()));
@@ -562,21 +557,27 @@ export function ClubRevenuePanel() {
     if (qInput !== next) setQInput(next);
   }, [qInput, q]);
 
+  // Track externalId without putting `search` in the state→URL effect deps
+  // (that re-ran the writer against a lagging React searchParams snapshot).
+  const externalIdRef = useRef(search.get('externalId')?.trim() || '');
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const live = new URLSearchParams(window.location.search);
-      if (hasExplicitQuery(live, [...SALES_URL_KEYS])) {
-        const liveFrom = live.get('from');
-        const liveTo = live.get('to');
-        const liveQ = (live.get('product') || live.get('q') || '').trim();
-        const liveEmp = live.get('employee') || '';
-        const drifted =
-          (isIsoDay(liveFrom) && liveFrom !== from) ||
-          (isIsoDay(liveTo) && liveTo !== to) ||
-          liveQ !== q.trim() ||
-          liveEmp !== (employeeExternalId || '');
-        if (drifted) return;
-      }
+    externalIdRef.current = search.get('externalId')?.trim() || '';
+  }, [search]);
+
+  useEffect(() => {
+    const live = new URLSearchParams(window.location.search);
+    if (hasExplicitQuery(live, [...SALES_URL_KEYS])) {
+      const liveFrom = live.get('from');
+      const liveTo = live.get('to');
+      const liveQ = (live.get('product') || live.get('q') || '').trim();
+      const liveEmp = live.get('employee') || '';
+      const drifted =
+        (isIsoDay(liveFrom) && liveFrom !== from) ||
+        (isIsoDay(liveTo) && liveTo !== to) ||
+        liveQ !== q.trim() ||
+        liveEmp !== (employeeExternalId || '');
+      // Deep-link still ahead of state — do not overwrite the address bar.
+      if (drifted) return;
     }
     const next = new URLSearchParams();
     next.set('from', from);
@@ -595,17 +596,15 @@ export function ClubRevenuePanel() {
     if (productExact && q.trim()) next.set('productExact', '1');
     // Preserve deep-link from ЗП so detail + list stay open after filter rewrite.
     const ext =
-      search.get('externalId')?.trim() ||
-      (typeof window !== 'undefined'
-        ? new URLSearchParams(window.location.search).get('externalId')?.trim()
-        : '') ||
-      '';
+      externalIdRef.current || live.get('externalId')?.trim() || '';
     if (ext) next.set('externalId', ext);
     const qs = next.toString();
-    const current = search.toString();
+    const current = live.toString();
     if (qs !== current) {
       router.replace(`${pathname}?${qs}`);
     }
+    // Compare/write against live address bar only — React `search` lags and
+    // must not be an effect dep (re-entry against a stale snapshot).
   }, [
     from,
     to,
@@ -619,7 +618,6 @@ export function ClubRevenuePanel() {
     productExact,
     pathname,
     router,
-    search,
   ]);
 
   const load = useCallback(async () => {

@@ -118,13 +118,14 @@ export function AdminTaskStatsPanel() {
 
   const setParams = useCallback(
     (patch: Record<string, string>) => {
-      const next = new URLSearchParams(searchParams.toString());
+      // Live bar — React searchParams lags the previous replace.
+      const next = new URLSearchParams(window.location.search);
       for (const [k, v] of Object.entries(patch)) {
         next.set(k, v);
       }
       router.replace(`${pathname}?${next.toString()}`, { scroll: false });
     },
-    [pathname, router, searchParams],
+    [pathname, router],
   );
 
   useEffect(() => {

@@ -181,7 +181,8 @@ export function ClubSchedulePage({
 
   const writeUrl = useCallback(
     (nextDay: string, nextTypes: string, nextView: ScheduleViewMode) => {
-      const params = new URLSearchParams(searchParams.toString());
+      // Live bar — React searchParams lags the previous replace.
+      const params = new URLSearchParams(window.location.search);
       params.set('date', nextDay);
       if (nextView === 'week') params.set('view', 'week');
       else params.delete('view');
@@ -197,7 +198,6 @@ export function ClubSchedulePage({
     [
       pathname,
       router,
-      searchParams,
       isTrainer,
       trainerAllowKindFilter,
       trainerDefaultTypes,
