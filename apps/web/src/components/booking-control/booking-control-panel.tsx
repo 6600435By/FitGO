@@ -405,6 +405,13 @@ function spaPendingLabel(
   );
 }
 
+/** Error vs success banner inside booking-control (list + detail). */
+function isBookingControlErrorMessage(message: string): boolean {
+  return /ошибк|не удалось|нет прав|чуж|не законч|сначала|не найден|не оказывает|пересека|выберите|нельзя|запрещ|конфликт|не выбран|нет запис/i.test(
+    message,
+  );
+}
+
 export function BookingControlPanel({
   api,
   canResolve = false,
@@ -917,6 +924,21 @@ export function BookingControlPanel({
   }, [api, canAssignRemark]);
 
   useEffect(() => {
+    if (!api.listSpaServices || spaServices.length > 0) return;
+    if (!items.some((i) => i.missingJournal)) return;
+    let cancelled = false;
+    api
+      .listSpaServices()
+      .then((rows) => {
+        if (!cancelled) setSpaServices(rows);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [api, items, spaServices.length]);
+
+  useEffect(() => {
     if (!initialSessionKey) return;
     void openDetail(initialSessionKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- open once from URL
@@ -1249,9 +1271,18 @@ export function BookingControlPanel({
       await load();
       setMessage('Добавлено в журнал');
     } catch (e) {
-      setMessage(
-        e instanceof Error ? e.message : 'Не удалось добавить в журнал',
-      );
+      const text =
+        e instanceof Error ? e.message : 'Не удалось добавить в журнал';
+      // From the list chip there is no service picker — open detail so the
+      // error is visible and the user can choose a service.
+      if (!selected || selected.sessionKey !== sessionKey) {
+        try {
+          await openDetail(sessionKey);
+        } catch {
+          /* keep text below */
+        }
+      }
+      setMessage(text);
     } finally {
       setAdoptBusyKey(null);
     }
@@ -2174,7 +2205,16 @@ export function BookingControlPanel({
       ) : null}
 
       {message && !selected ? (
-        <p className="text-sm text-fitgo-300">{message}</p>
+        <p
+          className={
+            isBookingControlErrorMessage(message)
+              ? 'rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200'
+              : 'text-sm text-fitgo-300'
+          }
+          role="status"
+        >
+          {message}
+        </p>
       ) : null}
       {showOpsHints &&
       !loading &&
@@ -2205,10 +2245,17 @@ export function BookingControlPanel({
               const pay = paymentCell(item);
               return (
                 <li key={item.sessionKey}>
-                  <button
-                    type="button"
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => openDetail(item.sessionKey)}
-                    className="card w-full text-left"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        void openDetail(item.sessionKey);
+                      }
+                    }}
+                    className="card w-full cursor-pointer text-left"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <p className="text-xs text-slate-400">
@@ -2298,7 +2345,7 @@ export function BookingControlPanel({
                         ) : null}
                       </div>
                     ) : null}
-                  </button>
+                  </div>
                 </li>
               );
             })}
@@ -2440,7 +2487,14 @@ export function BookingControlPanel({
       )}
 
       {detailOnly && message && !selected ? (
-        <p className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300 shadow-lg">
+        <p
+          className={
+            isBookingControlErrorMessage(message)
+              ? 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-rose-500/40 bg-slate-900 px-3 py-2 text-sm text-rose-200 shadow-lg'
+              : 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300 shadow-lg'
+          }
+          role="status"
+        >
           {message}
         </p>
       ) : null}
@@ -2473,7 +2527,7 @@ export function BookingControlPanel({
                 {message ? (
                   <p
                     className={
-                      /ошибк|нет прав|чуж|не законч|сначала/i.test(message)
+                      isBookingControlErrorMessage(message)
                         ? 'rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200'
                         : 'rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200'
                     }

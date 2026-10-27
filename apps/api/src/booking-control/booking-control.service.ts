@@ -5782,6 +5782,24 @@ export class BookingControlService {
     return hit ? { id: hit.id } : null;
   }
 
+  private async ensureSpecialistServiceLink(
+    specialistId: string,
+    serviceId: string,
+  ): Promise<void> {
+    await this.prisma.specialistService.upsert({
+      where: {
+        specialistId_serviceId: { specialistId, serviceId },
+      },
+      create: { specialistId, serviceId },
+      update: {},
+    });
+  }
+
+  /**
+   * Resolve catalog service for «В журнал».
+   * Prefer specialist-linked services; if the visit already exists in 1C,
+   * fall back to club catalog and link the specialist (visit proves they do it).
+   */
   private async resolveSpaServiceForAdopt(
     clubId: string,
     title: string,
@@ -5794,6 +5812,16 @@ export class BookingControlService {
     bufferMin: number;
     priceMinor: number | null;
   }> {
+    const pick = async (s: {
+      id: string;
+      durationMin: number;
+      bufferMin: number;
+      priceMinor: number | null;
+    }) => {
+      await this.ensureSpecialistServiceLink(specialistId, s.id);
+      return s;
+    };
+
     if (serviceId?.trim()) {
       const s = await this.prisma.spaService.findFirst({
         where: { id: serviceId.trim(), clubId, active: true },
@@ -5805,20 +5833,7 @@ export class BookingControlService {
         },
       });
       if (!s) throw new BadRequestException('Услуга не найдена');
-      const linked = await this.prisma.specialistService.findUnique({
-        where: {
-          specialistId_serviceId: {
-            specialistId,
-            serviceId: s.id,
-          },
-        },
-      });
-      if (!linked) {
-        throw new BadRequestException(
-          'Специалист не оказывает выбранную услугу',
-        );
-      }
-      return s;
+      return pick(s);
     }
     const ext = serviceExternalId?.trim();
     if (ext) {
@@ -5831,17 +5846,7 @@ export class BookingControlService {
           priceMinor: true,
         },
       });
-      if (byExt) {
-        const linked = await this.prisma.specialistService.findUnique({
-          where: {
-            specialistId_serviceId: {
-              specialistId,
-              serviceId: byExt.id,
-            },
-          },
-        });
-        if (linked) return byExt;
-      }
+      if (byExt) return pick(byExt);
     }
     const catalog = await this.prisma.spaService.findMany({
       where: { clubId, active: true },
@@ -5861,11 +5866,21 @@ export class BookingControlService {
         })
       ).map((r) => r.serviceId),
     );
-    const matches = catalog.filter(
+    const linkedMatches = catalog.filter(
       (s) => linkedIds.has(s.id) && serviceNamesMatch(title, s.name),
     );
-    if (matches.length === 1) return matches[0]!;
-    if (matches.length === 0) {
+    if (linkedMatches.length === 1) return pick(linkedMatches[0]!);
+    if (linkedMatches.length > 1) {
+      throw new BadRequestException(
+        `Несколько услуг подходят под «${title}» — выберите вручную`,
+      );
+    }
+    // No specialist link yet — match club catalog (1C visit already happened).
+    const catalogMatches = catalog.filter((s) =>
+      serviceNamesMatch(title, s.name),
+    );
+    if (catalogMatches.length === 1) return pick(catalogMatches[0]!);
+    if (catalogMatches.length === 0) {
       throw new BadRequestException(
         `Не найдена услуга каталога для «${title}» — выберите вручную`,
       );
