@@ -9,7 +9,11 @@ import type {
   SpaSpecialistSummary,
   SpaWaitlistEntry,
 } from '@fitgo/shared-types';
-import { spaWaitlistFitsSlot, UserRole } from '@fitgo/shared-types';
+import {
+  MEMBERSHIP_INCLUDED_SPA_NAMES,
+  spaWaitlistFitsSlot,
+  UserRole,
+} from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { SpaBoard } from '@/components/spa-board/spa-board';
 import {
@@ -31,9 +35,6 @@ import { SpaWeekBoard } from '@/components/spa-board/spa-week-board';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
-
-/** Internal key: catalog allowlist for any SPA membership / massage block line. */
-const SPA_QUOTA_RULE_KEY = 'SPA';
 
 function formatPrice(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)} ${currency}`;
@@ -273,19 +274,23 @@ export function AdminSpaWorkspace() {
     if (!token || !canEditQuotaRules) return;
     setBusy(true);
     try {
+      // Exact 1C VIP pack lines (qty varies). One allowlist → each SPA line name.
+      // Gift PT is complimentary PT, not SpaQuotaRule.
       const next =
         ruleDraft.allowedServiceIds.length === 0
           ? []
-          : [
-              {
-                membershipServiceName: SPA_QUOTA_RULE_KEY,
-                allowedServiceIds: ruleDraft.allowedServiceIds,
-                allowedSpecialistIds: ruleDraft.allowedSpecialistIds,
-              },
-            ];
+          : MEMBERSHIP_INCLUDED_SPA_NAMES.map((membershipServiceName) => ({
+              membershipServiceName,
+              allowedServiceIds: ruleDraft.allowedServiceIds,
+              allowedSpecialistIds: ruleDraft.allowedSpecialistIds,
+            }));
       const updated = await api.adminSetSpaQuotaRules(token, next);
       setRules(updated);
-      setMessage('Правила квоты сохранены');
+      setMessage(
+        next.length
+          ? `Правила квоты: ${MEMBERSHIP_INCLUDED_SPA_NAMES.join(', ')}`
+          : 'Правила квоты очищены',
+      );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка');
     } finally {
@@ -729,9 +734,10 @@ export function AdminSpaWorkspace() {
           <div className="card space-y-3">
             <h3 className="font-medium">Списание с абонемента</h3>
             <p className="text-sm text-slate-400">
-              Отметьте услуги каталога, которые можно списывать по квоте, если у
-              клиента есть остаток в абонементе или в блоке массажей (пакет SPA
-              в 1С).
+              Услуги из абонемента (кол-во в карточке 1С разное):{' '}
+              {MEMBERSHIP_INCLUDED_SPA_NAMES.join(', ')}. Плюс «Подарочная ПТ с
+              тренером» — это ПТ, не SPA. Отметьте позиции каталога FitGO, на
+              которые списывается квота VIP / блока массажей.
             </p>
             <div>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">

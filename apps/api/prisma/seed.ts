@@ -735,50 +735,47 @@ async function main() {
         s.name.startsWith('Классический спа-массаж') &&
         s.durationMin < 80,
     );
-    // Exact names from live FitGO GET /membership (VIP Куделко, 2026-09-17)
-    const membershipServiceName = 'Массаж классический общий';
+    const bodycomp = spaServices.find((s) => s.kind === 'BODY_COMPOSITION');
+    // Exact VIP pack lines from 1C (qty varies). Gift PT is not SpaQuotaRule.
+    const spaQuotaLines: Array<{
+      membershipServiceName: string;
+      serviceIds: string[];
+    }> = [
+      {
+        membershipServiceName: 'Массаж классический общий',
+        serviceIds: classicServices.map((s) => s.id),
+      },
+      {
+        membershipServiceName: 'Анализ состава тела',
+        serviceIds: bodycomp ? [bodycomp.id] : [],
+      },
+    ];
     await prisma.spaQuotaRule.deleteMany({
       where: {
         clubId: club.id,
         membershipServiceName: {
-          in: [membershipServiceName, 'Массаж классический'],
+          in: [
+            ...spaQuotaLines.map((l) => l.membershipServiceName),
+            'Массаж классический',
+            'SPA',
+          ],
         },
       },
     });
-    if (classicServices.length > 0) {
-      const rule = await prisma.spaQuotaRule.create({
+    for (const line of spaQuotaLines) {
+      if (line.serviceIds.length === 0) continue;
+      await prisma.spaQuotaRule.create({
         data: {
           clubId: club.id,
-          membershipServiceName,
+          membershipServiceName: line.membershipServiceName,
           services: {
-            create: classicServices.map((s) => ({ serviceId: s.id })),
+            create: line.serviceIds.map((serviceId) => ({ serviceId })),
           },
           specialists: {
             create: [{ specialistId: demoSpecialist.id }],
           },
         },
       });
-      void rule;
-
-      const bodycomp = spaServices.find((s) => s.kind === 'BODY_COMPOSITION');
-      if (bodycomp) {
-        await prisma.spaQuotaRule.deleteMany({
-          where: {
-            clubId: club.id,
-            membershipServiceName: 'Анализ состава тела',
-          },
-        });
-        await prisma.spaQuotaRule.create({
-          data: {
-            clubId: club.id,
-            membershipServiceName: 'Анализ состава тела',
-            services: { create: [{ serviceId: bodycomp.id }] },
-            specialists: {
-              create: [{ specialistId: demoSpecialist.id }],
-            },
-          },
-        });
-      }
     }
   }
 

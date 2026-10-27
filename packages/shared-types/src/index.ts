@@ -624,6 +624,7 @@ export * from './hall-class-snapshot';
 export * from './analytics';
 export * from './pricing-analytics';
 export * from './visit-mix';
+export * from './membership-included';
 export * from './floor-staff-home';
 export * from './trainer-month-analytics';
 export * from './discrepancies';

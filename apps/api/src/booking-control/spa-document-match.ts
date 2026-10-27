@@ -188,6 +188,61 @@ export function serviceNamesMatch(
   return false;
 }
 
+export {
+  isMembershipIncludedSpaTitle,
+  spaTitleHasDurationMin,
+} from '@fitgo/shared-types';
+
+/**
+ * Preferred duration for «В журнал» Auto:
+ * minutes in the 1C title, else onex.durationMin / slot length.
+ */
+export function preferredServiceDurationMin(opts: {
+  title?: string | null;
+  durationMin?: number | null;
+  startAt?: Date | null;
+  endAt?: Date | null;
+}): number | null {
+  const fromTitle = /(\d+)\s*(?:мин|min|м)(?=\s|$)/i.exec(opts.title ?? '');
+  if (fromTitle?.[1]) {
+    const n = Number(fromTitle[1]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  if (opts.durationMin && opts.durationMin > 0) return opts.durationMin;
+  if (opts.startAt && opts.endAt) {
+    const mins = Math.round(
+      (opts.endAt.getTime() - opts.startAt.getTime()) / 60_000,
+    );
+    if (mins > 0) return mins;
+  }
+  return null;
+}
+
+/**
+ * Among name-matched catalog rows, pick by duration.
+ * Prefer exact durationMin; else closest among services that do not exceed
+ * the visit length (visit often = service + buffer); else closest overall.
+ * Returns null when still ambiguous (caller should ask the user).
+ */
+export function pickBestServiceByDuration<T extends { durationMin: number }>(
+  matches: T[],
+  preferredMin: number | null,
+): T | null {
+  if (matches.length === 0) return null;
+  if (matches.length === 1) return matches[0]!;
+  if (preferredMin == null || preferredMin <= 0) return null;
+  const exact = matches.filter((m) => m.durationMin === preferredMin);
+  if (exact.length >= 1) return exact[0]!;
+  const notOver = matches.filter((m) => m.durationMin <= preferredMin);
+  const pool = notOver.length > 0 ? notOver : matches;
+  return pool.reduce((best, m) =>
+    Math.abs(m.durationMin - preferredMin) <
+    Math.abs(best.durationMin - preferredMin)
+      ? m
+      : best,
+  );
+}
+
 export function idsMatch(
   a?: string | null,
   b?: string | null,

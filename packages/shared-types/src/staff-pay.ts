@@ -610,6 +610,7 @@ export const DEFAULT_PT_TIERS: PtPercentTier[] = [
   { minSessions: 151, percent: 70 },
 ];
 
+/** Fixed SPA pay for VIP-included pack lines (exact 1C names). */
 export const DEFAULT_SPA_QUOTA_RATES: SpaQuotaServiceRate[] = [
   {
     serviceKey: 'BODY_COMPOSITION',
@@ -618,7 +619,7 @@ export const DEFAULT_SPA_QUOTA_RATES: SpaQuotaServiceRate[] = [
   },
   {
     serviceKey: 'CLASSIC_MASSAGE',
-    label: 'Массаж классический',
+    label: 'Массаж классический общий',
     rateMinor: 0,
   },
 ];

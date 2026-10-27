@@ -2,7 +2,11 @@
  * Run: cd apps/api && npx ts-node --transpile-only src/booking-control/spa-document-match.test.ts
  */
 import assert from 'node:assert/strict';
-import { humanDocumentNumber } from '@fitgo/shared-types';
+import {
+  humanDocumentNumber,
+  MEMBERSHIP_INCLUDED_SERVICES,
+  MEMBERSHIP_INCLUDED_SPA_NAMES,
+} from '@fitgo/shared-types';
 import {
   awaitingPaymentLabel,
   buildSpaDayMergePairs,
@@ -11,7 +15,11 @@ import {
   minskDayKey,
   namesMatch,
   paidSaleSettlementLabel,
+  isMembershipIncludedSpaTitle,
+  pickBestServiceByDuration,
+  preferredServiceDurationMin,
   serviceNamesMatch,
+  spaTitleHasDurationMin,
   type SpaBookingMatchInput,
   type SpaOnexCandidate,
   type SpaSaleCandidate,
@@ -210,6 +218,51 @@ function sale(
     ),
     true,
   );
+}
+
+// --- VIP pack lines (qty varies) vs timed retail SKU ---
+{
+  assert.deepEqual(
+    [...MEMBERSHIP_INCLUDED_SPA_NAMES],
+    ['Массаж классический общий', 'Анализ состава тела'],
+  );
+  assert.equal(
+    MEMBERSHIP_INCLUDED_SERVICES.some(
+      (s) => s.name === 'Подарочная ПТ с тренером' && s.kind === 'PT',
+    ),
+    true,
+  );
+  assert.equal(isMembershipIncludedSpaTitle('Массаж классический общий'), true);
+  assert.equal(spaTitleHasDurationMin('Массаж классический общий'), false);
+  assert.equal(isMembershipIncludedSpaTitle('Массаж классический 50 мин'), false);
+  assert.equal(spaTitleHasDurationMin('Массаж классический 50 мин'), true);
+  assert.equal(isMembershipIncludedSpaTitle('Анализ состава тела'), true);
+  assert.equal(
+    isMembershipIncludedSpaTitle('Подарочная ПТ с тренером'),
+    false,
+  );
+}
+
+// --- Quota-linked classical SKUs: pick by visit length (60 → 50) ---
+{
+  const catalog = [
+    { id: '25', durationMin: 25, name: 'Классический спа-массаж 25 мин' },
+    { id: '40', durationMin: 40, name: 'Классический спа-массаж 40 мин' },
+    { id: '50', durationMin: 50, name: 'Классический спа-массаж 50 мин' },
+    { id: '80', durationMin: 80, name: 'Классический спа-массаж 80 мин' },
+  ];
+  const preferred = preferredServiceDurationMin({
+    title: 'Массаж классический общий',
+    durationMin: 60,
+  });
+  assert.equal(preferred, 60);
+  const best = pickBestServiceByDuration(catalog, preferred);
+  assert.equal(best?.id, '50');
+  const fromTitle = preferredServiceDurationMin({
+    title: 'Массаж классический 50 мин',
+  });
+  assert.equal(fromTitle, 50);
+  assert.equal(pickBestServiceByDuration(catalog, fromTitle)?.id, '50');
 }
 
 // --- Paid (non-quota) day merge when times differ > 3 min ---

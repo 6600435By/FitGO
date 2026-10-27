@@ -286,12 +286,20 @@ function errorMessageFromBody(
   body: unknown,
   status: number,
 ): string {
-  const raw =
-    body && typeof body === 'object' && 'message' in body
-      ? (body as { message?: unknown }).message
-      : undefined;
-  if (Array.isArray(raw)) return raw.join('; ');
-  if (typeof raw === 'string' && raw.trim()) return raw;
+  if (typeof body === 'string' && body.trim()) return body.trim();
+  if (body && typeof body === 'object') {
+    const o = body as { message?: unknown; error?: unknown };
+    const raw = o.message;
+    if (Array.isArray(raw)) {
+      const joined = raw.map(String).filter((s) => s.trim()).join('; ');
+      if (joined) return joined;
+    }
+    if (typeof raw === 'string' && raw.trim()) return raw;
+    if (typeof o.error === 'string' && o.error.trim()) {
+      // Nest often sends error: "Bad Request" — keep only if no message.
+      if (o.error !== 'Bad Request' && o.error !== 'Error') return o.error;
+    }
+  }
   return `Ошибка ${status}`;
 }
 

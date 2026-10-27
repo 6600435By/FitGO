@@ -43,9 +43,11 @@ import {
   humanDocumentNumber,
   isSpaAllSportsBioimpedance,
   isSpaLikeSessionTitle,
+  isMembershipIncludedSpaTitle,
   membershipNameFromPaymentBasis,
   resolvePackageUnitPriceMinor,
   spaSettlementLabelRu,
+  spaTitleHasDurationMin,
   type BookingControlDetail,
   type BookingControlHistoryEvent,
   type BookingControlKind,
@@ -80,6 +82,9 @@ import { sessionMatchesFlag } from '../discrepancies/discrepancies-predicates';
 import { FitnessService } from '../fitness/fitness.service';
 import { matchOnexToScheduleSlots } from '../club-schedule/trainer-schedule.helpers';
 import { SessionApprovalService } from './session-approval.service';
+import { randomBytes } from 'crypto';
+import * as bcrypt from 'bcryptjs';
+import { allocateStaffLogin } from '../auth/staff-login';
 import {
   awaitingPaymentLabel,
   buildSpaDayMergePairs,
@@ -90,6 +95,8 @@ import {
   minskDayKey,
   normalizeLabel,
   paidSaleSettlementLabel,
+  pickBestServiceByDuration,
+  preferredServiceDurationMin,
   saleAmountMajor,
   saleIsComplimentaryPartner,
   namesMatch,
@@ -5589,6 +5596,12 @@ export class BookingControlService {
       onex.serviceExternalId,
       opts?.serviceId,
       specialist.id,
+      preferredServiceDurationMin({
+        title: onex.title,
+        durationMin: onex.durationMin,
+        startAt: onex.startAt,
+        endAt: onex.endAt,
+      }),
     );
 
     const durationMin = Math.max(
@@ -5622,19 +5635,27 @@ export class BookingControlService {
       payment,
       source: '1C',
     });
-    const paymentType =
-      payTag === 'PACKAGE' || payment === 'QUOTA'
-        ? SpaPaymentType.QUOTA
-        : SpaPaymentType.PAID;
+    // Membership add-on titles without «N мин» (VIP massage / bodycomp) are
+    // always quota write-offs — same idea as gift PT / solarium in a pack.
+    const membershipQuota =
+      Boolean(service.membershipQuotaName) ||
+      isMembershipIncludedSpaTitle(onex.title) ||
+      payTag === 'PACKAGE' ||
+      payment === 'QUOTA';
+    const paymentType = membershipQuota
+      ? SpaPaymentType.QUOTA
+      : SpaPaymentType.PAID;
     const completed =
       onex.status === OnexClassStatus.COMPLETED ||
       String(onex.status).toUpperCase() === 'COMPLETED';
     const origin = (user.roles ?? []).includes(UserRole.SPECIALIST)
       ? SpaBookingOrigin.SPECIALIST_ASSIGNED
       : SpaBookingOrigin.ADMIN_ASSIGNED;
-    const membershipName = membershipNameFromPaymentBasis(
-      primary?.paymentBasis,
-    );
+    // SpaBooking.membershipServiceName = 1C pack line («Массаж классический общий»),
+    // not the VIP product title from paymentBasis.
+    const membershipServiceName = membershipQuota
+      ? (service.membershipQuotaName ?? (onex.title.trim() || null))
+      : null;
 
     const booking = await this.prisma.spaBooking.create({
       data: {
@@ -5660,9 +5681,9 @@ export class BookingControlService {
             paymentBasis: primary?.paymentBasis,
             sessionTitle: onex.title,
           }) ??
-          service.priceMinor ??
+          (membershipQuota ? null : service.priceMinor) ??
           null,
-        membershipServiceName: membershipName ?? null,
+        membershipServiceName,
         crmDocRef: onex.externalId,
         consumedInCrmAt: completed ? onex.startAt : null,
         bookedByUserId: user.sub,
@@ -5744,12 +5765,29 @@ export class BookingControlService {
     return { added, skipped };
   }
 
+  /**
+   * Resolve SPA specialist for «В журнал».
+   * 1C often has the employee before staff.spa sync — create a login-disabled
+   * stub so the journal row can be saved (no re-post to 1C).
+   */
   private async resolveSpaSpecialist(
     clubId: string,
     employeeExternalId: string | null | undefined,
     employeeName: string | null | undefined,
   ): Promise<{ id: string } | null> {
     const ext = employeeExternalId?.trim();
+    const name = employeeName?.trim();
+
+    const ensureSpecialistRole = async (userId: string) => {
+      await this.prisma.userRole.upsert({
+        where: {
+          userId_role: { userId, role: Role.SPECIALIST },
+        },
+        create: { userId, role: Role.SPECIALIST },
+        update: {},
+      });
+    };
+
     if (ext) {
       const byExt = await this.prisma.user.findFirst({
         where: {
@@ -5763,23 +5801,73 @@ export class BookingControlService {
         },
         select: { id: true },
       });
-      if (byExt) return byExt;
+      if (byExt) {
+        await ensureSpecialistRole(byExt.id);
+        return byExt;
+      }
     }
-    const name = employeeName?.trim();
-    if (!name) return null;
-    const staff = await this.prisma.user.findMany({
-      where: {
-        clubId,
-        roles: {
-          some: { role: { in: [Role.SPECIALIST, Role.TRAINER] } },
+    if (name) {
+      const staff = await this.prisma.user.findMany({
+        where: {
+          clubId,
+          archivedAt: null,
+          OR: [
+            {
+              roles: {
+                some: { role: { in: [Role.SPECIALIST, Role.TRAINER] } },
+              },
+            },
+            ...(ext ? [{ externalId: ext }] : []),
+          ],
         },
-      },
-      select: { id: true, firstName: true, lastName: true },
-    });
-    const hit = staff.find((u) =>
-      namesMatch(`${u.lastName} ${u.firstName}`.trim(), name),
-    );
-    return hit ? { id: hit.id } : null;
+        select: { id: true, firstName: true, lastName: true },
+      });
+      const hit = staff.find((u) =>
+        namesMatch(`${u.lastName} ${u.firstName}`.trim(), name),
+      );
+      if (hit) {
+        await ensureSpecialistRole(hit.id);
+        return { id: hit.id };
+      }
+    }
+
+    // Stub from 1C visit — specialist missing from staff.spa sync.
+    if (!ext || !name) return null;
+    const parts = name.split(/\s+/).filter(Boolean);
+    const lastName = parts[0] || 'Специалист';
+    const firstName = parts.slice(1).join(' ') || '1С';
+    try {
+      const email = await allocateStaffLogin(this.prisma, lastName);
+      const passwordHash = await bcrypt.hash(
+        randomBytes(18).toString('hex'),
+        10,
+      );
+      const created = await this.prisma.user.create({
+        data: {
+          clubId,
+          email,
+          password: passwordHash,
+          firstName,
+          lastName,
+          externalId: ext,
+          loginEnabled: false,
+          roles: { create: [{ role: Role.SPECIALIST }] },
+        },
+        select: { id: true },
+      });
+      return created;
+    } catch {
+      // Race: another request created the same externalId — re-read.
+      const again = await this.prisma.user.findFirst({
+        where: { clubId, externalId: ext },
+        select: { id: true },
+      });
+      if (again) {
+        await ensureSpecialistRole(again.id);
+        return again;
+      }
+      return null;
+    }
   }
 
   private async ensureSpecialistServiceLink(
@@ -5797,8 +5885,9 @@ export class BookingControlService {
 
   /**
    * Resolve catalog service for «В журнал».
-   * Prefer specialist-linked services; if the visit already exists in 1C,
-   * fall back to club catalog and link the specialist (visit proves they do it).
+   * Membership add-ons without «N мин» (VIP massage / bodycomp) go through
+   * SpaQuotaRule → linked retail SKUs by visit duration.
+   * Timed titles match the paid catalog directly.
    */
   private async resolveSpaServiceForAdopt(
     clubId: string,
@@ -5806,20 +5895,48 @@ export class BookingControlService {
     serviceExternalId: string | null | undefined,
     serviceId: string | undefined,
     specialistId: string,
+    preferredDurationMin?: number | null,
   ): Promise<{
     id: string;
     durationMin: number;
     bufferMin: number;
     priceMinor: number | null;
+    membershipQuotaName?: string;
   }> {
-    const pick = async (s: {
-      id: string;
-      durationMin: number;
-      bufferMin: number;
-      priceMinor: number | null;
-    }) => {
+    const pick = async (
+      s: {
+        id: string;
+        durationMin: number;
+        bufferMin: number;
+        priceMinor: number | null;
+      },
+      membershipQuotaName?: string,
+    ) => {
       await this.ensureSpecialistServiceLink(specialistId, s.id);
-      return s;
+      return membershipQuotaName
+        ? { ...s, membershipQuotaName }
+        : s;
+    };
+
+    const disambiguate = async <
+      T extends {
+        id: string;
+        durationMin: number;
+        bufferMin: number;
+        priceMinor: number | null;
+      },
+    >(
+      matches: T[],
+    ): Promise<T> => {
+      if (matches.length === 1) return matches[0]!;
+      const best = pickBestServiceByDuration(
+        matches,
+        preferredDurationMin ?? null,
+      );
+      if (best) return best;
+      throw new BadRequestException(
+        `Несколько услуг подходят под «${title}» — выберите вручную`,
+      );
     };
 
     if (serviceId?.trim()) {
@@ -5833,7 +5950,10 @@ export class BookingControlService {
         },
       });
       if (!s) throw new BadRequestException('Услуга не найдена');
-      return pick(s);
+      return pick(
+        s,
+        isMembershipIncludedSpaTitle(title) ? title.trim() : undefined,
+      );
     }
     const ext = serviceExternalId?.trim();
     if (ext) {
@@ -5846,8 +5966,51 @@ export class BookingControlService {
           priceMinor: true,
         },
       });
-      if (byExt) return pick(byExt);
+      if (byExt) {
+        return pick(
+          byExt,
+          isMembershipIncludedSpaTitle(title) ? title.trim() : undefined,
+        );
+      }
     }
+
+    // Membership pack line («Массаж классический общий») → SpaQuotaRule SKUs.
+    const quotaRules = await this.prisma.spaQuotaRule.findMany({
+      where: { clubId },
+      include: {
+        services: {
+          include: {
+            service: {
+              select: {
+                id: true,
+                name: true,
+                durationMin: true,
+                bufferMin: true,
+                priceMinor: true,
+                active: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    const quotaHit = quotaRules.find(
+      (r) =>
+        normalizeLabel(r.membershipServiceName) === normalizeLabel(title) ||
+        serviceNamesMatch(r.membershipServiceName, title),
+    );
+    if (quotaHit) {
+      const quotaServices = quotaHit.services
+        .map((l) => l.service)
+        .filter((s) => s.active);
+      if (quotaServices.length >= 1) {
+        return pick(
+          await disambiguate(quotaServices),
+          quotaHit.membershipServiceName,
+        );
+      }
+    }
+
     const catalog = await this.prisma.spaService.findMany({
       where: { clubId, active: true },
       select: {
@@ -5866,27 +6029,36 @@ export class BookingControlService {
         })
       ).map((r) => r.serviceId),
     );
+
+    // Timed retail titles: fuzzy name match. Membership titles without minutes
+    // already tried SpaQuotaRule — avoid mapping them onto every «классический» SKU.
+    const allowFuzzy =
+      spaTitleHasDurationMin(title) || !isMembershipIncludedSpaTitle(title);
+    const nameMatches = (s: { name: string }) =>
+      allowFuzzy
+        ? serviceNamesMatch(title, s.name)
+        : normalizeLabel(s.name) === normalizeLabel(title);
+
     const linkedMatches = catalog.filter(
-      (s) => linkedIds.has(s.id) && serviceNamesMatch(title, s.name),
+      (s) => linkedIds.has(s.id) && nameMatches(s),
     );
-    if (linkedMatches.length === 1) return pick(linkedMatches[0]!);
-    if (linkedMatches.length > 1) {
-      throw new BadRequestException(
-        `Несколько услуг подходят под «${title}» — выберите вручную`,
+    if (linkedMatches.length >= 1) {
+      return pick(
+        await disambiguate(linkedMatches),
+        isMembershipIncludedSpaTitle(title) ? title.trim() : undefined,
       );
     }
-    // No specialist link yet — match club catalog (1C visit already happened).
-    const catalogMatches = catalog.filter((s) =>
-      serviceNamesMatch(title, s.name),
-    );
-    if (catalogMatches.length === 1) return pick(catalogMatches[0]!);
+    const catalogMatches = catalog.filter((s) => nameMatches(s));
     if (catalogMatches.length === 0) {
       throw new BadRequestException(
-        `Не найдена услуга каталога для «${title}» — выберите вручную`,
+        isMembershipIncludedSpaTitle(title)
+          ? `Нет правила квоты / услуги для «${title}» — настройте SpaQuotaRule или выберите услугу вручную`
+          : `Не найдена услуга каталога для «${title}» — выберите вручную`,
       );
     }
-    throw new BadRequestException(
-      `Несколько услуг подходят под «${title}» — выберите вручную`,
+    return pick(
+      await disambiguate(catalogMatches),
+      isMembershipIncludedSpaTitle(title) ? title.trim() : undefined,
     );
   }
 
