@@ -388,9 +388,12 @@ export class ClubRevenueSyncService {
     await upsertRevenueRows(this.prisma, clubId, pendingRows);
     const upserted = pending.size;
 
-    // Attach sale nomenclature to cash payments (placeholders / mismatched labels).
+    // Attach sale nomenclature to cash / debt placeholders («Оплата…», «Продажа N»).
     const genericPay = pendingRows.filter(
-      (r) => r.operationType === 'payment' || r.operationType === 'refund',
+      (r) =>
+        r.operationType === 'payment' ||
+        r.operationType === 'refund' ||
+        r.operationType === 'unpaid',
     );
     if (genericPay.length) {
       const ids = genericPay.map((r) => r.externalId);

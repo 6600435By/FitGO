@@ -685,12 +685,13 @@ export class ClubRevenueService {
 
     if (
       row.operationType === 'payment' ||
-      row.operationType === 'refund'
+      row.operationType === 'refund' ||
+      row.operationType === 'unpaid'
     ) {
       await enrichGenericPaymentProducts(this.prisma, clubId, [row]);
       row =
         (await this.prisma.clubRevenueEntry.findFirst({
-          where: { id, clubId, isActive: true },
+          where: { id: row.id, clubId, isActive: true },
         })) ?? row;
     }
 
@@ -788,8 +789,29 @@ export class ClubRevenueService {
     from: Date,
     to: Date,
   ): Promise<void> {
-    // All payments/refunds touching the window (paidAt or occurredAt).
+    // Payments/refunds in the window + open debt (unpaid may be older than `from`).
     // Enrich replaces «Оплата от клиента» / «Продажа N» via SaleTransaction.
+    const placeholderProduct = {
+      OR: [
+        { productName: null },
+        { productName: '' },
+        {
+          productName: {
+            equals: 'Оплата от клиента',
+            mode: 'insensitive' as const,
+          },
+        },
+        {
+          productName: { equals: 'Возврат', mode: 'insensitive' as const },
+        },
+        {
+          productName: {
+            startsWith: 'Продажа ',
+            mode: 'insensitive' as const,
+          },
+        },
+      ],
+    };
     const page = 2000;
     let offset = 0;
     for (;;) {
@@ -797,35 +819,23 @@ export class ClubRevenueService {
         where: {
           clubId,
           isActive: true,
-          operationType: { in: ['payment', 'refund'] },
           AND: [
             {
               OR: [
-                { paidAt: { gte: from, lte: to } },
-                { occurredAt: { gte: from, lte: to } },
-              ],
-            },
-            {
-              OR: [
-                { productName: null },
-                { productName: '' },
                 {
-                  productName: {
-                    equals: 'Оплата от клиента',
-                    mode: 'insensitive',
-                  },
+                  operationType: { in: ['payment', 'refund'] },
+                  OR: [
+                    { paidAt: { gte: from, lte: to } },
+                    { occurredAt: { gte: from, lte: to } },
+                  ],
                 },
                 {
-                  productName: { equals: 'Возврат', mode: 'insensitive' },
-                },
-                {
-                  productName: {
-                    startsWith: 'Продажа ',
-                    mode: 'insensitive',
-                  },
+                  operationType: 'unpaid',
+                  occurredAt: { lte: to },
                 },
               ],
             },
+            placeholderProduct,
           ],
         },
         select: {
