@@ -25,6 +25,7 @@ import {
 } from './admin-sales.util';
 import {
   classifySaleType,
+  isExcludedFromAdminDeskSales,
   loadPayrollSegmentSets,
 } from './admin-sales-segments';
 import { isCollectibleClientDebt } from './club-revenue-debt';
@@ -211,6 +212,11 @@ export class AdminSalesService {
       const paid = row.paidAt != null;
       if (params.payment === 'paid' && !paid) continue;
       if (params.payment === 'unpaid' && paid) continue;
+      if (
+        isExcludedFromAdminDeskSales(row.productName, row.productExternalId)
+      ) {
+        continue;
+      }
 
       const bucket = classifySaleType(
         row.saleType,
@@ -545,6 +551,14 @@ export class AdminSalesService {
     const lines: AdminSaleLineDto[] = [];
     let unpaidMinor = 0;
     for (const item of chosen) {
+      if (
+        isExcludedFromAdminDeskSales(
+          item.productName,
+          item.productExternalId,
+        )
+      ) {
+        continue;
+      }
       const major = Math.abs(Number(item.saleAmount ?? item.amount) || 0);
       const amountMinor = majorToMinor(major);
       if (amountMinor <= 0) continue;
@@ -666,6 +680,7 @@ export class AdminSalesService {
       saleAmount: number;
       saleType: string | null;
       productName: string | null;
+      productExternalId?: string | null;
       clientName: string | null;
       employeeExternalId: string | null;
       employeeName: string | null;
@@ -675,6 +690,11 @@ export class AdminSalesService {
     const lines: AdminSaleLineDto[] = [];
     let unpaidMinor = 0;
     for (const row of rows) {
+      if (
+        isExcludedFromAdminDeskSales(row.productName, row.productExternalId)
+      ) {
+        continue;
+      }
       const major = Math.abs(Number(row.saleAmount || row.amount) || 0);
       const amountMinor = majorToMinor(major);
       if (amountMinor <= 0) continue;

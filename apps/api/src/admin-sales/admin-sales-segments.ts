@@ -24,6 +24,14 @@ export const PAYROLL_SEGMENT_UUIDS = {
   reformerPersonal: '8deca45d-36c3-2cf1-11f1-c6f94643a7d2',
 } as const;
 
+/**
+ * Not in ADMIN desk sales / admin motivation %.
+ * Still in manager club-wide %, super-admin ClubRevenue «Продажи».
+ * e1cib: Справочник.Номенклатура?ref=8dd1a45d36c32cf111ee4584f37c7bb9
+ */
+export const ADMIN_DESK_EXCLUDED_PRODUCT_UUID =
+  '8dd1a45d-36c3-2cf1-11ee-4584f37c7bb9';
+
 export type PayrollSegmentSets = {
   membership: Set<string>;
   spa: Set<string>;
@@ -48,6 +56,30 @@ export function normNom(name: string) {
     .toLowerCase()
     .replace(/ё/g, 'е')
     .replace(/[^a-zа-я0-9]+/gi, '');
+}
+
+const ADMIN_DESK_EXCLUDED_PRODUCT_IDS = new Set([
+  ADMIN_DESK_EXCLUDED_PRODUCT_UUID,
+  ADMIN_DESK_EXCLUDED_PRODUCT_UUID.replace(/-/g, ''),
+]);
+
+const ADMIN_DESK_EXCLUDED_PRODUCT_NAMES = new Set([
+  normNom('Безлимит с арендой шкафчика (1месяц)'),
+  normNom('Безлимит с арендой шкафчика (1 месяц)'),
+]);
+
+/** Admin «Мои продажи» + ADMIN track motivation — not manager / club sales. */
+export function isExcludedFromAdminDeskSales(
+  productName?: string | null,
+  productExternalId?: string | null,
+): boolean {
+  const uuid = (productExternalId ?? '').trim().toLowerCase();
+  if (uuid) {
+    if (ADMIN_DESK_EXCLUDED_PRODUCT_IDS.has(uuid)) return true;
+    if (ADMIN_DESK_EXCLUDED_PRODUCT_IDS.has(uuid.replace(/-/g, ''))) return true;
+  }
+  const key = normNom(productName ?? '');
+  return Boolean(key && ADMIN_DESK_EXCLUDED_PRODUCT_NAMES.has(key));
 }
 
 export type SegmentMatchKey =
