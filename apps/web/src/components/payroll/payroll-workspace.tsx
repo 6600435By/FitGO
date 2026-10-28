@@ -241,11 +241,14 @@ function payslipHtmlFromSummary(
   const centered = payslipHeaderOnly(fields);
   const slipClass = centered ? 'slip slip--centered' : 'slip';
   const parts: string[] = [`<section class="${slipClass}">`];
+  if (centered) {
+    parts.push('<table class="sheet"><tr><td>');
+  }
   if (fields.fio || fields.period) {
     parts.push('<div class="header-block">');
     if (fields.fio) {
       parts.push(
-        `<p class="meta"><strong>ФИО:</strong> ${escapeHtml(summary.performerName)}</p>`,
+        `<p class="meta meta-name">${escapeHtml(summary.performerName)}</p>`,
       );
     }
     if (fields.period) {
@@ -317,6 +320,9 @@ function payslipHtmlFromSummary(
       `<p class="total"><strong>Итого к выплате:</strong> ${escapeHtml(money(summary.totalMinor, cur))}</p>`,
     );
   }
+  if (centered) {
+    parts.push('</td></tr></table>');
+  }
   parts.push('</section>');
   return parts.join('\n');
 }
@@ -334,14 +340,26 @@ function printHtmlPayslips(sections: Array<{ name: string; html: string }>) {
     document.body.removeChild(iframe);
     return;
   }
-  const body = sections.map((s) => s.html).join('\n<div class="page-break"></div>\n');
+  // Page break on the slip itself (not an empty sibling) — Safari blank-page fix.
+  const body = sections
+    .map((s, i) =>
+      i < sections.length - 1
+        ? s.html.replace('class="slip', 'class="slip slip-break')
+        : s.html,
+    )
+    .join('\n');
   doc.open();
   doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Печать</title>
 <style>
   @page{size:A4;margin:16mm}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:0;font-size:13px;color:#111;line-height:1.45;background:#fff;margin:0}
-  .slip{max-width:640px;margin:0 auto 24px;box-sizing:border-box}
-  .slip--centered{max-width:none;width:100%;min-height:calc(297mm - 32mm);display:flex;flex-direction:column;align-items:center;justify-content:center;margin:0}
+  html,body{margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:13px;color:#111;line-height:1.45;background:#fff}
+  .slip{max-width:640px;margin:0 auto;box-sizing:border-box}
+  .slip-break{page-break-after:always;break-after:page}
+  /* Print-safe vertical center: table cell, not min-height+extra break div */
+  .slip--centered{max-width:none;width:100%;margin:0}
+  .slip--centered .sheet{width:100%;height:250mm;border-collapse:collapse}
+  .slip--centered .sheet td{vertical-align:middle;text-align:center;border:none;padding:0}
   .header-block{text-align:center;margin:0 0 16px}
   .slip--centered .header-block{margin:0}
   h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#555;margin:16px 0 6px}
@@ -350,15 +368,10 @@ function printHtmlPayslips(sections: Array<{ name: string; html: string }>) {
   th.num,td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
   td{padding:4px 0;border-bottom:1px solid #e5e7eb;vertical-align:top}
   .meta{margin:4px 0;color:#333;font-size:14px}
+  .meta-name{font-size:16px;font-weight:600}
   .chips{font-size:11px;color:#666;margin-top:6px}
   .empty{color:#999;margin:0}
   .total{margin-top:16px;padding-top:12px;border-top:2px solid #111;font-size:15px}
-  .page-break{page-break-after:always;height:0}
-  @media print{
-    body{padding:0}
-    .slip--centered{min-height:calc(297mm - 32mm);page-break-inside:avoid}
-    .page-break{break-after:page}
-  }
 </style></head><body>${body}</body></html>`);
   doc.close();
   const run = () => {
@@ -554,6 +567,11 @@ export function PayrollWorkspace({ mode }: Props) {
   );
   const [batchIds, setBatchIds] = useState<Set<string>>(new Set());
   const [batchPrinting, setBatchPrinting] = useState(false);
+  /** Period used by the print dialog (employee report or payouts wave). */
+  const [printRange, setPrintRange] = useState<{ from: string; to: string }>({
+    from: boot.from,
+    to: boot.to,
+  });
   const canEdit = mode === 'super';
 
   const [employeeReportOpen, setEmployeeReportOpen] = useState(
@@ -795,9 +813,9 @@ export function PayrollWorkspace({ mode }: Props) {
       if (ownerId) {
         setPayrollSummaryCache(ownerId, { mode, userId, from, to }, s);
       }
-      setMessage('Период зафиксирован');
+      setMessage('Выплата подтверждена — период зафиксирован');
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Ошибка lock');
+      setMessage(e instanceof Error ? e.message : 'Ошибка подтверждения');
     }
   };
 
@@ -870,13 +888,17 @@ export function PayrollWorkspace({ mode }: Props) {
   const buildPayslipText = (
     fields: PayslipFields,
     source: PayrollPeriodSummary | null = summary,
+    ctx?: { ids: Set<string>; from: string; to: string },
   ): string => {
+    const ids = ctx?.ids ?? batchIds;
+    const rangeFrom = ctx?.from ?? printRange.from;
+    const rangeTo = ctx?.to ?? printRange.to;
     if (!source) {
       const first =
-        staff.find((s) => batchIds.has(s.userId))?.name ?? '…';
+        staff.find((s) => ids.has(s.userId))?.name ?? '…';
       const lines: string[] = [];
-      if (fields.fio) lines.push(`ФИО: ${first}`);
-      if (fields.period) lines.push(`Период: ${from} — ${to}`);
+      if (fields.fio) lines.push(first);
+      if (fields.period) lines.push(`Период: ${rangeFrom} — ${rangeTo}`);
       if (
         fields.motivation ||
         fields.bonus ||
@@ -886,12 +908,12 @@ export function PayrollWorkspace({ mode }: Props) {
       ) {
         lines.push('');
         lines.push(
-          `(детальные поля подставятся при печати по ${batchIds.size} сотрудник(ам))`,
+          `(детальные поля подставятся при печати по ${ids.size} сотрудник(ам))`,
         );
       }
-      if (batchIds.size > 1) {
+      if (ids.size > 1) {
         lines.push('');
-        lines.push(`Выбрано сотрудников: ${batchIds.size}`);
+        lines.push(`Выбрано сотрудников: ${ids.size}`);
       }
       lines.push('');
       return lines.join('\n');
@@ -900,7 +922,7 @@ export function PayrollWorkspace({ mode }: Props) {
     const bonuses = source.adjustments.filter((a) => a.amountMinor > 0);
     const fines = source.adjustments.filter((a) => a.amountMinor < 0);
     const lines: string[] = [];
-    if (fields.fio) lines.push(`ФИО: ${source.performerName}`);
+    if (fields.fio) lines.push(source.performerName);
     if (fields.period) lines.push(`Период: ${source.from} — ${source.to}`);
     if (fields.motivation) {
       lines.push('');
@@ -961,28 +983,57 @@ export function PayrollWorkspace({ mode }: Props) {
       );
       lines.push(`ИТОГО К ВЫПЛАТЕ: ${money(source.totalMinor, cur)}`);
     }
-    if (batchIds.size > 1) {
+    if (ids.size > 1) {
       lines.push('');
-      lines.push(`Выбрано сотрудников: ${batchIds.size}`);
+      lines.push(`Выбрано сотрудников: ${ids.size}`);
     }
     lines.push('');
     return lines.join('\n');
   };
 
-  const openPrintDialog = () => {
-    if (!canEdit || batchIds.size === 0) return;
+  const openPrintDialogFor = (ids: string[], rangeFrom: string, rangeTo: string) => {
+    if (!canEdit || ids.length === 0) return;
+    const idSet = new Set(ids);
+    setBatchIds(idSet);
+    setPrintRange({ from: rangeFrom, to: rangeTo });
     setPrintFields(DEFAULT_PAYSLIP);
     const previewSource =
-      summary && batchIds.has(userId) ? summary : null;
-    setDocPreview(buildPayslipText(DEFAULT_PAYSLIP, previewSource));
+      summary &&
+      idSet.has(userId) &&
+      summary.from === rangeFrom &&
+      summary.to === rangeTo
+        ? summary
+        : null;
+    setDocPreview(
+      buildPayslipText(DEFAULT_PAYSLIP, previewSource, {
+        ids: idSet,
+        from: rangeFrom,
+        to: rangeTo,
+      }),
+    );
     setPrintOpen(true);
+  };
+
+  const openPrintDialog = () => {
+    openPrintDialogFor([...batchIds], from, to);
   };
 
   const refreshPreview = (fields: PayslipFields) => {
     setPrintFields(fields);
     const previewSource =
-      summary && batchIds.has(userId) ? summary : null;
-    setDocPreview(buildPayslipText(fields, previewSource));
+      summary &&
+      batchIds.has(userId) &&
+      summary.from === printRange.from &&
+      summary.to === printRange.to
+        ? summary
+        : null;
+    setDocPreview(
+      buildPayslipText(fields, previewSource, {
+        ids: batchIds,
+        from: printRange.from,
+        to: printRange.to,
+      }),
+    );
   };
 
   const savePayslipFile = async () => {
@@ -1067,7 +1118,11 @@ export function PayrollWorkspace({ mode }: Props) {
       const ids = [...batchIds];
       const sections: Array<{ name: string; html: string }> = [];
       for (const id of ids) {
-        const s = await api.payrollSummary(token, { userId: id, from, to });
+        const s = await api.payrollSummary(token, {
+          userId: id,
+          from: printRange.from,
+          to: printRange.to,
+        });
         sections.push({
           name: s.performerName,
           html: payslipHtmlFromSummary(s, printFields),
@@ -1153,6 +1208,10 @@ export function PayrollWorkspace({ mode }: Props) {
           staff={staff}
           open={payoutsOpen}
           onToggle={() => setPayoutsOpen((o) => !o)}
+          onPrintSelected={(ids, rangeFrom, rangeTo) =>
+            openPrintDialogFor(ids, rangeFrom, rangeTo)
+          }
+          printBusy={batchPrinting}
         />
       )}
 
@@ -1200,18 +1259,12 @@ export function PayrollWorkspace({ mode }: Props) {
             ))}
           </div>
         )}
-        <div
-          className={
-            canEdit
-              ? 'grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.5fr)_7.5rem_7.5rem_auto_auto_auto] lg:items-end'
-              : 'grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_7.5rem_7.5rem_auto_auto] lg:items-end'
-          }
-        >
+        <div className="flex flex-wrap items-end gap-2">
           {canEdit ? (
-            <label className="block text-xs font-medium uppercase tracking-wide text-slate-500">
+            <label className="min-w-[12rem] flex-1 text-[10px] font-medium uppercase tracking-wide text-slate-500">
               Сотрудник
               <select
-                className="input mt-1 w-full py-1.5 text-sm"
+                className="input mt-1 w-full min-w-[12rem] py-1.5 text-sm"
                 value={userId}
                 onChange={(e) => {
                   setUserId(e.target.value);
@@ -1231,7 +1284,7 @@ export function PayrollWorkspace({ mode }: Props) {
               </select>
             </label>
           ) : (
-            <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2.5 sm:col-span-2 lg:col-span-1">
+            <div className="min-w-[12rem] flex-1 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2.5">
               <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
                 Моя ЗП
               </p>
@@ -1247,6 +1300,7 @@ export function PayrollWorkspace({ mode }: Props) {
               setFrom(v);
               clearSummary();
             }}
+            className="w-[9.5rem]"
             inputClassName="text-sm"
           />
           <DateField
@@ -1256,11 +1310,12 @@ export function PayrollWorkspace({ mode }: Props) {
               setTo(v);
               clearSummary();
             }}
+            className="w-[9.5rem]"
             inputClassName="text-sm"
           />
           <button
             type="button"
-            className="btn-primary w-full lg:min-w-[7.5rem] lg:w-auto"
+            className="btn-primary px-3 py-1.5 text-sm"
             disabled={loading || !userId}
             onClick={load}
           >
@@ -1268,7 +1323,7 @@ export function PayrollWorkspace({ mode }: Props) {
           </button>
           <button
             type="button"
-            className="btn-secondary w-full lg:min-w-[9.5rem] lg:w-auto"
+            className="btn-secondary px-3 py-1.5 text-sm"
             disabled={syncing1c || loading || !userId}
             onClick={() => void refreshFrom1c()}
             title="Перечитать занятия из 1С за выбранный период и пересчитать"
@@ -1278,7 +1333,7 @@ export function PayrollWorkspace({ mode }: Props) {
           {canEdit && (
             <button
               type="button"
-              className="btn-secondary w-full lg:min-w-[9rem] lg:w-auto"
+              className="btn-secondary px-3 py-1.5 text-sm"
               disabled={batchPrinting || batchIds.size === 0}
               onClick={openPrintDialog}
               title={
@@ -1293,16 +1348,16 @@ export function PayrollWorkspace({ mode }: Props) {
           {canEdit && (
             <button
               type="button"
-              className="btn-secondary w-full lg:w-auto"
+              className="btn-secondary px-3 py-1.5 text-sm"
               disabled={!summary?.canLock}
               onClick={lock}
               title={
                 summary && !summary.canLock
                   ? `Открытых нестыковок: ${summary.openExceptions}`
-                  : undefined
+                  : 'Зафиксировать период ЗП для выбранного сотрудника'
               }
             >
-              Lock
+              Подтвердить выплату
             </button>
           )}
         </div>
@@ -2010,7 +2065,8 @@ export function PayrollWorkspace({ mode }: Props) {
             <h2 className="text-lg font-semibold text-white">Печать</h2>
             <p className="text-xs text-slate-400">
               Выберите поля. Печать для {batchIds.size} сотрудник
-              {batchIds.size === 1 ? 'а' : 'ов'} за период {from} — {to}.
+              {batchIds.size === 1 ? 'а' : 'ов'} за период {printRange.from} —{' '}
+              {printRange.to}.
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               <button

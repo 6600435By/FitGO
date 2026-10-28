@@ -121,6 +121,13 @@ type Props = {
   staff: StaffPaySummary[];
   open: boolean;
   onToggle: () => void;
+  /** Print checked rows for the current payout period. */
+  onPrintSelected?: (
+    userIds: string[],
+    periodFrom: string,
+    periodTo: string,
+  ) => void;
+  printBusy?: boolean;
 };
 
 type PayoutViewMem = {
@@ -143,7 +150,13 @@ const PAYOUT_DEPTS: Dept[] = [
   'EXTERNAL',
 ];
 
-export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
+export function PayrollPayoutsPanel({
+  staff,
+  open,
+  onToggle,
+  onPrintSelected,
+  printBusy = false,
+}: Props) {
   const today = useMemo(() => new Date(), []);
   const pathname = usePathname();
   const ownerId = getUser()?.id ?? '';
@@ -666,6 +679,32 @@ export function PayrollPayoutsPanel({ staff, open, onToggle }: Props) {
               onClick={load}
             >
               {busy ? '…' : 'Рассчитать'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary px-3 py-1.5 text-sm"
+              disabled={
+                busy ||
+                printBusy ||
+                !rows.some((r) => drafts[r.performerId]?.selected)
+              }
+              onClick={() => {
+                const ids = rows
+                  .filter((r) => drafts[r.performerId]?.selected)
+                  .map((r) => r.performerId);
+                if (!ids.length) {
+                  setMessage('Отметьте сотрудников галочками в таблице');
+                  return;
+                }
+                onPrintSelected?.(ids, periodFrom, periodTo);
+              }}
+              title={
+                !rows.some((r) => drafts[r.performerId]?.selected)
+                  ? 'Отметьте сотрудников галочками в таблице'
+                  : undefined
+              }
+            >
+              {printBusy ? 'Печать…' : 'Печать'}
             </button>
             <button
               type="button"
