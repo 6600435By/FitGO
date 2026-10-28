@@ -27,19 +27,6 @@ function money(minor: number): string {
   });
 }
 
-function saleTypeLabel(t: AdminSaleType): string {
-  switch (t) {
-    case 'membership':
-      return 'Абонемент';
-    case 'massage':
-      return 'Массаж';
-    case 'solarium':
-      return 'Солярий';
-    case 'shop':
-      return 'Магазин';
-  }
-}
-
 function monthBounds(d = new Date()): { from: string; to: string } {
   const y = d.getFullYear();
   const m = d.getMonth();
@@ -134,11 +121,35 @@ function TotalsBar({
   );
 }
 
+const CLUB_TZ = 'Europe/Minsk';
+
+function fmtDay(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('ru-RU', {
+    timeZone: CLUB_TZ,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
+
 function lineStatus(line: AdminSaleLineDto, overdueCutoff: number) {
   const unpaid = !line.paid;
   const soldAt = line.soldAt ? new Date(line.soldAt).getTime() : 0;
   const overdue = unpaid && soldAt > 0 && soldAt < overdueCutoff;
   return { unpaid, overdue };
+}
+
+function paymentStatusLabel(
+  line: AdminSaleLineDto,
+  overdueCutoff: number,
+): { text: string; className: string } {
+  const { unpaid, overdue } = lineStatus(line, overdueCutoff);
+  if (!unpaid) return { text: 'Оплачена', className: 'text-fitgo-300' };
+  if (overdue) return { text: 'Долг >7 дн.', className: 'text-amber-200' };
+  return { text: 'Не оплачена', className: 'text-amber-300' };
 }
 
 function filterSaleLines(
@@ -162,8 +173,6 @@ function filterSaleLines(
 }
 
 function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
-
   if (!lines.length) {
     return (
       <p className="text-sm text-slate-500">Нет продаж за выбранный период</p>
@@ -171,112 +180,93 @@ function LinesTable({ lines }: { lines: AdminSaleLineDto[] }) {
   }
 
   const overdueCutoff = Date.now() - 7 * 86400000;
-  const groups = new Map<
-    string,
-    { key: string; name: string; lines: AdminSaleLineDto[]; totalMinor: number }
-  >();
-  for (const line of lines) {
-    const name = line.clientName?.trim() || '—';
-    const key = name.toLowerCase();
-    const g = groups.get(key);
-    if (g) {
-      g.lines.push(line);
-      g.totalMinor += line.attributedMinor;
-    } else {
-      groups.set(key, {
-        key,
-        name,
-        lines: [line],
-        totalMinor: line.attributedMinor,
-      });
-    }
-  }
-  const rows = [...groups.values()].sort((a, b) =>
-    a.name.localeCompare(b.name, 'ru'),
-  );
 
   return (
-    <AdminStickyTable>
+    <>
+      <ul className="space-y-2 md:hidden phone-land:!flex phone-land:!flex-col">
+        {lines.map((line) => {
+          const { overdue } = lineStatus(line, overdueCutoff);
+          const status = paymentStatusLabel(line, overdueCutoff);
+          const product = line.productName?.trim() || '—';
+          return (
+            <li key={line.id}>
+              <article
+                className={`rounded-xl border border-slate-800 bg-slate-950/50 p-3 ${
+                  overdue ? 'bg-amber-500/5' : ''
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <p className="min-w-0 font-medium text-slate-100">
+                    {line.clientName?.trim() || '—'}
+                  </p>
+                  <p className="shrink-0 tabular-nums font-medium">
+                    {money(line.attributedMinor)}
+                  </p>
+                </div>
+                <p className="mt-1 break-words text-sm text-slate-300">
+                  {product}
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+                  <span>Прод. {fmtDay(line.soldAt)}</span>
+                  <span>Опл. {fmtDay(line.paidAt)}</span>
+                  <span className={status.className}>{status.text}</span>
+                </div>
+              </article>
+            </li>
+          );
+        })}
+      </ul>
+
+      <AdminStickyTable className="hidden md:block phone-land:!hidden">
         <thead className="bg-slate-900/80 text-xs font-medium text-slate-400">
           <tr>
+            <th className="whitespace-nowrap px-3 py-2">Дата продажи</th>
+            <th className="whitespace-nowrap px-3 py-2">Дата оплаты</th>
             <th className="px-3 py-2">Клиент</th>
-            <th className="px-3 py-2 text-right">Продаж</th>
+            <th className="px-3 py-2">Товар</th>
+            <th className="px-3 py-2">Вид оплаты</th>
             <th className="px-3 py-2 text-right">Сумма</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((group) => {
-            const open = expanded === group.key;
+          {lines.map((line) => {
+            const { overdue } = lineStatus(line, overdueCutoff);
+            const status = paymentStatusLabel(line, overdueCutoff);
+            const product = line.productName?.trim() || '—';
             return (
-              <Fragment key={group.key}>
-                <tr
-                  className="cursor-pointer border-t border-slate-800 hover:bg-slate-900/60"
-                  onClick={() =>
-                    setExpanded(open ? null : group.key)
-                  }
+              <tr
+                key={line.id}
+                className={`border-t border-slate-800/80 ${
+                  overdue ? 'bg-amber-500/5' : ''
+                }`}
+              >
+                <td className="whitespace-nowrap px-3 py-2 text-slate-400">
+                  {fmtDay(line.soldAt)}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-slate-400">
+                  {fmtDay(line.paidAt)}
+                </td>
+                <td className="px-3 py-2 font-medium">
+                  {line.clientName?.trim() || '—'}
+                </td>
+                <td
+                  className="max-w-[14rem] truncate px-3 py-2 text-slate-300"
+                  title={product !== '—' ? product : undefined}
                 >
-                  <td className="px-3 py-2 font-medium">
-                    <span className="mr-2 text-slate-500">{open ? '▾' : '▸'}</span>
-                    {group.name}
-                  </td>
-                  <td className="px-3 py-2 text-right text-slate-400">
-                    {group.lines.length}
-                  </td>
-                  <td className="px-3 py-2 text-right font-medium">
-                    {money(group.totalMinor)}
-                  </td>
-                </tr>
-                {open
-                  ? group.lines.map((line) => {
-                      const { overdue } = lineStatus(line, overdueCutoff);
-                      return (
-                        <tr
-                          key={line.id}
-                          className={`border-t border-slate-800/80 bg-slate-950/40 ${
-                            overdue ? 'bg-amber-500/5' : ''
-                          }`}
-                        >
-                          <td className="px-3 py-2 pl-8" colSpan={2}>
-                            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                              <span>{saleTypeLabel(line.saleType)}</span>
-                              <span className="text-xs text-slate-500">
-                                {line.soldAt.slice(0, 10)}
-                                {line.paidAt
-                                  ? ` · опл. ${line.paidAt.slice(0, 10)}`
-                                  : ''}
-                              </span>
-                              {line.productName ? (
-                                <span className="text-xs text-slate-500">
-                                  {line.productName}
-                                </span>
-                              ) : null}
-                              {line.paid ? (
-                                <span className="text-xs text-fitgo-300">
-                                  Оплачена
-                                </span>
-                              ) : overdue ? (
-                                <span className="text-xs text-amber-200">
-                                  Долг &gt;7 дн.
-                                </span>
-                              ) : (
-                                <span className="text-xs text-amber-300">
-                                  Не оплачена
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-right font-medium">
-                            {money(line.attributedMinor)}
-                          </td>
-                        </tr>
-                      );
-                    })
-                  : null}
-              </Fragment>
+                  {product}
+                </td>
+                <td className={`px-3 py-2 ${status.className}`}>
+                  {status.text}
+                </td>
+                <td className="px-3 py-2 text-right font-medium tabular-nums">
+                  {money(line.attributedMinor)}
+                </td>
+              </tr>
             );
           })}
         </tbody>
-    </AdminStickyTable>
+      </AdminStickyTable>
+    </>
   );
 }
 
