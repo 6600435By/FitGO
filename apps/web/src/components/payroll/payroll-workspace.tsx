@@ -1397,7 +1397,13 @@ export function PayrollWorkspace({ mode }: Props) {
             <ul className="grid max-h-40 gap-1 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
               {filteredStaff.map((s) => (
                 <li key={s.userId}>
-                  <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-slate-900">
+                  <label
+                    className={
+                      batchIds.has(s.userId)
+                        ? 'flex cursor-pointer items-center gap-2 rounded-lg bg-fitgo-500/15 px-2 py-1 text-sm'
+                        : 'flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-slate-800'
+                    }
+                  >
                     <input
                       type="checkbox"
                       checked={batchIds.has(s.userId)}
