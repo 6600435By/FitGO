@@ -4,6 +4,7 @@ import { SaleDetailDrawer } from '@/components/admin-sales/sale-detail-drawer';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { ClubPayrollReportPanel } from '@/components/payroll/club-payroll-report';
 import { MotivationBreakdownList } from '@/components/payroll/motivation-breakdown-list';
+import { PayrollFold } from '@/components/payroll/payroll-fold';
 import { PayrollPayoutsPanel } from '@/components/payroll/payroll-payouts-panel';
 import { TrustBandDot } from '@/components/payroll/trust-band-dot';
 import { DateField } from '@/components/ui/date-field';
@@ -14,6 +15,7 @@ import type {
   StaffPaySummary,
   WorkUnit,
 } from '@fitgo/shared-types';
+import { UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -242,7 +244,7 @@ function payslipHtmlFromSummary(
   const slipClass = centered ? 'slip slip--centered' : 'slip';
   const parts: string[] = [`<section class="${slipClass}">`];
   if (centered) {
-    parts.push('<table class="sheet"><tr><td>');
+    parts.push('<div class="sheet">');
   }
   if (fields.fio || fields.period) {
     parts.push('<div class="header-block">');
@@ -321,7 +323,7 @@ function payslipHtmlFromSummary(
     );
   }
   if (centered) {
-    parts.push('</td></tr></table>');
+    parts.push('</div>');
   }
   parts.push('</section>');
   return parts.join('\n');
@@ -332,34 +334,32 @@ function printHtmlPayslips(sections: Array<{ name: string; html: string }>) {
   const iframe = document.createElement('iframe');
   iframe.setAttribute(
     'style',
-    'position:fixed;right:0;bottom:0;width:0;height:0;border:0',
+    'position:fixed;left:-10000px;top:0;width:210mm;height:297mm;border:0',
   );
+  iframe.setAttribute('title', 'Печать расчётных листков');
   document.body.appendChild(iframe);
   const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
   if (!doc) {
     document.body.removeChild(iframe);
     return;
   }
-  // Page break on the slip itself (not an empty sibling) — Safari blank-page fix.
+  // break-before on next slip (not break-after on a tall centered block) —
+  // Safari otherwise inserts a blank page after nearly-full A4 height.
   const body = sections
     .map((s, i) =>
-      i < sections.length - 1
-        ? s.html.replace('class="slip', 'class="slip slip-break')
-        : s.html,
+      i > 0 ? s.html.replace('class="slip', 'class="slip slip-next') : s.html,
     )
     .join('\n');
   doc.open();
   doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Печать</title>
 <style>
-  @page{size:A4;margin:16mm}
+  @page{size:A4;margin:14mm}
   html,body{margin:0;padding:0}
   body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:13px;color:#111;line-height:1.45;background:#fff}
   .slip{max-width:640px;margin:0 auto;box-sizing:border-box}
-  .slip-break{page-break-after:always;break-after:page}
-  /* Print-safe vertical center: table cell, not min-height+extra break div */
+  .slip-next{page-break-before:always;break-before:page}
   .slip--centered{max-width:none;width:100%;margin:0}
-  .slip--centered .sheet{width:100%;height:250mm;border-collapse:collapse}
-  .slip--centered .sheet td{vertical-align:middle;text-align:center;border:none;padding:0}
+  .slip--centered .sheet{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:100%;height:250mm;text-align:center}
   .header-block{text-align:center;margin:0 0 16px}
   .slip--centered .header-block{margin:0}
   h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#555;margin:16px 0 6px}
@@ -374,17 +374,29 @@ function printHtmlPayslips(sections: Array<{ name: string; html: string }>) {
   .total{margin-top:16px;padding-top:12px;border-top:2px solid #111;font-size:15px}
 </style></head><body>${body}</body></html>`);
   doc.close();
+
+  const cleanup = () => {
+    if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+  };
+  const win = iframe.contentWindow;
+  if (win) {
+    win.addEventListener('afterprint', cleanup, { once: true });
+  }
   const run = () => {
     try {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-    } finally {
-      setTimeout(() => {
-        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-      }, 800);
+      win?.focus();
+      win?.print();
+    } catch {
+      cleanup();
     }
+    // Fallback if afterprint never fires (some Safari builds).
+    setTimeout(cleanup, 60_000);
   };
-  setTimeout(run, 200);
+  if (iframe.contentDocument?.readyState === 'complete') {
+    setTimeout(run, 50);
+  } else {
+    iframe.addEventListener('load', () => setTimeout(run, 50), { once: true });
+  }
 }
 
 /** Safe filename: ФИО + period, without forbidden path characters. */
@@ -444,10 +456,10 @@ type PayslipFields = {
 const DEFAULT_PAYSLIP: PayslipFields = {
   fio: true,
   period: true,
-  motivation: false,
-  bonus: false,
-  fine: false,
-  totals: false,
+  motivation: true,
+  bonus: true,
+  fine: true,
+  totals: true,
   shifts: false,
 };
 
@@ -471,7 +483,6 @@ type EmployeeViewMem = {
   to: string;
   deptFilter: DeptFilter;
   employeeReportOpen: boolean;
-  summaryOpen: boolean;
   payoutsOpen: boolean;
 };
 
@@ -508,7 +519,6 @@ export function PayrollWorkspace({ mode }: Props) {
       to: isoDate(today),
       deptFilter: 'ALL',
       employeeReportOpen: mode === 'admin',
-      summaryOpen: true,
       payoutsOpen: false,
     };
     return resolveViewFilters<EmployeeViewMem>({
@@ -577,7 +587,8 @@ export function PayrollWorkspace({ mode }: Props) {
   const [employeeReportOpen, setEmployeeReportOpen] = useState(
     Boolean(boot.employeeReportOpen),
   );
-  const [summaryOpen, setSummaryOpen] = useState(Boolean(boot.summaryOpen));
+  /** Always start collapsed — do not restore from view memory. */
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const [payoutsOpen, setPayoutsOpen] = useState(Boolean(boot.payoutsOpen));
   const [peekSession, setPeekSession] = useState<{
     sessionKey: string;
@@ -628,7 +639,6 @@ export function PayrollWorkspace({ mode }: Props) {
       to,
       deptFilter,
       employeeReportOpen,
-      summaryOpen,
       payoutsOpen,
     },
     toSearchParams: (d) => {
@@ -1215,32 +1225,22 @@ export function PayrollWorkspace({ mode }: Props) {
         />
       )}
 
-      <section className="rounded-xl border border-slate-800/80 bg-slate-950/80">
-        <button
-          type="button"
-          className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left md:px-4"
-          onClick={() => setEmployeeReportOpen((o) => !o)}
-        >
-          <div>
-            <h2 className="text-base font-semibold text-white">
-              Отчёт по сотруднику
-            </h2>
-            <p className="text-[11px] text-slate-500">
-              {selected
-                ? `${selected.name}${
-                    summary
-                      ? ` · ${formatIsoDayRu(summary.from)}–${formatIsoDayRu(summary.to)} · ${money(summary.totalMinor, summary.currency)}`
-                      : ''
-                  }`
-                : 'Индивидуальный расчёт и проверка'}
-            </p>
-          </div>
-          <span className="text-slate-400">{employeeReportOpen ? '▾' : '▸'}</span>
-        </button>
-
-        {employeeReportOpen && (
-          <div className="space-y-3 border-t border-slate-800 px-3 pb-3 pt-3 md:px-4">
-
+      <PayrollFold
+        open={employeeReportOpen}
+        onToggle={() => setEmployeeReportOpen((o) => !o)}
+        title="Отчёт по сотруднику"
+        subtitle={
+          selected
+            ? `${selected.name}${
+                summary
+                  ? ` · ${formatIsoDayRu(summary.from)}–${formatIsoDayRu(summary.to)} · ${money(summary.totalMinor, summary.currency)}`
+                  : ''
+              }`
+            : 'Индивидуальный расчёт и проверка'
+        }
+        icon={UserRound}
+        badge={selected?.name}
+      >
         {canEdit && (
           <div className="mb-3 flex flex-wrap gap-1.5">
             {DEPT_FILTERS.map((f) => (
@@ -2047,11 +2047,7 @@ export function PayrollWorkspace({ mode }: Props) {
           </p>
         </div>
       )}
-
-
-          </div>
-        )}
-      </section>
+      </PayrollFold>
 
       {printOpen && (
         <div

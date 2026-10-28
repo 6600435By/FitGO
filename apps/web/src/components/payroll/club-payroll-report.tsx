@@ -7,8 +7,10 @@ import type {
   StaffPaySummary,
 } from '@fitgo/shared-types';
 import { sameSlicePreviousMonth } from '@fitgo/shared-types';
+import { LayoutGrid } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { PayrollFold } from '@/components/payroll/payroll-fold';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -624,23 +626,16 @@ export function ClubPayrollReportPanel({
   const expanded = report?.sections.find((s) => s.id === expandedSection);
 
   return (
-    <section className="rounded-xl border border-emerald-900/40 bg-slate-950/80">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left md:px-4"
-        onClick={onToggle}
-      >
-        <div>
-          <h2 className="text-base font-semibold text-white">Сводный отчёт</h2>
-          <p className="text-[11px] text-slate-500">
-            Картина по подразделениям · сравнение с прошлым месяцем · Excel
-          </p>
-        </div>
-        <span className="text-slate-400">{open ? '▾' : '▸'}</span>
-      </button>
-
-      {open && (
-        <div className="space-y-3 border-t border-emerald-900/30 px-3 pb-3 pt-3 md:px-4">
+    <PayrollFold
+      open={open}
+      onToggle={onToggle}
+      title="Сводный отчёт"
+      subtitle="Картина по подразделениям · сравнение с прошлым месяцем · Excel"
+      icon={LayoutGrid}
+      badge={
+        report ? formatRangeRu(report.from, report.to) : 'не сформирован'
+      }
+    >
           <div className="flex flex-wrap gap-1.5">
             {DEPTS.map((d) => (
               <button
@@ -988,9 +983,7 @@ export function ClubPayrollReportPanel({
               </div>
             </div>
           )}
-        </div>
-      )}
-    </section>
+    </PayrollFold>
   );
 }
 

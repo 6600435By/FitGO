@@ -11,8 +11,10 @@ import {
   parseMoneyToMinor,
   resolvePayoutFormSplit,
 } from '@fitgo/shared-types';
+import { Banknote } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { PayrollFold } from '@/components/payroll/payroll-fold';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -556,25 +558,14 @@ export function PayrollPayoutsPanel({
   }, [rows, drafts]);
 
   return (
-    <section className="rounded-xl border border-slate-800/80 bg-slate-950/80">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left md:px-4"
-        onClick={onToggle}
-      >
-        <div>
-          <h2 className="text-base font-semibold text-white">
-            Выплаты ЗП / Аванс
-          </h2>
-          <p className="text-[11px] text-slate-500">
-            Переключатель 25 / 15, период вручную, факт из кассы и перенос остатка
-          </p>
-        </div>
-        <span className="text-slate-400">{open ? '▾' : '▸'}</span>
-      </button>
-
-      {open && (
-        <div className="space-y-3 border-t border-slate-800 px-3 pb-3 pt-3 md:px-4">
+    <PayrollFold
+      open={open}
+      onToggle={onToggle}
+      title="Выплаты ЗП / Аванс"
+      subtitle="Переключатель 25 / 15, период вручную, факт из кассы и перенос остатка"
+      icon={Banknote}
+      badge={payKind === 'ADVANCE_HALF' ? '25 · аванс' : '15 · расчёт'}
+    >
           <div className="flex flex-wrap gap-1.5">
             {DEPTS.map((d) => (
               <button
@@ -881,8 +872,6 @@ export function PayrollPayoutsPanel({
                 ))}
             </ul>
           )}
-        </div>
-      )}
-    </section>
+    </PayrollFold>
   );
 }
