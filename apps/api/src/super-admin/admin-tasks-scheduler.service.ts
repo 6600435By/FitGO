@@ -184,9 +184,14 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     ))
       ? await this.syncTrainingSalesNoPerformer(clubId, systemUser.id)
       : 0;
+    const fromTemplates = await this.generateFromTemplates(
+      clubId,
+      systemUser.id,
+      dayKey,
+    );
 
     this.logger.log(
-      `Club ${clubId}: debt +${debtCreated}, installment +${installment}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}, birthday +${birthdays.created} skip ${birthdays.skipped}, confirm +${confirmations.created}, ptNoPerformer +${ptNoPerformer}`,
+      `Club ${clubId}: debt +${debtCreated}, installment +${installment}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}, birthday +${birthdays.created} skip ${birthdays.skipped}, confirm +${confirmations.created}, ptNoPerformer +${ptNoPerformer}, templates +${fromTemplates}`,
     );
     return {
       debt: debtCreated,
@@ -198,7 +203,110 @@ export class AdminTasksSchedulerService implements OnModuleInit {
       birthdaySkipped: birthdays.skipped,
       confirmation: confirmations.created,
       ptNoPerformer,
+      templates: fromTemplates,
     };
+  }
+
+  /** Recurring manager templates → MANAGER tasks (dedupe by template+day). */
+  async generateFromTemplates(
+    clubId: string,
+    createdById: string,
+    dayKey = localDayKey(),
+  ): Promise<number> {
+    const templates = await this.prisma.adminTaskTemplate.findMany({
+      where: { clubId, enabled: true, recurrence: { not: 'NONE' } },
+    });
+    if (!templates.length) return 0;
+
+    const now = new Date();
+    const hour = Number(
+      new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/Minsk',
+        hour: 'numeric',
+        hour12: false,
+      }).format(now),
+    );
+    const weekday = new Date(`${dayKey}T12:00:00`).getDay(); // 0=Sun
+    const dayOfMonth = Number(dayKey.slice(8, 10));
+    let created = 0;
+
+    for (const tpl of templates) {
+      const genHour = tpl.generateHour ?? 9;
+      if (hour < genHour) continue;
+
+      if (tpl.recurrence === 'WEEKDAYS' && (weekday === 0 || weekday === 6)) {
+        continue;
+      }
+      if (
+        tpl.recurrence === 'WEEKLY' &&
+        tpl.recurrenceDay != null &&
+        weekday !== tpl.recurrenceDay
+      ) {
+        continue;
+      }
+      if (
+        tpl.recurrence === 'MONTHLY' &&
+        tpl.recurrenceDay != null &&
+        dayOfMonth !== tpl.recurrenceDay
+      ) {
+        continue;
+      }
+
+      const dedupeKey = `template:${tpl.id}:${dayKey}`;
+      const exists = await this.prisma.adminTask.findFirst({
+        where: { clubId, dedupeKey },
+        select: { id: true },
+      });
+      if (exists) continue;
+
+      let assigneeIds: Array<string | null> = [null];
+      if (tpl.assignMode === 'USERS' && tpl.assigneeIds.length) {
+        assigneeIds = tpl.assigneeIds;
+      } else if (tpl.assignMode === 'ON_SHIFT') {
+        const shifts = await this.prisma.staffShift.findMany({
+          where: {
+            clubId,
+            track: StaffShiftTrack.ADMIN,
+            startAt: { lte: now },
+            endAt: { gte: now },
+          },
+          select: { userId: true },
+        });
+        assigneeIds = shifts.length
+          ? [...new Set(shifts.map((s) => s.userId))]
+          : [null];
+      }
+
+      const checklist = Array.isArray(tpl.checklist)
+        ? (tpl.checklist as string[])
+        : [];
+      const dueAt = new Date(`${dayKey}T23:59:59`);
+      for (const assigneeId of assigneeIds) {
+        await this.prisma.adminTask.create({
+          data: {
+            clubId,
+            assigneeId,
+            createdById,
+            title: tpl.title,
+            description: tpl.description,
+            dueAt,
+            source: 'MANAGER',
+            dedupeKey:
+              assigneeIds.length > 1
+                ? `${dedupeKey}:${assigneeId ?? 'pool'}`
+                : dedupeKey,
+            priority: tpl.priority,
+            checklist: checklist.length ? checklist : undefined,
+          },
+        });
+        created += 1;
+      }
+      await this.prisma.adminTaskTemplate.update({
+        where: { id: tpl.id },
+        data: { lastGeneratedAt: now },
+      });
+    }
+    return created;
   }
 
   /** Missing rule row = enabled (backwards compatible). */

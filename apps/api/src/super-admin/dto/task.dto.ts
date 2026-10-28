@@ -15,7 +15,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { AdminTaskStatus } from '@fitgo/shared-types';
+import { AdminTaskPriority, AdminTaskStatus } from '@fitgo/shared-types';
 
 export class CreateAdminTaskDto {
   /** Prefer multi-assign; single assigneeId kept for backwards compatibility */
@@ -25,9 +25,18 @@ export class CreateAdminTaskDto {
 
   @IsOptional()
   @IsArray()
-  @ArrayMinSize(1)
   @IsString({ each: true })
   assigneeIds?: string[];
+
+  /** Assign to every admin currently on ADMIN shift. */
+  @IsOptional()
+  @IsBoolean()
+  onShift?: boolean;
+
+  /** Leave in common pool (no assignee). */
+  @IsOptional()
+  @IsBoolean()
+  pool?: boolean;
 
   @IsOptional()
   @IsIn(['SHARED', 'INDIVIDUAL'])
@@ -44,6 +53,15 @@ export class CreateAdminTaskDto {
   @IsOptional()
   @IsDateString()
   dueAt?: string;
+
+  @IsOptional()
+  @IsEnum(AdminTaskPriority)
+  priority?: AdminTaskPriority;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  checklist?: string[];
 }
 
 export class UpdateAdminTaskDto {
@@ -69,11 +87,89 @@ export class UpdateAdminTaskDto {
   @IsString()
   assigneeId?: string | null;
 
+  @IsOptional()
+  @IsEnum(AdminTaskPriority)
+  priority?: AdminTaskPriority;
+
   /** Required when status = CANCELLED. */
   @IsOptional()
   @IsString()
   @MinLength(2)
   comment?: string;
+}
+
+export class BulkUpdateAdminTasksDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsString({ each: true })
+  ids!: string[];
+
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null && v !== undefined)
+  @IsString()
+  assigneeId?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  dueAt?: string;
+
+  @IsOptional()
+  @IsEnum(AdminTaskPriority)
+  priority?: AdminTaskPriority;
+
+  @IsOptional()
+  @IsEnum(AdminTaskStatus)
+  status?: AdminTaskStatus;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  comment?: string;
+}
+
+export class CreateAdminTaskTemplateDto {
+  @IsString()
+  @MinLength(2)
+  title!: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsEnum(AdminTaskPriority)
+  priority?: AdminTaskPriority;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  checklist?: string[];
+
+  @IsOptional()
+  @IsIn(['POOL', 'USERS', 'ON_SHIFT'])
+  assignMode?: 'POOL' | 'USERS' | 'ON_SHIFT';
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  assigneeIds?: string[];
+
+  @IsOptional()
+  @IsIn(['NONE', 'DAILY', 'WEEKDAYS', 'WEEKLY', 'MONTHLY'])
+  recurrence?: 'NONE' | 'DAILY' | 'WEEKDAYS' | 'WEEKLY' | 'MONTHLY';
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  generateHour?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  recurrenceDay?: number | null;
+
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
 }
 
 export class ReworkAdminTaskDto {

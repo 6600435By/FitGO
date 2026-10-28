@@ -272,48 +272,72 @@ export function AdminTaskStatsPanel() {
             </div>
           </section>
 
-          <section className="card space-y-2 overflow-x-auto">
+          <section className="card space-y-2">
             <h2 className="font-semibold">По видам</h2>
-            <table className="w-full min-w-[640px] text-left text-sm">
-              <thead>
-                <tr className="border-b border-slate-700 text-slate-400">
-                  <th className="py-2 pr-2 font-medium">Вид</th>
-                  <th className="py-2 pr-2 font-medium">Создано</th>
-                  <th className="py-2 pr-2 font-medium">Закрыто</th>
-                  <th className="py-2 pr-2 font-medium">В работе</th>
-                  <th className="py-2 pr-2 font-medium">Просрочено</th>
-                  <th className="py-2 font-medium">В срок %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.byTopic.map((row) => (
-                  <tr
-                    key={row.topic}
-                    className="border-b border-slate-800/80 hover:bg-slate-800/30"
-                  >
-                    <td className="py-2 pr-2">
-                      <Link
-                        href={topicHref(row.topic)}
-                        className="text-fitgo-400 hover:underline"
-                      >
-                        {row.label}
-                      </Link>
-                    </td>
-                    <td className="py-2 pr-2">{row.created}</td>
-                    <td className="py-2 pr-2">{row.closed}</td>
-                    <td className="py-2 pr-2">{row.open}</td>
-                    <td className="py-2 pr-2">
-                      <span className={row.overdue > 0 ? 'text-rose-400' : ''}>
-                        {row.overdue}
+            <div className="space-y-2 md:hidden">
+              {report.byTopic.map((row) => (
+                <Link
+                  key={row.topic}
+                  href={topicHref(row.topic)}
+                  className="block rounded-xl border border-slate-800 bg-slate-900/40 px-3 py-2"
+                >
+                  <p className="font-medium text-fitgo-400">{row.label}</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    созд. {row.created} · закр. {row.closed} · в раб.{' '}
+                    {row.open}
+                    {row.overdue > 0 ? (
+                      <span className="text-rose-400">
+                        {' '}
+                        · проср. {row.overdue}
                       </span>
-                    </td>
-                    <td className="py-2">
-                      {row.onTimePct == null ? '—' : `${row.onTimePct}%`}
-                    </td>
+                    ) : null}
+                    {row.onTimePct != null ? ` · в срок ${row.onTimePct}%` : ''}
+                  </p>
+                </Link>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full min-w-[640px] text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-700 text-slate-400">
+                    <th className="py-2 pr-2 font-medium">Вид</th>
+                    <th className="py-2 pr-2 font-medium">Создано</th>
+                    <th className="py-2 pr-2 font-medium">Закрыто</th>
+                    <th className="py-2 pr-2 font-medium">В работе</th>
+                    <th className="py-2 pr-2 font-medium">Просрочено</th>
+                    <th className="py-2 font-medium">В срок %</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {report.byTopic.map((row) => (
+                    <tr
+                      key={row.topic}
+                      className="border-b border-slate-800/80 hover:bg-slate-800/30"
+                    >
+                      <td className="py-2 pr-2">
+                        <Link
+                          href={topicHref(row.topic)}
+                          className="text-fitgo-400 hover:underline"
+                        >
+                          {row.label}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-2">{row.created}</td>
+                      <td className="py-2 pr-2">{row.closed}</td>
+                      <td className="py-2 pr-2">{row.open}</td>
+                      <td className="py-2 pr-2">
+                        <span className={row.overdue > 0 ? 'text-rose-400' : ''}>
+                          {row.overdue}
+                        </span>
+                      </td>
+                      <td className="py-2">
+                        {row.onTimePct == null ? '—' : `${row.onTimePct}%`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
 
 

@@ -54,6 +54,10 @@ enum AdminTaskEventKind {
   CLAIM
   ASSIGN
   REWORK
+  OUTCOME
+  SNOOZE
+  CANCEL
+  BLOCK
 }
 
 /// Who receives newly generated auto-tasks for a source.
@@ -68,6 +72,22 @@ enum AdminTaskDuePolicy {
   END_OF_DAY
   HOURS_BEFORE_EVENT
   HOURS_AFTER_CREATE
+}
+
+enum AdminTaskPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+/// Recurrence for manager task templates.
+enum AdminTaskRecurrence {
+  NONE
+  DAILY
+  WEEKDAYS
+  WEEKLY
+  MONTHLY
 }
 
 enum ClubCrmLinkStatus {
@@ -546,6 +566,7 @@ model Club {
   discrepancyAcks      DiscrepancyAck[]
   discrepancyTaskRules DiscrepancyTaskRule[]
   adminTaskRules       AdminTaskRule[]
+  adminTaskTemplates   AdminTaskTemplate[]
   segmentCompetitors   SegmentCompetitor[]
   marketProductHides   MarketProductHide[]
   membershipSaleWindows MembershipSaleWindow[]
@@ -1555,6 +1576,13 @@ model AdminTask {
   reworkCount Int             @default(0)
   /// After rework, scheduler must not auto-DONE/CANCEL until human closes again.
   suppressAutoClose Boolean   @default(false)
+  priority      AdminTaskPriority @default(NORMAL)
+  /// Last chosen outcome id (paid, no_answer, …).
+  outcome       String?
+  /// Checklist labels (JSON string[]).
+  checklist     Json?
+  /// Admin marked «Не могу» — reason shown to manager.
+  blockedReason String?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
@@ -1571,6 +1599,7 @@ model AdminTask {
   @@index([clubId, nextActionAt])
   @@index([clubId, groupId])
   @@index([clubId, completedAt])
+  @@index([clubId, priority])
 }
 
 model AdminTaskEvent {
@@ -1611,6 +1640,33 @@ model AdminTaskRule {
 
   @@unique([clubId, source])
   @@index([clubId, enabled])
+}
+
+/// Manager / SA templates for recurring or one-shot manual tasks.
+model AdminTaskTemplate {
+  id               String              @id @default(cuid())
+  clubId           String
+  title            String
+  description      String?
+  priority         AdminTaskPriority   @default(NORMAL)
+  checklist        Json?
+  assignMode       AdminTaskAssignMode @default(USERS)
+  assigneeIds      String[]            @default([])
+  recurrence       AdminTaskRecurrence @default(NONE)
+  /// Hour of day (0–23, Europe/Minsk) when recurring tasks are generated.
+  generateHour     Int?
+  /// Weekday 0–6 for WEEKLY; day of month 1–28 for MONTHLY.
+  recurrenceDay    Int?
+  enabled          Boolean             @default(true)
+  lastGeneratedAt  DateTime?
+  createdById      String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@index([clubId, enabled])
+  @@index([clubId, recurrence, enabled])
 }
 
 model StaffAuditLog {

@@ -48,6 +48,11 @@ export class AdminController {
     return this.adminService.getMyTasks(user);
   }
 
+  @Get('tasks/inbox')
+  getTasksInbox(@CurrentUser() user: JwtPayload) {
+    return this.adminService.getTasksInbox(user);
+  }
+
   @Get('tasks/renewals/counters')
   getRenewalCounters(@CurrentUser() user: JwtPayload) {
     return this.adminService.getRenewalCounters(user);
@@ -114,6 +119,26 @@ export class AdminController {
     return this.adminService.confirmBookingClient(user, id, {
       clientExternalId: body.clientExternalId ?? '',
       confirmed: body.confirmed,
+    });
+  }
+
+  @Post('tasks/:id/outcome')
+  applyTaskOutcome(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      outcomeId?: string;
+      comment?: string;
+      date?: string;
+      snoozeDays?: number;
+    },
+  ) {
+    return this.adminService.applyTaskOutcome(user, id, {
+      outcomeId: body.outcomeId ?? '',
+      comment: body.comment,
+      date: body.date,
+      snoozeDays: body.snoozeDays,
     });
   }
 

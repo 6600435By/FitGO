@@ -25,6 +25,7 @@ import {
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminHomeSettings } from '@/components/admin/admin-home-settings';
+import { AdminFocusCard } from '@/components/admin/tasks/admin-focus-card';
 import { useFeatures } from '@/components/features-provider';
 import { api, type AdminDashboard } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -318,9 +319,10 @@ export default function AdminHomePage() {
   const callPreview = data.callToday.slice(0, 2);
   const callExtra = Math.max(0, data.callToday.length - callPreview.length);
 
+  const showFocus = showWidget('focus');
   const showTasksCard = showWidget('tasks');
   const showTasksBlock = showTasksCard || taskPins.length > 0;
-  const showCall = showWidget('callToday');
+  const showCall = showWidget('callToday') && !showFocus;
   const showPendingCrm =
     showWidget('pendingCrm') && (data.stats.pendingCrmCount ?? 0) > 0;
 
@@ -347,6 +349,7 @@ export default function AdminHomePage() {
   const navFullWidth = navPins.length > 0 && !navUnderCall;
 
   const hasLeft =
+    showFocus ||
     showTasksBlock ||
     metricCount > 0 ||
     showPendingCrm;
@@ -424,6 +427,8 @@ export default function AdminHomePage() {
               hasRight ? 'lg:col-span-2' : '',
             )}
           >
+            {showFocus ? <AdminFocusCard /> : null}
+
             {showTasksBlock ? (
               <div className="card !p-3 sm:!p-4">
                 <div className="flex items-start gap-2 sm:gap-3">
@@ -434,14 +439,14 @@ export default function AdminHomePage() {
                         <div>
                           <p className="stat-label">Задачи</p>
                           <Link
-                            href="/admin/tasks"
+                            href="/admin/tasks?view=now"
                             className="stat-value text-2xl leading-none hover:text-fitgo-300 sm:text-3xl"
                           >
                             {tasks.total}
                           </Link>
                         </div>
                         <Link
-                          href="/admin/tasks"
+                          href="/admin/tasks?view=now"
                           className="text-xs text-slate-500 hover:text-fitgo-400"
                         >
                           Все задачи →

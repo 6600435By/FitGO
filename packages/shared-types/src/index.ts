@@ -32,6 +32,13 @@ export enum AdminTaskStatus {
   CANCELLED = 'CANCELLED',
 }
 
+export enum AdminTaskPriority {
+  LOW = 'LOW',
+  NORMAL = 'NORMAL',
+  HIGH = 'HIGH',
+  URGENT = 'URGENT',
+}
+
 export enum MembershipStatus {
   ACTIVE = 'ACTIVE',
   EXPIRED = 'EXPIRED',
@@ -629,6 +636,7 @@ export * from './floor-staff-home';
 export * from './trainer-month-analytics';
 export * from './discrepancies';
 export * from './admin-home-layout';
+export * from './admin-task-inbox';
 export * from './spa-board-slots';
 export * from './spa-waitlist';
 
@@ -1172,6 +1180,11 @@ export interface AdminTaskItem {
   reworkComment?: string;
   /** ISO time of latest REWORK event. */
   reworkAt?: string;
+  /** Phase 2: priority / outcome / checklist / blocked. */
+  priority?: AdminTaskPriority | string;
+  outcome?: string;
+  checklist?: string[];
+  blockedReason?: string;
 }
 
 /** Lane for manager control inbox. */
@@ -1187,7 +1200,11 @@ export type AdminTaskEventKind =
   | 'COMMENT'
   | 'CLAIM'
   | 'ASSIGN'
-  | 'REWORK';
+  | 'REWORK'
+  | 'OUTCOME'
+  | 'SNOOZE'
+  | 'CANCEL'
+  | 'BLOCK';
 
 export type AdminTaskAssignMode = 'POOL' | 'USERS' | 'ON_SHIFT';
 
@@ -1195,6 +1212,14 @@ export type AdminTaskDuePolicy =
   | 'END_OF_DAY'
   | 'HOURS_BEFORE_EVENT'
   | 'HOURS_AFTER_CREATE';
+
+/** Recurrence for AdminTaskTemplate. */
+export type AdminTaskRecurrence =
+  | 'NONE'
+  | 'DAILY'
+  | 'WEEKDAYS'
+  | 'WEEKLY'
+  | 'MONTHLY';
 
 /** Catalog sources that have a settings row. */
 export type AdminTaskRuleSource =
@@ -1215,6 +1240,38 @@ export interface AdminTaskRuleItem {
   duePolicy: AdminTaskDuePolicy;
   dueHours?: number | null;
   params: Record<string, unknown>;
+}
+
+export interface AdminTaskTemplateItem {
+  id: string;
+  clubId: string;
+  title: string;
+  description?: string;
+  priority: AdminTaskPriority;
+  checklist?: string[];
+  assignMode: AdminTaskAssignMode;
+  assigneeIds: string[];
+  recurrence: AdminTaskRecurrence;
+  /** Hour of day (0–23) when recurring tasks are generated. */
+  generateHour?: number | null;
+  /** Weekday 0–6 for WEEKLY; day of month 1–28 for MONTHLY. */
+  recurrenceDay?: number | null;
+  enabled: boolean;
+  lastGeneratedAt?: string;
+  createdAt: string;
+}
+
+export interface CreateAdminTaskTemplateBody {
+  title: string;
+  description?: string;
+  priority?: AdminTaskPriority;
+  checklist?: string[];
+  assignMode?: AdminTaskAssignMode;
+  assigneeIds?: string[];
+  recurrence?: AdminTaskRecurrence;
+  generateHour?: number | null;
+  recurrenceDay?: number | null;
+  enabled?: boolean;
 }
 
 export interface ReworkAdminTaskBody {

@@ -101,6 +101,99 @@ function Donut({
   );
 }
 
+function TaskControlWidget({
+  openTasks,
+  birthdayToday,
+}: {
+  openTasks: number;
+  birthdayToday: number;
+}) {
+  const [stats, setStats] = useState({
+    overdue: 0,
+    unassigned: 0,
+    rework: 0,
+  });
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    api
+      .superAdminTasks(token)
+      .then((tasks) => {
+        const now = Date.now();
+        let overdue = 0;
+        let unassigned = 0;
+        let rework = 0;
+        for (const t of tasks) {
+          if (t.status === 'DONE' || t.status === 'CANCELLED') continue;
+          if (
+            (t.dueAt && new Date(t.dueAt).getTime() < now) ||
+            (t.nextActionAt && new Date(t.nextActionAt).getTime() < now)
+          ) {
+            overdue += 1;
+          }
+          if (!t.assignee) unassigned += 1;
+          if ((t.reworkCount ?? 0) > 0) rework += 1;
+        }
+        setStats({ overdue, unassigned, rework });
+      })
+      .catch(() => undefined);
+  }, []);
+
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="font-semibold">Задачи клуба</h2>
+        <Link
+          href="/super-admin/tasks?mode=attention"
+          className="text-xs text-fitgo-400 hover:underline"
+        >
+          Пульт →
+        </Link>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <Link
+          href="/super-admin/tasks?mode=attention&metric=overdue"
+          className="rounded-xl bg-slate-800/60 px-2 py-2 text-center"
+        >
+          <p className="text-[10px] text-slate-500">Просрочено</p>
+          <p className="text-lg font-semibold text-rose-300">{stats.overdue}</p>
+        </Link>
+        <Link
+          href="/super-admin/tasks?mode=attention&metric=unassigned"
+          className="rounded-xl bg-slate-800/60 px-2 py-2 text-center"
+        >
+          <p className="text-[10px] text-slate-500">Без исполнителя</p>
+          <p className="text-lg font-semibold text-white">{stats.unassigned}</p>
+        </Link>
+        <Link
+          href="/super-admin/tasks?mode=attention&metric=rework"
+          className="rounded-xl bg-slate-800/60 px-2 py-2 text-center"
+        >
+          <p className="text-[10px] text-slate-500">Доработка</p>
+          <p className="text-lg font-semibold text-amber-300">{stats.rework}</p>
+        </Link>
+      </div>
+      <p className="text-sm text-slate-400">
+        Открытых:{' '}
+        <span className="font-semibold text-white">{openTasks}</span>
+        {birthdayToday > 0 ? (
+          <>
+            {' '}
+            · ДР сегодня:{' '}
+            <Link
+              href="/super-admin/tasks?topic=birthday"
+              className="font-semibold text-white hover:text-fitgo-300"
+            >
+              {birthdayToday}
+            </Link>
+          </>
+        ) : null}
+      </p>
+    </div>
+  );
+}
+
 export default function SuperAdminHomePage() {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState('');
@@ -265,21 +358,10 @@ export default function SuperAdminHomePage() {
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Link href="/super-admin/tasks" className="card block text-sm">
-          Открытых задач:{' '}
-          <span className="font-semibold text-white">{data.openTasks}</span>
-        </Link>
-        <Link
-          href="/super-admin/tasks?topic=birthday"
-          className="card block text-sm"
-        >
-          Дни рождения сегодня:{' '}
-          <span className="font-semibold text-white">
-            {data.birthdayToday ?? 0}
-          </span>
-        </Link>
-      </div>
+      <TaskControlWidget
+        openTasks={data.openTasks}
+        birthdayToday={data.birthdayToday ?? 0}
+      />
     </div>
   );
 }

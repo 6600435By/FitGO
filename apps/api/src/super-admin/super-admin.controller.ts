@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   Param,
@@ -24,7 +25,9 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { ApplyPresetDto, SetPermissionsDto } from './dto/permissions.dto';
 import { CreateStaffDto, UpdateStaffDto } from './dto/staff.dto';
 import {
+  BulkUpdateAdminTasksDto,
   CreateAdminTaskDto,
+  CreateAdminTaskTemplateDto,
   PutAdminTaskRulesDto,
   ReworkAdminTaskDto,
   UpdateAdminTaskDto,
@@ -144,6 +147,14 @@ export class SuperAdminController {
     return this.superAdmin.createTask(user, dto);
   }
 
+  @Post('tasks/bulk')
+  bulkUpdateTasks(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: BulkUpdateAdminTasksDto,
+  ) {
+    return this.superAdmin.bulkUpdateTasks(user, dto);
+  }
+
   @Patch('tasks/:id')
   updateTask(
     @CurrentUser() user: JwtPayload,
@@ -153,6 +164,11 @@ export class SuperAdminController {
     return this.superAdmin.updateTask(user, id, dto);
   }
 
+  @Get('tasks/:id/events')
+  getTaskEvents(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.superAdmin.getTaskEvents(user, id);
+  }
+
   @Post('tasks/:id/rework')
   reworkTask(
     @CurrentUser() user: JwtPayload,
@@ -160,6 +176,27 @@ export class SuperAdminController {
     @Body() dto: ReworkAdminTaskDto,
   ) {
     return this.superAdmin.reworkTask(user, id, dto);
+  }
+
+  @Get('task-templates')
+  listTaskTemplates(@CurrentUser() user: JwtPayload) {
+    return this.superAdmin.listTaskTemplates(user);
+  }
+
+  @Post('task-templates')
+  createTaskTemplate(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateAdminTaskTemplateDto,
+  ) {
+    return this.superAdmin.createTaskTemplate(user, dto);
+  }
+
+  @Delete('task-templates/:id')
+  deleteTaskTemplate(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+  ) {
+    return this.superAdmin.deleteTaskTemplate(user, id);
   }
 
   @Get('task-rules')

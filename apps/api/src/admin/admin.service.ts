@@ -6,15 +6,21 @@ import {
 import {
   AdminTaskStatus,
   MembershipStatus,
+  adminInboxItemFromPending,
+  adminInboxItemFromTask,
   filterAdminHomePins,
   filterAdminHomeWidgets,
+  inboxCountsFromItems,
   isAdminHomePinId,
   isAdminHomeWidgetId,
+  outcomesForSource,
+  sortAdminInboxItems,
   type AdminHomeLayoutValue,
   type AdminHomePinId,
   type AdminHomeWidgetId,
   type AdminRenewalActionBody,
   type AdminDashboard,
+  type AdminTasksInboxResponse,
   type RenewalStage,
 } from '@fitgo/shared-types';
 import { AdminPermissionsService } from '../auth/admin-permissions.service';
@@ -744,23 +750,19 @@ export class AdminService {
     });
   }
 
+  /** Fire-and-forget debt / confirmation rebuild (throttled by callers). */
+  private kickTaskSync(clubId: string) {
+    void this.tasksScheduler.refreshDebtors(clubId).catch(() => undefined);
+    void this.tasksScheduler
+      .refreshBookingConfirmations(clubId)
+      .catch(() => undefined);
+    this.tasksScheduler.refreshBirthdaysNonBlocking(clubId);
+  }
+
   async getMyTasks(user: JwtPayload) {
     const clubId = requireClubId(user);
-    // Rebuild grouped debtor rows ASAP (legacy per-sale tasks still in DB until sync).
-    try {
-      await this.tasksScheduler.refreshDebtors(clubId);
-    } catch {
-      // non-fatal — list whatever we have
-    }
-    // Tomorrow confirmations (reformer hall / SPA) — local schedule, refresh every open.
-    try {
-      await this.tasksScheduler.refreshBookingConfirmations(clubId);
-    } catch {
-      // non-fatal
-    }
-    // Birthdays from 1C (throttled). Do not await: a 60s 1C timeout used to
-    // hold the whole inbox, including tasks already in progress.
-    this.tasksScheduler.refreshBirthdaysNonBlocking(clubId);
+    // Sync off the GET path — inbox paints from DB, refresh is background.
+    this.kickTaskSync(clubId);
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
     const sharedOpen = {
@@ -902,6 +904,266 @@ export class AdminService {
     });
 
     return this.enrichConfirmTasksWithSpaNotes(clubId, mapped);
+  }
+
+  /**
+   * Unified admin inbox: AdminTask rows + virtual GP/SPA/PT approval cards.
+   * Shared bucket/owner/counts with the web via @fitgo/shared-types helpers.
+   */
+  async getTasksInbox(user: JwtPayload): Promise<AdminTasksInboxResponse> {
+    const clubId = requireClubId(user);
+    this.kickTaskSync(clubId);
+
+    const today = localDayKey();
+    const from30 = new Date();
+    from30.setDate(from30.getDate() - 30);
+    const from30Str = localDayKey(from30);
+
+    const [tasks, gpPending, spaPending, ptPending, birthdayMeta] =
+      await Promise.all([
+        this.getMyTasks(user),
+        this.bookingControl
+          .listPendingAdminApprovals(clubId, from30Str, today, 'GROUP')
+          .catch(() => []),
+        this.bookingControl
+          .listPendingAdminApprovals(clubId, from30Str, today, 'SPA')
+          .catch(() => []),
+        this.bookingControl
+          .listPendingAdminApprovals(clubId, from30Str, today, 'PT')
+          .catch(() => []),
+        this.getBirthdaySkippedQuiet(clubId),
+      ]);
+
+    const now = new Date();
+    const fromTasks = tasks.map((t) =>
+      adminInboxItemFromTask(t, user.sub, now),
+    );
+    const fromPending = [
+      ...gpPending,
+      ...spaPending,
+      ...ptPending,
+    ].map((p) => adminInboxItemFromPending(p, now));
+
+    const items = sortAdminInboxItems([...fromTasks, ...fromPending]);
+    const counts = inboxCountsFromItems(items, now);
+
+    return {
+      items,
+      counts,
+      refreshedAt: now.toISOString(),
+      skippedBirthdays: birthdayMeta.skipped,
+      birthdayScanError: birthdayMeta.scanError,
+    };
+  }
+
+  private async getBirthdaySkippedQuiet(clubId: string) {
+    const dayKey = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Minsk',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+    const skipped = await this.prisma.adminTask
+      .count({
+        where: {
+          clubId,
+          source: 'BIRTHDAY',
+          status: PrismaAdminTaskStatus.CANCELLED,
+          dedupeKey: { startsWith: `birthday-skip:`, endsWith: `:${dayKey}` },
+        },
+      })
+      .catch(() => 0);
+    return {
+      skipped,
+      scanError: this.tasksScheduler.getBirthdayScanError(clubId) ?? null,
+    };
+  }
+
+  /**
+   * Apply a catalog outcome (phase 1: maps to done / snooze / cancel / block
+   * via existing fields + COMMENT/OUTCOME events).
+   */
+  async applyTaskOutcome(
+    user: JwtPayload,
+    taskId: string,
+    body: {
+      outcomeId: string;
+      comment?: string;
+      /** ISO date for snooze-with-date outcomes. */
+      date?: string;
+      snoozeDays?: number;
+    },
+  ) {
+    const clubId = requireClubId(user);
+    const task = await this.prisma.adminTask.findFirst({
+      where: { id: taskId, clubId },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+
+    const catalog = outcomesForSource(task.source);
+    const outcome = catalog.find((o) => o.id === body.outcomeId);
+    if (!outcome) {
+      throw new BadRequestException('Неизвестный исход');
+    }
+    if (outcome.needsComment && !(body.comment?.trim())) {
+      throw new BadRequestException('Укажите комментарий');
+    }
+
+    const comment =
+      body.comment?.trim() ||
+      outcome.label;
+
+    if (outcome.effect === 'open_renewal' || outcome.effect === 'open_session') {
+      return this.mapTaskItem(
+        await this.prisma.adminTask.findFirstOrThrow({
+          where: { id: taskId },
+          include: { assignee: true },
+        }),
+      );
+    }
+
+    if (outcome.effect === 'snooze') {
+      let days = body.snoozeDays ?? outcome.snoozeDays ?? 1;
+      if (body.date) {
+        const target = new Date(body.date);
+        if (!Number.isNaN(target.getTime())) {
+          const ms = target.getTime() - Date.now();
+          days = Math.max(1, Math.ceil(ms / 86400000));
+        }
+      }
+      const updated = await this.snoozeTaskExpanded(user, taskId, days, comment);
+      await this.prisma.adminTask.update({
+        where: { id: taskId },
+        data: { outcome: outcome.id },
+      });
+      return updated;
+    }
+
+    if (outcome.effect === 'block') {
+      const updated = await this.prisma.adminTask.update({
+        where: { id: taskId },
+        data: {
+          blockedReason: comment,
+          outcome: outcome.id,
+          assigneeId: task.assigneeId ?? user.sub,
+          status:
+            task.status === PrismaAdminTaskStatus.OPEN
+              ? PrismaAdminTaskStatus.IN_PROGRESS
+              : task.status,
+        },
+        include: { assignee: true },
+      });
+      await this.prisma.adminTaskEvent.create({
+        data: {
+          taskId,
+          actorId: user.sub,
+          kind: AdminTaskEventKind.BLOCK,
+          stage: task.stage,
+          comment,
+        },
+      });
+      return this.mapTaskItem(updated);
+    }
+
+    if (outcome.effect === 'cancel') {
+      const updated = await this.prisma.adminTask.update({
+        where: { id: taskId },
+        data: {
+          status: PrismaAdminTaskStatus.CANCELLED,
+          completedAt: new Date(),
+          outcome: outcome.id,
+          doNotCall:
+            outcome.id === 'do_not_call' ? true : task.doNotCall,
+          assigneeId: task.assigneeId ?? user.sub,
+        },
+        include: { assignee: true },
+      });
+      await this.prisma.adminTaskEvent.create({
+        data: {
+          taskId,
+          actorId: user.sub,
+          kind: AdminTaskEventKind.CANCEL,
+          stage: task.stage,
+          comment,
+        },
+      });
+      return this.mapTaskItem(updated);
+    }
+
+    // done
+    const updated = await this.prisma.adminTask.update({
+      where: { id: taskId },
+      data: {
+        status: PrismaAdminTaskStatus.DONE,
+        completedAt: new Date(),
+        outcome: outcome.id,
+        blockedReason: null,
+        assigneeId: task.assigneeId ?? user.sub,
+        suppressAutoClose: false,
+      },
+      include: { assignee: true },
+    });
+    await this.prisma.adminTaskEvent.create({
+      data: {
+        taskId,
+        actorId: user.sub,
+        kind: AdminTaskEventKind.OUTCOME,
+        stage: task.stage,
+        comment,
+      },
+    });
+    if (task.source === 'DISCREPANCY') {
+      await ackDiscrepancyFromTask(this.prisma, task, user.sub, comment).catch(
+        () => undefined,
+      );
+    }
+    return this.mapTaskItem(updated);
+  }
+
+  /** Snooze for any actionable source (birthday included). */
+  private async snoozeTaskExpanded(
+    user: JwtPayload,
+    taskId: string,
+    days: number,
+    comment?: string,
+  ) {
+    const clubId = requireClubId(user);
+    const n = Math.min(30, Math.max(1, Math.floor(days) || 1));
+    const task = await this.prisma.adminTask.findFirst({
+      where: {
+        id: taskId,
+        clubId,
+        status: {
+          in: [
+            PrismaAdminTaskStatus.OPEN,
+            PrismaAdminTaskStatus.IN_PROGRESS,
+          ],
+        },
+      },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+    const next = new Date();
+    next.setDate(next.getDate() + n);
+    next.setHours(10, 0, 0, 0);
+    const updated = await this.prisma.adminTask.update({
+      where: { id: taskId },
+      data: {
+        nextActionAt: next,
+        status: PrismaAdminTaskStatus.IN_PROGRESS,
+        assigneeId: task.assigneeId ?? user.sub,
+      },
+      include: { assignee: true },
+    });
+    await this.prisma.adminTaskEvent.create({
+      data: {
+        taskId,
+        actorId: user.sub,
+        kind: AdminTaskEventKind.SNOOZE,
+        stage: task.stage,
+        comment: comment ?? `Напомнить через ${n} дн.`,
+      },
+    });
+    return this.mapTaskItem(updated);
   }
 
   private async loadLatestReworkMeta(taskIds: string[]) {
@@ -1070,47 +1332,7 @@ export class AdminService {
   }
 
   async snoozeTask(user: JwtPayload, taskId: string, days: number) {
-    const clubId = requireClubId(user);
-    const n = Math.min(30, Math.max(1, Math.floor(days) || 1));
-    const task = await this.prisma.adminTask.findFirst({
-      where: {
-        id: taskId,
-        clubId,
-        source: {
-          in: ['CLIENT_DEBT', 'STAFF_DEBT', 'INSTALLMENT_PAYMENT', 'MANAGER'],
-        },
-        OR: [
-          { assigneeId: user.sub },
-          { assigneeId: null },
-          { source: { in: ['CLIENT_DEBT', 'STAFF_DEBT', 'INSTALLMENT_PAYMENT'] } },
-        ],
-      },
-    });
-    if (!task) throw new NotFoundException('Задача не найдена');
-    const next = new Date();
-    next.setDate(next.getDate() + n);
-    next.setHours(10, 0, 0, 0);
-    const updated = await this.prisma.adminTask.update({
-      where: { id: taskId },
-      data: {
-        nextActionAt: next,
-        status:
-          task.status === PrismaAdminTaskStatus.OPEN
-            ? PrismaAdminTaskStatus.IN_PROGRESS
-            : task.status,
-        assigneeId: task.assigneeId ?? user.sub,
-      },
-      include: { assignee: true },
-    });
-    await this.prisma.adminTaskEvent.create({
-      data: {
-        taskId,
-        actorId: user.sub,
-        stage: task.stage,
-        comment: `Напомнить через ${n} дн.`,
-      },
-    });
-    return this.mapTaskItem(updated);
+    return this.snoozeTaskExpanded(user, taskId, days);
   }
 
   async addTaskComment(user: JwtPayload, taskId: string, comment: string) {
@@ -1146,18 +1368,13 @@ export class AdminService {
 
   async getBirthdaySkipped(user: JwtPayload) {
     const clubId = requireClubId(user);
+    this.tasksScheduler.refreshBirthdaysNonBlocking(clubId);
     const dayKey = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Europe/Minsk',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
     }).format(new Date());
-    // Ensure a recent scan so scanError is current when the inbox opens.
-    try {
-      await this.tasksScheduler.refreshBirthdays(clubId);
-    } catch {
-      // non-fatal
-    }
     const skipped = await this.prisma.adminTask.count({
       where: {
         clubId,
@@ -1765,6 +1982,23 @@ export class AdminService {
       suppressAutoClose: task.suppressAutoClose ?? false,
       reworkComment: undefined as string | undefined,
       reworkAt: undefined as string | undefined,
+      priority: String(
+        (task as { priority?: string }).priority ?? 'NORMAL',
+      ),
+      outcome:
+        typeof (task as { outcome?: string | null }).outcome === 'string'
+          ? (task as { outcome: string }).outcome
+          : undefined,
+      checklist: Array.isArray((task as { checklist?: unknown }).checklist)
+        ? ((task as { checklist: unknown[] }).checklist.filter(
+            (x) => typeof x === 'string',
+          ) as string[])
+        : undefined,
+      blockedReason:
+        typeof (task as { blockedReason?: string | null }).blockedReason ===
+        'string'
+          ? (task as { blockedReason: string }).blockedReason
+          : undefined,
     };
   }
 

@@ -8,11 +8,15 @@ import {
 } from '@nestjs/common';
 import {
   AdminPermission,
+  AdminTaskPriority,
   AdminTaskStatus,
   UserRole,
 } from '@fitgo/shared-types';
 import {
+  AdminTaskAssignMode,
   AdminTaskEventKind,
+  AdminTaskPriority as PrismaAdminTaskPriority,
+  AdminTaskRecurrence,
   AdminTaskStatus as PrismaAdminTaskStatus,
   Prisma,
   Role,
@@ -27,7 +31,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AdminTasksSchedulerService } from './admin-tasks-scheduler.service';
 import { ackDiscrepancyFromTask } from '../discrepancies/discrepancy-task-ack';
 import type {
+  BulkUpdateAdminTasksDto,
   CreateAdminTaskDto,
+  CreateAdminTaskTemplateDto,
   ReworkAdminTaskDto,
   UpsertAdminTaskRuleDto,
 } from './dto/task.dto';
@@ -608,8 +614,9 @@ export class SuperAdminService implements OnModuleInit {
 
     // OPEN is the first enum value, so a single take ordered by status
     // drops IN_PROGRESS once the open queue is large. Load them separately.
-    // Also load DONE completed today so manager can send for rework.
+    // DONE for last 7 days — manager can send older closes for rework.
     const dayStart = new Date();
+    dayStart.setDate(dayStart.getDate() - 7);
     dayStart.setHours(0, 0, 0, 0);
 
     const tasks = status
@@ -974,18 +981,41 @@ export class SuperAdminService implements OnModuleInit {
 
   async createTask(user: JwtPayload, dto: CreateAdminTaskDto) {
     const clubId = requireClubId(user);
-    const assigneeIds = [
+    let assigneeIds = [
       ...new Set(
         (dto.assigneeIds?.length
           ? dto.assigneeIds
           : dto.assigneeId
             ? [dto.assigneeId]
             : []
-        ).map((id) => id.trim()).filter(Boolean),
+        )
+          .map((id) => id.trim())
+          .filter(Boolean),
       ),
     ];
-    if (!assigneeIds.length) {
-      throw new BadRequestException('Выберите хотя бы одного администратора');
+
+    if (dto.onShift) {
+      const now = new Date();
+      const shifts = await this.prisma.staffShift.findMany({
+        where: {
+          clubId,
+          track: StaffShiftTrack.ADMIN,
+          startAt: { lte: now },
+          endAt: { gte: now },
+        },
+        select: { userId: true },
+      });
+      assigneeIds = [...new Set(shifts.map((s) => s.userId))];
+      if (!assigneeIds.length) {
+        throw new BadRequestException('Сейчас никто не на смене');
+      }
+    }
+
+    const pool = dto.pool === true && !dto.onShift && assigneeIds.length === 0;
+    if (!pool && !assigneeIds.length) {
+      throw new BadRequestException(
+        'Выберите администратора, смену или общую очередь',
+      );
     }
     for (const id of assigneeIds) {
       await this.ensureClubAdmin(clubId, id);
@@ -1000,9 +1030,15 @@ export class SuperAdminService implements OnModuleInit {
     const title = dto.title.trim();
     const description = dto.description?.trim() || null;
     const dueAt = dto.dueAt ? new Date(dto.dueAt) : null;
+    const priority =
+      (dto.priority as PrismaAdminTaskPriority | undefined) ??
+      PrismaAdminTaskPriority.NORMAL;
+    const checklist =
+      dto.checklist?.filter((x) => x.trim()).map((x) => x.trim()) ?? [];
 
+    const targets = pool ? [null as string | null] : assigneeIds;
     const created = [];
-    for (const assigneeId of assigneeIds) {
+    for (const assigneeId of targets) {
       const task = await this.prisma.adminTask.create({
         data: {
           clubId,
@@ -1014,6 +1050,8 @@ export class SuperAdminService implements OnModuleInit {
           source: 'MANAGER',
           groupId,
           completionMode,
+          priority,
+          checklist: checklist.length ? checklist : undefined,
         },
         include: {
           assignee: true,
@@ -1021,24 +1059,149 @@ export class SuperAdminService implements OnModuleInit {
         },
       });
       created.push(task);
-      await this.prisma.notification.create({
-        data: {
-          userId: assigneeId,
-          type: 'GENERAL',
-          title: 'Новая задача от руководителя',
-          body: title,
-          senderId: user.sub,
-        },
-      });
+      if (assigneeId) {
+        await this.prisma.notification.create({
+          data: {
+            userId: assigneeId,
+            type: 'GENERAL',
+            title: 'Новая задача от руководителя',
+            body: title,
+            senderId: user.sub,
+          },
+        });
+      }
     }
 
     await this.logAudit(user, 'TASK_CREATED', created[0]?.id ?? '', {
       assigneeIds,
+      pool,
       groupId,
       completionMode,
+      priority,
     });
 
     return created.map((task) => this.mapTask(task));
+  }
+
+  async bulkUpdateTasks(user: JwtPayload, dto: BulkUpdateAdminTasksDto) {
+    const results = [];
+    for (const id of dto.ids) {
+      results.push(
+        await this.updateTask(user, id, {
+          status: dto.status,
+          dueAt: dto.dueAt,
+          assigneeId: dto.assigneeId,
+          priority: dto.priority,
+          comment: dto.comment,
+        }),
+      );
+    }
+    return results;
+  }
+
+  async getTaskEvents(user: JwtPayload, taskId: string) {
+    const clubId = requireClubId(user);
+    const task = await this.prisma.adminTask.findFirst({
+      where: { id: taskId, clubId },
+      select: { id: true },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+    const events = await this.prisma.adminTaskEvent.findMany({
+      where: { taskId },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: {
+        actor: { select: { firstName: true, lastName: true } },
+      },
+    });
+    return events.map((e) => ({
+      id: e.id,
+      kind: e.kind,
+      stage: e.stage ?? undefined,
+      comment: e.comment ?? undefined,
+      actorName: e.actor
+        ? `${e.actor.firstName} ${e.actor.lastName}`.trim()
+        : undefined,
+      createdAt: e.createdAt.toISOString(),
+    }));
+  }
+
+  async listTaskTemplates(user: JwtPayload) {
+    const clubId = requireClubId(user);
+    const rows = await this.prisma.adminTaskTemplate.findMany({
+      where: { clubId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((r) => this.mapTemplate(r));
+  }
+
+  async createTaskTemplate(user: JwtPayload, dto: CreateAdminTaskTemplateDto) {
+    const clubId = requireClubId(user);
+    const row = await this.prisma.adminTaskTemplate.create({
+      data: {
+        clubId,
+        title: dto.title.trim(),
+        description: dto.description?.trim() || null,
+        priority:
+          (dto.priority as PrismaAdminTaskPriority | undefined) ??
+          PrismaAdminTaskPriority.NORMAL,
+        checklist: dto.checklist?.filter(Boolean) ?? [],
+        assignMode: (dto.assignMode as AdminTaskAssignMode) ?? 'USERS',
+        assigneeIds: dto.assigneeIds ?? [],
+        recurrence: (dto.recurrence as AdminTaskRecurrence) ?? 'NONE',
+        generateHour: dto.generateHour ?? 9,
+        recurrenceDay: dto.recurrenceDay ?? null,
+        enabled: dto.enabled !== false,
+        createdById: user.sub,
+      },
+    });
+    return this.mapTemplate(row);
+  }
+
+  async deleteTaskTemplate(user: JwtPayload, id: string) {
+    const clubId = requireClubId(user);
+    const row = await this.prisma.adminTaskTemplate.findFirst({
+      where: { id, clubId },
+    });
+    if (!row) throw new NotFoundException('Шаблон не найден');
+    await this.prisma.adminTaskTemplate.delete({ where: { id } });
+    return { ok: true };
+  }
+
+  private mapTemplate(r: {
+    id: string;
+    clubId: string;
+    title: string;
+    description: string | null;
+    priority: PrismaAdminTaskPriority;
+    checklist: unknown;
+    assignMode: AdminTaskAssignMode;
+    assigneeIds: string[];
+    recurrence: AdminTaskRecurrence;
+    generateHour: number | null;
+    recurrenceDay: number | null;
+    enabled: boolean;
+    lastGeneratedAt: Date | null;
+    createdAt: Date;
+  }) {
+    return {
+      id: r.id,
+      clubId: r.clubId,
+      title: r.title,
+      description: r.description ?? undefined,
+      priority: r.priority as AdminTaskPriority,
+      checklist: Array.isArray(r.checklist)
+        ? (r.checklist as string[])
+        : undefined,
+      assignMode: r.assignMode,
+      assigneeIds: r.assigneeIds,
+      recurrence: r.recurrence,
+      generateHour: r.generateHour,
+      recurrenceDay: r.recurrenceDay,
+      enabled: r.enabled,
+      lastGeneratedAt: r.lastGeneratedAt?.toISOString(),
+      createdAt: r.createdAt.toISOString(),
+    };
   }
 
   async updateTask(
@@ -1050,6 +1213,7 @@ export class SuperAdminService implements OnModuleInit {
       description?: string;
       dueAt?: string;
       assigneeId?: string | null;
+      priority?: AdminTaskPriority;
       comment?: string;
     },
   ) {
@@ -1090,6 +1254,9 @@ export class SuperAdminService implements OnModuleInit {
         ...(data.dueAt !== undefined
           ? { dueAt: data.dueAt ? new Date(data.dueAt) : null }
           : {}),
+        ...(data.priority
+          ? { priority: data.priority as PrismaAdminTaskPriority }
+          : {}),
         ...(nextAssigneeId !== undefined
           ? {
               assigneeId: nextAssigneeId,
@@ -1106,7 +1273,7 @@ export class SuperAdminService implements OnModuleInit {
               completedAt:
                 data.status === AdminTaskStatus.DONE ? new Date() : null,
               ...(data.status === AdminTaskStatus.DONE
-                ? { suppressAutoClose: false }
+                ? { suppressAutoClose: false, blockedReason: null }
                 : {}),
             }
           : {}),
@@ -1389,6 +1556,23 @@ export class SuperAdminService implements OnModuleInit {
         typeof meta.validUntil === 'string' ? meta.validUntil : undefined,
       docId: typeof meta.docId === 'string' ? meta.docId : undefined,
       reworkCount: task.reworkCount ?? 0,
+      priority: String(
+        (task as { priority?: string }).priority ?? 'NORMAL',
+      ),
+      outcome:
+        typeof (task as { outcome?: string | null }).outcome === 'string'
+          ? (task as { outcome: string }).outcome
+          : undefined,
+      checklist: Array.isArray((task as { checklist?: unknown }).checklist)
+        ? ((task as { checklist: unknown[] }).checklist.filter(
+            (x) => typeof x === 'string',
+          ) as string[])
+        : undefined,
+      blockedReason:
+        typeof (task as { blockedReason?: string | null }).blockedReason ===
+        'string'
+          ? (task as { blockedReason: string }).blockedReason
+          : undefined,
       suppressAutoClose: task.suppressAutoClose ?? false,
       reworkComment: undefined as string | undefined,
       reworkAt: undefined as string | undefined,

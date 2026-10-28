@@ -2,6 +2,7 @@
 
 export type AdminHomeWidgetId =
   | 'tasks'
+  | 'focus'
   | 'needsReview'
   | 'expiringSoon'
   | 'sessionsToday'
@@ -70,7 +71,8 @@ export interface AdminHomeLayoutValue {
 }
 
 export const ADMIN_HOME_WIDGETS: AdminHomeWidgetDef[] = [
-  { id: 'tasks', label: 'Задачи', modules: ['club_admin'] },
+  { id: 'focus', label: 'Мой фокус', modules: ['club_admin'] },
+  { id: 'tasks', label: 'Задачи (чипы)', modules: ['club_admin'] },
   {
     id: 'needsReview',
     label: 'Контроль записей',
@@ -112,7 +114,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'Все задачи',
     shortLabel: 'Все',
     kind: 'task',
-    href: '/admin/tasks',
+    href: '/admin/tasks?view=now',
     modules: ['club_admin'],
   },
   {
@@ -120,7 +122,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'Клиенты',
     shortLabel: 'Клиенты',
     kind: 'task',
-    href: '/admin/tasks?group=clients',
+    href: '/admin/tasks?view=now&kind=calls',
     modules: ['club_admin'],
   },
   {
@@ -128,7 +130,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'По сроку',
     shortLabel: 'Абон.',
     kind: 'task',
-    href: '/admin/tasks?topic=membership',
+    href: '/admin/tasks?view=now&kind=calls&topic=membership',
     nested: true,
     modules: ['club_admin'],
   },
@@ -137,7 +139,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'Дни рождения',
     shortLabel: 'ДР',
     kind: 'task',
-    href: '/admin/tasks?topic=birthday',
+    href: '/admin/tasks?view=now&kind=calls&topic=birthday',
     nested: true,
     modules: ['club_admin'],
   },
@@ -146,7 +148,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'Долги клиентов',
     shortLabel: 'Долги',
     kind: 'task',
-    href: '/admin/tasks?topic=client_debt',
+    href: '/admin/tasks?view=now&kind=money&topic=client_debt',
     nested: true,
     modules: ['club_admin'],
   },
@@ -155,7 +157,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'Рассрочки',
     shortLabel: 'Расср.',
     kind: 'task',
-    href: '/admin/tasks?topic=installment',
+    href: '/admin/tasks?view=now&kind=money&topic=installment',
     nested: true,
     modules: ['club_admin'],
   },
@@ -164,7 +166,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'Персонал',
     shortLabel: 'Перс.',
     kind: 'task',
-    href: '/admin/tasks?group=staff',
+    href: '/admin/tasks?view=now&kind=staff',
     modules: ['club_admin'],
   },
   {
@@ -172,7 +174,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'Руководитель',
     shortLabel: 'Рук.',
     kind: 'task',
-    href: '/admin/tasks?group=manager',
+    href: '/admin/tasks?view=now&kind=manager',
     modules: ['club_admin'],
   },
   {
@@ -180,7 +182,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'Контроль',
     shortLabel: 'Контроль',
     kind: 'task',
-    href: '/admin/tasks?group=control',
+    href: '/admin/tasks?view=now&kind=control',
     modules: ['club_admin'],
   },
   {
@@ -188,7 +190,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'ГП',
     shortLabel: 'ГП',
     kind: 'task',
-    href: '/admin/tasks?topic=group_approval',
+    href: '/admin/tasks?view=now&kind=control&topic=group_approval',
     nested: true,
     modules: ['club_admin', 'group_classes'],
   },
@@ -197,7 +199,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'ПТ',
     shortLabel: 'ПТ',
     kind: 'task',
-    href: '/admin/tasks?topic=pt_approval',
+    href: '/admin/tasks?view=now&kind=control&topic=pt_approval',
     nested: true,
     modules: ['club_admin', 'pt_sheet'],
   },
@@ -206,7 +208,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'SPA',
     shortLabel: 'SPA',
     kind: 'task',
-    href: '/admin/tasks?topic=spa_approval',
+    href: '/admin/tasks?view=now&kind=control&topic=spa_approval',
     nested: true,
     modules: ['club_admin', 'spa_booking'],
   },
@@ -215,7 +217,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'Подтверждения',
     shortLabel: 'Подтв.',
     kind: 'task',
-    href: '/admin/tasks?topic=confirmation',
+    href: '/admin/tasks?view=now&kind=control&topic=confirmation',
     nested: true,
     modules: ['club_admin'],
   },
@@ -325,12 +327,11 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
 
 /** Current home screen before any personalization. */
 export const ADMIN_HOME_DEFAULT_WIDGETS: AdminHomeWidgetId[] = [
-  'tasks',
+  'focus',
   'needsReview',
   'expiringSoon',
   'sessionsToday',
   'revenueToday',
-  'callToday',
   'pendingCrm',
 ];
 
@@ -366,11 +367,10 @@ export const ADMIN_HOME_PRESETS: Record<
   reception: {
     label: 'Рецепция',
     widgets: [
-      'tasks',
+      'focus',
       'needsReview',
       'sessionsToday',
       'expiringSoon',
-      'callToday',
       'pendingCrm',
     ],
     pins: [
@@ -381,7 +381,7 @@ export const ADMIN_HOME_PRESETS: Record<
   },
   floor: {
     label: 'Зал',
-    widgets: ['tasks', 'sessionsToday', 'needsReview'],
+    widgets: ['focus', 'sessionsToday', 'needsReview'],
     pins: [
       ...ADMIN_HOME_DEFAULT_TASK_PINS,
       'nav:/admin/schedule',
@@ -392,7 +392,7 @@ export const ADMIN_HOME_PRESETS: Record<
   },
   money: {
     label: 'Деньги',
-    widgets: ['revenueToday', 'tasks'],
+    widgets: ['revenueToday', 'focus'],
     pins: [
       ...ADMIN_HOME_DEFAULT_TASK_PINS,
       'nav:/admin/sales',

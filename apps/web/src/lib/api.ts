@@ -233,7 +233,24 @@ export interface AdminDashboard {
       confirmation?: number;
       clients?: number;
       control?: number;
+      overdue?: number;
+      mine?: number;
+      rework?: number;
+      pool?: number;
+      waiting?: number;
     };
+    /** Next focus rows for home «Мой фокус» (optional). */
+    focusPreview?: Array<{
+      id: string;
+      title: string;
+      subtitle?: string;
+      phone?: string;
+      primaryAction: string;
+      kind: string;
+      bucket: string;
+      virtual?: boolean;
+      sessionKey?: string;
+    }>;
     expiringSoon: number;
     pendingCrmCount?: number;
   };
@@ -2062,6 +2079,28 @@ export const api = {
   adminMyTasks: (token: string) =>
     request<AdminTaskItem[]>('/admin/tasks', {}, token),
 
+  adminTasksInbox: (token: string) =>
+    request<import('@fitgo/shared-types').AdminTasksInboxResponse>(
+      '/admin/tasks/inbox',
+      {},
+      token,
+    ),
+
+  adminTaskOutcome: (
+    token: string,
+    taskId: string,
+    body: {
+      outcomeId: string;
+      comment?: string;
+      date?: string;
+      snoozeDays?: number;
+    },
+  ) =>
+    request<AdminTaskItem>(`/admin/tasks/${taskId}/outcome`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, token),
+
   adminUpdateTask: (
     token: string,
     taskId: string,
@@ -2286,9 +2325,29 @@ export const api = {
       description?: string;
       dueAt?: string;
       completionMode?: 'SHARED' | 'INDIVIDUAL';
+      priority?: string;
+      checklist?: string[];
+      pool?: boolean;
+      onShift?: boolean;
     },
   ) =>
     request<AdminTaskItem | AdminTaskItem[]>('/super-admin/tasks', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }, token),
+
+  superAdminBulkUpdateTasks: (
+    token: string,
+    data: {
+      ids: string[];
+      assigneeId?: string | null;
+      dueAt?: string;
+      priority?: string;
+      status?: AdminTaskStatus;
+      comment?: string;
+    },
+  ) =>
+    request<AdminTaskItem[]>('/super-admin/tasks/bulk', {
       method: 'POST',
       body: JSON.stringify(data),
     }, token),
@@ -2302,6 +2361,7 @@ export const api = {
       description: string;
       dueAt: string;
       assigneeId: string | null;
+      priority: string;
       comment: string;
     }>,
   ) =>
@@ -2309,6 +2369,18 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(data),
     }, token),
+
+  superAdminTaskEvents: (token: string, id: string) =>
+    request<
+      Array<{
+        id: string;
+        kind?: string;
+        stage?: string;
+        comment?: string;
+        actorName?: string;
+        createdAt: string;
+      }>
+    >(`/super-admin/tasks/${id}/events`, {}, token),
 
   superAdminReworkTask: (
     token: string,
@@ -2323,6 +2395,28 @@ export const api = {
     request<AdminTaskItem>(`/super-admin/tasks/${id}/rework`, {
       method: 'POST',
       body: JSON.stringify(data),
+    }, token),
+
+  superAdminTaskTemplates: (token: string) =>
+    request<import('@fitgo/shared-types').AdminTaskTemplateItem[]>(
+      '/super-admin/task-templates',
+      {},
+      token,
+    ),
+
+  superAdminCreateTaskTemplate: (
+    token: string,
+    data: import('@fitgo/shared-types').CreateAdminTaskTemplateBody,
+  ) =>
+    request<import('@fitgo/shared-types').AdminTaskTemplateItem>(
+      '/super-admin/task-templates',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  superAdminDeleteTaskTemplate: (token: string, id: string) =>
+    request<{ ok: boolean }>(`/super-admin/task-templates/${id}`, {
+      method: 'DELETE',
     }, token),
 
   superAdminTaskRules: (token: string) =>
