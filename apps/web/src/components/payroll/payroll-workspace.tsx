@@ -220,6 +220,17 @@ function payslipSalesSegmentHtml(
   return `<h2>Продажи по сегментам</h2><table><thead><tr><th>Сегмент</th><th class="num">Продано</th><th class="num">В мотивацию</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
+function payslipHeaderOnly(fields: PayslipFields): boolean {
+  return (
+    (fields.fio || fields.period) &&
+    !fields.motivation &&
+    !fields.bonus &&
+    !fields.fine &&
+    !fields.shifts &&
+    !fields.totals
+  );
+}
+
 function payslipHtmlFromSummary(
   summary: PayrollPeriodSummary,
   fields: PayslipFields,
@@ -227,14 +238,22 @@ function payslipHtmlFromSummary(
   const cur = summary.currency;
   const bonuses = summary.adjustments.filter((a) => a.amountMinor > 0);
   const fines = summary.adjustments.filter((a) => a.amountMinor < 0);
-  const parts: string[] = ['<section class="slip">', '<h1>Расчётный лист</h1>'];
-  if (fields.fio) {
-    parts.push(`<p class="meta"><strong>ФИО:</strong> ${escapeHtml(summary.performerName)}</p>`);
-  }
-  if (fields.period) {
-    parts.push(
-      `<p class="meta"><strong>Период:</strong> ${escapeHtml(summary.from)} — ${escapeHtml(summary.to)}</p>`,
-    );
+  const centered = payslipHeaderOnly(fields);
+  const slipClass = centered ? 'slip slip--centered' : 'slip';
+  const parts: string[] = [`<section class="${slipClass}">`];
+  if (fields.fio || fields.period) {
+    parts.push('<div class="header-block">');
+    if (fields.fio) {
+      parts.push(
+        `<p class="meta"><strong>ФИО:</strong> ${escapeHtml(summary.performerName)}</p>`,
+      );
+    }
+    if (fields.period) {
+      parts.push(
+        `<p class="meta"><strong>Период:</strong> ${escapeHtml(summary.from)} — ${escapeHtml(summary.to)}</p>`,
+      );
+    }
+    parts.push('</div>');
   }
   if (fields.motivation) {
     parts.push('<h2>Начисления</h2><table>');
@@ -317,22 +336,29 @@ function printHtmlPayslips(sections: Array<{ name: string; html: string }>) {
   }
   const body = sections.map((s) => s.html).join('\n<div class="page-break"></div>\n');
   doc.open();
-  doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Расчётные листы</title>
+  doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Печать</title>
 <style>
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:24px;font-size:13px;color:#111;line-height:1.45;background:#fff}
-  .slip{max-width:640px;margin:0 auto 24px}
-  h1{font-size:18px;margin:0 0 12px;letter-spacing:-0.02em}
+  @page{size:A4;margin:16mm}
+  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:0;font-size:13px;color:#111;line-height:1.45;background:#fff;margin:0}
+  .slip{max-width:640px;margin:0 auto 24px;box-sizing:border-box}
+  .slip--centered{max-width:none;width:100%;min-height:calc(297mm - 32mm);display:flex;flex-direction:column;align-items:center;justify-content:center;margin:0}
+  .header-block{text-align:center;margin:0 0 16px}
+  .slip--centered .header-block{margin:0}
   h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#555;margin:16px 0 6px}
   table{width:100%;border-collapse:collapse}
   th{padding:4px 0;border-bottom:1px solid #ccc;font-size:11px;text-align:left;font-weight:600;color:#555}
   th.num,td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
   td{padding:4px 0;border-bottom:1px solid #e5e7eb;vertical-align:top}
-  .meta{margin:4px 0;color:#333}
+  .meta{margin:4px 0;color:#333;font-size:14px}
   .chips{font-size:11px;color:#666;margin-top:6px}
   .empty{color:#999;margin:0}
   .total{margin-top:16px;padding-top:12px;border-top:2px solid #111;font-size:15px}
   .page-break{page-break-after:always;height:0}
-  @media print{body{padding:12px}.page-break{break-after:page}}
+  @media print{
+    body{padding:0}
+    .slip--centered{min-height:calc(297mm - 32mm);page-break-inside:avoid}
+    .page-break{break-after:page}
+  }
 </style></head><body>${body}</body></html>`);
   doc.close();
   const run = () => {
@@ -401,7 +427,18 @@ type PayslipFields = {
   shifts: boolean;
 };
 
+/** Defaults when opening the print dialog. */
 const DEFAULT_PAYSLIP: PayslipFields = {
+  fio: true,
+  period: true,
+  motivation: false,
+  bonus: false,
+  fine: false,
+  totals: false,
+  shifts: false,
+};
+
+const ALL_PAYSLIP: PayslipFields = {
   fio: true,
   period: true,
   motivation: true,
@@ -830,32 +867,55 @@ export function PayrollWorkspace({ mode }: Props) {
     }
   };
 
-  const buildPayslipText = (fields: PayslipFields): string => {
-    if (!summary) return '';
-    const cur = summary.currency;
-    const bonuses = summary.adjustments.filter((a) => a.amountMinor > 0);
-    const fines = summary.adjustments.filter((a) => a.amountMinor < 0);
+  const buildPayslipText = (
+    fields: PayslipFields,
+    source: PayrollPeriodSummary | null = summary,
+  ): string => {
+    if (!source) {
+      const first =
+        staff.find((s) => batchIds.has(s.userId))?.name ?? '…';
+      const lines: string[] = [];
+      if (fields.fio) lines.push(`ФИО: ${first}`);
+      if (fields.period) lines.push(`Период: ${from} — ${to}`);
+      if (
+        fields.motivation ||
+        fields.bonus ||
+        fields.fine ||
+        fields.shifts ||
+        fields.totals
+      ) {
+        lines.push('');
+        lines.push(
+          `(детальные поля подставятся при печати по ${batchIds.size} сотрудник(ам))`,
+        );
+      }
+      if (batchIds.size > 1) {
+        lines.push('');
+        lines.push(`Выбрано сотрудников: ${batchIds.size}`);
+      }
+      lines.push('');
+      return lines.join('\n');
+    }
+    const cur = source.currency;
+    const bonuses = source.adjustments.filter((a) => a.amountMinor > 0);
+    const fines = source.adjustments.filter((a) => a.amountMinor < 0);
     const lines: string[] = [];
-    lines.push('РАСЧЁТНЫЙ ЛИСТ');
-    lines.push('='.repeat(40));
-    if (fields.fio) lines.push(`ФИО: ${summary.performerName}`);
-    if (fields.period) lines.push(`Период: ${summary.from} — ${summary.to}`);
+    if (fields.fio) lines.push(`ФИО: ${source.performerName}`);
+    if (fields.period) lines.push(`Период: ${source.from} — ${source.to}`);
     if (fields.motivation) {
       lines.push('');
       lines.push('Мотивация / ставки:');
       const chips =
-        summary.payChips?.length > 0
-          ? summary.payChips
-          : ['Ставки не заданы'];
+        source.payChips?.length > 0 ? source.payChips : ['Ставки не заданы'];
       for (const c of chips) lines.push(`  · ${c}`);
-      lines.push(`  Оклад / часы: ${money(summary.baseSalaryMinor, cur)}`);
-      lines.push(`  Мотивация: ${money(summary.motivationMinor, cur)}`);
-      if (hasPayslipSalesSegments(summary)) {
+      lines.push(`  Оклад / часы: ${money(source.baseSalaryMinor, cur)}`);
+      lines.push(`  Мотивация: ${money(source.motivationMinor, cur)}`);
+      if (hasPayslipSalesSegments(source)) {
         lines.push('');
         lines.push('Продажи по сегментам (продано → в мотивацию):');
         for (const seg of PAYSLIP_SALE_SEGMENTS) {
           lines.push(
-            `  ${seg.label}: ${money(seg.sold(summary), cur)} → ${money(seg.contrib(summary), cur)}`,
+            `  ${seg.label}: ${money(seg.sold(source), cur)} → ${money(seg.contrib(source), cur)}`,
           );
         }
       }
@@ -881,7 +941,7 @@ export function PayrollWorkspace({ mode }: Props) {
       }
     }
     if (fields.shifts) {
-      const shifts = summary.workUnits.filter((u) => u.kind === 'SHIFT');
+      const shifts = source.workUnits.filter((u) => u.kind === 'SHIFT');
       lines.push('');
       lines.push('Смены:');
       if (!shifts.length) lines.push('  нет');
@@ -897,24 +957,32 @@ export function PayrollWorkspace({ mode }: Props) {
       lines.push('');
       lines.push('-'.repeat(40));
       lines.push(
-        `Корректировки всего: ${money(summary.adjustmentsMinor, cur)}`,
+        `Корректировки всего: ${money(source.adjustmentsMinor, cur)}`,
       );
-      lines.push(`ИТОГО К ВЫПЛАТЕ: ${money(summary.totalMinor, cur)}`);
+      lines.push(`ИТОГО К ВЫПЛАТЕ: ${money(source.totalMinor, cur)}`);
+    }
+    if (batchIds.size > 1) {
+      lines.push('');
+      lines.push(`Выбрано сотрудников: ${batchIds.size}`);
     }
     lines.push('');
     return lines.join('\n');
   };
 
   const openPrintDialog = () => {
-    if (!summary) return;
+    if (!canEdit || batchIds.size === 0) return;
     setPrintFields(DEFAULT_PAYSLIP);
-    setDocPreview(buildPayslipText(DEFAULT_PAYSLIP));
+    const previewSource =
+      summary && batchIds.has(userId) ? summary : null;
+    setDocPreview(buildPayslipText(DEFAULT_PAYSLIP, previewSource));
     setPrintOpen(true);
   };
 
   const refreshPreview = (fields: PayslipFields) => {
     setPrintFields(fields);
-    setDocPreview(buildPayslipText(fields));
+    const previewSource =
+      summary && batchIds.has(userId) ? summary : null;
+    setDocPreview(buildPayslipText(fields, previewSource));
   };
 
   const savePayslipFile = async () => {
@@ -980,17 +1048,6 @@ export function PayrollWorkspace({ mode }: Props) {
     );
   };
 
-  const printPayslipDoc = () => {
-    const text = docPreview || buildPayslipText(printFields);
-    if (!text || !summary) return;
-    printHtmlPayslips([
-      {
-        name: summary.performerName,
-        html: payslipHtmlFromSummary(summary, printFields),
-      },
-    ]);
-  };
-
   const toggleBatchId = (id: string) => {
     setBatchIds((prev) => {
       const next = new Set(prev);
@@ -1000,7 +1057,7 @@ export function PayrollWorkspace({ mode }: Props) {
     });
   };
 
-  const printBatchPayslips = async () => {
+  const printSelectedPayslips = async () => {
     if (!canEdit || batchIds.size === 0) return;
     const token = getToken();
     if (!token) return;
@@ -1013,13 +1070,14 @@ export function PayrollWorkspace({ mode }: Props) {
         const s = await api.payrollSummary(token, { userId: id, from, to });
         sections.push({
           name: s.performerName,
-          html: payslipHtmlFromSummary(s, DEFAULT_PAYSLIP),
+          html: payslipHtmlFromSummary(s, printFields),
         });
       }
       printHtmlPayslips(sections);
-      setMessage(`Отправлено на печать: ${sections.length} расчётник(ов)`);
+      setPrintOpen(false);
+      setMessage(`Отправлено на печать: ${sections.length}`);
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Ошибка пакетной печати');
+      setMessage(e instanceof Error ? e.message : 'Ошибка печати');
     } finally {
       setBatchPrinting(false);
     }
@@ -1222,21 +1280,14 @@ export function PayrollWorkspace({ mode }: Props) {
               type="button"
               className="btn-secondary w-full lg:min-w-[9rem] lg:w-auto"
               disabled={batchPrinting || batchIds.size === 0}
-              onClick={() => void printBatchPayslips()}
-            >
-              {batchPrinting
-                ? 'Печать…'
-                : `Печать (${batchIds.size})`}
-            </button>
-          )}
-          {canEdit && (
-            <button
-              type="button"
-              className="btn-secondary w-full lg:w-auto"
-              disabled={!summary}
               onClick={openPrintDialog}
+              title={
+                batchIds.size === 0
+                  ? 'Отметьте сотрудников галочками ниже'
+                  : undefined
+              }
             >
-              Печать листа
+              {batchPrinting ? 'Печать…' : 'Печать'}
             </button>
           )}
           {canEdit && (
@@ -1947,26 +1998,25 @@ export function PayrollWorkspace({ mode }: Props) {
         )}
       </section>
 
-      {printOpen && summary && (
+      {printOpen && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center"
-          onMouseDown={() => setPrintOpen(false)}
+          onMouseDown={() => !batchPrinting && setPrintOpen(false)}
         >
           <div
             className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl"
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <h2 className="text-lg font-semibold text-white">
-              Расчётный лист
-            </h2>
+            <h2 className="text-lg font-semibold text-white">Печать</h2>
             <p className="text-xs text-slate-400">
-              Выберите поля для текстового документа
+              Выберите поля. Печать для {batchIds.size} сотрудник
+              {batchIds.size === 1 ? 'а' : 'ов'} за период {from} — {to}.
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               <button
                 type="button"
                 className="rounded-lg bg-emerald-500/15 px-2.5 py-1 text-emerald-300"
-                onClick={() => refreshPreview(DEFAULT_PAYSLIP)}
+                onClick={() => refreshPreview(ALL_PAYSLIP)}
               >
                 Выбрать все
               </button>
@@ -2022,7 +2072,7 @@ export function PayrollWorkspace({ mode }: Props) {
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-300">
                 {docPreview || 'Отметьте хотя бы одно поле'}
               </pre>
-              {summary && (
+              {summary && batchIds.has(userId) && (
                 <p className="mt-2 text-[11px] text-slate-500">
                   Имя файла:{' '}
                   <span className="text-slate-400">
@@ -2039,22 +2089,36 @@ export function PayrollWorkspace({ mode }: Props) {
               <button
                 type="button"
                 className="btn-primary flex-1"
-                disabled={!docPreview.trim()}
-                onClick={printPayslipDoc}
+                disabled={
+                  batchPrinting ||
+                  !Object.values(printFields).some(Boolean)
+                }
+                onClick={() => void printSelectedPayslips()}
               >
-                Печать
+                {batchPrinting ? 'Печать…' : 'Печать'}
               </button>
               <button
                 type="button"
                 className="btn-secondary flex-1"
-                disabled={!docPreview.trim()}
+                disabled={
+                  batchPrinting ||
+                  !summary ||
+                  !batchIds.has(userId) ||
+                  !docPreview.trim()
+                }
                 onClick={savePayslipFile}
+                title={
+                  !summary || !batchIds.has(userId)
+                    ? 'Сохранение txt — для текущего рассчитанного сотрудника из выбора'
+                    : undefined
+                }
               >
                 Сохранить как…
               </button>
               <button
                 type="button"
                 className="btn-secondary w-full sm:w-auto"
+                disabled={batchPrinting}
                 onClick={() => setPrintOpen(false)}
               >
                 Закрыть
