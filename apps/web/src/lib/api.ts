@@ -299,10 +299,54 @@ function handleUnauthorized(hadToken: boolean, path: string) {
   });
 }
 
-function errorMessageFromBody(
-  body: unknown,
-  status: number,
-): string {
+/** Nest / fetch failure with status + optional structured body (for «В журнал» codes). */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+  readonly code?: string;
+
+  constructor(message: string, status: number, body?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.body = body ?? null;
+    if (body && typeof body === 'object' && body !== null && 'code' in body) {
+      const c = (body as { code?: unknown }).code;
+      if (typeof c === 'string' && c.trim()) this.code = c.trim();
+    }
+  }
+}
+
+const NEST_GENERIC_ERRORS = new Set([
+  'Bad Request',
+  'Unauthorized',
+  'Forbidden',
+  'Not Found',
+  'Conflict',
+  'Internal Server Error',
+  'Error',
+]);
+
+function fallbackMessageForStatus(status: number): string {
+  switch (status) {
+    case 401:
+      return 'Сессия истекла — войдите снова';
+    case 403:
+      return 'Недостаточно прав для этого действия';
+    case 404:
+      return 'Запись не найдена';
+    case 409:
+      return 'Это время уже занято';
+    case 500:
+    case 502:
+    case 503:
+      return 'Не удалось выполнить действие. Повторите через минуту.';
+    default:
+      return `Не удалось выполнить действие (код ${status})`;
+  }
+}
+
+function rawMessageFromBody(body: unknown): string | null {
   if (typeof body === 'string' && body.trim()) return body.trim();
   if (body && typeof body === 'object') {
     const o = body as { message?: unknown; error?: unknown };
@@ -311,13 +355,26 @@ function errorMessageFromBody(
       const joined = raw.map(String).filter((s) => s.trim()).join('; ');
       if (joined) return joined;
     }
-    if (typeof raw === 'string' && raw.trim()) return raw;
+    if (typeof raw === 'string' && raw.trim()) return raw.trim();
     if (typeof o.error === 'string' && o.error.trim()) {
-      // Nest often sends error: "Bad Request" — keep only if no message.
-      if (o.error !== 'Bad Request' && o.error !== 'Error') return o.error;
+      if (!NEST_GENERIC_ERRORS.has(o.error)) return o.error.trim();
     }
   }
-  return `Ошибка ${status}`;
+  return null;
+}
+
+function errorMessageFromBody(body: unknown, status: number): string {
+  const raw = rawMessageFromBody(body);
+  if (raw && !NEST_GENERIC_ERRORS.has(raw) && !/^Ошибка \d+$/.test(raw)) {
+    // 5xx: keep server reason as second line under a stable lead-in.
+    if (status >= 500) {
+      const lead = fallbackMessageForStatus(status);
+      if (raw === lead) return lead;
+      return `${lead} ${raw}`;
+    }
+    return raw;
+  }
+  return fallbackMessageForStatus(status);
 }
 
 async function assertBlobOk(
@@ -355,7 +412,11 @@ async function request<T>(
       handleUnauthorized(Boolean(token), path);
     }
     const error = await response.json().catch(() => ({}));
-    throw new Error(errorMessageFromBody(error, response.status));
+    throw new ApiError(
+      errorMessageFromBody(error, response.status),
+      response.status,
+      error,
+    );
   }
 
   return response.json();

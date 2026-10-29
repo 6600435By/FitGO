@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  AvailabilityBlockStatus,
   OnexClassKind,
   OnexClassMemberAttendance,
   OnexClassStatus,
@@ -109,6 +110,11 @@ import {
   type SpaOnexCandidate,
   type SpaSaleCandidate,
 } from './spa-document-match';
+import {
+  formatMinskDayShort,
+  minskDayBoundsUtc,
+  pickEarliestCleanSpaJournalSlot,
+} from './spa-journal-slot';
 
 type ListFilters = {
   from: string;
@@ -6292,16 +6298,76 @@ export class BookingControlService {
       }),
     );
 
+    // Journal card length = catalog service + buffer (same as manual assign).
     const durationMin = Math.max(
       1,
-      onex.durationMin ??
-        service.durationMin + (service.bufferMin ?? 0),
+      service.durationMin + (service.bufferMin ?? 0),
     );
-    const startAt = onex.startAt;
-    const endAt =
-      onex.endAt ??
-      new Date(startAt.getTime() + durationMin * 60_000);
+    const day = minskDayKey(onex.startAt);
+    const { start: dayStart, end: dayEnd } = minskDayBoundsUtc(day);
+    const dayRu = formatMinskDayShort(day);
 
+    const publishedBlocks =
+      await this.prisma.specialistAvailabilityBlock.findMany({
+        where: {
+          specialistId: specialist.id,
+          status: AvailabilityBlockStatus.PUBLISHED,
+          startAt: { lt: dayEnd },
+          endAt: { gt: dayStart },
+        },
+        select: { startAt: true, endAt: true },
+        orderBy: { startAt: 'asc' },
+      });
+    const dayBookings = await this.prisma.spaBooking.findMany({
+      where: {
+        specialistId: specialist.id,
+        status: {
+          notIn: [SpaBookingStatus.CANCELLED, SpaBookingStatus.FAILED],
+        },
+        startAt: { lt: dayEnd },
+        endAt: { gt: dayStart },
+      },
+      select: { id: true, startAt: true, endAt: true },
+    });
+
+    const slotPick = pickEarliestCleanSpaJournalSlot({
+      workBands: publishedBlocks.map((b) => ({
+        startMs: b.startAt.getTime(),
+        endMs: b.endAt.getTime(),
+      })),
+      bookings: dayBookings.map((b) => ({
+        id: b.id,
+        startMs: b.startAt.getTime(),
+        endMs: b.endAt.getTime(),
+      })),
+      durationMin,
+    });
+
+    if (slotPick.kind === 'no_shift') {
+      throw new ConflictException({
+        statusCode: 409,
+        message: `На ${dayRu} у специалиста нет рабочей смены. Укажите часы в журнале и нажмите «В журнал» снова.`,
+        code: 'NO_SHIFT',
+        day,
+        specialistId: specialist.id,
+        durationMin,
+      });
+    }
+    if (slotPick.kind === 'no_free_slot') {
+      throw new ConflictException({
+        statusCode: 409,
+        message: `Свободного окна на ${durationMin} мин в этот день нет. Сдвиньте другие записи, чтобы эта влезла, и нажмите «В журнал» снова.`,
+        code: 'NO_FREE_SLOT',
+        day,
+        specialistId: specialist.id,
+        durationMin,
+      });
+    }
+
+    const startAt = slotPick.startAt;
+    const endAt = slotPick.endAt;
+
+    // Race: another adopt may have taken the window since we read bookings.
     const overlap = await this.prisma.spaBooking.findFirst({
       where: {
         specialistId: specialist.id,
@@ -6312,9 +6378,15 @@ export class BookingControlService {
       select: { id: true, startAt: true },
     });
     if (overlap) {
-      throw new ConflictException(
-        'Слот журнала пересекается с другой записью — сдвиньте или освободите время',
-      );
+      throw new ConflictException({
+        statusCode: 409,
+        message:
+          'Это окно только что заняли. Нажмите «В журнал» ещё раз.',
+        code: 'SLOT_TAKEN',
+        day,
+        specialistId: specialist.id,
+        durationMin,
+      });
     }
 
     const payment = inferPaymentFromBasis(primary?.paymentBasis);
@@ -6409,7 +6481,17 @@ export class BookingControlService {
       data: { fitgoBookingRef: booking.id },
     });
 
-    return this.detail(clubId, onexSessionKey(onex.externalId));
+    const detail = await this.detail(clubId, onexSessionKey(onex.externalId));
+    return {
+      ...detail,
+      adoptedJournalSlot: {
+        startAt: startAt.toISOString(),
+        endAt: endAt.toISOString(),
+        day,
+        specialistId: specialist.id,
+        durationMin,
+      },
+    };
   }
 
   /** Adopt all unambiguous missing-journal SPA rows for the given keys. */

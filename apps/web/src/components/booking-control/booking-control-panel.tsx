@@ -30,6 +30,7 @@ import {
   usePersistViewMemory,
 } from '@/lib/use-view-memory';
 import { isIsoDay } from '@/lib/view-memory';
+import { ApiError } from '@/lib/api';
 import { formatDateTime, formatVisitClock } from '@/lib/utils';
 
 type BookingViewMem = {
@@ -524,10 +525,55 @@ function spaPendingLabel(
 
 /** Error vs success banner inside booking-control (list + detail). */
 function isBookingControlErrorMessage(message: string): boolean {
-  return /ошибк|не удалось|нет прав|чуж|не законч|сначала|не найден|не оказывает|пересека|выберите|нельзя|запрещ|конфликт|не выбран|нет запис/i.test(
+  return /ошибк|не удалось|нет прав|чуж|не законч|сначала|не найден|не оказывает|пересека|выберите|нельзя|запрещ|конфликт|не выбран|нет запис|сессия истек|недостаточно прав|только что заняли/i.test(
     message,
   );
 }
+
+/** Soft block for «В журнал» (no shift / no free window) — orange, not rose. */
+function isBookingControlWarnMessage(message: string): boolean {
+  return /нет рабочей смены|свободного окна|укажите часы в журнале|сдвиньте другие записи/i.test(
+    message,
+  );
+}
+
+function spaJournalHref(
+  pathname: string,
+  day: string,
+  specialistId?: string,
+): string {
+  const q = new URLSearchParams();
+  q.set('day', day);
+  if (specialistId?.trim()) q.set('specialist', specialistId.trim());
+  if (pathname.startsWith('/specialist')) {
+    return `/specialist/schedule?${q.toString()}`;
+  }
+  if (pathname.startsWith('/super-admin')) {
+    return `/super-admin/spa?${q.toString()}`;
+  }
+  return `/admin/spa?${q.toString()}`;
+}
+
+function formatAdoptSlotLabel(startAt: string, endAt: string, day: string): string {
+  const fmt = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Europe/Minsk',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const start = new Date(startAt);
+  const end = new Date(endAt);
+  const dayRu = (() => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.trim());
+    return m ? `${m[3]}.${m[2]}` : day;
+  })();
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return `Добавлено в журнал на ${dayRu}`;
+  }
+  return `Добавлено в журнал на ${dayRu}, ${fmt.format(start)}–${fmt.format(end)}`;
+}
+
+type MessageLink = { href: string; label: string };
 
 export function BookingControlPanel({
   api,
@@ -862,6 +908,7 @@ export function BookingControlPanel({
   const [bulkAdoptBusy, setBulkAdoptBusy] = useState(false);
   const [pendingGroupsOpen, setPendingGroupsOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const [messageLink, setMessageLink] = useState<MessageLink | null>(null);
   const [selected, setSelected] = useState<BookingControlDetail | null>(null);
   const [comment, setComment] = useState('');
   const [adminComment, setAdminComment] = useState('');
@@ -1007,6 +1054,7 @@ export function BookingControlPanel({
     }
     setLoading(true);
     setMessage('');
+    setMessageLink(null);
     return api
       .list({
         from,
@@ -1488,6 +1536,7 @@ export function BookingControlPanel({
     if (!api.adoptSpaToJournal) return;
     setAdoptBusyKey(sessionKey);
     setMessage('');
+    setMessageLink(null);
     try {
       const d = await api.adoptSpaToJournal(
         sessionKey,
@@ -1496,10 +1545,49 @@ export function BookingControlPanel({
       setSelected(d);
       setAdoptServiceId('');
       await load();
-      setMessage('Добавлено в журнал');
+      const slot = d.adoptedJournalSlot;
+      if (slot) {
+        setMessage(
+          formatAdoptSlotLabel(slot.startAt, slot.endAt, slot.day),
+        );
+        setMessageLink({
+          href: spaJournalHref(pathname, slot.day, slot.specialistId),
+          label: 'Открыть в журнале',
+        });
+      } else {
+        setMessage('Добавлено в журнал');
+      }
     } catch (e) {
       const text =
         e instanceof Error ? e.message : 'Не удалось добавить в журнал';
+      const body =
+        e instanceof ApiError && e.body && typeof e.body === 'object'
+          ? (e.body as {
+              code?: string;
+              day?: string;
+              specialistId?: string;
+            })
+          : null;
+      const code = e instanceof ApiError ? e.code ?? body?.code : undefined;
+      const day = body?.day?.trim();
+      const specialistId = body?.specialistId?.trim();
+      if (
+        day &&
+        (code === 'NO_SHIFT' ||
+          code === 'NO_FREE_SLOT' ||
+          code === 'SLOT_TAKEN')
+      ) {
+        const dayRu = (() => {
+          const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+          return m ? `${m[3]}.${m[2]}` : day;
+        })();
+        setMessageLink({
+          href: spaJournalHref(pathname, day, specialistId),
+          label: `Открыть журнал на ${dayRu}`,
+        });
+      } else {
+        setMessageLink(null);
+      }
       // From the list chip there is no service picker — open detail so the
       // error is visible and the user can choose a service.
       if (!selected || selected.sessionKey !== sessionKey) {
@@ -1522,6 +1610,7 @@ export function BookingControlPanel({
       .map((i) => i.sessionKey);
     if (!keys.length) {
       setMessage('Нет записей без журнала в текущем списке');
+      setMessageLink(null);
       return;
     }
     const ok = window.confirm(
@@ -1533,12 +1622,23 @@ export function BookingControlPanel({
     if (!ok) return;
     setBulkAdoptBusy(true);
     setMessage('');
+    setMessageLink(null);
     try {
       const res = await api.bulkAdoptSpaToJournal(keys);
       await load();
+      const skipReasons = res.skipped
+        .map((s) => s.reason)
+        .filter(Boolean)
+        .slice(0, 3);
       const skipNote =
         res.skipped.length > 0
-          ? ` · пропущено ${res.skipped.length} (нужен выбор услуги или занят слот)`
+          ? ` · пропущено ${res.skipped.length}${
+              skipReasons.length
+                ? `: ${skipReasons.join('; ')}${
+                    res.skipped.length > skipReasons.length ? '…' : ''
+                  }`
+                : ''
+            }`
           : '';
       setMessage(`В журнал: ${res.added}${skipNote}`);
     } catch (e) {
@@ -2814,13 +2914,26 @@ export function BookingControlPanel({
       {message && !selected ? (
         <p
           className={
-            isBookingControlErrorMessage(message)
-              ? 'rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200'
-              : 'text-sm text-fitgo-300'
+            isBookingControlWarnMessage(message)
+              ? 'rounded-lg border border-orange-500/40 bg-orange-500/10 px-3 py-2 text-sm text-orange-100'
+              : isBookingControlErrorMessage(message)
+                ? 'rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200'
+                : 'text-sm text-fitgo-300'
           }
           role="status"
         >
           {message}
+          {messageLink ? (
+            <>
+              {' '}
+              <a
+                href={messageLink.href}
+                className="font-medium underline underline-offset-2 hover:opacity-90"
+              >
+                {messageLink.label}
+              </a>
+            </>
+          ) : null}
         </p>
       ) : null}
       {showOpsHints &&
@@ -3106,16 +3219,31 @@ export function BookingControlPanel({
         <p
           className={
             embedInPlace
-              ? isBookingControlErrorMessage(message)
-                ? 'rounded-xl border border-rose-500/40 bg-slate-900 px-3 py-2 text-sm text-rose-200'
-                : 'rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300'
-              : isBookingControlErrorMessage(message)
-                ? 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-rose-500/40 bg-slate-900 px-3 py-2 text-sm text-rose-200 shadow-lg'
-                : 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300 shadow-lg'
+              ? isBookingControlWarnMessage(message)
+                ? 'rounded-xl border border-orange-500/40 bg-slate-900 px-3 py-2 text-sm text-orange-100'
+                : isBookingControlErrorMessage(message)
+                  ? 'rounded-xl border border-rose-500/40 bg-slate-900 px-3 py-2 text-sm text-rose-200'
+                  : 'rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300'
+              : isBookingControlWarnMessage(message)
+                ? 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-orange-500/40 bg-slate-900 px-3 py-2 text-sm text-orange-100 shadow-lg'
+                : isBookingControlErrorMessage(message)
+                  ? 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-rose-500/40 bg-slate-900 px-3 py-2 text-sm text-rose-200 shadow-lg'
+                  : 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300 shadow-lg'
           }
           role="status"
         >
           {message}
+          {messageLink ? (
+            <>
+              {' '}
+              <a
+                href={messageLink.href}
+                className="font-medium underline underline-offset-2 hover:opacity-90"
+              >
+                {messageLink.label}
+              </a>
+            </>
+          ) : null}
         </p>
       ) : null}
 
@@ -3161,13 +3289,26 @@ export function BookingControlPanel({
                 {message ? (
                   <p
                     className={
-                      isBookingControlErrorMessage(message)
-                        ? 'rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200'
-                        : 'rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200'
+                      isBookingControlWarnMessage(message)
+                        ? 'rounded-lg border border-orange-500/40 bg-orange-500/10 px-3 py-2 text-sm text-orange-100'
+                        : isBookingControlErrorMessage(message)
+                          ? 'rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200'
+                          : 'rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200'
                     }
                     role="status"
                   >
                     {message}
+                    {messageLink ? (
+                      <>
+                        {' '}
+                        <a
+                          href={messageLink.href}
+                          className="font-medium underline underline-offset-2 hover:opacity-90"
+                        >
+                          {messageLink.label}
+                        </a>
+                      </>
+                    ) : null}
                   </p>
                 ) : null}
                 <div className="flex items-start justify-between gap-2">

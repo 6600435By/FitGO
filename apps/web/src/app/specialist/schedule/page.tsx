@@ -45,6 +45,13 @@ function toDayIso(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
+function parseDayQuery(raw: string | null | undefined): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((raw ?? '').trim());
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 function normalizeSlots(slots: SpecialistWorkSlotInput[]) {
   return slots.map((s) => ({
     ...s,
@@ -57,6 +64,7 @@ function SpecialistScheduleInner() {
   const me = getUser();
   const searchParams = useSearchParams();
   const deepLinkBookingId = searchParams.get('booking')?.trim() || '';
+  const deepLinkDay = searchParams.get('day')?.trim() || '';
   const [board, setBoard] = useState<SpaBoardResponse | null>(null);
   const [calendar, setCalendar] = useState<SpecialistCalendarResponse | null>(
     null,
@@ -70,6 +78,8 @@ function SpecialistScheduleInner() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [day, setDay] = useState(() => {
+    const fromQuery = parseDayQuery(deepLinkDay);
+    if (fromQuery) return fromQuery;
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     return d;
@@ -105,8 +115,12 @@ function SpecialistScheduleInner() {
   );
 
   useEffect(() => {
+    if (deepLinkDay) {
+      setBoardView('day');
+      return;
+    }
     setBoardView(defaultSpaBoardView());
-  }, []);
+  }, [deepLinkDay]);
 
   const changeBoardView = (v: SpaBoardView) => {
     setBoardView(v);
@@ -196,6 +210,14 @@ function SpecialistScheduleInner() {
       setMessage(err instanceof Error ? err.message : 'Ошибка загрузки'),
     );
   }, [reload]);
+
+  /** Deep-link: /specialist/schedule?day=YYYY-MM-DD (from «В журнал»). */
+  useEffect(() => {
+    const parsed = parseDayQuery(deepLinkDay);
+    if (!parsed) return;
+    setDay(parsed);
+    setBoardView('day');
+  }, [deepLinkDay]);
 
   /** Deep-link from контроль записей: /specialist/schedule?booking=<id> */
   useEffect(() => {

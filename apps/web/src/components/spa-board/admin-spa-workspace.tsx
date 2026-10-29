@@ -14,7 +14,8 @@ import {
   spaWaitlistFitsSlot,
   UserRole,
 } from '@fitgo/shared-types';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { SpaBoard } from '@/components/spa-board/spa-board';
 import {
   boardPeriodForView,
@@ -47,7 +48,25 @@ function toDayIso(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
+function parseDayQuery(raw: string | null | undefined): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((raw ?? '').trim());
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export function AdminSpaWorkspace() {
+  return (
+    <Suspense fallback={<p className="text-sm text-slate-400">Загрузка…</p>}>
+      <AdminSpaWorkspaceInner />
+    </Suspense>
+  );
+}
+
+function AdminSpaWorkspaceInner() {
+  const searchParams = useSearchParams();
+  const deepLinkDay = searchParams.get('day')?.trim() || '';
+  const deepLinkSpecialist = searchParams.get('specialist')?.trim() || '';
   const [tab, setTab] = useState<
     'services' | 'rules' | 'specialists' | 'calendar'
   >('calendar');
@@ -62,12 +81,17 @@ export function AdminSpaWorkspace() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [day, setDay] = useState(() => {
+    const fromQuery = parseDayQuery(deepLinkDay);
+    if (fromQuery) return fromQuery;
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     return d;
   });
   const [boardView, setBoardView] = useState<SpaBoardView>('day');
   const [weekFilterSpecialistId, setWeekFilterSpecialistId] = useState('');
+  const [focusSpecialistId, setFocusSpecialistId] = useState(
+    () => deepLinkSpecialist,
+  );
   const [showAssign, setShowAssign] = useState(false);
   const [assignDefaults, setAssignDefaults] = useState<{
     specialistId?: string;
@@ -118,8 +142,26 @@ export function AdminSpaWorkspace() {
   );
 
   useEffect(() => {
+    if (deepLinkDay) {
+      setBoardView('day');
+      return;
+    }
     setBoardView(defaultSpaBoardView());
-  }, []);
+  }, [deepLinkDay]);
+
+  /** Deep-link from контроль: /admin/spa?day=YYYY-MM-DD&specialist=<id> */
+  useEffect(() => {
+    const parsed = parseDayQuery(deepLinkDay);
+    if (parsed) {
+      setDay(parsed);
+      setTab('calendar');
+      setBoardView('day');
+    }
+    if (deepLinkSpecialist) {
+      setFocusSpecialistId(deepLinkSpecialist);
+      setWeekFilterSpecialistId(deepLinkSpecialist);
+    }
+  }, [deepLinkDay, deepLinkSpecialist]);
 
   const changeBoardView = (v: SpaBoardView) => {
     setBoardView(v);
@@ -992,6 +1034,7 @@ export function AdminSpaWorkspace() {
                 mode="admin"
                 day={day}
                 onDayChange={setDay}
+                focusSpecialistId={focusSpecialistId || undefined}
                 onEmptySlotClick={({ specialistId, startAt }) => {
                   const iso = startAt.toISOString();
                   const matches = matchingWaitlist(specialistId, iso);

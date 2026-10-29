@@ -297,6 +297,28 @@ export interface BookingControlHistoryEvent {
   byName?: string;
 }
 
+/** Journal wall-clock after «В журнал» (not 1C write-off time). */
+export interface SpaAdoptedJournalSlot {
+  startAt: string;
+  endAt: string;
+  /** YYYY-MM-DD Europe/Minsk */
+  day: string;
+  specialistId: string;
+  durationMin: number;
+}
+
+/** Structured body when «В журнал» cannot place a clean slot. */
+export type SpaAdoptJournalErrorCode = 'NO_SHIFT' | 'NO_FREE_SLOT' | 'SLOT_TAKEN';
+
+export interface SpaAdoptJournalErrorBody {
+  statusCode: number;
+  message: string;
+  code: SpaAdoptJournalErrorCode;
+  day: string;
+  specialistId: string;
+  durationMin: number;
+}
+
 export interface BookingControlDetail extends BookingControlListItem {
   durationMin?: number;
   members: BookingControlMember[];
@@ -327,6 +349,8 @@ export interface BookingControlDetail extends BookingControlListItem {
    * Used by manager rework to preselect admin assignee.
    */
   employeeExternalId?: string | null;
+  /** Present right after a successful «В журнал» adopt. */
+  adoptedJournalSlot?: SpaAdoptedJournalSlot;
 }
 
 /** Shared admin inbox row for GROUP / SPA / PT tasks awaiting admin action. */

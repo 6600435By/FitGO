@@ -225,6 +225,7 @@ export function SpaBoard({
   onEditDayHours,
   mobileStaffId,
   onMobileStaffChange,
+  focusSpecialistId,
 }: {
   board: SpaBoardResponse;
   mode: SpaBoardMode;
@@ -246,6 +247,8 @@ export function SpaBoard({
   onEditDayHours?: (args: { specialistId: string }) => void;
   mobileStaffId?: string;
   onMobileStaffChange?: (id: string) => void;
+  /** Scroll / select this specialist column (deep-link from «В журнал»). */
+  focusSpecialistId?: string;
 }) {
   const dayStart = startOfDay(day);
   const totalMin = (DAY_END_HOUR - DAY_START_HOUR) * 60;
@@ -329,6 +332,24 @@ export function SpaBoard({
 
   const columnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const viewStartByStaffRef = useRef<Map<string, number>>(new Map());
+
+  useEffect(() => {
+    const focus = focusSpecialistId?.trim();
+    if (!focus || !staffOrdered.some((s) => s.id === focus)) return;
+    setSelectedStaffId(focus);
+    // Column refs fill after paint — retry once on next frame.
+    const scroll = () => {
+      columnRefs.current.get(focus)?.scrollIntoView({
+        behavior: 'smooth',
+        inline: 'center',
+        block: 'nearest',
+      });
+    };
+    scroll();
+    const t = window.setTimeout(scroll, 50);
+    return () => window.clearTimeout(t);
+  }, [focusSpecialistId, staffOrdered, dayStart]);
+
   const [drag, setDrag] = useState<DragState | null>(null);
   const [pointerStart, setPointerStart] = useState<PointerStart | null>(null);
   const dragRef = useRef<DragState | null>(null);
