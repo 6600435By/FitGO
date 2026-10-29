@@ -79,7 +79,14 @@ export type BookingControlApi = {
   /** Staff for «Сотрудник» filter (admin / SA). */
   listPerformers?: () => Promise<BookingControlPerformerOption[]>;
   /** Pull Документ.Занятие for selected period from 1C. */
-  refreshFrom1c?: (from: string, to: string) => Promise<{ message: string }>;
+  refreshFrom1c?: (
+    from: string,
+    to: string,
+  ) => Promise<{
+    message: string;
+    sessionsUpserted?: number;
+    ptSalesUpserted?: number;
+  }>;
   /** Mark GROUP member arrived / no-show in 1C. */
   setAttendance?: (
     sessionKey: string,
@@ -1759,9 +1766,31 @@ export function BookingControlPanel({
     setRefreshBusy(true);
     setMessage('');
     try {
-      const res = await api.refreshFrom1c(from, to);
+      // Month-long pull ≈ 800 занятий; one Nest call exceeds Next proxy (~150s)
+      // → HTTP 500. Chunk into ≤5-day windows (backend also day-by-day vs 1C).
+      const chunks = splitIsoRangeInclusive(from, to, 5);
+      let sessions = 0;
+      let pt = 0;
+      let lastMsg = '';
+      for (let i = 0; i < chunks.length; i++) {
+        if (chunks.length > 1) {
+          setMessage(
+            `Обновляем из 1С… ${i + 1}/${chunks.length} (${chunks[i].from} – ${chunks[i].to})`,
+          );
+        }
+        const res = await api.refreshFrom1c(chunks[i].from, chunks[i].to);
+        sessions += res.sessionsUpserted ?? 0;
+        pt += res.ptSalesUpserted ?? 0;
+        lastMsg = res.message || lastMsg;
+      }
       await load();
-      setMessage(res.message || 'Период обновлён из 1С');
+      if (chunks.length > 1) {
+        setMessage(
+          `Период обновлён из 1С (${chunks.length} частей): занятий ${sessions}, ПТ ${pt}.`,
+        );
+      } else {
+        setMessage(lastMsg || 'Период обновлён из 1С');
+      }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Не удалось обновить из 1С');
     } finally {
@@ -3567,4 +3596,27 @@ export function BookingControlPanel({
       )}
     </div>
   );
+}
+
+/** Inclusive ISO day ranges, each at most `maxDays` long (YYYY-MM-DD, UTC). */
+function splitIsoRangeInclusive(
+  from: string,
+  to: string,
+  maxDays: number,
+): Array<{ from: string; to: string }> {
+  const out: Array<{ from: string; to: string }> = [];
+  if (!from || !to || from > to || maxDays < 1) return out;
+  const cur = new Date(`${from}T00:00:00.000Z`);
+  const end = new Date(`${to}T00:00:00.000Z`);
+  if (Number.isNaN(cur.getTime()) || Number.isNaN(end.getTime())) return out;
+  while (cur <= end) {
+    const chunkFrom = cur.toISOString().slice(0, 10);
+    const chunkEnd = new Date(cur);
+    chunkEnd.setUTCDate(chunkEnd.getUTCDate() + maxDays - 1);
+    if (chunkEnd > end) chunkEnd.setTime(end.getTime());
+    out.push({ from: chunkFrom, to: chunkEnd.toISOString().slice(0, 10) });
+    cur.setTime(chunkEnd.getTime());
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return out;
 }

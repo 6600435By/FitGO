@@ -7,9 +7,9 @@ const apiProxyTarget =
 
 const nextConfig: NextConfig = {
   transpilePackages: ['@fitgo/shared-types'],
-  // Nest may wait on 1C up to ~120s; keep rewrite proxy above that.
+  // Nest refresh-from-1c can run ~2–3 min per week of class sessions.
   experimental: {
-    proxyTimeout: 150_000,
+    proxyTimeout: 300_000,
   },
   async rewrites() {
     return [

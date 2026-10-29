@@ -106,60 +106,68 @@ export class ClassSessionsSyncService {
       };
     }
 
-    let page = 1;
-    let total = Infinity;
+    // Day-by-day: 1C ЗанятияПериодаJSON loads ALL refs in [from,to] before
+    // paging — a month-long window OOMs / times out; one day stays small.
+    const days = eachUtcDay(from, to);
     let sessionsUpserted = 0;
     let membersUpserted = 0;
     let journalsTouched = 0;
     let endpointMissing = false;
-    const seenIds = new Set<string>();
 
-    while ((page - 1) * PAGE_SIZE < total) {
-      const batch = await provider.getClassSessions({
-        from,
-        to,
-        page,
-        pageSize: PAGE_SIZE,
-      });
-      if (!batch) {
-        endpointMissing = page === 1;
-        break;
-      }
-      total = batch.total;
-      if (batch.data.length === 0) break;
+    for (const day of days) {
+      let page = 1;
+      let total = Infinity;
+      const seenIds = new Set<string>();
 
-      for (const row of batch.data) {
-        if (!row.id?.trim()) continue;
-        seenIds.add(row.id.trim());
-        const r = await this.upsertSession(clubId, row);
-        sessionsUpserted += 1;
-        membersUpserted += r.members;
-        journalsTouched += r.journal ? 1 : 0;
-      }
-      page += 1;
-      if (page > 500) break;
-    }
-
-    // Soft-deactivate sessions in range that disappeared from 1C (not payroll-locked)
-    if (!endpointMissing && seenIds.size > 0) {
-      const fromD = new Date(`${from}T00:00:00.000Z`);
-      const toD = new Date(`${to}T23:59:59.999Z`);
-      const stale = await this.prisma.onexClassSession.findMany({
-        where: {
-          clubId,
-          isActive: true,
-          payrollLocked: false,
-          startAt: { gte: fromD, lte: toD },
-          externalId: { notIn: [...seenIds] },
-        },
-        select: { id: true },
-      });
-      if (stale.length) {
-        await this.prisma.onexClassSession.updateMany({
-          where: { id: { in: stale.map((s) => s.id) } },
-          data: { isActive: false, syncedAt: new Date() },
+      while ((page - 1) * PAGE_SIZE < total) {
+        const batch = await provider.getClassSessions({
+          from: day,
+          to: day,
+          page,
+          pageSize: PAGE_SIZE,
         });
+        if (!batch) {
+          if (page === 1 && day === days[0]) endpointMissing = true;
+          break;
+        }
+        total = batch.total;
+        if (batch.data.length === 0) break;
+
+        for (const row of batch.data) {
+          if (!row.id?.trim()) continue;
+          seenIds.add(row.id.trim());
+          const r = await this.upsertSession(clubId, row);
+          sessionsUpserted += 1;
+          membersUpserted += r.members;
+          journalsTouched += r.journal ? 1 : 0;
+        }
+        page += 1;
+        if (page > 500) break;
       }
+
+      // Soft-deactivate sessions that day that disappeared from 1C (not locked)
+      if (!endpointMissing && seenIds.size > 0) {
+        const fromD = new Date(`${day}T00:00:00.000Z`);
+        const toD = new Date(`${day}T23:59:59.999Z`);
+        const stale = await this.prisma.onexClassSession.findMany({
+          where: {
+            clubId,
+            isActive: true,
+            payrollLocked: false,
+            startAt: { gte: fromD, lte: toD },
+            externalId: { notIn: [...seenIds] },
+          },
+          select: { id: true },
+        });
+        if (stale.length) {
+          await this.prisma.onexClassSession.updateMany({
+            where: { id: { in: stale.map((s) => s.id) } },
+            data: { isActive: false, syncedAt: new Date() },
+          });
+        }
+      }
+
+      if (endpointMissing) break;
     }
 
     await this.prisma.salesSyncState.upsert({
@@ -764,4 +772,16 @@ function mapGroupAttendance(a: string): GroupSessionMemberAttendance {
   if (u === 'NO_SHOW') return GroupSessionMemberAttendance.NO_SHOW;
   if (u === 'CANCELLED') return GroupSessionMemberAttendance.REMOVED;
   return GroupSessionMemberAttendance.EXPECTED;
+}
+
+function eachUtcDay(fromStr: string, toStr: string): string[] {
+  const days: string[] = [];
+  const cur = new Date(`${fromStr}T00:00:00.000Z`);
+  const end = new Date(`${toStr}T00:00:00.000Z`);
+  if (Number.isNaN(cur.getTime()) || Number.isNaN(end.getTime())) return days;
+  while (cur <= end) {
+    days.push(cur.toISOString().slice(0, 10));
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return days;
 }

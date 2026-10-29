@@ -1540,7 +1540,16 @@ export class BookingControlService {
     if (from > to) {
       throw new BadRequestException('from must be ≤ to');
     }
-    const sync = await this.classSessions.syncClub(clubId, { from, to });
+    let sync: Awaited<ReturnType<ClassSessionsSyncService['syncClub']>>;
+    try {
+      // ClassSessionsSyncService pulls day-by-day (1C loads all refs in window).
+      sync = await this.classSessions.syncClub(clubId, { from, to });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new BadRequestException(
+        `Не удалось обновить занятия из 1С: ${msg}`,
+      );
+    }
     let ptUpserted = 0;
     let ptError: string | undefined;
     try {
