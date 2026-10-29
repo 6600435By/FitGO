@@ -1,11 +1,17 @@
 'use client';
 
 import {
-  ADMIN_HOME_PINS,
+  ADMIN_HOME_PANEL_PRESETS,
   ADMIN_HOME_PRESETS,
-  ADMIN_HOME_WIDGETS,
+  ADMIN_HOME_SETTINGS_ZONES,
   adminHomeItemAllowed,
+  adminHomePinDef,
+  adminHomeWidgetDef,
+  matchingAdminHomePreset,
   materializeAdminHomeLayout,
+  normalizeAdminHomeWidgets,
+  toggleAdminHomePin,
+  toggleAdminHomeWidget,
   type AdminHomeLayoutValue,
   type AdminHomePinId,
   type AdminHomePresetId,
@@ -13,38 +19,49 @@ import {
   type AdminPermission,
   type ProductModuleKey,
 } from '@fitgo/shared-types';
-
-const PRESET_ORDER: AdminHomePresetId[] = [
-  'reception',
-  'floor',
-  'money',
-  'all',
-];
+import { cn } from '@/lib/utils';
 
 function ToggleRow({
   checked,
   label,
+  hint,
   nested,
+  count,
   onChange,
 }: {
   checked: boolean;
   label: string;
+  hint?: string;
   nested?: boolean;
+  count?: number;
   onChange: (next: boolean) => void;
 }) {
   return (
     <label
-      className={`flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-1 text-sm text-slate-200 hover:bg-slate-800/50 ${
-        nested ? 'pl-5' : ''
-      }`}
+      className={cn(
+        'flex min-h-11 cursor-pointer items-start gap-2 rounded-lg px-1 py-1.5 text-sm text-slate-200 hover:bg-slate-800/50',
+        nested ? 'pl-5' : '',
+      )}
     >
       <input
         type="checkbox"
-        className="rounded border-slate-600"
+        className="mt-0.5 rounded border-slate-600"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
       />
-      <span>{label}</span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline justify-between gap-2">
+          <span>{label}</span>
+          {count != null ? (
+            <span className="shrink-0 tabular-nums text-slate-500">{count}</span>
+          ) : null}
+        </span>
+        {hint ? (
+          <span className="mt-0.5 block text-[11px] leading-snug text-slate-500">
+            {hint}
+          </span>
+        ) : null}
+      </span>
     </label>
   );
 }
@@ -53,6 +70,7 @@ export function AdminHomeSettings({
   layout,
   permissions,
   isEnabled,
+  taskCounts,
   onChange,
   onReset,
   onClose,
@@ -60,6 +78,8 @@ export function AdminHomeSettings({
   layout: AdminHomeLayoutValue;
   permissions: AdminPermission[];
   isEnabled: (m: ProductModuleKey) => boolean;
+  /** Live chip counts from dashboard (task pins only). */
+  taskCounts?: Partial<Record<AdminHomePinId, number>>;
   onChange: (next: {
     widgets: AdminHomeWidgetId[];
     pins: AdminHomePinId[];
@@ -67,47 +87,54 @@ export function AdminHomeSettings({
   onReset: () => void;
   onClose: () => void;
 }) {
-  const current = materializeAdminHomeLayout(layout);
+  const materialized = materializeAdminHomeLayout(layout);
+  const current = {
+    widgets: normalizeAdminHomeWidgets(materialized.widgets),
+    pins: materialized.pins,
+  };
   const permStrs = permissions as string[];
   const enabled = (m: string) => isEnabled(m as ProductModuleKey);
+  const activePreset = matchingAdminHomePreset(
+    current.widgets,
+    current.pins,
+    permStrs,
+    enabled,
+  );
 
-  const widgets = ADMIN_HOME_WIDGETS.filter((w) =>
-    adminHomeItemAllowed(w, permStrs, enabled),
-  );
-  const pins = ADMIN_HOME_PINS.filter((p) =>
-    adminHomeItemAllowed(p, permStrs, enabled),
-  );
-  const taskPins = pins.filter((p) => p.kind === 'task');
-  const navPins = pins.filter((p) => p.kind === 'nav');
+  const rowAllowed = (row: {
+    kind: 'widget' | 'pin';
+    id: AdminHomeWidgetId | AdminHomePinId;
+  }) => {
+    if (row.kind === 'widget') {
+      const def = adminHomeWidgetDef(row.id as AdminHomeWidgetId);
+      return def ? adminHomeItemAllowed(def, permStrs, enabled) : false;
+    }
+    const def = adminHomePinDef(row.id as AdminHomePinId);
+    return def ? adminHomeItemAllowed(def, permStrs, enabled) : false;
+  };
 
   const toggleWidget = (id: AdminHomeWidgetId, on: boolean) => {
-    const set = new Set(current.widgets);
-    if (on) set.add(id);
-    else set.delete(id);
     onChange({
-      widgets: ADMIN_HOME_WIDGETS.map((w) => w.id).filter((w) => set.has(w)),
+      widgets: toggleAdminHomeWidget(current.widgets, id, on),
       pins: current.pins,
     });
   };
 
   const togglePin = (id: AdminHomePinId, on: boolean) => {
-    const set = new Set(current.pins);
-    if (on) set.add(id);
-    else set.delete(id);
     onChange({
       widgets: current.widgets,
-      pins: ADMIN_HOME_PINS.map((p) => p.id).filter((p) => set.has(p)),
+      pins: toggleAdminHomePin(current.pins, id, on),
     });
   };
 
-  const applyPreset = (id: AdminHomePresetId) => {
+  const applyPreset = (id: Exclude<AdminHomePresetId, 'all'>) => {
     const preset = ADMIN_HOME_PRESETS[id];
     const nextWidgets = preset.widgets.filter((w) => {
-      const def = ADMIN_HOME_WIDGETS.find((d) => d.id === w);
+      const def = adminHomeWidgetDef(w);
       return def ? adminHomeItemAllowed(def, permStrs, enabled) : false;
     });
     const nextPins = preset.pins.filter((p) => {
-      const def = ADMIN_HOME_PINS.find((d) => d.id === p);
+      const def = adminHomePinDef(p);
       return def ? adminHomeItemAllowed(def, permStrs, enabled) : false;
     });
     onChange({ widgets: nextWidgets, pins: nextPins });
@@ -128,12 +155,20 @@ export function AdminHomeSettings({
             Как у всех
           </button>
         </div>
+        <p className="text-[11px] leading-snug text-slate-500">
+          Галочки сразу сохраняются. «Как у всех» возвращает стандарт клуба.
+        </p>
         <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-3">
-          {PRESET_ORDER.map((id) => (
+          {ADMIN_HOME_PANEL_PRESETS.map((id) => (
             <button
               key={id}
               type="button"
-              className="btn-secondary shrink-0 !px-3 !py-1.5 text-xs"
+              className={cn(
+                'btn-secondary shrink-0 !px-3 !py-1.5 text-xs',
+                activePreset === id
+                  ? '!border-fitgo-500/60 !bg-fitgo-500/15 !text-fitgo-200'
+                  : '',
+              )}
               onClick={() => applyPreset(id)}
             >
               {ADMIN_HOME_PRESETS[id].label}
@@ -142,55 +177,75 @@ export function AdminHomeSettings({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3 sm:px-4 md:overflow-visible">
-        <section>
-          <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">
-            Данные
-          </p>
-          <div className="md:grid md:grid-cols-2 md:gap-x-4">
-            {widgets.map((w) => (
-              <ToggleRow
-                key={w.id}
-                label={w.label}
-                checked={current.widgets.includes(w.id)}
-                onChange={(on) => toggleWidget(w.id, on)}
-              />
-            ))}
-          </div>
-        </section>
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 py-3 sm:px-4 md:overflow-visible">
+        {ADMIN_HOME_SETTINGS_ZONES.map((zone) => {
+          const visibleGroups = zone.groups
+            .map((group) => ({
+              ...group,
+              rows: group.rows.filter(rowAllowed),
+            }))
+            .filter((g) => g.rows.length > 0);
+          if (visibleGroups.length === 0) return null;
 
-        <section>
-          <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">
-            Задачи
-          </p>
-          <div className="md:grid md:grid-cols-2 md:gap-x-4">
-            {taskPins.map((p) => (
-              <ToggleRow
-                key={p.id}
-                label={p.label}
-                nested={p.nested}
-                checked={current.pins.includes(p.id)}
-                onChange={(on) => togglePin(p.id, on)}
-              />
-            ))}
-          </div>
-        </section>
-
-        <section>
-          <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500">
-            Разделы
-          </p>
-          <div className="md:grid md:grid-cols-2 md:gap-x-4">
-            {navPins.map((p) => (
-              <ToggleRow
-                key={p.id}
-                label={p.label}
-                checked={current.pins.includes(p.id)}
-                onChange={(on) => togglePin(p.id, on)}
-              />
-            ))}
-          </div>
-        </section>
+          return (
+            <section key={zone.id}>
+              <p className="mb-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                {zone.label}
+              </p>
+              {zone.hint ? (
+                <p className="mb-2 text-[11px] leading-snug text-slate-500">
+                  {zone.hint}
+                </p>
+              ) : (
+                <div className="mb-1" />
+              )}
+              <div className="space-y-3">
+                {visibleGroups.map((group, gi) => (
+                  <div key={`${zone.id}-${group.label ?? gi}`}>
+                    {group.label ? (
+                      <p className="mb-1 text-xs font-medium text-slate-400">
+                        {group.label}
+                      </p>
+                    ) : null}
+                    <div className="space-y-0.5">
+                      {group.rows.map((row) => {
+                        if (row.kind === 'widget') {
+                          const id = row.id as AdminHomeWidgetId;
+                          const def = adminHomeWidgetDef(id)!;
+                          return (
+                            <ToggleRow
+                              key={`w:${id}`}
+                              label={def.label}
+                              hint={def.hint}
+                              nested={row.nested}
+                              checked={current.widgets.includes(id)}
+                              onChange={(on) => toggleWidget(id, on)}
+                            />
+                          );
+                        }
+                        const id = row.id as AdminHomePinId;
+                        const def = adminHomePinDef(id)!;
+                        const count =
+                          def.kind === 'task' ? taskCounts?.[id] : undefined;
+                        return (
+                          <ToggleRow
+                            key={`p:${id}`}
+                            label={def.label}
+                            hint={def.hint}
+                            nested={row.nested ?? def.nested}
+                            count={count}
+                            checked={current.pins.includes(id)}
+                            onChange={(on) => togglePin(id, on)}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
 
       <div className="flex shrink-0 flex-wrap gap-2 border-t border-slate-800 px-3 py-3 sm:px-4">

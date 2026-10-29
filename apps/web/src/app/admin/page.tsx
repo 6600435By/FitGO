@@ -7,6 +7,7 @@ import {
   ADMIN_HOME_DEFAULT_WIDGETS,
   ADMIN_HOME_PINS,
   adminHomeItemAllowed,
+  normalizeAdminHomeWidgets,
   type AdminHomeLayoutValue,
   type AdminHomePinId,
   type AdminHomeWidgetId,
@@ -281,12 +282,16 @@ export default function AdminHomePage() {
     widgets: AdminHomeWidgetId[];
     pins: AdminHomePinId[];
   }) => {
+    const normalized = {
+      widgets: normalizeAdminHomeWidgets(next.widgets),
+      pins: next.pins,
+    };
     const prev = layout;
-    setLayout(next);
+    setLayout(normalized);
     const token = getToken();
     if (!token) return;
     try {
-      const saved = await api.adminPutHomeLayout(token, next);
+      const saved = await api.adminPutHomeLayout(token, normalized);
       setLayout(saved);
     } catch {
       setLayout(prev);
@@ -416,6 +421,25 @@ export default function AdminHomePage() {
           layout={layout}
           permissions={permissions}
           isEnabled={isEnabled}
+          taskCounts={Object.fromEntries(
+            (
+              [
+                'task:all',
+                'task:clients',
+                'task:membership',
+                'task:birthday',
+                'task:client_debt',
+                'task:installment',
+                'task:staff',
+                'task:manager',
+                'task:control',
+                'task:group_approval',
+                'task:pt_approval',
+                'task:spa_approval',
+                'task:confirmation',
+              ] as AdminHomePinId[]
+            ).map((id) => [id, pinCount(id, tasks)]),
+          )}
           onChange={(next) => void persistLayout(next)}
           onReset={() => void resetLayout()}
           onClose={() => setEditing(false)}
