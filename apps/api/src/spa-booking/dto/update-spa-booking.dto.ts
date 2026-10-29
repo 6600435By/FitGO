@@ -32,6 +32,19 @@ export class UpdateSpaBookingDto {
   @IsString()
   guestPhone?: string;
 
+  /** 1C counterparty from specialist history suggestion (skip slow re-lookup). */
+  @IsOptional()
+  @IsString()
+  clientExternalId?: string;
+
+  /**
+   * When linking phone on a one-word guest name, pass true to also update
+   * sibling bookings with the same typed name.
+   */
+  @IsOptional()
+  @IsBoolean()
+  cascadeClientLink?: boolean;
+
   @IsOptional()
   @IsIn(['QUOTA', 'PAID'])
   paymentType?: 'QUOTA' | 'PAID';

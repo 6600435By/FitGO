@@ -40,6 +40,8 @@ import {
   type SpaService,
   type SpaServiceEligibility,
   type SpaWaitlistEntry,
+  type SpaClientLinkCascadeResult,
+  type SpaSpecialistClientSuggestion,
   type SpaWaitlistPreference as SpaWaitlistPreferenceShared,
   type SpecialistCalendarResponse,
 } from '@fitgo/shared-types';
@@ -49,6 +51,12 @@ import { SessionApprovalService } from '../booking-control/session-approval.serv
 import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { normalizePhone } from '../common/phone.util';
+import {
+  guestMatchLabel,
+  normalizeGuestLabel,
+  shouldAutoCascadeByName,
+  spaClientGroupKey,
+} from './spa-client-identity.util';
 import {
   findSpaClientNotesByIdentities,
   normalizeSpaNoteText,
@@ -903,31 +911,37 @@ export class SpaBookingService {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      /** Trusted when taken from specialist history / phone lookup. */
+      clientExternalId?: string;
       paymentType?: 'QUOTA' | 'PAID';
     },
   ) {
     let clientId = input.clientId?.trim() || undefined;
-    let guestName = input.guestName?.trim() || undefined;
+    const typedAlias = input.guestName?.trim() || undefined;
+    let guestName = typedAlias;
     let guestPhone = input.guestPhone?.trim() || undefined;
-    let clientExternalId: string | undefined;
-    let oneCLinkStatus: SpaOneCLinkStatus = SpaOneCLinkStatus.NOT_LINKED;
+    let clientExternalId = input.clientExternalId?.trim() || undefined;
+    let oneCLinkStatus: SpaOneCLinkStatus = clientExternalId
+      ? SpaOneCLinkStatus.LINKED
+      : SpaOneCLinkStatus.NOT_LINKED;
 
     if (!clientId && guestPhone) {
       const found = await this.lookupClientByPhone(actor, guestPhone);
       guestPhone = found.phone;
       if (found.clientId) {
         clientId = found.clientId;
-        clientExternalId = found.externalId;
+        clientExternalId = found.externalId ?? clientExternalId;
         if (found.externalId) oneCLinkStatus = SpaOneCLinkStatus.LINKED;
       } else if (found.externalId) {
         const fromCrm = `${found.lastName ?? ''} ${found.firstName ?? ''}`.trim();
-        guestName = guestName || fromCrm || undefined;
+        // Prefer 1C FIO for display once linked; keep typedAlias separately.
+        guestName = fromCrm || guestName || undefined;
         clientExternalId = found.externalId;
         oneCLinkStatus = SpaOneCLinkStatus.LINKED;
       }
     }
 
-    if (!clientId && !guestName) {
+    if (!clientId && !guestName && !typedAlias) {
       throw new BadRequestException('Укажите клиента из базы или ФИО');
     }
 
@@ -970,10 +984,19 @@ export class SpaBookingService {
       }
     }
 
+    const crmDisplayName =
+      !client && guestName ? guestName : undefined;
+    const guestAlias =
+      typedAlias ||
+      (client
+        ? `${client.lastName} ${client.firstName}`.trim() || undefined
+        : undefined);
+
     return {
       clientId: client?.id,
       client,
-      guestName: client ? undefined : guestName,
+      guestName: client ? undefined : crmDisplayName ?? typedAlias,
+      guestAlias,
       guestPhone: client ? guestPhone : guestPhone,
       clientExternalId: externalId,
       oneCLinkStatus,
@@ -1109,6 +1132,7 @@ export class SpaBookingService {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
       specialistId: string;
       serviceId: string;
       startAt: string;
@@ -1282,6 +1306,7 @@ export class SpaBookingService {
             clubId,
             clientId: resolved.clientId ?? null,
             guestName: resolved.guestName ?? null,
+            guestAlias: resolved.guestAlias ?? existing.guestAlias ?? null,
             guestPhone: resolved.guestPhone ?? null,
             clientExternalId: resolved.clientExternalId ?? null,
             oneCLinkStatus: resolved.oneCLinkStatus,
@@ -1331,6 +1356,7 @@ export class SpaBookingService {
             specialistId: input.specialistId,
             clientId: resolved.clientId ?? null,
             guestName: resolved.guestName ?? null,
+            guestAlias: resolved.guestAlias ?? null,
             guestPhone: resolved.guestPhone ?? null,
             clientExternalId: resolved.clientExternalId ?? null,
             oneCLinkStatus: resolved.oneCLinkStatus,
@@ -1429,6 +1455,7 @@ export class SpaBookingService {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
       serviceId: string;
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
@@ -1450,6 +1477,7 @@ export class SpaBookingService {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
       specialistId: string;
       serviceId: string;
       startAt: string;
@@ -2333,13 +2361,15 @@ export class SpaBookingService {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
+      cascadeClientLink?: boolean;
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
       overlapConfirmed?: boolean;
     },
     opts: { asSpecialist: boolean },
-  ): Promise<{ booking: SpaBooking }> {
+  ): Promise<{ booking: SpaBooking; cascade?: SpaClientLinkCascadeResult }> {
     const clubId = requireClubId(actor);
     const existing = await this.prisma.spaBooking.findFirst({
       where: { id: bookingId, clubId },
@@ -2428,10 +2458,12 @@ export class SpaBookingService {
     const clientTouched =
       input.clientId !== undefined ||
       input.guestName !== undefined ||
-      input.guestPhone !== undefined;
+      input.guestPhone !== undefined ||
+      input.clientExternalId !== undefined;
 
     let clientId = existing.clientId;
     let guestName = existing.guestName;
+    let guestAlias = existing.guestAlias;
     let guestPhone = existing.guestPhone;
     let clientExternalId = existing.clientExternalId;
     let oneCLinkStatus = existing.oneCLinkStatus;
@@ -2445,7 +2477,8 @@ export class SpaBookingService {
         guestName:
           input.guestName !== undefined
             ? input.guestName
-            : (existing.guestName ??
+            : (existing.guestAlias ??
+              existing.guestName ??
               (existing.client
                 ? `${existing.client.lastName} ${existing.client.firstName}`.trim()
                 : undefined)),
@@ -2453,10 +2486,16 @@ export class SpaBookingService {
           input.guestPhone !== undefined
             ? input.guestPhone
             : (existing.guestPhone ?? undefined),
+        clientExternalId:
+          input.clientExternalId !== undefined
+            ? input.clientExternalId
+            : (existing.clientExternalId ?? undefined),
         paymentType,
       });
       clientId = resolved.clientId ?? null;
       guestName = resolved.guestName ?? null;
+      // Alias is sticky: keep first typed name forever.
+      guestAlias = existing.guestAlias ?? resolved.guestAlias ?? null;
       guestPhone = resolved.guestPhone ?? null;
       clientExternalId = resolved.clientExternalId ?? null;
       oneCLinkStatus = resolved.oneCLinkStatus;
@@ -2512,6 +2551,7 @@ export class SpaBookingService {
           endAt: end,
           clientId,
           guestName,
+          guestAlias,
           guestPhone,
           clientExternalId,
           oneCLinkStatus,
@@ -2537,6 +2577,13 @@ export class SpaBookingService {
           updated.usageStatus === ServiceUsageStatus.CONSUMED)
       ) {
         await this.serviceUsage.consumeSpaIfReady(updated.id).catch(() => undefined);
+      }
+
+      let cascade: SpaClientLinkCascadeResult | undefined;
+      if (clientTouched && (guestPhone || clientExternalId || clientId)) {
+        cascade = await this.cascadeClientLinkToSiblings(updated, {
+          force: Boolean(input.cascadeClientLink),
+        });
       }
 
       // Material edit after admin approve → reopen admin review (out of payroll).
@@ -2574,7 +2621,7 @@ export class SpaBookingService {
         }
       }
 
-      return { booking: this.mapBooking(updated) };
+      return { booking: this.mapBooking(updated), cascade };
     } catch (err) {
       if (
         err instanceof Error &&
@@ -2584,6 +2631,246 @@ export class SpaBookingService {
       }
       throw err;
     }
+  }
+
+  /**
+   * Propagate phone / 1C link from one booking to siblings with the same
+   * typed guest name (exact normalized match, same specialist).
+   */
+  private async cascadeClientLinkToSiblings(
+    source: {
+      id: string;
+      clubId: string;
+      specialistId: string;
+      guestAlias: string | null;
+      guestName: string | null;
+      guestPhone: string | null;
+      clientId: string | null;
+      clientExternalId: string | null;
+      oneCLinkStatus: SpaOneCLinkStatus;
+    },
+    opts: { force: boolean },
+  ): Promise<SpaClientLinkCascadeResult> {
+    const matchLabel = guestMatchLabel(source);
+    if (!matchLabel) {
+      return { applied: [], candidates: [], autoApplied: false };
+    }
+    const auto = shouldAutoCascadeByName(matchLabel);
+    if (!auto && !opts.force) {
+      const candidates = await this.findUnlinkedSiblingBookings(
+        source,
+        matchLabel,
+      );
+      return {
+        applied: [],
+        candidates: candidates.map((c) => ({
+          id: c.id,
+          startAt: c.startAt.toISOString(),
+        })),
+        autoApplied: false,
+      };
+    }
+
+    const siblings = await this.findUnlinkedSiblingBookings(source, matchLabel);
+    const applied: Array<{ id: string; startAt: string }> = [];
+    const crmName =
+      source.oneCLinkStatus === SpaOneCLinkStatus.LINKED && source.guestName
+        ? source.guestName
+        : undefined;
+
+    for (const sib of siblings) {
+      await this.prisma.spaBooking.update({
+        where: { id: sib.id },
+        data: {
+          guestPhone: source.guestPhone ?? sib.guestPhone,
+          clientId: source.clientId ?? sib.clientId,
+          clientExternalId: source.clientExternalId ?? sib.clientExternalId,
+          oneCLinkStatus: source.clientExternalId
+            ? SpaOneCLinkStatus.LINKED
+            : source.oneCLinkStatus,
+          ...(crmName ? { guestName: crmName } : {}),
+          guestAlias: sib.guestAlias ?? sib.guestName ?? source.guestAlias,
+          ...(source.clientExternalId ? { consumeState: null } : {}),
+        },
+      });
+      applied.push({ id: sib.id, startAt: sib.startAt.toISOString() });
+    }
+
+    return {
+      applied,
+      candidates: [],
+      autoApplied: auto && !opts.force,
+    };
+  }
+
+  private async findUnlinkedSiblingBookings(
+    source: {
+      id: string;
+      clubId: string;
+      specialistId: string;
+    },
+    matchLabel: string,
+  ) {
+    const rows = await this.prisma.spaBooking.findMany({
+      where: {
+        clubId: source.clubId,
+        specialistId: source.specialistId,
+        id: { not: source.id },
+        status: { not: SpaBookingStatus.CANCELLED },
+        oneCLinkStatus: SpaOneCLinkStatus.NOT_LINKED,
+        clientExternalId: null,
+        consumedInCrmAt: null,
+      },
+      select: {
+        id: true,
+        startAt: true,
+        guestName: true,
+        guestAlias: true,
+        guestPhone: true,
+        clientId: true,
+        clientExternalId: true,
+      },
+      orderBy: { startAt: 'asc' },
+      take: 80,
+    });
+    return rows.filter((r) => guestMatchLabel(r) === matchLabel);
+  }
+
+  /** Typeahead over this specialist's past clients (no 1C, no club-wide list). */
+  async searchSpecialistClients(
+    actor: JwtPayload,
+    opts: { q: string; specialistId?: string },
+  ): Promise<SpaSpecialistClientSuggestion[]> {
+    const clubId = requireClubId(actor);
+    const q = opts.q.trim();
+    const digits = q.replace(/\D/g, '');
+    const nameOk = normalizeGuestLabel(q).length >= 2;
+    const phoneOk = digits.length >= 4;
+    if (!nameOk && !phoneOk) return [];
+
+    let specialistId = opts.specialistId?.trim() || '';
+    if (rolesIncludesSpecialistOnly(actor)) {
+      specialistId = actor.sub;
+    } else if (!specialistId) {
+      return [];
+    }
+
+    const since = new Date();
+    since.setMonth(since.getMonth() - 18);
+
+    const rows = await this.prisma.spaBooking.findMany({
+      where: {
+        clubId,
+        specialistId,
+        status: { not: SpaBookingStatus.CANCELLED },
+        startAt: { gte: since },
+      },
+      select: {
+        startAt: true,
+        guestName: true,
+        guestAlias: true,
+        guestPhone: true,
+        clientId: true,
+        clientExternalId: true,
+        client: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            externalId: true,
+          },
+        },
+      },
+      orderBy: { startAt: 'desc' },
+      take: 500,
+    });
+
+    const needle = normalizeGuestLabel(q);
+    const groups = new Map<
+      string,
+      {
+        label: string;
+        clientId?: string;
+        clientExternalId?: string;
+        guestPhone?: string;
+        visitCount: number;
+        lastVisitAt: Date;
+      }
+    >();
+
+    for (const row of rows) {
+      const label =
+        (row.client
+          ? `${row.client.lastName} ${row.client.firstName}`.trim()
+          : '') ||
+        row.guestName?.trim() ||
+        row.guestAlias?.trim() ||
+        'Клиент';
+      const phone = row.guestPhone ?? row.client?.phone ?? undefined;
+      const phoneDigits = (phone ?? '').replace(/\D/g, '');
+      const aliasNorm = guestMatchLabel(row);
+      const labelNorm = normalizeGuestLabel(label);
+      const matchesName =
+        nameOk &&
+        (labelNorm.includes(needle) ||
+          aliasNorm.includes(needle) ||
+          needle
+            .split(' ')
+            .every(
+              (p) =>
+                p && (labelNorm.includes(p) || aliasNorm.includes(p)),
+            ));
+      const matchesPhone = phoneOk && phoneDigits.includes(digits);
+      if (!matchesName && !matchesPhone) continue;
+
+      const key = spaClientGroupKey({
+        clientExternalId: row.clientExternalId ?? row.client?.externalId,
+        clientId: row.clientId,
+        guestPhone: phone,
+        guestAlias: row.guestAlias,
+        guestName: row.guestName ?? label,
+      });
+      const prev = groups.get(key);
+      if (prev) {
+        prev.visitCount += 1;
+        if (row.startAt > prev.lastVisitAt) prev.lastVisitAt = row.startAt;
+        if (!prev.guestPhone && phone) prev.guestPhone = phone;
+        if (!prev.clientId && row.clientId) prev.clientId = row.clientId;
+        if (
+          !prev.clientExternalId &&
+          (row.clientExternalId || row.client?.externalId)
+        ) {
+          prev.clientExternalId =
+            row.clientExternalId ?? row.client?.externalId ?? undefined;
+        }
+        if (row.client || (row.guestName && row.clientExternalId)) {
+          prev.label = label;
+        }
+      } else {
+        groups.set(key, {
+          label,
+          clientId: row.clientId ?? undefined,
+          clientExternalId:
+            row.clientExternalId ?? row.client?.externalId ?? undefined,
+          guestPhone: phone,
+          visitCount: 1,
+          lastVisitAt: row.startAt,
+        });
+      }
+    }
+
+    return [...groups.values()]
+      .sort((a, b) => b.lastVisitAt.getTime() - a.lastVisitAt.getTime())
+      .slice(0, 8)
+      .map((g) => ({
+        label: g.label,
+        clientId: g.clientId,
+        clientExternalId: g.clientExternalId,
+        guestPhone: g.guestPhone,
+        visitCount: g.visitCount,
+        lastVisitAt: g.lastVisitAt.toISOString(),
+      }));
   }
 
   /**
@@ -2640,9 +2927,12 @@ export class SpaBookingService {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
+      cascadeClientLink?: boolean;
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
+      overlapConfirmed?: boolean;
     },
   ) {
     return this.updateStaffBooking(user, bookingId, input, {
@@ -2660,9 +2950,12 @@ export class SpaBookingService {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
+      cascadeClientLink?: boolean;
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
+      overlapConfirmed?: boolean;
     },
   ) {
     return this.updateStaffBooking(user, bookingId, input, {
@@ -3813,6 +4106,7 @@ export class SpaBookingService {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
       specialistId: string;
       serviceId: string;
       startAt: string;
@@ -3862,6 +4156,7 @@ export class SpaBookingService {
           clientId: input.clientId,
           guestName: input.guestName,
           guestPhone: input.guestPhone,
+          clientExternalId: input.clientExternalId,
           specialistId: input.specialistId,
           serviceId: input.serviceId,
           startAt: start.toISOString(),

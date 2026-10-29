@@ -75,9 +75,6 @@ function AdminSpaWorkspaceInner() {
   const [specialists, setSpecialists] = useState<SpaSpecialistSummary[]>([]);
   const [bookings, setBookings] = useState<SpaBooking[]>([]);
   const [board, setBoard] = useState<SpaBoardResponse | null>(null);
-  const [clients, setClients] = useState<
-    Array<{ id: string; firstName: string; lastName: string }>
-  >([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [day, setDay] = useState(() => {
@@ -171,14 +168,13 @@ function AdminSpaWorkspaceInner() {
   const reload = useCallback(async () => {
     const token = getToken();
     if (!token) return;
-    const [svc, rls, sps, bks, cls, brd, wl] = await Promise.all([
+    const [svc, rls, sps, bks, brd, wl] = await Promise.all([
       api.adminSpaServices(token),
       canEditQuotaRules
         ? api.adminSpaQuotaRules(token)
         : Promise.resolve([] as SpaQuotaRule[]),
       api.adminSpaSpecialists(token),
       api.adminSpaCalendar(token, period.start, period.end),
-      api.adminSpaClients(token),
       api.adminSpaBoard(token, boardPeriod.start, boardPeriod.end),
       api.adminSpaWaitlist(token, boardPeriod.start, boardPeriod.end),
     ]);
@@ -186,7 +182,6 @@ function AdminSpaWorkspaceInner() {
     setRules(rls);
     setSpecialists(sps);
     setBookings(bks);
-    setClients(cls);
     setBoard(brd);
     setWaitlist(wl);
     const allowedServiceIds = [
@@ -381,6 +376,7 @@ function AdminSpaWorkspaceInner() {
     clientId?: string;
     guestName?: string;
     guestPhone?: string;
+    clientExternalId?: string;
     serviceId: string;
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
@@ -404,6 +400,7 @@ function AdminSpaWorkspaceInner() {
         clientId: payload.clientId,
         guestName: payload.guestName,
         guestPhone: payload.guestPhone,
+        clientExternalId: payload.clientExternalId,
         visitNote: payload.visitNote,
         overlapConfirmed: payload.overlapConfirmed,
       });
@@ -423,6 +420,7 @@ function AdminSpaWorkspaceInner() {
     clientId?: string;
     guestName?: string;
     guestPhone?: string;
+    clientExternalId?: string;
     serviceId: string;
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
@@ -447,6 +445,7 @@ function AdminSpaWorkspaceInner() {
         clientId: payload.clientId,
         guestName: payload.guestName,
         guestPhone: payload.guestPhone,
+        clientExternalId: payload.clientExternalId,
         visitNote: payload.visitNote,
         dates: payload.dates,
         overlapConfirmed: payload.overlapConfirmed,
@@ -974,7 +973,6 @@ function AdminSpaWorkspaceInner() {
             entries={waitlist}
             services={services}
             specialists={specialists}
-            clients={clients}
             boardDayYmd={toDayIso(day)}
             allowPickSpecialist
             busy={busy}
@@ -1132,7 +1130,6 @@ function AdminSpaWorkspaceInner() {
             open={showAssign}
             onClose={() => setShowAssign(false)}
             services={services}
-            clients={clients}
             specialists={specialists}
             allowPickSpecialist
             defaultSpecialistId={assignDefaults.specialistId}

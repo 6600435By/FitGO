@@ -4,6 +4,7 @@ import type {
   SpaBoardBooking,
   SpaBoardHourBlock,
   SpaService,
+  SpaSpecialistClientSuggestion,
 } from '@fitgo/shared-types';
 import {
   SPA_OVERLAP_ALLOW_MIN,
@@ -12,6 +13,7 @@ import {
 } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
 import { SpaBookingNotesFields } from '@/components/spa-board/spa-booking-notes-fields';
+import { SpaClientNameField } from '@/components/spa-board/spa-client-name-field';
 import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -30,6 +32,7 @@ type BookingPayload = {
   clientId?: string;
   guestName?: string;
   guestPhone?: string;
+  clientExternalId?: string;
   serviceId: string;
   startAt: string;
   paymentType: 'QUOTA' | 'PAID';
@@ -96,7 +99,6 @@ export function SpaBookingDialog({
   open,
   onClose,
   services,
-  clients,
   specialists,
   defaultSpecialistId,
   defaultStartAt,
@@ -110,7 +112,8 @@ export function SpaBookingDialog({
   open: boolean;
   onClose: () => void;
   services: SpaService[];
-  clients: Array<{ id: string; firstName: string; lastName: string }>;
+  /** @deprecated unused — suggestions come from specialist history search */
+  clients?: Array<{ id: string; firstName: string; lastName: string }>;
   specialists?: Array<{ id: string; firstName: string; lastName: string }>;
   defaultSpecialistId?: string;
   defaultStartAt?: string;
@@ -125,7 +128,6 @@ export function SpaBookingDialog({
   busy?: boolean;
 }) {
   const bookable = services.filter((s) => s.active && (s.bookable ?? true));
-  const [mode, setMode] = useState<'base' | 'phone'>('phone');
   const [phoneLookup, setPhoneLookup] = useState('');
   const [error, setError] = useState('');
   const [periodMode, setPeriodMode] = useState(false);
@@ -153,7 +155,6 @@ export function SpaBookingDialog({
     if (!open) return;
     setError('');
     setPhoneLookup('');
-    setMode('phone');
     setPeriodMode(false);
     setPeriodWeeks(4);
     setPeriodEntries([]);
@@ -174,6 +175,26 @@ export function SpaBookingDialog({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset when dialog opens
   }, [open, defaultSpecialistId, defaultStartAt]);
+
+  const applySuggestion = (s: SpaSpecialistClientSuggestion) => {
+    setClientExternalId(s.clientExternalId ?? '');
+    setForm((f) => ({
+      ...f,
+      clientId: s.clientId ?? '',
+      guestName: s.label,
+      guestPhone: s.guestPhone ?? f.guestPhone,
+    }));
+    setPhoneLookup(
+      s.guestPhone
+        ? `Выбрано из истории · ${s.guestPhone}`
+        : 'Выбрано из истории',
+    );
+    void loadClientNote({
+      clientId: s.clientId,
+      clientExternalId: s.clientExternalId,
+      phone: s.guestPhone,
+    });
+  };
 
   const clientNoteEnabled = Boolean(
     form.clientId ||
@@ -420,6 +441,7 @@ export function SpaBookingDialog({
   const buildPayload = (startIso: string): BookingPayload => {
     const phone = form.guestPhone.trim() || undefined;
     const note = visitNote.trim() || undefined;
+    const ext = clientExternalId.trim() || undefined;
     return {
       specialistId: allowPickSpecialist ? form.specialistId : undefined,
       serviceId: form.serviceId,
@@ -429,14 +451,17 @@ export function SpaBookingDialog({
         ? { overlapConfirmed: true }
         : {}),
       ...(note ? { visitNote: note } : { visitNote: '' }),
-      ...(mode === 'base'
-        ? { clientId: form.clientId }
-        : form.clientId
-          ? { clientId: form.clientId, ...(phone ? { guestPhone: phone } : {}) }
-          : {
-              guestName: form.guestName.trim(),
-              ...(phone ? { guestPhone: phone } : {}),
-            }),
+      ...(form.clientId
+        ? {
+            clientId: form.clientId,
+            ...(phone ? { guestPhone: phone } : {}),
+            ...(ext ? { clientExternalId: ext } : {}),
+          }
+        : {
+            guestName: form.guestName.trim(),
+            ...(phone ? { guestPhone: phone } : {}),
+            ...(ext ? { clientExternalId: ext } : {}),
+          }),
     };
   };
 
@@ -454,11 +479,7 @@ export function SpaBookingDialog({
       setError('Укажите специалиста');
       return;
     }
-    if (mode === 'base' && !form.clientId) {
-      setError('Выберите клиента из базы');
-      return;
-    }
-    if (mode === 'phone' && !form.clientId && !form.guestName.trim()) {
+    if (!form.clientId && !form.guestName.trim()) {
       setError('Укажите ФИО клиента');
       return;
     }
@@ -524,23 +545,6 @@ export function SpaBookingDialog({
           </button>
         </div>
 
-        <div className="flex gap-2 text-xs">
-          <button
-            type="button"
-            className={mode === 'phone' ? 'btn-primary' : 'btn-secondary'}
-            onClick={() => setMode('phone')}
-          >
-            Вручную
-          </button>
-          <button
-            type="button"
-            className={mode === 'base' ? 'btn-primary' : 'btn-secondary'}
-            onClick={() => setMode('base')}
-          >
-            Из базы
-          </button>
-        </div>
-
         {allowPickSpecialist && specialists ? (
           <label className="block space-y-1 text-sm">
             <span className="text-slate-400">Специалист</span>
@@ -563,60 +567,44 @@ export function SpaBookingDialog({
 
         <div className="space-y-3 rounded-xl border border-white/5 bg-slate-900/40 p-3">
           <p className="text-sm font-medium text-slate-300">Клиент</p>
-          {mode === 'base' ? (
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-400">Из базы</span>
-              <select
-                className="input"
-                value={form.clientId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setForm((f) => ({ ...f, clientId: id }));
-                  setClientExternalId('');
-                  void loadClientNote({ clientId: id || undefined });
-                }}
-              >
-                <option value="">Выберите</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.lastName} {c.firstName}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <SpaClientNameField
+            guestName={form.guestName}
+            guestPhone={form.guestPhone}
+            specialistId={
+              allowPickSpecialist
+                ? form.specialistId || undefined
+                : defaultSpecialistId
+            }
+            onGuestNameChange={(name) =>
+              setForm((f) => ({ ...f, guestName: name }))
+            }
+            onClearPick={() => {
+              setForm((f) => ({ ...f, clientId: '' }));
+              setClientExternalId('');
+              setPhoneLookup('');
+            }}
+            onPick={applySuggestion}
+          />
+          <label className="block space-y-1 text-sm">
+            <span className="text-slate-400">Телефон (необязательно)</span>
+            <input
+              className="input"
+              value={form.guestPhone}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, guestPhone: e.target.value }))
+              }
+              onBlur={(e) => lookupPhone(e.target.value)}
+              placeholder="+375…"
+            />
+          </label>
+          {phoneLookup ? (
+            <p className="text-xs text-slate-400">{phoneLookup}</p>
           ) : (
-            <>
-              <label className="block space-y-1 text-sm">
-                <span className="text-slate-400">Телефон (необязательно)</span>
-                <input
-                  className="input"
-                  value={form.guestPhone}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, guestPhone: e.target.value }))
-                  }
-                  onBlur={(e) => lookupPhone(e.target.value)}
-                  placeholder="+375…"
-                />
-              </label>
-              {phoneLookup ? (
-                <p className="text-xs text-slate-400">{phoneLookup}</p>
-              ) : (
-                <p className="text-xs text-slate-500">
-                  Без номера запись сохранится с пометкой «Нет в 1С». Телефон
-                  добавит админ на контроле записей.
-                </p>
-              )}
-              <label className="block space-y-1 text-sm">
-                <span className="text-slate-400">ФИО</span>
-                <input
-                  className="input"
-                  value={form.guestName}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, guestName: e.target.value }))
-                  }
-                />
-              </label>
-            </>
+            <p className="text-xs text-slate-500">
+              Начните вводить имя — появятся клиенты, которые уже были у
+              специалиста. Без номера запись сохранится с пометкой «Нет в
+              1С»; телефон добавит админ на контроле.
+            </p>
           )}
         </div>
 

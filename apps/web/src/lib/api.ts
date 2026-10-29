@@ -33,6 +33,8 @@ import {
   type SpaBookingSlot,
   type SpaBooking,
   type SpaBulkBookingResult,
+  type SpaClientLinkCascadeResult,
+  type SpaSpecialistClientSuggestion,
   type SpaQuotaRule,
   type SpaWaitlistEntry,
   type SpecialistCalendarResponse,
@@ -1098,6 +1100,20 @@ export const api = {
       token,
     ),
 
+  searchSpaSpecialistClients: (
+    token: string,
+    q: string,
+    specialistId?: string,
+  ) => {
+    const params = new URLSearchParams({ q });
+    if (specialistId) params.set('specialistId', specialistId);
+    return request<SpaSpecialistClientSuggestion[]>(
+      `/specialist/spa-clients/search?${params}`,
+      {},
+      token,
+    );
+  },
+
   getSpaClientNote: (
     token: string,
     query: { clientId?: string; clientExternalId?: string; phone?: string },
@@ -1136,6 +1152,7 @@ export const api = {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
       serviceId: string;
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
@@ -1156,6 +1173,7 @@ export const api = {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
       serviceId: string;
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
@@ -1383,6 +1401,7 @@ export const api = {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
       specialistId: string;
       serviceId: string;
       startAt: string;
@@ -1404,6 +1423,7 @@ export const api = {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
       specialistId: string;
       serviceId: string;
       startAt: string;
@@ -1513,13 +1533,18 @@ export const api = {
       clientId?: string;
       guestName?: string;
       guestPhone?: string;
+      clientExternalId?: string;
+      cascadeClientLink?: boolean;
       paymentType?: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
       overlapConfirmed?: boolean;
     },
   ) =>
-    request<{ booking: SpaBooking }>(
+    request<{
+      booking: SpaBooking;
+      cascade?: SpaClientLinkCascadeResult;
+    }>(
       `/admin/spa-bookings/${bookingId}`,
       { method: 'PUT', body: JSON.stringify(data) },
       token,

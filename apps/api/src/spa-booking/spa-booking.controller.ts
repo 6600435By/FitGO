@@ -278,6 +278,25 @@ export class SpaBookingController {
     return this.spa.lookupClientByPhone(user, phone ?? '');
   }
 
+  /** Typeahead: past clients of this specialist (no club-wide dump). */
+  @Get('specialist/spa-clients/search')
+  @Roles(
+    UserRole.SPECIALIST,
+    UserRole.ADMIN,
+    UserRole.MANAGER,
+    UserRole.SUPER_ADMIN,
+  )
+  searchSpecialistClients(
+    @CurrentUser() user: JwtPayload,
+    @Query('q') q?: string,
+    @Query('specialistId') specialistId?: string,
+  ) {
+    return this.spa.searchSpecialistClients(user, {
+      q: q ?? '',
+      specialistId,
+    });
+  }
+
   @Get('specialist/spa/client-note')
   @Roles(
     UserRole.SPECIALIST,
@@ -316,6 +335,7 @@ export class SpaBookingController {
       clientId: dto.clientId,
       guestName: dto.guestName,
       guestPhone: dto.guestPhone,
+      clientExternalId: dto.clientExternalId,
       serviceId: dto.serviceId,
       startAt: dto.startAt,
       paymentType: dto.paymentType,
@@ -335,6 +355,7 @@ export class SpaBookingController {
       clientId: dto.clientId,
       guestName: dto.guestName,
       guestPhone: dto.guestPhone,
+      clientExternalId: dto.clientExternalId,
       specialistId: user.sub,
       serviceId: dto.serviceId,
       startAt: dto.startAt,
@@ -585,6 +606,7 @@ export class SpaBookingController {
       clientId: dto.clientId,
       guestName: dto.guestName,
       guestPhone: dto.guestPhone,
+      clientExternalId: dto.clientExternalId,
       specialistId: dto.specialistId,
       serviceId: dto.serviceId,
       startAt: dto.startAt,
@@ -608,6 +630,7 @@ export class SpaBookingController {
       clientId: dto.clientId,
       guestName: dto.guestName,
       guestPhone: dto.guestPhone,
+      clientExternalId: dto.clientExternalId,
       specialistId: dto.specialistId,
       serviceId: dto.serviceId,
       startAt: dto.startAt,
@@ -704,7 +727,20 @@ export class SpaBookingController {
     @Param('bookingId') bookingId: string,
     @Body() dto: UpdateSpaBookingDto,
   ) {
-    return this.spa.adminUpdateBooking(user, bookingId, dto);
+    return this.spa.adminUpdateBooking(user, bookingId, {
+      specialistId: dto.specialistId,
+      serviceId: dto.serviceId,
+      startAt: dto.startAt,
+      clientId: dto.clientId,
+      guestName: dto.guestName,
+      guestPhone: dto.guestPhone,
+      clientExternalId: dto.clientExternalId,
+      cascadeClientLink: dto.cascadeClientLink,
+      paymentType: dto.paymentType,
+      membershipServiceName: dto.membershipServiceName,
+      visitNote: dto.visitNote,
+      overlapConfirmed: dto.overlapConfirmed,
+    });
   }
 
   @Post('admin/spa-bookings/:bookingId/confirm-manual-payment')

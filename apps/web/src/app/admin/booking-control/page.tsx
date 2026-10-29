@@ -36,10 +36,18 @@ function AdminBookingControlInner() {
     const base = createBookingControlApi('admin');
     return {
       ...base,
-      updateSpaGuestPhone: async (bookingId: string, guestPhone: string) => {
+      updateSpaGuestPhone: async (
+        bookingId: string,
+        guestPhone: string,
+        opts?: { cascadeClientLink?: boolean },
+      ) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
-        await api.adminUpdateSpaBooking(token, bookingId, { guestPhone });
+        const res = await api.adminUpdateSpaBooking(token, bookingId, {
+          guestPhone,
+          cascadeClientLink: opts?.cascadeClientLink,
+        });
+        return res.cascade;
       },
     };
   }, []);

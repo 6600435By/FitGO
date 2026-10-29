@@ -228,7 +228,11 @@ export type BookingControlApi = {
   updateSpaGuestPhone?: (
     bookingId: string,
     guestPhone: string,
-  ) => Promise<void>;
+    opts?: { cascadeClientLink?: boolean },
+  ) => Promise<
+    | import('@fitgo/shared-types').SpaClientLinkCascadeResult
+    | undefined
+  >;
   /** Admin / specialist: change SPA nomenclature on the FitGO booking. */
   updateSpaService?: (
     bookingId: string,
@@ -946,6 +950,9 @@ export function BookingControlPanel({
   const [linkPhone, setLinkPhone] = useState('');
   const [linkPhoneBusy, setLinkPhoneBusy] = useState(false);
   const [linkPhoneMsg, setLinkPhoneMsg] = useState('');
+  const [linkCascadeCandidates, setLinkCascadeCandidates] = useState<
+    Array<{ id: string; startAt: string }>
+  >([]);
   const [spaServices, setSpaServices] = useState<
     Array<{ id: string; name: string }>
   >([]);
@@ -1671,6 +1678,7 @@ export function BookingControlPanel({
     setSeenSaveError('');
     setLinkPhone('');
     setLinkPhoneMsg('');
+    setLinkCascadeCandidates([]);
     setSelected(null);
     onDetailClose?.();
   };
@@ -1688,7 +1696,18 @@ export function BookingControlPanel({
     closeDetail();
   };
 
-  const saveSpaGuestPhone = async () => {
+  const formatCascadeDates = (rows: Array<{ id: string; startAt: string }>) =>
+    rows
+      .slice(0, 8)
+      .map((r) =>
+        new Date(r.startAt).toLocaleDateString('ru-RU', {
+          day: '2-digit',
+          month: '2-digit',
+        }),
+      )
+      .join(', ');
+
+  const saveSpaGuestPhone = async (opts?: { cascadeClientLink?: boolean }) => {
     if (!selected?.fitgoBookingId || !api.updateSpaGuestPhone) return;
     const phone = linkPhone.trim();
     if (!phone) {
@@ -1698,12 +1717,27 @@ export function BookingControlPanel({
     setLinkPhoneBusy(true);
     setLinkPhoneMsg('');
     try {
-      await api.updateSpaGuestPhone(selected.fitgoBookingId, phone);
+      const cascade = await api.updateSpaGuestPhone(
+        selected.fitgoBookingId,
+        phone,
+        opts,
+      );
       const d = await api.detail(selected.sessionKey);
       setSelected(d);
       setLinkPhone(d.guestPhone ?? phone);
+      const applied = cascade?.applied ?? [];
+      const candidates = cascade?.candidates ?? [];
+      setLinkCascadeCandidates(candidates);
       if (d.spaSettlement?.status === 'AWAITING_CLIENT_LINK') {
-        setLinkPhoneMsg('В 1С не найден, номер сохранён');
+        setLinkPhoneMsg(
+          applied.length > 0
+            ? `В 1С не найден, номер сохранён. Ещё ${applied.length} записей: ${formatCascadeDates(applied)}`
+            : 'В 1С не найден, номер сохранён',
+        );
+      } else if (applied.length > 0) {
+        setLinkPhoneMsg(
+          `Клиент привязан. Ещё ${applied.length} записей: ${formatCascadeDates(applied)}`,
+        );
       } else {
         setLinkPhoneMsg('Клиент привязан');
       }
@@ -3780,9 +3814,28 @@ export function BookingControlPanel({
                     ) : (
                       <p className="text-xs text-slate-500">
                         Номер сохранится в записи. Если клиент есть в 1С —
-                        привязка выполнится автоматически.
+                        привязка выполнится автоматически. Записи с тем же
+                        ФИО (два и больше слова) обновятся сами.
                       </p>
                     )}
+                    {linkCascadeCandidates.length > 0 ? (
+                      <div className="space-y-1.5 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2">
+                        <p className="text-xs text-amber-100/90">
+                          Ещё {linkCascadeCandidates.length} записей с тем же
+                          именем: {formatCascadeDates(linkCascadeCandidates)}
+                        </p>
+                        <button
+                          type="button"
+                          className="btn-secondary text-xs"
+                          disabled={linkPhoneBusy}
+                          onClick={() =>
+                            void saveSpaGuestPhone({ cascadeClientLink: true })
+                          }
+                        >
+                          Привязать эти тоже
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 {selected.members.length > 0 && (

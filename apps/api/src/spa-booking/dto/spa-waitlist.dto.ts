@@ -71,6 +71,10 @@ export class CreateSpaWaitlistDto {
   @IsOptional()
   @IsString()
   guestPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  clientExternalId?: string;
 }
 
 export class UpdateSpaWaitlistDto {

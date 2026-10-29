@@ -13,10 +13,11 @@ import {
   spaWaitlistFitsBoardDay,
 } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
-import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { SpaClientNameField } from '@/components/spa-board/spa-client-name-field';
 import { toDatetimeLocalValue } from '@/components/spa-board/spa-booking-dialog';
 import { DateField } from '@/components/ui/date-field';
+import { api } from '@/lib/api';
+import { getToken } from '@/lib/auth';
 
 type PeriodEntry = { date: string; time: string };
 type PrefMode = 'exact' | 'window';
@@ -115,17 +116,24 @@ function formatDateShort(dateYmd: string) {
   });
 }
 
-function clientPayload(
-  mode: 'base' | 'phone',
-  form: { clientId: string; guestName: string; guestPhone: string },
-) {
-  if (mode === 'base') return { clientId: form.clientId };
+function clientPayload(form: {
+  clientId: string;
+  guestName: string;
+  guestPhone: string;
+}) {
   if (form.clientId) {
-    return { clientId: form.clientId, guestPhone: form.guestPhone };
+    return {
+      clientId: form.clientId,
+      ...(form.guestPhone.trim()
+        ? { guestPhone: form.guestPhone.trim() }
+        : {}),
+    };
   }
   return {
-    guestName: form.guestName,
-    guestPhone: form.guestPhone,
+    guestName: form.guestName.trim(),
+    ...(form.guestPhone.trim()
+      ? { guestPhone: form.guestPhone.trim() }
+      : {}),
   };
 }
 
@@ -133,7 +141,6 @@ export function SpaWaitlistPanel({
   entries,
   services,
   specialists,
-  clients,
   defaultSpecialistId,
   defaultStartAt,
   boardDayYmd,
@@ -146,7 +153,8 @@ export function SpaWaitlistPanel({
   entries: SpaWaitlistEntry[];
   services: SpaService[];
   specialists?: Array<{ id: string; firstName: string; lastName: string }>;
-  clients: Array<{ id: string; firstName: string; lastName: string }>;
+  /** @deprecated unused — suggestions from specialist history */
+  clients?: Array<{ id: string; firstName: string; lastName: string }>;
   defaultSpecialistId?: string;
   defaultStartAt?: string;
   /** Local YYYY-MM-DD of the open board day — for sort and «Могут в этот день». */
@@ -289,7 +297,6 @@ export function SpaWaitlistPanel({
           onClose={() => setShowAdd(false)}
           bookable={bookable}
           specialists={specialists}
-          clients={clients}
           defaultSpecialistId={defaultSpecialistId}
           defaultStartAt={defaultStartAt}
           allowPickSpecialist={allowPickSpecialist}
@@ -327,7 +334,6 @@ function SpaWaitlistAddDialog({
   onClose,
   bookable,
   specialists,
-  clients,
   defaultSpecialistId,
   defaultStartAt,
   allowPickSpecialist,
@@ -339,7 +345,6 @@ function SpaWaitlistAddDialog({
   onClose: () => void;
   bookable: SpaService[];
   specialists?: Array<{ id: string; firstName: string; lastName: string }>;
-  clients: Array<{ id: string; firstName: string; lastName: string }>;
   defaultSpecialistId?: string;
   defaultStartAt?: string;
   allowPickSpecialist?: boolean;
@@ -347,7 +352,6 @@ function SpaWaitlistAddDialog({
   onCreated: (summary?: string) => Promise<void>;
   onError: (msg: string) => void;
 }) {
-  const [mode, setMode] = useState<'base' | 'phone'>('phone');
   const [prefMode, setPrefMode] = useState<PrefMode>('exact');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -370,7 +374,6 @@ function SpaWaitlistAddDialog({
   useEffect(() => {
     if (!open) return;
     setError('');
-    setMode('phone');
     setPrefMode('exact');
     setPeriodMode(false);
     setPeriodWeeks(4);
@@ -412,13 +415,7 @@ function SpaWaitlistAddDialog({
   const liveSummary = useMemo(() => {
     const serviceName =
       bookable.find((s) => s.id === form.serviceId)?.name ?? 'услуга';
-    const clientLabel =
-      mode === 'base'
-        ? (() => {
-            const c = clients.find((x) => x.id === form.clientId);
-            return c ? `${c.lastName} ${c.firstName}`.trim() : 'клиент';
-          })()
-        : form.guestName.trim() || 'клиент';
+    const clientLabel = form.guestName.trim() || 'клиент';
     if (prefMode === 'window') {
       const { timeFromMin, timeToMin } = resolveTimeBand(windowForm);
       return `${clientLabel} · ${serviceName} · ${formatSpaWaitlistPreference({
@@ -441,7 +438,7 @@ function SpaWaitlistAddDialog({
       desiredStartAt: start.toISOString(),
       desiredEndAt: start.toISOString(),
     })}`;
-  }, [bookable, clients, form, mode, prefMode, windowForm]);
+  }, [bookable, form, prefMode, windowForm]);
 
   if (!open) return null;
 
@@ -453,7 +450,7 @@ function SpaWaitlistAddDialog({
       preference: 'EXACT' as const,
       desiredStartAt,
       note: note.trim() || undefined,
-      ...clientPayload(mode, form),
+      ...clientPayload(form),
     };
     if (allowPickSpecialist) {
       await api.adminCreateSpaWaitlist(token, {
@@ -476,7 +473,7 @@ function SpaWaitlistAddDialog({
       timeToMin: timeToMin ?? undefined,
       weekdays: windowForm.weekdays,
       note: note.trim() || undefined,
-      ...clientPayload(mode, form),
+      ...clientPayload(form),
     };
     if (allowPickSpecialist) {
       await api.adminCreateSpaWaitlist(token, {
@@ -498,11 +495,7 @@ function SpaWaitlistAddDialog({
       setError('Укажите специалиста');
       return;
     }
-    if (mode === 'base' && !form.clientId) {
-      setError('Выберите клиента');
-      return;
-    }
-    if (mode === 'phone' && !form.clientId && !form.guestName.trim()) {
+    if (!form.clientId && !form.guestName.trim()) {
       setError('Укажите ФИО');
       return;
     }
@@ -593,23 +586,6 @@ function SpaWaitlistAddDialog({
           </button>
         </div>
 
-        <div className="flex gap-2 text-xs">
-          <button
-            type="button"
-            className={mode === 'phone' ? 'btn-primary' : 'btn-secondary'}
-            onClick={() => setMode('phone')}
-          >
-            Вручную
-          </button>
-          <button
-            type="button"
-            className={mode === 'base' ? 'btn-primary' : 'btn-secondary'}
-            onClick={() => setMode('base')}
-          >
-            Из базы
-          </button>
-        </div>
-
         {allowPickSpecialist && specialists ? (
           <label className="block space-y-1 text-sm">
             <span className="text-slate-400">Специалист</span>
@@ -630,48 +606,38 @@ function SpaWaitlistAddDialog({
           </label>
         ) : null}
 
-        {mode === 'base' ? (
-          <label className="block space-y-1 text-sm">
-            <span className="text-slate-400">Клиент</span>
-            <select
-              className="input"
-              value={form.clientId}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, clientId: e.target.value }))
-              }
-            >
-              <option value="">Выберите</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.lastName} {c.firstName}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-400">Телефон</span>
-              <input
-                className="input"
-                value={form.guestPhone}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, guestPhone: e.target.value }))
-                }
-              />
-            </label>
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-400">ФИО</span>
-              <input
-                className="input"
-                value={form.guestName}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, guestName: e.target.value }))
-                }
-              />
-            </label>
-          </>
-        )}
+        <SpaClientNameField
+          guestName={form.guestName}
+          guestPhone={form.guestPhone}
+          specialistId={
+            allowPickSpecialist
+              ? form.specialistId || undefined
+              : defaultSpecialistId
+          }
+          onGuestNameChange={(name) =>
+            setForm((f) => ({ ...f, guestName: name }))
+          }
+          onClearPick={() => setForm((f) => ({ ...f, clientId: '' }))}
+          onPick={(s) =>
+            setForm((f) => ({
+              ...f,
+              clientId: s.clientId ?? '',
+              guestName: s.label,
+              guestPhone: s.guestPhone ?? f.guestPhone,
+            }))
+          }
+        />
+        <label className="block space-y-1 text-sm">
+          <span className="text-slate-400">Телефон (необязательно)</span>
+          <input
+            className="input"
+            value={form.guestPhone}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, guestPhone: e.target.value }))
+            }
+            placeholder="+375…"
+          />
+        </label>
 
         <label className="block space-y-1 text-sm">
           <span className="text-slate-400">Услуга</span>

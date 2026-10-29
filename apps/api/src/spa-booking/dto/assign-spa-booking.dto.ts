@@ -20,6 +20,11 @@ export class AssignSpaBookingDto {
   @IsString()
   guestPhone?: string;
 
+  /** 1C counterparty from specialist history suggestion (skip slow re-lookup). */
+  @IsOptional()
+  @IsString()
+  clientExternalId?: string;
+
   @IsString()
   serviceId!: string;
 

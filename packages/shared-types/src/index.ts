@@ -1535,6 +1535,23 @@ export interface SpaBoardHourBlock {
 
 export type SpaOneCLinkStatus = 'NOT_LINKED' | 'LINKED';
 
+/** Suggestion from a specialist's own past SPA bookings (no club-wide list). */
+export interface SpaSpecialistClientSuggestion {
+  label: string;
+  clientId?: string;
+  clientExternalId?: string;
+  guestPhone?: string;
+  visitCount: number;
+  lastVisitAt: string;
+}
+
+/** Result of linking phone/client on one booking and optionally siblings. */
+export interface SpaClientLinkCascadeResult {
+  applied: Array<{ id: string; startAt: string }>;
+  candidates: Array<{ id: string; startAt: string }>;
+  autoApplied: boolean;
+}
+
 export interface SpaBoardBooking {
   id: string;
   specialistId: string;

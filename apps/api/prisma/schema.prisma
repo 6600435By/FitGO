@@ -1841,6 +1841,8 @@ model SpaBooking {
   clientId               String?
   /// Manual client when there is no app user.
   guestName              String?
+  /// Name as typed by staff (kept after 1C link renames guestName).
+  guestAlias             String?
   guestPhone             String?
   /// 1C counterparty id when the client is not a local user.
   clientExternalId       String?

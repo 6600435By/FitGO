@@ -72,9 +72,6 @@ function SpecialistScheduleInner() {
   const [workSlots, setWorkSlots] = useState<SpecialistWorkSlotInput[]>([]);
   const [bookings, setBookings] = useState<SpaBooking[]>([]);
   const [services, setServices] = useState<SpaService[]>([]);
-  const [clients, setClients] = useState<
-    Array<{ id: string; firstName: string; lastName: string }>
-  >([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [day, setDay] = useState(() => {
@@ -139,13 +136,12 @@ function SpecialistScheduleInner() {
   const reload = useCallback(async () => {
     const token = getToken();
     if (!token) return;
-    const [brd, cal, slots, bks, svc, cls, wl] = await Promise.all([
+    const [brd, cal, slots, bks, svc, wl] = await Promise.all([
       api.specialistSpaBoard(token, boardPeriod.start, boardPeriod.end),
       api.specialistCalendar(token, publishPeriod.start, publishPeriod.end),
       api.specialistWorkSchedule(token),
       api.specialistSpaBookings(token),
       api.specialistOwnServices(token),
-      api.adminSpaClients(token).catch(() => []),
       api.specialistSpaWaitlist(token, boardPeriod.start, boardPeriod.end),
     ]);
     setBoard(brd);
@@ -153,7 +149,6 @@ function SpecialistScheduleInner() {
     setWorkSlots(slots);
     setBookings(bks);
     setServices(svc);
-    setClients(cls);
     setWaitlist(wl);
   }, [boardPeriod.end, boardPeriod.start, publishPeriod.end, publishPeriod.start]);
 
@@ -401,6 +396,7 @@ function SpecialistScheduleInner() {
     clientId?: string;
     guestName?: string;
     guestPhone?: string;
+    clientExternalId?: string;
     serviceId: string;
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
@@ -428,6 +424,7 @@ function SpecialistScheduleInner() {
     clientId?: string;
     guestName?: string;
     guestPhone?: string;
+    clientExternalId?: string;
     serviceId: string;
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
@@ -623,7 +620,6 @@ function SpecialistScheduleInner() {
       <SpaWaitlistPanel
         entries={waitlist}
         services={services}
-        clients={clients}
         boardDayYmd={toDayIso(day)}
         busy={busy}
         onReload={reload}
@@ -816,7 +812,6 @@ function SpecialistScheduleInner() {
         open={showAssign}
         onClose={() => setShowAssign(false)}
         services={services}
-        clients={clients}
         defaultSpecialistId={me?.id}
         defaultStartAt={assignDefaults.startAt}
         boardHours={board?.hours}
