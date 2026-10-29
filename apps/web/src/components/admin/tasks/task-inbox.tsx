@@ -10,9 +10,10 @@ import type {
   AdminTasksInboxResponse,
 } from '@fitgo/shared-types';
 import {
-  ADMIN_INBOX_KIND_LABEL,
+  ADMIN_INBOX_KIND_SHORT_LABEL,
   ADMIN_INBOX_VIEW_LABEL,
   filterAdminInboxItems,
+  isAdminInboxDebtKind,
   parseLegacyAdminTasksQuery,
 } from '@fitgo/shared-types';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -39,6 +40,7 @@ type Mem = {
 const VIEWS: AdminInboxView[] = ['now', 'mine', 'pool', 'waiting', 'done'];
 const KINDS: AdminInboxKind[] = [
   'calls',
+  'birthday',
   'money',
   'control',
   'manager',
@@ -194,10 +196,14 @@ export function TaskInbox() {
     return list;
   }, [inbox, view, kind, topicFilter]);
 
-  const selected = useMemo(
-    () => items.find((i) => i.id === selectedId) ?? null,
-    [items, selectedId],
-  );
+  const selected = useMemo(() => {
+    if (!selectedId) return null;
+    return (
+      items.find((i) => i.id === selectedId) ??
+      inbox?.items.find((i) => i.id === selectedId) ??
+      null
+    );
+  }, [items, selectedId, inbox?.items]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -443,10 +449,19 @@ export function TaskInbox() {
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const overdueItems = items.filter((i) => i.bucket === 'overdue');
-  const todayItems = items.filter((i) => i.bucket === 'today');
+  // Долги не смешиваем с «Просрочено» — отдельная секция.
+  const debtItems = items.filter((i) => isAdminInboxDebtKind(i));
+  const overdueItems = items.filter(
+    (i) => i.bucket === 'overdue' && !isAdminInboxDebtKind(i),
+  );
+  const todayItems = items.filter(
+    (i) => i.bucket === 'today' && !isAdminInboxDebtKind(i),
+  );
   const otherItems = items.filter(
-    (i) => i.bucket !== 'overdue' && i.bucket !== 'today',
+    (i) =>
+      !isAdminInboxDebtKind(i) &&
+      i.bucket !== 'overdue' &&
+      i.bucket !== 'today',
   );
 
   const renderList = (list: AdminInboxItem[], heading?: string) => (
@@ -578,7 +593,7 @@ export function TaskInbox() {
                 : 'btn-secondary shrink-0 px-3 py-2 text-xs'
             }
           >
-            {ADMIN_INBOX_KIND_LABEL[k]}
+            {ADMIN_INBOX_KIND_SHORT_LABEL[k]}
             {inbox ? ` (${inbox.counts.byKind[k]})` : ''}
           </button>
         ))}
@@ -613,10 +628,15 @@ export function TaskInbox() {
               {todayItems.length > 0
                 ? renderList(todayItems, 'Сегодня')
                 : null}
+              {debtItems.length > 0
+                ? renderList(debtItems, 'Долги')
+                : null}
               {otherItems.length > 0
                 ? renderList(otherItems, 'Ещё')
                 : null}
             </>
+          ) : kind === 'money' || kind === 'staff' ? (
+            renderList(items, 'Долги')
           ) : (
             renderList(items)
           )}

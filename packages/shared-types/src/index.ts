@@ -1172,6 +1172,8 @@ export interface AdminTaskItem {
   /** BOOKING_CONFIRM aggregated clients (reformer / multi) */
   confirmClients?: AdminConfirmClient[];
   roomTitle?: string;
+  /** SPA specialist / reformer trainer FIO on confirm tasks. */
+  performerName?: string;
   /** How many times returned for rework by manager. */
   reworkCount?: number;
   /** True while manager rework blocks scheduler auto-close. */

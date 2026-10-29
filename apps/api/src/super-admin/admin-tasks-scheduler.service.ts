@@ -733,6 +733,9 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         guestName: true,
         clientExternalId: true,
         service: { select: { name: true } },
+        specialist: {
+          select: { firstName: true, lastName: true },
+        },
         client: {
           select: {
             externalId: true,
@@ -815,11 +818,20 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         minute: '2-digit',
         timeZone: 'Europe/Minsk',
       });
+      const performerName = session.employeeName?.trim() || null;
       const title = `Реформер ${timeLabel}: подтвердить ${clients.length}`;
-      const description = `${session.title}${session.roomTitle ? ` · ${session.roomTitle}` : ''} · ${tomorrow}`;
+      const description = [
+        session.title,
+        performerName ? `к ${performerName}` : null,
+        session.roomTitle,
+        tomorrow,
+      ]
+        .filter(Boolean)
+        .join(' · ');
       const metaBase = {
         membershipName: session.title,
         roomTitle: session.roomTitle ?? null,
+        performerName,
         sessionKey,
         sessionDate: tomorrow,
         sessionExternalId: session.externalId,
@@ -917,17 +929,27 @@ export class AdminTasksSchedulerService implements OnModuleInit {
         },
       ];
       const serviceName = booking.service.name;
+      const performerName =
+        `${booking.specialist.lastName} ${booking.specialist.firstName}`.trim() ||
+        null;
       const timeLabel = booking.startAt.toLocaleTimeString('ru-RU', {
         hour: '2-digit',
         minute: '2-digit',
         timeZone: 'Europe/Minsk',
       });
       const title = `SPA ${timeLabel}: ${clientName}`;
-      const description = `${serviceName} · ${tomorrow}`;
+      const description = [
+        serviceName,
+        performerName ? `к ${performerName}` : null,
+        tomorrow,
+      ]
+        .filter(Boolean)
+        .join(' · ');
       const metaBase = {
         phone: phone || null,
         clientName,
         membershipName: serviceName,
+        performerName,
         sessionKey,
         sessionDate: tomorrow,
         spaBookingId: booking.id,

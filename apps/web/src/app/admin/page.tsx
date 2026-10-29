@@ -246,9 +246,23 @@ export default function AdminHomePage() {
     if (layout.pins == null) {
       return ADMIN_HOME_DEFAULT_TASK_PINS.filter(allowedPin);
     }
-    return ADMIN_HOME_PINS.filter(
+    const ids = ADMIN_HOME_PINS.filter(
       (p) => p.kind === 'task' && selected.includes(p.id),
     ).map((p) => p.id);
+    // Soft-migrate: show ДР next to Абон. for saved layouts that predate the pin.
+    if (
+      allowedPin('task:birthday') &&
+      !ids.includes('task:birthday') &&
+      ids.includes('task:membership')
+    ) {
+      const i = ids.indexOf('task:membership');
+      return [
+        ...ids.slice(0, i + 1),
+        'task:birthday' as const,
+        ...ids.slice(i + 1),
+      ];
+    }
+    return ids;
   }, [effectivePins, allowedPin, layout.pins]);
 
   const navPins = useMemo(() => {
@@ -456,7 +470,7 @@ export default function AdminHomePage() {
                     {taskPins.length > 0 ? (
                       <div
                         className={cn(
-                          'grid grid-cols-3 gap-1 sm:grid-cols-6 sm:gap-1.5',
+                          'grid grid-cols-3 gap-1 sm:grid-cols-4 sm:gap-1.5 lg:grid-cols-7',
                           showTasksCard ? 'mt-2 sm:mt-3' : '',
                         )}
                       >
@@ -502,7 +516,7 @@ export default function AdminHomePage() {
 
                 {showWidget('expiringSoon') ? (
                   <Link
-                    href="/admin/tasks?topic=membership"
+                    href="/admin/tasks?view=now&kind=calls"
                     className="card !p-2.5 block transition hover:border-amber-500/40 sm:!p-3.5"
                   >
                     <div className="mb-1 flex items-center gap-1.5">

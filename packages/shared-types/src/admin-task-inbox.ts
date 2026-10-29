@@ -7,7 +7,8 @@ import type { GroupApprovalPendingTask } from './booking-control';
 
 /** Filter category on the admin inbox chips. */
 export type AdminInboxKind =
-  | 'calls'
+  | 'calls' // Абон. — membership renewals only
+  | 'birthday'
   | 'money'
   | 'control'
   | 'manager'
@@ -124,7 +125,14 @@ export interface AdminInboxTaskLike {
   planAmount?: number;
   overdueDays?: number;
   roomTitle?: string;
-  confirmClients?: Array<{ confirmed: boolean }>;
+  /** SPA specialist / reformer trainer / PT performer FIO. */
+  performerName?: string;
+  confirmClients?: Array<{
+    confirmed: boolean;
+    phone?: string;
+    clientName?: string;
+    externalId?: string;
+  }>;
   reworkCount?: number;
   reworkComment?: string;
   /** Booking-control card deep link (MANAGER rework from control). */
@@ -144,6 +152,8 @@ export interface AdminInboxItem {
   title: string;
   subtitle?: string;
   phone?: string;
+  /** Specialist / trainer FIO for booking confirms. */
+  performerName?: string;
   dueAt?: string;
   nextActionAt?: string;
   status?: string;
@@ -166,12 +176,44 @@ export interface AdminInboxItem {
 }
 
 export const ADMIN_INBOX_KIND_LABEL: Record<AdminInboxKind, string> = {
-  calls: 'Звонки',
+  calls: 'Абон.',
+  birthday: 'ДР',
   money: 'Деньги',
-  control: 'Контроль',
+  control: 'Подтвердить запись',
   manager: 'Руководитель',
   staff: 'Персонал',
 };
+
+/** Short chip label when full kind name is too long (mobile). */
+export const ADMIN_INBOX_KIND_SHORT_LABEL: Record<AdminInboxKind, string> = {
+  calls: 'Абон.',
+  birthday: 'ДР',
+  money: 'Деньги',
+  control: 'Подтв. запись',
+  manager: 'Руководитель',
+  staff: 'Персонал',
+};
+
+/** Debt / installment / staff-debt rows — not listed under «Просрочено». */
+export function isAdminInboxDebtKind(
+  item: Pick<AdminInboxItem, 'kind'>,
+): boolean {
+  return item.kind === 'money' || item.kind === 'staff';
+}
+
+/** Best available phone: task.phone → first unconfirmed client → any client. */
+export function resolveAdminInboxPhone(
+  item: Pick<AdminInboxItem, 'phone' | 'task'>,
+): string | undefined {
+  const direct = item.phone?.trim();
+  if (direct) return direct;
+  const clients = item.task?.confirmClients;
+  if (!clients?.length) return undefined;
+  const pending = clients.find((c) => !c.confirmed && c.phone?.trim());
+  if (pending?.phone?.trim()) return pending.phone.trim();
+  const any = clients.find((c) => c.phone?.trim());
+  return any?.phone?.trim() || undefined;
+}
 
 export const ADMIN_INBOX_VIEW_LABEL: Record<AdminInboxView, string> = {
   now: 'Сейчас',
@@ -183,6 +225,7 @@ export const ADMIN_INBOX_VIEW_LABEL: Record<AdminInboxView, string> = {
 
 const EMPTY_BY_KIND = (): Record<AdminInboxKind, number> => ({
   calls: 0,
+  birthday: 0,
   money: 0,
   control: 0,
   manager: 0,
@@ -222,13 +265,11 @@ export function adminInboxKindFromTask(task: {
 }): AdminInboxKind {
   const source = task.source ?? '';
   const topic = task.topic ?? '';
-  if (
-    source === 'MEMBERSHIP_EXPIRING' ||
-    source === 'BIRTHDAY' ||
-    topic === 'membership' ||
-    topic === 'birthday'
-  ) {
+  if (source === 'MEMBERSHIP_EXPIRING' || topic === 'membership') {
     return 'calls';
+  }
+  if (source === 'BIRTHDAY' || topic === 'birthday') {
+    return 'birthday';
   }
   if (
     source === 'CLIENT_DEBT' ||
@@ -559,6 +600,7 @@ function subtitleForTask(
   if (source === 'BOOKING_CONFIRM') {
     const parts = [
       task.membershipName ?? 'Запись',
+      task.performerName ? `к ${task.performerName}` : null,
       task.roomTitle,
       task.confirmClients
         ? `${task.confirmClients.filter((c) => c.confirmed).length}/${task.confirmClients.length}`
@@ -584,6 +626,12 @@ export function adminInboxItemFromTask(
   const bucket = adminInboxBucket(task, now);
   const owner = adminInboxOwner(task.assignee?.id, currentUserId);
   const visitToday = opts?.visitToday === true;
+  const phone =
+    task.phone?.trim() ||
+    task.confirmClients?.find((c) => !c.confirmed && c.phone?.trim())?.phone
+      ?.trim() ||
+    task.confirmClients?.find((c) => c.phone?.trim())?.phone?.trim() ||
+    undefined;
   return {
     id: task.id,
     virtual: false,
@@ -593,7 +641,8 @@ export function adminInboxItemFromTask(
     primaryAction: primaryActionForTask(task),
     title: displayTitle(task),
     subtitle: subtitleForTask(task, { visitToday }),
-    phone: task.phone,
+    phone,
+    performerName: task.performerName?.trim() || undefined,
     dueAt: task.dueAt,
     nextActionAt: task.nextActionAt,
     status: task.status,
@@ -732,6 +781,27 @@ export function filterAdminInboxItems(
         ) {
           return true;
         }
+        // Абон.: весь горизонт продлений (в т.ч. upcoming до 7/14 дн.), не только «сегодня».
+        if (
+          kind === 'calls' &&
+          (item.topic === 'membership' ||
+            item.source === 'MEMBERSHIP_EXPIRING') &&
+          item.owner !== 'other' &&
+          item.bucket !== 'done' &&
+          item.bucket !== 'waiting'
+        ) {
+          return true;
+        }
+        // ДР: поздравления на сегодня / просроченные.
+        if (
+          kind === 'birthday' &&
+          (item.topic === 'birthday' || item.source === 'BIRTHDAY') &&
+          item.owner !== 'other' &&
+          item.bucket !== 'done' &&
+          item.bucket !== 'waiting'
+        ) {
+          return true;
+        }
         return (
           (item.bucket === 'overdue' ||
             item.bucket === 'today' ||
@@ -799,8 +869,11 @@ export function inboxCountsFromItems(
     if (!isInAdminFocusQueue(item)) continue;
 
     counts.total += 1;
-    if (item.bucket === 'overdue') counts.overdue += 1;
-    if (item.bucket === 'today') counts.today += 1;
+    // Долги отдельно от «Просрочено» / «Сегодня» в фокусе.
+    if (!isAdminInboxDebtKind(item)) {
+      if (item.bucket === 'overdue') counts.overdue += 1;
+      if (item.bucket === 'today') counts.today += 1;
+    }
     if ((item.reworkCount ?? 0) > 0) counts.rework += 1;
   }
 
@@ -827,6 +900,7 @@ export function parseLegacyAdminTasksQuery(params: {
   const kindRaw = params.kind;
   if (
     kindRaw === 'calls' ||
+    kindRaw === 'birthday' ||
     kindRaw === 'money' ||
     kindRaw === 'control' ||
     kindRaw === 'manager' ||
@@ -836,8 +910,11 @@ export function parseLegacyAdminTasksQuery(params: {
   }
 
   const topic = params.topic;
-  if (topic === 'membership' || topic === 'birthday') {
+  if (topic === 'membership') {
     return { view, kind: 'calls' };
+  }
+  if (topic === 'birthday') {
+    return { view, kind: 'birthday' };
   }
   if (topic === 'client_debt' || topic === 'installment') {
     return { view, kind: 'money' };

@@ -97,6 +97,37 @@ describe('adminFocusLane', () => {
   });
 });
 
+describe('filterAdminInboxItems membership / birthday kinds', () => {
+  it('keeps upcoming renewals when kind=calls', () => {
+    const rows = [
+      item({
+        id: 'm',
+        kind: 'calls',
+        source: 'MEMBERSHIP_EXPIRING',
+        topic: 'membership',
+        bucket: 'upcoming',
+      }),
+      item({
+        id: 'b',
+        kind: 'birthday',
+        source: 'BIRTHDAY',
+        topic: 'birthday',
+        bucket: 'today',
+      }),
+    ];
+    const abon = filterAdminInboxItems(rows, { view: 'now', kind: 'calls' });
+    assert.deepEqual(
+      abon.map((r) => r.id),
+      ['m'],
+    );
+    const dr = filterAdminInboxItems(rows, { view: 'now', kind: 'birthday' });
+    assert.deepEqual(
+      dr.map((r) => r.id),
+      ['b'],
+    );
+  });
+});
+
 describe('filterAdminInboxItems focus', () => {
   it('excludes old installments from view=now without kind', () => {
     const rows = [
@@ -200,5 +231,28 @@ describe('inboxCountsFromItems focus totals', () => {
     assert.equal(counts.total, 1);
     assert.equal(counts.today, 1);
     assert.equal(counts.overdue, 0);
+  });
+
+  it('excludes visit debts from overdue/today focus counters', () => {
+    const counts = inboxCountsFromItems([
+      item({
+        id: 'debt',
+        kind: 'money',
+        source: 'CLIENT_DEBT',
+        topic: 'client_debt',
+        bucket: 'overdue',
+        visitToday: true,
+      }),
+      item({
+        id: 'cfm',
+        kind: 'control',
+        source: 'BOOKING_CONFIRM',
+        topic: 'confirmation',
+        bucket: 'overdue',
+      }),
+    ]);
+    assert.equal(counts.total, 2);
+    assert.equal(counts.overdue, 1);
+    assert.equal(counts.byKind.money, 1);
   });
 });

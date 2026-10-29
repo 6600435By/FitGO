@@ -14,10 +14,12 @@ import {
   isAdminHomePinId,
   isAdminHomeWidgetId,
   outcomesForSource,
+  resolveAdminInboxPhone,
   sortAdminInboxItems,
   type AdminHomeLayoutValue,
   type AdminHomePinId,
   type AdminHomeWidgetId,
+  type AdminInboxItem,
   type AdminRenewalActionBody,
   type AdminDashboard,
   type AdminTasksInboxResponse,
@@ -205,27 +207,42 @@ export class AdminService {
         orderBy: { nextActionAt: 'asc' },
         take: 5,
       }),
-      this.prisma.adminTask.count({
-        where: {
-          clubId,
-          source: 'MEMBERSHIP_EXPIRING',
-          status: {
-            in: [
-              PrismaAdminTaskStatus.OPEN,
-              PrismaAdminTaskStatus.IN_PROGRESS,
-            ],
-          },
-          nextActionAt: { lte: now },
-          AND: [
-            {
-              OR: [
-                { stage: null },
-                { stage: { notIn: ['RENEWED', 'LOST', 'WILL_RENEW'] } },
+      // Абон. chip: open renewals with validUntil within 7 days (same window as «Истекают скоро»).
+      this.prisma.adminTask
+        .findMany({
+          where: {
+            clubId,
+            source: 'MEMBERSHIP_EXPIRING',
+            status: {
+              in: [
+                PrismaAdminTaskStatus.OPEN,
+                PrismaAdminTaskStatus.IN_PROGRESS,
               ],
             },
-          ],
-        },
-      }),
+            AND: [
+              {
+                OR: [
+                  { stage: null },
+                  { stage: { notIn: ['RENEWED', 'LOST', 'WILL_RENEW'] } },
+                ],
+              },
+            ],
+          },
+          select: { dueAt: true, meta: true },
+        })
+        .then(
+          (open) =>
+            open.filter((t) => {
+              const meta = (t.meta ?? {}) as Record<string, unknown>;
+              const vu =
+                typeof meta.validUntil === 'string'
+                  ? meta.validUntil.slice(0, 10)
+                  : t.dueAt
+                    ? localDayKey(t.dueAt)
+                    : null;
+              return vu != null && vu <= in7Str;
+            }).length,
+        ),
       this.prisma.adminTask.count({
         where: {
           clubId,
@@ -757,6 +774,9 @@ export class AdminService {
     void this.tasksScheduler
       .refreshBookingConfirmations(clubId)
       .catch(() => undefined);
+    void this.tasksScheduler
+      .refreshMembershipRenewals(clubId)
+      .catch(() => undefined);
     this.tasksScheduler.refreshBirthdaysNonBlocking(clubId);
   }
 
@@ -777,50 +797,95 @@ export class AdminService {
       ] as string[],
     };
 
-    const tasks = await this.prisma.adminTask.findMany({
-      where: {
-        clubId,
-        OR: [
-          {
-            assigneeId: user.sub,
-            NOT: {
+    const taskInclude = {
+      assignee: true,
+      createdBy: { select: { id: true, firstName: true, lastName: true } },
+    } as const;
+
+    const [mainTasks, membershipTasks, birthdayTasks] = await Promise.all([
+      this.prisma.adminTask.findMany({
+        where: {
+          clubId,
+          OR: [
+            {
+              assigneeId: user.sub,
+              NOT: {
+                OR: [
+                  { source: 'DEBT_OVERDUE' },
+                  {
+                    source: { in: ['STAFF_DEBT', 'CLIENT_DEBT'] },
+                    dedupeKey: { startsWith: 'debt:' },
+                  },
+                ],
+              },
+            },
+            {
+              source: sharedOpen,
+              status: {
+                in: [
+                  PrismaAdminTaskStatus.OPEN,
+                  PrismaAdminTaskStatus.IN_PROGRESS,
+                ],
+              },
+              // Debt queue: only aggregated debtor:* rows
               OR: [
-                { source: 'DEBT_OVERDUE' },
-                {
-                  source: { in: ['STAFF_DEBT', 'CLIENT_DEBT'] },
-                  dedupeKey: { startsWith: 'debt:' },
-                },
+                { source: { notIn: ['CLIENT_DEBT', 'STAFF_DEBT'] } },
+                { dedupeKey: { startsWith: 'debtor:' } },
               ],
             },
-          },
-          {
-            source: sharedOpen,
-            status: {
-              in: [
-                PrismaAdminTaskStatus.OPEN,
-                PrismaAdminTaskStatus.IN_PROGRESS,
-              ],
+            {
+              source: 'MEMBERSHIP_EXPIRING',
+              status: PrismaAdminTaskStatus.DONE,
+              completedAt: { gte: weekAgo },
             },
-            // Debt queue: only aggregated debtor:* rows
-            OR: [
-              { source: { notIn: ['CLIENT_DEBT', 'STAFF_DEBT'] } },
-              { dedupeKey: { startsWith: 'debtor:' } },
+          ],
+        },
+        include: taskInclude,
+        orderBy: [
+          { status: 'asc' },
+          { nextActionAt: 'asc' },
+          { dueAt: 'asc' },
+        ],
+        take: 300,
+      }),
+      // Guaranteed fetch — main take:300 can drop renewals behind a large debt queue.
+      this.prisma.adminTask.findMany({
+        where: {
+          clubId,
+          source: 'MEMBERSHIP_EXPIRING',
+          status: {
+            in: [
+              PrismaAdminTaskStatus.OPEN,
+              PrismaAdminTaskStatus.IN_PROGRESS,
             ],
           },
-          {
-            source: 'MEMBERSHIP_EXPIRING',
-            status: PrismaAdminTaskStatus.DONE,
-            completedAt: { gte: weekAgo },
+        },
+        include: taskInclude,
+        orderBy: [{ nextActionAt: 'asc' }, { dueAt: 'asc' }],
+        take: 150,
+      }),
+      this.prisma.adminTask.findMany({
+        where: {
+          clubId,
+          source: 'BIRTHDAY',
+          status: {
+            in: [
+              PrismaAdminTaskStatus.OPEN,
+              PrismaAdminTaskStatus.IN_PROGRESS,
+            ],
           },
-        ],
-      },
-      include: {
-        assignee: true,
-        createdBy: { select: { id: true, firstName: true, lastName: true } },
-      },
-      orderBy: [{ status: 'asc' }, { nextActionAt: 'asc' }, { dueAt: 'asc' }],
-      take: 300,
-    });
+        },
+        include: taskInclude,
+        orderBy: [{ dueAt: 'asc' }],
+        take: 100,
+      }),
+    ]);
+
+    const tasksById = new Map(mainTasks.map((t) => [t.id, t]));
+    for (const t of [...membershipTasks, ...birthdayTasks]) {
+      if (!tasksById.has(t.id)) tasksById.set(t.id, t);
+    }
+    const tasks = [...tasksById.values()];
 
     const saleIds = tasks
       .map((task) => task.relatedSaleId)
@@ -945,11 +1010,12 @@ export class AdminService {
     ]);
 
     const now = new Date();
-    const fromTasks = tasks.map((t) => {
+    let fromTasks = tasks.map((t) => {
       const ext = t.clientExternalId?.trim();
       const visitToday = !!ext && visitingExternalIds.has(ext);
       return adminInboxItemFromTask(t, user.sub, now, { visitToday });
     });
+    fromTasks = await this.enrichInboxPhones(clubId, fromTasks);
     const fromPending = [
       ...gpPending,
       ...spaPending,
@@ -966,6 +1032,172 @@ export class AdminService {
       skippedBirthdays: birthdayMeta.skipped,
       birthdayScanError: birthdayMeta.scanError,
     };
+  }
+
+  /**
+   * Fill missing phones from User / SpaBooking when task meta has no number.
+   * Needed for call buttons on focus + task detail for older confirm rows.
+   */
+  private async enrichInboxPhones(
+    clubId: string,
+    items: AdminInboxItem[],
+  ): Promise<AdminInboxItem[]> {
+    const needExt = new Set<string>();
+    const spaBookingIds = new Set<string>();
+    const onexSessionIds = new Set<string>();
+    for (const item of items) {
+      const sk = item.task?.sessionKey ?? '';
+      const spaMatch = /^fitgo:SPA:(.+)$/.exec(sk);
+      if (spaMatch?.[1]) spaBookingIds.add(spaMatch[1]);
+      const onexMatch = /^1c:(.+)$/.exec(sk);
+      if (onexMatch?.[1] && !item.performerName && !item.task?.performerName) {
+        onexSessionIds.add(onexMatch[1]);
+      }
+      if (resolveAdminInboxPhone(item)) continue;
+      const ext = item.task?.clientExternalId?.trim();
+      if (ext) needExt.add(ext);
+      for (const c of item.task?.confirmClients ?? []) {
+        const id = c.externalId?.trim();
+        if (id && !id.startsWith('guest:')) needExt.add(id);
+      }
+    }
+    if (!needExt.size && !spaBookingIds.size && !onexSessionIds.size) {
+      return items;
+    }
+
+    const [users, spaRows, onexRows] = await Promise.all([
+      needExt.size
+        ? this.prisma.user
+            .findMany({
+              where: {
+                clubId,
+                externalId: { in: [...needExt] },
+                phone: { not: null },
+              },
+              select: { externalId: true, phone: true },
+              take: 500,
+            })
+            .catch(
+              () =>
+                [] as Array<{
+                  externalId: string | null;
+                  phone: string | null;
+                }>,
+            )
+        : Promise.resolve(
+            [] as Array<{ externalId: string | null; phone: string | null }>,
+          ),
+      spaBookingIds.size
+        ? this.prisma.spaBooking
+            .findMany({
+              where: { clubId, id: { in: [...spaBookingIds] } },
+              select: {
+                id: true,
+                guestPhone: true,
+                client: { select: { phone: true, externalId: true } },
+                specialist: {
+                  select: { firstName: true, lastName: true },
+                },
+              },
+              take: 200,
+            })
+            .catch(() => [])
+        : Promise.resolve([]),
+      onexSessionIds.size
+        ? this.prisma.onexClassSession
+            .findMany({
+              where: {
+                clubId,
+                externalId: { in: [...onexSessionIds] },
+              },
+              select: { externalId: true, employeeName: true },
+              take: 200,
+            })
+            .catch(() => [])
+        : Promise.resolve([]),
+    ]);
+
+    const phoneByExt = new Map(
+      users
+        .filter((u) => u.externalId && u.phone)
+        .map((u) => [u.externalId as string, u.phone as string]),
+    );
+    const spaById = new Map(spaRows.map((r) => [r.id, r] as const));
+    const trainerByOnex = new Map(
+      onexRows
+        .filter((r) => r.employeeName?.trim())
+        .map((r) => [r.externalId, r.employeeName!.trim()] as const),
+    );
+
+    return items.map((item) => {
+      let phone = resolveAdminInboxPhone(item);
+      let performerName = item.performerName ?? item.task?.performerName;
+      const sk = item.task?.sessionKey ?? '';
+      const spaId = /^fitgo:SPA:(.+)$/.exec(sk)?.[1];
+      const spa = spaId ? spaById.get(spaId) : undefined;
+      const onexId = /^1c:(.+)$/.exec(sk)?.[1];
+      if (!phone) {
+        const ext = item.task?.clientExternalId?.trim();
+        if (ext && phoneByExt.get(ext)) phone = phoneByExt.get(ext);
+        if (!phone) {
+          for (const c of item.task?.confirmClients ?? []) {
+            const id = c.externalId?.trim();
+            if (id && phoneByExt.get(id)) {
+              phone = phoneByExt.get(id);
+              break;
+            }
+          }
+        }
+        if (!phone && spa) {
+          phone =
+            spa.client?.phone?.trim() ||
+            spa.guestPhone?.trim() ||
+            undefined;
+        }
+      }
+      if (!performerName && spa?.specialist) {
+        performerName =
+          `${spa.specialist.lastName} ${spa.specialist.firstName}`.trim() ||
+          undefined;
+      }
+      if (!performerName && onexId) {
+        performerName = trainerByOnex.get(onexId);
+      }
+      if (!phone && !performerName) return item;
+
+      const confirmClients = item.task?.confirmClients?.map((c) => {
+        if (c.phone?.trim()) return c;
+        const id = c.externalId?.trim();
+        const filled = id ? phoneByExt.get(id) : undefined;
+        return filled ? { ...c, phone: filled } : c;
+      });
+
+      const nextTask = item.task
+        ? {
+            ...item.task,
+            phone: phone ?? item.task.phone,
+            performerName: performerName ?? item.task.performerName,
+            confirmClients: confirmClients ?? item.task.confirmClients,
+          }
+        : item.task;
+
+      const subtitle =
+        performerName &&
+        item.source === 'BOOKING_CONFIRM' &&
+        !(item.subtitle ?? '').includes(performerName)
+          ? [item.task?.membershipName ?? item.subtitle, `к ${performerName}`]
+              .filter(Boolean)
+              .join(' · ')
+          : item.subtitle;
+
+      return {
+        ...item,
+        phone: phone ?? item.phone,
+        performerName: performerName ?? item.performerName,
+        subtitle,
+        task: nextTask,
+      };
+    });
   }
 
   /** Clients with a non-cancelled GP / PT / SPA booking today (club TZ). */
@@ -2007,7 +2239,28 @@ export class AdminService {
       lostReason: task.lostReason ?? undefined,
       doNotCall: task.doNotCall ?? false,
       clientExternalId: task.clientExternalId ?? undefined,
-      phone: typeof meta.phone === 'string' ? meta.phone : undefined,
+      phone: (() => {
+        if (typeof meta.phone === 'string' && meta.phone.trim()) {
+          return meta.phone.trim();
+        }
+        if (Array.isArray(meta.clients)) {
+          const rows = meta.clients as Array<Record<string, unknown>>;
+          const pending = rows.find(
+            (c) =>
+              c.confirmed !== true &&
+              typeof c.phone === 'string' &&
+              !!String(c.phone).trim(),
+          );
+          if (pending && typeof pending.phone === 'string') {
+            return pending.phone.trim();
+          }
+          const any = rows.find(
+            (c) => typeof c.phone === 'string' && !!String(c.phone).trim(),
+          );
+          if (any && typeof any.phone === 'string') return any.phone.trim();
+        }
+        return undefined;
+      })(),
       firstName:
         typeof meta.firstName === 'string' && meta.firstName.trim()
           ? meta.firstName.trim()
@@ -2020,6 +2273,12 @@ export class AdminService {
         typeof meta.membershipName === 'string'
           ? meta.membershipName
           : undefined,
+      performerName:
+        typeof meta.performerName === 'string' && meta.performerName.trim()
+          ? meta.performerName.trim()
+          : typeof meta.employeeName === 'string' && meta.employeeName.trim()
+            ? meta.employeeName.trim()
+            : undefined,
       validUntil,
       daysLeft,
       docId: typeof meta.docId === 'string' ? meta.docId : undefined,

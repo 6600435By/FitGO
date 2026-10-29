@@ -127,11 +127,10 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
   },
   {
     id: 'task:membership',
-    label: 'По сроку',
+    label: 'Абонементы по сроку',
     shortLabel: 'Абон.',
     kind: 'task',
-    href: '/admin/tasks?view=now&kind=calls&topic=membership',
-    nested: true,
+    href: '/admin/tasks?view=now&kind=calls',
     modules: ['club_admin'],
   },
   {
@@ -139,8 +138,7 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
     label: 'Дни рождения',
     shortLabel: 'ДР',
     kind: 'task',
-    href: '/admin/tasks?view=now&kind=calls&topic=birthday',
-    nested: true,
+    href: '/admin/tasks?view=now&kind=birthday',
     modules: ['club_admin'],
   },
   {
@@ -179,8 +177,8 @@ export const ADMIN_HOME_PINS: AdminHomePinDef[] = [
   },
   {
     id: 'task:control',
-    label: 'Контроль',
-    shortLabel: 'Контроль',
+    label: 'Подтвердить запись',
+    shortLabel: 'Подтв. запись',
     kind: 'task',
     href: '/admin/tasks?view=now&kind=control',
     modules: ['club_admin'],
@@ -339,6 +337,7 @@ export const ADMIN_HOME_DEFAULT_WIDGETS: AdminHomeWidgetId[] = [
 export const ADMIN_HOME_DEFAULT_TASK_PINS: AdminHomePinId[] = [
   'task:control',
   'task:membership',
+  'task:birthday',
   'task:group_approval',
   'task:spa_approval',
   'task:pt_approval',

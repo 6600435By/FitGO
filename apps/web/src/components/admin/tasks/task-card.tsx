@@ -2,8 +2,10 @@
 
 import type { AdminInboxItem } from '@fitgo/shared-types';
 import {
-  ADMIN_INBOX_KIND_LABEL,
+  ADMIN_INBOX_KIND_SHORT_LABEL,
+  resolveAdminInboxPhone,
 } from '@fitgo/shared-types';
+import { Phone } from 'lucide-react';
 import { phoneTelHref } from '@/lib/phone';
 import { TaskActionsMenu, type TaskMenuAction } from './task-actions-menu';
 
@@ -44,7 +46,7 @@ function ownerLabel(item: AdminInboxItem) {
 function primaryLabel(item: AdminInboxItem) {
   switch (item.primaryAction) {
     case 'call':
-      return item.phone ? `Позвонить ${item.phone}` : 'Позвонить';
+      return 'Исход после звонка';
     case 'open_renewal':
       return 'Открыть воронку';
     case 'open_session':
@@ -71,7 +73,8 @@ export function TaskCard({
   onPrimary: () => void;
   onMenu: (action: TaskMenuAction) => void;
 }) {
-  const tel = phoneTelHref(item.phone);
+  const phone = resolveAdminInboxPhone(item);
+  const tel = phoneTelHref(phone);
 
   return (
     <li
@@ -82,9 +85,15 @@ export function TaskCard({
       <button type="button" className="w-full text-left" onClick={onSelect}>
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] uppercase tracking-wide text-slate-500">
-            {ADMIN_INBOX_KIND_LABEL[item.kind]}
+            {ADMIN_INBOX_KIND_SHORT_LABEL[item.kind]}
           </span>
-          {bucketBadge(item.bucket)}
+          {item.kind === 'money' || item.kind === 'staff' ? (
+            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-200">
+              Долг
+            </span>
+          ) : (
+            bucketBadge(item.bucket)
+          )}
           {(item.reworkCount ?? 0) > 0 && item.bucket !== 'done' ? (
             <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">
               Доработка
@@ -95,6 +104,9 @@ export function TaskCard({
         {item.subtitle ? (
           <p className="mt-0.5 text-sm text-slate-400">{item.subtitle}</p>
         ) : null}
+        {phone ? (
+          <p className="mt-0.5 text-xs tabular-nums text-slate-500">{phone}</p>
+        ) : null}
         <p className="mt-1 text-xs text-slate-500">
           {ownerLabel(item)}
           {item.reworkComment ? ` · ${item.reworkComment}` : ''}
@@ -102,14 +114,28 @@ export function TaskCard({
       </button>
 
       <div className="flex items-stretch gap-2">
-        {item.primaryAction === 'call' && tel ? (
+        {tel ? (
           <a
             href={tel}
-            className="btn-primary flex flex-1 items-center justify-center text-center text-xs"
+            aria-label={`Позвонить ${phone}`}
+            title="Позвонить"
+            className="btn-primary inline-flex h-9 w-9 shrink-0 items-center justify-center !rounded-xl !p-0"
             onClick={(e) => e.stopPropagation()}
           >
-            {primaryLabel(item)}
+            <Phone className="h-4 w-4" />
           </a>
+        ) : null}
+        {item.primaryAction === 'call' && tel ? (
+          <button
+            type="button"
+            className="btn-secondary flex flex-1 items-center justify-center text-center text-xs"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPrimary();
+            }}
+          >
+            {primaryLabel(item)}
+          </button>
         ) : (
           <button
             type="button"

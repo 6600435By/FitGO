@@ -5,7 +5,11 @@ import type {
   AdminInboxItem,
   AdminTaskEventItem,
 } from '@fitgo/shared-types';
-import { AdminTaskStatus } from '@fitgo/shared-types';
+import {
+  AdminTaskStatus,
+  resolveAdminInboxPhone,
+} from '@fitgo/shared-types';
+import { Phone } from 'lucide-react';
 import { BirthdayCallScript } from '@/components/admin/birthday-call-script';
 import { phoneTelHref } from '@/lib/phone';
 import { formatDate, formatDateTime } from '@/lib/utils';
@@ -43,11 +47,13 @@ export function TaskDetail({
   onOutcome: () => void;
 }) {
   const task = item.task;
-  const tel = phoneTelHref(item.phone);
+  const phone = resolveAdminInboxPhone(item);
+  const tel = phoneTelHref(phone);
   const isDebt =
     item.source === 'CLIENT_DEBT' ||
     item.source === 'STAFF_DEBT' ||
-    item.source === 'DEBT_OVERDUE';
+    item.source === 'DEBT_OVERDUE' ||
+    item.source === 'INSTALLMENT_PAYMENT';
   const isBirthday = item.source === 'BIRTHDAY';
   const isConfirm = item.source === 'BOOKING_CONFIRM';
   const clients = task && 'confirmClients' in task
@@ -60,14 +66,25 @@ export function TaskDetail({
         visitNote?: string;
       }> }).confirmClients
     : undefined;
+  const performerName =
+    item.performerName ??
+    (task && 'performerName' in task
+      ? (task as { performerName?: string }).performerName
+      : undefined);
 
   return (
     <div className="card space-y-3 !p-4">
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="min-w-0">
           <p className="font-semibold">{item.title}</p>
           {item.subtitle ? (
             <p className="text-sm text-slate-400">{item.subtitle}</p>
+          ) : null}
+          {performerName &&
+          !(item.subtitle ?? '').includes(performerName) ? (
+            <p className="mt-0.5 text-xs text-slate-500">
+              Специалист: {performerName}
+            </p>
           ) : null}
         </div>
         {onClose ? (
@@ -113,8 +130,12 @@ export function TaskDetail({
       ) : null}
 
       {tel ? (
-        <a href={tel} className="btn-primary flex w-full justify-center text-xs">
-          Позвонить {item.phone}
+        <a
+          href={tel}
+          className="btn-primary flex w-full items-center justify-center gap-2 text-xs"
+        >
+          <Phone className="h-3.5 w-3.5" />
+          Позвонить {phone}
         </a>
       ) : null}
 
@@ -167,8 +188,13 @@ export function TaskDetail({
               }`}
             >
               <div className="flex items-start justify-between gap-2">
-                <div>
+                <div className="min-w-0">
                   <p className="text-sm font-medium">{client.clientName}</p>
+                  {(client.phone || (!client.confirmed && phone)) ? (
+                    <p className="mt-0.5 text-[11px] tabular-nums text-slate-500">
+                      {client.phone || phone}
+                    </p>
+                  ) : null}
                   {client.clientNote ? (
                     <p className="text-[11px] text-amber-200/85">
                       Клиент: {client.clientNote}
@@ -180,28 +206,33 @@ export function TaskDetail({
                     </p>
                   ) : null}
                 </div>
-                <button
-                  type="button"
-                  className={
-                    client.confirmed
-                      ? 'btn-secondary text-[11px]'
-                      : 'btn-primary text-[11px]'
-                  }
-                  onClick={() =>
-                    onConfirmClient?.(client.externalId, !client.confirmed)
-                  }
-                >
-                  {client.confirmed ? 'Снять' : 'Проверил'}
-                </button>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {!client.confirmed &&
+                  phoneTelHref(client.phone || phone) ? (
+                    <a
+                      href={phoneTelHref(client.phone || phone)}
+                      aria-label="Позвонить"
+                      title="Позвонить"
+                      className="btn-primary inline-flex h-8 w-8 items-center justify-center !rounded-full !p-0"
+                    >
+                      <Phone className="h-3.5 w-3.5" />
+                    </a>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={
+                      client.confirmed
+                        ? 'btn-secondary text-[11px]'
+                        : 'btn-primary text-[11px]'
+                    }
+                    onClick={() =>
+                      onConfirmClient?.(client.externalId, !client.confirmed)
+                    }
+                  >
+                    {client.confirmed ? 'Снять' : 'Проверил'}
+                  </button>
+                </div>
               </div>
-              {!client.confirmed && client.phone ? (
-                <a
-                  href={phoneTelHref(client.phone)}
-                  className="btn-primary mt-2 flex w-full justify-center text-[11px]"
-                >
-                  Позвонить {client.phone}
-                </a>
-              ) : null}
             </li>
           ))}
         </ul>

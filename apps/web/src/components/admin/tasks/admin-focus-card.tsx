@@ -4,13 +4,17 @@ import type {
   AdminInboxItem,
   AdminTasksInboxResponse,
 } from '@fitgo/shared-types';
-import { ListTodo } from 'lucide-react';
+import {
+  filterAdminInboxItems,
+  isAdminInboxDebtKind,
+  resolveAdminInboxPhone,
+} from '@fitgo/shared-types';
+import { ListTodo, Phone } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { phoneTelHref } from '@/lib/phone';
-import { filterAdminInboxItems } from '@fitgo/shared-types';
 
 function FocusStat({
   href,
@@ -42,7 +46,10 @@ function FocusStat({
 
 function primaryHref(item: AdminInboxItem): string {
   if (item.primaryAction === 'open_renewal') {
-    return `/admin/tasks?view=now&kind=calls&topic=membership&task=${item.id}`;
+    return `/admin/tasks?view=now&kind=calls&task=${item.id}`;
+  }
+  if (item.kind === 'birthday' || item.source === 'BIRTHDAY') {
+    return `/admin/tasks?view=now&kind=birthday&task=${item.id}`;
   }
   if (
     item.primaryAction === 'confirm' ||
@@ -57,10 +64,24 @@ function primaryHref(item: AdminInboxItem): string {
   if (item.kind === 'money') {
     return `/admin/tasks?view=now&kind=money&task=${item.id}`;
   }
+  if (item.kind === 'staff') {
+    return `/admin/tasks?view=now&kind=staff&task=${item.id}`;
+  }
+  if (item.kind === 'calls') {
+    return `/admin/tasks?view=now&kind=calls&task=${item.id}`;
+  }
   if (item.virtual && item.pending?.sessionKey) {
     return `/admin/tasks?view=now&kind=control&task=${encodeURIComponent(item.id)}`;
   }
   return `/admin/tasks?view=now&task=${item.id}`;
+}
+
+function focusCtaLabel(item: AdminInboxItem): string {
+  if (item.primaryAction === 'confirm') return 'Подтвердить';
+  if (item.primaryAction === 'open_renewal') return 'Воронка';
+  if (item.primaryAction === 'call') return 'Открыть';
+  if (item.kind === 'money' || item.kind === 'staff') return 'Долг';
+  return 'Открыть';
 }
 
 export function AdminFocusCard() {
@@ -76,9 +97,11 @@ export function AdminFocusCard() {
   }, []);
 
   const counts = inbox?.counts;
-  const preview = inbox
-    ? filterAdminInboxItems(inbox.items, { view: 'now' }).slice(0, 3)
+  const focusItems = inbox
+    ? filterAdminInboxItems(inbox.items, { view: 'now' })
     : [];
+  const preview = focusItems.slice(0, 3);
+  const debtCount = focusItems.filter(isAdminInboxDebtKind).length;
 
   return (
     <div className="card !p-3 sm:!p-4">
@@ -103,7 +126,7 @@ export function AdminFocusCard() {
             </Link>
           </div>
 
-          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
             <FocusStat
               href="/admin/tasks?view=now"
               label="Просрочено"
@@ -114,6 +137,12 @@ export function AdminFocusCard() {
               href="/admin/tasks?view=now"
               label="Сегодня"
               value={counts?.today ?? 0}
+            />
+            <FocusStat
+              href="/admin/tasks?view=now&kind=money"
+              label="Долги"
+              value={debtCount}
+              warn
             />
             <FocusStat
               href="/admin/tasks?view=mine"
@@ -131,21 +160,12 @@ export function AdminFocusCard() {
           {preview.length > 0 ? (
             <ul className="divide-y divide-slate-800">
               {preview.map((item) => {
-                const tel =
-                  item.primaryAction === 'call'
-                    ? phoneTelHref(item.phone)
-                    : undefined;
-                const cta =
-                  item.primaryAction === 'confirm'
-                    ? 'Подтвердить'
-                    : item.primaryAction === 'open_renewal'
-                      ? 'Воронка'
-                      : tel
-                        ? 'Звонок'
-                        : 'Открыть';
+                const phone = resolveAdminInboxPhone(item);
+                const tel = phoneTelHref(phone);
+                const cta = focusCtaLabel(item);
                 return (
                   <li key={item.id}>
-                    <div className="flex items-center justify-between gap-2 py-2">
+                    <div className="flex items-center gap-2 py-2">
                       <Link
                         href={primaryHref(item)}
                         className="min-w-0 flex-1 transition hover:text-fitgo-300"
@@ -158,22 +178,30 @@ export function AdminFocusCard() {
                             {item.subtitle}
                           </p>
                         ) : null}
+                        {phone ? (
+                          <p className="mt-0.5 truncate text-[11px] tabular-nums text-slate-500">
+                            {phone}
+                          </p>
+                        ) : null}
                       </Link>
-                      {tel ? (
-                        <a
-                          href={tel}
-                          className="btn-primary shrink-0 !px-2 !py-1 text-[11px]"
-                        >
-                          {cta}
-                        </a>
-                      ) : (
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {tel ? (
+                          <a
+                            href={tel}
+                            aria-label={`Позвонить ${phone}`}
+                            title="Позвонить"
+                            className="btn-primary inline-flex h-8 w-8 items-center justify-center !rounded-full !p-0"
+                          >
+                            <Phone className="h-3.5 w-3.5" />
+                          </a>
+                        ) : null}
                         <Link
                           href={primaryHref(item)}
-                          className="btn-secondary shrink-0 !px-2 !py-1 text-[11px]"
+                          className="btn-secondary shrink-0 !px-2.5 !py-1.5 text-[11px]"
                         >
                           {cta}
                         </Link>
-                      )}
+                      </div>
                     </div>
                   </li>
                 );
