@@ -1515,6 +1515,13 @@ export function BookingControlPanel({
       setMessage('Нет записей без журнала в текущем списке');
       return;
     }
+    const ok = window.confirm(
+      `Добавить в журнал ${keys.length} SPA из текущего списка?\n\n` +
+        'В FitGO появятся записи журнала для однозначных SPA из 1С (без дубля по слоту).\n' +
+        'Строки, где нужна ручная услуга или слот уже занят, будут пропущены.\n\n' +
+        'Продолжить?',
+    );
+    if (!ok) return;
     setBulkAdoptBusy(true);
     setMessage('');
     try {
@@ -2272,6 +2279,15 @@ export function BookingControlPanel({
       .map((i) => i.sessionKey)
       .filter((k) => bulkSelected.has(k));
     if (!sessionKeys.length) return;
+    const roleRu = bulkRole === 'admin' ? 'админом' : 'тренером';
+    const ok = window.confirm(
+      `Подтвердить ${sessionKeys.length} групповых занятий (${roleRu})?\n\n` +
+        'На выбранные ГП будет проставлена отметка подтверждения.\n' +
+        'Занятия сразу войдут в расчёт ЗП.\n' +
+        'Массово откатить нельзя — снять можно только точечно (вернуть на доработку).\n\n' +
+        'Продолжить?',
+    );
+    if (!ok) return;
     setBulkBusy(true);
     setMessage('');
     try {
