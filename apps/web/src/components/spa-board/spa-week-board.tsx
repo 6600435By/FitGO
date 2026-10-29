@@ -227,7 +227,8 @@ type DragState = {
   valid: boolean;
   validity: DragValidity;
   overlapMin: number;
-  grabOffsetY: number;
+  /** Minutes from booking start to the grab point (time-space, not visual px). */
+  grabOffsetMin: number;
   pointerX: number;
   pointerY: number;
 };
@@ -247,7 +248,7 @@ type PointerStart = {
   height: number;
   durationMin: number;
   pointerType: string;
-  grabOffsetY: number;
+  grabOffsetMin: number;
 };
 
 export type SpaBoardMode = 'specialist' | 'admin';
@@ -517,7 +518,7 @@ export function SpaWeekBoard({
         startMinutes: snapped,
         durationMin: pending.durationMin,
         height: pending.height,
-        grabOffsetY: pending.grabOffsetY,
+        grabOffsetMin: pending.grabOffsetMin,
         pointerX: pending.x,
         pointerY: pending.y,
         valid: drop.ok,
@@ -541,31 +542,38 @@ export function SpaWeekBoard({
   }, []);
 
   const resolveDropTarget = useCallback(
-    (clientX: number, clientY: number, grabOffsetY: number) => {
+    (
+      clientX: number,
+      clientY: number,
+      grabOffsetMin: number,
+      durationMin: number,
+    ) => {
+      const px = Math.max(0.01, pxPerMin);
       for (const d of days) {
         const key = dateKey(d);
         const el = columnRefs.current.get(key);
         if (!el) continue;
         const rect = el.getBoundingClientRect();
-        if (clientX < rect.left || clientX > rect.right) continue;
-        const colHeight = Math.max(1, rect.height);
-        const adjustedY = clientY - grabOffsetY;
-        const relY = Math.max(
-          0,
-          Math.min(adjustedY - rect.top, colHeight - 1),
-        );
-        const minsFromView =
-          Math.floor(relY / pxPerMin / GRID_STEP_MIN) * GRID_STEP_MIN;
-        const maxStart =
+        // Slight X slop helps fat-finger drops near day borders.
+        if (clientX < rect.left - 8 || clientX > rect.right + 8) continue;
+
+        const fingerMinsFromView = (clientY - rect.top) / px;
+        const rawStart =
+          viewport.viewStartMin + fingerMinsFromView - grabOffsetMin;
+        const snapped =
+          Math.round(rawStart / GRID_STEP_MIN) * GRID_STEP_MIN;
+        const minStart = viewport.viewStartMin;
+        const maxStart = Math.max(
+          minStart,
           Math.floor(
-            (viewport.viewEndMin - viewport.viewStartMin - GRID_STEP_MIN) /
-              GRID_STEP_MIN,
-          ) * GRID_STEP_MIN;
-        const clamped = Math.max(0, Math.min(minsFromView, maxStart));
+            (viewport.viewEndMin - durationMin) / GRID_STEP_MIN,
+          ) * GRID_STEP_MIN,
+        );
+        const minutes = Math.max(minStart, Math.min(snapped, maxStart));
         return {
           day: d,
           dayKey: key,
-          minutes: viewport.viewStartMin + clamped,
+          minutes,
         };
       }
       return null;
@@ -631,40 +639,73 @@ export function SpaWeekBoard({
   const commitMoveRef = useRef(commitMove);
   commitMoveRef.current = commitMove;
 
+  const isTracking = Boolean(drag || pointerStart);
+  const boardScrollRef = useRef<HTMLDivElement | null>(null);
+
+  // If the journal scrolls while a touch is pending (before long-press drag),
+  // cancel arming so we don't steal the gesture mid-scroll.
   useEffect(() => {
+    if (!pointerStart || drag) return;
+    if (!isTouchPointer(pointerStart.pointerType)) return;
+
+    const cancelPending = () => {
+      clearTouchArmTimer();
+      pointerStartRef.current = null;
+      setPointerStart(null);
+    };
+
+    const vertical = boardScrollRef.current;
+    const horizontal = scrollRef.current;
+    vertical?.addEventListener('scroll', cancelPending, { passive: true });
+    horizontal?.addEventListener('scroll', cancelPending, { passive: true });
+    return () => {
+      vertical?.removeEventListener('scroll', cancelPending);
+      horizontal?.removeEventListener('scroll', cancelPending);
+    };
+  }, [clearTouchArmTimer, drag, pointerStart]);
+
+  useEffect(() => {
+    if (!isTracking) return;
+
     function onPointerMove(e: PointerEvent) {
       const pending = pointerStartRef.current;
       const current = dragRef.current;
       if (!pending && !current) return;
-
-      e.preventDefault();
 
       if (pending && !current) {
         const dx = e.clientX - pending.x;
         const dy = e.clientY - pending.y;
         const dist = Math.hypot(dx, dy);
 
+        // Touch: never preventDefault while only pending — native scroll must win.
         if (isTouchPointer(pending.pointerType)) {
           if (dist > TOUCH_SCROLL_SLOP_PX) {
             clearTouchArmTimer();
+            pointerStartRef.current = null;
             setPointerStart(null);
           }
           return;
         }
 
         if (dist < MOUSE_DRAG_THRESHOLD_PX) return;
+        e.preventDefault();
         beginDragFromPendingRef.current(pending);
+        return;
       }
 
       const dragNow = dragRef.current;
       if (!dragNow) return;
+
+      // Active drag: block board scroll under the finger.
+      if (e.cancelable) e.preventDefault();
 
       maybeEdgeScroll(e.clientX);
 
       const target = resolveDropTarget(
         e.clientX,
         e.clientY,
-        dragNow.grabOffsetY,
+        dragNow.grabOffsetMin,
+        dragNow.durationMin,
       );
       if (!target) {
         setDrag((prev) =>
@@ -715,15 +756,30 @@ export function SpaWeekBoard({
       }
     }
 
+    function onTouchMoveBlockScroll(e: TouchEvent) {
+      if (!dragRef.current) return;
+      if (e.cancelable) e.preventDefault();
+    }
+
+    window.addEventListener('touchmove', onTouchMoveBlockScroll, {
+      passive: false,
+    });
     window.addEventListener('pointermove', onPointerMove, { passive: false });
     window.addEventListener('pointerup', onPointerUp);
     window.addEventListener('pointercancel', onPointerUp);
     return () => {
+      window.removeEventListener('touchmove', onTouchMoveBlockScroll);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
     };
-  }, [clearTouchArmTimer, evaluateDrop, maybeEdgeScroll, resolveDropTarget]);
+  }, [
+    clearTouchArmTimer,
+    evaluateDrop,
+    isTracking,
+    maybeEdgeScroll,
+    resolveDropTarget,
+  ]);
 
   const onBookingPointerDown = (
     e: ReactPointerEvent,
@@ -734,13 +790,21 @@ export function SpaWeekBoard({
     if (!onBookingMove || !canEditBooking(booking)) return;
     if (e.button !== 0) return;
     e.stopPropagation();
+    // Mouse only — touch must keep native pan/scroll on the journal.
+    if (!isTouchPointer(e.pointerType)) {
+      e.preventDefault();
+    }
     clearTouchArmTimer();
     const target = e.currentTarget as HTMLElement;
     const rect = target.getBoundingClientRect();
-    const grabOffsetY = Math.max(
+    // Map grab point through the visual cell (may be taller than duration*px)
+    // into time-space so short bookings don't drop skewed.
+    const offsetPx = Math.max(
       0,
       Math.min(e.clientY - rect.top, Math.max(0, height - 1)),
     );
+    const grabOffsetMin =
+      height > 0 ? (offsetPx / height) * durationMin : 0;
     const pending: PointerStart = {
       booking,
       x: e.clientX,
@@ -748,8 +812,9 @@ export function SpaWeekBoard({
       height,
       durationMin,
       pointerType: e.pointerType,
-      grabOffsetY,
+      grabOffsetMin,
     };
+    pointerStartRef.current = pending;
     setPointerStart(pending);
     if (isTouchPointer(e.pointerType)) {
       touchArmTimerRef.current = window.setTimeout(() => {
@@ -786,8 +851,6 @@ export function SpaWeekBoard({
         DAY_START_HOUR * 60 + drag.startMinutes,
       )}`
     : '';
-
-  const isTracking = Boolean(drag || pointerStart);
 
   useEffect(() => {
     if (!isTracking) return;
@@ -889,7 +952,8 @@ export function SpaWeekBoard({
       ) : null}
 
       <div
-        className="max-h-[calc(100dvh-var(--app-header-h,3rem)-4.5rem-env(safe-area-inset-bottom,0px))] select-none overflow-y-auto overscroll-contain rounded-xl border border-slate-800 bg-slate-950/40 md:max-h-[calc(100dvh-var(--app-header-h,3rem)-2rem)]"
+        ref={boardScrollRef}
+        className="max-h-[calc(100dvh-var(--app-header-h,3rem)-4.5rem-env(safe-area-inset-bottom,0px))] select-none overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch] rounded-xl border border-slate-800 bg-slate-950/40 md:max-h-[calc(100dvh-var(--app-header-h,3rem)-2rem)]"
       >
         <div className="flex w-full">
           <div className="admin-time-rail w-12 shrink-0 border-r border-slate-800 bg-slate-950">
@@ -921,7 +985,7 @@ export function SpaWeekBoard({
 
           <div
             ref={scrollRef}
-            className="min-w-0 flex-1 snap-x snap-mandatory overflow-x-auto [-webkit-overflow-scrolling:touch]"
+            className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] md:snap-x md:snap-mandatory"
           >
             <div className="flex w-max min-w-full md:min-w-0 md:w-full">
           {days.map((d) => {
@@ -1292,11 +1356,11 @@ export function SpaWeekBoard({
                               ? 'Удерживайте и перетащите на другой день или время'
                               : undefined
                           }
-                          className={`spa-booking-cell-week absolute z-10 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-sm touch-none ${color} ${
+                          className={`spa-booking-cell-week absolute z-10 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-sm touch-manipulation ${color} ${
                             editable
                               ? 'cursor-grab active:cursor-grabbing'
                               : 'cursor-pointer'
-                          } ${isDragging ? 'opacity-35' : ''} ${
+                          } ${isDragging ? 'opacity-35 touch-none' : ''} ${
                             pointerStart?.booking.id === b.id
                               ? 'scale-[1.02] shadow-md ring-2 ring-white/30'
                               : ''

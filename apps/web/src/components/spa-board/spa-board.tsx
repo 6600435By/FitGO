@@ -534,10 +534,6 @@ export function SpaBoard({
     if (!isTracking) return;
 
     function onPointerMove(e: PointerEvent) {
-      if (dragRef.current || pointerStartRef.current) {
-        e.preventDefault();
-      }
-
       const pending = pointerStartRef.current;
       const current = dragRef.current;
 
@@ -546,20 +542,25 @@ export function SpaBoard({
         const dy = e.clientY - pending.y;
         const dist = Math.hypot(dx, dy);
 
+        // Touch: never preventDefault while only pending — native scroll must win.
         if (isTouchPointer(pending.pointerType)) {
           if (dist > TOUCH_SCROLL_SLOP_PX) {
             clearTouchArmTimer();
+            pointerStartRef.current = null;
             setPointerStart(null);
           }
           return;
         }
 
         if (dist < MOUSE_DRAG_THRESHOLD_PX) return;
+        e.preventDefault();
         beginDragFromPendingRef.current(pending);
         return;
       }
 
       if (!dragRef.current) return;
+      // Active drag: block page/board scroll under the finger.
+      if (e.cancelable) e.preventDefault();
       const target = resolveDropTarget(e.clientX, e.clientY);
       if (!target) return;
 
@@ -663,7 +664,10 @@ export function SpaBoard({
     if (!canEditBooking(booking) || !onBookingMove) return;
     if (suppressClickRef.current) return;
     e.stopPropagation();
-    e.preventDefault();
+    // Mouse: block text selection. Touch: keep default so the board can scroll.
+    if (!isTouchPointer(e.pointerType)) {
+      e.preventDefault();
+    }
 
     const pending: PointerStart = {
       booking,
@@ -675,6 +679,7 @@ export function SpaBoard({
     };
 
     clearTouchArmTimer();
+    pointerStartRef.current = pending;
     setPointerStart(pending);
 
     if (isTouchPointer(e.pointerType)) {
@@ -929,13 +934,13 @@ export function SpaBoard({
                   if (suppressClickRef.current || dragRef.current) return;
                   if (!b.busy && onBookingDoubleClick) onBookingDoubleClick(b);
                 }}
-                className={`spa-booking-cell-day absolute z-[2] overflow-hidden rounded-lg px-1.5 py-1 text-left text-[11px] leading-tight ${
+                className={`spa-booking-cell-day absolute z-[2] overflow-hidden rounded-lg px-1.5 py-1 text-left text-[11px] leading-tight touch-manipulation ${
                   b.busy
                     ? 'bg-slate-800 text-slate-400'
                     : editable
                       ? 'cursor-grab border-l-[3px] border-amber-500 bg-amber-950/40 text-amber-50 active:cursor-grabbing'
                       : 'border-l-[3px] border-amber-500 bg-amber-950/40 text-amber-50'
-                } ${isDragging ? 'opacity-30' : ''}`}
+                } ${isDragging ? 'opacity-30 touch-none' : ''}`}
                 style={{
                   top: (clippedTop - viewStartMin) * PX_PER_MIN,
                   height: blockHeight,
