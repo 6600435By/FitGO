@@ -72,6 +72,7 @@ import {
 } from '../admin-sales/admin-sales-segments';
 import {
   isExcludedFromPtBookingControl,
+  isGymFloorSessionTitle,
   isHiddenFromTrainerBookingControl,
   isSolariumSessionTitle,
   loadTrainerPtSalesFromRevenue,
@@ -294,6 +295,10 @@ export class BookingControlService {
       }
       // Солярий / тренажёрный зал не смешиваем с ПТ (отдельный kind SOLARIUM остаётся).
       if (kind === 'PT' && isExcludedFromPtBookingControl(s.title)) {
+        continue;
+      }
+      // GROUP «Тренажерный зал» — только аналитика посещений, без контроля/ЗП-подтверждения.
+      if (kind === 'GROUP' && isGymFloorSessionTitle(s.title)) {
         continue;
       }
       if (kindFilter && kind !== (kindFilter as BookingControlKind)) {
@@ -666,6 +671,7 @@ export class BookingControlService {
       out = out.map((item) => {
         if (item.kind !== 'GROUP' || item.source !== '1C') return item;
         if (item.status === 'CANCELLED') return item;
+        if (isGymFloorSessionTitle(item.title)) return item;
         const endMs = item.endAt
           ? new Date(item.endAt).getTime()
           : new Date(item.startAt).getTime();
@@ -1085,7 +1091,7 @@ export class BookingControlService {
         : undefined;
 
       const groupApproval =
-        kind === 'GROUP'
+        kind === 'GROUP' && !isGymFloorSessionTitle(s.title)
           ? await this.loadGroupApprovalInfo(
               clubId,
               canonicalKey,
@@ -2260,6 +2266,10 @@ export class BookingControlService {
         skipped += 1;
         continue;
       }
+      if (isGymFloorSessionTitle(session.title)) {
+        skipped += 1;
+        continue;
+      }
       const endedAt = session.endAt ?? session.startAt;
       if (
         session.payrollLocked ||
@@ -2714,6 +2724,7 @@ export class BookingControlService {
 
     const out: GroupApprovalPendingTask[] = [];
     for (const s of sessions) {
+      if (isGymFloorSessionTitle(s.title)) continue;
       const endedAt = s.endAt ?? s.startAt;
       if (endedAt > now) continue;
       if (s.status === OnexClassStatus.SCHEDULED && endedAt > now) continue;
@@ -3275,6 +3286,11 @@ export class BookingControlService {
     if (session.kind !== OnexClassKind.GROUP) {
       throw new BadRequestException(
         'Подтверждение доступно только для групповых занятий',
+      );
+    }
+    if (isGymFloorSessionTitle(session.title)) {
+      throw new BadRequestException(
+        'Тренажёрный зал не требует подтверждения тренера или администратора',
       );
     }
     return session;

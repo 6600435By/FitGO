@@ -3,6 +3,8 @@
  */
 import assert from 'node:assert/strict';
 import {
+  isExcludedFromPtBookingControl,
+  isGymFloorSessionTitle,
   isHiddenFromTrainerBookingControl,
   isSolariumSessionTitle,
 } from './trainer-pt-sales-from-revenue';
@@ -11,6 +13,11 @@ assert.equal(isSolariumSessionTitle('Солярий'), true);
 assert.equal(isSolariumSessionTitle('Солярий 10 мин'), true);
 assert.equal(isSolariumSessionTitle('Vertical solarium'), true);
 assert.equal(isSolariumSessionTitle('Персональная тренировка'), false);
+
+assert.equal(isGymFloorSessionTitle('Тренажерный зал'), true);
+assert.equal(isGymFloorSessionTitle('Тренажёрный зал'), true);
+assert.equal(isGymFloorSessionTitle('Йога'), false);
+assert.equal(isExcludedFromPtBookingControl('Тренажерный зал'), true);
 
 assert.equal(
   isHiddenFromTrainerBookingControl({ kind: 'SOLARIUM', title: 'Солярий' }),

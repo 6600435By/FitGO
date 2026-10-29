@@ -64,6 +64,24 @@ export function isSolariumSessionTitle(
 }
 
 /**
+ * Open gym-floor visits logged in 1C as GROUP «Тренажерный зал».
+ * Kept for analytics / attendance; no responsible trainer → skip control & confirm.
+ */
+export function isGymFloorSessionTitle(
+  name: string | null | undefined,
+): boolean {
+  const s = (name ?? '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return false;
+  if (s.includes('тренажер')) return true;
+  if (/\bзал\b/.test(s) && /тренаж/.test(s)) return true;
+  return false;
+}
+
+/**
  * Солярий / тренажёрный зал / SPA-массаж — не в Контроле записей (ПТ)
  * и не в merge рейтинга тренеров.
  * 1С часто помечает массаж как kind=PT; для продаж исключаем здесь,
@@ -80,8 +98,7 @@ export function isExcludedFromPtBookingControl(
     .trim();
   if (!s) return false;
   if (isSolariumSessionTitle(s)) return true;
-  if (s.includes('тренажер')) return true;
-  if (/\bзал\b/.test(s) && /тренаж/.test(s)) return true;
+  if (isGymFloorSessionTitle(s)) return true;
   // Massage / bioimpedance / SPA titles tagged as training in 1C sales.
   if (isSpaLikeSessionTitle(s)) return true;
   return false;

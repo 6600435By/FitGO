@@ -17,7 +17,10 @@ import type {
   FloorStaffMonthMetric,
 } from '@fitgo/shared-types';
 import { isReformerHallSession } from '@fitgo/shared-types';
-import { isSolariumSessionTitle } from '../admin-sales/trainer-pt-sales-from-revenue';
+import {
+  isGymFloorSessionTitle,
+  isSolariumSessionTitle,
+} from '../admin-sales/trainer-pt-sales-from-revenue';
 import { TrainerMonthAnalyticsService } from '../analytics/trainer-month-analytics.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
@@ -474,6 +477,13 @@ export class FloorStaffHomeService {
       if (
         s.kind === OnexClassKind.SOLARIUM ||
         isSolariumSessionTitle(s.title)
+      ) {
+        return false;
+      }
+      // Open gym floor — analytics only, no trainer confirm.
+      if (
+        s.kind === OnexClassKind.GROUP &&
+        isGymFloorSessionTitle(s.title)
       ) {
         return false;
       }

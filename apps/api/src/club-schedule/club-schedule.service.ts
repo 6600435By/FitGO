@@ -19,7 +19,10 @@ import {
   type ScheduleSlot,
   type SessionApprovalPhase,
 } from '@fitgo/shared-types';
-import { isSolariumSessionTitle } from '../admin-sales/trainer-pt-sales-from-revenue';
+import {
+  isGymFloorSessionTitle,
+  isSolariumSessionTitle,
+} from '../admin-sales/trainer-pt-sales-from-revenue';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { SessionApprovalService } from '../booking-control/session-approval.service';
@@ -301,16 +304,21 @@ export class ClubScheduleService {
       );
       const ended = !Number.isNaN(endMs) && endMs <= Date.now();
       // Past/done GROUP without a row still waits for trainer (same as booking-control).
-      const phase = approval
-        ? groupApprovalPhase({
-            trainerApprovedAt: approval.trainerApprovedAt?.toISOString() ?? null,
-            adminApprovedAt: approval.adminApprovedAt?.toISOString() ?? null,
-            overrideApprovedAt:
-              approval.overrideApprovedAt?.toISOString() ?? null,
-          })
-        : ended && status !== 'cancelled'
-          ? groupApprovalPhase({})
-          : undefined;
+      // Gym floor visits need no trainer/admin confirm.
+      const skipApproval = isGymFloorSessionTitle(slot.title);
+      const phase = skipApproval
+        ? undefined
+        : approval
+          ? groupApprovalPhase({
+              trainerApprovedAt:
+                approval.trainerApprovedAt?.toISOString() ?? null,
+              adminApprovedAt: approval.adminApprovedAt?.toISOString() ?? null,
+              overrideApprovedAt:
+                approval.overrideApprovedAt?.toISOString() ?? null,
+            })
+          : ended && status !== 'cancelled'
+            ? groupApprovalPhase({})
+            : undefined;
       const staffId =
         (slot.trainerId && staffByExt.get(slot.trainerId)?.id) ||
         (onex?.employeeExternalId &&
