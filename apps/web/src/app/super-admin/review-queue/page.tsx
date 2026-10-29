@@ -65,6 +65,7 @@ function SuperAdminBookingControlInner() {
       approvalActor="override"
       canBulkApprove
       canReturnApproval
+      canManagerRework
       canViewHallPhotos
       showOpsHints
       initialSessionKey={initialSessionKey}

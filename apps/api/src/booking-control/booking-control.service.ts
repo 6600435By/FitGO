@@ -83,6 +83,7 @@ import { sessionMatchesFlag } from '../discrepancies/discrepancies-predicates';
 import { FitnessService } from '../fitness/fitness.service';
 import { matchOnexToScheduleSlots } from '../club-schedule/trainer-schedule.helpers';
 import { SessionApprovalService } from './session-approval.service';
+import { ManagerOriginTasksService } from '../admin-tasks/manager-origin-tasks.service';
 import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { allocateStaffLogin } from '../auth/staff-login';
@@ -150,6 +151,7 @@ export class BookingControlService {
     private readonly fitness: FitnessService,
     private readonly classSessions: ClassSessionsSyncService,
     private readonly sessionApproval: SessionApprovalService,
+    private readonly managerTasks: ManagerOriginTasksService,
   ) {}
 
   async list(
@@ -2337,11 +2339,16 @@ export class BookingControlService {
     return { confirmed, skipped };
   }
 
-  /** Admin / SA / Manager: return GROUP to trainer for rework. */
+  /**
+   * Admin / SA / Manager: return GROUP for rework.
+   * - trainer (default): clear trainer + admin + override → PENDING_TRAINER
+   * - admin: keep trainer, clear admin + override → PENDING_ADMIN
+   */
   async returnGroupApproval(
     actor: JwtPayload,
     sessionKey: string,
     comment?: string,
+    target: 'trainer' | 'admin' = 'trainer',
   ): Promise<BookingControlDetail> {
     const clubId = requireClubId(actor);
     if (!this.isAdminLike(actor)) {
@@ -2363,6 +2370,16 @@ export class BookingControlService {
     const existing = await this.findGroupApprovalRow(clubId, key, sessionKey);
     await this.ensureApprovalNotesMigrated(clubId, key, existing);
 
+    if (target === 'admin') {
+      if (!existing?.trainerApprovedAt) {
+        throw new BadRequestException(
+          'Нельзя вернуть администратору: тренер ещё не подтвердил',
+        );
+      }
+    }
+
+    const clearTrainer = target === 'trainer';
+
     await this.prisma.groupClassApproval.upsert({
       where: { clubId_sessionKey: { clubId, sessionKey: key } },
       create: {
@@ -2374,10 +2391,13 @@ export class BookingControlService {
         ...(note ? { returnComment: note } : {}),
       },
       update: {
-        // Reset approval stamps; keep prior comment slots for fallback display
-        trainerUserId: null,
-        trainerName: null,
-        trainerApprovedAt: null,
+        ...(clearTrainer
+          ? {
+              trainerUserId: null,
+              trainerName: null,
+              trainerApprovedAt: null,
+            }
+          : {}),
         adminUserId: null,
         adminName: null,
         adminApprovedAt: null,
@@ -2395,10 +2415,247 @@ export class BookingControlService {
       authorName: actorName,
       authorRole,
       action: 'RETURN',
-      text: note,
+      text: note
+        ? `${target === 'admin' ? 'Админу' : 'Тренеру'}: ${note}`
+        : target === 'admin'
+          ? 'Админу'
+          : 'Тренеру',
     });
 
+    const notifyUserId =
+      target === 'trainer'
+        ? existing?.trainerUserId ??
+          (
+            await this.managerTasks.findUserByExternalId(
+              clubId,
+              session.employeeExternalId,
+            )
+          )?.id
+        : existing?.adminUserId;
+    await this.managerTasks.notifyUser(
+      notifyUserId,
+      actor.sub,
+      'На доработку',
+      note
+        ? `${session.title ?? 'Занятие'}: ${note}`
+        : `${session.title ?? 'Занятие'} — верните контроль`,
+    );
+
     return this.detail(clubId, key);
+  }
+
+  /**
+   * Manager / SA sheet: return control to trainer/admin OR assign a MANAGER task.
+   * SALE rows (sale:PT:…) have no approval chain — all targets create tasks.
+   */
+  async managerRework(
+    actor: JwtPayload,
+    body: {
+      sessionKey: string;
+      target: 'trainer' | 'admin' | 'staff';
+      assigneeId?: string;
+      comment: string;
+      dueAt?: string;
+    },
+  ): Promise<{
+    mode: 'approval' | 'task';
+    detail?: BookingControlDetail;
+    task?: ReturnType<ManagerOriginTasksService['mapAssigneeTask']>;
+    warning?: string;
+  }> {
+    this.managerTasks.assertManagerLike(actor);
+    const clubId = requireClubId(actor);
+    const comment = body.comment?.trim() ?? '';
+    if (comment.length < 2) {
+      throw new BadRequestException('Укажите комментарий для доработки');
+    }
+    const sessionKey = body.sessionKey?.trim();
+    if (!sessionKey) throw new BadRequestException('Не указано занятие');
+
+    const detail = await this.detail(clubId, sessionKey);
+    const key = detail.sessionKey;
+    const parsed = parseSessionKey(key);
+
+    // SALE rows: always a task (no dual-approval chain).
+    if (parsed?.source === 'SALE' || body.target === 'staff') {
+      let assigneeId = body.assigneeId?.trim() || '';
+      if (!assigneeId && body.target === 'trainer') {
+        assigneeId =
+          (
+            await this.managerTasks.findUserByExternalId(
+              clubId,
+              detail.performerId,
+            )
+          )?.id ?? '';
+      }
+      if (!assigneeId && body.target === 'admin') {
+        // Prefer author of PT sale document when present on detail.
+        const empExt =
+          (detail as { employeeExternalId?: string | null }).employeeExternalId ??
+          null;
+        assigneeId =
+          (
+            await this.managerTasks.findUserByExternalId(clubId, empExt, [
+              Role.ADMIN,
+              Role.MANAGER,
+            ])
+          )?.id ?? '';
+      }
+      if (!assigneeId) {
+        throw new BadRequestException('Выберите сотрудника');
+      }
+
+      const openDup = await this.managerTasks.findOpenBySessionKey(
+        clubId,
+        key,
+        assigneeId,
+      );
+      const warning = openDup.length
+        ? 'У этого сотрудника уже есть открытая задача по записи'
+        : undefined;
+
+      const when = detail.startAt
+        ? new Date(detail.startAt).toLocaleString('ru-RU', {
+            timeZone: 'Europe/Minsk',
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        : '';
+      const task = await this.managerTasks.createAssignedTask({
+        clubId,
+        createdById: actor.sub,
+        assigneeId,
+        title: `Доработка: ${detail.title || detail.clientName || 'запись'}`,
+        description: [
+          detail.clientName ? `Клиент: ${detail.clientName}` : null,
+          when ? `Когда: ${when}` : null,
+          detail.performerName ? `Исполнитель: ${detail.performerName}` : null,
+          `Карточка: ${key}`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        comment,
+        dueAt: body.dueAt,
+        meta: {
+          origin: 'booking_control',
+          sessionKey: key,
+          clientName: detail.clientName ?? null,
+          title: detail.title ?? null,
+          occurredAt: detail.startAt ?? null,
+        },
+      });
+      return { mode: 'task', task, warning, detail };
+    }
+
+    if (body.target === 'trainer' || body.target === 'admin') {
+      // FitGO PT/SPA
+      if (
+        parsed?.source === 'FITGO' &&
+        (parsed.kind === 'PT' || parsed.kind === 'SPA')
+      ) {
+        await this.sessionApproval.returnApproval(
+          actor,
+          parsed.kind === 'PT'
+            ? SessionApprovalKind.PT
+            : SessionApprovalKind.SPA,
+          parsed.id,
+          comment,
+          body.target === 'admin' ? 'admin' : 'performer',
+        );
+        const updated = await this.detail(clubId, key);
+        const notifyId =
+          body.target === 'trainer'
+            ? updated.performerId
+            : undefined;
+        if (notifyId && /^[a-z0-9]{20,}$/i.test(notifyId)) {
+          await this.managerTasks.notifyUser(
+            notifyId,
+            actor.sub,
+            'На доработку',
+            `${updated.title}: ${comment}`,
+          );
+        } else if (body.target === 'trainer' && updated.performerId) {
+          const u = await this.managerTasks.findUserByExternalId(
+            clubId,
+            updated.performerId,
+          );
+          await this.managerTasks.notifyUser(
+            u?.id,
+            actor.sub,
+            'На доработку',
+            `${updated.title}: ${comment}`,
+          );
+        }
+        return { mode: 'approval', detail: updated };
+      }
+
+      // 1C SPA/PT via matched FitGO booking — reuse approve routing logic
+      if (parsed?.source === '1C') {
+        const onex = await this.findOnexSessionForControl(
+          clubId,
+          parsed.id,
+          'narrow',
+        );
+        if (onex?.kind === OnexClassKind.SPA) {
+          const matched = await this.findMatchingFitgoBooking(
+            clubId,
+            'SPA',
+            onex,
+            undefined,
+          );
+          if (matched) {
+            await this.sessionApproval.returnApproval(
+              actor,
+              SessionApprovalKind.SPA,
+              matched.id,
+              comment,
+              body.target === 'admin' ? 'admin' : 'performer',
+            );
+            return {
+              mode: 'approval',
+              detail: await this.detail(clubId, key),
+            };
+          }
+        }
+        if (onex?.kind === OnexClassKind.PT) {
+          const matched = await this.findMatchingFitgoBooking(
+            clubId,
+            'PT',
+            onex,
+            undefined,
+          );
+          if (matched) {
+            await this.sessionApproval.returnApproval(
+              actor,
+              SessionApprovalKind.PT,
+              matched.id,
+              comment,
+              body.target === 'admin' ? 'admin' : 'performer',
+            );
+            return {
+              mode: 'approval',
+              detail: await this.detail(clubId, key),
+            };
+          }
+          throw new BadRequestException(
+            'ПТ из 1С без записи FitGO нельзя вернуть по цепочке — поставьте задачу сотруднику',
+          );
+        }
+      }
+
+      // GROUP 1C
+      const updated = await this.returnGroupApproval(
+        actor,
+        key,
+        comment,
+        body.target,
+      );
+      return { mode: 'approval', detail: updated };
+    }
+
+    throw new BadRequestException('Некорректная цель доработки');
   }
 
   /**
@@ -2747,6 +3004,31 @@ export class BookingControlService {
     return rows.map((u) => ({
       id: u.id,
       name: `${u.lastName} ${u.firstName}`.trim(),
+    }));
+  }
+
+  /** Staff for manager rework sheet (admins, trainers, specialists). */
+  async listReworkAssignees(actor: JwtPayload) {
+    this.managerTasks.assertManagerLike(actor);
+    return this.managerTasks.listStaffAssignees(requireClubId(actor));
+  }
+
+  async listOpenReworkTasksForSession(actor: JwtPayload, sessionKey: string) {
+    this.managerTasks.assertManagerLike(actor);
+    const clubId = requireClubId(actor);
+    if (!sessionKey?.trim()) {
+      throw new BadRequestException('Не указано занятие');
+    }
+    const detail = await this.detail(clubId, sessionKey.trim());
+    const open = await this.managerTasks.findOpenBySessionKey(
+      clubId,
+      detail.sessionKey,
+    );
+    return open.map((t) => ({
+      id: t.id,
+      title: t.title,
+      assigneeId: t.assigneeId,
+      dueAt: t.dueAt?.toISOString(),
     }));
   }
 
@@ -3859,6 +4141,7 @@ export class BookingControlService {
         byName: sale.employeeName?.trim() || undefined,
       },
     ];
+    const empCode = sale.employeeCode?.trim() || null;
     return {
       sessionKey,
       kind: 'PT',
@@ -3867,6 +4150,9 @@ export class BookingControlService {
       startAt: at,
       status: 'COMPLETED',
       performerName: sale.employeeName?.trim() || '—',
+      /** Trainer / performer on PT sale: same 1C employee code when present. */
+      performerId: empCode || undefined,
+      employeeExternalId: empCode,
       clientName: sale.clientName || '—',
       number: sale.docRef || undefined,
       attendeeCount: saleCounts.arrivedCount,

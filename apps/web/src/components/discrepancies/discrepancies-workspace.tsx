@@ -562,6 +562,7 @@ export function DiscrepanciesWorkspace() {
           canApproveGroup
           approvalActor="override"
           canReturnApproval
+          canManagerRework
           canViewHallPhotos
           canBulkApprove
           detailOnly

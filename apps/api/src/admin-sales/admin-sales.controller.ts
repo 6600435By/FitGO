@@ -176,6 +176,42 @@ export class SuperAdminSalesController {
     return this.clubRevenue.detail(requireClubId(user), id);
   }
 
+  @Get('club/:id/rework-tasks')
+  clubReworkTasks(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.clubRevenue.listOpenReworkTasks(user, id);
+  }
+
+  @Get('rework-assignees')
+  reworkAssignees(@CurrentUser() user: JwtPayload) {
+    return this.clubRevenue.listReworkAssignees(user);
+  }
+
+  @Post('club/:id/rework')
+  clubRework(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      target?: 'performer' | 'admin' | 'staff';
+      assigneeId?: string;
+      comment?: string;
+      dueAt?: string;
+    },
+  ) {
+    const target =
+      body.target === 'admin' ||
+      body.target === 'staff' ||
+      body.target === 'performer'
+        ? body.target
+        : 'staff';
+    return this.clubRevenue.managerRework(user, id, {
+      target,
+      assigneeId: body.assigneeId,
+      comment: body.comment ?? '',
+      dueAt: body.dueAt,
+    });
+  }
+
   @Get()
   overview(
     @CurrentUser() user: JwtPayload,

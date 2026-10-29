@@ -13,6 +13,11 @@ import {
 import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AdminStickyTable } from '@/components/admin/admin-sticky-table';
+import {
+  ManagerReworkSheet,
+  type ManagerReworkAssignee,
+  type ManagerReworkTargetOption,
+} from '@/components/manager-rework/manager-rework-sheet';
 import { DateField } from '@/components/ui/date-field';
 import { getUser } from '@/lib/auth';
 import {
@@ -109,6 +114,30 @@ export type BookingControlApi = {
     sessionKey: string,
     comment?: string,
   ) => Promise<BookingControlDetail>;
+  /** Manager / SA: targeted rework (trainer / admin / staff task). */
+  managerRework?: (body: {
+    sessionKey: string;
+    target: 'trainer' | 'admin' | 'staff';
+    assigneeId?: string;
+    comment: string;
+    dueAt?: string;
+  }) => Promise<{
+    mode: 'approval' | 'task';
+    detail?: BookingControlDetail;
+    task?: { id: string; title: string };
+    warning?: string;
+  }>;
+  listReworkAssignees?: () => Promise<
+    Array<{
+      id: string;
+      name: string;
+      roles: string[];
+      externalId: string | null;
+    }>
+  >;
+  listReworkTasks?: (
+    sessionKey: string,
+  ) => Promise<Array<{ id: string; title: string; assigneeId: string | null }>>;
   /** Manager / super-admin: confirm many unapproved GROUP sessions. */
   bulkApproveGroups?: (body: {
     from: string;
@@ -188,6 +217,8 @@ type Props = {
   approvalActor?: 'performer' | 'admin' | 'override';
   /** Admin/SA: return to trainer */
   canReturnApproval?: boolean;
+  /** Manager / SA: sheet with trainer / admin / staff targets */
+  canManagerRework?: boolean;
   /** Manager / super-admin: bulk confirm unapproved GROUP in the period */
   canBulkApprove?: boolean;
   /** Admin/manager/SA/trainer: show Photo button on GROUP detail */
@@ -428,6 +459,7 @@ export function BookingControlPanel({
   canApproveGroup = false,
   approvalActor = 'admin',
   canReturnApproval = false,
+  canManagerRework = false,
   canBulkApprove = false,
   canViewHallPhotos = false,
   initialSessionKey,
@@ -717,6 +749,12 @@ export function BookingControlPanel({
   >([]);
   const [remarkAssigneeId, setRemarkAssigneeId] = useState('');
   const [assignBusy, setAssignBusy] = useState(false);
+  const [reworkOpen, setReworkOpen] = useState(false);
+  const [reworkBusy, setReworkBusy] = useState(false);
+  const [reworkAssignees, setReworkAssignees] = useState<
+    ManagerReworkAssignee[]
+  >([]);
+  const [reworkWarning, setReworkWarning] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
   const [photosOpen, setPhotosOpen] = useState(false);
@@ -1669,6 +1707,7 @@ export function BookingControlPanel({
       !selected.groupApproval?.locked &&
       (canConfirmSelected ||
         canReturnApproval ||
+        canManagerRework ||
         showConfirmAfterEndHint ||
         (canTrainerSeen &&
           (selected.groupApproval?.phase === 'PENDING_TRAINER' ||
@@ -1714,6 +1753,171 @@ export function BookingControlPanel({
       setMessage(e instanceof Error ? e.message : 'Ошибка возврата');
     } finally {
       setApproveBusy(false);
+    }
+  };
+
+  const openManagerRework = async () => {
+    if (!selected || !api.managerRework) return;
+    setReworkWarning(null);
+    setReworkOpen(true);
+    if (api.listReworkAssignees && reworkAssignees.length === 0) {
+      try {
+        setReworkAssignees(await api.listReworkAssignees());
+      } catch {
+        /* ignore — sheet still works with empty list */
+      }
+    }
+    if (api.listReworkTasks) {
+      try {
+        const open = await api.listReworkTasks(selected.sessionKey);
+        if (open.length > 0) {
+          setReworkWarning(
+            `Уже есть открытая задача по этой записи (${open.length}) — можно поставить ещё`,
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  const reworkTargets: ManagerReworkTargetOption[] = useMemo(() => {
+    if (!selected) return [];
+    const isSale = selected.source === 'SALE';
+    const phase =
+      selected.groupApproval?.phase ?? selected.approvalPhase ?? null;
+    const trainerDone =
+      phase === 'PENDING_ADMIN' ||
+      phase === 'APPROVED' ||
+      Boolean(selected.groupApproval?.trainerApprovedAt);
+    const hasChain =
+      !isSale &&
+      (selected.kind === 'GROUP' ||
+        selected.kind === 'PT' ||
+        selected.kind === 'SPA');
+
+    const performerMatch = reworkAssignees.find(
+      (a) =>
+        a.id === selected.performerId ||
+        (selected.performerId && a.externalId === selected.performerId),
+    );
+    const adminExt = selected.employeeExternalId?.trim() || null;
+    const adminMatch = reworkAssignees.find(
+      (a) =>
+        adminExt &&
+        a.externalId === adminExt &&
+        (a.roles ?? []).some((r) => r === 'ADMIN' || r === 'MANAGER'),
+    );
+
+    if (isSale || !hasChain) {
+      return [
+        {
+          id: 'trainer',
+          label: 'Исполнителю',
+          needsAssignee: !performerMatch,
+          presetAssigneeId: performerMatch?.id ?? null,
+          roleFilter: ['TRAINER', 'SPECIALIST'],
+          hint: performerMatch
+            ? performerMatch.name
+            : 'Выберите, если исполнитель не найден в FitGO',
+        },
+        {
+          id: 'admin',
+          label: 'Администратору',
+          needsAssignee: !adminMatch,
+          presetAssigneeId: adminMatch?.id ?? null,
+          roleFilter: ['ADMIN', 'MANAGER'],
+          hint: adminMatch
+            ? adminMatch.name
+            : 'Выберите администратора документа',
+        },
+        {
+          id: 'staff',
+          label: 'Сотруднику (задача)',
+          needsAssignee: true,
+          hint: 'Подтверждение и ЗП не меняются',
+        },
+      ];
+    }
+
+    const targets: ManagerReworkTargetOption[] = [
+      {
+        id: 'trainer',
+        label: 'Тренеру / исполнителю',
+        hint: 'Снимет подтверждение, ЗП на удержании',
+      },
+    ];
+    if (trainerDone) {
+      targets.push({
+        id: 'admin',
+        label: 'Администратору',
+        hint: 'Оставит отметку тренера, снимет админа',
+      });
+    }
+    targets.push({
+      id: 'staff',
+      label: 'Сотруднику (задача)',
+      needsAssignee: true,
+      hint: 'Подтверждение и ЗП не меняются',
+    });
+    return targets;
+  }, [selected, reworkAssignees]);
+
+  const submitManagerRework = async (input: {
+    targetId: string;
+    assigneeId?: string;
+    comment: string;
+    dueAt?: string;
+  }) => {
+    if (!selected || !api.managerRework) return;
+    const target =
+      input.targetId === 'admin' || input.targetId === 'staff'
+        ? input.targetId
+        : 'trainer';
+    if (
+      target === 'admin' &&
+      selected.source !== 'SALE' &&
+      !(
+        selected.groupApproval?.trainerApprovedAt ||
+        selected.approvalPhase === 'PENDING_ADMIN' ||
+        selected.approvalPhase === 'APPROVED'
+      )
+    ) {
+      throw new Error('Сначала нужно подтверждение тренера / исполнителя');
+    }
+    setReworkBusy(true);
+    try {
+      const result = await api.managerRework({
+        sessionKey: selected.sessionKey,
+        target,
+        assigneeId: input.assigneeId,
+        comment: input.comment,
+        dueAt: input.dueAt,
+      });
+      if (result.detail) {
+        setSelected(result.detail);
+        setLocalSeen(
+          new Set(result.detail.groupApproval?.trainerSeenClientIds ?? []),
+        );
+      }
+      setComment('');
+      setReworkOpen(false);
+      setReworkWarning(null);
+      setMessage(
+        [
+          result.mode === 'task'
+            ? `Задача поставлена${result.task ? `: ${result.task.title}` : ''}`
+            : target === 'admin'
+              ? 'Отправлено на доработку администратору'
+              : 'Отправлено на доработку тренеру',
+          result.warning,
+        ]
+          .filter(Boolean)
+          .join('. '),
+      );
+      load();
+    } finally {
+      setReworkBusy(false);
     }
   };
 
@@ -3390,7 +3594,16 @@ export function BookingControlPanel({
                           {approveBusy ? 'Подтверждаем…' : 'Подтвердить'}
                         </button>
                       ) : null}
-                      {canReturnApproval && api.returnGroupApproval ? (
+                      {canManagerRework && api.managerRework ? (
+                        <button
+                          type="button"
+                          className="btn-secondary w-full text-sm"
+                          onClick={() => void openManagerRework()}
+                          disabled={approveBusy || reworkBusy}
+                        >
+                          На доработку
+                        </button>
+                      ) : canReturnApproval && api.returnGroupApproval ? (
                         <button
                           type="button"
                           className="btn-secondary w-full text-sm"
@@ -3427,6 +3640,18 @@ export function BookingControlPanel({
                     </p>
                   </div>
                 )}
+                {selected.kind !== 'GROUP' &&
+                canManagerRework &&
+                api.managerRework ? (
+                  <button
+                    type="button"
+                    className="btn-secondary w-full text-sm"
+                    onClick={() => void openManagerRework()}
+                    disabled={reworkBusy}
+                  >
+                    На доработку
+                  </button>
+                ) : null}
                 {selected.kind !== 'GROUP' && !selected.remark && (
                   <div className="space-y-2">
                     <p className="text-xs text-slate-500">
@@ -3594,6 +3819,17 @@ export function BookingControlPanel({
           </div>
         </div>
       )}
+      <ManagerReworkSheet
+        open={reworkOpen}
+        title="На доработку"
+        subtitle={selected?.title}
+        targets={reworkTargets}
+        assignees={reworkAssignees}
+        warning={reworkWarning}
+        busy={reworkBusy}
+        onClose={() => setReworkOpen(false)}
+        onSubmit={submitManagerRework}
+      />
     </div>
   );
 }

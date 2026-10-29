@@ -1,14 +1,18 @@
 'use client';
 
-import { Suspense, useMemo } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useMemo } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
+import { ManagerOriginInbox } from '@/components/manager-rework/manager-origin-inbox';
+import { api } from '@/lib/api';
 import { getUser } from '@/lib/auth';
 import { createTrainerBookingControlApi } from '@/lib/trainer-booking-control-api';
 import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 
 function TrainerMySessionsInner() {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const user = getUser();
   const { groupCabinet, showPt, isReformer } = trainerCabinetMode(user);
   // Pure GP (no PT / reformers): only GROUP. Otherwise All / GP / PT filter.
@@ -54,35 +58,60 @@ function TrainerMySessionsInner() {
 
   const panelApi = useMemo(() => createTrainerBookingControlApi(), []);
 
+  const listManagerTasks = useCallback(
+    (token: string) => api.trainerManagerTasks(token),
+    [],
+  );
+  const completeManagerTask = useCallback(
+    (token: string, id: string, comment?: string) =>
+      api.trainerManagerTaskDone(token, id, comment),
+    [],
+  );
+  const openManagerSession = useCallback(
+    (sessionKey: string) => {
+      const next = new URLSearchParams(searchParams.toString());
+      next.set('session', sessionKey);
+      router.replace(`${pathname}?${next.toString()}`);
+    },
+    [pathname, router, searchParams],
+  );
+
   return (
-    <BookingControlPanel
-      api={panelApi}
-      title={groupCabinet ? 'Контроль записей' : 'Мои занятия'}
-      subtitle={
-        groupCabinet
-          ? 'Комментарий и состав можно внести до и во время занятия. Подтвердить — после окончания. Явку в 1С ставит администратор.'
-          : 'Комментарий и галочки — до и во время занятия. «Подтвердить» — после окончания. Явку в 1С ставит администратор.'
-      }
-      canTrainerSeen
-      canApproveGroup
-      approvalActor="performer"
-      canViewHallPhotos
-      fixedKind={fixedKind}
-      trainerKindFilter={allowKindFilter}
-      approvalSegments={groupCabinet}
-      initialFrom={initialFrom}
-      initialTo={initialTo}
-      initialNeedsReview={initialNeedsReview}
-      initialPayment={initialPayment}
-      initialSessionKey={initialSessionKey}
-      initialClient={initialClient}
-      initialClientId={initialClientId}
-      initialKind={initialKind}
-      initialStatus={initialStatus}
-      initialConducted={initialConducted}
-      initialHall={initialHall}
-      initialReformer={initialReformer}
-    />
+    <div>
+      <ManagerOriginInbox
+        list={listManagerTasks}
+        complete={completeManagerTask}
+        onOpenSession={openManagerSession}
+      />
+      <BookingControlPanel
+        api={panelApi}
+        title={groupCabinet ? 'Контроль записей' : 'Мои занятия'}
+        subtitle={
+          groupCabinet
+            ? 'Комментарий и состав можно внести до и во время занятия. Подтвердить — после окончания. Явку в 1С ставит администратор.'
+            : 'Комментарий и галочки — до и во время занятия. «Подтвердить» — после окончания. Явку в 1С ставит администратор.'
+        }
+        canTrainerSeen
+        canApproveGroup
+        approvalActor="performer"
+        canViewHallPhotos
+        fixedKind={fixedKind}
+        trainerKindFilter={allowKindFilter}
+        approvalSegments={groupCabinet}
+        initialFrom={initialFrom}
+        initialTo={initialTo}
+        initialNeedsReview={initialNeedsReview}
+        initialPayment={initialPayment}
+        initialSessionKey={initialSessionKey}
+        initialClient={initialClient}
+        initialClientId={initialClientId}
+        initialKind={initialKind}
+        initialStatus={initialStatus}
+        initialConducted={initialConducted}
+        initialHall={initialHall}
+        initialReformer={initialReformer}
+      />
+    </div>
   );
 }
 

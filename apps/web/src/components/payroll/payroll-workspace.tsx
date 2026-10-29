@@ -2195,6 +2195,7 @@ export function PayrollWorkspace({ mode }: Props) {
           canApproveGroup
           approvalActor={mode === 'super' ? 'override' : 'admin'}
           canReturnApproval
+          canManagerRework={mode === 'super'}
           canViewHallPhotos
           canBulkApprove={mode === 'super'}
           detailOnly
@@ -2212,6 +2213,7 @@ export function PayrollWorkspace({ mode }: Props) {
         <SaleDetailDrawer
           detail={saleDetail}
           onClose={() => setSaleDetail(null)}
+          canRework={mode === 'super'}
         />
       ) : null}
     </div>

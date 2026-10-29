@@ -127,6 +127,8 @@ export interface AdminInboxTaskLike {
   confirmClients?: Array<{ confirmed: boolean }>;
   reworkCount?: number;
   reworkComment?: string;
+  /** Booking-control card deep link (MANAGER rework from control). */
+  sessionKey?: string | null;
 }
 
 /** Unified inbox row — real AdminTask or virtual booking-control approval. */
@@ -397,10 +399,12 @@ export function outcomesForSource(source?: string | null): AdminTaskOutcomeDef[]
 export function primaryActionForTask(task: {
   source?: string | null;
   phone?: string | null;
+  sessionKey?: string | null;
 }): AdminInboxPrimaryAction {
   const source = task.source ?? '';
   if (source === 'MEMBERSHIP_EXPIRING') return 'open_renewal';
   if (source === 'BOOKING_CONFIRM') return 'confirm';
+  if (source === 'MANAGER' && task.sessionKey) return 'open_session';
   if (
     source === 'MANAGER' ||
     source === 'DISCREPANCY' ||
@@ -410,6 +414,20 @@ export function primaryActionForTask(task: {
   }
   if (task.phone) return 'call';
   return 'complete';
+}
+
+function outcomesForManagerTask(task: {
+  source?: string | null;
+  sessionKey?: string | null;
+}): AdminTaskOutcomeDef[] {
+  const base = outcomesForSource(task.source);
+  if (task.source === 'MANAGER' && task.sessionKey) {
+    return [
+      { id: 'open', label: 'Открыть карточку', effect: 'open_session' },
+      ...base,
+    ];
+  }
+  return base;
 }
 
 function displayTitle(task: AdminInboxTaskLike): string {
@@ -504,7 +522,7 @@ export function adminInboxItemFromTask(
     assignee: task.assignee,
     reworkCount: task.reworkCount,
     reworkComment: task.reworkComment,
-    outcomes: outcomesForSource(task.source),
+    outcomes: outcomesForManagerTask(task),
     task,
   };
 }

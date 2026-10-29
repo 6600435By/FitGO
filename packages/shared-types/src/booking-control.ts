@@ -317,6 +317,11 @@ export interface BookingControlDetail extends BookingControlListItem {
   history?: BookingControlHistoryEvent[];
   /** SPA guest / booking phone (may be empty until admin fills it). */
   guestPhone?: string;
+  /**
+   * 1C employee / document author external id (SALE rows and some Onex sessions).
+   * Used by manager rework to preselect admin assignee.
+   */
+  employeeExternalId?: string | null;
 }
 
 /** Shared admin inbox row for GROUP / SPA / PT tasks awaiting admin action. */

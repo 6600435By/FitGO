@@ -11,6 +11,10 @@ import type {
   ClubRevenueReportResponse,
   ClubRevenueSummary,
 } from '@fitgo/shared-types';
+import { Role } from '@prisma/client';
+import { ManagerOriginTasksService } from '../admin-tasks/manager-origin-tasks.service';
+import type { JwtPayload } from '../auth/jwt.strategy';
+import { requireClubId } from '../auth/require-club-id';
 import {
   classifySaleType,
   loadPayrollSegmentSets,
@@ -173,6 +177,7 @@ export class ClubRevenueService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly managerTasks: ManagerOriginTasksService,
   ) {}
 
   async report(
@@ -788,6 +793,104 @@ export class ClubRevenueService {
       basisProducts,
       currency: club?.currency ?? 'BYN',
     };
+  }
+
+  /** Manager / SA: assign a MANAGER task from a sale card (always a task). */
+  async managerRework(
+    actor: JwtPayload,
+    entryId: string,
+    body: {
+      target: 'performer' | 'admin' | 'staff';
+      assigneeId?: string;
+      comment: string;
+      dueAt?: string;
+    },
+  ) {
+    this.managerTasks.assertManagerLike(actor);
+    const clubId = requireClubId(actor);
+    const comment = body.comment?.trim() ?? '';
+    if (comment.length < 2) {
+      throw new BadRequestException('Укажите комментарий для доработки');
+    }
+
+    const detail = await this.detail(clubId, entryId);
+    const line = detail.line;
+
+    let assigneeId = body.assigneeId?.trim() || '';
+    if (!assigneeId && body.target === 'performer') {
+      assigneeId =
+        (
+          await this.managerTasks.findUserByExternalId(
+            clubId,
+            line.performerExternalId,
+          )
+        )?.id ?? '';
+    }
+    if (!assigneeId && body.target === 'admin') {
+      assigneeId =
+        (
+          await this.managerTasks.findUserByExternalId(
+            clubId,
+            line.employeeExternalId,
+            [Role.ADMIN, Role.MANAGER],
+          )
+        )?.id ?? '';
+    }
+    if (!assigneeId) {
+      throw new BadRequestException('Выберите сотрудника');
+    }
+
+    const amountMajor = (line.amountMinor / 100).toFixed(2);
+    const when = new Date(line.occurredAt).toLocaleString('ru-RU', {
+      timeZone: 'Europe/Minsk',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const task = await this.managerTasks.createAssignedTask({
+      clubId,
+      createdById: actor.sub,
+      assigneeId,
+      title: `Доработка продажи: ${line.productName ?? line.clientName ?? 'операция'}`,
+      description: [
+        line.clientName ? `Клиент: ${line.clientName}` : null,
+        line.productName ? `Товар: ${line.productName}` : null,
+        `Сумма: ${amountMajor} BYN`,
+        `Когда: ${when}`,
+        line.employeeName ? `Сотрудник: ${line.employeeName}` : null,
+        line.performerName ? `Исполнитель: ${line.performerName}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      comment,
+      dueAt: body.dueAt,
+      meta: {
+        origin: 'sale',
+        clubRevenueEntryId: line.id,
+        externalId: line.externalId,
+        clientName: line.clientName,
+        productName: line.productName,
+        amountMinor: line.amountMinor,
+        occurredAt: line.occurredAt,
+      },
+    });
+
+    return { mode: 'task' as const, task, detail };
+  }
+
+  async listOpenReworkTasks(actor: JwtPayload, entryId: string) {
+    this.managerTasks.assertManagerLike(actor);
+    const clubId = requireClubId(actor);
+    const detail = await this.detail(clubId, entryId);
+    return this.managerTasks.findOpenBySaleEntry(clubId, detail.line.id);
+  }
+
+  async listReworkAssignees(actor: JwtPayload) {
+    this.managerTasks.assertManagerLike(actor);
+    return this.managerTasks.listStaffAssignees(requireClubId(actor));
   }
 
   private async enrichGenericPaymentsInRange(

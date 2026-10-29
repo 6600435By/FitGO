@@ -1555,6 +1555,8 @@ export class SuperAdminService implements OnModuleInit {
       validUntil:
         typeof meta.validUntil === 'string' ? meta.validUntil : undefined,
       docId: typeof meta.docId === 'string' ? meta.docId : undefined,
+      sessionKey:
+        typeof meta.sessionKey === 'string' ? meta.sessionKey : undefined,
       reworkCount: task.reworkCount ?? 0,
       priority: String(
         (task as { priority?: string }).priority ?? 'NORMAL',

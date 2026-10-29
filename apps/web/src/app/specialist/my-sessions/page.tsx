@@ -1,14 +1,18 @@
 'use client';
 
-import { Suspense, useMemo } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useMemo } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
+import { ManagerOriginInbox } from '@/components/manager-rework/manager-origin-inbox';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
 function SpecialistMySessionsInner() {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const initialFrom = searchParams.get('from')?.trim() || undefined;
+  const initialSessionKey = searchParams.get('session')?.trim() || undefined;
   const initialTo = searchParams.get('to')?.trim() || undefined;
   const initialNeedsReview =
     searchParams.get('needsReview') === '1' ||
@@ -99,24 +103,50 @@ function SpecialistMySessionsInner() {
     [],
   );
 
+  const listManagerTasks = useCallback(
+    (token: string) => api.specialistManagerTasks(token),
+    [],
+  );
+  const completeManagerTask = useCallback(
+    (token: string, id: string, comment?: string) =>
+      api.specialistManagerTaskDone(token, id, comment),
+    [],
+  );
+  const openManagerSession = useCallback(
+    (sessionKey: string) => {
+      const next = new URLSearchParams(searchParams.toString());
+      next.set('session', sessionKey);
+      router.replace(`${pathname}?${next.toString()}`);
+    },
+    [pathname, router, searchParams],
+  );
+
   return (
-    <BookingControlPanel
-      api={panelApi}
-      fixedKind="SPA"
-      title="Контроль записей"
-      subtitle="Ваши SPA-записи. Подтвердите услугу — затем админ допустит в ЗП."
-      canApproveGroup
-      approvalActor="performer"
-      initialFrom={initialFrom}
-      initialTo={initialTo}
-      initialNeedsReview={initialNeedsReview}
-      initialPayment={initialPayment}
-      initialClient={initialClient}
-      initialClientId={initialClientId}
-      spaBookingEditHref={(bookingId) =>
-        `/specialist/schedule?booking=${encodeURIComponent(bookingId)}`
-      }
-    />
+    <div>
+      <ManagerOriginInbox
+        list={listManagerTasks}
+        complete={completeManagerTask}
+        onOpenSession={openManagerSession}
+      />
+      <BookingControlPanel
+        api={panelApi}
+        fixedKind="SPA"
+        title="Контроль записей"
+        subtitle="Ваши SPA-записи. Подтвердите услугу — затем админ допустит в ЗП."
+        canApproveGroup
+        approvalActor="performer"
+        initialFrom={initialFrom}
+        initialTo={initialTo}
+        initialNeedsReview={initialNeedsReview}
+        initialPayment={initialPayment}
+        initialSessionKey={initialSessionKey}
+        initialClient={initialClient}
+        initialClientId={initialClientId}
+        spaBookingEditHref={(bookingId) =>
+          `/specialist/schedule?booking=${encodeURIComponent(bookingId)}`
+        }
+      />
+    </div>
   );
 }
 

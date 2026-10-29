@@ -94,6 +94,30 @@ export function createBookingControlApi(
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlReturnApproval(token, base, sessionKey, comment);
     },
+    managerRework:
+      base === 'super-admin'
+        ? async (body) => {
+            const token = getToken();
+            if (!token) throw new Error('Нет сессии');
+            return api.bookingControlManagerRework(token, body);
+          }
+        : undefined,
+    listReworkAssignees:
+      base === 'super-admin'
+        ? async () => {
+            const token = getToken();
+            if (!token) return [];
+            return api.bookingControlReworkAssignees(token);
+          }
+        : undefined,
+    listReworkTasks:
+      base === 'super-admin'
+        ? async (sessionKey) => {
+            const token = getToken();
+            if (!token) return [];
+            return api.bookingControlReworkTasks(token, sessionKey);
+          }
+        : undefined,
     linkSpaSale: async (bookingId, saleExternalId, applyServiceId) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');

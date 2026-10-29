@@ -3123,6 +3123,136 @@ export const api = {
       token,
     ),
 
+  bookingControlManagerRework: (
+    token: string,
+    body: {
+      sessionKey: string;
+      target: 'trainer' | 'admin' | 'staff';
+      assigneeId?: string;
+      comment: string;
+      dueAt?: string;
+    },
+  ) =>
+    request<{
+      mode: 'approval' | 'task';
+      detail?: import('@fitgo/shared-types').BookingControlDetail;
+      task?: { id: string; title: string };
+      warning?: string;
+    }>(
+      '/super-admin/booking-control/rework',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  bookingControlReworkAssignees: (token: string) =>
+    request<
+      Array<{
+        id: string;
+        name: string;
+        roles: string[];
+        externalId: string | null;
+      }>
+    >('/super-admin/booking-control/rework-assignees', {}, token),
+
+  bookingControlReworkTasks: (token: string, sessionKey: string) =>
+    request<
+      Array<{
+        id: string;
+        title: string;
+        assigneeId: string | null;
+        dueAt?: string;
+      }>
+    >(
+      `/super-admin/booking-control/rework-tasks?sessionKey=${encodeURIComponent(sessionKey)}`,
+      {},
+      token,
+    ),
+
+  trainerManagerTasks: (token: string) =>
+    request<
+      Array<{
+        id: string;
+        title: string;
+        description?: string;
+        dueAt?: string;
+        sessionKey?: string;
+        clientName?: string;
+        createdBy?: { firstName: string; lastName: string };
+      }>
+    >('/trainer/manager-tasks', {}, token),
+
+  trainerManagerTaskDone: (
+    token: string,
+    id: string,
+    comment?: string,
+  ) =>
+    request(`/trainer/manager-tasks/${id}/done`, {
+      method: 'POST',
+      body: JSON.stringify({ comment: comment ?? '' }),
+    }, token),
+
+  specialistManagerTasks: (token: string) =>
+    request<
+      Array<{
+        id: string;
+        title: string;
+        description?: string;
+        dueAt?: string;
+        sessionKey?: string;
+        clientName?: string;
+        createdBy?: { firstName: string; lastName: string };
+      }>
+    >('/specialist/manager-tasks', {}, token),
+
+  specialistManagerTaskDone: (
+    token: string,
+    id: string,
+    comment?: string,
+  ) =>
+    request(`/specialist/manager-tasks/${id}/done`, {
+      method: 'POST',
+      body: JSON.stringify({ comment: comment ?? '' }),
+    }, token),
+
+  superAdminClubSaleRework: (
+    token: string,
+    entryId: string,
+    body: {
+      target: 'performer' | 'admin' | 'staff';
+      assigneeId?: string;
+      comment: string;
+      dueAt?: string;
+    },
+  ) =>
+    request<{
+      mode: 'task';
+      task: { id: string; title: string };
+    }>(
+      `/super-admin/sales/club/${entryId}/rework`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  superAdminClubSaleReworkTasks: (token: string, entryId: string) =>
+    request<
+      Array<{
+        id: string;
+        title: string;
+        dueAt?: string;
+        assignee?: { id: string; firstName: string; lastName: string };
+      }>
+    >(`/super-admin/sales/club/${entryId}/rework-tasks`, {}, token),
+
+  superAdminSalesReworkAssignees: (token: string) =>
+    request<
+      Array<{
+        id: string;
+        name: string;
+        roles: string[];
+        externalId: string | null;
+      }>
+    >('/super-admin/sales/rework-assignees', {}, token),
+
   bookingControlSpaLinkSale: (
     token: string,
     base: 'super-admin' | 'admin',

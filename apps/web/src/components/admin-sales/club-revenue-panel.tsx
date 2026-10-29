@@ -8,6 +8,7 @@ import type {
   ClubRevenuePaymentMethod,
   ClubRevenueReportResponse,
 } from '@fitgo/shared-types';
+import { UserRole } from '@fitgo/shared-types';
 import { AdminStickyTable } from '@/components/admin/admin-sticky-table';
 import { SaleDetailDrawer } from '@/components/admin-sales/sale-detail-drawer';
 import { api } from '@/lib/api';
@@ -396,7 +397,12 @@ export function ClubRevenuePanel() {
   const search = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  const ownerId = getUser()?.id ?? '';
+  const sessionUser = getUser();
+  const ownerId = sessionUser?.id ?? '';
+  const canManagerRework = Boolean(
+    sessionUser?.roles?.includes(UserRole.SUPER_ADMIN) ||
+      sessionUser?.roles?.includes(UserRole.MANAGER),
+  );
   const bounds = useMemo(() => monthBounds(), []);
 
   const boot = useMemo(() => {
@@ -1011,7 +1017,11 @@ export function ClubRevenuePanel() {
       ) : null}
 
       {detail ? (
-        <SaleDetailDrawer detail={detail} onClose={() => setDetail(null)} />
+        <SaleDetailDrawer
+          detail={detail}
+          onClose={() => setDetail(null)}
+          canRework={canManagerRework}
+        />
       ) : null}
     </div>
   );

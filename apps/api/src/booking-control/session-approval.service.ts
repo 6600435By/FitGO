@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -127,19 +128,30 @@ export class SessionApprovalService {
     return { updated: result.count };
   }
 
+  /**
+   * Return PT/SPA approval for rework.
+   * - performer (default): clear performer + admin + override → PENDING_PERFORMER
+   * - admin: keep performer, clear admin + override → PENDING_ADMIN
+   */
   async returnApproval(
     actor: JwtPayload,
     kind: SessionApprovalKind,
     bookingId: string,
     reason?: string,
+    target: 'performer' | 'admin' = 'performer',
   ) {
     const clubId = requireClubId(actor);
     this.assertAdminLike(actor);
-    await this.ensureApproval(kind, bookingId, clubId);
+    const row = await this.ensureApproval(kind, bookingId, clubId);
+    if (target === 'admin' && !row.performerConfirmedAt) {
+      throw new BadRequestException(
+        'Нельзя вернуть администратору: исполнитель ещё не подтвердил',
+      );
+    }
     return this.prisma.sessionApproval.update({
       where: { kind_bookingId: { kind, bookingId } },
       data: {
-        performerConfirmedAt: null,
+        ...(target === 'performer' ? { performerConfirmedAt: null } : {}),
         adminApprovedAt: null,
         adminApprovedById: null,
         overrideApprovedAt: null,

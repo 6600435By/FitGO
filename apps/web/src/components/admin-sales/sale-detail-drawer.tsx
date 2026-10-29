@@ -1,9 +1,17 @@
 'use client';
 
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   ClubRevenueDetailResponse,
   ClubRevenuePaymentMethod,
 } from '@fitgo/shared-types';
+import {
+  ManagerReworkSheet,
+  type ManagerReworkAssignee,
+  type ManagerReworkTargetOption,
+} from '@/components/manager-rework/manager-rework-sheet';
+import { api } from '@/lib/api';
+import { getToken } from '@/lib/auth';
 
 const SYSTEM_EMPLOYEE_ID = '__1c__';
 
@@ -51,14 +59,105 @@ function fmtDate(iso: string | null): string {
   });
 }
 
+type OpenTask = {
+  id: string;
+  title: string;
+  dueAt?: string;
+  assignee?: { id: string; firstName: string; lastName: string };
+};
+
 type Props = {
   detail: ClubRevenueDetailResponse;
   onClose: () => void;
+  /** Manager / SA: enable «На доработку» sheet. */
+  canRework?: boolean;
 };
 
-/** Side drawer with ClubRevenue sale / payment details (read-only). */
-export function SaleDetailDrawer({ detail, onClose }: Props) {
+/** Side drawer with ClubRevenue sale / payment details. */
+export function SaleDetailDrawer({ detail, onClose, canRework = false }: Props) {
   const line = detail.line;
+  const [reworkOpen, setReworkOpen] = useState(false);
+  const [reworkBusy, setReworkBusy] = useState(false);
+  const [assignees, setAssignees] = useState<ManagerReworkAssignee[]>([]);
+  const [openTasks, setOpenTasks] = useState<OpenTask[]>([]);
+  const [message, setMessage] = useState('');
+
+  const loadTasks = useCallback(async () => {
+    if (!canRework) return;
+    const token = getToken();
+    if (!token) return;
+    try {
+      setOpenTasks(await api.superAdminClubSaleReworkTasks(token, line.id));
+    } catch {
+      setOpenTasks([]);
+    }
+  }, [canRework, line.id]);
+
+  useEffect(() => {
+    void loadTasks();
+  }, [loadTasks]);
+
+  const targets: ManagerReworkTargetOption[] = useMemo(() => {
+    const performer = assignees.find(
+      (a) =>
+        line.performerExternalId &&
+        (a.externalId === line.performerExternalId ||
+          a.id === line.performerExternalId),
+    );
+    const admin = assignees.find(
+      (a) =>
+        line.employeeExternalId &&
+        a.externalId === line.employeeExternalId &&
+        (a.roles ?? []).some((r) => r === 'ADMIN' || r === 'MANAGER'),
+    );
+    return [
+      {
+        id: 'performer',
+        label: 'Исполнителю',
+        presetAssigneeId: performer?.id ?? null,
+        needsAssignee: !performer,
+        roleFilter: ['TRAINER', 'SPECIALIST'],
+        hint: performer
+          ? performer.name
+          : line.performerName
+            ? `${line.performerName} — выберите в FitGO`
+            : 'Выберите тренера / специалиста',
+      },
+      {
+        id: 'admin',
+        label: 'Администратору',
+        presetAssigneeId: admin?.id ?? null,
+        needsAssignee: !admin,
+        roleFilter: ['ADMIN', 'MANAGER'],
+        hint: admin
+          ? admin.name
+          : line.employeeName
+            ? `${line.employeeName} — выберите в FitGO`
+            : 'Выберите администратора',
+      },
+      {
+        id: 'staff',
+        label: 'Другому сотруднику',
+        needsAssignee: true,
+        hint: 'Задача от руководителя',
+      },
+    ];
+  }, [assignees, line]);
+
+  const openRework = async () => {
+    setMessage('');
+    setReworkOpen(true);
+    if (assignees.length === 0) {
+      const token = getToken();
+      if (!token) return;
+      try {
+        setAssignees(await api.superAdminSalesReworkAssignees(token));
+      } catch {
+        /* empty list */
+      }
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/50">
       <button
@@ -206,7 +305,86 @@ export function SaleDetailDrawer({ detail, onClose }: Props) {
             </ul>
           </div>
         ) : null}
+
+        {canRework ? (
+          <div className="mt-6 space-y-3 border-t border-slate-800 pt-4">
+            {openTasks.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-slate-400">
+                  Открытые задачи по операции
+                </p>
+                <ul className="space-y-1 text-sm">
+                  {openTasks.map((t) => (
+                    <li
+                      key={t.id}
+                      className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2"
+                    >
+                      <div className="font-medium text-amber-100">{t.title}</div>
+                      <div className="text-xs text-slate-400">
+                        {t.assignee
+                          ? `${t.assignee.firstName} ${t.assignee.lastName}`
+                          : 'Без исполнителя'}
+                        {t.dueAt
+                          ? ` · до ${new Date(t.dueAt).toLocaleString('ru-RU', {
+                              timeZone: CLUB_TZ,
+                              day: '2-digit',
+                              month: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}`
+                          : ''}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {message ? (
+              <p className="text-xs text-fitgo-300">{message}</p>
+            ) : null}
+            <button
+              type="button"
+              className="btn-secondary w-full text-sm"
+              onClick={() => void openRework()}
+              disabled={reworkBusy}
+            >
+              На доработку
+            </button>
+          </div>
+        ) : null}
       </aside>
+
+      <ManagerReworkSheet
+        open={reworkOpen}
+        title="На доработку"
+        subtitle={line.productName ?? line.clientName ?? undefined}
+        targets={targets}
+        assignees={assignees}
+        busy={reworkBusy}
+        onClose={() => setReworkOpen(false)}
+        onSubmit={async (input) => {
+          const token = getToken();
+          if (!token) throw new Error('Нет сессии');
+          const target =
+            input.targetId === 'performer' || input.targetId === 'admin'
+              ? input.targetId
+              : 'staff';
+          setReworkBusy(true);
+          try {
+            const result = await api.superAdminClubSaleRework(token, line.id, {
+              target,
+              assigneeId: input.assigneeId,
+              comment: input.comment,
+              dueAt: input.dueAt,
+            });
+            setReworkOpen(false);
+            setMessage(`Задача: ${result.task.title}`);
+            await loadTasks();
+          } finally {
+            setReworkBusy(false);
+          }
+        }}
+      />
     </div>
   );
 }

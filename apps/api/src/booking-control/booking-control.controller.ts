@@ -2,12 +2,14 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { isReformerHallSession, UserRole } from '@fitgo/shared-types';
 import { isHiddenFromTrainerBookingControl } from '../admin-sales/trainer-pt-sales-from-revenue';
+import { ManagerOriginTasksService } from '../admin-tasks/manager-origin-tasks.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -51,6 +53,7 @@ export class BookingControlController {
     private readonly bookingControl: BookingControlService,
     private readonly clubSync: ClubSyncOrchestrator,
     private readonly prisma: PrismaService,
+    private readonly managerTasks: ManagerOriginTasksService,
   ) {}
 
   /** Period-scoped pull of Документ.Занятие + PT sales (not club-wide LIGHT). */
@@ -199,6 +202,51 @@ export class BookingControlController {
       user,
       body.sessionKey ?? '',
       body.comment,
+    );
+  }
+
+  /** Manager / SA: return to trainer/admin or create a staff task. */
+  @Post('super-admin/booking-control/rework')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  reworkSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      sessionKey?: string;
+      target?: 'trainer' | 'admin' | 'staff';
+      assigneeId?: string;
+      comment?: string;
+      dueAt?: string;
+    },
+  ) {
+    const target =
+      body.target === 'admin' || body.target === 'staff' || body.target === 'trainer'
+        ? body.target
+        : 'trainer';
+    return this.bookingControl.managerRework(user, {
+      sessionKey: body.sessionKey ?? '',
+      target,
+      assigneeId: body.assigneeId,
+      comment: body.comment ?? '',
+      dueAt: body.dueAt,
+    });
+  }
+
+  @Get('super-admin/booking-control/rework-assignees')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  reworkAssigneesSuperAdmin(@CurrentUser() user: JwtPayload) {
+    return this.bookingControl.listReworkAssignees(user);
+  }
+
+  @Get('super-admin/booking-control/rework-tasks')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  reworkTasksSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Query('sessionKey') sessionKey?: string,
+  ) {
+    return this.bookingControl.listOpenReworkTasksForSession(
+      user,
+      sessionKey ?? '',
     );
   }
 
@@ -654,6 +702,38 @@ export class BookingControlController {
       body.sessionKey ?? '',
       body.comment,
     );
+  }
+
+  @Get('trainer/manager-tasks')
+  @Roles(UserRole.TRAINER)
+  listTrainerManagerTasks(@CurrentUser() user: JwtPayload) {
+    return this.managerTasks.listForAssignee(user);
+  }
+
+  @Post('trainer/manager-tasks/:id/done')
+  @Roles(UserRole.TRAINER)
+  doneTrainerManagerTask(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { comment?: string },
+  ) {
+    return this.managerTasks.completeByAssignee(user, id, body.comment);
+  }
+
+  @Get('specialist/manager-tasks')
+  @Roles(UserRole.SPECIALIST)
+  listSpecialistManagerTasks(@CurrentUser() user: JwtPayload) {
+    return this.managerTasks.listForAssignee(user);
+  }
+
+  @Post('specialist/manager-tasks/:id/done')
+  @Roles(UserRole.SPECIALIST)
+  doneSpecialistManagerTask(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { comment?: string },
+  ) {
+    return this.managerTasks.completeByAssignee(user, id, body.comment);
   }
 
   private list(

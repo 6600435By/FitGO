@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ManagerOriginTasksModule } from '../admin-tasks/manager-origin-tasks.module';
 import { AuthModule } from '../auth/auth.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import {
@@ -15,7 +16,7 @@ import { SalesBackfillOnceScheduler } from './sales-backfill-once.scheduler';
 import { SalesBackfillService } from './sales-backfill.service';
 
 @Module({
-  imports: [ConfigModule, AuthModule, PrismaModule],
+  imports: [ConfigModule, AuthModule, PrismaModule, ManagerOriginTasksModule],
   controllers: [AdminSalesController, SuperAdminSalesController],
   providers: [
     AdminSalesService,
