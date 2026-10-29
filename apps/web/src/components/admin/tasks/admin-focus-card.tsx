@@ -70,8 +70,9 @@ function primaryHref(item: AdminInboxItem): string {
   if (item.kind === 'calls') {
     return `/admin/tasks?view=now&kind=calls&task=${item.id}`;
   }
-  if (item.virtual && item.pending?.sessionKey) {
-    return `/admin/tasks?view=now&kind=control&task=${encodeURIComponent(item.id)}`;
+  if (item.kind === 'booking' || (item.virtual && item.pending?.sessionKey)) {
+    const topic = item.topic ? `&topic=${item.topic}` : '';
+    return `/admin/tasks?view=now&kind=booking${topic}&task=${encodeURIComponent(item.id)}`;
   }
   return `/admin/tasks?view=now&task=${item.id}`;
 }

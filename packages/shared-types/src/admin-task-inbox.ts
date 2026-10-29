@@ -10,7 +10,8 @@ export type AdminInboxKind =
   | 'calls' // Абон. — membership renewals only
   | 'birthday'
   | 'money'
-  | 'control'
+  | 'control' // Подтв. запись — SPA/реформер, клиент придёт (завтра)
+  | 'booking' // Контроль записей — ГП / ПТ / SPA после занятия
   | 'manager'
   | 'staff';
 
@@ -180,6 +181,7 @@ export const ADMIN_INBOX_KIND_LABEL: Record<AdminInboxKind, string> = {
   birthday: 'ДР',
   money: 'Деньги',
   control: 'Подтвердить запись',
+  booking: 'Контроль записей',
   manager: 'Руководитель',
   staff: 'Персонал',
 };
@@ -190,9 +192,44 @@ export const ADMIN_INBOX_KIND_SHORT_LABEL: Record<AdminInboxKind, string> = {
   birthday: 'ДР',
   money: 'Деньги',
   control: 'Подтв. запись',
+  booking: 'Контроль',
   manager: 'Руководитель',
   staff: 'Персонал',
 };
+
+/** Sub-filters under «Контроль записей». */
+export const ADMIN_BOOKING_TOPIC_CHIPS: Array<{
+  topic: 'group_approval' | 'pt_approval' | 'spa_approval';
+  label: string;
+}> = [
+  { topic: 'group_approval', label: 'ГП' },
+  { topic: 'pt_approval', label: 'ПТ' },
+  { topic: 'spa_approval', label: 'SPA' },
+];
+
+export function isAdminInboxConfirmation(
+  item: Pick<AdminInboxItem, 'source' | 'topic'>,
+): boolean {
+  return (
+    item.source === 'BOOKING_CONFIRM' || item.topic === 'confirmation'
+  );
+}
+
+export function isAdminInboxBookingControl(
+  item: Pick<AdminInboxItem, 'kind' | 'topic' | 'source'>,
+): boolean {
+  if (item.kind === 'booking') return true;
+  return (
+    item.topic === 'group_approval' ||
+    item.topic === 'spa_approval' ||
+    item.topic === 'pt_approval' ||
+    item.topic === 'pt_sale_check' ||
+    item.source === 'TRAINING_SALE_NO_PERFORMER' ||
+    item.source === 'BOOKING_GROUP' ||
+    item.source === 'BOOKING_SPA' ||
+    item.source === 'BOOKING_PT'
+  );
+}
 
 /** Debt / installment / staff-debt rows — not listed under «Просрочено». */
 export function isAdminInboxDebtKind(
@@ -228,6 +265,7 @@ const EMPTY_BY_KIND = (): Record<AdminInboxKind, number> => ({
   birthday: 0,
   money: 0,
   control: 0,
+  booking: 0,
   manager: 0,
   staff: 0,
 });
@@ -288,18 +326,19 @@ export function adminInboxKindFromTask(task: {
   ) {
     return 'manager';
   }
+  if (source === 'BOOKING_CONFIRM' || topic === 'confirmation') {
+    return 'control';
+  }
   if (
-    source === 'BOOKING_CONFIRM' ||
     source === 'TRAINING_SALE_NO_PERFORMER' ||
-    topic === 'confirmation' ||
     topic === 'pt_sale_check' ||
     topic === 'group_approval' ||
     topic === 'spa_approval' ||
     topic === 'pt_approval'
   ) {
-    return 'control';
+    return 'booking';
   }
-  return 'control';
+  return 'booking';
 }
 
 export function adminInboxOwner(
@@ -483,10 +522,9 @@ export function adminFocusLane(item: AdminInboxItem): number | null {
 
   if (item.kind === 'manager') return 0;
 
-  if (
-    item.source === 'BOOKING_CONFIRM' ||
-    item.topic === 'confirmation'
-  ) {
+  // Client attendance confirms (SPA / reformer for tomorrow) — never overdue in focus.
+  if (isAdminInboxConfirmation(item)) {
+    if (item.bucket === 'overdue') return null;
     return 1;
   }
 
@@ -511,7 +549,7 @@ export function adminFocusLane(item: AdminInboxItem): number | null {
     return null;
   }
 
-  if (item.kind === 'control') {
+  if (item.kind === 'booking') {
     return dueNow ? 4 : null;
   }
 
@@ -688,7 +726,7 @@ export function adminInboxItemFromPending(
   return {
     id: `virtual:${pending.sessionKey}`,
     virtual: true,
-    kind: 'control',
+    kind: 'booking',
     bucket,
     owner: 'pool',
     primaryAction: 'open_session',
@@ -755,6 +793,13 @@ export function filterAdminInboxItems(
   const kind = opts.kind ?? null;
   const filtered = items.filter((item) => {
     if (kind && item.kind !== kind) return false;
+    // Подтв. запись — только завтрашние SPA/реформер; просрочку не показываем.
+    if (
+      kind === 'control' &&
+      (item.bucket === 'overdue' || !isAdminInboxConfirmation(item))
+    ) {
+      return false;
+    }
     switch (view) {
       case 'now':
         // Default focus queue: manager → confirm → renewals → visit money → control.
@@ -770,16 +815,28 @@ export function filterAdminInboxItems(
         ) {
           return true;
         }
-        // SPA / reformer confirms are due tomorrow (bucket upcoming) but still actionable.
-        if (
-          kind === 'control' &&
-          (item.topic === 'confirmation' ||
-            item.source === 'BOOKING_CONFIRM') &&
-          item.owner !== 'other' &&
-          item.bucket !== 'done' &&
-          item.bucket !== 'waiting'
-        ) {
-          return true;
+        // SPA / reformer: confirm client will come tomorrow (upcoming). No overdue.
+        if (kind === 'control') {
+          return (
+            isAdminInboxConfirmation(item) &&
+            item.owner !== 'other' &&
+            item.bucket !== 'done' &&
+            item.bucket !== 'waiting' &&
+            item.bucket !== 'overdue'
+          );
+        }
+        // Контроль записей: ГП / ПТ / SPA после факта (в т.ч. просроченные).
+        if (kind === 'booking') {
+          return (
+            item.kind === 'booking' &&
+            item.owner !== 'other' &&
+            item.bucket !== 'done' &&
+            item.bucket !== 'waiting' &&
+            (item.bucket === 'overdue' ||
+              item.bucket === 'today' ||
+              item.bucket === 'upcoming' ||
+              (item.reworkCount ?? 0) > 0)
+          );
         }
         // Абон.: весь горизонт продлений (в т.ч. upcoming до 7/14 дн.), не только «сегодня».
         if (
@@ -855,15 +912,20 @@ export function inboxCountsFromItems(
       continue;
     }
 
-    counts.byKind[item.kind] += 1;
+    // Stale client-confirm tasks are hidden from «Подтв. запись» — skip chip counts.
+    const hideStaleConfirm =
+      isAdminInboxConfirmation(item) && item.bucket === 'overdue';
+
+    if (!hideStaleConfirm) {
+      counts.byKind[item.kind] += 1;
+      const topic = item.topic;
+      if (topic && topic in counts.byTopic) {
+        counts.byTopic[topic as keyof AdminInboxCounts['byTopic']] += 1;
+      }
+    }
     if (item.bucket === 'waiting') counts.waiting += 1;
     if (item.owner === 'mine') counts.mine += 1;
     if (item.owner === 'pool') counts.pool += 1;
-
-    const topic = item.topic;
-    if (topic && topic in counts.byTopic) {
-      counts.byTopic[topic as keyof AdminInboxCounts['byTopic']] += 1;
-    }
 
     // Focus counters (Мой фокус / Просрочено / Сегодня) — actionable queue only.
     if (!isInAdminFocusQueue(item)) continue;
@@ -903,6 +965,7 @@ export function parseLegacyAdminTasksQuery(params: {
     kindRaw === 'birthday' ||
     kindRaw === 'money' ||
     kindRaw === 'control' ||
+    kindRaw === 'booking' ||
     kindRaw === 'manager' ||
     kindRaw === 'staff'
   ) {
@@ -920,14 +983,16 @@ export function parseLegacyAdminTasksQuery(params: {
     return { view, kind: 'money' };
   }
   if (topic === 'staff_debt') return { view, kind: 'staff' };
+  if (topic === 'confirmation') {
+    return { view, kind: 'control' };
+  }
   if (
     topic === 'group_approval' ||
     topic === 'spa_approval' ||
     topic === 'pt_approval' ||
-    topic === 'confirmation' ||
     topic === 'pt_sale_check'
   ) {
-    return { view, kind: 'control' };
+    return { view, kind: 'booking' };
   }
 
   const group = params.group;
@@ -935,6 +1000,7 @@ export function parseLegacyAdminTasksQuery(params: {
   if (group === 'staff') return { view, kind: 'staff' };
   if (group === 'manager') return { view, kind: 'manager' };
   if (group === 'control') return { view, kind: 'control' };
+  if (group === 'booking') return { view, kind: 'booking' };
 
   return { view, kind: null };
 }

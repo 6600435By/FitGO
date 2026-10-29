@@ -28,7 +28,7 @@ function item(
 }
 
 describe('adminFocusLane', () => {
-  it('ranks manager first, then confirm, renewals, visit money, control', () => {
+  it('ranks manager first, then confirm, renewals, visit money, booking control', () => {
     assert.equal(
       adminFocusLane(item({ id: 'm', kind: 'manager' })),
       0,
@@ -44,6 +44,18 @@ describe('adminFocusLane', () => {
         }),
       ),
       1,
+    );
+    assert.equal(
+      adminFocusLane(
+        item({
+          id: 'stale',
+          kind: 'control',
+          source: 'BOOKING_CONFIRM',
+          topic: 'confirmation',
+          bucket: 'overdue',
+        }),
+      ),
+      null,
     );
     assert.equal(
       adminFocusLane(
@@ -87,12 +99,76 @@ describe('adminFocusLane', () => {
       adminFocusLane(
         item({
           id: 'g',
-          kind: 'control',
+          kind: 'booking',
           topic: 'group_approval',
           bucket: 'today',
         }),
       ),
       4,
+    );
+  });
+});
+
+describe('filterAdminInboxItems control vs booking', () => {
+  it('kind=control keeps only non-overdue BOOKING_CONFIRM', () => {
+    const rows = [
+      item({
+        id: 'cfm',
+        kind: 'control',
+        source: 'BOOKING_CONFIRM',
+        topic: 'confirmation',
+        bucket: 'upcoming',
+      }),
+      item({
+        id: 'old',
+        kind: 'control',
+        source: 'BOOKING_CONFIRM',
+        topic: 'confirmation',
+        bucket: 'overdue',
+      }),
+      item({
+        id: 'spa',
+        kind: 'booking',
+        topic: 'spa_approval',
+        source: 'BOOKING_SPA',
+        bucket: 'overdue',
+      }),
+    ];
+    const list = filterAdminInboxItems(rows, { view: 'now', kind: 'control' });
+    assert.deepEqual(
+      list.map((r) => r.id),
+      ['cfm'],
+    );
+  });
+
+  it('kind=booking keeps GP/PT/SPA approvals including overdue', () => {
+    const rows = [
+      item({
+        id: 'cfm',
+        kind: 'control',
+        source: 'BOOKING_CONFIRM',
+        topic: 'confirmation',
+        bucket: 'upcoming',
+      }),
+      item({
+        id: 'spa',
+        kind: 'booking',
+        topic: 'spa_approval',
+        source: 'BOOKING_SPA',
+        bucket: 'overdue',
+      }),
+      item({
+        id: 'gp',
+        kind: 'booking',
+        topic: 'group_approval',
+        source: 'BOOKING_GROUP',
+        bucket: 'today',
+      }),
+    ];
+    const list = filterAdminInboxItems(rows, { view: 'now', kind: 'booking' });
+    assert.deepEqual(
+      list.map((r) => r.id).sort(),
+      ['gp', 'spa'],
     );
   });
 });
@@ -248,11 +324,12 @@ describe('inboxCountsFromItems focus totals', () => {
         kind: 'control',
         source: 'BOOKING_CONFIRM',
         topic: 'confirmation',
-        bucket: 'overdue',
+        bucket: 'upcoming',
       }),
     ]);
     assert.equal(counts.total, 2);
-    assert.equal(counts.overdue, 1);
+    assert.equal(counts.overdue, 0);
     assert.equal(counts.byKind.money, 1);
+    assert.equal(counts.byKind.control, 1);
   });
 });

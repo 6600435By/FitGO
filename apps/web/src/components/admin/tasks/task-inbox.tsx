@@ -10,6 +10,7 @@ import type {
   AdminTasksInboxResponse,
 } from '@fitgo/shared-types';
 import {
+  ADMIN_BOOKING_TOPIC_CHIPS,
   ADMIN_INBOX_KIND_SHORT_LABEL,
   ADMIN_INBOX_VIEW_LABEL,
   filterAdminInboxItems,
@@ -50,6 +51,7 @@ const KINDS: AdminInboxKind[] = [
   'birthday',
   'money',
   'control',
+  'booking',
   'manager',
   'staff',
 ];
@@ -442,7 +444,7 @@ export function TaskInbox() {
 
   useLayoutEffect(() => {
     const align = () => {
-      if (!selectedId || !listColRef.current || !detailWrapRef.current) {
+      if (!selectedId || !listColRef.current) {
         setDetailOffset(0);
         return;
       }
@@ -453,14 +455,11 @@ export function TaskInbox() {
         setDetailOffset(0);
         return;
       }
+      // Align right panel top with selected card (do not clamp to list height —
+      // a tall panel previously forced offset=0 and stuck the panel at the top).
       const listTop = listColRef.current.getBoundingClientRect().top;
       const cardTop = card.getBoundingClientRect().top;
-      let offset = Math.max(0, cardTop - listTop);
-      const listH = listColRef.current.offsetHeight;
-      const panelH = detailWrapRef.current.offsetHeight;
-      const maxOffset = Math.max(0, listH - panelH);
-      offset = Math.min(offset, maxOffset);
-      setDetailOffset(offset);
+      setDetailOffset(Math.max(0, Math.round(cardTop - listTop)));
       const rect = card.getBoundingClientRect();
       if (rect.top < 72 || rect.bottom > window.innerHeight - 16) {
         card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -468,9 +467,11 @@ export function TaskInbox() {
     };
     align();
     const t = window.setTimeout(align, 50);
+    const t2 = window.setTimeout(align, 200);
     window.addEventListener('resize', align);
     return () => {
       window.clearTimeout(t);
+      window.clearTimeout(t2);
       window.removeEventListener('resize', align);
     };
   }, [selectedId, items, peekSession, eventsLoading]);
@@ -707,6 +708,40 @@ export function TaskInbox() {
         ))}
       </div>
 
+      {kind === 'booking' ? (
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          <button
+            type="button"
+            onClick={() => setTopicFilter(null)}
+            className={
+              !topicFilter
+                ? 'btn-primary shrink-0 px-3 py-1.5 text-xs'
+                : 'btn-secondary shrink-0 px-3 py-1.5 text-xs'
+            }
+          >
+            Все
+            {inbox
+              ? ` (${inbox.counts.byKind.booking})`
+              : ''}
+          </button>
+          {ADMIN_BOOKING_TOPIC_CHIPS.map(({ topic, label }) => (
+            <button
+              key={topic}
+              type="button"
+              onClick={() => setTopicFilter(topic)}
+              className={
+                topicFilter === topic
+                  ? 'btn-primary shrink-0 px-3 py-1.5 text-xs'
+                  : 'btn-secondary shrink-0 px-3 py-1.5 text-xs'
+              }
+            >
+              {label}
+              {inbox ? ` (${inbox.counts.byTopic[topic]})` : ''}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {inbox?.birthdayScanError ? (
         <p className="text-xs text-amber-300/90">
           1С не отдала дни рождения: {inbox.birthdayScanError}
@@ -730,7 +765,7 @@ export function TaskInbox() {
           ) : null}
           {view === 'now' ? (
             <>
-              {overdueItems.length > 0
+              {kind !== 'control' && overdueItems.length > 0
                 ? renderList(overdueItems, 'Просрочено')
                 : null}
               {todayItems.length > 0
@@ -740,7 +775,10 @@ export function TaskInbox() {
                 ? renderList(debtItems, 'Долги')
                 : null}
               {otherItems.length > 0
-                ? renderList(otherItems, 'Ещё')
+                ? renderList(
+                    otherItems,
+                    kind === 'control' ? 'На завтра' : 'Ещё',
+                  )
                 : null}
             </>
           ) : kind === 'money' || kind === 'staff' ? (
@@ -752,9 +790,9 @@ export function TaskInbox() {
 
         <div
           ref={detailWrapRef}
-          className="hidden lg:block"
+          className="hidden self-start lg:block"
           style={
-            selectedId && detailOffset > 0
+            selectedId
               ? { marginTop: detailOffset }
               : undefined
           }
