@@ -74,10 +74,12 @@ export function TaskCard({
   onMenu: (action: TaskMenuAction) => void;
 }) {
   const phone = resolveAdminInboxPhone(item);
-  const tel = phoneTelHref(phone);
+  const multiClient = (item.task?.confirmClients?.length ?? 0) > 1;
+  const tel = multiClient ? null : phoneTelHref(phone);
 
   return (
     <li
+      data-task-id={item.id}
       className={`card space-y-2 !p-3 transition ${
         selected ? 'border-fitgo-500/50' : 'hover:border-fitgo-500/30'
       }`}
@@ -104,7 +106,7 @@ export function TaskCard({
         {item.subtitle ? (
           <p className="mt-0.5 text-sm text-slate-400">{item.subtitle}</p>
         ) : null}
-        {phone ? (
+        {phone && !multiClient ? (
           <p className="mt-0.5 text-xs tabular-nums text-slate-500">{phone}</p>
         ) : null}
         <p className="mt-1 text-xs text-slate-500">

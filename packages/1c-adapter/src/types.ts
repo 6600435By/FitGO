@@ -228,6 +228,19 @@ export interface IFitnessClubProvider {
     attendance: 'ATTENDED' | 'NO_SHOW';
   }>;
   /**
+   * Cancel a client row on a 1C group class (Документ.Занятие.СоставЗанятия).
+   * Optional — unsupported providers throw.
+   */
+  cancelClassSessionMember?(input: {
+    appointmentId: string;
+    clientExternalId: string;
+  }): Promise<{
+    ok: boolean;
+    appointmentId: string;
+    clientExternalId: string;
+    cancelled: boolean;
+  }>;
+  /**
    * One-time PT sale lines with Исполнитель (no class document required).
    * Optional — returns [] when unsupported.
    */

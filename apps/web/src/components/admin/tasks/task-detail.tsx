@@ -14,6 +14,13 @@ import { BirthdayCallScript } from '@/components/admin/birthday-call-script';
 import { phoneTelHref } from '@/lib/phone';
 import { formatDate, formatDateTime } from '@/lib/utils';
 
+function resolveSessionKey(item: AdminInboxItem): string | undefined {
+  const fromPending = item.pending?.sessionKey?.trim();
+  if (fromPending) return fromPending;
+  const fromTask = item.task?.sessionKey?.trim();
+  return fromTask || undefined;
+}
+
 export function TaskDetail({
   item,
   debtLines,
@@ -24,6 +31,8 @@ export function TaskDetail({
   onCommentDraft,
   onComment,
   onConfirmClient,
+  onExcludeClient,
+  onOpenSession,
   onLoadDebt,
   onClose,
   onPrimary,
@@ -41,6 +50,8 @@ export function TaskDetail({
     clientExternalId: string,
     confirmed: boolean,
   ) => void;
+  onExcludeClient?: (clientExternalId: string, clientName: string) => void;
+  onOpenSession?: (sessionKey: string) => void;
   onLoadDebt?: () => void;
   onClose?: () => void;
   onPrimary: () => void;
@@ -56,32 +67,46 @@ export function TaskDetail({
     item.source === 'INSTALLMENT_PAYMENT';
   const isBirthday = item.source === 'BIRTHDAY';
   const isConfirm = item.source === 'BOOKING_CONFIRM';
-  const clients = task && 'confirmClients' in task
-    ? (task as { confirmClients?: Array<{
-        externalId: string;
-        clientName: string;
-        phone?: string;
-        confirmed: boolean;
-        clientNote?: string;
-        visitNote?: string;
-      }> }).confirmClients
-    : undefined;
+  const clients =
+    task && 'confirmClients' in task
+      ? (
+          task as {
+            confirmClients?: Array<{
+              externalId: string;
+              clientName: string;
+              phone?: string;
+              confirmed: boolean;
+              clientNote?: string;
+              visitNote?: string;
+            }>;
+          }
+        ).confirmClients
+      : undefined;
+  const multiClient = (clients?.length ?? 0) > 1;
+  const showSharedCall = Boolean(tel) && !multiClient;
+  const sessionKey = resolveSessionKey(item);
+  const description = task?.description?.trim() || '';
   const performerName =
     item.performerName ??
     (task && 'performerName' in task
       ? (task as { performerName?: string }).performerName
       : undefined);
 
+  const openSession = () => {
+    if (sessionKey) onOpenSession?.(sessionKey);
+  };
+
   return (
     <div className="card space-y-3 !p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="font-semibold">{item.title}</p>
-          {item.subtitle ? (
+          {!isConfirm && item.subtitle ? (
             <p className="text-sm text-slate-400">{item.subtitle}</p>
           ) : null}
           {performerName &&
-          !(item.subtitle ?? '').includes(performerName) ? (
+          !(item.subtitle ?? '').includes(performerName) &&
+          !(description.includes(performerName)) ? (
             <p className="mt-0.5 text-xs text-slate-500">
               Специалист: {performerName}
             </p>
@@ -107,10 +132,28 @@ export function TaskDetail({
         </div>
       ) : null}
 
-      {task?.description ? (
-        <p className="whitespace-pre-line text-sm text-slate-300">
-          {task.description}
-        </p>
+      {description ? (
+        sessionKey && onOpenSession ? (
+          <button
+            type="button"
+            className="block w-full whitespace-pre-line text-left text-sm text-fitgo-300 underline decoration-fitgo-500/40 underline-offset-2 hover:text-fitgo-200"
+            onClick={openSession}
+          >
+            {description}
+          </button>
+        ) : (
+          <p className="whitespace-pre-line text-sm text-slate-300">
+            {description}
+          </p>
+        )
+      ) : sessionKey && onOpenSession && !isConfirm ? (
+        <button
+          type="button"
+          className="text-sm text-fitgo-300 underline decoration-fitgo-500/40 underline-offset-2 hover:text-fitgo-200"
+          onClick={openSession}
+        >
+          Контроль записей
+        </button>
       ) : null}
 
       {isBirthday ? (
@@ -129,7 +172,7 @@ export function TaskDetail({
         />
       ) : null}
 
-      {tel ? (
+      {showSharedCall ? (
         <a
           href={tel}
           className="btn-primary flex w-full items-center justify-center gap-2 text-xs"
@@ -178,63 +221,85 @@ export function TaskDetail({
 
       {isConfirm && clients && clients.length > 0 ? (
         <ul className="space-y-2">
-          {clients.map((client) => (
-            <li
-              key={client.externalId}
-              className={`rounded-lg border px-3 py-2 ${
-                client.confirmed
-                  ? 'border-emerald-800/60 bg-emerald-950/30'
-                  : 'border-slate-800 bg-slate-950/40'
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">{client.clientName}</p>
-                  {(client.phone || (!client.confirmed && phone)) ? (
-                    <p className="mt-0.5 text-[11px] tabular-nums text-slate-500">
-                      {client.phone || phone}
-                    </p>
-                  ) : null}
-                  {client.clientNote ? (
-                    <p className="text-[11px] text-amber-200/85">
-                      Клиент: {client.clientNote}
-                    </p>
-                  ) : null}
-                  {client.visitNote ? (
-                    <p className="text-[11px] text-slate-300/90">
-                      Запись: {client.visitNote}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {!client.confirmed &&
-                  phoneTelHref(client.phone || phone) ? (
-                    <a
-                      href={phoneTelHref(client.phone || phone)}
-                      aria-label="Позвонить"
-                      title="Позвонить"
-                      className="btn-primary inline-flex h-8 w-8 items-center justify-center !rounded-full !p-0"
+          {clients.map((client) => {
+            const clientTel = phoneTelHref(
+              client.phone || (multiClient ? undefined : phone),
+            );
+            return (
+              <li
+                key={client.externalId}
+                className={`rounded-lg border px-3 py-2 ${
+                  client.confirmed
+                    ? 'border-emerald-800/60 bg-emerald-950/30'
+                    : 'border-slate-800 bg-slate-950/40'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{client.clientName}</p>
+                    {(client.phone ||
+                      (!multiClient && !client.confirmed && phone)) ? (
+                      <p className="mt-0.5 text-[11px] tabular-nums text-slate-500">
+                        {client.phone || phone}
+                      </p>
+                    ) : null}
+                    {client.clientNote ? (
+                      <p className="text-[11px] text-amber-200/85">
+                        Клиент: {client.clientNote}
+                      </p>
+                    ) : null}
+                    {client.visitNote ? (
+                      <p className="text-[11px] text-slate-300/90">
+                        Запись: {client.visitNote}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                    {!client.confirmed && clientTel ? (
+                      <a
+                        href={clientTel}
+                        aria-label="Позвонить"
+                        title="Позвонить"
+                        className="btn-primary inline-flex h-8 w-8 items-center justify-center !rounded-full !p-0"
+                      >
+                        <Phone className="h-3.5 w-3.5" />
+                      </a>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={
+                        client.confirmed
+                          ? 'btn-secondary text-[11px]'
+                          : 'btn-primary text-[11px]'
+                      }
+                      onClick={() =>
+                        onConfirmClient?.(
+                          client.externalId,
+                          !client.confirmed,
+                        )
+                      }
                     >
-                      <Phone className="h-3.5 w-3.5" />
-                    </a>
-                  ) : null}
-                  <button
-                    type="button"
-                    className={
-                      client.confirmed
-                        ? 'btn-secondary text-[11px]'
-                        : 'btn-primary text-[11px]'
-                    }
-                    onClick={() =>
-                      onConfirmClient?.(client.externalId, !client.confirmed)
-                    }
-                  >
-                    {client.confirmed ? 'Снять' : 'Проверил'}
-                  </button>
+                      {client.confirmed ? 'Снять' : 'Проверил'}
+                    </button>
+                    {!client.confirmed && onExcludeClient ? (
+                      <button
+                        type="button"
+                        className="btn-secondary text-[11px] text-rose-200"
+                        onClick={() =>
+                          onExcludeClient(
+                            client.externalId,
+                            client.clientName,
+                          )
+                        }
+                      >
+                        Исключить
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
 

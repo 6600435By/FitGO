@@ -14,6 +14,7 @@ import {
   isAdminHomePinId,
   isAdminHomeWidgetId,
   outcomesForSource,
+  parseSessionKey,
   resolveAdminInboxPhone,
   sortAdminInboxItems,
   type AdminHomeLayoutValue,
@@ -58,6 +59,7 @@ import {
   resolveNoteFromMap,
   type SpaNoteIdentity,
 } from '../spa-booking/spa-client-note.util';
+import { SpaBookingService } from '../spa-booking/spa-booking.service';
 
 @Injectable()
 export class AdminService {
@@ -71,6 +73,7 @@ export class AdminService {
     private readonly tasksScheduler: AdminTasksSchedulerService,
     private readonly adminPermissions: AdminPermissionsService,
     private readonly features: FeaturesService,
+    private readonly spaBooking: SpaBookingService,
   ) {}
 
   async getDashboard(user: JwtPayload): Promise<AdminDashboard> {
@@ -2415,6 +2418,161 @@ export class AdminService {
         comment: confirmed
           ? `Подтвердил: ${String(clients[idx].clientName ?? externalId)}`
           : `Снял подтверждение: ${String(clients[idx].clientName ?? externalId)}`,
+      },
+    });
+    return this.mapTaskItem(updated);
+  }
+
+  /**
+   * Remove a client from the underlying booking (SPA cancel / 1C roster flag)
+   * and drop them from the BOOKING_CONFIRM task.
+   */
+  async excludeBookingClient(
+    user: JwtPayload,
+    taskId: string,
+    body: { clientExternalId: string },
+  ) {
+    const clubId = requireClubId(user);
+    const externalId = body.clientExternalId?.trim();
+    if (!externalId) {
+      throw new BadRequestException('clientExternalId обязателен');
+    }
+    const task = await this.prisma.adminTask.findFirst({
+      where: { id: taskId, clubId, source: 'BOOKING_CONFIRM' },
+    });
+    if (!task) throw new NotFoundException('Задача не найдена');
+    if (
+      task.status === PrismaAdminTaskStatus.DONE ||
+      task.status === PrismaAdminTaskStatus.CANCELLED
+    ) {
+      throw new BadRequestException('Задача уже закрыта');
+    }
+
+    const meta = (task.meta ?? {}) as Record<string, unknown>;
+    const clients = Array.isArray(meta.clients)
+      ? ([...meta.clients] as Array<Record<string, unknown>>)
+      : [];
+    const idx = clients.findIndex((c) => c.externalId === externalId);
+    if (idx < 0) {
+      throw new NotFoundException('Клиент не найден в задаче');
+    }
+    const clientName = String(clients[idx].clientName ?? externalId);
+    const sessionKey =
+      typeof meta.sessionKey === 'string' ? meta.sessionKey.trim() : '';
+    if (!sessionKey) {
+      throw new BadRequestException('У задачи нет ссылки на запись');
+    }
+
+    const parsed = parseSessionKey(sessionKey);
+    if (!parsed) {
+      throw new BadRequestException('Неизвестный формат sessionKey');
+    }
+
+    if (parsed.source === 'FITGO' && parsed.kind === 'SPA') {
+      try {
+        await this.spaBooking.adminCancelBooking(user, parsed.id);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new BadRequestException(
+          msg.includes('1С') || msg.includes('отмен')
+            ? msg
+            : `Не удалось отменить SPA: ${msg}`,
+        );
+      }
+    } else if (parsed.source === '1C') {
+      const provider = this.fitness.getProvider();
+      if (!provider.cancelClassSessionMember) {
+        throw new BadRequestException(
+          'Провайдер 1С не поддерживает исключение из состава (нужен FitGO HTTP)',
+        );
+      }
+      try {
+        await provider.cancelClassSessionMember({
+          appointmentId: parsed.id,
+          clientExternalId: externalId,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new BadRequestException(
+          msg.includes('FitGO 1C') || msg.includes('1C')
+            ? msg
+            : `Не удалось исключить из 1С: ${msg}`,
+        );
+      }
+      await this.prisma.onexClassSessionMember.updateMany({
+        where: {
+          session: { clubId, externalId: parsed.id },
+          externalId,
+        },
+        data: {
+          cancelled: true,
+          attendance: OnexClassMemberAttendance.CANCELLED,
+        },
+      });
+    } else {
+      throw new BadRequestException(
+        'Исключение доступно только для SPA и групповых занятий из 1С',
+      );
+    }
+
+    const remaining = clients.filter((c) => c.externalId !== externalId);
+    const allConfirmed =
+      remaining.length > 0 && remaining.every((c) => c.confirmed === true);
+    const noneLeft = remaining.length === 0;
+
+    let nextStatus: PrismaAdminTaskStatus = task.status;
+    let completedAt: Date | null = task.completedAt;
+    if (noneLeft) {
+      nextStatus = PrismaAdminTaskStatus.CANCELLED;
+      completedAt = new Date();
+    } else if (allConfirmed) {
+      nextStatus = PrismaAdminTaskStatus.DONE;
+      completedAt = new Date();
+    } else if (task.status === PrismaAdminTaskStatus.OPEN) {
+      nextStatus = PrismaAdminTaskStatus.IN_PROGRESS;
+    }
+
+    const nextMeta = {
+      ...meta,
+      clients: remaining,
+      phone:
+        remaining.find(
+          (c) =>
+            c.confirmed !== true &&
+            typeof c.phone === 'string' &&
+            String(c.phone).trim(),
+        )?.phone ??
+        remaining.find(
+          (c) => typeof c.phone === 'string' && String(c.phone).trim(),
+        )?.phone ??
+        null,
+    } as Prisma.InputJsonValue;
+
+    const updated = await this.prisma.adminTask.update({
+      where: { id: taskId },
+      data: {
+        meta: nextMeta,
+        status: nextStatus,
+        completedAt,
+        assigneeId: task.assigneeId ?? user.sub,
+        title:
+          noneLeft || !/подтвердить\s+\d+/i.test(task.title)
+            ? task.title
+            : task.title.replace(
+                /подтвердить\s+\d+/i,
+                `подтвердить ${remaining.length}`,
+              ),
+      },
+      include: {
+        assignee: true,
+        createdBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+    await this.prisma.adminTaskEvent.create({
+      data: {
+        taskId,
+        actorId: user.sub,
+        comment: `Исключён из записи: ${clientName}`,
       },
     });
     return this.mapTaskItem(updated);

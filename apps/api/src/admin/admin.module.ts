@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { BookingControlModule } from '../booking-control/booking-control.module';
 import { FitnessModule } from '../fitness/fitness.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { SpaBookingModule } from '../spa-booking/spa-booking.module';
 import { SuperAdminModule } from '../super-admin/super-admin.module';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
@@ -15,6 +16,7 @@ import { AdminService } from './admin.service';
     AuthModule,
     BookingControlModule,
     AdminSalesModule,
+    SpaBookingModule,
     forwardRef(() => SuperAdminModule),
   ],
   controllers: [AdminController],

@@ -18,6 +18,7 @@
 //   GET  /v1/group-session-roster         → GroupSessionRosterGET (?appointmentId=)
 //   GET  /v1/class-sessions               → ClassSessionsGET (?from&to&page&pageSize)
 //   POST /v1/class-sessions/attendance    → ClassSessionAttendancePOST (явка состава ГП)
+//   POST /v1/class-sessions/cancel-member → ClassSessionCancelMemberPOST (исключить из состава)
 //   GET  /v1/trainer-pt-sales             → TrainerPtSalesGET (?from&to) — разовые ПТ с Исполнителем
 //   GET  /v1/segments/config              → SegmentsConfigGET
 //   GET  /v1/segments/members             → SegmentsMembersGET (?key= | ?uuid=)
@@ -35,13 +36,17 @@
 //   Шаблон:      /v1/membership/freeze | /v1/membership/consume-service | /v1/spa/service-sale
 //                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
 //                | /v1/group-session-roster | /v1/class-sessions | /v1/class-sessions/attendance
-//                | /v1/trainer-pt-sales | /v1/segments/config | /v1/segments/members
+//                | /v1/class-sessions/cancel-member | /v1/trainer-pt-sales
+//                | /v1/segments/config | /v1/segments/members
 //                | /v1/memberships/expiring | /v1/memberships/renewal-coverage
 //                | /v1/packages | /v1/clients/birthdays
 //   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | ClassSessionsGET
 //                | TrainerPtSalesGET | SegmentsConfigGET | SegmentsMembersGET
 //                | MembershipsExpiringGET | PackagesGET | ClientsBirthdaysGET
-//   Метод POST → ClassSessionAttendancePOST | MembershipsRenewalCoveragePOST
+//   Метод POST → ClassSessionAttendancePOST | ClassSessionCancelMemberPOST
+//                | MembershipsRenewalCoveragePOST
+//   Имя шаблона cancel-member: class-sessions-cancel-member
+//   Шаблон: /v1/class-sessions/cancel-member → ClassSessionCancelMemberPOST
 //
 // У расширения снять флаг «Защита от опасных действий»: проведение документов
 // создаёт COM-объект WinHttp (рассылки), иначе в HTTP-сервисе будет 500 «Предупреждение безопасности».
@@ -691,6 +696,54 @@
         Если СтрНайти(ВРег(Сообщение), "NOT FOUND") > 0 Тогда
             Код = 404;
         ИначеЕсли СтрНайти(ВРег(Сообщение), "NOT IN SESSION") > 0 Тогда
+            Код = 404;
+        КонецЕсли;
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(Код, Сообщение);
+    КонецЕсли;
+
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Результат);
+КонецФункции
+
+// Исключить клиента из состава Документ.Занятие (флаг отмены строки).
+// Тело: {"appointmentId":"<uuid>","clientExternalId":"<uuid>"}
+Функция ClassSessionCancelMemberPOST(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    ТелоСтрока = Запрос.ПолучитьТелоКакСтроку();
+    Чтение = Новый ЧтениеJSON;
+    Чтение.УстановитьСтроку(ТелоСтрока);
+    Данные = Неопределено;
+    Попытка
+        Данные = ПрочитатьJSON(Чтение);
+    Исключение
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "Invalid JSON body");
+    КонецПопытки;
+    Чтение.Закрыть();
+
+    Если ТипЗнч(Данные) <> Тип("Структура") Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "JSON object required");
+    КонецЕсли;
+
+    AppointmentId = "";
+    ClientExternalId = "";
+    Если Данные.Свойство("appointmentId") Тогда
+        AppointmentId = СокрЛП(Строка(Данные.appointmentId));
+    КонецЕсли;
+    Если Данные.Свойство("clientExternalId") Тогда
+        ClientExternalId = СокрЛП(Строка(Данные.clientExternalId));
+    КонецЕсли;
+
+    Результат = FitGOIntegrationКлиенты.ОтменитьСтрокуСоставаЗанятияJSON(
+        AppointmentId, ClientExternalId);
+    Если НЕ Результат.ok Тогда
+        Код = 400;
+        Сообщение = Результат.error;
+        Если СтрНайти(ВРег(Сообщение), "NOT FOUND") > 0 Тогда
+            Код = 404;
+        ИначеЕсли СтрНайти(ВРег(Сообщение), "NOT IN SESSION") > 0
+            Или СтрНайти(ВРег(Сообщение), "NOT IN SESSION ROSTER") > 0 Тогда
             Код = 404;
         КонецЕсли;
         Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(Код, Сообщение);

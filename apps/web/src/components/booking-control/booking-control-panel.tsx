@@ -335,6 +335,13 @@ type Props = {
    * so the card opens like Контроль записей without leaving the page.
    */
   detailOnly?: boolean;
+  /**
+   * With detailOnly: render the card in the parent layout instead of a
+   * full-screen modal (admin task inbox right column).
+   */
+  embedInPlace?: boolean;
+  /** Close label when embedInPlace (default «Закрыть»). */
+  embedCloseLabel?: string;
   onDetailClose?: () => void;
   /** Cancel FitGO SPA booking that is not locked in 1C. */
   cancelSpaBooking?: (bookingId: string) => Promise<void>;
@@ -554,6 +561,8 @@ export function BookingControlPanel({
   title = 'Контроль занятий',
   subtitle = 'Занятия из 1С и разовые ПТ из продаж. Запись FitGO без 1С — в ЗП не идёт.',
   detailOnly = false,
+  embedInPlace = false,
+  embedCloseLabel,
   onDetailClose,
   cancelSpaBooking,
   approvalSegments: _approvalSegments = false,
@@ -3096,9 +3105,13 @@ export function BookingControlPanel({
       {detailOnly && message && !selected ? (
         <p
           className={
-            isBookingControlErrorMessage(message)
-              ? 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-rose-500/40 bg-slate-900 px-3 py-2 text-sm text-rose-200 shadow-lg'
-              : 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300 shadow-lg'
+            embedInPlace
+              ? isBookingControlErrorMessage(message)
+                ? 'rounded-xl border border-rose-500/40 bg-slate-900 px-3 py-2 text-sm text-rose-200'
+                : 'rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300'
+              : isBookingControlErrorMessage(message)
+                ? 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-rose-500/40 bg-slate-900 px-3 py-2 text-sm text-rose-200 shadow-lg'
+                : 'fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-slate-900 px-3 py-2 text-sm text-fitgo-300 shadow-lg'
           }
           role="status"
         >
@@ -3107,8 +3120,20 @@ export function BookingControlPanel({
       ) : null}
 
       {(selected || detailLoading || detailError) && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 pb-[max(2rem,env(safe-area-inset-bottom))] sm:items-center">
-          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl">
+        <div
+          className={
+            embedInPlace
+              ? ''
+              : 'fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 pb-[max(2rem,env(safe-area-inset-bottom))] sm:items-center'
+          }
+        >
+          <div
+            className={
+              embedInPlace
+                ? 'max-h-[min(90vh,calc(100vh-6rem))] w-full overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl'
+                : 'max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl'
+            }
+          >
             {!selected ? (
               <div className="space-y-3">
                 {detailError && !detailLoading ? (
@@ -3122,7 +3147,9 @@ export function BookingControlPanel({
                     className="btn-secondary text-sm"
                     onClick={closeDetail}
                   >
-                    Закрыть
+                    {embedInPlace
+                      ? (embedCloseLabel ?? 'К задаче')
+                      : 'Закрыть'}
                   </button>
                 ) : null}
               </div>
@@ -3318,7 +3345,9 @@ export function BookingControlPanel({
                       className="btn-secondary text-sm"
                       onClick={closeDetail}
                     >
-                      Закрыть
+                      {embedInPlace
+                        ? (embedCloseLabel ?? 'К задаче')
+                        : 'Закрыть'}
                     </button>
                   </div>
                 </div>

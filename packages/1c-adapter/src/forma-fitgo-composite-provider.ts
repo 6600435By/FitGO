@@ -163,6 +163,18 @@ export class FormaFitgoCompositeProvider implements IFitnessClubProvider {
     return this.fitgo.setClassSessionAttendance(input);
   }
 
+  cancelClassSessionMember(input: {
+    appointmentId: string;
+    clientExternalId: string;
+  }) {
+    if (!this.fitgo.cancelClassSessionMember) {
+      return Promise.reject(
+        new Error('cancelClassSessionMember not supported by provider'),
+      );
+    }
+    return this.fitgo.cancelClassSessionMember(input);
+  }
+
   getTrainerPtSales(input: { from: string; to: string }) {
     return this.fitgo.getTrainerPtSales?.(input) ?? Promise.resolve([]);
   }

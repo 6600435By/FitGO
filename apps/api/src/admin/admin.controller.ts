@@ -122,6 +122,17 @@ export class AdminController {
     });
   }
 
+  @Post('tasks/:id/exclude-client')
+  excludeBookingClient(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() body: { clientExternalId?: string },
+  ) {
+    return this.adminService.excludeBookingClient(user, id, {
+      clientExternalId: body.clientExternalId ?? '',
+    });
+  }
+
   @Post('tasks/:id/outcome')
   applyTaskOutcome(
     @CurrentUser() user: JwtPayload,

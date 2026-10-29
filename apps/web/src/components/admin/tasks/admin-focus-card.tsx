@@ -161,7 +161,9 @@ export function AdminFocusCard() {
             <ul className="divide-y divide-slate-800">
               {preview.map((item) => {
                 const phone = resolveAdminInboxPhone(item);
-                const tel = phoneTelHref(phone);
+                const multiClient =
+                  (item.task?.confirmClients?.length ?? 0) > 1;
+                const tel = multiClient ? null : phoneTelHref(phone);
                 const cta = focusCtaLabel(item);
                 return (
                   <li key={item.id}>
@@ -178,7 +180,7 @@ export function AdminFocusCard() {
                             {item.subtitle}
                           </p>
                         ) : null}
-                        {phone ? (
+                        {phone && !multiClient ? (
                           <p className="mt-0.5 truncate text-[11px] tabular-nums text-slate-500">
                             {phone}
                           </p>

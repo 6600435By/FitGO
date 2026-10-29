@@ -522,6 +522,43 @@ export class FitgoHttpProvider {
     };
   }
 
+  async cancelClassSessionMember(input: {
+    appointmentId: string;
+    clientExternalId: string;
+  }): Promise<{
+    ok: boolean;
+    appointmentId: string;
+    clientExternalId: string;
+    cancelled: boolean;
+  }> {
+    const data = await this.request<{
+      ok?: boolean;
+      appointmentId?: string;
+      clientExternalId?: string;
+      cancelled?: boolean;
+      error?: string;
+    }>('/class-sessions/cancel-member', {
+      method: 'POST',
+      body: {
+        appointmentId: input.appointmentId,
+        clientExternalId: input.clientExternalId,
+      },
+      timeoutMs: 30_000,
+    });
+    if (!data?.ok) {
+      throw new Error(
+        data?.error?.trim() ||
+          'FitGO 1C API failed to cancel class session member',
+      );
+    }
+    return {
+      ok: true,
+      appointmentId: data.appointmentId ?? input.appointmentId,
+      clientExternalId: data.clientExternalId ?? input.clientExternalId,
+      cancelled: data.cancelled !== false,
+    };
+  }
+
   async getTrainerPtSales(input: {
     from: string;
     to: string;

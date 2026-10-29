@@ -2157,6 +2157,16 @@ export const api = {
       body: JSON.stringify(body),
     }, token),
 
+  adminExcludeBookingClient: (
+    token: string,
+    taskId: string,
+    body: { clientExternalId: string },
+  ) =>
+    request<AdminTaskItem>(`/admin/tasks/${taskId}/exclude-client`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, token),
+
   superAdminStaff: (token: string, opts?: { archived?: boolean }) =>
     request<StaffMember[]>(
       `/super-admin/staff${opts?.archived ? '?archived=1' : ''}`,

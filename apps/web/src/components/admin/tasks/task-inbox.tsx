@@ -17,7 +17,14 @@ import {
   parseLegacyAdminTasksQuery,
 } from '@fitgo/shared-types';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { RenewalTaskSheet } from '@/components/admin/renewal-task-sheet';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { api } from '@/lib/api';
@@ -136,8 +143,28 @@ export function TaskInbox() {
   } | null>(null);
   const [renewalId, setRenewalId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [detailOffset, setDetailOffset] = useState(0);
+  const listColRef = useRef<HTMLDivElement>(null);
+  const detailWrapRef = useRef<HTMLDivElement>(null);
 
   const bookingPeekApi = useMemo(() => createBookingControlApi('admin'), []);
+
+  const openPeek = useCallback(
+    (sessionKey: string, dueAt?: string) => {
+      const day = dueAt?.slice(0, 10);
+      setPeekSession({
+        sessionKey,
+        from: day,
+        to: day,
+      });
+    },
+    [],
+  );
+
+  const selectTask = useCallback((id: string) => {
+    setPeekSession(null);
+    setSelectedId(id);
+  }, []);
 
   usePersistViewMemory<Mem>({
     data: { view, kind: kind ?? '' },
@@ -239,17 +266,9 @@ export function TaskInbox() {
     }
     if (item.primaryAction === 'open_session') {
       const sessionKey =
-        item.pending?.sessionKey ??
-        (item.task && 'sessionKey' in item.task
-          ? (item.task as { sessionKey?: string }).sessionKey
-          : undefined);
-      if (sessionKey) {
-        setPeekSession({
-          sessionKey,
-          from: item.dueAt?.slice(0, 10),
-          to: item.dueAt?.slice(0, 10),
-        });
-      }
+        item.pending?.sessionKey ?? item.task?.sessionKey ?? undefined;
+      setSelectedId(item.id);
+      if (sessionKey) openPeek(sessionKey, item.dueAt);
       return;
     }
     if (item.primaryAction === 'call') {
@@ -322,7 +341,7 @@ export function TaskInbox() {
       return;
     }
     if (action === 'history') {
-      setSelectedId(item.id);
+      selectTask(item.id);
       void loadEvents(item.id);
       return;
     }
@@ -421,6 +440,41 @@ export function TaskInbox() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
+  useLayoutEffect(() => {
+    const align = () => {
+      if (!selectedId || !listColRef.current || !detailWrapRef.current) {
+        setDetailOffset(0);
+        return;
+      }
+      const card = listColRef.current.querySelector(
+        `[data-task-id="${CSS.escape(selectedId)}"]`,
+      ) as HTMLElement | null;
+      if (!card) {
+        setDetailOffset(0);
+        return;
+      }
+      const listTop = listColRef.current.getBoundingClientRect().top;
+      const cardTop = card.getBoundingClientRect().top;
+      let offset = Math.max(0, cardTop - listTop);
+      const listH = listColRef.current.offsetHeight;
+      const panelH = detailWrapRef.current.offsetHeight;
+      const maxOffset = Math.max(0, listH - panelH);
+      offset = Math.min(offset, maxOffset);
+      setDetailOffset(offset);
+      const rect = card.getBoundingClientRect();
+      if (rect.top < 72 || rect.bottom > window.innerHeight - 16) {
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    };
+    align();
+    const t = window.setTimeout(align, 50);
+    window.addEventListener('resize', align);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('resize', align);
+    };
+  }, [selectedId, items, peekSession, eventsLoading]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (
@@ -433,10 +487,10 @@ export function TaskInbox() {
       const idx = items.findIndex((i) => i.id === selectedId);
       if (e.key === 'j' || e.key === 'J') {
         const next = items[Math.min(items.length - 1, Math.max(0, idx + 1))];
-        if (next) setSelectedId(next.id);
+        if (next) selectTask(next.id);
       } else if (e.key === 'k' || e.key === 'K') {
         const next = items[Math.max(0, idx <= 0 ? 0 : idx - 1)];
-        if (next) setSelectedId(next.id);
+        if (next) selectTask(next.id);
       } else if (e.key === 'Enter' && selected) {
         openPrimary(selected);
       } else if ((e.key === 'd' || e.key === 'D') && selected && !selected.virtual) {
@@ -477,7 +531,7 @@ export function TaskInbox() {
             key={item.id}
             item={item}
             selected={selectedId === item.id}
-            onSelect={() => setSelectedId(item.id)}
+            onSelect={() => selectTask(item.id)}
             onPrimary={() => openPrimary(item)}
             onMenu={(a) => void onMenu(item, a)}
           />
@@ -485,6 +539,29 @@ export function TaskInbox() {
       </ul>
     </div>
   );
+
+  const peekPanel = peekSession ? (
+    <BookingControlPanel
+      key={peekSession.sessionKey}
+      api={bookingPeekApi}
+      canResolve
+      canMarkAttendance
+      canApproveGroup
+      approvalActor="admin"
+      canReturnApproval
+      canViewHallPhotos
+      detailOnly
+      embedInPlace
+      embedCloseLabel="К задаче"
+      initialSessionKey={peekSession.sessionKey}
+      initialFrom={peekSession.from}
+      initialTo={peekSession.to}
+      onDetailClose={() => {
+        setPeekSession(null);
+        void load();
+      }}
+    />
+  ) : null;
 
   const detailPanel = selected ? (
     <TaskDetail
@@ -515,8 +592,36 @@ export function TaskInbox() {
           })
           .then(() => load());
       }}
+      onExcludeClient={(externalId, clientName) => {
+        const token = getToken();
+        if (!token || selected.virtual) return;
+        if (
+          !window.confirm(
+            `Убрать ${clientName} из записи? Место освободится.`,
+          )
+        ) {
+          return;
+        }
+        void api
+          .adminExcludeBookingClient(token, selected.id, {
+            clientExternalId: externalId,
+          })
+          .then(() => {
+            showToast(`Исключён: ${clientName}`);
+            void load();
+          })
+          .catch((e) => {
+            showToast(
+              e instanceof Error ? e.message : 'Не удалось исключить',
+            );
+          });
+      }}
+      onOpenSession={(sessionKey) => openPeek(sessionKey, selected.dueAt)}
       onLoadDebt={() => void loadDebt(selected.id)}
-      onClose={() => setSelectedId(null)}
+      onClose={() => {
+        setPeekSession(null);
+        setSelectedId(null);
+      }}
       onPrimary={() => openPrimary(selected)}
       onOutcome={() => setOutcomeItem(selected)}
     />
@@ -526,6 +631,8 @@ export function TaskInbox() {
       (отложить).
     </div>
   );
+
+  const rightPanel = peekPanel ?? detailPanel;
 
   return (
     <div className="mx-auto max-w-6xl space-y-3">
@@ -550,6 +657,7 @@ export function TaskInbox() {
             type="button"
             onClick={() => {
               setView(v);
+              setPeekSession(null);
               setSelectedId(null);
             }}
             className={
@@ -616,7 +724,7 @@ export function TaskInbox() {
       {error ? <p className="text-rose-400">{error}</p> : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-4">
+        <div ref={listColRef} className="space-y-4">
           {items.length === 0 && !loading ? (
             <p className="text-slate-400">Нет задач в этом виде</p>
           ) : null}
@@ -642,14 +750,24 @@ export function TaskInbox() {
           )}
         </div>
 
-        <div className="hidden lg:block">{detailPanel}</div>
+        <div
+          ref={detailWrapRef}
+          className="hidden lg:block"
+          style={
+            selectedId && detailOffset > 0
+              ? { marginTop: detailOffset }
+              : undefined
+          }
+        >
+          {rightPanel}
+        </div>
       </div>
 
       {/* Mobile detail sheet */}
-      {selected ? (
+      {selected || peekSession ? (
         <div className="fixed inset-0 z-30 flex items-end bg-black/60 p-0 lg:hidden">
           <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl bg-slate-950 p-3">
-            {detailPanel}
+            {rightPanel}
           </div>
         </div>
       ) : null}
@@ -759,27 +877,6 @@ export function TaskInbox() {
             void load();
           }}
           onUpdated={() => void load()}
-        />
-      ) : null}
-
-      {peekSession ? (
-        <BookingControlPanel
-          key={peekSession.sessionKey}
-          api={bookingPeekApi}
-          canResolve
-          canMarkAttendance
-          canApproveGroup
-          approvalActor="admin"
-          canReturnApproval
-          canViewHallPhotos
-          detailOnly
-          initialSessionKey={peekSession.sessionKey}
-          initialFrom={peekSession.from}
-          initialTo={peekSession.to}
-          onDetailClose={() => {
-            setPeekSession(null);
-            void load();
-          }}
         />
       ) : null}
 
