@@ -529,3 +529,126 @@ export function groupApprovalLabelRu(
   if (phase === 'PENDING_ADMIN') return 'Ждёт администратора';
   return undefined;
 }
+
+/** Queue segment on «Контроль записей» filter bar. */
+export type BookingControlQueueSegment = 'pending' | 'done' | 'upcoming';
+
+/**
+ * Why a row is still in «На контроле» (chips).
+ * Approval-wait without these is pending only after startAt.
+ */
+export type BookingControlIssueReason =
+  | 'review'
+  | 'unpaid'
+  | 'not1c'
+  | 'journal';
+
+const BOOKING_CONTROL_PENDING_PHASES = new Set([
+  'PENDING_TRAINER',
+  'PENDING_ADMIN',
+  'PENDING_PERFORMER',
+]);
+
+/** Same rule as list payment=DEBT: not GROUP, DEBT or UNKNOWN. */
+export function bookingControlIsUnpaid(
+  item: Pick<BookingControlListItem, 'kind' | 'payment'>,
+): boolean {
+  if (item.kind === 'GROUP') return false;
+  return item.payment === 'DEBT' || item.payment === 'UNKNOWN';
+}
+
+export function bookingControlIsNotIn1c(
+  item: Pick<BookingControlListItem, 'kind' | 'source' | 'oneCLinked'>,
+): boolean {
+  return item.kind === 'SPA' && item.source === 'FITGO' && !item.oneCLinked;
+}
+
+export function bookingControlIssueReasons(
+  item: Pick<
+    BookingControlListItem,
+    | 'kind'
+    | 'source'
+    | 'payment'
+    | 'needsReview'
+    | 'oneCLinked'
+    | 'missingJournal'
+  >,
+): BookingControlIssueReason[] {
+  const out: BookingControlIssueReason[] = [];
+  if (item.needsReview) out.push('review');
+  if (bookingControlIsUnpaid(item)) out.push('unpaid');
+  if (bookingControlIsNotIn1c(item)) out.push('not1c');
+  if (item.missingJournal) out.push('journal');
+  return out;
+}
+
+function bookingControlApprovalPending(
+  phase: BookingControlListItem['approvalPhase'],
+): boolean {
+  return Boolean(phase && BOOKING_CONTROL_PENDING_PHASES.has(phase));
+}
+
+/**
+ * Row still needs floor/admin work (queue «На контроле»).
+ * Future approval-wait alone does not count; structural issues do.
+ */
+export function bookingControlHasControlWork(
+  item: Pick<
+    BookingControlListItem,
+    | 'kind'
+    | 'source'
+    | 'payment'
+    | 'needsReview'
+    | 'oneCLinked'
+    | 'missingJournal'
+    | 'approvalPhase'
+    | 'startAt'
+  >,
+  nowMs: number,
+): boolean {
+  if (bookingControlIssueReasons(item).length > 0) return true;
+  if (new Date(item.startAt).getTime() > nowMs) return false;
+  return bookingControlApprovalPending(item.approvalPhase);
+}
+
+/**
+ * Queue bucket for a list row. Cancelled → null (hidden unless status filter).
+ */
+export function bookingControlQueueSegment(
+  item: Pick<
+    BookingControlListItem,
+    | 'kind'
+    | 'source'
+    | 'status'
+    | 'payment'
+    | 'needsReview'
+    | 'oneCLinked'
+    | 'missingJournal'
+    | 'approvalPhase'
+    | 'startAt'
+  >,
+  nowMs: number,
+): BookingControlQueueSegment | null {
+  if (item.status === 'CANCELLED') return null;
+  if (bookingControlHasControlWork(item, nowMs)) return 'pending';
+  if (new Date(item.startAt).getTime() > nowMs) return 'upcoming';
+  return 'done';
+}
+
+/** Reason chips: empty selection = all; otherwise OR of selected reasons. */
+export function bookingControlMatchesSelectedReasons(
+  item: Pick<
+    BookingControlListItem,
+    | 'kind'
+    | 'source'
+    | 'payment'
+    | 'needsReview'
+    | 'oneCLinked'
+    | 'missingJournal'
+  >,
+  selected: readonly BookingControlIssueReason[],
+): boolean {
+  if (selected.length === 0) return true;
+  const have = new Set(bookingControlIssueReasons(item));
+  return selected.some((r) => have.has(r));
+}

@@ -1,12 +1,17 @@
 'use client';
 
 import {
+  bookingControlIssueReasons,
+  bookingControlMatchesSelectedReasons,
+  bookingControlQueueSegment,
   humanDocumentNumber,
   paymentLabelRu,
   payTagLabelRu,
   type BookingControlDetail,
+  type BookingControlIssueReason,
   type BookingControlKind,
   type BookingControlListItem,
+  type BookingControlQueueSegment,
   type BookingControlStatus,
   type GroupApprovalNoteItem,
 } from '@fitgo/shared-types';
@@ -36,10 +41,69 @@ type BookingViewMem = {
   payTag: string;
   flag: string;
   performerId: string;
-  needsReview: boolean;
+  /** @deprecated migrated to queue + reasons */
+  needsReview?: boolean;
+  queue: BookingControlQueueSegment;
+  reasons: BookingControlIssueReason[];
   clientFilter: string;
   clientIdFilter: string;
 };
+
+const ISSUE_REASON_ALL: BookingControlIssueReason[] = [
+  'review',
+  'unpaid',
+  'not1c',
+  'journal',
+];
+
+function parseIssueReasons(raw: string | null | undefined): BookingControlIssueReason[] {
+  if (!raw?.trim()) return [];
+  const allowed = new Set<string>(ISSUE_REASON_ALL);
+  const out: BookingControlIssueReason[] = [];
+  for (const part of raw.split(',')) {
+    const t = part.trim().toLowerCase();
+    if (allowed.has(t) && !out.includes(t as BookingControlIssueReason)) {
+      out.push(t as BookingControlIssueReason);
+    }
+  }
+  return out;
+}
+
+function formatRangeLabel(fromIso: string, toIso: string): string {
+  const a = new Date(`${fromIso}T12:00:00`);
+  const b = new Date(`${toIso}T12:00:00`);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return `${fromIso} – ${toIso}`;
+  if (fromIso === toIso) {
+    return a.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  }
+  const sameMonth =
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+  if (sameMonth) {
+    return `${a.getDate()}–${b.toLocaleDateString('ru-RU', {
+      day: 'numeric',
+      month: 'short',
+    })}`;
+  }
+  return `${a.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+  })} – ${b.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}`;
+}
+
+function chipClass(active: boolean, tone?: 'rose' | 'orange' | 'default'): string {
+  const base =
+    'inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl px-3 text-xs font-medium transition-colors';
+  if (!active) {
+    return `${base} border border-slate-700 bg-slate-900/40 text-slate-400`;
+  }
+  if (tone === 'rose') {
+    return `${base} bg-rose-500/20 text-rose-200 ring-1 ring-inset ring-rose-400/35`;
+  }
+  if (tone === 'orange') {
+    return `${base} bg-orange-500/20 text-orange-200 ring-1 ring-inset ring-orange-400/35`;
+  }
+  return `${base} bg-fitgo-500 text-white`;
+}
 
 export type BookingControlPerformerOption = {
   id: string;
@@ -492,10 +556,11 @@ export function BookingControlPanel({
   detailOnly = false,
   onDetailClose,
   cancelSpaBooking,
-  approvalSegments = false,
+  approvalSegments: _approvalSegments = false,
   showOpsHints = false,
   spaBookingEditHref,
 }: Props) {
+  void _approvalSegments;
   const pathname = usePathname();
   const ownerId = getUser()?.id ?? '';
   const hasDeepLink = Boolean(
@@ -515,10 +580,9 @@ export function BookingControlPanel({
   );
 
   const boot = useMemo(() => {
-    // «На контроле» backlog matches home pendingMe (~45 days), not only today.
     const pendingLookbackFrom = daysAgoIso(45);
     const defaults: BookingViewMem = {
-      from: approvalSegments ? pendingLookbackFrom : todayIso(),
+      from: monthStartIso(),
       to: todayIso(),
       kind: fixedKind ?? 'ALL',
       status: 'ALL',
@@ -526,23 +590,29 @@ export function BookingControlPanel({
       payTag: '',
       flag: '',
       performerId: '',
-      needsReview: false,
+      queue: 'pending',
+      reasons: [],
       clientFilter: '',
       clientIdFilter: '',
     };
     if (hasDeepLink || detailOnly) {
       const needsAttention = Boolean(initialNeedsReview);
+      const unpaidDeep = initialPayment === 'DEBT';
+      const reasons: BookingControlIssueReason[] = [];
+      if (needsAttention) reasons.push('review');
+      if (unpaidDeep) reasons.push('unpaid');
       return {
         ...defaults,
         from:
           initialFrom?.trim() ||
-          (needsAttention ? pendingLookbackFrom : defaults.from),
+          (needsAttention || unpaidDeep ? pendingLookbackFrom : defaults.from),
         to: initialTo?.trim() || defaults.to,
         kind: fixedKind ?? initialKind?.toUpperCase() ?? defaults.kind,
         status:
           initialStatus?.toUpperCase() ||
           (initialConducted ? 'COMPLETED' : defaults.status),
-        payment: initialPayment || defaults.payment,
+        // DEBT deep-link → unpaid chip, not payment select
+        payment: unpaidDeep ? 'ALL' : initialPayment || defaults.payment,
         payTag: initialPayTag?.toUpperCase() || '',
         flag:
           initialFlag?.toUpperCase() === 'EXPIRING_PACKAGE' ||
@@ -550,12 +620,13 @@ export function BookingControlPanel({
             ? initialFlag.toUpperCase()
             : '',
         performerId: initialPerformerId?.trim() || '',
-        needsReview: needsAttention,
+        queue: needsAttention || unpaidDeep ? 'pending' : defaults.queue,
+        reasons,
         clientFilter: initialClient?.trim() || '',
         clientIdFilter: initialClientId?.trim() || '',
       };
     }
-    return resolveViewFilters<BookingViewMem>({
+    const saved = resolveViewFilters<BookingViewMem>({
       userId: ownerId,
       pathname,
       slot: 'main',
@@ -564,6 +635,17 @@ export function BookingControlPanel({
       fromUrl: () => ({}),
       defaults,
     });
+    const reasons =
+      Array.isArray(saved.reasons) && saved.reasons.length
+        ? parseIssueReasons(saved.reasons.join(','))
+        : saved.needsReview
+          ? (['review'] as BookingControlIssueReason[])
+          : [];
+    const queue: BookingControlQueueSegment =
+      saved.queue === 'done' || saved.queue === 'upcoming'
+        ? saved.queue
+        : 'pending';
+    return { ...defaults, ...saved, queue, reasons };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount
   }, []);
 
@@ -602,9 +684,14 @@ export function BookingControlPanel({
   const [performers, setPerformers] = useState<BookingControlPerformerOption[]>(
     [],
   );
-  const [approvalSegment, setApprovalSegment] = useState<
-    'pending' | 'done'
-  >('pending');
+  const [queue, setQueue] = useState<BookingControlQueueSegment>(
+    boot.queue === 'done' || boot.queue === 'upcoming' ? boot.queue : 'pending',
+  );
+  const [reasons, setReasons] = useState<BookingControlIssueReason[]>(
+    Array.isArray(boot.reasons) ? boot.reasons : [],
+  );
+  const [datesOpen, setDatesOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [conductedMode, setConductedMode] = useState(Boolean(initialConducted));
   const [hallFilter, setHallFilter] = useState<'REFORMER' | ''>(
     initialHall === 'REFORMER' ? 'REFORMER' : '',
@@ -612,13 +699,14 @@ export function BookingControlPanel({
   const [reformerFilter, setReformerFilter] = useState<'personal' | ''>(
     initialReformer === 'personal' ? 'personal' : '',
   );
-  const [needsReview, setNeedsReview] = useState(Boolean(boot.needsReview));
   const [clientFilter, setClientFilter] = useState(
     typeof boot.clientFilter === 'string' ? boot.clientFilter : '',
   );
   const [clientIdFilter, setClientIdFilter] = useState(
     typeof boot.clientIdFilter === 'string' ? boot.clientIdFilter : '',
   );
+  const showQueue = !detailOnly && !conductedMode;
+  const showSpaIssueChips = !trainerKindFilter;
 
   // Deep link from табель / ЗП: useSearchParams can be empty on the first
   // paint of a static page, and saved filters would hide the session.
@@ -630,31 +718,50 @@ export function BookingControlPanel({
     const toL = live.get('to')?.trim() || '';
     const needsReviewL =
       live.get('needsReview') === '1' || live.get('needsReview') === 'true';
+    const queueL = live.get('queue')?.trim().toLowerCase();
+    const reasonsL = parseIssueReasons(live.get('reasons'));
+    const paymentL = live.get('payment')?.trim().toUpperCase();
+    const unpaidDeep = paymentL === 'DEBT';
     const drill = Boolean(sessionKey);
     if (
       !drill &&
       !isIsoDay(fromL) &&
       !isIsoDay(toL) &&
       !needsReviewL &&
+      !unpaidDeep &&
+      !queueL &&
+      !reasonsL.length &&
       !live.get('client') &&
       !live.get('performerId')
     ) {
       return;
     }
     if (isIsoDay(fromL)) setFrom(fromL);
-    else if (needsReviewL) setFrom(daysAgoIso(45));
+    else if (needsReviewL || unpaidDeep) setFrom(daysAgoIso(45));
     if (isIsoDay(toL)) setTo(toL);
-    else if (needsReviewL) setTo(todayIso());
-    if (needsReviewL) setNeedsReview(true);
+    else if (needsReviewL || unpaidDeep) setTo(todayIso());
+    const nextReasons: BookingControlIssueReason[] = [...reasonsL];
+    if (needsReviewL && !nextReasons.includes('review')) nextReasons.push('review');
+    if (unpaidDeep && !nextReasons.includes('unpaid')) nextReasons.push('unpaid');
+    if (nextReasons.length) setReasons(nextReasons);
+    if (
+      queueL === 'done' ||
+      queueL === 'upcoming' ||
+      queueL === 'pending'
+    ) {
+      setQueue(queueL);
+    } else if (needsReviewL || unpaidDeep) {
+      setQueue('pending');
+    }
     const kindL = live.get('kind')?.trim().toUpperCase();
     if (kindL && !fixedKind) setKind(kindL);
     const statusL = live.get('status')?.trim().toUpperCase();
     if (statusL) setStatus(statusL);
     else if (drill) setStatus('ALL');
-    const paymentL = live.get('payment')?.trim().toUpperCase();
-    if (
+    if (unpaidDeep) {
+      setPayment('ALL');
+    } else if (
       paymentL === 'PAID' ||
-      paymentL === 'DEBT' ||
       paymentL === 'GIFT' ||
       paymentL === 'ALL'
     ) {
@@ -675,9 +782,6 @@ export function BookingControlPanel({
     if (live.has('flag')) {
       setFlag(live.get('flag')?.trim().toUpperCase() || '');
     } else if (drill) setFlag('');
-    if (drill && live.get('needsReview') !== '1' && live.get('needsReview') !== 'true') {
-      setNeedsReview(false);
-    }
     const hallL = live.get('hall')?.trim().toUpperCase();
     if (hallL === 'REFORMER') setHallFilter('REFORMER');
     const reformerL = live.get('reformer')?.trim().toLowerCase();
@@ -703,7 +807,8 @@ export function BookingControlPanel({
       payTag,
       flag,
       performerId,
-      needsReview,
+      queue,
+      reasons,
       clientFilter,
       clientIdFilter,
     },
@@ -717,7 +822,8 @@ export function BookingControlPanel({
       if (d.payTag) q.set('payTag', d.payTag);
       if (d.flag) q.set('flag', d.flag);
       if (d.performerId) q.set('performerId', d.performerId);
-      if (d.needsReview) q.set('needsReview', '1');
+      if (d.queue && d.queue !== 'pending') q.set('queue', d.queue);
+      if (d.reasons?.length) q.set('reasons', d.reasons.join(','));
       if (d.clientFilter) q.set('client', d.clientFilter);
       if (d.clientIdFilter) q.set('clientId', d.clientIdFilter);
       if (typeof window !== 'undefined') {
@@ -735,8 +841,6 @@ export function BookingControlPanel({
       return q;
     },
   });
-  const [notIn1c, setNotIn1c] = useState(false);
-  const [missingJournal, setMissingJournal] = useState(false);
   const [items, setItems] = useState<BookingControlListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
@@ -899,20 +1003,12 @@ export function BookingControlPanel({
         from,
         to,
         kind: fixedKind ?? kind,
-        status,
-        payment,
-        needsReview,
-        ...(performerId ? { performerId } : {}),
+        // Queue / reasons / performer / client filter on the client so
+        // segment counters stay stable for the period + kind.
         ...(payTag ? { payTag } : {}),
         ...(flag ? { flag } : {}),
         ...(hallFilter ? { hall: hallFilter } : {}),
         ...(reformerFilter ? { reformer: reformerFilter } : {}),
-        ...(clientFilter.trim() ? { client: clientFilter.trim() } : {}),
-        ...(clientIdFilter.trim()
-          ? { clientId: clientIdFilter.trim() }
-          : {}),
-        ...(notIn1c ? { notIn1c: true } : {}),
-        ...(missingJournal ? { missingJournal: true } : {}),
       })
       .then(setItems)
       .catch((e) =>
@@ -924,16 +1020,8 @@ export function BookingControlPanel({
     from,
     to,
     kind,
-    status,
-    payment,
     payTag,
     flag,
-    needsReview,
-    performerId,
-    clientFilter,
-    clientIdFilter,
-    notIn1c,
-    missingJournal,
     hallFilter,
     reformerFilter,
     fixedKind,
@@ -1014,32 +1102,9 @@ export function BookingControlPanel({
 
   const nowMs = Date.now();
 
-  const onControlCount = useMemo(() => {
-    if (!approvalSegments) return 0;
-    return items.filter((i) => {
-      if (new Date(i.startAt).getTime() > nowMs) return false;
-      if (i.status === 'CANCELLED') return false;
-      return (
-        i.approvalPhase === 'PENDING_TRAINER' ||
-        i.approvalPhase === 'PENDING_ADMIN' ||
-        i.needsReview
-      );
-    }).length;
-  }, [items, approvalSegments, nowMs]);
-
-  const awaitingTrainerCount = useMemo(() => {
-    if (!approvalSegments) return 0;
-    return items.filter(
-      (i) =>
-        new Date(i.startAt).getTime() <= nowMs &&
-        i.status !== 'CANCELLED' &&
-        i.approvalPhase === 'PENDING_TRAINER',
-    ).length;
-  }, [items, approvalSegments, nowMs]);
-
-  const visible = useMemo(() => {
+  /** Period rows after kind/source (and trainer SPA hide) — before queue chips. */
+  const scopedItems = useMemo(() => {
     let rows = items;
-    // Trainer cabinet: never show SPA / solarium (API also filters; belt-and-suspenders).
     if (trainerKindFilter) {
       rows = rows.filter(
         (i) =>
@@ -1048,16 +1113,78 @@ export function BookingControlPanel({
           !/соляр|solarium|tanning/i.test(i.title ?? ''),
       );
     }
-    // Home «провёл» = all completed rows in range (incl. разовые ПТ из продаж).
-    if (conductedMode) {
-      // no source cut — SALE PT count in ЗП / лестница / home card
-    } else if (sourceFilter === 'SALE') {
-      rows = rows.filter((i) => i.source === 'SALE' || i.payTag === 'SALE');
-    } else if (sourceFilter === '1C') {
-      rows = rows.filter((i) => i.source !== 'SALE');
+    if (!conductedMode) {
+      if (sourceFilter === 'SALE') {
+        rows = rows.filter((i) => i.source === 'SALE' || i.payTag === 'SALE');
+      } else if (sourceFilter === '1C') {
+        rows = rows.filter((i) => i.source !== 'SALE');
+      }
     }
-    // API already filters by performer (code/name/UUID). Do not re-filter with
-    // strict === — SALE rows may keep a raw 1C code while the dropdown uses UUID.
+    return rows;
+  }, [items, trainerKindFilter, conductedMode, sourceFilter]);
+
+  const pendingCount = useMemo(
+    () =>
+      scopedItems.filter(
+        (i) => bookingControlQueueSegment(i, nowMs) === 'pending',
+      ).length,
+    [scopedItems, nowMs],
+  );
+
+  const doneCount = useMemo(
+    () =>
+      scopedItems.filter(
+        (i) => bookingControlQueueSegment(i, nowMs) === 'done',
+      ).length,
+    [scopedItems, nowMs],
+  );
+
+  const upcomingCount = useMemo(
+    () =>
+      scopedItems.filter(
+        (i) => bookingControlQueueSegment(i, nowMs) === 'upcoming',
+      ).length,
+    [scopedItems, nowMs],
+  );
+
+  const reasonCounts = useMemo(() => {
+    const counts: Record<BookingControlIssueReason, number> = {
+      review: 0,
+      unpaid: 0,
+      not1c: 0,
+      journal: 0,
+    };
+    for (const i of scopedItems) {
+      if (bookingControlQueueSegment(i, nowMs) !== 'pending') continue;
+      for (const r of bookingControlIssueReasons(i)) {
+        counts[r] += 1;
+      }
+    }
+    return counts;
+  }, [scopedItems, nowMs]);
+
+  const visible = useMemo(() => {
+    let rows = scopedItems;
+
+    if (status && status !== 'ALL') {
+      rows = rows.filter((i) => i.status === status);
+    }
+    if (payment && payment !== 'ALL') {
+      rows = rows.filter((i) => {
+        if (i.kind === 'GROUP') return false;
+        if (payment === 'GIFT') return i.payment === 'GIFT';
+        if (payment === 'PAID') {
+          return (
+            i.payment === 'PAID' ||
+            i.payment === 'QUOTA' ||
+            i.payment === 'PARTNER' ||
+            i.payment === 'GIFT'
+          );
+        }
+        return i.payment === 'DEBT' || i.payment === 'UNKNOWN';
+      });
+    }
+
     if (performerId) {
       const selectedName = (
         performerOptions.find((p) => p.id === performerId)?.name ?? ''
@@ -1075,47 +1202,75 @@ export function BookingControlPanel({
         return false;
       });
     }
-    if (approvalSegments && !conductedMode) {
-      rows = rows.filter((i) => {
-        if (new Date(i.startAt).getTime() > nowMs) return false;
-        if (i.status === 'CANCELLED') return false;
-        // PT chip: GP approval tabs don't apply — show all own past PT.
-        if (kind === 'PT' && i.kind === 'PT') return true;
-        // Mixed «Все»: PT without phase → «Прошли»; remarks / pending → «На контроле».
-        if (i.kind === 'PT') {
-          if (i.needsReview) return approvalSegment === 'pending';
-          if (
-            i.approvalPhase === 'PENDING_TRAINER' ||
-            i.approvalPhase === 'PENDING_ADMIN' ||
-            i.approvalPhase === 'PENDING_PERFORMER'
-          ) {
-            return approvalSegment === 'pending';
-          }
-          return approvalSegment === 'done';
-        }
-        if (approvalSegment === 'done') {
-          return i.approvalPhase === 'APPROVED';
-        }
-        return (
-          i.approvalPhase === 'PENDING_TRAINER' ||
-          i.approvalPhase === 'PENDING_ADMIN' ||
-          i.needsReview
+
+    const clientQ = clientFilter.trim().toLowerCase();
+    if (clientIdFilter.trim()) {
+      const id = clientIdFilter.trim();
+      rows = rows.filter((i) => i.clientId === id);
+    } else if (clientQ) {
+      rows = rows.filter((i) =>
+        (i.clientName ?? '').toLowerCase().includes(clientQ),
+      );
+    }
+
+    if (showQueue) {
+      // Status «Отменено» bypasses queue so cancelled rows stay reachable.
+      if (status !== 'CANCELLED') {
+        rows = rows.filter(
+          (i) => bookingControlQueueSegment(i, nowMs) === queue,
         );
-      });
+      }
+      if (queue === 'pending' && reasons.length > 0) {
+        rows = rows.filter((i) =>
+          bookingControlMatchesSelectedReasons(i, reasons),
+        );
+      }
     }
     return rows;
   }, [
-    items,
-    sourceFilter,
+    scopedItems,
     performerId,
     performerOptions,
-    approvalSegments,
-    approvalSegment,
-    conductedMode,
-    kind,
+    showQueue,
+    queue,
+    reasons,
+    status,
+    payment,
+    clientFilter,
+    clientIdFilter,
     nowMs,
-    trainerKindFilter,
   ]);
+
+  const journalAdoptCount = useMemo(
+    () =>
+      visible.filter(
+        (i) => i.missingJournal && i.source === '1C' && i.kind === 'SPA',
+      ).length,
+    [visible],
+  );
+
+  const toggleReason = (reason: BookingControlIssueReason) => {
+    setReasons((prev) =>
+      prev.includes(reason)
+        ? prev.filter((r) => r !== reason)
+        : [...prev, reason],
+    );
+  };
+
+  const today = todayIso();
+  const periodPreset =
+    from === today && to === today
+      ? 'today'
+      : from === daysAgoIso(6) && to === today
+        ? 'week'
+        : from === monthStartIso() && to === today
+          ? 'month'
+          : 'custom';
+  const moreActive =
+    (status && status !== 'ALL') ||
+    (payment && payment !== 'ALL') ||
+    sourceFilter !== 'ALL' ||
+    Boolean(flag);
 
   const saleCount = useMemo(
     () => items.filter((i) => i.source === 'SALE').length,
@@ -1412,8 +1567,8 @@ export function BookingControlPanel({
     setClientFilter(n);
     setClientIdFilter(clientId?.trim() || '');
     setStatus('ALL');
-    setNeedsReview(false);
-    setNotIn1c(false);
+    setReasons([]);
+    setQueue('pending');
     closeDetail();
   };
 
@@ -2038,10 +2193,10 @@ export function BookingControlPanel({
   const clearConductedMode = () => {
     setConductedMode(false);
     setStatus('ALL');
-    setNeedsReview(false);
-    const d = todayIso();
-    setFrom(d);
-    setTo(d);
+    setReasons([]);
+    setQueue('pending');
+    setFrom(monthStartIso());
+    setTo(todayIso());
     if (typeof window !== 'undefined') {
       const url = new URL(window.location.href);
       for (const key of [
@@ -2051,6 +2206,8 @@ export function BookingControlPanel({
         'from',
         'to',
         'needsReview',
+        'queue',
+        'reasons',
       ]) {
         url.searchParams.delete(key);
       }
@@ -2166,149 +2323,190 @@ export function BookingControlPanel({
             сбросить
           </button>
         </div>
-      ) : approvalSegments ? (
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => setApprovalSegment('pending')}
-            className={`min-w-0 rounded-2xl px-3 py-2 text-center text-sm leading-tight ${
-              approvalSegment === 'pending'
-                ? 'bg-fitgo-500 text-white'
-                : 'bg-slate-800 text-slate-400'
-            }`}
-          >
-            <span className="block font-medium">На контроле</span>
-            {onControlCount ? (
-              <span className="mt-0.5 block text-xs opacity-90">
-                {onControlCount}
-                {awaitingTrainerCount
-                  ? ` · ждёт вас ${awaitingTrainerCount}`
-                  : ''}
-              </span>
+      ) : null}
+
+      <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+        {showQueue ? (
+          <div className="sticky top-0 z-20 -mx-3 -mt-3 space-y-1 border-b border-slate-800/80 bg-slate-950/95 px-3 pb-3 pt-3 backdrop-blur-sm">
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setQueue('pending')}
+                className={`min-h-11 min-w-0 rounded-2xl px-3 py-2 text-center text-sm leading-tight ${
+                  queue === 'pending'
+                    ? 'bg-fitgo-500 text-white'
+                    : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                <span className="block font-medium">На контроле</span>
+                <span className="mt-0.5 block text-xs opacity-90">
+                  {pendingCount}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setQueue('done')}
+                className={`min-h-11 min-w-0 rounded-2xl px-3 py-2 text-center text-sm leading-tight ${
+                  queue === 'done'
+                    ? 'bg-fitgo-500 text-white'
+                    : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                <span className="block font-medium">Прошли контроль</span>
+                <span className="mt-0.5 block text-xs opacity-90">
+                  {doneCount}
+                </span>
+              </button>
+            </div>
+            {upcomingCount > 0 ? (
+              <button
+                type="button"
+                onClick={() => setQueue('upcoming')}
+                className={`w-full rounded-xl px-3 py-1.5 text-left text-xs ${
+                  queue === 'upcoming'
+                    ? 'bg-slate-800 text-fitgo-300'
+                    : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                Ещё не начались · {upcomingCount}
+              </button>
             ) : null}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={
+              periodPreset === 'today' ? 'btn-primary px-3 py-2 text-sm' : 'btn-secondary px-3 py-2 text-sm'
+            }
+            onClick={setToday}
+          >
+            Сегодня
           </button>
           <button
             type="button"
-            onClick={() => setApprovalSegment('done')}
-            className={`min-w-0 rounded-2xl px-3 py-2 text-center text-sm leading-tight ${
-              approvalSegment === 'done'
-                ? 'bg-fitgo-500 text-white'
-                : 'bg-slate-800 text-slate-400'
-            }`}
+            className={
+              periodPreset === 'week' ? 'btn-primary px-3 py-2 text-sm' : 'btn-secondary px-3 py-2 text-sm'
+            }
+            onClick={setWeek}
           >
-            <span className="block font-medium">Прошли контроль</span>
+            Неделя
+          </button>
+          <button
+            type="button"
+            className={
+              periodPreset === 'month' ? 'btn-primary px-3 py-2 text-sm' : 'btn-secondary px-3 py-2 text-sm'
+            }
+            onClick={setMonth}
+          >
+            Месяц
+          </button>
+          <button
+            type="button"
+            className={`rounded-xl px-3 py-2 text-sm ${
+              periodPreset === 'custom' || datesOpen
+                ? 'bg-slate-800 text-fitgo-300 ring-1 ring-inset ring-fitgo-500/40'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+            onClick={() => setDatesOpen((v) => !v)}
+            aria-expanded={datesOpen}
+          >
+            {formatRangeLabel(from, to)}
           </button>
         </div>
-      ) : null}
 
-      {trainerKindFilter && !fixedKind ? (
-        <div className="flex flex-wrap gap-2">
-          {(
-            [
-              ['ALL', 'Все'],
-              ['GROUP', 'ГП'],
-              ['PT', 'ПТ'],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={
-                kind === value ? 'btn-primary text-xs' : 'btn-secondary text-xs'
-              }
-              onClick={() => setKind(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      ) : null}
+        {datesOpen ? (
+          <div className="grid grid-cols-2 gap-2">
+            <DateField
+              label="С"
+              value={from}
+              onChange={setFrom}
+              className="min-w-0"
+              inputClassName="text-sm"
+            />
+            <DateField
+              label="По"
+              value={to}
+              onChange={setTo}
+              className="min-w-0"
+              inputClassName="text-sm"
+            />
+          </div>
+        ) : null}
 
-      <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-        <div className="grid grid-cols-2 items-end gap-2 md:grid-cols-4">
-          <DateField
-            label="С"
-            value={from}
-            onChange={setFrom}
-            className="min-w-0"
-            inputClassName="text-sm"
-          />
-          <DateField
-            label="По"
-            value={to}
-            onChange={setTo}
-            className="min-w-0"
-            inputClassName="text-sm"
-          />
-          {!fixedKind && !trainerKindFilter && (
-            <label className="min-w-0 text-[11px] text-slate-500">
-              Вид
-              <select
-                className="input mt-1 block w-full min-w-0 text-sm"
-                value={kind}
-                onChange={(e) => setKind(e.target.value)}
+        {!fixedKind ? (
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5">
+            {(trainerKindFilter
+              ? ([
+                  ['ALL', 'Все'],
+                  ['GROUP', 'ГП'],
+                  ['PT', 'ПТ'],
+                ] as const)
+              : ([
+                  ['ALL', 'Все'],
+                  ['GROUP', 'ГП'],
+                  ['PT', 'ПТ'],
+                  ['SPA', 'SPA'],
+                  ['SOLARIUM', 'Солярий'],
+                ] as const)
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={chipClass(kind === value)}
+                onClick={() => setKind(value)}
               >
-                <option value="ALL">Все</option>
-                <option value="GROUP">ГП</option>
-                <option value="PT">ПТ</option>
-                <option value="SPA">SPA</option>
-                <option value="SOLARIUM">Солярий</option>
-              </select>
-            </label>
-          )}
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {showQueue && queue === 'pending' ? (
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5">
+            {(
+              [
+                ['review', 'На проверке', 'rose'],
+                ['unpaid', 'Нет оплаты', 'rose'],
+                ...(showSpaIssueChips
+                  ? ([
+                      ['not1c', 'Нет в 1С', 'orange'],
+                      ['journal', 'Нет в журнале', 'orange'],
+                    ] as const)
+                  : []),
+              ] as const
+            ).map(([id, label, tone]) => (
+              <button
+                key={id}
+                type="button"
+                className={chipClass(reasons.includes(id), tone)}
+                onClick={() => toggleReason(id)}
+              >
+                {label}
+                <span className="tabular-nums opacity-80">
+                  {reasonCounts[id]}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <label className="min-w-0 text-[11px] text-slate-500">
-            Статус
-            <select
+            Клиент
+            <input
               className="input mt-1 block w-full min-w-0 text-sm"
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-            >
-              <option value="ALL">Все</option>
-              <option value="SCHEDULED">Запланировано</option>
-              <option value="COMPLETED">Выполнено</option>
-              <option value="CANCELLED">Отменено</option>
-            </select>
+              value={clientFilter}
+              onChange={(e) => {
+                setClientFilter(e.target.value);
+                if (!e.target.value.trim()) setClientIdFilter('');
+              }}
+              placeholder="ФИО или часть имени"
+            />
           </label>
-          {(kind === 'PT' ||
-            kind === 'SPA' ||
-            kind === 'SOLARIUM' ||
-            kind === 'ALL' ||
-            fixedKind) && (
-            <label className="min-w-0 text-[11px] text-slate-500">
-              Оплата
-              <select
-                className="input mt-1 block w-full min-w-0 text-sm"
-                value={payment}
-                onChange={(e) =>
-                  setPayment(e.target.value as 'PAID' | 'DEBT' | 'ALL')
-                }
-              >
-                <option value="ALL">Все</option>
-                <option value="PAID">Оплачено</option>
-                <option value="DEBT">Нет оплаты</option>
-              </select>
-            </label>
-          )}
-          {!fixedKind && (
-            <label className="min-w-0 text-[11px] text-slate-500">
-              Источник
-              <select
-                className="input mt-1 block w-full min-w-0 text-sm"
-                value={sourceFilter}
-                onChange={(e) =>
-                  setSourceFilter(e.target.value as 'ALL' | 'SALE' | '1C')
-                }
-              >
-                <option value="ALL">Все</option>
-                <option value="1C">Занятия 1С</option>
-                <option value="SALE">
-                  Продажи ПТ{saleCount ? ` (${saleCount})` : ''}
-                </option>
-              </select>
-            </label>
-          )}
           {!detailOnly && (performerOptions.length > 0 || api.listPerformers) ? (
-            <label className="col-span-2 min-w-0 text-[11px] text-slate-500 md:col-span-1">
+            <label className="min-w-0 text-[11px] text-slate-500">
               Сотрудник
               <select
                 className="input mt-1 block w-full min-w-0 text-sm"
@@ -2324,224 +2522,267 @@ export function BookingControlPanel({
               </select>
             </label>
           ) : null}
-          <label className="col-span-2 min-w-0 text-[11px] text-slate-500 md:col-span-2">
-            Клиент
-            <input
-              className="input mt-1 block w-full min-w-0 text-sm"
-              value={clientFilter}
-              onChange={(e) => {
-                setClientFilter(e.target.value);
-                if (!e.target.value.trim()) setClientIdFilter('');
-              }}
-              placeholder="ФИО или часть имени"
-            />
-          </label>
-          <label className="col-span-2 flex h-11 items-center gap-2 text-sm text-slate-300 md:col-span-1">
-            <input
-              type="checkbox"
-              className="h-4 w-4 shrink-0"
-              checked={needsReview}
-              onChange={(e) => setNeedsReview(e.target.checked)}
-            />
-            На проверке
-          </label>
-          <label className="col-span-2 flex h-11 items-center gap-2 text-sm text-slate-300 md:col-span-1">
-            <input
-              type="checkbox"
-              className="h-4 w-4 shrink-0"
-              checked={notIn1c}
-              onChange={(e) => setNotIn1c(e.target.checked)}
-            />
-            Нет в 1С
-          </label>
-          <label className="col-span-2 flex h-11 items-center gap-2 text-sm text-slate-300 md:col-span-1">
-            <input
-              type="checkbox"
-              className="h-4 w-4 shrink-0"
-              checked={missingJournal}
-              onChange={(e) => setMissingJournal(e.target.checked)}
-            />
-            Нет в журнале
-          </label>
-          {flag ? (
-            <div className="col-span-2 flex h-11 items-center md:col-span-2">
-              <button
-                type="button"
-                className="inline-flex items-center gap-2 rounded-full border border-amber-700/60 bg-amber-950/40 px-3 py-1 text-xs text-amber-200"
-                onClick={() => setFlag('')}
-                title="Снять фильтр нестыковки"
-              >
-                {flag === 'EXPIRING_PACKAGE'
-                  ? 'Истекающий пакет'
-                  : 'Добавлены после занятия'}
-                <span aria-hidden>×</span>
-              </button>
-            </div>
-          ) : null}
-          <div className="col-span-2 flex flex-wrap items-center gap-2 md:col-span-4">
-            <button
-              type="button"
-              className="btn-primary px-3 py-2 text-sm"
-              onClick={setToday}
-            >
-              Сегодня
-            </button>
-            <button
-              type="button"
-              className="btn-secondary px-3 py-2 text-sm"
-              onClick={setWeek}
-            >
-              Неделя
-            </button>
-            <button
-              type="button"
-              className="btn-secondary px-3 py-2 text-sm"
-              onClick={setMonth}
-            >
-              Месяц
-            </button>
-            {api.bulkAdoptSpaToJournal ? (
-              <button
-                type="button"
-                className="btn-secondary px-3 py-2 text-sm"
-                disabled={
-                  bulkAdoptBusy ||
-                  !visible.some((i) => i.missingJournal)
-                }
-                title="Добавить в журнал все однозначные записи из 1С без дубля"
-                onClick={() => void bulkAdoptMissingJournal()}
-              >
-                {bulkAdoptBusy
-                  ? 'Добавляем…'
-                  : 'Добавить все однозначные в журнал'}
-              </button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={`inline-flex items-center gap-1.5 text-xs ${
+              moreActive || moreOpen
+                ? 'text-fitgo-300'
+                : 'text-slate-500 hover:text-slate-300'
+            }`}
+            onClick={() => setMoreOpen((v) => !v)}
+            aria-expanded={moreOpen}
+          >
+            Ещё
+            {moreActive ? (
+              <span className="h-1.5 w-1.5 rounded-full bg-fitgo-400" aria-hidden />
             ) : null}
-            {api.refreshFrom1c ? (
-              <button
-                type="button"
-                className="btn-secondary ml-auto px-3 py-2 text-sm"
-                disabled={refreshBusy || !from || !to || from > to}
-                title={`Перечитать занятия 1С и разовые ПТ за ${from} – ${to}`}
-                onClick={() => void refreshPeriodFrom1c()}
+            <span aria-hidden>{moreOpen ? '▾' : '▸'}</span>
+          </button>
+          {payment !== 'ALL' ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[11px] text-slate-300"
+              onClick={() => setPayment('ALL')}
+            >
+              {payment === 'PAID'
+                ? 'Оплачено'
+                : payment === 'DEBT'
+                  ? 'Нет оплаты'
+                  : 'Подарок'}
+              <span aria-hidden>×</span>
+            </button>
+          ) : null}
+          {status !== 'ALL' ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[11px] text-slate-300"
+              onClick={() => setStatus('ALL')}
+            >
+              {status === 'SCHEDULED'
+                ? 'Запланировано'
+                : status === 'COMPLETED'
+                  ? 'Выполнено'
+                  : 'Отменено'}
+              <span aria-hidden>×</span>
+            </button>
+          ) : null}
+          {sourceFilter !== 'ALL' ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 px-2.5 py-1 text-[11px] text-slate-300"
+              onClick={() => setSourceFilter('ALL')}
+            >
+              {sourceFilter === 'SALE' ? 'Продажи ПТ' : 'Занятия 1С'}
+              <span aria-hidden>×</span>
+            </button>
+          ) : null}
+          {flag ? (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-full border border-amber-700/60 bg-amber-950/40 px-2.5 py-1 text-[11px] text-amber-200"
+              onClick={() => setFlag('')}
+              title="Снять фильтр нестыковки"
+            >
+              {flag === 'EXPIRING_PACKAGE'
+                ? 'Истекающий пакет'
+                : 'Добавлены после занятия'}
+              <span aria-hidden>×</span>
+            </button>
+          ) : null}
+        </div>
+
+        {moreOpen ? (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {(kind === 'PT' ||
+              kind === 'SPA' ||
+              kind === 'SOLARIUM' ||
+              kind === 'ALL' ||
+              fixedKind) && (
+              <label className="min-w-0 text-[11px] text-slate-500">
+                Оплата
+                <select
+                  className="input mt-1 block w-full min-w-0 text-sm"
+                  value={payment}
+                  onChange={(e) =>
+                    setPayment(
+                      e.target.value as 'PAID' | 'DEBT' | 'GIFT' | 'ALL',
+                    )
+                  }
+                >
+                  <option value="ALL">Все</option>
+                  <option value="PAID">Оплачено</option>
+                  <option value="DEBT">Нет оплаты</option>
+                  <option value="GIFT">Подарок</option>
+                </select>
+              </label>
+            )}
+            <label className="min-w-0 text-[11px] text-slate-500">
+              Статус
+              <select
+                className="input mt-1 block w-full min-w-0 text-sm"
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
               >
-                {refreshBusy ? 'Обновляем…' : 'Обновить период из 1С'}
-              </button>
+                <option value="ALL">Все</option>
+                <option value="SCHEDULED">Запланировано</option>
+                <option value="COMPLETED">Выполнено</option>
+                <option value="CANCELLED">Отменено</option>
+              </select>
+            </label>
+            {!fixedKind ? (
+              <label className="min-w-0 text-[11px] text-slate-500">
+                Источник
+                <select
+                  className="input mt-1 block w-full min-w-0 text-sm"
+                  value={sourceFilter}
+                  onChange={(e) =>
+                    setSourceFilter(e.target.value as 'ALL' | 'SALE' | '1C')
+                  }
+                >
+                  <option value="ALL">Все</option>
+                  <option value="1C">Занятия 1С</option>
+                  <option value="SALE">
+                    Продажи ПТ{saleCount ? ` (${saleCount})` : ''}
+                  </option>
+                </select>
+              </label>
             ) : null}
           </div>
+        ) : null}
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+          {api.bulkAdoptSpaToJournal && journalAdoptCount > 0 ? (
+            <button
+              type="button"
+              className="btn-secondary px-3 py-2 text-sm"
+              disabled={bulkAdoptBusy}
+              title="Добавить в журнал все однозначные записи из 1С без дубля"
+              onClick={() => void bulkAdoptMissingJournal()}
+            >
+              {bulkAdoptBusy ? 'Добавляем…' : `В журнал · ${journalAdoptCount}`}
+            </button>
+          ) : null}
+          {canBulkApprove && api.bulkApproveGroups && pendingGroups.length > 0 ? (
+            <button
+              type="button"
+              className="btn-secondary px-3 py-2 text-sm"
+              onClick={() => setPendingGroupsOpen(true)}
+            >
+              Подтвердить ГП · {pendingGroups.length}
+            </button>
+          ) : null}
+          {api.refreshFrom1c ? (
+            <button
+              type="button"
+              className="btn-secondary px-3 py-2 text-sm sm:ml-auto"
+              disabled={refreshBusy || !from || !to || from > to}
+              title={`Перечитать занятия 1С и разовые ПТ за ${from} – ${to}`}
+              onClick={() => void refreshPeriodFrom1c()}
+            >
+              {refreshBusy ? 'Обновляем…' : 'Обновить из 1С'}
+            </button>
+          ) : null}
         </div>
       </div>
 
-      {canBulkApprove && api.bulkApproveGroups ? (
+      {canBulkApprove &&
+      api.bulkApproveGroups &&
+      pendingGroupsOpen &&
+      pendingGroups.length > 0 ? (
         <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 space-y-2">
           <button
             type="button"
             className="flex w-full items-center justify-between gap-2 text-left"
             aria-expanded={pendingGroupsOpen}
-            onClick={() => setPendingGroupsOpen((v) => !v)}
+            onClick={() => setPendingGroupsOpen(false)}
           >
             <span className="text-sm font-medium text-white">
-              Неподтверждённые ГП за период
-              {pendingGroups.length ? ` · ${pendingGroups.length}` : ''}
+              Неподтверждённые ГП за период · {pendingGroups.length}
             </span>
-            <span className="shrink-0 text-xs text-slate-500">
-              {pendingGroupsOpen ? '▾' : '▸'}
-            </span>
+            <span className="shrink-0 text-xs text-slate-500">▾</span>
           </button>
-          {pendingGroupsOpen ? (
-            <>
-              <p className="text-xs text-slate-500">
-                Выполненные занятия без подтверждения. Отметка тренером или админом
-                сразу включает их в расчёт ЗП.
-              </p>
-              {pendingGroups.length === 0 ? (
-                <p className="text-sm text-slate-400">Нет таких занятий</p>
-              ) : (
-                <>
-                  <label className="flex items-center gap-2 text-xs text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={
-                        pendingGroups.length > 0 &&
-                        pendingGroups.every((i) =>
-                          bulkSelected.has(i.sessionKey),
-                        )
-                      }
-                      onChange={(e) => {
-                        setBulkSelected(
-                          e.target.checked
-                            ? new Set(pendingGroups.map((i) => i.sessionKey))
-                            : new Set(),
-                        );
-                      }}
-                    />
-                    Выбрать все
-                  </label>
-                  <ul className="max-h-48 overflow-y-auto rounded-lg border border-slate-800 text-sm">
-                    {pendingGroups.map((item) => (
-                      <li
-                        key={item.sessionKey}
-                        className="flex items-center gap-2 border-b border-slate-900 px-2 py-1.5 last:border-0"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={bulkSelected.has(item.sessionKey)}
-                          onChange={() => toggleBulk(item.sessionKey)}
-                        />
-                        <button
-                          type="button"
-                          className="min-w-0 flex-1 truncate text-left text-slate-200"
-                          onClick={() => openDetail(item.sessionKey)}
-                        >
-                          {formatDateTime(item.startAt)} · {item.title}
-                          {item.performerName
-                            ? ` · ${item.performerName}`
-                            : ''}
-                        </button>
-                        <span
-                          className={`shrink-0 text-[11px] ${HINT_TEXT_COLOR[approvalHintTone(item.approvalLabel)]}`}
-                        >
-                          {item.approvalLabel}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
-                    <label className="flex items-center gap-1.5">
-                      <input
-                        type="radio"
-                        name="bulk-role"
-                        checked={bulkRole === 'trainer'}
-                        onChange={() => setBulkRole('trainer')}
-                      />
-                      Подтвердить тренером
-                    </label>
-                    <label className="flex items-center gap-1.5">
-                      <input
-                        type="radio"
-                        name="bulk-role"
-                        checked={bulkRole === 'admin'}
-                        onChange={() => setBulkRole('admin')}
-                      />
-                      Подтвердить админом
-                    </label>
-                    <button
-                      type="button"
-                      className="btn-primary px-3 py-1.5 text-sm"
-                      disabled={
-                        bulkBusy ||
-                        pendingGroups.every(
-                          (i) => !bulkSelected.has(i.sessionKey),
-                        )
-                      }
-                      onClick={confirmBulk}
-                    >
-                      {bulkBusy ? 'Подтверждаем…' : 'Подтвердить'}
-                    </button>
-                  </div>
-                </>
-              )}
-            </>
-          ) : null}
+          <p className="text-xs text-slate-500">
+            Выполненные занятия без подтверждения. Отметка тренером или админом
+            сразу включает их в расчёт ЗП.
+          </p>
+          <label className="flex items-center gap-2 text-xs text-slate-300">
+            <input
+              type="checkbox"
+              checked={
+                pendingGroups.length > 0 &&
+                pendingGroups.every((i) => bulkSelected.has(i.sessionKey))
+              }
+              onChange={(e) => {
+                setBulkSelected(
+                  e.target.checked
+                    ? new Set(pendingGroups.map((i) => i.sessionKey))
+                    : new Set(),
+                );
+              }}
+            />
+            Выбрать все
+          </label>
+          <ul className="max-h-48 overflow-y-auto rounded-lg border border-slate-800 text-sm">
+            {pendingGroups.map((item) => (
+              <li
+                key={item.sessionKey}
+                className="flex items-center gap-2 border-b border-slate-900 px-2 py-1.5 last:border-0"
+              >
+                <input
+                  type="checkbox"
+                  checked={bulkSelected.has(item.sessionKey)}
+                  onChange={() => toggleBulk(item.sessionKey)}
+                />
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 truncate text-left text-slate-200"
+                  onClick={() => openDetail(item.sessionKey)}
+                >
+                  {formatDateTime(item.startAt)} · {item.title}
+                  {item.performerName ? ` · ${item.performerName}` : ''}
+                </button>
+                <span
+                  className={`shrink-0 text-[11px] ${HINT_TEXT_COLOR[approvalHintTone(item.approvalLabel)]}`}
+                >
+                  {item.approvalLabel}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
+            <label className="flex items-center gap-1.5">
+              <input
+                type="radio"
+                name="bulk-role"
+                checked={bulkRole === 'trainer'}
+                onChange={() => setBulkRole('trainer')}
+              />
+              Подтвердить тренером
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input
+                type="radio"
+                name="bulk-role"
+                checked={bulkRole === 'admin'}
+                onChange={() => setBulkRole('admin')}
+              />
+              Подтвердить админом
+            </label>
+            <button
+              type="button"
+              className="btn-primary px-3 py-1.5 text-sm"
+              disabled={
+                bulkBusy ||
+                pendingGroups.every((i) => !bulkSelected.has(i.sessionKey))
+              }
+              onClick={confirmBulk}
+            >
+              {bulkBusy ? 'Подтверждаем…' : 'Подтвердить'}
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -2573,9 +2814,18 @@ export function BookingControlPanel({
         <p className="text-slate-400">Загрузка…</p>
       ) : visible.length === 0 ? (
         <p className="text-slate-400">
-          Нет записей за период
-          {approvalSegments && approvalSegment === 'pending' && from === to
-            ? ' — на контроле могут быть занятия за прошлые дни: нажмите «Неделя» или «Месяц»'
+          {showQueue && queue === 'pending'
+            ? 'На контроле за период пусто'
+            : showQueue && queue === 'done'
+              ? 'Прошедших контроль за период нет'
+              : showQueue && queue === 'upcoming'
+                ? 'В периоде нет записей, которые ещё не начались'
+                : 'Нет записей за период'}
+          {showQueue &&
+          queue === 'pending' &&
+          from === to &&
+          pendingCount === 0
+            ? ' — расширьте период: «Неделя» или «Месяц»'
             : ''}
         </p>
       ) : (
