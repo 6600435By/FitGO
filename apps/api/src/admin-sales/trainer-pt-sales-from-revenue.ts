@@ -50,6 +50,19 @@ export type PackUnitPriceMatch = {
   occurredAt?: string;
 };
 
+/** Title clearly means solarium (1C often tags the doc as PT / personal). */
+export function isSolariumSessionTitle(
+  name: string | null | undefined,
+): boolean {
+  const s = (name ?? '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return false;
+  return /соляр|solarium|tanning/.test(s);
+}
+
 /**
  * Солярий / тренажёрный зал / SPA-массаж — не в Контроле записей (ПТ)
  * и не в merge рейтинга тренеров.
@@ -66,11 +79,22 @@ export function isExcludedFromPtBookingControl(
     .replace(/\s+/g, ' ')
     .trim();
   if (!s) return false;
-  if (s.includes('соляр')) return true;
+  if (isSolariumSessionTitle(s)) return true;
   if (s.includes('тренажер')) return true;
   if (/\bзал\b/.test(s) && /тренаж/.test(s)) return true;
   // Massage / bioimpedance / SPA titles tagged as training in 1C sales.
   if (isSpaLikeSessionTitle(s)) return true;
+  return false;
+}
+
+/** Trainer surfaces: never show SPA / solarium (wrong 1C performer). */
+export function isHiddenFromTrainerBookingControl(item: {
+  kind?: string | null;
+  title?: string | null;
+}): boolean {
+  const kind = (item.kind ?? '').toUpperCase();
+  if (kind === 'SPA' || kind === 'SOLARIUM') return true;
+  if (isSolariumSessionTitle(item.title)) return true;
   return false;
 }
 

@@ -714,6 +714,10 @@ function mapKind(k: string, title?: string | null): OnexClassKind {
   const u = (k || '').toUpperCase();
   if (u === 'SPA') return OnexClassKind.SPA;
   if (u === 'SOLARIUM') return OnexClassKind.SOLARIUM;
+  // Title wins: 1C Control often tags solarium / massage as «персональное».
+  if (/соляр|solarium|tanning/i.test(title ?? '')) {
+    return OnexClassKind.SOLARIUM;
+  }
   // 1C Control often tags massage / bioimpedance as PT — store as SPA.
   if (u === 'PT') {
     return isSpaLikeSessionTitle(title) ? OnexClassKind.SPA : OnexClassKind.PT;

@@ -22,6 +22,7 @@ import {
   type TrainerMonthAnalytics,
 } from '@fitgo/shared-types';
 import { isLikelyTrainingProductName } from '../admin-sales/admin-sales-segments';
+import { isHiddenFromTrainerBookingControl } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { BookingControlService } from '../booking-control/booking-control.service';
 import { PayrollService } from '../payroll/payroll.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -242,11 +243,13 @@ export class TrainerMonthAnalyticsService {
       performerId: trainerId,
       status: 'COMPLETED',
       skipExternal: true,
+      excludeKinds: ['SPA', 'SOLARIUM'],
     });
     return items.filter(
       (i) =>
         isConductedControlRow(i) &&
-        (i.kind === 'PT' || i.kind === 'GROUP'),
+        (i.kind === 'PT' || i.kind === 'GROUP') &&
+        !isHiddenFromTrainerBookingControl(i),
     );
   }
 

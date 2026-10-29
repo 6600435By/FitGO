@@ -986,6 +986,15 @@ export function BookingControlPanel({
 
   const visible = useMemo(() => {
     let rows = items;
+    // Trainer cabinet: never show SPA / solarium (API also filters; belt-and-suspenders).
+    if (trainerKindFilter) {
+      rows = rows.filter(
+        (i) =>
+          i.kind !== 'SPA' &&
+          i.kind !== 'SOLARIUM' &&
+          !/соляр|solarium|tanning/i.test(i.title ?? ''),
+      );
+    }
     // Home «провёл» = all completed rows in range (incl. разовые ПТ из продаж).
     if (conductedMode) {
       // no source cut — SALE PT count in ЗП / лестница / home card
@@ -1052,6 +1061,7 @@ export function BookingControlPanel({
     conductedMode,
     kind,
     nowMs,
+    trainerKindFilter,
   ]);
 
   const saleCount = useMemo(

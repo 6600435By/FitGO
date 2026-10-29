@@ -17,6 +17,7 @@ import type {
   FloorStaffMonthMetric,
 } from '@fitgo/shared-types';
 import { isReformerHallSession } from '@fitgo/shared-types';
+import { isSolariumSessionTitle } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { TrainerMonthAnalyticsService } from '../analytics/trainer-month-analytics.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
@@ -469,6 +470,13 @@ export class FloorStaffHomeService {
       roomTitle: string | null;
       title: string;
     }) => {
+      // Wrong 1C performer on solarium must not inflate trainer home / counts.
+      if (
+        s.kind === OnexClassKind.SOLARIUM ||
+        isSolariumSessionTitle(s.title)
+      ) {
+        return false;
+      }
       if (s.kind === OnexClassKind.PT) {
         if (hasPt) return true;
         if (isReformer) return isReformerHallSession(s.roomTitle, s.title);

@@ -7,6 +7,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { isReformerHallSession, UserRole } from '@fitgo/shared-types';
+import { isHiddenFromTrainerBookingControl } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -489,6 +490,7 @@ export class BookingControlController {
       return this.bookingControl.detail(clubId, query.sessionKey.trim(), {
         userId: user.sub,
         ownOnly: true,
+        hideSpaAndSolarium: true,
       });
     }
     this.clubSync.ensureFreshToday(clubId);
@@ -511,11 +513,13 @@ export class BookingControlController {
       kind: query.kind,
       performerId: user.sub,
       _own: true,
+      // Admin / manager / SA control keeps SOLARIUM; trainers never see it.
+      excludeKinds: ['SPA', 'SOLARIUM'],
     });
 
-    // Trainers never see SPA / solarium in booking control.
+    // Defense in depth: kind + title (mistagged PT «Солярий»).
     const noSpa = items.filter(
-      (item) => item.kind !== 'SPA' && item.kind !== 'SOLARIUM',
+      (item) => !isHiddenFromTrainerBookingControl(item),
     );
 
     if (!isReformer) return noSpa;
@@ -654,7 +658,10 @@ export class BookingControlController {
 
   private list(
     clubId: string,
-    query: ListQuery & { _own?: boolean },
+    query: ListQuery & {
+      _own?: boolean;
+      excludeKinds?: Array<'SPA' | 'SOLARIUM' | 'GROUP' | 'PT'>;
+    },
   ) {
     const from =
       query.from?.trim() ||
@@ -665,7 +672,8 @@ export class BookingControlController {
       | 'ALL'
       | 'GROUP'
       | 'PT'
-      | 'SPA';
+      | 'SPA'
+      | 'SOLARIUM';
     const status = (query.status?.toUpperCase() || 'ALL') as
       | 'ALL'
       | 'SCHEDULED'
@@ -705,6 +713,7 @@ export class BookingControlController {
       notIn1c: query.notIn1c === '1' || query.notIn1c === 'true',
       missingJournal:
         query.missingJournal === '1' || query.missingJournal === 'true',
+      excludeKinds: query.excludeKinds,
     });
   }
 }

@@ -72,6 +72,8 @@ import {
 } from '../admin-sales/admin-sales-segments';
 import {
   isExcludedFromPtBookingControl,
+  isHiddenFromTrainerBookingControl,
+  isSolariumSessionTitle,
   loadTrainerPtSalesFromRevenue,
   mergeTrainerPtSaleRows,
   overlayPtSaleDebtFromRevenue,
@@ -134,6 +136,11 @@ type ListFilters = {
   notIn1c?: boolean;
   /** 1C SPA visits with no FitGO journal booking. */
   missingJournal?: boolean;
+  /**
+   * Drop these kinds after build (trainer own view: SPA / SOLARIUM).
+   * Admin / manager / super-admin lists omit this — solarium stays visible.
+   */
+  excludeKinds?: BookingControlKind[];
 };
 
 @Injectable()
@@ -811,6 +818,12 @@ export class BookingControlService {
     if (filters.hall || filters.reformer) {
       out = filterControlByHall(out, filters.hall, filters.reformer);
     }
+    if (filters.excludeKinds?.length) {
+      const drop = new Set(
+        filters.excludeKinds.map((k) => k.toUpperCase()),
+      );
+      out = out.filter((i) => !drop.has((i.kind ?? '').toUpperCase()));
+    }
 
     return out.sort(
       (a, b) =>
@@ -947,7 +960,12 @@ export class BookingControlService {
   async detail(
     clubId: string,
     sessionKey: string,
-    viewer?: { userId: string; ownOnly: boolean },
+    viewer?: {
+      userId: string;
+      ownOnly: boolean;
+      /** Trainer cabinet: hide SPA / solarium even if 1C performer matches. */
+      hideSpaAndSolarium?: boolean;
+    },
   ): Promise<BookingControlDetail> {
     const parsed = parseSessionKey(sessionKey);
     if (!parsed) throw new BadRequestException('Некорректный sessionKey');
@@ -983,6 +1001,15 @@ export class BookingControlService {
       // Same as list: massage / SPA often arrives from 1C as PT.
       if (kind === 'PT' && isSpaLikeSessionTitle(s.title)) {
         kind = 'SPA';
+      }
+      if (kind === 'PT' && isSolariumSessionTitle(s.title)) {
+        kind = 'SOLARIUM';
+      }
+      if (
+        viewer?.hideSpaAndSolarium &&
+        isHiddenFromTrainerBookingControl({ kind, title: s.title })
+      ) {
+        throw new NotFoundException('Занятие не найдено');
       }
       const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
       const matched =

@@ -19,6 +19,7 @@ import {
   type ScheduleSlot,
   type SessionApprovalPhase,
 } from '@fitgo/shared-types';
+import { isSolariumSessionTitle } from '../admin-sales/trainer-pt-sales-from-revenue';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { SessionApprovalService } from '../booking-control/session-approval.service';
@@ -481,7 +482,7 @@ export class ClubScheduleService {
       }
     }
 
-    const rows = await this.prisma.onexClassSession.findMany({
+    const rowsRaw = await this.prisma.onexClassSession.findMany({
       where: {
         clubId,
         kind: 'PT',
@@ -495,6 +496,8 @@ export class ClubScheduleService {
       },
       orderBy: { startAt: 'asc' },
     });
+    // Solarium mistagged as PT in 1C must not appear on trainer schedule.
+    const rows = rowsRaw.filter((r) => !isSolariumSessionTitle(r.title));
 
     if (!rows.length) return [];
 
