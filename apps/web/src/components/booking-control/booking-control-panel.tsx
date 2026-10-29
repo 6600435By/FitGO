@@ -109,6 +109,14 @@ export type BookingControlApi = {
     sessionKey: string,
     comment?: string,
   ) => Promise<BookingControlDetail>;
+  /**
+   * Performer: update while PENDING_ADMIN, or request re-review after APPROVED.
+   */
+  reviseSession?: (
+    sessionKey: string,
+    mode: 'update' | 'rereview',
+    comment?: string,
+  ) => Promise<BookingControlDetail>;
   /** Admin / SA: return GROUP to trainer. */
   returnGroupApproval?: (
     sessionKey: string,
@@ -1635,6 +1643,35 @@ export function BookingControlPanel({
     }
   };
 
+  const reviseSelected = async (mode: 'update' | 'rereview') => {
+    if (!selected || !api.reviseSession) return;
+    if (mode === 'rereview' && comment.trim().length < 2) {
+      setMessage('Укажите комментарий для повторной проверки');
+      return;
+    }
+    setApproveBusy(true);
+    setMessage('');
+    try {
+      const updated = await api.reviseSession(
+        selected.sessionKey,
+        mode,
+        comment.trim() || undefined,
+      );
+      setSelected(updated);
+      setComment('');
+      setMessage(
+        mode === 'rereview'
+          ? 'Отправлено на повторную проверку администратору'
+          : 'Изменения сохранены — админ увидит новую версию',
+      );
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка сохранения');
+    } finally {
+      setApproveBusy(false);
+    }
+  };
+
   const selectedGroupEnded =
     !selected || selected.kind !== 'GROUP'
       ? true
@@ -1687,6 +1724,58 @@ export function BookingControlPanel({
     return false;
   })();
 
+  /** Performer may update confirmation while admin still reviews. */
+  const canReviseUpdate = (() => {
+    if (
+      approvalActor !== 'performer' ||
+      !api.reviseSession ||
+      !selected ||
+      selected.status === 'CANCELLED'
+    ) {
+      return false;
+    }
+    if (selected.kind === 'GROUP' && selected.source === '1C') {
+      return (
+        selected.groupApproval?.phase === 'PENDING_ADMIN' &&
+        !selected.groupApproval.locked
+      );
+    }
+    if (selected.kind === 'SPA' || selected.kind === 'PT') {
+      const canPt =
+        selected.kind === 'PT' &&
+        Boolean(selected.fitgoBookingId || selected.source === 'FITGO');
+      if (selected.kind === 'PT' && !canPt) return false;
+      return selected.approvalPhase === 'PENDING_ADMIN';
+    }
+    return false;
+  })();
+
+  /** Performer requests admin re-check after APPROVED (required comment). */
+  const canReviseRereview = (() => {
+    if (
+      approvalActor !== 'performer' ||
+      !api.reviseSession ||
+      !selected ||
+      selected.status === 'CANCELLED'
+    ) {
+      return false;
+    }
+    if (selected.kind === 'GROUP' && selected.source === '1C') {
+      return (
+        selected.groupApproval?.phase === 'APPROVED' &&
+        !selected.groupApproval.locked
+      );
+    }
+    if (selected.kind === 'SPA' || selected.kind === 'PT') {
+      const canPt =
+        selected.kind === 'PT' &&
+        Boolean(selected.fitgoBookingId || selected.source === 'FITGO');
+      if (selected.kind === 'PT' && !canPt) return false;
+      return selected.approvalPhase === 'APPROVED';
+    }
+    return false;
+  })();
+
   const showConfirmAfterEndHint =
     Boolean(
       canTrainerSeen &&
@@ -1706,12 +1795,21 @@ export function BookingControlPanel({
       selected.source === '1C' &&
       !selected.groupApproval?.locked &&
       (canConfirmSelected ||
+        canReviseUpdate ||
+        canReviseRereview ||
         canReturnApproval ||
         canManagerRework ||
         showConfirmAfterEndHint ||
         (canTrainerSeen &&
           (selected.groupApproval?.phase === 'PENDING_TRAINER' ||
             !selected.groupApproval?.phase))),
+  );
+
+  /** PT/SPA performer: comment for update / rereview (or confirm). */
+  const showPtSpaReviseBox = Boolean(
+    selected &&
+      (selected.kind === 'PT' || selected.kind === 'SPA') &&
+      (canReviseUpdate || canReviseRereview),
   );
 
   const saveDraftComment = async () => {
@@ -3486,10 +3584,20 @@ export function BookingControlPanel({
                     ) : null}
                   </div>
                 )}
-                {selected.kind === 'SPA' &&
-                selected.status !== 'CANCELLED' &&
-                selected.approvalPhase !== 'APPROVED'
+                {selected.kind === 'SPA' && selected.status !== 'CANCELLED'
                   ? (() => {
+                      if (selected.approvalPhase === 'APPROVED') {
+                        return (
+                          <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2 text-xs text-slate-300">
+                            <p className="text-emerald-300">Подтверждено администратором</p>
+                            {selected.returnComment ? (
+                              <p className="text-rose-300">
+                                Комментарий: {selected.returnComment}
+                              </p>
+                            ) : null}
+                          </div>
+                        );
+                      }
                       const spaLabel = spaPendingLabel(
                         selected.approvalLabel,
                         selected.approvalPhase,
@@ -3498,6 +3606,11 @@ export function BookingControlPanel({
                       return (
                         <div className={`space-y-2 ${HINT_PANEL_COLOR[spaTone]}`}>
                           <p className={HINT_TEXT_COLOR[spaTone]}>{spaLabel}</p>
+                          {selected.returnComment ? (
+                            <p className="text-rose-300 text-xs">
+                              {selected.returnComment}
+                            </p>
+                          ) : null}
                           {canConfirmSelected ? (
                             <button
                               type="button"
@@ -3512,9 +3625,7 @@ export function BookingControlPanel({
                       );
                     })()
                   : null}
-                {selected.kind === 'PT' &&
-                selected.status !== 'CANCELLED' &&
-                selected.approvalPhase !== 'APPROVED'
+                {selected.kind === 'PT' && selected.status !== 'CANCELLED'
                   ? (() => {
                       const hasFitgo =
                         Boolean(selected.fitgoBookingId) ||
@@ -3528,6 +3639,18 @@ export function BookingControlPanel({
                           </p>
                         );
                       }
+                      if (selected.approvalPhase === 'APPROVED') {
+                        return (
+                          <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2 text-xs text-slate-300">
+                            <p className="text-emerald-300">Подтверждено администратором</p>
+                            {selected.returnComment ? (
+                              <p className="text-rose-300">
+                                Комментарий: {selected.returnComment}
+                              </p>
+                            ) : null}
+                          </div>
+                        );
+                      }
                       const ptLabel =
                         selected.approvalLabel ||
                         (selected.approvalPhase === 'PENDING_ADMIN'
@@ -3537,6 +3660,11 @@ export function BookingControlPanel({
                       return (
                         <div className={`space-y-2 ${HINT_PANEL_COLOR[ptTone]}`}>
                           <p className={HINT_TEXT_COLOR[ptTone]}>{ptLabel}</p>
+                          {selected.returnComment ? (
+                            <p className="text-rose-300 text-xs">
+                              {selected.returnComment}
+                            </p>
+                          ) : null}
                           {canConfirmSelected ? (
                             <button
                               type="button"
@@ -3551,6 +3679,100 @@ export function BookingControlPanel({
                       );
                     })()
                   : null}
+                {(selected.kind === 'PT' || selected.kind === 'SPA') &&
+                selected.approvalNotes?.length ? (
+                  <div className="space-y-1 rounded-lg border border-slate-700/60 bg-slate-900/40 p-2 text-xs">
+                    {(() => {
+                      const notes = selected.approvalNotes!;
+                      const last = notes[notes.length - 1]!;
+                      const older = notes.length - 1;
+                      return (
+                        <>
+                          <p className="break-words text-slate-300">
+                            <span className="text-slate-400">
+                              {last.authorName} ·{' '}
+                              {approvalNoteActionRu(last.action)}:{' '}
+                            </span>
+                            {last.text}
+                          </p>
+                          {older > 0 ? (
+                            <>
+                              <button
+                                type="button"
+                                className="text-[11px] text-sky-400/90 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-300"
+                                aria-expanded={approvalNotesOpen}
+                                onClick={() =>
+                                  setApprovalNotesOpen((v) => !v)
+                                }
+                              >
+                                {approvalNotesOpen
+                                  ? 'свернуть'
+                                  : `ещё ${older}`}
+                              </button>
+                              {approvalNotesOpen ? (
+                                <ul className="max-h-36 space-y-1.5 overflow-y-auto text-[11px] leading-snug text-slate-400">
+                                  {notes.slice(0, -1).map((n, i) => (
+                                    <li key={`${n.createdAt}-${i}`}>
+                                      <span className="text-slate-500">
+                                        {formatDateTime(n.createdAt)} ·{' '}
+                                        {n.authorName} ·{' '}
+                                        {approvalNoteActionRu(n.action)}:{' '}
+                                      </span>
+                                      <span className="text-slate-300">
+                                        {n.text}
+                                      </span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </>
+                      );
+                    })()}
+                  </div>
+                ) : null}
+                {showPtSpaReviseBox ? (
+                  <div className="space-y-2">
+                    <textarea
+                      className="input min-h-[3rem] w-full text-sm"
+                      placeholder={
+                        canReviseRereview
+                          ? 'Комментарий для администратора (обязательно)'
+                          : 'Комментарий (необязательно)'
+                      }
+                      value={comment}
+                      onChange={(e) => setComment(e.target.value)}
+                    />
+                    {canReviseUpdate ? (
+                      <button
+                        type="button"
+                        className="btn-secondary w-full text-sm"
+                        onClick={() => void reviseSelected('update')}
+                        disabled={approveBusy}
+                      >
+                        {approveBusy ? 'Сохраняем…' : 'Сохранить изменения'}
+                      </button>
+                    ) : null}
+                    {canReviseRereview ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn-primary w-full text-sm"
+                          onClick={() => void reviseSelected('rereview')}
+                          disabled={approveBusy || comment.trim().length < 2}
+                        >
+                          {approveBusy
+                            ? 'Отправляем…'
+                            : 'Запросить повторную проверку'}
+                        </button>
+                        <p className="text-[11px] text-amber-200/80">
+                          Запись снова ждёт администратора и временно не в ЗП
+                        </p>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
                 {selected.kind === 'GROUP' &&
                 selected.source === '1C' &&
                 !selected.groupApproval?.locked &&
@@ -3593,6 +3815,33 @@ export function BookingControlPanel({
                         >
                           {approveBusy ? 'Подтверждаем…' : 'Подтвердить'}
                         </button>
+                      ) : null}
+                      {canReviseUpdate ? (
+                        <button
+                          type="button"
+                          className="btn-secondary w-full text-sm"
+                          onClick={() => void reviseSelected('update')}
+                          disabled={approveBusy}
+                        >
+                          {approveBusy ? 'Сохраняем…' : 'Сохранить изменения'}
+                        </button>
+                      ) : null}
+                      {canReviseRereview ? (
+                        <button
+                          type="button"
+                          className="btn-primary w-full text-sm"
+                          onClick={() => void reviseSelected('rereview')}
+                          disabled={approveBusy || comment.trim().length < 2}
+                        >
+                          {approveBusy
+                            ? 'Отправляем…'
+                            : 'Запросить повторную проверку'}
+                        </button>
+                      ) : null}
+                      {canReviseRereview ? (
+                        <p className="text-[11px] text-amber-200/80">
+                          Запись снова ждёт администратора и временно не в ЗП
+                        </p>
                       ) : null}
                       {canManagerRework && api.managerRework ? (
                         <button

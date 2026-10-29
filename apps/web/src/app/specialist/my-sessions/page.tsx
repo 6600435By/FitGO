@@ -69,6 +69,21 @@ function SpecialistMySessionsInner() {
           comment,
         );
       },
+      reviseSession: async (
+        sessionKey: string,
+        mode: 'update' | 'rereview',
+        comment?: string,
+      ) => {
+        const token = getToken();
+        if (!token) throw new Error('Нет сессии');
+        return api.bookingControlRevise(
+          token,
+          'specialist',
+          sessionKey,
+          mode,
+          comment,
+        );
+      },
       adoptSpaToJournal: async (sessionKey: string, serviceId?: string) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');

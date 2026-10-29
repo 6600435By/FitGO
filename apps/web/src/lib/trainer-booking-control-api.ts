@@ -35,6 +35,11 @@ export function createTrainerBookingControlApi(): BookingControlApi {
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlApprove(token, 'trainer', sessionKey, comment);
     },
+    reviseSession: async (sessionKey, mode, comment) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlRevise(token, 'trainer', sessionKey, mode, comment);
+    },
     listHallSnapshots: async (sessionKey) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');

@@ -631,6 +631,23 @@ export class BookingControlController {
     );
   }
 
+  @Post('trainer/booking-control/revise')
+  @Roles(UserRole.TRAINER)
+  reviseTrainer(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      sessionKey?: string;
+      mode?: 'update' | 'rereview';
+      comment?: string;
+    },
+  ) {
+    return this.bookingControl.performerReviseSession(user, body.sessionKey ?? '', {
+      mode: body.mode === 'rereview' ? 'rereview' : 'update',
+      comment: body.comment,
+    });
+  }
+
   @Get('specialist/booking-control')
   @Roles(UserRole.SPECIALIST)
   listSpecialist(
@@ -702,6 +719,23 @@ export class BookingControlController {
       body.sessionKey ?? '',
       body.comment,
     );
+  }
+
+  @Post('specialist/booking-control/revise')
+  @Roles(UserRole.SPECIALIST)
+  reviseSpecialist(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      sessionKey?: string;
+      mode?: 'update' | 'rereview';
+      comment?: string;
+    },
+  ) {
+    return this.bookingControl.performerReviseSession(user, body.sessionKey ?? '', {
+      mode: body.mode === 'rereview' ? 'rereview' : 'update',
+      comment: body.comment,
+    });
   }
 
   @Get('trainer/manager-tasks')

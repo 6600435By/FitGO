@@ -2538,6 +2538,42 @@ export class SpaBookingService {
       ) {
         await this.serviceUsage.consumeSpaIfReady(updated.id).catch(() => undefined);
       }
+
+      // Material edit after admin approve → reopen admin review (out of payroll).
+      const materialChanged =
+        updated.startAt.getTime() !== existing.startAt.getTime() ||
+        updated.serviceId !== existing.serviceId ||
+        updated.specialistId !== existing.specialistId ||
+        (updated.clientId ?? null) !== (existing.clientId ?? null) ||
+        (updated.guestName ?? null) !== (existing.guestName ?? null) ||
+        (updated.guestPhone ?? null) !== (existing.guestPhone ?? null) ||
+        updated.paymentType !== existing.paymentType;
+      if (materialChanged && opts.asSpecialist) {
+        const { cleared } =
+          await this.sessionApproval.clearAdminAfterMaterialEdit(
+            SessionApprovalKind.SPA,
+            updated.id,
+            clubId,
+            'Изменена запись',
+          );
+        if (cleared) {
+          const specialistName =
+            `${updated.specialist.lastName} ${updated.specialist.firstName}`.trim() ||
+            'Специалист';
+          await this.prisma.groupApprovalNote.create({
+            data: {
+              clubId,
+              sessionKey: `fitgo:SPA:${updated.id}`,
+              authorId: actor.sub,
+              authorName: specialistName,
+              authorRole: 'TRAINER',
+              action: 'RETURN',
+              text: 'Изменена запись',
+            },
+          });
+        }
+      }
+
       return { booking: this.mapBooking(updated) };
     } catch (err) {
       if (

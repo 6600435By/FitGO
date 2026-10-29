@@ -4,7 +4,16 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PersonalBookingStatus, Prisma, Role, AvailabilityBlockStatus, PersonalBookingOrigin, AccountStatus, StaffShiftTrack } from '@prisma/client';
+import {
+  PersonalBookingStatus,
+  Prisma,
+  Role,
+  AvailabilityBlockStatus,
+  PersonalBookingOrigin,
+  AccountStatus,
+  StaffShiftTrack,
+  SessionApprovalKind,
+} from '@prisma/client';
 import {
   PERSONAL_TRAINING_GOAL_TEMPLATES,
   SessionType,
@@ -18,9 +27,11 @@ import {
   type TrainerCalendarResponse,
   type TrainerCalendarEvent,
   type ScheduleSlot,
+  toUsageControl,
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { SessionApprovalService } from '../booking-control/session-approval.service';
 import { FormaScheduleCacheService } from '../club-schedule/forma-schedule-cache.service';
 import { staffOwnsScheduleSlot } from '../club-schedule/trainer-schedule.helpers';
 import { moscowDayKey } from '../club-sync/moscow-time';
@@ -29,7 +40,6 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
-import { toUsageControl } from '@fitgo/shared-types';
 
 const SESSION_DURATION_MIN = 60;
 
@@ -66,6 +76,7 @@ export class PersonalTrainingService {
     private readonly visitSync: VisitSyncService,
     private readonly serviceUsage: ServiceUsageService,
     private readonly formaCache: FormaScheduleCacheService,
+    private readonly sessionApproval: SessionApprovalService,
   ) {}
 
   async getTrainerWorkSchedule(user: JwtPayload) {
@@ -575,8 +586,38 @@ export class PersonalTrainingService {
       const updated = await this.prisma.personalTrainingBooking.update({
         where: { id: bookingId },
         data: { startAt: start, endAt: end },
-        include: { client: true },
+        include: {
+          client: true,
+          trainer: { select: { firstName: true, lastName: true } },
+        },
       });
+
+      if (updated.startAt.getTime() !== booking.startAt.getTime()) {
+        const clubId = requireClubId(user);
+        const { cleared } =
+          await this.sessionApproval.clearAdminAfterMaterialEdit(
+            SessionApprovalKind.PT,
+            updated.id,
+            clubId,
+            'Изменена запись',
+          );
+        if (cleared) {
+          const trainerName =
+            `${updated.trainer.lastName} ${updated.trainer.firstName}`.trim() ||
+            'Тренер';
+          await this.prisma.groupApprovalNote.create({
+            data: {
+              clubId,
+              sessionKey: `fitgo:PT:${updated.id}`,
+              authorId: user.sub,
+              authorName: trainerName,
+              authorRole: 'TRAINER',
+              action: 'RETURN',
+              text: 'Изменена запись',
+            },
+          });
+        }
+      }
 
       return {
         id: updated.id,

@@ -162,6 +162,95 @@ export class SessionApprovalService {
     });
   }
 
+  /**
+   * Performer revises a confirmed PT/SPA booking.
+   * - update: PENDING_ADMIN only — bump performer stamp (admin still reviews)
+   * - rereview: APPROVED only — keep performer, clear admin/override → PENDING_ADMIN
+   */
+  async performerRevise(
+    actor: JwtPayload,
+    kind: SessionApprovalKind,
+    bookingId: string,
+    input: { mode: 'update' | 'rereview'; comment?: string },
+  ) {
+    const clubId = requireClubId(actor);
+    await this.assertBookingAccess(actor, kind, bookingId, clubId);
+    const row = await this.ensureApproval(kind, bookingId, clubId);
+    const phase = this.phase(row);
+    const note = input.comment?.trim() || '';
+    const now = new Date();
+
+    if (input.mode === 'update') {
+      if (phase !== 'PENDING_ADMIN') {
+        throw new BadRequestException(
+          'Обновить можно только запись, ожидающую администратора',
+        );
+      }
+      return this.prisma.sessionApproval.update({
+        where: { kind_bookingId: { kind, bookingId } },
+        data: {
+          performerConfirmedAt: now,
+          ...(note
+            ? { returnReason: note, returnedAt: now }
+            : {}),
+        },
+      });
+    }
+
+    if (phase !== 'APPROVED') {
+      throw new BadRequestException(
+        'Повторную проверку можно запросить только после подтверждения админом',
+      );
+    }
+    if (note.length < 2) {
+      throw new BadRequestException(
+        'Укажите комментарий для повторной проверки',
+      );
+    }
+    return this.prisma.sessionApproval.update({
+      where: { kind_bookingId: { kind, bookingId } },
+      data: {
+        performerConfirmedAt: row.performerConfirmedAt ?? now,
+        adminApprovedAt: null,
+        adminApprovedById: null,
+        overrideApprovedAt: null,
+        overrideApprovedById: null,
+        returnedAt: now,
+        returnReason: note,
+      },
+    });
+  }
+
+  /**
+   * Material journal edit after admin approve: keep performer, clear admin → PENDING_ADMIN.
+   * No-op when not APPROVED. Returns whether approval was cleared.
+   */
+  async clearAdminAfterMaterialEdit(
+    kind: SessionApprovalKind,
+    bookingId: string,
+    clubId: string,
+    reason = 'Изменена запись',
+  ): Promise<{ cleared: boolean }> {
+    const row = await this.prisma.sessionApproval.findUnique({
+      where: { kind_bookingId: { kind, bookingId } },
+    });
+    if (!row) return { cleared: false };
+    const phase = this.phase(row);
+    if (phase !== 'APPROVED') return { cleared: false };
+    await this.prisma.sessionApproval.update({
+      where: { kind_bookingId: { kind, bookingId } },
+      data: {
+        adminApprovedAt: null,
+        adminApprovedById: null,
+        overrideApprovedAt: null,
+        overrideApprovedById: null,
+        returnedAt: new Date(),
+        returnReason: reason,
+      },
+    });
+    return { cleared: true };
+  }
+
   async bulkApprove(
     actor: JwtPayload,
     kind: SessionApprovalKind,

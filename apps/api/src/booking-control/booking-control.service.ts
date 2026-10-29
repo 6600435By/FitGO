@@ -1113,6 +1113,11 @@ export class BookingControlService {
         | SessionApprovalPhase
         | undefined = groupApproval?.phase;
       let approvalLabel = groupApprovalLabelRu(groupApproval?.phase);
+      let sessionApprovalNotes:
+        | NonNullable<BookingControlDetail['approvalNotes']>
+        | undefined;
+      let sessionReturnComment: string | undefined;
+      let sessionReturnedAt: string | undefined;
       if (kind === 'SPA' || (kind === 'PT' && matched?.id)) {
         const approvalId =
           kind === 'SPA' ? matched?.id ?? canonicalKey : matched!.id;
@@ -1144,6 +1149,21 @@ export class BookingControlService {
               : kind === 'PT' && phase === 'PENDING_PERFORMER'
                 ? 'Ждёт тренера'
                 : sessionApprovalLabelRu(phase);
+        }
+        if (row) {
+          sessionReturnComment = row.returnReason ?? undefined;
+          sessionReturnedAt = row.returnedAt?.toISOString();
+        }
+        if (matched?.id) {
+          const info = await this.loadSessionApprovalInfo(
+            clubId,
+            kind === 'SPA' ? 'SPA' : 'PT',
+            matched.id,
+          );
+          sessionApprovalNotes = info.approvalNotes;
+          sessionReturnComment =
+            info.returnComment ?? sessionReturnComment;
+          sessionReturnedAt = info.returnedAt ?? sessionReturnedAt;
         }
       }
 
@@ -1285,6 +1305,9 @@ export class BookingControlService {
         needsReview: Boolean(open),
         approvalPhase,
         approvalLabel,
+        approvalNotes: sessionApprovalNotes,
+        returnComment: sessionReturnComment,
+        returnedAt: sessionReturnedAt,
         fitgoBookingId: matched?.id,
         durationMin: s.durationMin ?? undefined,
         members,
@@ -1400,6 +1423,9 @@ export class BookingControlService {
           ptPhase === 'PENDING_PERFORMER'
             ? 'Ждёт тренера'
             : sessionApprovalLabelRu(ptPhase),
+        approvalNotes: approval?.approvalNotes,
+        returnComment: approval?.returnComment,
+        returnedAt: approval?.returnedAt,
         members: [],
         remark: open,
         remarksHistory: mappedRemarks,
@@ -1515,6 +1541,9 @@ export class BookingControlService {
           approval?.phase === 'PENDING_PERFORMER'
             ? 'Ждёт специалиста'
             : sessionApprovalLabelRu(approval?.phase),
+        approvalNotes: approval?.approvalNotes,
+        returnComment: approval?.returnComment,
+        returnedAt: approval?.returnedAt,
         members: [],
         remark: open,
         remarksHistory: mappedRemarks,
@@ -1770,13 +1799,19 @@ export class BookingControlService {
 
     const existing = await this.findGroupApprovalRow(clubId, key, sessionKey);
     const draftComment = comment?.trim();
-    // Draft note before confirm — only while trainer has not confirmed yet.
-    const canStoreDraft =
-      draftComment !== undefined && !existing?.trainerApprovedAt;
+    const phase = groupApprovalPhase({
+      trainerApprovedAt: existing?.trainerApprovedAt?.toISOString() ?? null,
+      adminApprovedAt: existing?.adminApprovedAt?.toISOString() ?? null,
+      overrideApprovedAt: existing?.overrideApprovedAt?.toISOString() ?? null,
+    });
+    // Comment: draft before confirm, or update while waiting for admin.
+    const canStoreComment =
+      draftComment !== undefined &&
+      (!existing?.trainerApprovedAt || phase === 'PENDING_ADMIN');
     const notePatch =
-      canStoreDraft && draftComment
+      canStoreComment && draftComment
         ? { trainerComment: draftComment }
-        : canStoreDraft && draftComment === ''
+        : canStoreComment && draftComment === ''
           ? { trainerComment: null }
           : {};
 
@@ -1805,10 +1840,29 @@ export class BookingControlService {
               overrideName: null,
               overrideApprovedAt: null,
               overrideComment: null,
+              returnedByUserId: actor.sub,
+              returnedAt: new Date(),
+              ...(draftComment
+                ? { returnComment: draftComment }
+                : {}),
             }
           : {}),
       },
     });
+
+    if (clearAdmin || (canStoreComment && draftComment)) {
+      const actorName = await this.actorDisplayName(clubId, actor.sub);
+      await this.ensureApprovalNotesMigrated(clubId, key, existing);
+      await this.appendApprovalNote(clubId, key, {
+        authorId: actor.sub,
+        authorName: actorName,
+        authorRole: 'TRAINER',
+        action: clearAdmin ? 'RETURN' : 'CONFIRM',
+        text:
+          draftComment ||
+          (clearAdmin ? 'Изменены отметки явки' : 'Обновлено тренером'),
+      });
+    }
 
     return this.detail(clubId, key, {
       userId: actor.sub,
@@ -2017,7 +2071,7 @@ export class BookingControlService {
     actor: JwtPayload,
     kind: 'PT' | 'SPA',
     bookingId: string,
-    _comment?: string,
+    comment?: string,
   ): Promise<BookingControlDetail> {
     const clubId = requireClubId(actor);
     const roles = actor.roles ?? [];
@@ -2035,6 +2089,8 @@ export class BookingControlService {
 
     const prismaKind =
       kind === 'PT' ? SessionApprovalKind.PT : SessionApprovalKind.SPA;
+    const note = comment?.trim() || null;
+    const key = fitgoSessionKey(kind, bookingId);
 
     if (kind === 'SPA') {
       const booking = await this.prisma.spaBooking.findFirst({
@@ -2046,6 +2102,9 @@ export class BookingControlService {
       }
       this.assertSessionEnded(booking);
     }
+
+    const actorName = await this.actorDisplayName(clubId, actor.sub);
+    let noteRole: 'TRAINER' | 'ADMIN' | 'OVERRIDE' = 'TRAINER';
 
     if (isOverride) {
       await this.sessionApproval.ensureApproval(prismaKind, bookingId, clubId);
@@ -2060,6 +2119,7 @@ export class BookingControlService {
           returnReason: null,
         },
       });
+      noteRole = 'OVERRIDE';
     } else if (isAdmin) {
       const row = await this.sessionApproval.ensureApproval(
         prismaKind,
@@ -2072,11 +2132,21 @@ export class BookingControlService {
         );
       }
       await this.sessionApproval.adminApprove(actor, prismaKind, bookingId);
+      noteRole = 'ADMIN';
     } else {
       await this.sessionApproval.confirmPerformer(actor, prismaKind, bookingId);
+      noteRole = 'TRAINER';
     }
 
-    return this.detail(clubId, fitgoSessionKey(kind, bookingId), {
+    await this.appendApprovalNote(clubId, key, {
+      authorId: actor.sub,
+      authorName: actorName,
+      authorRole: noteRole,
+      action: 'CONFIRM',
+      text: note,
+    });
+
+    return this.detail(clubId, key, {
       userId: actor.sub,
       ownOnly: !isOverride && !isAdmin,
     });
@@ -2452,6 +2522,255 @@ export class BookingControlService {
     );
 
     return this.detail(clubId, key);
+  }
+
+  /**
+   * Performer (trainer / specialist) revises a confirmed session.
+   * - update: PENDING_ADMIN — refresh stamp + optional comment (admin sees new version)
+   * - rereview: APPROVED — required comment, clear admin → PENDING_ADMIN (out of payroll)
+   */
+  async performerReviseSession(
+    actor: JwtPayload,
+    sessionKey: string,
+    input: { mode: 'update' | 'rereview'; comment?: string },
+  ): Promise<BookingControlDetail> {
+    const clubId = requireClubId(actor);
+    const mode = input.mode;
+    if (mode !== 'update' && mode !== 'rereview') {
+      throw new BadRequestException('Некорректный режим правки');
+    }
+    const note = input.comment?.trim() || '';
+    if (mode === 'rereview' && note.length < 2) {
+      throw new BadRequestException(
+        'Укажите комментарий для повторной проверки',
+      );
+    }
+
+    const parsed = parseSessionKey(sessionKey);
+    if (!parsed) throw new BadRequestException('Некорректный ключ записи');
+
+    // FitGO PT / SPA
+    if (
+      parsed.source === 'FITGO' &&
+      (parsed.kind === 'PT' || parsed.kind === 'SPA')
+    ) {
+      const prismaKind =
+        parsed.kind === 'PT'
+          ? SessionApprovalKind.PT
+          : SessionApprovalKind.SPA;
+      await this.sessionApproval.performerRevise(
+        actor,
+        prismaKind,
+        parsed.id,
+        { mode, comment: note || undefined },
+      );
+      const actorName = await this.actorDisplayName(clubId, actor.sub);
+      const key = fitgoSessionKey(parsed.kind, parsed.id);
+      await this.appendApprovalNote(clubId, key, {
+        authorId: actor.sub,
+        authorName: actorName,
+        authorRole: 'TRAINER',
+        action: mode === 'rereview' ? 'RETURN' : 'CONFIRM',
+        text:
+          note ||
+          (mode === 'rereview'
+            ? 'Запрос повторной проверки'
+            : 'Обновлено исполнителем'),
+      });
+      return this.detail(clubId, key, {
+        userId: actor.sub,
+        ownOnly: true,
+      });
+    }
+
+    // 1C SPA matched to FitGO
+    if (parsed.source === '1C') {
+      const onex = await this.findOnexSessionForControl(
+        clubId,
+        parsed.id,
+        'narrow',
+      );
+      if (onex?.kind === OnexClassKind.SPA) {
+        this.assertGroupEditable(onex);
+        const matched = await this.findMatchingFitgoBooking(
+          clubId,
+          'SPA',
+          onex,
+          undefined,
+        );
+        if (matched) {
+          await this.sessionApproval.performerRevise(
+            actor,
+            SessionApprovalKind.SPA,
+            matched.id,
+            { mode, comment: note || undefined },
+          );
+          const actorName = await this.actorDisplayName(clubId, actor.sub);
+          const noteKey = fitgoSessionKey('SPA', matched.id);
+          await this.appendApprovalNote(clubId, noteKey, {
+            authorId: actor.sub,
+            authorName: actorName,
+            authorRole: 'TRAINER',
+            action: mode === 'rereview' ? 'RETURN' : 'CONFIRM',
+            text:
+              note ||
+              (mode === 'rereview'
+                ? 'Запрос повторной проверки'
+                : 'Обновлено исполнителем'),
+          });
+          return this.detail(clubId, onexSessionKey(onex.externalId), {
+            userId: actor.sub,
+            ownOnly: true,
+          });
+        }
+      }
+
+      // GROUP 1C
+      if (onex?.kind === OnexClassKind.GROUP) {
+        return this.performerReviseGroup(actor, sessionKey, { mode, comment: note });
+      }
+
+      // 1C PT matched to FitGO
+      if (onex?.kind === OnexClassKind.PT) {
+        this.assertGroupEditable(onex);
+        const matched = await this.findMatchingFitgoBooking(
+          clubId,
+          'PT',
+          onex,
+          undefined,
+        );
+        if (!matched) {
+          throw new BadRequestException(
+            'ПТ из 1С без записи FitGO нельзя править по цепочке подтверждения',
+          );
+        }
+        await this.sessionApproval.performerRevise(
+          actor,
+          SessionApprovalKind.PT,
+          matched.id,
+          { mode, comment: note || undefined },
+        );
+        const actorName = await this.actorDisplayName(clubId, actor.sub);
+        const noteKey = fitgoSessionKey('PT', matched.id);
+        await this.appendApprovalNote(clubId, noteKey, {
+          authorId: actor.sub,
+          authorName: actorName,
+          authorRole: 'TRAINER',
+          action: mode === 'rereview' ? 'RETURN' : 'CONFIRM',
+          text:
+            note ||
+            (mode === 'rereview'
+              ? 'Запрос повторной проверки'
+              : 'Обновлено исполнителем'),
+        });
+        return this.detail(clubId, onexSessionKey(onex.externalId), {
+          userId: actor.sub,
+          ownOnly: true,
+        });
+      }
+    }
+
+    throw new BadRequestException('Эту запись нельзя править исполнителем');
+  }
+
+  /** GROUP: performer update while PENDING_ADMIN, or rereview after APPROVED. */
+  private async performerReviseGroup(
+    actor: JwtPayload,
+    sessionKey: string,
+    input: { mode: 'update' | 'rereview'; comment: string },
+  ): Promise<BookingControlDetail> {
+    const clubId = requireClubId(actor);
+    const session = await this.requireGroupOnex(clubId, sessionKey);
+    const key = onexSessionKey(session.externalId);
+    await this.assertOwnOnex(clubId, actor.sub, session);
+    this.assertGroupEditable(session);
+
+    const existing = await this.findGroupApprovalRow(clubId, key, sessionKey);
+    const phase = groupApprovalPhase({
+      trainerApprovedAt: existing?.trainerApprovedAt?.toISOString() ?? null,
+      adminApprovedAt: existing?.adminApprovedAt?.toISOString() ?? null,
+      overrideApprovedAt: existing?.overrideApprovedAt?.toISOString() ?? null,
+    });
+    const actorName = await this.actorDisplayName(clubId, actor.sub);
+    const note = input.comment.trim();
+    const now = new Date();
+
+    await this.ensureApprovalNotesMigrated(clubId, key, existing);
+
+    if (input.mode === 'update') {
+      if (phase !== 'PENDING_ADMIN') {
+        throw new BadRequestException(
+          'Обновить можно только занятие, ожидающее администратора',
+        );
+      }
+      if (!existing?.trainerApprovedAt) {
+        throw new BadRequestException('Сначала подтвердите занятие');
+      }
+      await this.prisma.groupClassApproval.update({
+        where: { clubId_sessionKey: { clubId, sessionKey: key } },
+        data: {
+          trainerUserId: actor.sub,
+          trainerName: actorName,
+          trainerApprovedAt: now,
+          ...(note ? { trainerComment: note } : {}),
+          returnedByUserId: null,
+          returnedByName: null,
+          returnedAt: null,
+        },
+      });
+      await this.appendApprovalNote(clubId, key, {
+        authorId: actor.sub,
+        authorName: actorName,
+        authorRole: 'TRAINER',
+        action: 'CONFIRM',
+        text: note || 'Обновлено тренером',
+      });
+      return this.detail(clubId, key, {
+        userId: actor.sub,
+        ownOnly: true,
+      });
+    }
+
+    // rereview
+    if (phase !== 'APPROVED') {
+      throw new BadRequestException(
+        'Повторную проверку можно запросить только после подтверждения админом',
+      );
+    }
+    if (note.length < 2) {
+      throw new BadRequestException(
+        'Укажите комментарий для повторной проверки',
+      );
+    }
+    await this.prisma.groupClassApproval.update({
+      where: { clubId_sessionKey: { clubId, sessionKey: existing!.sessionKey } },
+      data: {
+        adminUserId: null,
+        adminName: null,
+        adminApprovedAt: null,
+        adminComment: null,
+        overrideUserId: null,
+        overrideName: null,
+        overrideApprovedAt: null,
+        overrideComment: null,
+        returnedByUserId: actor.sub,
+        returnedByName: actorName,
+        returnedAt: now,
+        returnComment: note,
+        trainerComment: note,
+      },
+    });
+    await this.appendApprovalNote(clubId, key, {
+      authorId: actor.sub,
+      authorName: actorName,
+      authorRole: 'TRAINER',
+      action: 'RETURN',
+      text: note,
+    });
+    return this.detail(clubId, key, {
+      userId: actor.sub,
+      ownOnly: true,
+    });
   }
 
   /**
@@ -3522,9 +3841,25 @@ export class BookingControlService {
   ) {
     const row = await this.sessionApproval.ensureApproval(kind, bookingId, clubId);
     const phase = this.sessionApproval.phase(row);
+    const notesKey = fitgoSessionKey(kind, bookingId);
+    const notes = await this.prisma.groupApprovalNote.findMany({
+      where: { clubId, sessionKey: notesKey },
+      orderBy: { createdAt: 'asc' },
+      take: 30,
+    });
+    const approvalNotes = notes.map((n) => ({
+      authorName: n.authorName,
+      authorRole: n.authorRole as 'TRAINER' | 'ADMIN' | 'OVERRIDE',
+      action: n.action as 'CONFIRM' | 'RETURN',
+      text: n.text,
+      createdAt: n.createdAt.toISOString(),
+    }));
     return {
       phase,
       payrollEligible: this.sessionApproval.isPayrollEligible(row),
+      returnComment: row.returnReason ?? undefined,
+      returnedAt: row.returnedAt?.toISOString(),
+      approvalNotes: approvalNotes.length ? approvalNotes : undefined,
     };
   }
 

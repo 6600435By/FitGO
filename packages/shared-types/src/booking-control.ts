@@ -305,6 +305,11 @@ export interface BookingControlDetail extends BookingControlListItem {
   fitgoBookedAt?: string;
   crmDocRef?: string;
   groupApproval?: GroupClassApprovalInfo | null;
+  /** PT/SPA approval comment thread (same shape as GROUP notes). */
+  approvalNotes?: GroupApprovalNoteItem[];
+  /** Last performer revise / rereview comment (PT/SPA). */
+  returnComment?: string;
+  returnedAt?: string;
   /** SPA only: quota write-off / payment fact from 1C. */
   spaSettlement?: SpaSettlementInfo;
   /** Admin-only: soft match to a sale/visit that needs a click. */

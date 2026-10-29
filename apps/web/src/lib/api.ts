@@ -3108,6 +3108,26 @@ export const api = {
       token,
     ),
 
+  bookingControlRevise: (
+    token: string,
+    base: 'trainer' | 'specialist',
+    sessionKey: string,
+    mode: 'update' | 'rereview',
+    comment?: string,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/revise`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionKey,
+          mode,
+          comment: comment ?? '',
+        }),
+      },
+      token,
+    ),
+
   bookingControlReturnApproval: (
     token: string,
     base: 'super-admin' | 'admin',
