@@ -52,7 +52,7 @@ function viewCount(
   if (!counts) return 0;
   switch (view) {
     case 'now':
-      return counts.overdue + counts.today + counts.rework;
+      return counts.total;
     case 'mine':
       return counts.mine;
     case 'pool':

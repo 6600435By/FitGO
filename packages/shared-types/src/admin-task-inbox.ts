@@ -129,6 +129,7 @@ export interface AdminInboxTaskLike {
   reworkComment?: string;
   /** Booking-control card deep link (MANAGER rework from control). */
   sessionKey?: string | null;
+  clientExternalId?: string | null;
 }
 
 /** Unified inbox row — real AdminTask or virtual booking-control approval. */
@@ -152,6 +153,11 @@ export interface AdminInboxItem {
   assignee?: { id: string; firstName: string; lastName: string };
   reworkCount?: number;
   reworkComment?: string;
+  /**
+   * Client has a non-cancelled GP / PT / SPA booking today.
+   * Set by API for money tasks so reception can settle debt on visit.
+   */
+  visitToday?: boolean;
   outcomes: AdminTaskOutcomeDef[];
   /** Present for real tasks — full payload for detail panels. */
   task?: AdminInboxTaskLike;
@@ -412,8 +418,67 @@ export function primaryActionForTask(task: {
   ) {
     return 'complete';
   }
+  // Debts / installments: settle on visit — call is optional, not primary CTA.
+  if (
+    source === 'CLIENT_DEBT' ||
+    source === 'DEBT_OVERDUE' ||
+    source === 'INSTALLMENT_PAYMENT' ||
+    source === 'STAFF_DEBT'
+  ) {
+    return 'complete';
+  }
   if (task.phone) return 'call';
   return 'complete';
+}
+
+/** Focus queue lane (lower = higher priority). null = not in «Мой фокус» / view=now. */
+export function adminFocusLane(item: AdminInboxItem): number | null {
+  if (item.owner === 'other') return null;
+  if (item.bucket === 'done' || item.bucket === 'waiting') return null;
+
+  const rework = (item.reworkCount ?? 0) > 0;
+  const dueNow =
+    item.bucket === 'overdue' || item.bucket === 'today' || rework;
+
+  if (item.kind === 'manager') return 0;
+
+  if (
+    item.source === 'BOOKING_CONFIRM' ||
+    item.topic === 'confirmation'
+  ) {
+    return 1;
+  }
+
+  if (
+    item.topic === 'membership' ||
+    item.topic === 'birthday' ||
+    item.source === 'MEMBERSHIP_EXPIRING' ||
+    item.source === 'BIRTHDAY'
+  ) {
+    return dueNow ? 2 : null;
+  }
+
+  if (
+    item.kind === 'money' ||
+    item.topic === 'client_debt' ||
+    item.topic === 'installment' ||
+    item.source === 'CLIENT_DEBT' ||
+    item.source === 'DEBT_OVERDUE' ||
+    item.source === 'INSTALLMENT_PAYMENT'
+  ) {
+    if (item.visitToday && dueNow) return 3;
+    return null;
+  }
+
+  if (item.kind === 'control') {
+    return dueNow ? 4 : null;
+  }
+
+  return null;
+}
+
+export function isInAdminFocusQueue(item: AdminInboxItem): boolean {
+  return adminFocusLane(item) != null;
 }
 
 function outcomesForManagerTask(task: {
@@ -444,8 +509,19 @@ function displayTitle(task: AdminInboxTaskLike): string {
   );
 }
 
-function subtitleForTask(task: AdminInboxTaskLike): string | undefined {
+function subtitleForTask(
+  task: AdminInboxTaskLike,
+  opts?: { visitToday?: boolean },
+): string | undefined {
   const source = task.source ?? '';
+  const visitHint =
+    opts?.visitToday &&
+    (source === 'CLIENT_DEBT' ||
+      source === 'DEBT_OVERDUE' ||
+      source === 'INSTALLMENT_PAYMENT' ||
+      source === 'STAFF_DEBT')
+      ? 'На визите, звонок не обязателен'
+      : null;
   if (source === 'MEMBERSHIP_EXPIRING') {
     const parts = [
       task.membershipName ?? 'Абонемент',
@@ -463,6 +539,7 @@ function subtitleForTask(task: AdminInboxTaskLike): string | undefined {
       task.debtTotal != null ? `${task.debtTotal.toFixed(2)} BYN` : null,
       task.debtCount != null ? `${task.debtCount} продаж` : null,
       task.debtAgeDays != null ? `${task.debtAgeDays} дн.` : null,
+      visitHint,
     ].filter(Boolean);
     return parts.join(' · ') || undefined;
   }
@@ -474,6 +551,7 @@ function subtitleForTask(task: AdminInboxTaskLike): string | undefined {
       task.overdueDays != null && task.overdueDays > 0
         ? `просрочка ${task.overdueDays} дн.`
         : null,
+      visitHint,
     ].filter(Boolean);
     return parts.join(' · ') || undefined;
   }
@@ -500,10 +578,12 @@ export function adminInboxItemFromTask(
   task: AdminInboxTaskLike,
   currentUserId: string,
   now = new Date(),
+  opts?: { visitToday?: boolean },
 ): AdminInboxItem {
   const kind = adminInboxKindFromTask(task);
   const bucket = adminInboxBucket(task, now);
   const owner = adminInboxOwner(task.assignee?.id, currentUserId);
+  const visitToday = opts?.visitToday === true;
   return {
     id: task.id,
     virtual: false,
@@ -512,7 +592,7 @@ export function adminInboxItemFromTask(
     owner,
     primaryAction: primaryActionForTask(task),
     title: displayTitle(task),
-    subtitle: subtitleForTask(task),
+    subtitle: subtitleForTask(task, { visitToday }),
     phone: task.phone,
     dueAt: task.dueAt,
     nextActionAt: task.nextActionAt,
@@ -522,6 +602,7 @@ export function adminInboxItemFromTask(
     assignee: task.assignee,
     reworkCount: task.reworkCount,
     reworkComment: task.reworkComment,
+    visitToday: visitToday || undefined,
     outcomes: outcomesForManagerTask(task),
     task,
   };
@@ -605,16 +686,52 @@ export function sortAdminInboxItems(items: AdminInboxItem[]): AdminInboxItem[] {
   });
 }
 
+/** Sort for «Мой фокус» / view=now without kind filter. */
+export function sortAdminFocusItems(items: AdminInboxItem[]): AdminInboxItem[] {
+  return [...items].sort((a, b) => {
+    const la = adminFocusLane(a) ?? 99;
+    const lb = adminFocusLane(b) ?? 99;
+    if (la !== lb) return la - lb;
+    const at = new Date(a.nextActionAt ?? a.dueAt ?? 0).getTime();
+    const bt = new Date(b.nextActionAt ?? b.dueAt ?? 0).getTime();
+    return at - bt;
+  });
+}
+
 export function filterAdminInboxItems(
   items: AdminInboxItem[],
   opts: { view?: AdminInboxView; kind?: AdminInboxKind | null },
 ): AdminInboxItem[] {
   const view = opts.view ?? 'now';
   const kind = opts.kind ?? null;
-  return items.filter((item) => {
+  const filtered = items.filter((item) => {
     if (kind && item.kind !== kind) return false;
     switch (view) {
       case 'now':
+        // Default focus queue: manager → confirm → renewals → visit money → control.
+        // Explicit kind keeps legacy overdue/today urgency filter.
+        if (!kind) return isInAdminFocusQueue(item);
+        // Manager tasks stay in focus regardless of due bucket (except waiting/done).
+        if (
+          kind === 'manager' &&
+          item.kind === 'manager' &&
+          item.owner !== 'other' &&
+          item.bucket !== 'done' &&
+          item.bucket !== 'waiting'
+        ) {
+          return true;
+        }
+        // SPA / reformer confirms are due tomorrow (bucket upcoming) but still actionable.
+        if (
+          kind === 'control' &&
+          (item.topic === 'confirmation' ||
+            item.source === 'BOOKING_CONFIRM') &&
+          item.owner !== 'other' &&
+          item.bucket !== 'done' &&
+          item.bucket !== 'waiting'
+        ) {
+          return true;
+        }
         return (
           (item.bucket === 'overdue' ||
             item.bucket === 'today' ||
@@ -633,6 +750,10 @@ export function filterAdminInboxItems(
         return true;
     }
   });
+  if (view === 'now' && !kind) {
+    return sortAdminFocusItems(filtered);
+  }
+  return filtered;
 }
 
 export function inboxCountsFromItems(
@@ -664,20 +785,23 @@ export function inboxCountsFromItems(
       continue;
     }
 
-    counts.total += 1;
     counts.byKind[item.kind] += 1;
-
-    if (item.bucket === 'overdue') counts.overdue += 1;
-    if (item.bucket === 'today') counts.today += 1;
     if (item.bucket === 'waiting') counts.waiting += 1;
     if (item.owner === 'mine') counts.mine += 1;
     if (item.owner === 'pool') counts.pool += 1;
-    if ((item.reworkCount ?? 0) > 0) counts.rework += 1;
 
     const topic = item.topic;
     if (topic && topic in counts.byTopic) {
       counts.byTopic[topic as keyof AdminInboxCounts['byTopic']] += 1;
     }
+
+    // Focus counters (Мой фокус / Просрочено / Сегодня) — actionable queue only.
+    if (!isInAdminFocusQueue(item)) continue;
+
+    counts.total += 1;
+    if (item.bucket === 'overdue') counts.overdue += 1;
+    if (item.bucket === 'today') counts.today += 1;
+    if ((item.reworkCount ?? 0) > 0) counts.rework += 1;
   }
 
   return counts;

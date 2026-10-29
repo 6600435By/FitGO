@@ -45,6 +45,15 @@ const SECTIONS: { id: AdminSection; label: string; home: string }[] = [
   { id: 'clients', label: 'Клиенты', home: '/admin/at-risk' },
 ];
 
+/** Always pinned after «Зал» — quick jump to SPA board (not a section page chip). */
+const SPA_PIN: AdminNavDef = {
+  href: '/admin/spa',
+  label: 'SPA',
+  permission: AdminPermission.CLIENTS_VIEW,
+  modules: ['club_admin', 'spa_booking'],
+  section: 'floor',
+};
+
 const ALL_NAV: AdminNavDef[] = [
   {
     href: '/admin',
@@ -71,13 +80,6 @@ const ALL_NAV: AdminNavDef[] = [
     label: 'Расписание',
     permission: AdminPermission.CLIENTS_VIEW,
     modules: ['club_admin', 'group_classes'],
-    section: 'floor',
-  },
-  {
-    href: '/admin/spa',
-    label: 'SPA',
-    permission: AdminPermission.CLIENTS_VIEW,
-    modules: ['club_admin', 'spa_booking'],
     section: 'floor',
   },
   {
@@ -242,6 +244,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { isEnabled, loading: featuresLoading } = useFeatures();
   const [visible, setVisible] = useState<AdminNavDef[]>([]);
+  const [spaPinned, setSpaPinned] = useState(false);
   const [taskBadge, setTaskBadge] = useState(0);
 
   useEffect(() => {
@@ -249,6 +252,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     const token = getToken();
     if (!token) {
       setVisible([]);
+      setSpaPinned(false);
       return;
     }
     api
@@ -257,15 +261,17 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         setVisible(
           ALL_NAV.filter((item) => allowed(item, permissions, isEnabled)),
         );
+        setSpaPinned(allowed(SPA_PIN, permissions, isEnabled));
       })
-      .catch(() =>
+      .catch(() => {
         setVisible(
           ALL_NAV.filter(
             (item) =>
               item.href === '/admin/tasks' && allowed(item, [], isEnabled),
           ),
-        ),
-      );
+        );
+        setSpaPinned(false);
+      });
 
     api
       .adminDashboard(token)
@@ -275,10 +281,14 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       .catch(() => setTaskBadge(0));
   }, [isEnabled, featuresLoading]);
 
+  const spaActive =
+    pathname === '/admin/spa' || pathname.startsWith('/admin/spa/');
+
   const activeSection = useMemo((): AdminSection => {
+    if (spaActive) return 'floor';
     const hit = visible.find((item) => pathMatches(pathname, item));
     return hit?.section ?? 'today';
-  }, [pathname, visible]);
+  }, [pathname, visible, spaActive]);
 
   const sectionTabs = useMemo(
     () =>
@@ -304,17 +314,36 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     [visible, activeSection, taskBadge],
   );
 
+  const sectionChipRow = (
+    <>
+      {sectionTabs.flatMap((tab) => {
+        const chip = (
+          <SectionChip
+            key={tab.id}
+            href={tab.href}
+            label={tab.label}
+            active={tab.id === activeSection && !spaActive}
+            compact
+          />
+        );
+        if (tab.id !== 'floor' || !spaPinned) return [chip];
+        return [
+          chip,
+          <SectionChip
+            key="spa-pin"
+            href="/admin/spa"
+            label="SPA"
+            active={spaActive}
+            compact
+          />,
+        ];
+      })}
+    </>
+  );
+
   const desktopTopNav = (
     <>
-      {sectionTabs.map((tab) => (
-        <SectionChip
-          key={tab.id}
-          href={tab.href}
-          label={tab.label}
-          active={tab.id === activeSection}
-          compact
-        />
-      ))}
+      {sectionChipRow}
       {sectionTabs.length > 0 && sectionNav.length > 0 ? (
         <span className="mx-1 h-4 w-px shrink-0 bg-slate-700" aria-hidden />
       ) : null}
@@ -337,18 +366,8 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   );
 
   const mobileSubNav =
-    sectionTabs.length > 0 ? (
-      <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-        {sectionTabs.map((tab) => (
-          <SectionChip
-            key={tab.id}
-            href={tab.href}
-            label={tab.label}
-            active={tab.id === activeSection}
-            compact
-          />
-        ))}
-      </div>
+    sectionTabs.length > 0 || spaPinned ? (
+      <div className="flex gap-1.5 overflow-x-auto pb-0.5">{sectionChipRow}</div>
     ) : null;
 
   return (

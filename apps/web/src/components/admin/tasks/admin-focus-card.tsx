@@ -44,6 +44,19 @@ function primaryHref(item: AdminInboxItem): string {
   if (item.primaryAction === 'open_renewal') {
     return `/admin/tasks?view=now&kind=calls&topic=membership&task=${item.id}`;
   }
+  if (
+    item.primaryAction === 'confirm' ||
+    item.source === 'BOOKING_CONFIRM' ||
+    item.topic === 'confirmation'
+  ) {
+    return `/admin/tasks?view=now&kind=control&topic=confirmation&task=${item.id}`;
+  }
+  if (item.kind === 'manager') {
+    return `/admin/tasks?view=now&kind=manager&task=${item.id}`;
+  }
+  if (item.kind === 'money') {
+    return `/admin/tasks?view=now&kind=money&task=${item.id}`;
+  }
   if (item.virtual && item.pending?.sessionKey) {
     return `/admin/tasks?view=now&kind=control&task=${encodeURIComponent(item.id)}`;
   }
@@ -122,6 +135,14 @@ export function AdminFocusCard() {
                   item.primaryAction === 'call'
                     ? phoneTelHref(item.phone)
                     : undefined;
+                const cta =
+                  item.primaryAction === 'confirm'
+                    ? 'Подтвердить'
+                    : item.primaryAction === 'open_renewal'
+                      ? 'Воронка'
+                      : tel
+                        ? 'Звонок'
+                        : 'Открыть';
                 return (
                   <li key={item.id}>
                     <div className="flex items-center justify-between gap-2 py-2">
@@ -143,14 +164,14 @@ export function AdminFocusCard() {
                           href={tel}
                           className="btn-primary shrink-0 !px-2 !py-1 text-[11px]"
                         >
-                          Звонок
+                          {cta}
                         </a>
                       ) : (
                         <Link
                           href={primaryHref(item)}
                           className="btn-secondary shrink-0 !px-2 !py-1 text-[11px]"
                         >
-                          Открыть
+                          {cta}
                         </Link>
                       )}
                     </div>

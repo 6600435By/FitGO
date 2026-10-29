@@ -51,6 +51,8 @@ function primaryLabel(item: AdminInboxItem) {
       return 'Открыть карточку';
     case 'confirm':
       return 'Подтвердить';
+    case 'complete':
+      return item.kind === 'money' || item.visitToday ? 'Открыть' : 'Исход';
     default:
       return 'Исход';
   }

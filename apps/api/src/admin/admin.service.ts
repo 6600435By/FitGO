@@ -28,6 +28,7 @@ import { FeaturesService } from '../features/features.service';
 import {
   AdminTaskEventKind,
   AdminTaskStatus as PrismaAdminTaskStatus,
+  OnexClassMemberAttendance,
   OnexClassStatus,
   PersonalBookingStatus,
   Prisma,
@@ -918,26 +919,37 @@ export class AdminService {
     const from30 = new Date();
     from30.setDate(from30.getDate() - 30);
     const from30Str = localDayKey(from30);
+    const dayStart = new Date(`${today}T00:00:00+03:00`);
+    const dayEnd = new Date(`${today}T23:59:59.999+03:00`);
 
-    const [tasks, gpPending, spaPending, ptPending, birthdayMeta] =
-      await Promise.all([
-        this.getMyTasks(user),
-        this.bookingControl
-          .listPendingAdminApprovals(clubId, from30Str, today, 'GROUP')
-          .catch(() => []),
-        this.bookingControl
-          .listPendingAdminApprovals(clubId, from30Str, today, 'SPA')
-          .catch(() => []),
-        this.bookingControl
-          .listPendingAdminApprovals(clubId, from30Str, today, 'PT')
-          .catch(() => []),
-        this.getBirthdaySkippedQuiet(clubId),
-      ]);
+    const [
+      tasks,
+      gpPending,
+      spaPending,
+      ptPending,
+      birthdayMeta,
+      visitingExternalIds,
+    ] = await Promise.all([
+      this.getMyTasks(user),
+      this.bookingControl
+        .listPendingAdminApprovals(clubId, from30Str, today, 'GROUP')
+        .catch(() => []),
+      this.bookingControl
+        .listPendingAdminApprovals(clubId, from30Str, today, 'SPA')
+        .catch(() => []),
+      this.bookingControl
+        .listPendingAdminApprovals(clubId, from30Str, today, 'PT')
+        .catch(() => []),
+      this.getBirthdaySkippedQuiet(clubId),
+      this.listClientExternalIdsVisitingToday(clubId, dayStart, dayEnd),
+    ]);
 
     const now = new Date();
-    const fromTasks = tasks.map((t) =>
-      adminInboxItemFromTask(t, user.sub, now),
-    );
+    const fromTasks = tasks.map((t) => {
+      const ext = t.clientExternalId?.trim();
+      const visitToday = !!ext && visitingExternalIds.has(ext);
+      return adminInboxItemFromTask(t, user.sub, now, { visitToday });
+    });
     const fromPending = [
       ...gpPending,
       ...spaPending,
@@ -954,6 +966,81 @@ export class AdminService {
       skippedBirthdays: birthdayMeta.skipped,
       birthdayScanError: birthdayMeta.scanError,
     };
+  }
+
+  /** Clients with a non-cancelled GP / PT / SPA booking today (club TZ). */
+  private async listClientExternalIdsVisitingToday(
+    clubId: string,
+    dayStart: Date,
+    dayEnd: Date,
+  ): Promise<Set<string>> {
+    const ids = new Set<string>();
+    const [groupMembers, spaRows, ptRows] = await Promise.all([
+      this.prisma.onexClassSessionMember
+        .findMany({
+          where: {
+            cancelled: false,
+            attendance: { not: OnexClassMemberAttendance.CANCELLED },
+            session: {
+              clubId,
+              isActive: true,
+              status: { not: OnexClassStatus.CANCELLED },
+              startAt: { gte: dayStart, lte: dayEnd },
+            },
+          },
+          select: { externalId: true },
+          take: 5000,
+        })
+        .catch(() => [] as Array<{ externalId: string }>),
+      this.prisma.spaBooking
+        .findMany({
+          where: {
+            clubId,
+            status: { not: SpaBookingStatus.CANCELLED },
+            startAt: { gte: dayStart, lte: dayEnd },
+          },
+          select: {
+            clientExternalId: true,
+            client: { select: { externalId: true } },
+          },
+          take: 2000,
+        })
+        .catch(
+          () =>
+            [] as Array<{
+              clientExternalId: string | null;
+              client: { externalId: string | null } | null;
+            }>,
+        ),
+      this.prisma.personalTrainingBooking
+        .findMany({
+          where: {
+            trainer: { clubId },
+            status: { not: PersonalBookingStatus.CANCELLED },
+            startAt: { gte: dayStart, lte: dayEnd },
+          },
+          select: {
+            client: { select: { externalId: true } },
+          },
+          take: 2000,
+        })
+        .catch(
+          () => [] as Array<{ client: { externalId: string | null } | null }>,
+        ),
+    ]);
+
+    for (const m of groupMembers) {
+      if (m.externalId) ids.add(m.externalId);
+    }
+    for (const s of spaRows) {
+      const ext = s.clientExternalId?.trim() || s.client?.externalId?.trim();
+      if (ext) ids.add(ext);
+    }
+    for (const p of ptRows) {
+      const ext = p.client?.externalId?.trim();
+      if (ext) ids.add(ext);
+    }
+    return ids;
   }
 
   private async getBirthdaySkippedQuiet(clubId: string) {
