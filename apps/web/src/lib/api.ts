@@ -3155,6 +3155,20 @@ export const api = {
       token,
     ),
 
+  bookingControlExcludeMember: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    body: {
+      sessionKey: string;
+      clientExternalId: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/exclude-member`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
   bookingControlTrainerSeen: (
     token: string,
     sessionKey: string,

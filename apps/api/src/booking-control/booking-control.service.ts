@@ -6,11 +6,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  AdminTaskStatus,
   AvailabilityBlockStatus,
   OnexClassKind,
   OnexClassMemberAttendance,
   OnexClassStatus,
   PersonalBookingStatus,
+  Prisma,
   Role,
   ServicePaymentStatus,
   ServicePerformanceStatus,
@@ -1777,6 +1779,200 @@ export class BookingControlService {
     });
 
     return this.detail(clubId, onexSessionKey(session.externalId));
+  }
+
+  /**
+   * Cancel one GROUP roster row in 1C (free the slot) without closing the class.
+   * Mirrors admin task «Исключить»; also drops the client from open BOOKING_CONFIRM.
+   */
+  async excludeGroupMember(
+    clubId: string,
+    sessionKey: string,
+    clientExternalId: string,
+  ): Promise<BookingControlDetail> {
+    const clientId = clientExternalId?.trim();
+    if (!clientId) {
+      throw new BadRequestException('Не указан клиент');
+    }
+
+    const parsed = parseSessionKey(sessionKey);
+    if (!parsed || parsed.source !== '1C') {
+      throw new BadRequestException(
+        'Исключение доступно только по занятию из 1С',
+      );
+    }
+
+    const session = await this.findOnexSessionForControl(
+      clubId,
+      parsed.id,
+      'wide',
+    );
+    if (!session) throw new NotFoundException('Занятие не найдено');
+    if (session.kind !== OnexClassKind.GROUP) {
+      throw new BadRequestException(
+        'Исключение доступно только для групповых занятий',
+      );
+    }
+    if (session.payrollLocked) {
+      throw new BadRequestException(
+        'Период ЗП закрыт — состав менять нельзя',
+      );
+    }
+
+    const member = session.members.find((m) => m.externalId === clientId);
+    if (!member) {
+      throw new NotFoundException('Клиент не в составе занятия');
+    }
+
+    const key = onexSessionKey(session.externalId);
+
+    if (!member.cancelled) {
+      const provider = this.fitness.getProvider();
+      if (!provider.cancelClassSessionMember) {
+        throw new BadRequestException(
+          'Провайдер 1С не поддерживает исключение из состава (нужен FitGO HTTP)',
+        );
+      }
+
+      try {
+        await provider.cancelClassSessionMember({
+          appointmentId: session.externalId,
+          clientExternalId: clientId,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new BadRequestException(
+          msg.includes('FitGO 1C') || msg.includes('1C')
+            ? msg
+            : `Не удалось исключить из 1С: ${msg}`,
+        );
+      }
+
+      await this.prisma.onexClassSessionMember.update({
+        where: { id: member.id },
+        data: {
+          cancelled: true,
+          attendance: OnexClassMemberAttendance.CANCELLED,
+        },
+      });
+
+      const members = await this.prisma.onexClassSessionMember.findMany({
+        where: { sessionId: session.id },
+      });
+      const arrivedCount = members.filter(
+        (m) =>
+          !m.cancelled &&
+          m.attendance === OnexClassMemberAttendance.ATTENDED,
+      ).length;
+      await this.prisma.onexClassSession.update({
+        where: { id: session.id },
+        data: { attendedCount: arrivedCount },
+      });
+    }
+
+    const approval = await this.findGroupApprovalRow(clubId, key, sessionKey);
+    if (approval) {
+      const prevSeen = this.parseSeenIds(approval.trainerSeenClientIds);
+      const seen = prevSeen.filter((id) => id !== clientId);
+      if (seen.length !== prevSeen.length) {
+        await this.prisma.groupClassApproval.update({
+          where: { id: approval.id },
+          data: { trainerSeenClientIds: seen },
+        });
+      }
+    }
+
+    await this.syncBookingConfirmAfterExclude(clubId, key, clientId);
+
+    return this.detail(clubId, key);
+  }
+
+  /** Drop client from open BOOKING_CONFIRM task for this session (reformer queue). */
+  private async syncBookingConfirmAfterExclude(
+    clubId: string,
+    sessionKey: string,
+    clientExternalId: string,
+  ) {
+    const open = await this.prisma.adminTask.findMany({
+      where: {
+        clubId,
+        source: 'BOOKING_CONFIRM',
+        status: {
+          in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS],
+        },
+      },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        completedAt: true,
+        meta: true,
+      },
+      take: 80,
+    });
+    const task = open.find((t) => {
+      const meta = (t.meta ?? {}) as Record<string, unknown>;
+      return (
+        typeof meta.sessionKey === 'string' &&
+        meta.sessionKey.trim() === sessionKey
+      );
+    });
+    if (!task) return;
+
+    const meta = (task.meta ?? {}) as Record<string, unknown>;
+    const clients = Array.isArray(meta.clients)
+      ? ([...meta.clients] as Array<Record<string, unknown>>)
+      : [];
+    if (!clients.some((c) => c.externalId === clientExternalId)) return;
+
+    const remaining = clients.filter((c) => c.externalId !== clientExternalId);
+    const allConfirmed =
+      remaining.length > 0 && remaining.every((c) => c.confirmed === true);
+    const noneLeft = remaining.length === 0;
+
+    let nextStatus: AdminTaskStatus = task.status;
+    let completedAt: Date | null = task.completedAt;
+    if (noneLeft) {
+      nextStatus = AdminTaskStatus.CANCELLED;
+      completedAt = new Date();
+    } else if (allConfirmed) {
+      nextStatus = AdminTaskStatus.DONE;
+      completedAt = new Date();
+    } else if (task.status === AdminTaskStatus.OPEN) {
+      nextStatus = AdminTaskStatus.IN_PROGRESS;
+    }
+
+    const nextMeta = {
+      ...meta,
+      clients: remaining,
+      phone:
+        remaining.find(
+          (c) =>
+            c.confirmed !== true &&
+            typeof c.phone === 'string' &&
+            String(c.phone).trim(),
+        )?.phone ??
+        remaining.find(
+          (c) => typeof c.phone === 'string' && String(c.phone).trim(),
+        )?.phone ??
+        null,
+    } as Prisma.InputJsonValue;
+
+    await this.prisma.adminTask.update({
+      where: { id: task.id },
+      data: {
+        meta: nextMeta,
+        status: nextStatus,
+        completedAt,
+        title:
+          noneLeft || !/подтвердить\s+\d+/i.test(task.title)
+            ? task.title
+            : task.title.replace(
+                /подтвердить\s+\d+/i,
+                `подтвердить ${remaining.length}`,
+              ),
+      },
+    });
   }
 
   /** Trainer checkmarks (FitGO-only). Changing after admin confirm clears admin approval. */

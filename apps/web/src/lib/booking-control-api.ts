@@ -76,6 +76,14 @@ export function createBookingControlApi(
         attendance,
       });
     },
+    excludeMember: async (sessionKey, clientExternalId) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlExcludeMember(token, base, {
+        sessionKey,
+        clientExternalId,
+      });
+    },
     approveGroup: async (sessionKey, comment) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');

@@ -163,6 +163,11 @@ export type BookingControlApi = {
     clientExternalId: string,
     attendance: 'ATTENDED' | 'NO_SHOW',
   ) => Promise<BookingControlDetail>;
+  /** Cancel GROUP roster row in 1C without closing the class. */
+  excludeMember?: (
+    sessionKey: string,
+    clientExternalId: string,
+  ) => Promise<BookingControlDetail>;
   /** Trainer: FitGO checkmarks for who was present (+ optional draft comment). */
   saveTrainerSeen?: (
     sessionKey: string,
@@ -1887,6 +1892,35 @@ export function BookingControlPanel({
       load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка записи явки');
+    } finally {
+      setAttendanceBusyId(null);
+    }
+  };
+
+  const excludeMember = async (
+    clientExternalId: string,
+    clientName: string,
+  ) => {
+    if (!selected || !api.excludeMember) return;
+    if (
+      !window.confirm(
+        `Убрать ${clientName} из записи? Место освободится, занятие не закроется.`,
+      )
+    ) {
+      return;
+    }
+    setAttendanceBusyId(clientExternalId);
+    setMessage('');
+    try {
+      const updated = await api.excludeMember(
+        selected.sessionKey,
+        clientExternalId,
+      );
+      applyDetail(updated);
+      setMessage(`Исключён: ${clientName}`);
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось исключить');
     } finally {
       setAttendanceBusyId(null);
     }
@@ -3922,7 +3956,7 @@ export function BookingControlPanel({
                             ) : null}
                           </span>
                           {canMarkAttendance &&
-                          api.setAttendance &&
+                          (api.setAttendance || api.excludeMember) &&
                           selected.kind === 'GROUP' &&
                           selected.source === '1C' &&
                           m.attendance !== 'CANCELLED' &&
@@ -3932,38 +3966,64 @@ export function BookingControlPanel({
                               role="group"
                               aria-label="Явка клиента"
                             >
-                              <button
-                                type="button"
-                                className={
-                                  m.attendance === 'ATTENDED'
-                                    ? 'bg-emerald-500/25 px-1.5 py-0.5 text-[11px] font-medium text-emerald-200'
-                                    : 'px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-300'
-                                }
-                                disabled={attendanceBusyId === m.externalId}
-                                aria-pressed={m.attendance === 'ATTENDED'}
-                                onClick={() => {
-                                  if (m.attendance === 'ATTENDED') return;
-                                  void markAttendance(m.externalId, 'ATTENDED');
-                                }}
-                              >
-                                Прибыл
-                              </button>
-                              <button
-                                type="button"
-                                className={
-                                  m.attendance === 'NO_SHOW'
-                                    ? 'border-l border-slate-700 bg-rose-500/25 px-1.5 py-0.5 text-[11px] font-medium text-rose-200'
-                                    : 'border-l border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-rose-500/10 hover:text-rose-300'
-                                }
-                                disabled={attendanceBusyId === m.externalId}
-                                aria-pressed={m.attendance === 'NO_SHOW'}
-                                onClick={() => {
-                                  if (m.attendance === 'NO_SHOW') return;
-                                  void markAttendance(m.externalId, 'NO_SHOW');
-                                }}
-                              >
-                                Не прибыл
-                              </button>
+                              {api.setAttendance ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className={
+                                      m.attendance === 'ATTENDED'
+                                        ? 'bg-emerald-500/25 px-1.5 py-0.5 text-[11px] font-medium text-emerald-200'
+                                        : 'px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-300'
+                                    }
+                                    disabled={attendanceBusyId === m.externalId}
+                                    aria-pressed={m.attendance === 'ATTENDED'}
+                                    onClick={() => {
+                                      if (m.attendance === 'ATTENDED') return;
+                                      void markAttendance(
+                                        m.externalId,
+                                        'ATTENDED',
+                                      );
+                                    }}
+                                  >
+                                    Прибыл
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={
+                                      m.attendance === 'NO_SHOW'
+                                        ? 'border-l border-slate-700 bg-rose-500/25 px-1.5 py-0.5 text-[11px] font-medium text-rose-200'
+                                        : 'border-l border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-rose-500/10 hover:text-rose-300'
+                                    }
+                                    disabled={attendanceBusyId === m.externalId}
+                                    aria-pressed={m.attendance === 'NO_SHOW'}
+                                    onClick={() => {
+                                      if (m.attendance === 'NO_SHOW') return;
+                                      void markAttendance(
+                                        m.externalId,
+                                        'NO_SHOW',
+                                      );
+                                    }}
+                                  >
+                                    Не прибыл
+                                  </button>
+                                </>
+                              ) : null}
+                              {api.excludeMember ? (
+                                <button
+                                  type="button"
+                                  className="border-l border-slate-700 px-1.5 py-0.5 text-[11px] text-slate-400 hover:bg-slate-700/60 hover:text-slate-200"
+                                  title="Исключить из занятия — запись отменится, занятие останется"
+                                  disabled={attendanceBusyId === m.externalId}
+                                  onClick={() => {
+                                    void excludeMember(
+                                      m.externalId,
+                                      m.clientName,
+                                    );
+                                  }}
+                                >
+                                  Иск.
+                                </button>
+                              ) : null}
                             </span>
                           ) : null}
                         </li>

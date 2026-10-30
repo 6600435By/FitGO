@@ -158,6 +158,23 @@ export class BookingControlController {
     );
   }
 
+  @Post('super-admin/booking-control/exclude-member')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  excludeMemberSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      sessionKey?: string;
+      clientExternalId?: string;
+    },
+  ) {
+    return this.bookingControl.excludeGroupMember(
+      requireClubId(user),
+      body.sessionKey ?? '',
+      body.clientExternalId ?? '',
+    );
+  }
+
   @Post('super-admin/booking-control/bulk-approve')
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   bulkApproveSuperAdmin(
@@ -350,6 +367,23 @@ export class BookingControlController {
       body.sessionKey ?? '',
       body.clientExternalId ?? '',
       body.attendance ?? 'ATTENDED',
+    );
+  }
+
+  @Post('admin/booking-control/exclude-member')
+  @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  excludeMemberAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      sessionKey?: string;
+      clientExternalId?: string;
+    },
+  ) {
+    return this.bookingControl.excludeGroupMember(
+      requireClubId(user),
+      body.sessionKey ?? '',
+      body.clientExternalId ?? '',
     );
   }
 
