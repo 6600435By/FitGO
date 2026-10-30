@@ -108,6 +108,12 @@ try {
   pnpm --filter @fitgo/api exec prisma db push --skip-generate --accept-data-loss
   pnpm --filter @fitgo/api build
   pnpm --filter @fitgo/web build
+  # Client LK (optional service FitGO-Client). Prefer Update-FitGO-Client.ps1 alone when only UI changes.
+  if (Test-Path (Join-Path $FitGoRoot 'apps\client-web\package.json')) {
+    $env:NEXT_PUBLIC_API_URL = ''
+    $env:FITGO_API_PROXY_TARGET = 'http://127.0.0.1:3001'
+    pnpm --filter @fitgo/client-web build
+  }
 } finally {
   Pop-Location
 }
@@ -117,4 +123,8 @@ Deploy-AppMaintenancePage -RepoRoot $FitGoRoot
 
 Start-Service FitGO-API
 Start-Service FitGO-Web
+if (Get-Service FitGO-Client -ErrorAction SilentlyContinue) {
+  Start-Service FitGO-Client
+}
 Write-Host 'Update done. Services restarted.' -ForegroundColor Green
+Write-Host 'Prefer Update-FitGO-Staff / Client / API for independent deploys.' -ForegroundColor Cyan

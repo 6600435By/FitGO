@@ -1,0 +1,33 @@
+<!--
+  Полоска под шапкой. Крестик прячет на 30 дней (localStorage).
+  Стили — как у кнопок сайта; без палитры FitGO.
+-->
+<div id="forma-lk-bar" style="display:none;background:#1a1a1a;color:#fff;font-size:14px;padding:10px 16px;">
+  <div style="max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px;justify-content:space-between;">
+    <span style="flex:1;min-width:180px;">Появилось приложение клуба — абонемент, запись и визиты с компьютера и телефона</span>
+    <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <a href="https://lk.ffs.by/login" style="background:#c4a574;color:#111;padding:8px 14px;text-decoration:none;border-radius:4px;font-weight:600;">Войти</a>
+      <a href="/prilozhenie/" style="color:#fff;text-decoration:underline;">Что умеет</a>
+      <button type="button" id="forma-lk-bar-close" aria-label="Закрыть" style="background:transparent;border:0;color:#aaa;font-size:20px;cursor:pointer;line-height:1;">×</button>
+    </span>
+  </div>
+</div>
+<script>
+(function () {
+  var KEY = 'forma_lk_bar_until';
+  var bar = document.getElementById('forma-lk-bar');
+  if (!bar) return;
+  try {
+    var until = parseInt(localStorage.getItem(KEY) || '0', 10);
+    if (until && Date.now() < until) return;
+  } catch (e) {}
+  bar.style.display = 'block';
+  var btn = document.getElementById('forma-lk-bar-close');
+  if (btn) btn.onclick = function () {
+    try {
+      localStorage.setItem(KEY, String(Date.now() + 30 * 24 * 60 * 60 * 1000));
+    } catch (e) {}
+    bar.style.display = 'none';
+  };
+})();
+</script>

@@ -30,8 +30,14 @@ export default function AdminAtRiskPage() {
 
     setSending(client.userId);
     try {
-      await api.adminSendReminder(token, client.userId);
-      setMessage(`Напоминание отправлено: ${client.name}`);
+      const result = await api.adminSendReminder(token, client.userId);
+      const via =
+        result.channel === 'sms'
+          ? 'SMS'
+          : result.channel === 'push'
+            ? 'приложение'
+            : 'кабинет';
+      setMessage(`Напоминание ${client.name}: ${via}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
     } finally {

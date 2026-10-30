@@ -337,6 +337,19 @@ export class SuperAdminController {
     });
   }
 
+  @Post('clients/:clientUserId/message')
+  sendClientMessage(
+    @CurrentUser() user: JwtPayload,
+    @Param('clientUserId') clientUserId: string,
+    @Body() body: { message: string },
+  ) {
+    return this.superAdmin.sendClientMessage(
+      user,
+      clientUserId,
+      body.message ?? '',
+    );
+  }
+
   @Get('club-profile')
   getClubProfile(@CurrentUser() user: JwtPayload) {
     return this.superAdmin.getClubProfile(user);

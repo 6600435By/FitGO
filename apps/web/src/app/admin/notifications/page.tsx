@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { api, type NotificationItem } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
+import { SendClientClubMessage } from '@/components/admin/send-client-club-message';
 import { PushSubscribeButton } from '@/components/push-subscribe-button';
 import { ChatInbox } from '@/components/chat/chat-inbox';
 
@@ -33,6 +34,7 @@ export default function AdminNotificationsPage() {
   const [filter, setFilter] = useState<MessageFilter>('all');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [smsClientId, setSmsClientId] = useState('');
 
   const load = useCallback(() => {
     const token = getToken();
@@ -107,12 +109,28 @@ export default function AdminNotificationsPage() {
       </div>
 
       {tab === 'clients' ? (
-        <ChatInbox
-          key="clients"
-          role="admin"
-          scope="clients"
-          allowStaffChat={false}
-        />
+        <div className="space-y-4">
+          <div className="card space-y-2">
+            <label className="text-sm text-slate-400">
+              ID клиента в FitGO (для SMS / push)
+            </label>
+            <input
+              className="input"
+              value={smsClientId}
+              onChange={(e) => setSmsClientId(e.target.value)}
+              placeholder="cuid клиента"
+            />
+          </div>
+          {smsClientId.trim() ? (
+            <SendClientClubMessage clientUserId={smsClientId.trim()} />
+          ) : null}
+          <ChatInbox
+            key="clients"
+            role="admin"
+            scope="clients"
+            allowStaffChat={false}
+          />
+        </div>
       ) : tab === 'trainers' ? (
         <ChatInbox
           key="trainers"

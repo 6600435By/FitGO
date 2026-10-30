@@ -6,14 +6,16 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { UserRole as SharedUserRole } from '@fitgo/shared-types';
 import * as bcrypt from 'bcryptjs';
-import { AccountStatus, Role } from '@prisma/client';
+import { AccountStatus, PhoneOtpPurpose, Role } from '@prisma/client';
 import { normalizePhone } from '../common/phone.util';
 import { AppPresenceService } from '../app-presence/app-presence.service';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { SmsService } from '../sms/sms.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 const ROLE_MAP: Record<Role, SharedUserRole> = {
   [Role.CLIENT]: SharedUserRole.CLIENT,
@@ -33,6 +35,7 @@ export class AuthService {
     private readonly roster: TrainerRosterService,
     private readonly clubMembership: ClubMembershipService,
     private readonly appPresence: AppPresenceService,
+    private readonly sms: SmsService,
   ) {}
 
   private formatUserResponse(user: {
@@ -41,6 +44,8 @@ export class AuthService {
     clubId: string | null;
     email: string;
     phone: string | null;
+    phoneVerifiedAt?: Date | null;
+    pwaInstalledAt?: Date | null;
     firstName: string;
     lastName: string;
     groupPrograms?: boolean;
@@ -62,6 +67,8 @@ export class AuthService {
       clubId: user.clubId ?? undefined,
       email: user.email,
       phone: user.phone ?? undefined,
+      phoneVerified: Boolean(user.phoneVerifiedAt),
+      pwaInstalled: Boolean(user.pwaInstalledAt),
       firstName: user.firstName,
       lastName: user.lastName,
       groupPrograms: Boolean(user.groupPrograms),
@@ -101,13 +108,24 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const login = dto.email.trim();
-    const user = await this.prisma.user.findFirst({
-      where: { email: { equals: login, mode: 'insensitive' } },
-      include: {
-        roles: true,
-        club: true,
-      },
-    });
+    const phoneGuess = normalizePhone(login);
+    const user =
+      (await this.prisma.user.findFirst({
+        where: { email: { equals: login, mode: 'insensitive' } },
+        include: {
+          roles: true,
+          club: true,
+        },
+      })) ??
+      (phoneGuess.length >= 11
+        ? await this.prisma.user.findFirst({
+            where: {
+              phoneNormalized: phoneGuess,
+              accountStatus: AccountStatus.ACTIVE,
+            },
+            include: { roles: true, club: true },
+          })
+        : null);
 
     if (!user) {
       throw new UnauthorizedException('Неверный логин или пароль');
@@ -157,11 +175,20 @@ export class AuthService {
     };
   }
 
+  async sendPhoneCode(phone: string, purpose: 'register' | 'reset_password') {
+    const otpPurpose =
+      purpose === 'reset_password'
+        ? PhoneOtpPurpose.RESET_PASSWORD
+        : PhoneOtpPurpose.REGISTER;
+    return this.sms.sendOtp(phone, otpPurpose);
+  }
+
   async register(dto: RegisterDto) {
-    const phoneNormalized = normalizePhone(dto.phone);
-    if (phoneNormalized.length < 9) {
-      throw new ConflictException('Некорректный номер телефона');
-    }
+    const { phoneNormalized } = await this.sms.verifyOtp(
+      dto.phone,
+      PhoneOtpPurpose.REGISTER,
+      dto.verificationCode,
+    );
 
     const emailTaken = await this.prisma.user.findUnique({
       where: { email: dto.email },
@@ -185,6 +212,14 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
     const now = new Date();
+    const consent = {
+      phoneVerifiedAt: now,
+      privacyConsentVersion: dto.privacyConsentVersion.trim(),
+      privacyConsentAt: now,
+      termsConsentVersion: dto.termsConsentVersion.trim(),
+      termsConsentAt: now,
+      marketingConsentAt: dto.marketingConsent ? now : null,
+    };
 
     let userId: string;
 
@@ -204,6 +239,7 @@ export class AuthService {
           phoneNormalized,
           accountStatus: AccountStatus.ACTIVE,
           activatedAt: now,
+          ...consent,
         },
         include: { roles: true, club: true },
       });
@@ -248,6 +284,7 @@ export class AuthService {
         phoneNormalized,
         accountStatus: AccountStatus.ACTIVE,
         activatedAt: now,
+        ...consent,
         roles: { create: { role: Role.CLIENT } },
         notificationPrefs: { create: {} },
       },
@@ -275,6 +312,46 @@ export class AuthService {
       user: this.formatUserResponse(user),
       pendingTrainers,
     };
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    const { phoneNormalized } = await this.sms.verifyOtp(
+      dto.phone,
+      PhoneOtpPurpose.RESET_PASSWORD,
+      dto.verificationCode,
+    );
+
+    const user = await this.prisma.user.findFirst({
+      where: {
+        phoneNormalized,
+        accountStatus: AccountStatus.ACTIVE,
+        roles: { some: { role: Role.CLIENT } },
+      },
+    });
+    if (!user) {
+      throw new UnauthorizedException('Клиент с таким номером не найден');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: passwordHash,
+        phoneVerifiedAt: user.phoneVerifiedAt ?? new Date(),
+      },
+    });
+
+    return { ok: true as const };
+  }
+
+  async markPwaInstalled(userId: string, installed: boolean) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        pwaInstalledAt: installed ? new Date() : null,
+      },
+    });
+    return { ok: true as const, pwaInstalled: installed };
   }
 
   async getProfile(userId: string) {

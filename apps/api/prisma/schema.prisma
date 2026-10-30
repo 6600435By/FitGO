@@ -612,6 +612,17 @@ model User {
   password   String
   phone      String?
   phoneNormalized String? @unique
+  /// Set after RocketSMS (or desk) OTP succeeds. CRM link by phone requires this.
+  phoneVerifiedAt DateTime?
+  /// Client reported PWA standalone / add-to-home-screen.
+  pwaInstalledAt  DateTime?
+  privacyConsentVersion String?
+  privacyConsentAt      DateTime?
+  termsConsentVersion   String?
+  termsConsentAt        DateTime?
+  marketingConsentAt    DateTime?
+  /// Client opted out of club service SMS (not OTP).
+  smsClubOptOutAt       DateTime?
   accountStatus   AccountStatus @default(ACTIVE)
   createdByTrainerId String?
   activatedAt     DateTime?
@@ -3125,4 +3136,43 @@ model MembershipEconomicsSettings {
   updatedBy String?
 
   club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+}
+
+enum PhoneOtpPurpose {
+  REGISTER
+  RESET_PASSWORD
+}
+
+/// Short-lived SMS OTP (store hash only).
+model PhoneVerificationCode {
+  id              String          @id @default(cuid())
+  phoneNormalized String
+  codeHash        String
+  purpose         PhoneOtpPurpose
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  attempts        Int             @default(0)
+  createdAt       DateTime        @default(now())
+
+  @@index([phoneNormalized, purpose, createdAt])
+}
+
+enum SmsPurpose {
+  OTP
+  CLUB_MESSAGE
+}
+
+/// Outbound SMS audit (never store OTP plaintext).
+model SmsMessageLog {
+  id              String     @id @default(cuid())
+  phoneNormalized String
+  purpose         SmsPurpose
+  providerId      String?
+  status          String?
+  error           String?
+  userId          String?
+  createdAt       DateTime   @default(now())
+
+  @@index([phoneNormalized, createdAt])
+  @@index([userId, createdAt])
 }

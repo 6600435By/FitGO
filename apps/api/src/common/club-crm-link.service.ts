@@ -58,6 +58,17 @@ export class ClubCrmLinkService {
       };
     }
 
+    if (!membership.user.phoneVerifiedAt) {
+      const updated = await this.prisma.userClubMembership.update({
+        where: { id: membership.id },
+        data: {
+          crmStatus: ClubCrmLinkStatus.PENDING_CRM,
+          lastCrmSyncAt: new Date(),
+        },
+      });
+      return { crmStatus: updated.crmStatus };
+    }
+
     const phone =
       membership.user.phoneNormalized ??
       (membership.user.phone ? normalizePhone(membership.user.phone) : '');

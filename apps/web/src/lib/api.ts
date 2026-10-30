@@ -1757,7 +1757,35 @@ export const api = {
     }>>('/admin/clubs', {}, token),
 
   adminSendReminder: (token: string, clientUserId: string, message?: string) =>
-    request(`/admin/remind/${clientUserId}`, {
+    request<{
+      notification?: unknown;
+      channel?: 'push' | 'sms' | 'in_app';
+      sms?: {
+        sent?: boolean;
+        providerId?: string;
+        error?: string;
+        skipped?: string;
+      } | null;
+    }>(`/admin/remind/${clientUserId}`, {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    }, token),
+
+  superAdminSendClientMessage: (
+    token: string,
+    clientUserId: string,
+    message: string,
+  ) =>
+    request<{
+      notification?: unknown;
+      channel?: 'push' | 'sms' | 'in_app';
+      sms?: {
+        sent?: boolean;
+        providerId?: string;
+        error?: string;
+        skipped?: string;
+      } | null;
+    }>(`/super-admin/clients/${clientUserId}/message`, {
       method: 'POST',
       body: JSON.stringify({ message }),
     }, token),

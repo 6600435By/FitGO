@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="FITGO">
+  <rect width="512" height="512" rx="112" fill="#0f172a"/>
+  <!-- Geometric F with green accent on upper bar; ~18% safe padding -->
+  <g fill="none" stroke-linecap="square" stroke-linejoin="miter">
+    <path stroke="#ffffff" stroke-width="56" d="M176 140 V372"/>
+    <path stroke="#ffffff" stroke-width="56" d="M176 140 H336"/>
+    <path stroke="#ffffff" stroke-width="56" d="M176 256 H292"/>
+    <path stroke="#14b88a" stroke-width="56" d="M336 140 H372"/>
+  </g>
+</svg>

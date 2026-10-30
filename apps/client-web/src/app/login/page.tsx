@@ -1,0 +1,119 @@
+'use client';
+
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { FormEvent, useEffect, useState } from 'react';
+import { UserRole } from '@fitgo/shared-types';
+import { PasswordField } from '@/components/ui/password-field';
+import { api } from '@/lib/api';
+import { clearAuth, getHomePath, isClientUser, saveAuth } from '@/lib/auth';
+
+export default function LoginPage() {
+  const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('fitgo_session_expired') === '1') {
+        sessionStorage.removeItem('fitgo_session_expired');
+        setError('Сессия истекла после обновления сервера. Войдите снова.');
+      }
+    } catch {
+      /* private mode */
+    }
+  }, []);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      const result = await api.login(email, password);
+      if (!isClientUser(result.user.roles)) {
+        clearAuth();
+        setError(
+          'Это вход для клиентов. Рабочий кабинет сотрудников — app.ffs.by',
+        );
+        return;
+      }
+      // Prefer CLIENT home even if user also has staff roles
+      saveAuth(result.accessToken, {
+        ...result.user,
+        roles: result.user.roles.includes(UserRole.CLIENT)
+          ? result.user.roles
+          : [...result.user.roles, UserRole.CLIENT],
+      });
+      router.push(getHomePath());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка входа');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center px-4">
+      <div className="w-full max-w-md">
+        <div className="mb-8 text-center">
+          <p className="text-sm uppercase tracking-[0.3em] text-fitgo-400">
+            Forma
+          </p>
+          <h1 className="mt-2 text-3xl font-bold">Личный кабинет</h1>
+          <p className="mt-2 text-slate-400">
+            Абонемент, запись и визиты — с компьютера и телефона
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="card space-y-4">
+          <div>
+            <label className="mb-2 block text-sm text-slate-400">
+              Телефон или email
+            </label>
+            <input
+              type="text"
+              autoComplete="username"
+              className="input"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
+          <div>
+            <label className="mb-2 block text-sm text-slate-400">Пароль</label>
+            <PasswordField
+              className="input"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+
+          {error && (
+            <p className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-400">
+              {error}
+            </p>
+          )}
+
+          <button type="submit" className="btn-primary w-full" disabled={loading}>
+            {loading ? 'Вход...' : 'Войти'}
+          </button>
+
+          <p className="text-center text-sm text-slate-400">
+            Нет аккаунта?{' '}
+            <Link href="/register" className="text-fitgo-400">
+              Регистрация
+            </Link>
+            {' · '}
+            <Link href="/reset-password" className="text-fitgo-400">
+              Забыли пароль
+            </Link>
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}

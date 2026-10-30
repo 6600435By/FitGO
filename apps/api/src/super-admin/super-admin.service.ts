@@ -50,6 +50,7 @@ import {
   isValidStaffAppPassword,
 } from '../auth/staff-app-password';
 import { allocateStaffLogin, isCodeStubEmail } from '../auth/staff-login';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PayrollService } from '../payroll/payroll.service';
 
 const STAFF_ROLES: Role[] = [
@@ -115,6 +116,7 @@ export class SuperAdminService implements OnModuleInit {
     private readonly adminPermissions: AdminPermissionsService,
     private readonly tasksScheduler: AdminTasksSchedulerService,
     private readonly payroll: PayrollService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async onModuleInit() {
@@ -1579,6 +1581,29 @@ export class SuperAdminService implements OnModuleInit {
       reworkComment: undefined as string | undefined,
       reworkAt: undefined as string | undefined,
     };
+  }
+
+  async sendClientMessage(
+    user: JwtPayload,
+    clientUserId: string,
+    message: string,
+  ) {
+    const clubId = requireClubId(user);
+    const text = message.trim();
+    if (!text) throw new BadRequestException('Пустое сообщение');
+    const client = await this.prisma.user.findFirst({
+      where: {
+        id: clientUserId,
+        clubId,
+        roles: { some: { role: Role.CLIENT } },
+      },
+    });
+    if (!client) throw new NotFoundException('Клиент не найден');
+    return this.notifications.sendReminderToClient(
+      clientUserId,
+      text,
+      user.sub,
+    );
   }
 
   async getClubProfile(user: JwtPayload) {

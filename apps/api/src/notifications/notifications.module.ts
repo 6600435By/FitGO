@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { FitnessModule } from '../fitness/fitness.module';
+import { SmsModule } from '../sms/sms.module';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 
 @Module({
-  imports: [FitnessModule],
+  imports: [FitnessModule, SmsModule],
   controllers: [NotificationsController],
   providers: [NotificationsService],
   exports: [NotificationsService],

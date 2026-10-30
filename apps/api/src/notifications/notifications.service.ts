@@ -8,6 +8,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { SmsService } from '../sms/sms.service';
 
 @Injectable()
 export class NotificationsService implements OnModuleInit {
@@ -19,6 +20,7 @@ export class NotificationsService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
     private readonly config: ConfigService,
+    private readonly sms: SmsService,
   ) {}
 
   onModuleInit() {
@@ -695,8 +697,50 @@ export class NotificationsService implements OnModuleInit {
     });
   }
 
-  async sendReminderToClient(userId: string, message: string) {
-    return this.sendDirectMessage(userId, 'Сообщение от клуба', message);
+  /**
+   * Club → client: always in-app notification; push if PWA/push sub; else SMS.
+   */
+  async sendReminderToClient(userId: string, message: string, senderId?: string) {
+    const client = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        phoneNormalized: true,
+        phone: true,
+        pwaInstalledAt: true,
+        pushSubscriptions: { select: { id: true }, take: 1 },
+      },
+    });
+    if (!client) throw new NotFoundException('Клиент не найден');
+
+    const notification = await this.sendDirectMessage(
+      userId,
+      'Сообщение от клуба',
+      message,
+      senderId,
+    );
+
+    const hasPush =
+      Boolean(client.pwaInstalledAt) || client.pushSubscriptions.length > 0;
+
+    if (hasPush) {
+      return {
+        notification,
+        channel: 'push' as const,
+        sms: null,
+      };
+    }
+
+    const sms = await this.sms.sendClubMessageSms({
+      phoneNormalized: client.phoneNormalized ?? client.phone,
+      userId,
+      body: message,
+    });
+    return {
+      notification,
+      channel: sms.sent ? ('sms' as const) : ('in_app' as const),
+      sms,
+    };
   }
 
   async sendRatingDecayReminder(userId: string, dayOfMonth: number) {

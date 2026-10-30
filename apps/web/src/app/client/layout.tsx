@@ -6,10 +6,13 @@ import { useMemo } from 'react';
 import { AuthGuard } from '@/components/auth-guard';
 import { AppShell } from '@/components/app-shell';
 import { ClientOnboarding } from '@/components/client-onboarding';
+import { ClientChannelRedirect } from '@/app/client/client-channel-redirect';
 import { useFeatures } from '@/components/features-provider';
 import { ProfileGate } from '@/components/profile-gate';
 import { PushBridge } from '@/components/push-bridge';
 import { useClubTheme } from '@/components/club-theme-provider';
+
+const CLIENT_WEB_URL = process.env.NEXT_PUBLIC_CLIENT_WEB_URL;
 
 const ALL_NAV: Array<{
   href: string;
@@ -43,6 +46,10 @@ export default function ClientLayout({ children }: { children: ReactNode }) {
     () => ALL_NAV.filter((item) => !item.module || isEnabled(item.module)),
     [isEnabled],
   );
+
+  if (CLIENT_WEB_URL) {
+    return <ClientChannelRedirect />;
+  }
 
   return (
     <AuthGuard allowedRoles={[UserRole.CLIENT]}>

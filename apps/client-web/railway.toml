@@ -1,0 +1,10 @@
+[build]
+builder = "NIXPACKS"
+buildCommand = "cd ../.. && pnpm install && pnpm --filter @fitgo/shared-types build && pnpm --filter @fitgo/web build"
+
+[deploy]
+startCommand = "cd ../.. && pnpm --filter @fitgo/web start"
+restartPolicyType = "ON_FAILURE"
+
+[watch]
+paths = ["apps/web/**", "packages/shared-types/**", "pnpm-lock.yaml"]

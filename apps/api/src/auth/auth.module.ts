@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AppPresenceModule } from '../app-presence/app-presence.module';
+import { SmsModule } from '../sms/sms.module';
 import { TrainerRosterModule } from '../trainer-roster/trainer-roster.module';
 import { AdminPermissionsService } from './admin-permissions.service';
 import { AuthController } from './auth.controller';
@@ -14,6 +15,7 @@ import { JwtStrategy } from './jwt.strategy';
   imports: [
     TrainerRosterModule,
     AppPresenceModule,
+    SmsModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       inject: [ConfigService],

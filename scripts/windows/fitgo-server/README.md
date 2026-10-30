@@ -65,19 +65,24 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 .\Update-FitGO.ps1 -SkipPull
 ```
 
-## Публичный доступ без VPS (`app.ffs.by`)
+## Публичный доступ без VPS (`app.ffs.by` + `lk.ffs.by`)
 
-Сотрудники с телефона: `https://app.ffs.by` (hoster WordPress 2 → PHP-прокси → Apache NameVirtualHost `app.ffs.by` на `:8445` → Next `:3000`).
+Сотрудники: `https://app.ffs.by` → Next `:3000`.  
+Клиенты: `https://lk.ffs.by` → Next client-web `:3002` (NSSM `FitGO-Client`).
 
-- Шаблон Apache: [apache-fitgo-proxy.conf.template](./apache-fitgo-proxy.conf.template) → `C:\Apache24\conf\extra\fitgo-app-8445.conf`
-- PHP на hoster: [deploy/hoster-wp-proxy/](../../../deploy/hoster-wp-proxy/)
-- Полная инструкция: [DEPLOY_WP_PROXY.md](../../../docs/DEPLOY_WP_PROXY.md)
+- Staff Apache: [apache-fitgo-proxy.conf.template](./apache-fitgo-proxy.conf.template)
+- Client Apache: [apache-fitgo-lk-proxy.conf.template](./apache-fitgo-lk-proxy.conf.template)
+- Hoster staff: [deploy/hoster-wp-proxy/](../../../deploy/hoster-wp-proxy/)
+- Hoster client: [deploy/hoster-wp-proxy-lk/](../../../deploy/hoster-wp-proxy-lk/)
+- Инструкции: [DEPLOY_WP_PROXY.md](../../../docs/DEPLOY_WP_PROXY.md), [DEPLOY_CLIENT_LK.md](../../../docs/DEPLOY_CLIENT_LK.md)
+
+Независимые обновления: `Update-FitGO-Staff.ps1`, `Update-FitGO-Client.ps1`, `Update-FitGO-API.ps1`.
 
 Админам в клубе без интернета: `http://192.168.1.20:3000` (сессия отдельная от `app.ffs.by`).
 
 Web build: пустой `NEXT_PUBLIC_API_URL`, `FITGO_API_PROXY_TARGET=http://127.0.0.1:3001` (ставит Install-FitGO).
 
-В `CORS_ORIGIN` добавьте `https://app.ffs.by` (и при необходимости URL specialist-web) через запятую.
+В `CORS_ORIGIN` добавьте `https://app.ffs.by`, `https://lk.ffs.by` (и specialist-web при необходимости).
 
 ## Бэкапы и восстановление
 

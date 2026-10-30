@@ -1,0 +1,30 @@
+# Client LK — NameVirtualHost lk.ffs.by → Next client-web :3002
+#
+# Parallel to fitgo-app-444.conf (staff app.ffs.by → :3000).
+# Hoster: separate site lk.ffs.by with deploy/hoster-wp-proxy-lk/
+#   FITGO_UPSTREAM_HOST=lk.ffs.by
+#
+# Install:
+#   1. Save as C:\Apache24\conf\extra\fitgo-lk-444.conf
+#   2. Include after fitgo-app-444.conf in httpd.conf
+#   3. httpd.exe -t && Restart-Service Apache2.4
+#   4. NSSM service FitGO-Client on port 3002 (see Update-FitGO-Client.ps1)
+
+<VirtualHost *:444>
+  ServerName lk.ffs.by
+  SSLEngine on
+  SSLCertificateFile "${SRVROOT}/conf/ssl/server.crt"
+  SSLCertificateKeyFile "${SRVROOT}/conf/ssl/server.key"
+  DocumentRoot "${SRVROOT}/htdocs"
+  ProxyPreserveHost On
+  ProxyTimeout 180
+  ProxyPass        /forma !
+  ProxyPass        /fitgo !
+  Alias            /app-maintenance.html "${SRVROOT}/htdocs/app-maintenance.html"
+  ProxyPass        /app-maintenance.html !
+  ProxyErrorOverride On
+  ErrorDocument 502 /app-maintenance.html
+  ErrorDocument 503 /app-maintenance.html
+  ProxyPass        /  http://127.0.0.1:3002/
+  ProxyPassReverse /  http://127.0.0.1:3002/
+</VirtualHost>

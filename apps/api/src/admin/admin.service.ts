@@ -740,7 +740,11 @@ export class AdminService {
     const text =
       message?.trim() ||
       'Мы заметили, что вы давно не были в клубе. Запишитесь на тренировку!';
-    return this.notifications.sendReminderToClient(clientUserId, text);
+    return this.notifications.sendReminderToClient(
+      clientUserId,
+      text,
+      user.sub,
+    );
   }
 
   async createDailyReport(user: JwtPayload, dto: CreateDailyReportDto) {
