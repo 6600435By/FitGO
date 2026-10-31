@@ -25,7 +25,12 @@ function Resolve-GitExe {
 if (-not $SkipBackup) {
   $backupScript = Join-Path $PSScriptRoot 'Backup-FitGO.ps1'
   if (Test-Path $backupScript) {
-    $backupArgs = @{ FitGoRoot = $FitGoRoot }
+    # Backup-FitGO.ps1 takes InstallRoot (C:\FitGO), not FitGoRoot (C:\FitGO\FitGO)
+    $installRoot = Split-Path -Parent $FitGoRoot
+    $backupArgs = @{
+      InstallRoot = $installRoot
+      Mode = 'Backup'
+    }
     if ($OffsitePath) { $backupArgs['OffsitePath'] = $OffsitePath }
     & $backupScript @backupArgs
   }
