@@ -7,10 +7,14 @@ import {
   endOfMonth,
   endOfWeek,
   format,
+  getMonth,
+  getYear,
   isSameDay,
   isSameMonth,
   isToday,
   parseISO,
+  setMonth,
+  setYear,
   startOfMonth,
   startOfWeek,
 } from 'date-fns';
@@ -30,7 +34,19 @@ export type DateFieldProps = {
   disabled?: boolean;
   required?: boolean;
   align?: 'left' | 'right';
+  /**
+   * When value is empty, open calendar on this year (e.g. 1995 for birth date).
+   * Month defaults to January unless `initialMonth` is set (0–11).
+   */
+  initialYear?: number;
+  /** 0–11; used with `initialYear` when value is empty. */
+  initialMonth?: number;
 };
+
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, i) => ({
+  value: i,
+  label: format(new Date(2020, i, 1), 'LLLL', { locale: ru }),
+}));
 
 function toIsoDate(d: Date): string {
   return format(d, 'yyyy-MM-dd');
@@ -118,6 +134,19 @@ export function TimeField({
   );
 }
 
+function defaultCursor(
+  value: string,
+  initialYear?: number,
+  initialMonth?: number,
+): Date {
+  if (value) return startOfMonth(parseISO(value));
+  if (initialYear != null) {
+    const m = initialMonth ?? 0;
+    return startOfMonth(new Date(initialYear, m, 1));
+  }
+  return startOfMonth(new Date());
+}
+
 /** FitGO date picker — etalon from Super Admin «Нестыковки» → Свой. */
 export function DateField({
   label,
@@ -130,16 +159,20 @@ export function DateField({
   disabled,
   required,
   align = 'left',
+  initialYear,
+  initialMonth,
 }: DateFieldProps) {
   const id = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const selected = value ? parseISO(value) : new Date();
-  const [cursor, setCursor] = useState(startOfMonth(selected));
+  const [cursor, setCursor] = useState(() =>
+    defaultCursor(value, initialYear, initialMonth),
+  );
 
   useEffect(() => {
-    if (open) setCursor(startOfMonth(selected));
-  }, [open, value]);
+    if (open) setCursor(defaultCursor(value, initialYear, initialMonth));
+  }, [open, value, initialYear, initialMonth]);
 
   useEffect(() => {
     if (!open) return;
@@ -156,6 +189,13 @@ export function DateField({
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
+
+  const yearMin = min ? getYear(parseISO(min)) : 1920;
+  const yearMax = max ? getYear(parseISO(max)) : getYear(new Date()) + 5;
+  const years = Array.from(
+    { length: Math.max(0, yearMax - yearMin) + 1 },
+    (_, i) => yearMax - i,
+  );
 
   const monthStart = startOfMonth(cursor);
   const days = eachDayOfInterval({
@@ -219,7 +259,7 @@ export function DateField({
             align === 'right' ? 'right-0' : 'left-0'
           }`}
         >
-          <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="mb-2 flex items-center justify-between gap-1.5">
             <button
               type="button"
               className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-100"
@@ -228,8 +268,35 @@ export function DateField({
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <div className="text-sm font-medium capitalize text-slate-100">
-              {format(cursor, 'LLLL yyyy', { locale: ru })}
+            <div className="flex min-w-0 flex-1 items-center gap-1">
+              <select
+                aria-label="Месяц"
+                className="input h-8 min-w-0 flex-1 px-1.5 py-0 text-xs capitalize"
+                value={getMonth(cursor)}
+                onChange={(e) =>
+                  setCursor((c) => setMonth(c, Number(e.target.value)))
+                }
+              >
+                {MONTH_OPTIONS.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Год"
+                className="input h-8 w-[4.75rem] shrink-0 px-1.5 py-0 text-xs tabular-nums"
+                value={getYear(cursor)}
+                onChange={(e) =>
+                  setCursor((c) => setYear(c, Number(e.target.value)))
+                }
+              >
+                {years.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
             </div>
             <button
               type="button"

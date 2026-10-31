@@ -1,14 +1,22 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   CLIENT_PRIMARY_GOAL_LABELS,
   type ClientPrimaryGoal,
 } from '@fitgo/shared-types';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
+
+function todayIso() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 export default function ProfileCompletePage() {
   const router = useRouter();
@@ -24,6 +32,42 @@ export default function ProfileCompletePage() {
   const [weightKg, setWeightKg] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    const token = getToken();
+    const cached = getUser();
+    if (cached) {
+      setForm((prev) => ({
+        ...prev,
+        firstName: prev.firstName || cached.firstName || '',
+        lastName: prev.lastName || cached.lastName || '',
+        phone: prev.phone || cached.phone || '',
+      }));
+    }
+    if (!token) {
+      setHydrated(true);
+      return;
+    }
+    api
+      .clientProfile(token)
+      .then((profile) => {
+        setForm((prev) => ({
+          firstName: profile.firstName || prev.firstName || '',
+          lastName: profile.lastName || prev.lastName || '',
+          phone: profile.phone || prev.phone || '',
+          gender: profile.gender || prev.gender || 'MALE',
+          dateOfBirth: profile.dateOfBirth || prev.dateOfBirth || '',
+        }));
+        if (profile.profileCompletedAt) {
+          router.replace('/client');
+        }
+      })
+      .catch(() => {
+        /* keep session prefill */
+      })
+      .finally(() => setHydrated(true));
+  }, [router]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,6 +98,14 @@ export default function ProfileCompletePage() {
       setLoading(false);
     }
   };
+
+  if (!hydrated) {
+    return (
+      <div className="flex justify-center py-12">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-lg space-y-4">
@@ -110,6 +162,9 @@ export default function ProfileCompletePage() {
           required
           value={form.dateOfBirth}
           onChange={(v) => setForm({ ...form, dateOfBirth: v })}
+          max={todayIso()}
+          min="1920-01-01"
+          initialYear={1995}
         />
 
         <div>

@@ -89,8 +89,7 @@ export class ClientProfileService {
     };
   }
 
-  async updateProfile(userId: string, clubId: string, dto: UpdateClientProfileDto) {
-    void clubId;
+  async updateProfile(userId: string, dto: UpdateClientProfileDto) {
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: {
@@ -98,7 +97,8 @@ export class ClientProfileService {
         lastName: dto.lastName.trim(),
         phone: dto.phone.trim(),
         gender: dto.gender,
-        dateOfBirth: new Date(dto.dateOfBirth),
+        // Date-only string → noon UTC avoids TZ day-shift on @db.Date
+        dateOfBirth: new Date(`${dto.dateOfBirth.slice(0, 10)}T12:00:00.000Z`),
         profileCompletedAt: new Date(),
       },
       select: {

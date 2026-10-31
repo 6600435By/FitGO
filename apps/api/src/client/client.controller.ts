@@ -44,7 +44,8 @@ export class ClientController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateClientProfileDto,
   ) {
-    return this.profileService.updateProfile(user.sub, requireClubId(user), dto);
+    // Profile complete runs before club join — do not require clubId.
+    return this.profileService.updateProfile(user.sub, dto);
   }
 
   @Get('profile/training')
