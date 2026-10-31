@@ -52,7 +52,7 @@ export function ProfileGate({ children }: { children: ReactNode }) {
   if (error) {
     return (
       <div className="card space-y-3 text-center">
-        <p className="text-red-400">{error}</p>
+        <p className="text-rose-400">{error}</p>
         <button type="button" onClick={checkProfile} className="btn-secondary">
           Повторить
         </button>
@@ -63,7 +63,7 @@ export function ProfileGate({ children }: { children: ReactNode }) {
   if (!ready) {
     return (
       <div className="flex justify-center py-12">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-forma-500 border-t-transparent" />
       </div>
     );
   }

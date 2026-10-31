@@ -2,35 +2,85 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { FormEvent, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import confetti from 'canvas-confetti';
+import { Check } from 'lucide-react';
 import { TrainerOnboarding } from '@/components/client/trainer-onboarding';
+import {
+  AuthError,
+  AuthShell,
+  AuthStepBar,
+  FieldLabel,
+} from '@/components/forma/auth-shell';
+import { Button } from '@/components/forma/button';
+import { OtpInput } from '@/components/forma/otp-input';
+import { PasswordStrength } from '@/components/forma/password-strength';
 import { PasswordField } from '@/components/ui/password-field';
 import { api } from '@/lib/api';
 import { getHomePath, saveAuth } from '@/lib/auth';
+import { markWelcomeSeen } from '@/lib/welcome';
+import { cn } from '@/lib/utils';
 
 /** Bump when legal texts on ffs.by change. */
 const PRIVACY_VERSION = '2026-04-01';
 const TERMS_VERSION = '2026-04-01';
 
+const STEP_ORDER = [
+  'phone',
+  'code',
+  'name',
+  'credentials',
+  'consents',
+] as const;
+
+type FormStep = (typeof STEP_ORDER)[number];
+type WizardStep = FormStep | 'success' | 'trainers';
+
 export default function RegisterPage() {
   const router = useRouter();
-  const [step, setStep] = useState<'form' | 'trainers'>('form');
+  const [step, setStep] = useState<WizardStep>('phone');
   const [token, setToken] = useState('');
   const [pendingTrainers, setPendingTrainers] = useState<
     Awaited<ReturnType<typeof api.register>>['pendingTrainers']
   >([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [codeSent, setCodeSent] = useState(false);
   const [codeLoading, setCodeLoading] = useState(false);
+  const [resendIn, setResendIn] = useState(0);
+
   const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [privacy, setPrivacy] = useState(false);
+  const [terms, setTerms] = useState(false);
+  const [marketing, setMarketing] = useState(false);
+
+  useEffect(() => {
+    markWelcomeSeen();
+  }, []);
+
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const id = window.setTimeout(() => setResendIn((v) => v - 1), 1000);
+    return () => window.clearTimeout(id);
+  }, [resendIn]);
+
+  const stepIndex = Math.max(
+    1,
+    STEP_ORDER.indexOf(step as FormStep) + 1,
+  );
 
   const sendCode = async () => {
     setError('');
     setCodeLoading(true);
     try {
       await api.sendPhoneCode(phone, 'register');
-      setCodeSent(true);
+      setResendIn(60);
+      setStep('code');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось отправить код');
     } finally {
@@ -38,42 +88,45 @@ export default function RegisterPage() {
     }
   };
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-
-    const form = new FormData(e.currentTarget);
-    const privacy = form.get('privacy') === 'on';
-    const terms = form.get('terms') === 'on';
+  const submitRegister = async () => {
     if (!privacy || !terms) {
       setError('Нужно принять политику и пользовательское соглашение');
-      setLoading(false);
       return;
     }
-
+    setError('');
+    setLoading(true);
     try {
       const result = await api.register({
-        email: String(form.get('email')),
-        password: String(form.get('password')),
-        firstName: String(form.get('firstName')),
-        lastName: String(form.get('lastName')),
-        phone: String(form.get('phone')),
-        verificationCode: String(form.get('verificationCode')),
+        email,
+        password,
+        firstName,
+        lastName,
+        phone,
+        verificationCode: code,
         privacyConsentVersion: PRIVACY_VERSION,
         termsConsentVersion: TERMS_VERSION,
-        marketingConsent: form.get('marketing') === 'on',
+        marketingConsent: marketing,
       });
 
       saveAuth(result.accessToken, result.user);
       setToken(result.accessToken);
+      setPendingTrainers(result.pendingTrainers);
+      setStep('success');
 
-      if (result.pendingTrainers.length > 0) {
-        setPendingTrainers(result.pendingTrainers);
-        setStep('trainers');
-      } else {
-        router.push(getHomePath());
-      }
+      void confetti({
+        particleCount: 90,
+        spread: 70,
+        origin: { y: 0.65 },
+        colors: ['#FFD000', '#FFFFFF', '#FFE685'],
+      });
+
+      window.setTimeout(() => {
+        if (result.pendingTrainers.length > 0) {
+          setStep('trainers');
+        } else {
+          router.push(getHomePath());
+        }
+      }, 1600);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка регистрации');
     } finally {
@@ -91,112 +144,298 @@ export default function RegisterPage() {
     );
   }
 
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center px-4 py-8">
-      <div className="w-full max-w-md">
-        <div className="mb-8 text-center">
-          <p className="text-sm uppercase tracking-[0.3em] text-fitgo-400">
-            Forma
-          </p>
-          <h1 className="mt-2 text-3xl font-bold">Регистрация</h1>
-          <p className="mt-2 text-slate-400">
-            Код придёт SMS на номер из карточки клуба
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="card space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="mb-2 block text-sm text-slate-400">Имя</label>
-              <input name="firstName" className="input" required />
-            </div>
-            <div>
-              <label className="mb-2 block text-sm text-slate-400">Фамилия</label>
-              <input name="lastName" className="input" required />
-            </div>
-          </div>
-          <div>
-            <label className="mb-2 block text-sm text-slate-400">Телефон</label>
-            <input
-              name="phone"
-              className="input"
-              value={phone}
-              onChange={(e) => {
-                setPhone(e.target.value);
-                setCodeSent(false);
-              }}
-              placeholder="+375…"
-              required
-            />
-          </div>
-          <button
-            type="button"
-            className="btn-secondary w-full"
-            disabled={codeLoading || phone.trim().length < 9}
-            onClick={() => void sendCode()}
+  if (step === 'success') {
+    return (
+      <AuthShell>
+        <div className="flex flex-1 flex-col items-center justify-center text-center">
+          <motion.div
+            initial={{ scale: 0.6, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="mb-6 flex h-20 w-20 items-center justify-center rounded-3xl bg-forma-500 text-ink shadow-forma-glow"
           >
-            {codeLoading
-              ? 'Отправка…'
-              : codeSent
-                ? 'Отправить код ещё раз'
-                : 'Получить код SMS'}
-          </button>
-          <div>
-            <label className="mb-2 block text-sm text-slate-400">Код из SMS</label>
-            <input
-              name="verificationCode"
-              className="input"
-              inputMode="numeric"
-              pattern="\d{6}"
-              maxLength={6}
-              placeholder="6 цифр"
-              required
-            />
-          </div>
-          <div>
-            <label className="mb-2 block text-sm text-slate-400">Email</label>
-            <input name="email" type="email" className="input" required />
-          </div>
-          <div>
-            <label className="mb-2 block text-sm text-slate-400">Пароль</label>
-            <PasswordField name="password" className="input" required minLength={6} />
-          </div>
+            <Check className="h-10 w-10" strokeWidth={2.5} />
+          </motion.div>
+          <h1 className="font-display text-3xl font-bold text-white">
+            Добро пожаловать!
+          </h1>
+          <p className="mt-2 text-zinc-400">Аккаунт Forma готов</p>
+        </div>
+      </AuthShell>
+    );
+  }
 
-          <label className="flex gap-2 text-sm text-slate-300">
-            <input name="privacy" type="checkbox" className="mt-1" required />
-            <span>
-              Согласен на обработку персональных данных (версия {PRIVACY_VERSION})
-            </span>
-          </label>
-          <label className="flex gap-2 text-sm text-slate-300">
-            <input name="terms" type="checkbox" className="mt-1" required />
-            <span>
-              Принимаю пользовательское соглашение (версия {TERMS_VERSION})
-            </span>
-          </label>
-          <label className="flex gap-2 text-sm text-slate-300">
-            <input name="marketing" type="checkbox" className="mt-1" />
-            <span>Хочу получать новости клуба (необязательно)</span>
-          </label>
+  const titles: Record<FormStep, { title: string; subtitle: string }> = {
+    phone: {
+      title: 'Ваш телефон',
+      subtitle: 'Код придёт SMS на номер из карточки клуба',
+    },
+    code: {
+      title: 'Код из SMS',
+      subtitle: `Отправили на ${phone || 'ваш номер'}`,
+    },
+    name: {
+      title: 'Как вас зовут?',
+      subtitle: 'Так вас увидят тренеры и ресепшен',
+    },
+    credentials: {
+      title: 'Email и пароль',
+      subtitle: 'Для входа с любого устройства',
+    },
+    consents: {
+      title: 'Почти готово',
+      subtitle: 'Подтвердите согласия — и можно в клуб',
+    },
+  };
 
-          {error && (
-            <p className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-400">
-              {error}
-            </p>
-          )}
+  const meta = titles[step as FormStep];
 
-          <button type="submit" className="btn-primary w-full" disabled={loading}>
-            {loading ? 'Создание…' : 'Зарегистрироваться'}
-          </button>
-
-          <p className="text-center text-sm text-slate-400">
+  return (
+    <AuthShell
+      title={meta.title}
+      subtitle={meta.subtitle}
+      footer={
+        step === 'phone' ? (
+          <>
             Уже есть аккаунт?{' '}
-            <Link href="/login" className="text-fitgo-400">
+            <Link href="/login" className="font-semibold text-forma-400">
               Войти
             </Link>
-          </p>
-        </form>
-      </div>
-    </div>
+          </>
+        ) : undefined
+      }
+    >
+      <AuthStepBar step={stepIndex} total={STEP_ORDER.length} />
+
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={step}
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -16 }}
+          transition={{ duration: 0.22 }}
+          className="card space-y-4"
+        >
+          {step === 'phone' && (
+            <>
+              <div>
+                <FieldLabel htmlFor="reg-phone">Телефон</FieldLabel>
+                <input
+                  id="reg-phone"
+                  className="input"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="+375…"
+                  autoComplete="tel"
+                  inputMode="tel"
+                  required
+                />
+              </div>
+              <AuthError>{error}</AuthError>
+              <Button
+                className="w-full"
+                size="lg"
+                loading={codeLoading}
+                disabled={phone.trim().length < 9}
+                onClick={() => void sendCode()}
+              >
+                Получить код
+              </Button>
+            </>
+          )}
+
+          {step === 'code' && (
+            <>
+              <OtpInput
+                value={code}
+                onChange={setCode}
+                autoFocus
+              />
+              <AuthError>{error}</AuthError>
+              <Button
+                className="w-full"
+                size="lg"
+                disabled={code.length < 6}
+                onClick={() => {
+                  setError('');
+                  setStep('name');
+                }}
+              >
+                Продолжить
+              </Button>
+              <button
+                type="button"
+                className="w-full text-center text-sm text-zinc-400 touch-manipulation disabled:opacity-40"
+                disabled={resendIn > 0 || codeLoading}
+                onClick={() => void sendCode()}
+              >
+                {resendIn > 0
+                  ? `Отправить ещё раз через ${resendIn} с`
+                  : 'Отправить код ещё раз'}
+              </button>
+              <button
+                type="button"
+                className="w-full text-center text-sm text-zinc-500"
+                onClick={() => setStep('phone')}
+              >
+                Изменить номер
+              </button>
+            </>
+          )}
+
+          {step === 'name' && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <FieldLabel htmlFor="reg-first">Имя</FieldLabel>
+                  <input
+                    id="reg-first"
+                    className="input"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    autoComplete="given-name"
+                    required
+                  />
+                </div>
+                <div>
+                  <FieldLabel htmlFor="reg-last">Фамилия</FieldLabel>
+                  <input
+                    id="reg-last"
+                    className="input"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    autoComplete="family-name"
+                    required
+                  />
+                </div>
+              </div>
+              <AuthError>{error}</AuthError>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => setStep('code')}
+                >
+                  Назад
+                </Button>
+                <Button
+                  className="flex-[2]"
+                  size="lg"
+                  disabled={!firstName.trim() || !lastName.trim()}
+                  onClick={() => setStep('credentials')}
+                >
+                  Далее
+                </Button>
+              </div>
+            </>
+          )}
+
+          {step === 'credentials' && (
+            <>
+              <div>
+                <FieldLabel htmlFor="reg-email">Email</FieldLabel>
+                <input
+                  id="reg-email"
+                  type="email"
+                  className="input"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
+                  required
+                />
+              </div>
+              <div>
+                <FieldLabel htmlFor="reg-password">Пароль</FieldLabel>
+                <PasswordField
+                  id="reg-password"
+                  className="input"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  isNew
+                  required
+                  minLength={6}
+                />
+                <div className="mt-2">
+                  <PasswordStrength password={password} />
+                </div>
+              </div>
+              <AuthError>{error}</AuthError>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => setStep('name')}
+                >
+                  Назад
+                </Button>
+                <Button
+                  className="flex-[2]"
+                  size="lg"
+                  disabled={!email.trim() || password.length < 6}
+                  onClick={() => setStep('consents')}
+                >
+                  Далее
+                </Button>
+              </div>
+            </>
+          )}
+
+          {step === 'consents' && (
+            <>
+              <label className="flex gap-3 rounded-2xl border border-white/10 bg-ink-raised/60 p-3 text-sm text-zinc-300">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 accent-forma-500"
+                  checked={privacy}
+                  onChange={(e) => setPrivacy(e.target.checked)}
+                />
+                <span>
+                  Согласен на обработку персональных данных (версия{' '}
+                  {PRIVACY_VERSION})
+                </span>
+              </label>
+              <label className="flex gap-3 rounded-2xl border border-white/10 bg-ink-raised/60 p-3 text-sm text-zinc-300">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 accent-forma-500"
+                  checked={terms}
+                  onChange={(e) => setTerms(e.target.checked)}
+                />
+                <span>
+                  Принимаю пользовательское соглашение (версия {TERMS_VERSION})
+                </span>
+              </label>
+              <label className="flex gap-3 rounded-2xl border border-white/10 bg-ink-raised/40 p-3 text-sm text-zinc-400">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 accent-forma-500"
+                  checked={marketing}
+                  onChange={(e) => setMarketing(e.target.checked)}
+                />
+                <span>Хочу получать новости клуба (необязательно)</span>
+              </label>
+              <AuthError>{error}</AuthError>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => setStep('credentials')}
+                >
+                  Назад
+                </Button>
+                <Button
+                  className={cn('flex-[2]')}
+                  size="lg"
+                  loading={loading}
+                  disabled={!privacy || !terms}
+                  onClick={() => void submitRegister()}
+                >
+                  Создать аккаунт
+                </Button>
+              </div>
+            </>
+          )}
+        </motion.div>
+      </AnimatePresence>
+    </AuthShell>
   );
 }

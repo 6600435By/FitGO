@@ -3,6 +3,11 @@
 import type { Booking } from '@fitgo/shared-types';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
+import { Chip } from '@/components/forma/chip';
+import { EmptyState } from '@/components/forma/empty-state';
+import { PageHeader } from '@/components/forma/page-header';
+import { SkeletonCard } from '@/components/forma/skeleton';
+import { useToast } from '@/components/forma/toast';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatDateTime, sessionTypeLabel } from '@/lib/utils';
@@ -24,10 +29,10 @@ const LIFECYCLE_LABELS = {
 };
 
 export default function ClientBookingHistoryPage() {
+  const toast = useToast();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [filter, setFilter] = useState<HistoryFilter>('all');
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState('');
 
   const load = useCallback(() => {
     const token = getToken();
@@ -37,9 +42,9 @@ export default function ClientBookingHistoryPage() {
     api
       .clientBookingHistory(token, filter)
       .then(setBookings)
-      .catch((err) => setMessage(err.message))
+      .catch((err) => toast.error(err.message))
       .finally(() => setLoading(false));
-  }, [filter]);
+  }, [filter, toast]);
 
   useEffect(() => {
     load();
@@ -47,83 +52,76 @@ export default function ClientBookingHistoryPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">История записей</h2>
-        <Link href="/client/bookings" className="text-sm text-fitgo-400">
-          Активные →
-        </Link>
-      </div>
+      <PageHeader
+        title="История записей"
+        action={
+          <Link href="/client/bookings" className="text-sm text-forma-400">
+            Активные →
+          </Link>
+        }
+      />
 
-      <div className="flex flex-wrap gap-2">
+      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
         {FILTERS.map((f) => (
-          <button
+          <Chip
             key={f.id}
-            type="button"
+            active={filter === f.id}
             onClick={() => setFilter(f.id)}
-            className={`rounded-full px-3 py-1 text-sm ${
-              filter === f.id
-                ? 'bg-fitgo-500 text-white'
-                : 'bg-slate-800 text-slate-400'
-            }`}
           >
             {f.label}
-          </button>
+          </Chip>
         ))}
       </div>
 
-      {message && (
-        <p className="rounded-xl bg-red-400/10 px-3 py-2 text-sm text-red-400">
-          {message}
-        </p>
-      )}
-
       {loading ? (
-        <div className="flex justify-center py-12">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
-        </div>
+        <SkeletonCard />
       ) : bookings.length === 0 ? (
-        <div className="card text-center text-slate-400">
-          <p>Нет записей по выбранному фильтру</p>
-          <Link href="/client/schedule" className="btn-primary mt-4 inline-block">
-            Записаться на занятие
-          </Link>
-        </div>
+        <EmptyState
+          title="Нет записей"
+          description="По выбранному фильтру ничего нет"
+          actionLabel="Записаться"
+          onAction={() => {
+            window.location.href = '/client/schedule';
+          }}
+        />
       ) : (
         <ul className="space-y-3">
           {bookings.map((booking) => (
             <li key={`${booking.source}-${booking.id}`} className="card">
               <div className="mb-2 flex items-start justify-between gap-2">
                 <div>
-                  <p className="font-semibold">{booking.title}</p>
-                  <p className="text-sm text-slate-400">
+                  <p className="font-display font-semibold text-white">
+                    {booking.title}
+                  </p>
+                  <p className="text-sm text-zinc-400">
                     {formatDateTime(booking.startAt)}
                   </p>
-                  {booking.trainerName && (
-                    <p className="text-sm text-slate-400">{booking.trainerName}</p>
-                  )}
+                  {booking.trainerName ? (
+                    <p className="text-sm text-zinc-500">{booking.trainerName}</p>
+                  ) : null}
                 </div>
                 <div className="flex flex-col items-end gap-1">
-                  <span className="rounded-full bg-slate-800 px-2 py-1 text-xs">
+                  <span className="rounded-full bg-ink-raised px-2 py-1 text-xs text-zinc-400">
                     {sessionTypeLabel(booking.type)}
                   </span>
-                  {booking.lifecycle && (
+                  {booking.lifecycle ? (
                     <span
                       className={`rounded-full px-2 py-1 text-xs ${
                         booking.lifecycle === 'UPCOMING'
-                          ? 'bg-fitgo-500/10 text-fitgo-400'
+                          ? 'bg-forma-500/10 text-forma-400'
                           : booking.lifecycle === 'CANCELLED'
-                            ? 'bg-red-400/10 text-red-400'
-                            : 'bg-slate-700 text-slate-300'
+                            ? 'bg-rose-500/10 text-rose-300'
+                            : 'bg-ink-raised text-zinc-300'
                       }`}
                     >
                       {LIFECYCLE_LABELS[booking.lifecycle]}
                     </span>
-                  )}
+                  ) : null}
                 </div>
               </div>
-              {booking.lifecycle === 'CANCELLED' && booking.cancelledByLabel && (
-                <p className="text-xs text-slate-500">{booking.cancelledByLabel}</p>
-              )}
+              {booking.lifecycle === 'CANCELLED' && booking.cancelledByLabel ? (
+                <p className="text-xs text-zinc-500">{booking.cancelledByLabel}</p>
+              ) : null}
             </li>
           ))}
         </ul>

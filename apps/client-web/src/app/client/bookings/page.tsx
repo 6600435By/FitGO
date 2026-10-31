@@ -3,17 +3,30 @@
 import type { Booking } from '@fitgo/shared-types';
 import { SessionType, originBadgeLabel } from '@fitgo/shared-types';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { Avatar } from '@/components/forma/avatar';
+import { Button } from '@/components/forma/button';
+import { Countdown } from '@/components/forma/countdown';
+import { EmptyState } from '@/components/forma/empty-state';
+import { PageHeader } from '@/components/forma/page-header';
+import { SegmentedControl } from '@/components/forma/segmented-control';
+import { Sheet } from '@/components/forma/sheet';
+import { SkeletonCard } from '@/components/forma/skeleton';
+import { useToast } from '@/components/forma/toast';
 import { api } from '@/lib/api';
 import { cancelClientBooking } from '@/lib/cancel-booking';
 import { getToken } from '@/lib/auth';
 import { formatDateTime, sessionTypeLabel } from '@/lib/utils';
 
+type Tab = 'upcoming' | 'past';
+
 export default function ClientBookingsPage() {
+  const toast = useToast();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
-  const [message, setMessage] = useState('');
-  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>('upcoming');
+  const [cancelTarget, setCancelTarget] = useState<Booking | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   const load = () => {
     const token = getToken();
@@ -21,161 +34,211 @@ export default function ClientBookingsPage() {
     api
       .clientBookings(token)
       .then(setBookings)
-      .catch((err) => setMessage(err.message))
+      .catch((err) => toast.error(err.message))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleCancel = async (booking: Booking) => {
-    setCancellingId(booking.sessionId);
+  const upcoming = useMemo(
+    () =>
+      bookings.filter(
+        (b) =>
+          b.lifecycle !== 'CANCELLED' && new Date(b.startAt) >= new Date(),
+      ),
+    [bookings],
+  );
+  const past = useMemo(
+    () =>
+      bookings.filter(
+        (b) =>
+          b.lifecycle === 'CANCELLED' || new Date(b.startAt) < new Date(),
+      ),
+    [bookings],
+  );
+
+  const list = tab === 'upcoming' ? upcoming : past;
+
+  const handleCancel = async () => {
+    if (!cancelTarget) return;
+    setCancelling(true);
     try {
-      const result = await cancelClientBooking(booking);
+      const result = await cancelClientBooking(cancelTarget, {
+        skipConfirm: true,
+      });
       if (result.success) {
-        setMessage(
-          booking.type === SessionType.SPA
-            ? 'Запись в SPA-кабинет отменена'
-            : 'Запись отменена на сервере клуба. Администратор уведомлён.',
+        toast.success(
+          cancelTarget.type === SessionType.SPA
+            ? 'Запись в SPA отменена'
+            : 'Запись отменена',
         );
+        setCancelTarget(null);
         load();
       } else if (result.message && result.message !== 'Отменено') {
-        setMessage(result.message ?? 'Не удалось отменить');
+        toast.error(result.message);
       }
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Ошибка');
+      toast.error(err instanceof Error ? err.message : 'Ошибка');
     } finally {
-      setCancellingId(null);
+      setCancelling(false);
     }
   };
 
-  const upcoming = bookings.filter(
-    (b) =>
-      b.lifecycle !== 'CANCELLED' && new Date(b.startAt) >= new Date(),
-  );
-  const past = bookings.filter(
-    (b) =>
-      b.lifecycle === 'CANCELLED' || new Date(b.startAt) < new Date(),
-  );
-
   if (loading) {
     return (
-      <div className="flex justify-center py-12">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+      <div className="space-y-3">
+        <SkeletonCard />
+        <SkeletonCard />
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Мои записи</h2>
-        <Link href="/client/booking-history" className="text-sm text-fitgo-400">
-          История →
-        </Link>
-      </div>
-
-      {message && (
-        <p className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-400">
-          {message}
-        </p>
-      )}
-
-      {upcoming.length === 0 ? (
-        <div className="card text-center">
-          <p className="text-slate-400">Нет предстоящих записей</p>
-          <Link href="/client/schedule" className="btn-primary mt-4 inline-block">
-            Посмотреть расписание
+      <PageHeader
+        title="Мои записи"
+        action={
+          <Link href="/client/booking-history" className="text-sm text-forma-400">
+            История →
           </Link>
-        </div>
+        }
+      />
+
+      <SegmentedControl
+        layoutId="bookings-tabs"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'upcoming', label: `Предстоящие${upcoming.length ? ` · ${upcoming.length}` : ''}` },
+          { value: 'past', label: 'История' },
+        ]}
+      />
+
+      {list.length === 0 ? (
+        <EmptyState
+          title={
+            tab === 'upcoming' ? 'Нет предстоящих записей' : 'Пока пусто'
+          }
+          actionLabel={tab === 'upcoming' ? 'Открыть расписание' : undefined}
+          onAction={
+            tab === 'upcoming'
+              ? () => {
+                  window.location.href = '/client/schedule';
+                }
+              : undefined
+          }
+        />
       ) : (
         <ul className="space-y-3">
-          {upcoming.map((booking) => (
-            <li key={booking.id} className="card">
-              <p className="font-semibold">{booking.title}</p>
-              <p className="text-sm text-slate-400">
-                {formatDateTime(booking.startAt)}
-              </p>
-              {booking.trainerName && (
-                <p className="text-sm text-slate-400">{booking.trainerName}</p>
-              )}
-              <span className="mt-2 inline-block rounded-full bg-slate-800 px-2 py-1 text-xs">
-                {sessionTypeLabel(booking.type)}
-              </span>
-              {originBadgeLabel(booking.origin) && (
-                <span className="ml-2 mt-2 inline-block rounded-full bg-fitgo-500/15 px-2 py-1 text-xs text-fitgo-400">
-                  {originBadgeLabel(booking.origin)}
-                </span>
-              )}
-              {booking.usage?.paymentStatus === 'DEBT' && (
-                <span className="ml-2 mt-2 inline-block rounded-full bg-amber-500/15 px-2 py-1 text-xs text-amber-300">
-                  Долг
-                </span>
-              )}
-              {booking.usage?.paymentStatus === 'PAID' && (
-                <span className="ml-2 mt-2 inline-block rounded-full bg-emerald-500/15 px-2 py-1 text-xs text-emerald-300">
-                  Оплачено
-                </span>
-              )}
-              {booking.usage?.isComplimentary && (
-                <span className="ml-2 mt-2 inline-block rounded-full bg-violet-500/15 px-2 py-1 text-xs text-violet-300">
-                  Подарочная
-                </span>
-              )}
-              {booking.source === 'fitgo' && booking.type === SessionType.PERSONAL && (
-                <Link
-                  href={`/client/personal-bookings/${booking.sessionId}`}
-                  className="btn-primary mt-3 block w-full text-center"
+          {list.map((booking) => (
+            <li key={booking.id} className="card space-y-3">
+              <div className="flex items-start gap-3">
+                <Avatar
+                  name={booking.trainerName || booking.title}
+                  size="lg"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="font-display text-lg font-semibold text-white">
+                    {booking.title}
+                  </p>
+                  <p className="text-sm text-zinc-400">
+                    {formatDateTime(booking.startAt)}
+                  </p>
+                  {booking.trainerName ? (
+                    <p className="text-sm text-zinc-500">{booking.trainerName}</p>
+                  ) : null}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-zinc-400">
+                      {sessionTypeLabel(booking.type)}
+                    </span>
+                    {originBadgeLabel(booking.origin) ? (
+                      <span className="rounded-full bg-forma-500/15 px-2 py-0.5 text-[11px] text-forma-400">
+                        {originBadgeLabel(booking.origin)}
+                      </span>
+                    ) : null}
+                    {booking.usage?.paymentStatus === 'DEBT' ? (
+                      <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-300">
+                        Долг
+                      </span>
+                    ) : null}
+                    {booking.lifecycle === 'CANCELLED' ? (
+                      <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[11px] text-rose-300">
+                        Отменена
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                {tab === 'upcoming' && booking.lifecycle !== 'CANCELLED' ? (
+                  <Countdown to={booking.startAt} compact />
+                ) : null}
+              </div>
+
+              {booking.source === 'fitgo' &&
+                booking.type === SessionType.PERSONAL && (
+                  <Link
+                    href={`/client/personal-bookings/${booking.sessionId}`}
+                    className="btn-primary block w-full text-center"
+                  >
+                    {booking.lifecycle === 'AWAITING_CONFIRMATION'
+                      ? 'Завершить тренировку'
+                      : 'План тренировки'}
+                  </Link>
+                )}
+
+              {tab === 'upcoming' && booking.lifecycle !== 'CANCELLED' ? (
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  onClick={() => setCancelTarget(booking)}
                 >
-                  План тренировки
-                </Link>
-              )}
-              <button
-                onClick={() => handleCancel(booking)}
-                disabled={cancellingId === booking.sessionId}
-                className="btn-secondary mt-3 w-full"
-              >
-                Отменить запись
-              </button>
+                  Отменить запись
+                </Button>
+              ) : null}
+
+              {booking.lifecycle === 'CANCELLED' && booking.cancelledByLabel ? (
+                <p className="text-xs text-zinc-500">{booking.cancelledByLabel}</p>
+              ) : null}
             </li>
           ))}
         </ul>
       )}
 
-      {past.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-sm font-medium text-slate-400">Прошедшие</h3>
-          <ul className="space-y-2">
-            {past.map((booking) => (
-              <li
-                key={booking.id}
-                className="rounded-xl bg-slate-800/50 px-3 py-2 text-sm text-slate-400"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span>
-                    {booking.title} — {formatDateTime(booking.startAt)}
-                  </span>
-                  {booking.lifecycle === 'AWAITING_CONFIRMATION' &&
-                    booking.source === 'fitgo' && (
-                      <Link
-                        href={`/client/personal-bookings/${booking.sessionId}`}
-                        className="text-fitgo-400"
-                      >
-                        Завершить →
-                      </Link>
-                    )}
-                </div>
-                {booking.lifecycle === 'CANCELLED' && booking.cancelledByLabel && (
-                  <p className="mt-1 text-xs text-slate-500">
-                    {booking.cancelledByLabel}
-                  </p>
-                )}
-              </li>
-            ))}
-          </ul>
+      <Sheet
+        open={!!cancelTarget}
+        onOpenChange={(open) => {
+          if (!open) setCancelTarget(null);
+        }}
+        title="Отменить запись?"
+        description={
+          cancelTarget
+            ? `«${cancelTarget.title}» · ${formatDateTime(cancelTarget.startAt)}`
+            : undefined
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-zinc-400">
+            Место освободится для других клиентов. Администратор будет уведомлён.
+          </p>
+          <Button
+            className="w-full"
+            variant="danger"
+            loading={cancelling}
+            onClick={() => void handleCancel()}
+          >
+            Да, отменить
+          </Button>
+          <Button
+            className="w-full"
+            variant="secondary"
+            onClick={() => setCancelTarget(null)}
+          >
+            Оставить запись
+          </Button>
         </div>
-      )}
+      </Sheet>
     </div>
   );
 }

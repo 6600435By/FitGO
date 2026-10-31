@@ -1,0 +1,20 @@
+---
+description: Не менять визуал FitGO, пока нет отдельной задачи на дизайн. Токены — в DESIGN.md.
+globs: apps/web/**/*.{tsx,css},apps/specialist-web/**/*.{tsx,css}
+alwaysApply: false
+---
+
+# Дизайн на паузе
+
+Функционал и настройки клуба важнее внешнего вида. При правке экрана сохраняй текущие классы и токены из `DESIGN.md`.
+
+**Исключение:** `apps/client-web` — идёт редизайн Forma (графит + жёлтый, `src/components/forma/`, `ClientShell`). Там собирай UI из Forma-токенов и kit, не откатывай к teal FitGO.
+
+Не делай без явной просьбы (для `apps/web` и `apps/specialist-web`):
+
+- смену палитры, шрифтов, радиусов, теней, плотности
+- перенос вида `apps/web` ↔ `apps/specialist-web` ↔ `apps/client-web`
+- подстановку чужого DESIGN.md, 21st.dev, Kinetics или другого референса
+- «освежить» соседние экраны заодно с фиксом
+
+Новый кусок UI: в `apps/web` — `.card` / `.btn-primary` / `.input`; в `apps/specialist-web` — `.panel` / `.btn-primary` / `.field`; в `apps/client-web` — `forma/*` и Forma-токены. Если класса не хватает, повтори ближайший существующий в том же приложении.

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { PageHeader } from '@/components/forma/page-header';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -14,13 +15,15 @@ const WORKOUT_TYPES = [
 ];
 
 export default function ClientWorkoutsPage() {
-  const [workouts, setWorkouts] = useState<Array<{
-    id: string;
-    type: string;
-    startedAt: string;
-    durationMin: number;
-    notes?: string;
-  }>>([]);
+  const [workouts, setWorkouts] = useState<
+    Array<{
+      id: string;
+      type: string;
+      startedAt: string;
+      durationMin: number;
+      notes?: string;
+    }>
+  >([]);
   const [form, setForm] = useState({
     type: 'RUNNING',
     startedAt: new Date().toISOString().slice(0, 16),
@@ -57,12 +60,18 @@ export default function ClientWorkoutsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Тренировки вне клуба</h2>
-        <Link href="/client/engagement" className="text-sm text-fitgo-400">
-          ← Достижения
-        </Link>
-      </div>
+      <PageHeader
+        title="Тренировки вне клуба"
+        subtitle="Записывайте самостоятельные занятия — они дают XP"
+        action={
+          <Link
+            href="/client/engagement"
+            className="text-sm font-medium text-forma-400 hover:text-forma-300"
+          >
+            Достижения
+          </Link>
+        }
+      />
 
       <form onSubmit={submit} className="card space-y-3">
         <select
@@ -71,7 +80,9 @@ export default function ClientWorkoutsPage() {
           onChange={(e) => setForm({ ...form, type: e.target.value })}
         >
           {WORKOUT_TYPES.map((t) => (
-            <option key={t.value} value={t.value}>{t.label}</option>
+            <option key={t.value} value={t.value}>
+              {t.label}
+            </option>
           ))}
         </select>
         <input
@@ -93,25 +104,38 @@ export default function ClientWorkoutsPage() {
           value={form.notes}
           onChange={(e) => setForm({ ...form, notes: e.target.value })}
         />
-        {msg && <p className="text-sm text-fitgo-400">{msg}</p>}
-        <button type="submit" className="btn-primary w-full">
+        {msg ? <p className="text-sm text-forma-400">{msg}</p> : null}
+        <button
+          type="submit"
+          className="btn-primary w-full bg-forma-500 text-ink hover:bg-forma-400"
+        >
           Добавить тренировку
         </button>
       </form>
 
       <div className="card">
-        <h3 className="mb-3 font-semibold">История</h3>
+        <h3 className="mb-3 font-display text-lg font-semibold text-white">
+          История
+        </h3>
         {workouts.length === 0 ? (
-          <p className="text-sm text-slate-400">Пока нет записей</p>
+          <p className="text-sm text-zinc-400">Пока нет записей</p>
         ) : (
           <ul className="space-y-2">
             {workouts.map((w) => (
-              <li key={w.id} className="rounded-xl bg-slate-800/50 px-3 py-2 text-sm">
-                <div className="flex justify-between">
-                  <span>{WORKOUT_TYPES.find((t) => t.value === w.type)?.label ?? w.type}</span>
-                  <span className="text-slate-400">{w.durationMin} мин</span>
+              <li
+                key={w.id}
+                className="rounded-2xl border border-white/[0.06] bg-ink-raised/80 px-3 py-2.5 text-sm"
+              >
+                <div className="flex justify-between gap-2">
+                  <span className="font-medium text-white">
+                    {WORKOUT_TYPES.find((t) => t.value === w.type)?.label ??
+                      w.type}
+                  </span>
+                  <span className="tabular-nums text-zinc-400">
+                    {w.durationMin} мин
+                  </span>
                 </div>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-zinc-500">
                   {new Date(w.startedAt).toLocaleString('ru-RU')}
                 </p>
               </li>

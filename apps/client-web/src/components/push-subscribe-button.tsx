@@ -21,11 +21,17 @@ export function PushSubscribeButton() {
   };
 
   if (status === 'done') {
-    return <span className="text-xs text-fitgo-400">Push включён</span>;
+    return (
+      <span className="text-xs font-medium text-forma-400">Push включён</span>
+    );
   }
 
   return (
-    <button onClick={() => void subscribe()} className="btn-secondary text-xs px-3 py-1">
+    <button
+      type="button"
+      onClick={() => void subscribe()}
+      className="rounded-xl border border-white/10 bg-ink-raised px-3 py-1.5 text-xs font-medium text-white touch-manipulation hover:bg-ink-elevated"
+    >
       {status === 'error' ? 'Push недоступен' : 'Включить push'}
     </button>
   );

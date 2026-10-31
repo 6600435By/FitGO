@@ -1,39 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Unbounded:wght@500;600;700;800&display=swap&subset=cyrillic,latin');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
   color-scheme: dark;
+  --forma-bg: #0b0b0c;
+  --forma-elevated: #141416;
+  --forma-raised: #1c1c1f;
+  --forma-line: rgba(255, 255, 255, 0.08);
+  --forma-fg: #f5f5f4;
+  --forma-muted: #a1a1aa;
+  --forma-accent: #ffd000;
+  --forma-accent-fg: #0b0b0c;
+  --forma-success: #34d399;
+  --forma-danger: #f87171;
+  --forma-warning: #fbbf24;
+  --fitgo-primary: #ffd000;
 }
 
 body {
-  @apply bg-slate-950 text-slate-100 antialiased;
+  @apply bg-ink text-zinc-100 antialiased font-sans;
+  background-image: theme('backgroundImage.forma-mesh'),
+    theme('backgroundImage.forma-noise');
+  background-attachment: fixed;
+  min-height: 100dvh;
 }
 
 @layer components {
   .card {
-    @apply rounded-2xl border border-slate-800 bg-slate-900/80 p-4 shadow-lg;
+    @apply rounded-3xl border border-white/[0.08] bg-ink-elevated/90 p-4 shadow-forma-card backdrop-blur-sm;
   }
 
   .btn-primary {
-    @apply rounded-xl bg-fitgo-500 px-4 py-3 font-medium text-white transition hover:bg-fitgo-400 disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-forma-500 px-4 py-3.5 font-semibold text-ink transition active:scale-[0.98] hover:bg-forma-400 disabled:opacity-50 disabled:active:scale-100;
   }
 
   .btn-secondary {
-    @apply rounded-xl border border-slate-700 bg-slate-800 px-4 py-3 font-medium text-slate-100 transition hover:bg-slate-700;
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl border border-white/[0.1] bg-ink-raised px-4 py-3.5 font-medium text-white transition hover:bg-white/[0.06] active:scale-[0.98] disabled:opacity-50;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-3 py-2 font-medium text-zinc-400 transition hover:bg-white/[0.06] hover:text-white;
   }
 
   .input {
-    @apply box-border h-11 min-h-11 max-h-11 w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-0 text-sm leading-none text-slate-100 outline-none ring-fitgo-500 focus:ring-2;
+    @apply box-border h-12 min-h-12 max-h-12 w-full rounded-2xl border border-white/[0.1] bg-ink-elevated px-4 py-0 text-[15px] leading-none text-white outline-none ring-forma-500 placeholder:text-zinc-500 focus:border-forma-500/50 focus:ring-2 focus:ring-forma-500/30;
   }
 
-  /* type=password locks non-Latin IME on macOS; mask a text field instead */
   .input-password-mask {
     -webkit-text-security: disc;
   }
 
-  /* Native date: lock to same box as text search (macOS/WebKit quirks).
-   * Do not strip appearance on type=time — Chrome/Safari then block segment edit. */
   .date-field {
     @apply tabular-nums;
     color-scheme: dark;
@@ -60,12 +79,10 @@ body {
     opacity: 0.7;
   }
 
-  /* Native time: keep default inline layout so Android Chrome can edit
-   * hour/minute segments. Do not force display:flex on datetime-edit. */
   input.input[type='time']::-webkit-datetime-edit,
   input.date-field[type='time']::-webkit-datetime-edit {
     padding: 0;
-    line-height: 2.75rem;
+    line-height: 3rem;
   }
 
   input.input[type='time']::-webkit-datetime-edit-fields-wrapper,
@@ -74,528 +91,42 @@ body {
   }
 
   select.input {
-    @apply appearance-none bg-[length:1rem] bg-[position:right_0.65rem_center] bg-no-repeat pr-9;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%94a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+    @apply appearance-none bg-[length:1rem] bg-[position:right_0.75rem_center] bg-no-repeat pr-10;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%a1a1aa'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
   }
 
   .stat-value {
-    @apply text-2xl font-bold text-white;
+    @apply font-display text-2xl font-bold tabular-nums text-white;
   }
 
   .stat-label {
-    @apply text-sm text-slate-400;
+    @apply text-sm text-zinc-400;
+  }
+
+  .glass {
+    @apply border border-white/[0.08] bg-ink-elevated/80 backdrop-blur-xl;
+  }
+
+  .forma-glow {
+    box-shadow: 0 0 40px -8px rgba(255, 208, 0, 0.45);
   }
 }
 
-/* Admin light theme — scoped to .admin-app only (see admin-theme.tsx). */
-.admin-app.admin-theme-light {
-  color-scheme: light;
-  background-color: #f3f6f4;
-  color: #14211c;
-}
-
-.admin-app.admin-theme-light .admin-chrome {
-  border-color: #d5e0db !important;
-  background-color: rgba(243, 246, 244, 0.96) !important;
-  color: #14211c;
-}
-
-.admin-app.admin-theme-light .admin-chrome h1,
-.admin-app.admin-theme-light .admin-chrome .font-semibold {
-  color: #14211c;
-}
-
-.admin-app.admin-theme-light .admin-chrome .text-slate-400,
-.admin-app.admin-theme-light .text-slate-400,
-.admin-app.admin-theme-light .stat-label,
-.admin-app.admin-theme-light .text-slate-500 {
-  color: #3d5248 !important;
-}
-
-.admin-app.admin-theme-light .admin-chrome .text-slate-300,
-.admin-app.admin-theme-light .text-slate-300,
-.admin-app.admin-theme-light .text-slate-200 {
-  color: #2a3d35 !important;
-}
-
-.admin-app.admin-theme-light .admin-chrome-btn {
-  border-color: #c5d4cd !important;
-  color: #3d5248 !important;
-}
-
-.admin-app.admin-theme-light .admin-chrome-btn:hover {
-  background-color: #e4ece8 !important;
-  color: #14211c !important;
-}
-
-.admin-app.admin-theme-light .card {
-  border-color: #d5e0db;
-  background-color: #ffffff;
-  color: #14211c;
-  box-shadow: 0 1px 2px rgb(20 33 28 / 0.05);
-}
-
-.admin-app.admin-theme-light .btn-secondary {
-  border-color: #c5d4cd;
-  background-color: #eaf0ed;
-  color: #14211c;
-}
-
-.admin-app.admin-theme-light .btn-secondary:hover {
-  background-color: #dce6e1;
-}
-
-.admin-app.admin-theme-light .input {
-  border-color: #c5d4cd;
-  background-color: #ffffff;
-  color: #14211c;
-}
-
-.admin-app.admin-theme-light .date-field {
-  color-scheme: light;
-}
-
-.admin-app.admin-theme-light .date-field::-webkit-calendar-picker-indicator {
-  filter: none;
-  opacity: 0.55;
-}
-
-.admin-app.admin-theme-light .stat-value,
-.admin-app.admin-theme-light .text-white,
-.admin-app.admin-theme-light .text-white\/80,
-.admin-app.admin-theme-light .text-white\/90,
-.admin-app.admin-theme-light .text-slate-100 {
-  color: #14211c !important;
-}
-
-/*
- * Solid accent / primary — white label after global text-white→dark remap.
- * Same-element `.bg-fitgo-500.text-white` wins by source order (do not
- * select `.text-white` here: Tailwind treats white color as circular @apply).
- */
-.admin-app.admin-theme-light .bg-fitgo-500,
-.admin-app.admin-theme-light .bg-fitgo-600,
-.admin-app.admin-theme-light .btn-primary {
-  color: #fff !important;
-}
-
-/* Warning / success / danger chips — readable on white */
-.admin-app.admin-theme-light .text-amber-100,
-.admin-app.admin-theme-light .text-amber-100\/90,
-.admin-app.admin-theme-light .text-amber-200,
-.admin-app.admin-theme-light .text-amber-200\/80,
-.admin-app.admin-theme-light .text-amber-200\/85,
-.admin-app.admin-theme-light .text-amber-200\/90,
-.admin-app.admin-theme-light .text-amber-300,
-.admin-app.admin-theme-light .text-amber-300\/90,
-.admin-app.admin-theme-light .text-amber-400,
-.admin-app.admin-theme-light .text-amber-700,
-.admin-app.admin-theme-light .text-yellow-400,
-.admin-app.admin-theme-light .text-amber-50 {
-  color: #5c3a00 !important;
-}
-
-.admin-app.admin-theme-light .bg-amber-400\/10,
-.admin-app.admin-theme-light .bg-amber-500\/5,
-.admin-app.admin-theme-light .bg-amber-500\/10,
-.admin-app.admin-theme-light .bg-amber-500\/15,
-.admin-app.admin-theme-light .bg-amber-500\/20,
-.admin-app.admin-theme-light .bg-amber-950\/40 {
-  background-color: #fff1d6 !important;
-}
-
-/* SPA day journal cells — high contrast in light theme (week keeps staff colors) */
-.admin-app.admin-theme-light .spa-booking-cell-day {
-  background-color: #fff1d6 !important;
-  color: #3f2a00 !important;
-  border-left-color: #d97706 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-day .spa-booking-cell-title {
-  color: #3f2a00 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-day .spa-booking-cell-meta {
-  color: #6b4a12 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-day .text-rose-300 {
-  color: #9f1239 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-day .text-sky-300 {
-  color: #0369a1 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-note-chip {
-  background-color: #ffffff !important;
-  color: #3f2a00 !important;
-  border: 1px solid #d6b97a;
-}
-
-.admin-app.admin-theme-light .spa-booking-note-dot {
-  background-color: #d97706 !important;
-}
-
-.admin-app.admin-theme-light .spa-free-gap {
-  background-color: rgba(16, 185, 129, 0.12) !important;
-  border-color: rgba(5, 150, 105, 0.45) !important;
-  color: #047857 !important;
-}
-
-.admin-app.admin-theme-light .border-amber-500\/20,
-.admin-app.admin-theme-light .border-amber-500\/30,
-.admin-app.admin-theme-light .border-amber-500\/35,
-.admin-app.admin-theme-light .border-amber-500\/40,
-.admin-app.admin-theme-light .border-amber-700\/50,
-.admin-app.admin-theme-light .border-amber-700\/60 {
-  border-color: #e6c98a !important;
-}
-
-.admin-app.admin-theme-light .text-emerald-200,
-.admin-app.admin-theme-light .text-emerald-300,
-.admin-app.admin-theme-light .text-emerald-300\/90,
-.admin-app.admin-theme-light .text-emerald-400,
-.admin-app.admin-theme-light .text-emerald-400\/90,
-.admin-app.admin-theme-light .text-fitgo-100,
-.admin-app.admin-theme-light .text-fitgo-200,
-.admin-app.admin-theme-light .text-fitgo-300,
-.admin-app.admin-theme-light .text-fitgo-400 {
-  color: #0f765c !important;
-}
-
-.admin-app.admin-theme-light .bg-emerald-400\/10,
-.admin-app.admin-theme-light .bg-emerald-500\/10,
-.admin-app.admin-theme-light .bg-emerald-500\/15,
-.admin-app.admin-theme-light .bg-emerald-500\/20,
-.admin-app.admin-theme-light .bg-emerald-500\/25,
-.admin-app.admin-theme-light .bg-emerald-600\/30,
-.admin-app.admin-theme-light .bg-emerald-950\/30 {
-  background-color: #e7f6ef !important;
-}
-
-.admin-app.admin-theme-light .border-emerald-500\/30,
-.admin-app.admin-theme-light .border-emerald-500\/40,
-.admin-app.admin-theme-light .border-emerald-800\/60 {
-  border-color: #a7d7c3 !important;
-}
-
-.admin-app.admin-theme-light .text-rose-200,
-.admin-app.admin-theme-light .text-rose-300,
-.admin-app.admin-theme-light .text-red-300,
-.admin-app.admin-theme-light .text-red-400 {
-  color: #9f1239 !important;
-}
-
-.admin-app.admin-theme-light .bg-rose-500\/10,
-.admin-app.admin-theme-light .bg-rose-500\/20,
-.admin-app.admin-theme-light .bg-rose-500\/25,
-.admin-app.admin-theme-light .bg-red-500\/20,
-.admin-app.admin-theme-light .bg-red-950\/40 {
-  background-color: #fde8ee !important;
-}
-
-.admin-app.admin-theme-light .border-rose-500\/30,
-.admin-app.admin-theme-light .border-rose-500\/40 {
-  border-color: #f0b8c6 !important;
-}
-
-/* Sky / info */
-.admin-app.admin-theme-light .bg-sky-500\/10,
-.admin-app.admin-theme-light .bg-sky-500\/15,
-.admin-app.admin-theme-light .bg-sky-500\/20 {
-  background-color: #e0f2fe !important;
-}
-
-.admin-app.admin-theme-light .border-sky-500\/30,
-.admin-app.admin-theme-light .border-sky-500\/35 {
-  border-color: #7dd3fc !important;
-}
-
-.admin-app.admin-theme-light .ring-sky-400\/30 {
-  --tw-ring-color: rgb(3 105 161 / 0.35) !important;
-}
-
-/* Violet — specialist / SPA hint */
-.admin-app.admin-theme-light .text-violet-200,
-.admin-app.admin-theme-light .text-violet-300,
-.admin-app.admin-theme-light .text-violet-400 {
-  color: #5b21b6 !important;
-}
-
-.admin-app.admin-theme-light .bg-violet-500\/10,
-.admin-app.admin-theme-light .bg-violet-500\/20 {
-  background-color: #f3e8ff !important;
-}
-
-.admin-app.admin-theme-light .border-violet-500\/30,
-.admin-app.admin-theme-light .border-violet-500\/35 {
-  border-color: #d8b4fe !important;
-}
-
-.admin-app.admin-theme-light .ring-violet-400\/30 {
-  --tw-ring-color: rgb(91 33 182 / 0.35) !important;
-}
-
-/* Orange — 1C sync gap */
-.admin-app.admin-theme-light .text-orange-200,
-.admin-app.admin-theme-light .text-orange-300,
-.admin-app.admin-theme-light .text-orange-400 {
-  color: #9a3412 !important;
-}
-
-.admin-app.admin-theme-light .bg-orange-500\/10,
-.admin-app.admin-theme-light .bg-orange-500\/20 {
-  background-color: #ffedd5 !important;
-}
-
-.admin-app.admin-theme-light .border-orange-500\/30,
-.admin-app.admin-theme-light .border-orange-500\/35 {
-  border-color: #fdba74 !important;
-}
-
-.admin-app.admin-theme-light .ring-orange-400\/35 {
-  --tw-ring-color: rgb(154 52 18 / 0.35) !important;
-}
-
-.admin-app.admin-theme-light .ring-amber-400\/35 {
-  --tw-ring-color: rgb(92 58 0 / 0.35) !important;
-}
-
-.admin-app.admin-theme-light .ring-slate-400\/25 {
-  --tw-ring-color: rgb(61 82 72 / 0.3) !important;
-}
-
-/* Soft accent fills — include /25–/30 used by «В журнал» and chat chips */
-.admin-app.admin-theme-light .bg-fitgo-500\/5,
-.admin-app.admin-theme-light .bg-fitgo-500\/10,
-.admin-app.admin-theme-light .bg-fitgo-500\/15,
-.admin-app.admin-theme-light .bg-fitgo-500\/20,
-.admin-app.admin-theme-light .bg-fitgo-500\/25,
-.admin-app.admin-theme-light .bg-fitgo-500\/30 {
-  background-color: #e7f6ef !important;
-}
-
-.admin-app.admin-theme-light .border-fitgo-500\/30,
-.admin-app.admin-theme-light .border-fitgo-500\/40 {
-  border-color: #a7d7c3 !important;
-}
-
-.admin-app.admin-theme-light .ring-fitgo-400\/40,
-.admin-app.admin-theme-light .ring-fitgo-500\/40,
-.admin-app.admin-theme-light .ring-fitgo-500\/50 {
-  --tw-ring-color: rgb(15 118 92 / 0.35) !important;
-}
-
-.admin-app.admin-theme-light .bg-slate-800,
-.admin-app.admin-theme-light .bg-slate-800\/50,
-.admin-app.admin-theme-light .bg-slate-800\/60,
-.admin-app.admin-theme-light .hover\:bg-slate-800:hover {
-  background-color: #eaf0ed !important;
-}
-
-.admin-app.admin-theme-light .bg-slate-950\/30,
-.admin-app.admin-theme-light .bg-slate-950\/40,
-.admin-app.admin-theme-light .bg-slate-950\/50,
-.admin-app.admin-theme-light .bg-slate-950\/60,
-.admin-app.admin-theme-light .bg-slate-950\/80,
-.admin-app.admin-theme-light .bg-slate-950\/95,
-.admin-app.admin-theme-light .bg-slate-900\/30,
-.admin-app.admin-theme-light .bg-slate-900\/40,
-.admin-app.admin-theme-light .bg-slate-900\/50,
-.admin-app.admin-theme-light .bg-slate-900\/70,
-.admin-app.admin-theme-light .bg-slate-900\/80,
-.admin-app.admin-theme-light .bg-slate-900\/60,
-.admin-app.admin-theme-light .bg-slate-900\/95,
-.admin-app.admin-theme-light .bg-white\/5,
-.admin-app.admin-theme-light .bg-white\/10 {
-  background-color: #ffffff !important;
-}
-
-/* Second surface (chips / nested panels) */
-.admin-app.admin-theme-light .bg-slate-500\/20 {
-  background-color: #eaf0ed !important;
-}
-
-.admin-app.admin-theme-light .border-slate-800,
-.admin-app.admin-theme-light .border-slate-800\/80,
-.admin-app.admin-theme-light .border-slate-900,
-.admin-app.admin-theme-light .border-slate-700,
-.admin-app.admin-theme-light .border-slate-700\/50,
-.admin-app.admin-theme-light .border-white\/5,
-.admin-app.admin-theme-light .border-white\/10,
-.admin-app.admin-theme-light .border-white\/25,
-.admin-app.admin-theme-light .hover\:border-white\/25:hover,
-.admin-app.admin-theme-light .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
-  border-color: #d5e0db !important;
-}
-
-.admin-app.admin-theme-light .hover\:text-white:hover {
-  color: #14211c !important;
-}
-
-.admin-app.admin-theme-light .hover\:bg-slate-800\/60:hover,
-.admin-app.admin-theme-light .hover\:bg-slate-900\/60:hover {
-  background-color: #eaf0ed !important;
-}
-
-.admin-app.admin-theme-light thead {
-  font-size: 12px;
-  font-weight: 500;
-  color: #3d5248;
-}
-
-.admin-app.admin-theme-light td {
-  font-size: 14px;
-}
-
-.admin-app.admin-theme-light .bg-slate-950 {
-  background-color: #f3f6f4 !important;
-}
-
-.admin-app.admin-theme-light .bg-slate-900 {
-  background-color: #ffffff !important;
-}
-
-.admin-app.admin-theme-light .border-slate-700\/80 {
-  border-color: #d5e0db !important;
-}
-
-/* Schedule / SPA time rail — after solid bg remaps so fill/text win */
-.admin-app.admin-theme-light .admin-time-rail {
-  background-color: #eaf0ed !important;
-  border-color: #c5d4cd !important;
-  color: #14211c;
-}
-
-.admin-app.admin-theme-light .admin-time-rail .text-slate-500 {
-  color: #14211c !important;
-  font-weight: 500;
-}
-
-.admin-app.admin-theme-light .admin-time-rail .text-rose-400 {
-  color: #9f1239 !important;
-}
-
-.admin-app.admin-theme-light .text-sky-200,
-.admin-app.admin-theme-light .text-sky-300,
-.admin-app.admin-theme-light .text-sky-400,
-.admin-app.admin-theme-light .text-sky-400\/90,
-.admin-app.admin-theme-light .hover\:text-sky-300:hover {
-  color: #0369a1 !important;
-}
-
-.admin-app.admin-theme-light .hover\:bg-emerald-500\/10:hover {
-  background-color: #e7f6ef !important;
-}
-
-.admin-app.admin-theme-light .hover\:bg-rose-500\/10:hover {
-  background-color: #fde8ee !important;
-}
-
-.admin-app.admin-theme-light .hover\:border-slate-600:hover,
-.admin-app.admin-theme-light .hover\:border-slate-700:hover {
-  border-color: #c5d4cd !important;
-}
-
-.admin-app.admin-theme-light .text-slate-600 {
-  color: #3d5248 !important;
-}
-
-/* Solid status pills (toast / drop feedback) — white on saturated fill */
-.admin-app.admin-theme-light .bg-amber-600,
-.admin-app.admin-theme-light .bg-rose-600 {
-  color: #fff !important;
-}
-
-/*
- * SPA week booking cells — solid light fills + dark text (same idea as day cells).
- * Staff distinction stays in hue, not Tailwind opacity on white paper.
- */
-.admin-app.admin-theme-light .spa-booking-cell-week {
-  color: #14211c !important;
-}
-
-/* Drag handle bars — avoid .text-white white fill (Tailwind circular @apply) */
-.admin-app.admin-theme-light .spa-booking-cell-week .bg-white\/90 {
-  background-color: currentColor !important;
-  opacity: 0.55;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-week.bg-amber-500\/80,
-.admin-app.admin-theme-light .spa-booking-cell-week.bg-amber-500\/85 {
-  background-color: #fff1d6 !important;
-  border-color: #d97706 !important;
-  color: #3f2a00 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-week.bg-violet-500\/80 {
-  background-color: #f3e8ff !important;
-  border-color: #7c3aed !important;
-  color: #4c1d95 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-week.bg-emerald-500\/80 {
-  background-color: #e7f6ef !important;
-  border-color: #059669 !important;
-  color: #065f46 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-week.bg-sky-500\/80 {
-  background-color: #e0f2fe !important;
-  border-color: #0284c7 !important;
-  color: #0c4a6e !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-week.bg-rose-500\/80 {
-  background-color: #fde8ee !important;
-  border-color: #e11d48 !important;
-  color: #9f1239 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-week.bg-orange-500\/80 {
-  background-color: #ffedd5 !important;
-  border-color: #ea580c !important;
-  color: #9a3412 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-week.bg-teal-500\/80 {
-  background-color: #ccfbf1 !important;
-  border-color: #0d9488 !important;
-  color: #115e59 !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-week.bg-fuchsia-500\/80 {
-  background-color: #fae8ff !important;
-  border-color: #c026d3 !important;
-  color: #86198f !important;
-}
-
-.admin-app.admin-theme-light .spa-booking-cell-week.bg-rose-900\/80 {
-  background-color: #fde8ee !important;
-  border-color: #e11d48 !important;
-  color: #9f1239 !important;
-}
-
-.admin-app.admin-theme-light .ring-white\/30 {
-  --tw-ring-color: rgb(20 33 28 / 0.25) !important;
-}
-
-/* SPA journal — default (dark) note chip contrast */
+/* SPA note chips — keep readable on Forma dark */
 .spa-booking-note-chip {
-  background-color: rgb(15 23 42 / 0.92);
+  background-color: rgb(20 20 22 / 0.92);
   color: #fef3c7;
-  border: 1px solid rgb(251 191 36 / 0.55);
+  border: 1px solid rgb(255 208 0 / 0.45);
 }
 
 .spa-booking-note-chip:hover {
-  background-color: rgb(30 41 59 / 0.95);
+  background-color: rgb(28 28 31 / 0.95);
   color: #fffbeb;
 }
 
 .spa-booking-note-dot {
-  background-color: #fbbf24;
-  box-shadow: 0 0 0 1px rgb(15 23 42 / 0.8);
+  background-color: #ffd000;
+  box-shadow: 0 0 0 1px rgb(11 11 12 / 0.8);
 }
 
 .spa-free-gap {

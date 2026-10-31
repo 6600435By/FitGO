@@ -1,6 +1,8 @@
 'use client';
 
 import type { DecayWarning } from '@fitgo/shared-types';
+import { Button } from '@/components/forma/button';
+import { cn } from '@/lib/utils';
 
 export function RatingDecayBanner({
   warning,
@@ -12,27 +14,26 @@ export function RatingDecayBanner({
   loading?: boolean;
 }) {
   const colors = {
-    info: 'border-slate-600 bg-slate-800/50',
-    warning: 'border-yellow-600/50 bg-yellow-500/10',
-    critical: 'border-red-600/50 bg-red-500/10',
+    info: 'border-white/10 bg-ink-raised/70',
+    warning: 'border-amber-500/40 bg-amber-500/10',
+    critical: 'border-rose-500/40 bg-rose-500/10',
   };
 
   return (
-    <div className={`card border ${colors[warning.urgency]}`}>
-      <p className="font-medium">{warning.message}</p>
-      <p className="mt-1 text-sm text-slate-400">
+    <div className={cn('card border', colors[warning.urgency])}>
+      <p className="font-display font-semibold text-white">{warning.message}</p>
+      <p className="mt-1 text-sm text-zinc-400">
         День {warning.dayOfMonth} · до конца месяца {warning.daysLeftInMonth} дн.
       </p>
-      {onDailyGoal && (
-        <button
-          type="button"
+      {onDailyGoal ? (
+        <Button
+          className="mt-3 w-full"
+          loading={loading}
           onClick={onDailyGoal}
-          disabled={loading}
-          className="btn-primary mt-3 w-full"
         >
-          {loading ? '...' : 'Выполнить ежедневную цель (+5 XP)'}
-        </button>
-      )}
+          Выполнить ежедневную цель (+5 XP)
+        </Button>
+      ) : null}
     </div>
   );
 }

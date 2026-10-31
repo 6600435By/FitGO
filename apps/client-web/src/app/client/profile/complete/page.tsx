@@ -6,6 +6,10 @@ import {
   CLIENT_PRIMARY_GOAL_LABELS,
   type ClientPrimaryGoal,
 } from '@fitgo/shared-types';
+import { AuthError, FieldLabel } from '@/components/forma/auth-shell';
+import { Button } from '@/components/forma/button';
+import { Chip } from '@/components/forma/chip';
+import { PageHeader } from '@/components/forma/page-header';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -102,22 +106,21 @@ export default function ProfileCompletePage() {
   if (!hydrated) {
     return (
       <div className="flex justify-center py-12">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-forma-500 border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-lg space-y-4">
-      <h2 className="text-xl font-semibold">Заполните профиль</h2>
-      <p className="text-sm text-slate-400">
-        Минимум для записи, карты и работы с тренером. Остальное можно
-        дополнить позже во вкладке «Профиль».
-      </p>
+    <div className="space-y-4">
+      <PageHeader
+        title="Заполните профиль"
+        subtitle="Минимум для записи, карты и работы с тренером. Остальное — позже в «Профиле»."
+      />
 
       <form onSubmit={submit} className="card space-y-4">
         <div>
-          <label className="mb-1 block text-sm text-slate-400">Имя</label>
+          <FieldLabel>Имя</FieldLabel>
           <input
             className="input"
             required
@@ -126,7 +129,7 @@ export default function ProfileCompletePage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm text-slate-400">Фамилия</label>
+          <FieldLabel>Фамилия</FieldLabel>
           <input
             className="input"
             required
@@ -135,7 +138,7 @@ export default function ProfileCompletePage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm text-slate-400">Телефон</label>
+          <FieldLabel>Телефон</FieldLabel>
           <input
             className="input"
             type="tel"
@@ -146,16 +149,24 @@ export default function ProfileCompletePage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm text-slate-400">Пол</label>
-          <select
-            className="input"
-            value={form.gender}
-            onChange={(e) => setForm({ ...form, gender: e.target.value })}
-          >
-            <option value="MALE">Мужской</option>
-            <option value="FEMALE">Женский</option>
-            <option value="OTHER">Другой</option>
-          </select>
+          <FieldLabel>Пол</FieldLabel>
+          <div className="flex flex-wrap gap-2">
+            {(
+              [
+                ['MALE', 'Мужской'],
+                ['FEMALE', 'Женский'],
+                ['OTHER', 'Другой'],
+              ] as const
+            ).map(([value, label]) => (
+              <Chip
+                key={value}
+                active={form.gender === value}
+                onClick={() => setForm({ ...form, gender: value })}
+              >
+                {label}
+              </Chip>
+            ))}
+          </div>
         </div>
         <DateField
           label="Дата рождения"
@@ -168,30 +179,25 @@ export default function ProfileCompletePage() {
         />
 
         <div>
-          <label className="mb-2 block text-sm text-slate-400">Главная цель</label>
+          <FieldLabel>Главная цель</FieldLabel>
           <div className="flex flex-wrap gap-2">
             {(Object.keys(CLIENT_PRIMARY_GOAL_LABELS) as ClientPrimaryGoal[]).map(
               (g) => (
-                <button
+                <Chip
                   key={g}
-                  type="button"
+                  active={primaryGoal === g}
                   onClick={() => setPrimaryGoal(primaryGoal === g ? '' : g)}
-                  className={`rounded-lg px-3 py-1.5 text-sm ${
-                    primaryGoal === g
-                      ? 'bg-fitgo-500 text-white'
-                      : 'bg-slate-800 text-slate-300'
-                  }`}
                 >
                   {CLIENT_PRIMARY_GOAL_LABELS[g]}
-                </button>
+                </Chip>
               ),
             )}
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1 block text-sm text-slate-400">Рост (см)</label>
+            <FieldLabel>Рост (см)</FieldLabel>
             <input
               className="input"
               type="number"
@@ -200,7 +206,7 @@ export default function ProfileCompletePage() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm text-slate-400">Вес (кг)</label>
+            <FieldLabel>Вес (кг)</FieldLabel>
             <input
               className="input"
               type="number"
@@ -210,11 +216,11 @@ export default function ProfileCompletePage() {
           </div>
         </div>
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        <AuthError>{error}</AuthError>
 
-        <button type="submit" disabled={loading} className="btn-primary w-full">
-          {loading ? 'Сохранение...' : 'Продолжить'}
-        </button>
+        <Button type="submit" className="w-full" size="lg" loading={loading}>
+          Продолжить
+        </Button>
       </form>
     </div>
   );

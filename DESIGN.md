@@ -6,14 +6,27 @@
 
 Когда дизайн откроют отдельно, выбрать один референс и положить его поверх этих токенов. Несколько стилей сразу не смешивать.
 
-## Две поверхности
+## Три поверхности
 
 Они не унифицированы. Не переносить вид одной на другую без отдельной задачи.
 
 | Приложение | Кто | Характер |
 |---|---|---|
-| `apps/web` | клиент, тренер, админ, суперадмин | тёмная операционная оболочка, телефон `max-w-lg`, широкие столы админа на `md+` |
+| `apps/client-web` | клиент Forma (`lk.ffs.by`) | тёмный бренд Forma: графит + жёлтый `#FFD000`, Unbounded + Manrope, плавающий док |
+| `apps/web` | тренер, админ, суперадмин (`app.ffs.by`) | тёмная операционная оболочка FitGO teal, телефон `max-w-lg`, широкие столы админа на `md+` |
 | `apps/specialist-web` | SPA-специалист | светлая и тёмная тема, узкая колонка `max-w-3xl`, нижний док |
+
+## apps/client-web (Forma)
+
+Источник: `apps/client-web/src/app/globals.css`, `tailwind.config.ts`, `src/components/forma/`.
+
+Фон `#0B0B0C` (`ink`), поверхности `#141416` / `#1C1C1F`, линии `white/8%`. Акцент Forma `#FFD000` (`forma-500`); шкала `fitgo-*` в этом приложении алиасится на жёлтый, чтобы старые классы не ломали вид. Текст на акценте — чёрный (`ink`). Шрифты: `font-display` = Unbounded, `font-sans` = Manrope.
+
+Классы: `.card`, `.btn-primary`, `.btn-secondary`, `.btn-ghost`, `.input`, `.stat-value`, `.stat-label`, `.glass`. UI-kit: `src/components/forma/*` (Button, Sheet/vaul, SegmentedControl, Chip, DateStrip, Toast, SeatsMeter, OtpInput, …).
+
+Оболочка: `ClientShell` (`src/components/client/client-shell.tsx`) — шапка с вордмарком, док из 5 вкладок с центральным «Пропуском». Экран `/client/card` без шапки.
+
+Профиль: аватар + `ProgressRing`, iOS-группы ссылок (визиты / достижения / абонементы / реферал), push, горизонтальные `Chip`-вкладки анкеты, выход. Без выбора клуба — клиент Forma. Онбординг и PWA-tip — бренд Forma, без «Выберите клуб».
 
 ## apps/web
 

@@ -2,25 +2,25 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { Button } from '@/components/forma/button';
+import { FormaWordmark } from '@/components/forma/wordmark';
 
 const STEPS = [
   {
-    title: 'Ваш клуб',
-    text: 'Выберите клуб на главной — имя и адрес появятся в личном кабинете.',
+    title: 'Добро пожаловать в Forma',
+    text: 'Личный кабинет вашего клуба: расписание, записи и прогресс — в одном месте.',
     href: '/client',
-    cta: 'К выбору клуба',
+    cta: 'На главную',
   },
   {
     title: 'Расписание',
-    text: 'Смотрите групповые программы. Запись — после оформления в клубе.',
+    text: 'Смотрите групповые программы и персональные слоты. Запись — в пару касаний.',
     href: '/client/schedule',
     cta: 'Смотреть расписание',
   },
   {
     title: 'Мои записи',
-    text: 'Все предстоящие занятия — в одном месте. Отмена в пару кликов.',
+    text: 'Все предстоящие занятия — здесь. Отмена без лишних экранов.',
     href: '/client/bookings',
     cta: 'Мои записи',
   },
@@ -32,19 +32,7 @@ export function ClientOnboarding() {
 
   useEffect(() => {
     if (localStorage.getItem('fitgo-onboarding-done')) return;
-    const token = getToken();
-    if (!token) {
-      setVisible(true);
-      return;
-    }
-    api
-      .clientDashboard(token)
-      .then((dash) => {
-        // Skip club step if already joined
-        setStep(dash.club ? 1 : 0);
-        setVisible(true);
-      })
-      .catch(() => setVisible(true));
+    setVisible(true);
   }, []);
 
   if (!visible) return null;
@@ -58,35 +46,38 @@ export function ClientOnboarding() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4">
-      <div className="card w-full max-w-lg">
-        <p className="text-sm text-fitgo-400">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 backdrop-blur-sm sm:items-center">
+      <div className="card w-full max-w-lg space-y-4 border-forma-500/20">
+        <FormaWordmark size="sm" />
+        <p className="text-xs font-medium uppercase tracking-wider text-forma-400">
           Шаг {step + 1} из {STEPS.length}
         </p>
-        <h3 className="mt-2 text-xl font-semibold">{current.title}</h3>
-        <p className="mt-2 text-slate-400">{current.text}</p>
-        <div className="mt-6 flex gap-2">
+        <h3 className="font-display text-2xl font-bold text-white">
+          {current.title}
+        </h3>
+        <p className="text-zinc-400">{current.text}</p>
+        <div className="flex gap-2 pt-2">
           {isLast ? (
             <>
-              <Link href={current.href} onClick={finish} className="btn-primary flex-1 text-center">
+              <Link
+                href={current.href}
+                onClick={finish}
+                className="inline-flex flex-1 items-center justify-center rounded-2xl bg-forma-500 px-4 py-3.5 text-[15px] font-semibold text-ink touch-manipulation hover:bg-forma-400"
+              >
                 {current.cta}
               </Link>
-              <button type="button" onClick={finish} className="btn-secondary">
+              <Button variant="secondary" onClick={finish}>
                 Готово
-              </button>
+              </Button>
             </>
           ) : (
             <>
-              <button type="button" onClick={finish} className="btn-secondary">
+              <Button variant="ghost" onClick={finish}>
                 Пропустить
-              </button>
-              <button
-                type="button"
-                onClick={() => setStep((s) => s + 1)}
-                className="btn-primary flex-1"
-              >
+              </Button>
+              <Button className="flex-1" onClick={() => setStep((s) => s + 1)}>
                 Далее
-              </button>
+              </Button>
             </>
           )}
         </div>

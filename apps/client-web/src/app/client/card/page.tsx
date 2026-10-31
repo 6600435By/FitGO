@@ -4,6 +4,9 @@ import type { ClubCardView, ClubCrmLinkStatus, Membership } from '@fitgo/shared-
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { BarcodeCard } from '@/components/barcode-card';
+import { Button } from '@/components/forma/button';
+import { PageHeader } from '@/components/forma/page-header';
+import { Skeleton } from '@/components/forma/skeleton';
 import { ModuleGate } from '@/components/module-gate';
 import { api } from '@/lib/api';
 import {
@@ -98,7 +101,9 @@ function ClientCardPageInner() {
               });
             } else if (!readAccessCardCache()) {
               applyCard(null);
-              setMembershipOnly(dashboard.membership ?? result.membership ?? null);
+              setMembershipOnly(
+                dashboard.membership ?? result.membership ?? null,
+              );
             }
           });
         })
@@ -125,7 +130,7 @@ function ClientCardPageInner() {
         if (!('wakeLock' in navigator)) return;
         lock = await navigator.wakeLock.request('screen');
       } catch {
-        // Unsupported or denied — brightness hint covers it
+        /* unsupported */
       }
     };
 
@@ -183,57 +188,65 @@ function ClientCardPageInner() {
 
   if (loading && !card) {
     return (
-      <div className="space-y-3">
-        <div className="h-72 animate-pulse rounded-3xl bg-slate-800/60" />
-        <p className="text-center text-sm text-slate-500">Загрузка карты…</p>
+      <div className="space-y-4 px-4 pt-4">
+        <Skeleton className="h-80 w-full rounded-[1.75rem]" />
+        <p className="text-center text-sm text-zinc-500">Загрузка пропуска…</p>
       </div>
     );
   }
 
   if (error && !card) {
     return (
-      <div className="card space-y-3 text-center">
-        <p className="text-red-400">{error}</p>
-        <button type="button" onClick={() => load()} className="btn-secondary">
-          Повторить
-        </button>
+      <div className="space-y-4 px-4 pt-6">
+        <div className="card space-y-3 text-center">
+          <p className="text-rose-400">{error}</p>
+          <Button variant="secondary" onClick={() => load()}>
+            Повторить
+          </Button>
+        </div>
       </div>
     );
   }
 
   if (needsPhone && !card) {
     return (
-      <div className="card space-y-3 text-center">
-        <p className="text-slate-400">
-          Укажите телефон в профиле — по нему найдём клиента в 1С и клубную карту.
-        </p>
-        <Link href="/client/profile/complete" className="btn-primary inline-block">
-          Заполнить профиль
-        </Link>
+      <div className="space-y-4 px-4 pt-6">
+        <div className="card space-y-3 text-center">
+          <p className="text-zinc-400">
+            Укажите телефон в профиле — по нему найдём клиента в 1С и клубную
+            карту.
+          </p>
+          <Link href="/client/profile/complete" className="btn-primary inline-block">
+            Заполнить профиль
+          </Link>
+        </div>
       </div>
     );
   }
 
   if (crmStatus === 'PENDING_CRM' && !card) {
     return (
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-xl font-semibold">Карта клуба</h2>
-          <button
-            type="button"
-            onClick={handleSync}
-            disabled={syncing}
-            className="text-sm text-fitgo-400"
-          >
-            {syncing ? 'Обновление…' : 'Обновить'}
-          </button>
-        </div>
+      <div className="space-y-4 px-4 pt-6">
+        <PageHeader
+          title="Пропуск"
+          action={
+            <button
+              type="button"
+              onClick={handleSync}
+              disabled={syncing}
+              className="text-sm font-medium text-forma-400"
+            >
+              {syncing ? 'Обновление…' : 'Обновить'}
+            </button>
+          }
+        />
         <div className="card space-y-3 text-center">
-          <p className="text-lg font-semibold">Ожидает оформления в 1С</p>
-          <p className="text-slate-400">
+          <p className="font-display text-lg font-semibold">
+            Ожидает оформления в 1С
+          </p>
+          <p className="text-zinc-400">
             Штрихкод и запись на групповые появятся после заведения клиента на
-            ресепшен. Расписание можно смотреть уже сейчас; вход в зал — по
-            решению администратора.
+            ресепшен.
           </p>
           <Link href="/client/schedule" className="btn-primary inline-block">
             Смотреть расписание
@@ -247,33 +260,30 @@ function ClientCardPageInner() {
 
   if (!card && !membership) {
     return (
-      <div className="card space-y-3 text-center text-slate-400">
-        <p>Карта доступа недоступна</p>
-        <button
-          type="button"
-          onClick={handleSync}
-          disabled={syncing}
-          className="btn-primary w-full"
-        >
-          {syncing ? 'Синхронизация…' : 'Обновить'}
-        </button>
-        {anketaUrl && (
-          <a
-            href={anketaUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-secondary block"
-          >
-            Получить карту на сайте OSMI
-          </a>
-        )}
+      <div className="space-y-4 px-4 pt-6">
+        <div className="card space-y-3 text-center text-zinc-400">
+          <p>Карта доступа недоступна</p>
+          <Button className="w-full" loading={syncing} onClick={handleSync}>
+            Обновить
+          </Button>
+          {anketaUrl ? (
+            <a
+              href={anketaUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-secondary block"
+            >
+              Получить карту на сайте OSMI
+            </a>
+          ) : null}
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-3">
-      {card && (
+    <div className="space-y-3 px-4 pb-2 pt-4">
+      {card ? (
         <>
           <BarcodeCard
             barcode={card.barcode}
@@ -283,26 +293,26 @@ function ClientCardPageInner() {
             membership={membership ?? undefined}
           />
 
-          <p className="text-center text-xs text-slate-400">
-            Для надёжного скана увеличьте яркость экрана
-            {fromCache ? ' · показан последний сохранённый код' : ''}
+          <p className="text-center text-xs text-zinc-500">
+            Для скана увеличьте яркость
+            {fromCache ? ' · показан сохранённый код' : ''}
           </p>
 
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center justify-between gap-2 px-1">
             <button
               type="button"
               onClick={handleSync}
               disabled={syncing}
-              className="text-sm text-fitgo-400"
+              className="text-sm font-medium text-forma-400 touch-manipulation"
             >
               {syncing ? 'Обновление…' : 'Обновить'}
             </button>
-            <Link href="/client/visits" className="text-sm text-slate-400">
+            <Link href="/client/visits" className="text-sm text-zinc-400">
               Визиты →
             </Link>
           </div>
 
-          {card.walletUrl && (
+          {card.walletUrl ? (
             <a
               href={card.walletUrl}
               target="_blank"
@@ -311,21 +321,21 @@ function ClientCardPageInner() {
             >
               Добавить в Apple / Google Wallet
             </a>
-          )}
+          ) : null}
         </>
-      )}
+      ) : null}
 
-      {syncError && (
-        <p className="rounded-xl bg-amber-400/10 px-3 py-2 text-sm text-amber-300">
+      {syncError ? (
+        <p className="rounded-2xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
           {syncError}. Показана последняя сохранённая карта.
         </p>
-      )}
+      ) : null}
 
-      {!card && membership && (
-        <p className="text-center text-sm text-slate-400">
+      {!card && membership ? (
+        <p className="text-center text-sm text-zinc-400">
           Штрихкод ещё не присвоен в 1С. Обратитесь на ресепшен.
         </p>
-      )}
+      ) : null}
     </div>
   );
 }

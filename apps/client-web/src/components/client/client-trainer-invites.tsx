@@ -2,8 +2,11 @@
 
 import type { TrainerInviteRequest } from '@fitgo/shared-types';
 import { useCallback, useEffect, useState } from 'react';
+import { Avatar } from '@/components/forma/avatar';
+import { Button } from '@/components/forma/button';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { cn } from '@/lib/utils';
 
 export function ClientTrainerInvites() {
   const [requests, setRequests] = useState<TrainerInviteRequest[]>([]);
@@ -13,7 +16,10 @@ export function ClientTrainerInvites() {
   const load = useCallback(() => {
     const token = getToken();
     if (!token) return;
-    api.clientTrainerInvites(token).then(setRequests).catch((err) => setError(err.message));
+    api
+      .clientTrainerInvites(token)
+      .then(setRequests)
+      .catch((err) => setError(err.message));
   }, []);
 
   useEffect(() => {
@@ -44,45 +50,53 @@ export function ClientTrainerInvites() {
 
   return (
     <section className="card space-y-3">
-      <h3 className="font-medium">Приглашения тренеров</h3>
-      {error && <p className="text-sm text-red-400">{error}</p>}
+      <h3 className="font-display font-semibold text-white">
+        Приглашения тренеров
+      </h3>
+      {error ? <p className="text-sm text-rose-400">{error}</p> : null}
       {requests.length === 0 ? (
-        <p className="text-sm text-slate-400">Нет новых приглашений</p>
+        <p className="text-sm text-zinc-400">Нет новых приглашений</p>
       ) : (
         <ul className="space-y-3">
           {requests.map((req) => (
             <li
               key={req.trainerId}
-              className={`rounded-xl border p-3 ${
+              className={cn(
+                'rounded-2xl border p-3',
                 req.highlight
-                  ? 'border-fitgo-500/40 bg-fitgo-500/5'
-                  : 'border-slate-800'
-              }`}
-            >
-              <p className="font-medium">{req.trainerName}</p>
-              {req.highlight && (
-                <p className="mt-1 text-sm text-fitgo-400">
-                  Тренер добавил вас по телефону — подтвердите, чтобы видеть историю
-                  тренировок
-                </p>
+                  ? 'border-forma-500/40 bg-forma-500/5'
+                  : 'border-white/10 bg-ink-raised/60',
               )}
-              <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  className="btn-primary flex-1 text-sm"
-                  disabled={busyId === req.trainerId}
-                  onClick={() => respond(req.trainerId, 'accept')}
+            >
+              <div className="flex items-center gap-3">
+                <Avatar name={req.trainerName} />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-white">{req.trainerName}</p>
+                  {req.highlight ? (
+                    <p className="text-xs text-forma-400">
+                      Добавил вас по телефону
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+              <div className="mt-3 flex gap-2">
+                <Button
+                  className="flex-1"
+                  size="sm"
+                  loading={busyId === req.trainerId}
+                  onClick={() => void respond(req.trainerId, 'accept')}
                 >
                   Принять
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary flex-1 text-sm"
+                </Button>
+                <Button
+                  className="flex-1"
+                  size="sm"
+                  variant="secondary"
                   disabled={busyId === req.trainerId}
-                  onClick={() => respond(req.trainerId, 'reject')}
+                  onClick={() => void respond(req.trainerId, 'reject')}
                 >
                   Отклонить
-                </button>
+                </Button>
               </div>
             </li>
           ))}

@@ -2,7 +2,11 @@
 
 import type { TrainerInviteRequest } from '@fitgo/shared-types';
 import { useCallback, useEffect, useState } from 'react';
+import { AuthError, AuthShell } from '@/components/forma/auth-shell';
+import { Avatar } from '@/components/forma/avatar';
+import { Button } from '@/components/forma/button';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 export function TrainerOnboarding({
   token,
@@ -43,64 +47,71 @@ export function TrainerOnboarding({
   };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center px-4">
-      <div className="w-full max-w-lg space-y-4">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold">Подтвердите тренеров</h1>
-          <p className="mt-2 text-slate-400">
-            Эти тренеры хотят вести вас. Подтвердите или отклоните каждого.
-          </p>
+    <AuthShell
+      title="Ваши тренеры"
+      subtitle="Подтвердите или отклоните приглашения — можно сделать это позже в профиле"
+    >
+      {requests.length === 0 ? (
+        <div className="card space-y-4 text-center">
+          <p className="text-zinc-400">Нет ожидающих приглашений</p>
+          <Button className="w-full" size="lg" onClick={onComplete}>
+            В кабинет
+          </Button>
         </div>
-
-        {requests.length === 0 ? (
-          <div className="card text-center text-slate-400">
-            <p>Нет ожидающих приглашений</p>
-            <button type="button" className="btn-primary mt-4" onClick={onComplete}>
-              Продолжить
-            </button>
-          </div>
-        ) : (
-          <>
-            <ul className="space-y-3">
-              {requests.map((req) => (
-                <li
-                  key={req.trainerId}
-                  className={`card ${req.highlight ? 'ring-1 ring-fitgo-500/50' : ''}`}
-                >
-                  <p className="font-medium">{req.trainerName}</p>
-                  {req.highlight && (
-                    <p className="mt-1 text-sm text-fitgo-400">
-                      Тренер добавил вас по телефону — подтвердите связь
+      ) : (
+        <div className="space-y-3">
+          <ul className="space-y-3">
+            {requests.map((req) => (
+              <li
+                key={req.trainerId}
+                className={cn(
+                  'card',
+                  req.highlight && 'border-forma-500/40 shadow-forma-glow',
+                )}
+              >
+                <div className="flex items-start gap-3">
+                  <Avatar name={req.trainerName} size="lg" />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-display text-lg font-semibold text-white">
+                      {req.trainerName}
                     </p>
-                  )}
-                  <div className="mt-3 flex gap-2">
-                    <button
-                      type="button"
-                      className="btn-primary flex-1 text-sm"
-                      disabled={busyId === req.trainerId}
-                      onClick={() => respond(req.trainerId, 'accept')}
-                    >
-                      Принять
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary flex-1 text-sm"
-                      disabled={busyId === req.trainerId}
-                      onClick={() => respond(req.trainerId, 'reject')}
-                    >
-                      Отклонить
-                    </button>
+                    {req.highlight ? (
+                      <p className="mt-1 text-sm text-forma-400">
+                        Добавил вас по телефону — подтвердите связь
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-sm text-zinc-400">
+                        Хочет вести ваши тренировки
+                      </p>
+                    )}
                   </div>
-                </li>
-              ))}
-            </ul>
-            {error && <p className="text-sm text-red-400">{error}</p>}
-            <button type="button" className="btn-secondary w-full" onClick={onComplete}>
-              Пропустить и продолжить
-            </button>
-          </>
-        )}
-      </div>
-    </div>
+                </div>
+                <div className="mt-4 flex gap-2">
+                  <Button
+                    className="flex-1"
+                    loading={busyId === req.trainerId}
+                    onClick={() => void respond(req.trainerId, 'accept')}
+                  >
+                    Принять
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="flex-1"
+                    disabled={busyId === req.trainerId}
+                    onClick={() => void respond(req.trainerId, 'reject')}
+                  >
+                    Отклонить
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <AuthError>{error}</AuthError>
+          <Button variant="ghost" className="w-full" onClick={onComplete}>
+            Пропустить и продолжить
+          </Button>
+        </div>
+      )}
+    </AuthShell>
   );
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import {
   BODY_LIMITATION_LABELS,
@@ -8,6 +9,7 @@ import {
   EXPERIENCE_LEVEL_LABELS,
   GOAL_HORIZON_OPTIONS,
   HOME_EQUIPMENT_LABELS,
+  MembershipStatus,
   PREFERRED_INTENSITY_LABELS,
   PREFERRED_MODALITY_LABELS,
   PREFERRED_TIME_LABELS,
@@ -20,13 +22,37 @@ import {
   type ClientTrainingProfile,
   type ExperienceLevel,
   type HomeEquipmentItem,
+  type Membership,
   type PreferredIntensity,
   type PreferredModality,
   type PreferredTimeOfDay,
 } from '@fitgo/shared-types';
+import {
+  ChevronRight,
+  Gift,
+  LogOut,
+  ShoppingBag,
+  Trophy,
+  Dumbbell,
+  User,
+  Target,
+  Ruler,
+  Activity,
+  Ban,
+  SlidersHorizontal,
+  Star,
+} from 'lucide-react';
+import { Avatar } from '@/components/forma/avatar';
+import { Button } from '@/components/forma/button';
+import { Chip } from '@/components/forma/chip';
+import { PageHeader } from '@/components/forma/page-header';
+import { ProgressRing } from '@/components/forma/progress-ring';
+import { Sheet } from '@/components/forma/sheet';
+import { SkeletonCard } from '@/components/forma/skeleton';
+import { PushSubscribeButton } from '@/components/push-subscribe-button';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { clearAuth, getToken } from '@/lib/auth';
 
 type Tab =
   | 'account'
@@ -48,7 +74,7 @@ function toggleInList<T extends string>(list: T[], value: T, exclusive?: T): T[]
   return [...withoutExclusive, value];
 }
 
-function Chip({
+function ProfileChip({
   active,
   label,
   onClick,
@@ -58,21 +84,51 @@ function Chip({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-lg px-3 py-1.5 text-sm ${
-        active ? 'bg-fitgo-500 text-white' : 'bg-slate-800 text-slate-300'
-      }`}
-    >
+    <Chip active={active} onClick={onClick}>
       {label}
-    </button>
+    </Chip>
   );
 }
 
+const SHEET_META: {
+  id: Tab;
+  label: string;
+  hint: string;
+  icon: typeof User;
+}[] = [
+  { id: 'account', label: 'Данные', hint: 'Имя, телефон, дата рождения', icon: User },
+  { id: 'goals', label: 'Цели', hint: '1–2 главные цели', icon: Target },
+  { id: 'body', label: 'Тело', hint: 'Рост, вес, замеры', icon: Ruler },
+  { id: 'training', label: 'Опыт', hint: 'Уровень и стаж', icon: Activity },
+  { id: 'limits', label: 'Ограничения', hint: 'Зоны и противопоказания', icon: Ban },
+  { id: 'prefs', label: 'Предпочтения', hint: 'Время, интенсивность', icon: SlidersHorizontal },
+  { id: 'rating', label: 'Рейтинг', hint: 'Ник и лиги', icon: Star },
+];
+
+function membershipStatusLabel(m: Membership | null): string {
+  if (!m) return 'Нет абонемента';
+  if (typeof m.debtAmount === 'number' && m.debtAmount > 0) {
+    return 'Долг по абонементу';
+  }
+  switch (m.status) {
+    case MembershipStatus.ACTIVE:
+      return 'Абонемент активен';
+    case MembershipStatus.FROZEN:
+      return 'Заморожен';
+    case MembershipStatus.EXPIRED:
+      return 'Истёк';
+    case MembershipStatus.PENDING:
+      return 'Ожидает оформления';
+    default:
+      return String(m.status);
+  }
+}
+
 export default function ClientProfilePage() {
-  const [tab, setTab] = useState<Tab>('account');
+  const router = useRouter();
+  const [sheet, setSheet] = useState<Tab | null>(null);
   const [profile, setProfile] = useState<ClientProfile | null>(null);
+  const [membership, setMembership] = useState<Membership | null>(null);
   const [training, setTraining] = useState<ClientTrainingProfile>(
     emptyTrainingProfile(),
   );
@@ -93,6 +149,7 @@ export default function ClientProfilePage() {
     bodyFatPct: '',
   });
   const [editingLogId, setEditingLogId] = useState<string | null>(null);
+  const [deleteLogId, setDeleteLogId] = useState<string | null>(null);
   const [editLogForm, setEditLogForm] = useState({
     weightKg: '',
     chestCm: '',
@@ -127,6 +184,11 @@ export default function ClientProfilePage() {
   useEffect(() => {
     loadProfile();
     loadBody();
+    if (!token) return;
+    api
+      .clientDashboard(token)
+      .then((d) => setMembership(d.membership))
+      .catch(() => {});
   }, [token]);
 
   useEffect(() => {
@@ -294,11 +356,11 @@ export default function ClientProfilePage() {
 
   const deleteLog = async (id: string) => {
     if (!token) return;
-    if (!window.confirm('Удалить эту запись замеров?')) return;
     setError('');
     try {
       await api.deleteBodyLog(token, id);
       if (editingLogId === id) setEditingLogId(null);
+      setDeleteLogId(null);
       setMsg('Запись удалена');
       loadBody();
     } catch (e) {
@@ -343,72 +405,165 @@ export default function ClientProfilePage() {
 
   if (!profile) {
     return (
-      <div className="flex justify-center py-12">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+      <div className="space-y-3">
+        <SkeletonCard />
+        <SkeletonCard />
       </div>
     );
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'account', label: 'Аккаунт' },
-    { id: 'goals', label: 'Цели' },
-    { id: 'body', label: 'Тело' },
-    { id: 'training', label: 'Опыт' },
-    { id: 'limits', label: 'Ограничения' },
-    { id: 'prefs', label: 'Предпочтения' },
-    { id: 'rating', label: 'Рейтинг' },
-  ];
+  const displayName =
+    `${profile.firstName} ${profile.lastName}`.trim() || 'Клиент';
+
+  const logout = () => {
+    clearAuth();
+    router.push('/login');
+  };
+
+  const openSheet = (id: Tab) => {
+    setSheet(id);
+    setMsg('');
+    setError('');
+    setEditingLogId(null);
+  };
+
+  const sheetMeta = SHEET_META.find((s) => s.id === sheet);
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold">Профиль</h2>
-        <p className="text-sm text-slate-400">
-          Анкета для тренировок — видна вам и тренеру
-        </p>
-      </div>
+      <PageHeader
+        title="Профиль"
+        subtitle="Анкета для тренировок — видна вам и тренеру"
+      />
 
-      <div className="card space-y-2">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-slate-400">Заполнено</span>
-          <span className="font-medium text-fitgo-400">{completeness}%</span>
-        </div>
-        <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-          <div
-            className="h-full rounded-full bg-fitgo-500 transition-all"
-            style={{ width: `${completeness}%` }}
-          />
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-1.5">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => {
-              setTab(t.id);
-              setMsg('');
-              setError('');
-              setEditingLogId(null);
-            }}
-            className={`rounded-lg px-3 py-2 text-center text-xs font-medium leading-snug ${
-              tab === t.id ? 'bg-fitgo-500 text-white' : 'bg-slate-800 text-slate-300'
+      <div className="card flex items-center gap-4">
+        <Avatar name={displayName} size="xl" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-display text-xl font-bold text-white">
+            {displayName}
+          </p>
+          {profile.phone ? (
+            <p className="text-sm text-zinc-400">{profile.phone}</p>
+          ) : null}
+          <p
+            className={`mt-1 text-xs font-medium ${
+              typeof membership?.debtAmount === 'number' &&
+              membership.debtAmount > 0
+                ? 'text-rose-400'
+                : membership?.status === MembershipStatus.ACTIVE
+                  ? 'text-emerald-400'
+                  : membership?.status === MembershipStatus.FROZEN
+                    ? 'text-amber-400'
+                    : 'text-zinc-500'
             }`}
           >
-            {t.label}
-          </button>
-        ))}
+            {membershipStatusLabel(membership)}
+          </p>
+        </div>
+        <ProgressRing value={completeness} max={100} size={64} stroke={6}>
+          <span className="font-display text-xs font-bold tabular-nums text-forma-400">
+            {completeness}%
+          </span>
+        </ProgressRing>
       </div>
+
+      <div>
+        <p className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-zinc-500">
+          Анкета
+        </p>
+        <div className="overflow-hidden rounded-3xl border border-white/[0.08] bg-ink-elevated/90">
+          {SHEET_META.map((item, i, arr) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => openSheet(item.id)}
+              className={`flex w-full items-center gap-3 px-4 py-3.5 text-left touch-manipulation hover:bg-white/[0.03] ${
+                i < arr.length - 1 ? 'border-b border-white/[0.06]' : ''
+              }`}
+            >
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.06] text-forma-400">
+                <item.icon className="h-4 w-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium text-white">{item.label}</span>
+                <span className="block text-xs text-zinc-500">{item.hint}</span>
+              </span>
+              <ChevronRight className="h-4 w-4 text-zinc-500" />
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-2 px-1 text-xs font-medium uppercase tracking-wider text-zinc-500">
+          Клуб
+        </p>
+        <div className="overflow-hidden rounded-3xl border border-white/[0.08] bg-ink-elevated/90">
+          {(
+            [
+              {
+                href: '/client/visits',
+                label: 'Визиты',
+                icon: Dumbbell,
+              },
+              {
+                href: '/client/engagement',
+                label: 'Достижения',
+                icon: Trophy,
+              },
+              {
+                href: '/client/products',
+                label: 'Абонементы',
+                icon: ShoppingBag,
+              },
+              {
+                href: '/client/referral',
+                label: 'Пригласить друга',
+                icon: Gift,
+              },
+            ] as const
+          ).map((item, i, arr) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-3 px-4 py-3.5 touch-manipulation hover:bg-white/[0.03] ${
+                i < arr.length - 1 ? 'border-b border-white/[0.06]' : ''
+              }`}
+            >
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-forma-500/15 text-forma-400">
+                <item.icon className="h-4 w-4" />
+              </span>
+              <span className="flex-1 font-medium text-white">{item.label}</span>
+              <ChevronRight className="h-4 w-4 text-zinc-500" />
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      <div className="card flex items-center justify-between gap-3">
+        <div>
+          <p className="font-medium text-white">Уведомления</p>
+          <p className="text-xs text-zinc-500">Push о записях и новостях клуба</p>
+        </div>
+        <PushSubscribeButton />
+      </div>
+
       {savingTraining && (
-        <p className="text-xs text-slate-500">Сохранение анкеты…</p>
+        <p className="text-xs text-zinc-500">Сохранение анкеты…</p>
       )}
+      {msg && <p className="text-sm text-forma-400">{msg}</p>}
+      {error && <p className="text-sm text-rose-400">{error}</p>}
 
-      {msg && <p className="text-sm text-fitgo-400">{msg}</p>}
-      {error && <p className="text-sm text-red-400">{error}</p>}
-
-      {tab === 'account' && (
-        <div className="card space-y-3">
+      <Sheet
+        open={sheet != null}
+        onOpenChange={(open) => {
+          if (!open) setSheet(null);
+        }}
+        title={sheetMeta?.label}
+        description={sheetMeta?.hint}
+      >
+        {sheet === 'account' && (
+        <div className="space-y-3">
           <input
             className="input"
             placeholder="Имя"
@@ -441,21 +596,21 @@ export default function ClientProfilePage() {
             value={profile.dateOfBirth ?? ''}
             onChange={(v) => setProfile({ ...profile, dateOfBirth: v })}
           />
-          <button type="button" onClick={saveProfile} className="btn-primary w-full">
+          <button type="button" onClick={saveProfile} className="btn-primary bg-forma-500 text-ink hover:bg-forma-400 w-full">
             Сохранить
           </button>
         </div>
       )}
 
-      {tab === 'goals' && (
-        <div className="card space-y-4">
-          <p className="text-sm text-slate-400">
+      {sheet === 'goals' && (
+        <div className="space-y-4">
+          <p className="text-sm text-zinc-400">
             Выберите 1–2 главные цели — сохраняется сразу
           </p>
           <div className="flex flex-wrap gap-2">
             {(Object.keys(CLIENT_PRIMARY_GOAL_LABELS) as ClientPrimaryGoal[]).map(
               (g) => (
-                <Chip
+                <ProfileChip
                   key={g}
                   label={CLIENT_PRIMARY_GOAL_LABELS[g]}
                   active={training.primaryGoals.includes(g)}
@@ -470,10 +625,10 @@ export default function ClientProfilePage() {
             )}
           </div>
           <div>
-            <label className="mb-1 block text-sm text-slate-400">Горизонт</label>
+            <label className="mb-1 block text-sm text-zinc-400">Горизонт</label>
             <div className="flex flex-wrap gap-2">
               {GOAL_HORIZON_OPTIONS.map((w) => (
-                <Chip
+                <ProfileChip
                   key={w}
                   label={`${w} нед.`}
                   active={training.goalHorizonWeeks === w}
@@ -504,13 +659,13 @@ export default function ClientProfilePage() {
         </div>
       )}
 
-      {tab === 'body' && (
-        <div className="card space-y-4">
+      {sheet === 'body' && (
+        <div className="space-y-4">
           <div>
-            <h3 className="mb-2 text-sm font-medium text-slate-300">Базовые параметры</h3>
+            <h3 className="mb-2 text-sm font-medium text-zinc-300">Базовые параметры</h3>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="mb-1 block text-xs text-slate-500">Рост (см)</label>
+                <label className="mb-1 block text-xs text-zinc-500">Рост (см)</label>
                 <input
                   className="input"
                   type="number"
@@ -523,7 +678,7 @@ export default function ClientProfilePage() {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs text-slate-500">
+                <label className="mb-1 block text-xs text-zinc-500">
                   Цель по весу (кг)
                 </label>
                 <input
@@ -539,30 +694,30 @@ export default function ClientProfilePage() {
               </div>
             </div>
             {latestWeightKg != null && (
-              <p className="mt-2 text-sm text-slate-400">
+              <p className="mt-2 text-sm text-zinc-400">
                 Текущий вес:{' '}
                 <span className="font-medium text-white">{latestWeightKg} кг</span>
-                <span className="text-slate-500"> — из последней записи истории</span>
+                <span className="text-zinc-500"> — из последней записи истории</span>
               </p>
             )}
             <button
               type="button"
               onClick={saveBodyBaseline}
-              className="btn-secondary mt-3 w-full"
+              className="btn-secondary border-white/10 bg-ink-raised text-white hover:bg-ink-elevated mt-3 w-full"
             >
               Сохранить рост и цель
             </button>
           </div>
 
           <div className="border-t border-slate-800 pt-3">
-            <h3 className="mb-1 text-sm font-medium text-slate-300">
+            <h3 className="mb-1 text-sm font-medium text-zinc-300">
               Новая запись замеров
             </h3>
-            <p className="mb-2 text-xs text-slate-500">
+            <p className="mb-2 text-xs text-zinc-500">
               Вес и обхваты попадают в историю — их можно править или удалить ниже
             </p>
             <div>
-              <label className="mb-1 block text-xs text-slate-500">Вес (кг)</label>
+              <label className="mb-1 block text-xs text-zinc-500">Вес (кг)</label>
               <input
                 className="input"
                 type="number"
@@ -586,7 +741,7 @@ export default function ClientProfilePage() {
                 ] as const
               ).map(([key, label]) => (
                 <div key={key}>
-                  <label className="mb-1 block text-xs text-slate-500">{label}</label>
+                  <label className="mb-1 block text-xs text-zinc-500">{label}</label>
                   <input
                     className="input"
                     type="number"
@@ -602,7 +757,7 @@ export default function ClientProfilePage() {
             <button
               type="button"
               onClick={saveBodyLog}
-              className="btn-primary mt-3 w-full"
+              className="btn-primary bg-forma-500 text-ink hover:bg-forma-400 mt-3 w-full"
             >
               Добавить в историю
             </button>
@@ -615,11 +770,11 @@ export default function ClientProfilePage() {
                 {body.logs.slice(0, 20).map((l) => (
                   <li
                     key={l.id}
-                    className="rounded-lg bg-slate-800/50 px-3 py-2"
+                    className="rounded-lg bg-ink-raised/50 px-3 py-2"
                   >
                     {editingLogId === l.id ? (
                       <div className="space-y-2">
-                        <p className="text-slate-400">
+                        <p className="text-zinc-400">
                           {new Date(l.recordedAt).toLocaleDateString('ru-RU')}
                         </p>
                         <div className="grid grid-cols-2 gap-2">
@@ -635,7 +790,7 @@ export default function ClientProfilePage() {
                             ] as const
                           ).map(([key, label]) => (
                             <div key={key}>
-                              <label className="mb-0.5 block text-xs text-slate-500">
+                              <label className="mb-0.5 block text-xs text-zinc-500">
                                 {label}
                               </label>
                               <input
@@ -657,14 +812,14 @@ export default function ClientProfilePage() {
                           <button
                             type="button"
                             onClick={saveEditLog}
-                            className="btn-primary flex-1"
+                            className="btn-primary bg-forma-500 text-ink hover:bg-forma-400 flex-1"
                           >
                             Сохранить
                           </button>
                           <button
                             type="button"
                             onClick={() => setEditingLogId(null)}
-                            className="btn-secondary flex-1"
+                            className="btn-secondary border-white/10 bg-ink-raised text-white hover:bg-ink-elevated flex-1"
                           >
                             Отмена
                           </button>
@@ -673,7 +828,7 @@ export default function ClientProfilePage() {
                     ) : (
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="text-slate-400">
+                          <p className="text-zinc-400">
                             {new Date(l.recordedAt).toLocaleDateString('ru-RU')}
                           </p>
                           <p className="truncate">
@@ -694,14 +849,14 @@ export default function ClientProfilePage() {
                           <button
                             type="button"
                             onClick={() => startEditLog(l)}
-                            className="text-xs text-fitgo-400"
+                            className="text-xs text-forma-400"
                           >
                             Изменить
                           </button>
                           <button
                             type="button"
-                            onClick={() => void deleteLog(l.id)}
-                            className="text-xs text-red-400"
+                            onClick={() => setDeleteLogId(l.id)}
+                            className="text-xs text-rose-400"
                           >
                             Удалить
                           </button>
@@ -716,14 +871,14 @@ export default function ClientProfilePage() {
         </div>
       )}
 
-      {tab === 'training' && (
-        <div className="card space-y-4">
+      {sheet === 'training' && (
+        <div className="space-y-4">
           <div>
-            <label className="mb-2 block text-sm text-slate-400">Опыт</label>
+            <label className="mb-2 block text-sm text-zinc-400">Опыт</label>
             <div className="flex flex-wrap gap-2">
               {(Object.keys(EXPERIENCE_LEVEL_LABELS) as ExperienceLevel[]).map(
                 (lvl) => (
-                  <Chip
+                  <ProfileChip
                     key={lvl}
                     label={EXPERIENCE_LEVEL_LABELS[lvl]}
                     active={training.experienceLevel === lvl}
@@ -742,7 +897,7 @@ export default function ClientProfilePage() {
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="mb-1 block text-sm text-slate-400">Лет тренировок</label>
+              <label className="mb-1 block text-sm text-zinc-400">Лет тренировок</label>
               <input
                 className="input"
                 type="number"
@@ -767,7 +922,7 @@ export default function ClientProfilePage() {
               />
             </div>
             <div>
-              <label className="mb-1 block text-sm text-slate-400">Раз в неделю</label>
+              <label className="mb-1 block text-sm text-zinc-400">Раз в неделю</label>
               <input
                 className="input"
                 type="number"
@@ -793,11 +948,11 @@ export default function ClientProfilePage() {
             </div>
           </div>
           <div>
-            <label className="mb-2 block text-sm text-slate-400">Любимые форматы</label>
+            <label className="mb-2 block text-sm text-zinc-400">Любимые форматы</label>
             <div className="flex flex-wrap gap-2">
               {(Object.keys(PREFERRED_MODALITY_LABELS) as PreferredModality[]).map(
                 (m) => (
-                  <Chip
+                  <ProfileChip
                     key={m}
                     label={PREFERRED_MODALITY_LABELS[m]}
                     active={training.preferredModalities.includes(m)}
@@ -817,9 +972,9 @@ export default function ClientProfilePage() {
         </div>
       )}
 
-      {tab === 'limits' && (
-        <div className="card space-y-4">
-          <p className="text-sm text-slate-400">
+      {sheet === 'limits' && (
+        <div className="space-y-4">
+          <p className="text-sm text-zinc-400">
             Сообщите тренеру зоны, с которыми нужно быть осторожнее. Это не
             медкарта — при сомнениях проконсультируйтесь с врачом. Выбор
             сохраняется сразу.
@@ -827,7 +982,7 @@ export default function ClientProfilePage() {
           <div className="flex flex-wrap gap-2">
             {(Object.keys(BODY_LIMITATION_LABELS) as BodyLimitationZone[]).map(
               (z) => (
-                <Chip
+                <ProfileChip
                   key={z}
                   label={BODY_LIMITATION_LABELS[z]}
                   active={training.limitations.includes(z)}
@@ -886,10 +1041,10 @@ export default function ClientProfilePage() {
         </div>
       )}
 
-      {tab === 'prefs' && (
-        <div className="card space-y-4">
+      {sheet === 'prefs' && (
+        <div className="space-y-4">
           <div>
-            <label className="mb-1 block text-sm text-slate-400">
+            <label className="mb-1 block text-sm text-zinc-400">
               Длительность сессии (мин)
             </label>
             <input
@@ -919,11 +1074,11 @@ export default function ClientProfilePage() {
             />
           </div>
           <div>
-            <label className="mb-2 block text-sm text-slate-400">Время суток</label>
+            <label className="mb-2 block text-sm text-zinc-400">Время суток</label>
             <div className="flex flex-wrap gap-2">
               {(Object.keys(PREFERRED_TIME_LABELS) as PreferredTimeOfDay[]).map(
                 (t) => (
-                  <Chip
+                  <ProfileChip
                     key={t}
                     label={PREFERRED_TIME_LABELS[t]}
                     active={training.preferredTimeOfDay === t}
@@ -941,12 +1096,12 @@ export default function ClientProfilePage() {
             </div>
           </div>
           <div>
-            <label className="mb-2 block text-sm text-slate-400">Интенсивность</label>
+            <label className="mb-2 block text-sm text-zinc-400">Интенсивность</label>
             <div className="flex flex-wrap gap-2">
               {(
                 Object.keys(PREFERRED_INTENSITY_LABELS) as PreferredIntensity[]
               ).map((i) => (
-                <Chip
+                <ProfileChip
                   key={i}
                   label={PREFERRED_INTENSITY_LABELS[i]}
                   active={training.preferredIntensity === i}
@@ -963,13 +1118,13 @@ export default function ClientProfilePage() {
             </div>
           </div>
           <div>
-            <label className="mb-2 block text-sm text-slate-400">
+            <label className="mb-2 block text-sm text-zinc-400">
               Инвентарь дома
             </label>
             <div className="flex flex-wrap gap-2">
               {(Object.keys(HOME_EQUIPMENT_LABELS) as HomeEquipmentItem[]).map(
                 (eq) => (
-                  <Chip
+                  <ProfileChip
                     key={eq}
                     label={HOME_EQUIPMENT_LABELS[eq]}
                     active={training.homeEquipment.includes(eq)}
@@ -989,15 +1144,15 @@ export default function ClientProfilePage() {
         </div>
       )}
 
-      {tab === 'rating' && (
-        <div className="card space-y-4">
+      {sheet === 'rating' && (
+        <div className="space-y-4">
           {profile.gamificationStartedAt ? (
-            <p className="text-sm text-fitgo-400">
+            <p className="text-sm text-forma-400">
               Геймификация активна с{' '}
               {new Date(profile.gamificationStartedAt).toLocaleDateString('ru-RU')}
             </p>
           ) : (
-            <p className="text-sm text-slate-400">
+            <p className="text-sm text-zinc-400">
               Активируйте геймификацию, чтобы участвовать в лигах и получать бейджи.
             </p>
           )}
@@ -1019,23 +1174,61 @@ export default function ClientProfilePage() {
                 onChange={(e) => setNickname(e.target.value)}
                 placeholder="Игровой ник"
               />
-              <button type="button" onClick={suggestNick} className="btn-secondary">
+              <button type="button" onClick={suggestNick} className="btn-secondary border-white/10 bg-ink-raised text-white hover:bg-ink-elevated">
                 Другое имя
               </button>
             </div>
           )}
 
-          <button type="button" onClick={activate} className="btn-primary w-full">
+          <button type="button" onClick={activate} className="btn-primary bg-forma-500 text-ink hover:bg-forma-400 w-full">
             {profile.gamificationStartedAt
               ? 'Сохранить настройки'
               : 'Активировать геймификацию'}
           </button>
 
-          <Link href="/client/engagement" className="btn-secondary block text-center">
+          <Link href="/client/engagement" className="btn-secondary border-white/10 bg-ink-raised text-white hover:bg-ink-elevated block text-center">
             Перейти к достижениям
           </Link>
         </div>
       )}
+      </Sheet>
+
+      <button
+        type="button"
+        onClick={logout}
+        className="flex w-full items-center justify-center gap-2 rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-3.5 text-sm font-medium text-rose-300 touch-manipulation hover:bg-rose-500/15"
+      >
+        <LogOut className="h-4 w-4" />
+        Выйти
+      </button>
+
+      <Sheet
+        open={deleteLogId != null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteLogId(null);
+        }}
+        title="Удалить замеры?"
+        description="Запись нельзя будет восстановить."
+      >
+        <div className="flex gap-2 pt-2">
+          <Button
+            variant="secondary"
+            className="flex-1"
+            onClick={() => setDeleteLogId(null)}
+          >
+            Отмена
+          </Button>
+          <Button
+            variant="danger"
+            className="flex-1"
+            onClick={() => {
+              if (deleteLogId) void deleteLog(deleteLogId);
+            }}
+          >
+            Удалить
+          </Button>
+        </div>
+      </Sheet>
     </div>
   );
 }

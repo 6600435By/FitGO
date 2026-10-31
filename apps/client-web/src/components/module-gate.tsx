@@ -4,6 +4,7 @@ import type { ProductModuleKey } from '@fitgo/shared-types';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { useFeatures } from '@/components/features-provider';
+import { SkeletonCard } from '@/components/forma/skeleton';
 
 export function ModuleGate({
   module,
@@ -18,8 +19,8 @@ export function ModuleGate({
 
   if (loading) {
     return (
-      <div className="flex justify-center py-12">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+      <div className="space-y-3 py-4">
+        <SkeletonCard />
       </div>
     );
   }
@@ -27,9 +28,10 @@ export function ModuleGate({
   if (!isEnabled(module)) {
     return (
       <div className="card space-y-3 text-center">
-        <p className="text-lg font-semibold">Раздел скоро</p>
-        <p className="text-sm text-slate-400">
-          Этот модуль пока выключен на стенде. Загляните позже или спросите у клуба.
+        <p className="text-lg font-semibold text-white">Раздел скоро</p>
+        <p className="text-sm text-zinc-400">
+          Этот модуль пока выключен на стенде. Загляните позже или спросите у
+          клуба.
         </p>
         <Link href={fallbackHref} className="btn-primary inline-block">
           На главную

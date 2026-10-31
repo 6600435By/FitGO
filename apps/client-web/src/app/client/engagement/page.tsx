@@ -6,6 +6,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { BadgeGrid } from '@/components/engagement/badge-grid';
 import { LeagueBoard } from '@/components/engagement/league-board';
 import { RatingDecayBanner } from '@/components/engagement/rating-decay-banner';
+import { Button } from '@/components/forma/button';
+import { PageHeader } from '@/components/forma/page-header';
+import { SkeletonCard } from '@/components/forma/skeleton';
+import { StatTile } from '@/components/forma/stat-tile';
 import { ModuleGate } from '@/components/module-gate';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -52,7 +56,7 @@ function ClientEngagementPageInner() {
     setCheckInLoading(true);
     setCheckInMsg('');
     try {
-      const res = await api.checkIn(token) as {
+      const res = (await api.checkIn(token)) as {
         xpAwarded: number;
         newBadges: string[];
         accepted?: boolean;
@@ -77,19 +81,23 @@ function ClientEngagementPageInner() {
     if (!token) return;
     setDailyLoading(true);
     try {
-      const res = await api.dailyGoal(token) as { awarded: boolean; xp?: number };
+      const res = (await api.dailyGoal(token)) as {
+        awarded: boolean;
+        xp?: number;
+      };
       if (res.awarded) load();
     } finally {
       setDailyLoading(false);
     }
   };
 
-  if (error) return <p className="text-red-400">{error}</p>;
+  if (error) return <p className="text-rose-400">{error}</p>;
 
   if (!profile) {
     return (
-      <div className="flex justify-center py-12">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+      <div className="space-y-3">
+        <SkeletonCard />
+        <SkeletonCard />
       </div>
     );
   }
@@ -97,9 +105,10 @@ function ClientEngagementPageInner() {
   if (!profile.activated) {
     return (
       <div className="card space-y-4 text-center">
-        <h2 className="text-xl font-semibold">Достижения</h2>
-        <p className="text-slate-400">
-          Активируйте геймификацию в настройках профиля, чтобы участвовать в лигах и получать бейджи.
+        <PageHeader title="Достижения" />
+        <p className="text-zinc-400">
+          Активируйте геймификацию в профиле, чтобы участвовать в лигах и
+          получать бейджи.
         </p>
         <Link href="/client/profile" className="btn-primary inline-block">
           Перейти в профиль
@@ -110,92 +119,97 @@ function ClientEngagementPageInner() {
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-semibold">Достижения</h2>
+      <PageHeader
+        title="Достижения"
+        subtitle="Лиги, бейджи и челленджи Forma"
+      />
 
-      {profile.decayWarning && (
+      {profile.decayWarning ? (
         <RatingDecayBanner
           warning={profile.decayWarning}
           onDailyGoal={handleDailyGoal}
           loading={dailyLoading}
         />
-      )}
+      ) : null}
 
-      {profile.league && <LeagueBoard league={profile.league} />}
+      {profile.league ? <LeagueBoard league={profile.league} /> : null}
 
-      {profile.loyalty && (
-        <div className="card">
-          <p className="text-sm text-slate-400">Лояльность клуба</p>
-          <p className="text-lg font-bold text-fitgo-400">{profile.loyalty.tierLabel}</p>
-          <p className="text-sm text-slate-400">
-            {LOYALTY_STATUS_LABELS[profile.loyalty.status] ?? profile.loyalty.status} ·{' '}
-            {profile.loyalty.continuityMonths} мес. непрерывности
+      {profile.loyalty ? (
+        <div className="overflow-hidden rounded-[1.75rem] border border-forma-500/30 bg-gradient-to-br from-forma-500 via-forma-400 to-amber-500 p-5 text-ink shadow-forma-glow">
+          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-ink/55">
+            Лояльность клуба
+          </p>
+          <p className="mt-1 font-display text-2xl font-bold">
+            {profile.loyalty.tierLabel}
+          </p>
+          <p className="mt-1 text-sm text-ink/70">
+            {LOYALTY_STATUS_LABELS[profile.loyalty.status] ??
+              profile.loyalty.status}{' '}
+            · {profile.loyalty.continuityMonths} мес. непрерывности
           </p>
         </div>
-      )}
+      ) : null}
 
-      <div className="grid grid-cols-3 gap-3">
-        <div className="card text-center">
-          <p className="stat-value">{profile.visitStreak}</p>
-          <p className="stat-label">Streak</p>
-        </div>
-        <div className="card text-center">
-          <p className="stat-value">{profile.totalVisits}</p>
-          <p className="stat-label">Визитов</p>
-        </div>
-        <div className="card text-center">
-          <p className="stat-value">{profile.points}</p>
-          <p className="stat-label">XP</p>
-        </div>
+      <div className="grid grid-cols-3 gap-2">
+        <StatTile label="Streak" value={profile.visitStreak} accent />
+        <StatTile label="Визитов" value={profile.totalVisits} />
+        <StatTile label="XP" value={profile.points} />
       </div>
 
-      {profile.rank && (
+      {profile.rank ? (
         <div className="card text-center">
-          <p className="text-sm text-slate-400">Рейтинг в клубе</p>
-          <p className="text-3xl font-bold text-fitgo-400">#{profile.rank}</p>
+          <p className="text-sm text-zinc-500">Рейтинг в клубе</p>
+          <p className="font-display text-4xl font-bold text-forma-400">
+            #{profile.rank}
+          </p>
         </div>
-      )}
+      ) : null}
 
       <div className="card space-y-3">
-        <button
-          type="button"
-          onClick={handleCheckIn}
-          disabled={checkInLoading}
-          className="btn-primary w-full"
+        <Button
+          className="w-full"
+          loading={checkInLoading}
+          onClick={() => void handleCheckIn()}
         >
-          {checkInLoading ? 'Проверяем...' : 'Как засчитывается визит'}
-        </button>
-        {checkInMsg && <p className="text-center text-sm text-fitgo-400">{checkInMsg}</p>}
+          Как засчитывается визит
+        </Button>
+        {checkInMsg ? (
+          <p className="text-center text-sm text-forma-400">{checkInMsg}</p>
+        ) : null}
       </div>
 
       <BadgeGrid profile={profile} />
 
-      {challenges.length > 0 && (
+      {challenges.length > 0 ? (
         <div className="card">
-          <h3 className="mb-3 font-semibold">Челленджи</h3>
+          <h3 className="mb-3 font-display font-semibold">Челленджи</h3>
           <ul className="space-y-3">
             {challenges.map((c) => (
-              <li key={c.id} className="rounded-xl bg-slate-800/50 p-3">
-                <p className="font-medium">{c.title}</p>
-                {c.description && (
-                  <p className="text-sm text-slate-400">{c.description}</p>
-                )}
-                <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-700">
+              <li
+                key={c.id}
+                className="rounded-2xl border border-white/10 bg-ink-raised/70 p-3"
+              >
+                <p className="font-medium text-white">{c.title}</p>
+                {c.description ? (
+                  <p className="text-sm text-zinc-400">{c.description}</p>
+                ) : null}
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
                   <div
-                    className="h-full rounded-full bg-fitgo-500"
+                    className="h-full rounded-full bg-forma-500"
                     style={{
                       width: `${Math.min(100, (c.progress / c.targetVisits) * 100)}%`,
                     }}
                   />
                 </div>
-                <p className="mt-1 text-xs text-slate-400">
+                <p className="mt-1 text-xs text-zinc-500">
                   {c.progress} / {c.targetVisits} визитов
-                  {c.completed && ' · Завершён!'}
+                  {c.completed ? ' · Завершён!' : ''}
                 </p>
               </li>
             ))}
           </ul>
         </div>
-      )}
+      ) : null}
 
       <Link href="/client/workouts" className="btn-secondary block text-center">
         Тренировки вне клуба

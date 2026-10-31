@@ -3,32 +3,28 @@ import { SessionType } from '@fitgo/shared-types';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
+/** Confirmations belong in UI Sheets — this only calls the API. */
 export async function cancelGroupBooking(
   sessionId: string,
-  title: string,
+  _title?: string,
+  _opts?: { skipConfirm?: boolean },
 ): Promise<{ success: boolean; message?: string }> {
   const token = getToken();
   if (!token) {
     return { success: false, message: 'Не авторизован' };
-  }
-
-  if (!window.confirm(`Отменить запись на «${title}»?`)) {
-    return { success: false, message: 'Отменено' };
   }
 
   return api.clientCancelBooking(token, sessionId);
 }
 
+/** Confirmations belong in UI Sheets — this only calls the API. */
 export async function cancelClientBooking(
   booking: Booking,
+  _opts?: { skipConfirm?: boolean },
 ): Promise<{ success: boolean; message?: string }> {
   const token = getToken();
   if (!token) {
     return { success: false, message: 'Не авторизован' };
-  }
-
-  if (!window.confirm(`Отменить запись на «${booking.title}»?`)) {
-    return { success: false, message: 'Отменено' };
   }
 
   if (booking.source === 'fitgo' && booking.type === SessionType.SPA) {

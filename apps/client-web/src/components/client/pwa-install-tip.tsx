@@ -98,12 +98,14 @@ export function PwaInstallTip() {
   };
 
   return (
-    <div className="mb-3 rounded-2xl border border-fitgo-500/40 bg-slate-900/90 p-4 text-sm text-slate-200">
+    <div className="mb-3 rounded-3xl border border-forma-500/35 bg-ink-elevated/95 p-4 text-sm text-zinc-200 shadow-forma-glow/20">
       <div className="flex items-start justify-between gap-2">
-        <p className="font-medium text-fitgo-400">На экран Домой</p>
+        <p className="font-display font-semibold text-forma-400">
+          Forma на экран Домой
+        </p>
         <button
           type="button"
-          className="text-slate-500"
+          className="text-zinc-500 hover:text-white"
           onClick={dismiss}
           aria-label="Закрыть"
         >
@@ -111,15 +113,13 @@ export function PwaInstallTip() {
         </button>
       </div>
       {ios ? (
-        <ol className="mt-2 list-decimal space-y-1 pl-4 text-slate-300">
-          {!isSafari() && (
-            <li>Откройте эту страницу в Safari</li>
-          )}
+        <ol className="mt-2 list-decimal space-y-1 pl-4 text-zinc-300">
+          {!isSafari() && <li>Откройте эту страницу в Safari</li>}
           <li>Нажмите «Поделиться»</li>
           <li>Выберите «На экран „Домой“»</li>
         </ol>
       ) : (
-        <div className="mt-2 space-y-2 text-slate-300">
+        <div className="mt-2 space-y-2 text-zinc-300">
           <p>
             Добавьте ярлык — кабинет откроется как приложение, без браузерной
             строки.
@@ -127,13 +127,13 @@ export function PwaInstallTip() {
           {deferred ? (
             <button
               type="button"
-              className="btn-primary w-full"
+              className="btn-primary w-full bg-forma-500 text-ink hover:bg-forma-400"
               onClick={() => void installAndroid()}
             >
               Установить
             </button>
           ) : (
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-zinc-500">
               Меню Chrome → «Добавить на главный экран»
             </p>
           )}

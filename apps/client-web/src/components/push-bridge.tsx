@@ -85,11 +85,11 @@ export function PushBridge({ prompt = true }: { prompt?: boolean }) {
   if (!needsPermission) return null;
 
   return (
-    <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-300">
+    <div className="flex items-center justify-between gap-2 rounded-2xl border border-white/10 bg-ink-elevated/90 px-3 py-2.5 text-sm text-zinc-300">
       <span>Включить уведомления о сообщениях</span>
       <button
         type="button"
-        className="btn-secondary text-xs px-3 py-1 shrink-0"
+        className="shrink-0 rounded-xl border border-white/10 bg-ink-raised px-3 py-1 text-xs font-medium text-white touch-manipulation hover:bg-white/[0.06] disabled:opacity-50"
         disabled={busy}
         onClick={() => void enable()}
       >

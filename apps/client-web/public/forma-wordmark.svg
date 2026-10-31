@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 56" fill="none" role="img" aria-label="$>@<0">
+  <text
+    x="0"
+    y="40"
+    fill="#FFFFFF"
+    font-family="system-ui, -apple-system, sans-serif"
+    font-size="42"
+    font-weight="800"
+    letter-spacing="0.12em"
+  >$ </text>
+  <rect x="210" y="8" width="70" height="40" fill="#FFD000"/>
+  <text
+    x="245"
+    y="22"
+    fill="#0B0B0C"
+    font-family="system-ui, -apple-system, sans-serif"
+    font-size="8"
+    font-weight="700"
+    letter-spacing="0.04em"
+    text-anchor="middle"
+  >$"!</text>
+  <text
+    x="245"
+    y="34"
+    fill="#0B0B0C"
+    font-family="system-ui, -apple-system, sans-serif"
+    font-size="8"
+    font-weight="700"
+    letter-spacing="0.04em"
+    text-anchor="middle"
+  >!"#/</text>
+</svg>

@@ -8,10 +8,17 @@ import {
   type VisitKind,
 } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button } from '@/components/forma/button';
+import { Chip } from '@/components/forma/chip';
+import { EmptyState } from '@/components/forma/empty-state';
+import { PageHeader } from '@/components/forma/page-header';
+import { SkeletonCard } from '@/components/forma/skeleton';
+import { StatTile } from '@/components/forma/stat-tile';
 import { ModuleGate } from '@/components/module-gate';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { formatShortVisitDate, formatVisitClock, visitHeadline } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 
 const KIND_FILTERS: Array<{ value: '' | VisitKind; label: string }> = [
   { value: '', label: 'Все' },
@@ -50,6 +57,10 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function visitDayKey(date: string) {
+  return date.includes('T') ? date.slice(0, 10) : date.slice(0, 10);
+}
+
 export default function ClientVisitsPage() {
   return (
     <ModuleGate module="club_card">
@@ -71,7 +82,6 @@ function ClientVisitsPageInner() {
     const from = isoDaysAgo(Number(range));
     const to = todayIso();
     setError('');
-    // Always load full period — kind filter is client-side so chips stay stable.
     api
       .clientVisits(token, { from, to })
       .then(setData)
@@ -101,9 +111,7 @@ function ClientVisitsPageInner() {
   );
 
   useEffect(() => {
-    if (kind && (kindCounts[kind] ?? 0) === 0) {
-      setKind('');
-    }
+    if (kind && (kindCounts[kind] ?? 0) === 0) setKind('');
   }, [kind, kindCounts]);
 
   const { pending, confirmed } = useMemo(() => {
@@ -120,14 +128,80 @@ function ClientVisitsPageInner() {
         visit.canSelfConfirm
       ) {
         pendingList.push(visit);
-      } else if (visit.verification === 'REJECTED') {
-        // skip rejected from main lists
-      } else {
+      } else if (visit.verification !== 'REJECTED') {
         confirmedList.push(visit);
       }
     }
     return { pending: pendingList, confirmed: confirmedList };
   }, [data, kind]);
+
+  const monthGroups = useMemo(() => {
+    const map = new Map<string, { label: string; visits: Visit[] }>();
+    for (const visit of confirmed) {
+      const d = new Date(
+        visit.date.includes('T') ? visit.date : `${visit.date}T12:00:00`,
+      );
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.visits.push(visit);
+      } else {
+        map.set(key, {
+          label: d.toLocaleDateString('ru-RU', {
+            month: 'long',
+            year: 'numeric',
+          }),
+          visits: [visit],
+        });
+      }
+    }
+    return Array.from(map.entries()).map(([key, value]) => ({
+      key,
+      label: value.label,
+      visits: value.visits,
+    }));
+  }, [confirmed]);
+
+  const heatDays = useMemo(() => {
+    const set = new Set(
+      (data?.visits ?? [])
+        .filter((v) => isVerifiedVisitStatus(v.verification) || !v.verification)
+        .map((v) => visitDayKey(v.date)),
+    );
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    return Array.from({ length: 28 }, (_, i) => {
+      const d = new Date(today);
+      d.setDate(today.getDate() - (27 - i));
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const key = `${y}-${m}-${day}`;
+      return { key, active: set.has(key), day: d.getDate() };
+    });
+  }, [data]);
+
+  const monthCount = confirmed.filter((v) => {
+    const key = visitDayKey(v.date);
+    const now = todayIso().slice(0, 7);
+    return key.startsWith(now);
+  }).length;
+
+  let streak = 0;
+  {
+    const set = new Set(confirmed.map((v) => visitDayKey(v.date)));
+    const cursor = new Date();
+    cursor.setHours(12, 0, 0, 0);
+    for (let i = 0; i < 60; i++) {
+      const y = cursor.getFullYear();
+      const m = String(cursor.getMonth() + 1).padStart(2, '0');
+      const day = String(cursor.getDate()).padStart(2, '0');
+      const key = `${y}-${m}-${day}`;
+      if (set.has(key)) streak += 1;
+      else if (i > 0) break;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+  }
 
   async function selfConfirm(bookingId: string) {
     const token = getToken();
@@ -143,74 +217,92 @@ function ClientVisitsPageInner() {
     }
   }
 
-  if (error && !data) return <p className="text-red-400">{error}</p>;
+  if (error && !data) {
+    return <p className="text-rose-400">{error}</p>;
+  }
+
+  if (!data) {
+    return (
+      <div className="space-y-3">
+        <SkeletonCard />
+        <SkeletonCard />
+      </div>
+    );
+  }
 
   const empty = pending.length === 0 && confirmed.length === 0;
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-3">
-        <div>
-          <h2 className="text-xl font-semibold">История посещений</h2>
-          <p className="text-sm text-slate-400">
-            Зал — только через 1С; группа и персональная — после подтверждения
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {(['90', '180', '365'] as const).map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRange(r)}
-              className={`rounded-lg px-3 py-1.5 text-sm ${
-                range === r
-                  ? 'bg-sky-600 text-white'
-                  : 'bg-slate-800 text-slate-300'
-              }`}
-            >
-              {r === '90' ? '3 мес' : r === '180' ? '6 мес' : 'Год'}
-            </button>
+    <div className="space-y-5">
+      <PageHeader
+        title="Визиты"
+        subtitle="Зал — через 1С; группа и персональная — после подтверждения"
+      />
+
+      <div className="grid grid-cols-3 gap-2">
+        <StatTile label="За месяц" value={monthCount} />
+        <StatTile label="Серия" value={`${streak} дн.`} accent={streak > 0} />
+        <StatTile label="Всего" value={confirmed.length} />
+      </div>
+
+      <div className="card">
+        <p className="mb-3 text-xs font-bold uppercase tracking-[0.14em] text-zinc-500">
+          4 недели
+        </p>
+        <div className="grid grid-cols-7 gap-1.5">
+          {heatDays.map((d) => (
+            <div
+              key={d.key}
+              className={cn(
+                'aspect-square rounded-lg',
+                d.active
+                  ? 'bg-forma-500 shadow-forma-glow'
+                  : 'bg-white/[0.06]',
+              )}
+              title={d.key}
+            />
           ))}
         </div>
       </div>
 
-      {error && <p className="text-sm text-amber-400">{error}</p>}
+      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+        {(['90', '180', '365'] as const).map((r) => (
+          <Chip key={r} active={range === r} onClick={() => setRange(r)}>
+            {r === '90' ? '3 мес' : r === '180' ? '6 мес' : 'Год'}
+          </Chip>
+        ))}
+      </div>
 
-      {visibleKindFilters.length > 1 && (
-        <div className="flex flex-wrap gap-2">
+      {error ? <p className="text-sm text-amber-300">{error}</p> : null}
+
+      {visibleKindFilters.length > 1 ? (
+        <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
           {visibleKindFilters.map((f) => (
-            <button
+            <Chip
               key={f.value || 'all'}
-              type="button"
+              active={kind === f.value}
+              count={f.value ? kindCounts[f.value] : undefined}
               onClick={() => setKind(f.value)}
-              className={`rounded-lg px-3 py-1.5 text-sm ${
-                kind === f.value
-                  ? 'bg-slate-100 text-slate-900'
-                  : 'bg-slate-800 text-slate-300'
-              }`}
             >
               {f.label}
-              {f.value ? ` (${kindCounts[f.value] ?? 0})` : ''}
-            </button>
+            </Chip>
           ))}
         </div>
-      )}
+      ) : null}
 
       {empty ? (
-        <div className="rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-10 text-center text-slate-400">
-          Нет записей о посещениях за выбранный период
-        </div>
+        <EmptyState
+          title="Нет посещений"
+          description="За выбранный период записей нет"
+        />
       ) : (
-        <div className="space-y-8">
-          {pending.length > 0 && (
+        <div className="space-y-6">
+          {pending.length > 0 ? (
             <section className="space-y-3">
-              <div className="flex items-baseline justify-between gap-2">
-                <h3 className="text-sm font-semibold uppercase tracking-wide text-amber-300/90">
-                  Нужно подтвердить
-                </h3>
-                <span className="text-xs text-slate-500">{pending.length}</span>
-              </div>
-              <ul className="divide-y divide-slate-800 overflow-hidden rounded-xl border border-amber-500/20 bg-slate-900/50">
+              <h3 className="text-xs font-bold uppercase tracking-[0.16em] text-amber-300">
+                Нужно подтвердить · {pending.length}
+              </h3>
+              <ul className="space-y-2">
                 {pending.map((visit) => (
                   <VisitRow
                     key={visit.id}
@@ -222,22 +314,15 @@ function ClientVisitsPageInner() {
                 ))}
               </ul>
             </section>
-          )}
+          ) : null}
 
-          <section className="space-y-3">
-            <div className="flex items-baseline justify-between gap-2">
-              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
-                Посещения
+          {monthGroups.map((group) => (
+            <section key={group.key} className="space-y-3">
+              <h3 className="text-xs font-bold uppercase tracking-[0.16em] text-zinc-500">
+                {group.label}
               </h3>
-              <span className="text-xs text-slate-500">{confirmed.length}</span>
-            </div>
-            {confirmed.length === 0 ? (
-              <p className="rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-6 text-center text-sm text-slate-500">
-                Пока нет подтверждённых визитов
-              </p>
-            ) : (
-              <ul className="divide-y divide-slate-800 overflow-hidden rounded-xl border border-slate-800 bg-slate-900/50">
-                {confirmed.map((visit) => (
+              <ul className="space-y-2">
+                {group.visits.map((visit) => (
                   <VisitRow
                     key={visit.id}
                     visit={visit}
@@ -247,8 +332,8 @@ function ClientVisitsPageInner() {
                   />
                 ))}
               </ul>
-            )}
-          </section>
+            </section>
+          ))}
         </div>
       )}
     </div>
@@ -268,44 +353,44 @@ function VisitRow({
 }) {
   const headline = visitHeadline(visit);
   const when = formatVisitClock(visit.checkIn) ?? '';
-  const dateLine = [formatShortVisitDate(visit.date), when].filter(Boolean).join(' · ');
+  const dateLine = [formatShortVisitDate(visit.date), when]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
-    <li className="px-4 py-3.5">
+    <li className="card !p-3.5">
       <div className="flex items-start gap-3">
         <div
-          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-            tone === 'pending' ? 'bg-amber-400' : 'bg-emerald-400'
-          }`}
-          aria-hidden
+          className={cn(
+            'mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full',
+            tone === 'pending' ? 'bg-amber-400' : 'bg-forma-500',
+          )}
         />
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="truncate font-medium text-slate-100">{headline}</p>
-              <p className="mt-0.5 text-sm text-slate-400">{dateLine}</p>
+              <p className="truncate font-medium text-white">{headline}</p>
+              <p className="mt-0.5 text-sm text-zinc-400">{dateLine}</p>
             </div>
             <p
-              className={`shrink-0 text-xs ${
-                tone === 'pending' ? 'text-amber-300' : 'text-emerald-400/90'
-              }`}
+              className={cn(
+                'shrink-0 text-xs',
+                tone === 'pending' ? 'text-amber-300' : 'text-forma-400',
+              )}
             >
               {verificationLabel(visit)}
             </p>
           </div>
-
-          {visit.canSelfConfirm && visit.bookingId && (
-            <button
-              type="button"
-              className="w-full rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 sm:w-auto"
-              disabled={confirmingId === visit.bookingId}
+          {visit.canSelfConfirm && visit.bookingId ? (
+            <Button
+              size="sm"
+              className="w-full sm:w-auto"
+              loading={confirmingId === visit.bookingId}
               onClick={() => onSelfConfirm(visit.bookingId!)}
             >
-              {confirmingId === visit.bookingId
-                ? 'Подтверждение…'
-                : 'Я был на занятии'}
-            </button>
-          )}
+              Я был на занятии
+            </Button>
+          ) : null}
         </div>
       </div>
     </li>

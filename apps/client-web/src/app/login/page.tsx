@@ -4,9 +4,16 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useEffect, useState } from 'react';
 import { UserRole } from '@fitgo/shared-types';
+import {
+  AuthError,
+  AuthShell,
+  FieldLabel,
+} from '@/components/forma/auth-shell';
+import { Button } from '@/components/forma/button';
 import { PasswordField } from '@/components/ui/password-field';
 import { api } from '@/lib/api';
 import { clearAuth, getHomePath, isClientUser, saveAuth } from '@/lib/auth';
+import { markWelcomeSeen } from '@/lib/welcome';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -16,6 +23,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    markWelcomeSeen();
     try {
       if (sessionStorage.getItem('fitgo_session_expired') === '1') {
         sessionStorage.removeItem('fitgo_session_expired');
@@ -40,7 +48,6 @@ export default function LoginPage() {
         );
         return;
       }
-      // Prefer CLIENT home even if user also has staff roles
       saveAuth(result.accessToken, {
         ...result.user,
         roles: result.user.roles.includes(UserRole.CLIENT)
@@ -56,64 +63,56 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center px-4">
-      <div className="w-full max-w-md">
-        <div className="mb-8 text-center">
-          <p className="text-sm uppercase tracking-[0.3em] text-fitgo-400">
-            Forma
-          </p>
-          <h1 className="mt-2 text-3xl font-bold">Личный кабинет</h1>
-          <p className="mt-2 text-slate-400">
-            Абонемент, запись и визиты — с компьютера и телефона
-          </p>
+    <AuthShell
+      title="С возвращением"
+      subtitle="Абонемент, запись и визиты Forma — с телефона и компьютера"
+      footer={
+        <>
+          Нет аккаунта?{' '}
+          <Link href="/register" className="font-semibold text-forma-400">
+            Создать
+          </Link>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit} className="card space-y-4">
+        <div>
+          <FieldLabel htmlFor="login-id">Телефон или email</FieldLabel>
+          <input
+            id="login-id"
+            type="text"
+            autoComplete="username"
+            className="input"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </div>
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <FieldLabel htmlFor="login-password">Пароль</FieldLabel>
+            <Link
+              href="/reset-password"
+              className="-mt-2 text-sm font-medium text-forma-400"
+            >
+              Забыли?
+            </Link>
+          </div>
+          <PasswordField
+            id="login-password"
+            className="input"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
         </div>
 
-        <form onSubmit={handleSubmit} className="card space-y-4">
-          <div>
-            <label className="mb-2 block text-sm text-slate-400">
-              Телефон или email
-            </label>
-            <input
-              type="text"
-              autoComplete="username"
-              className="input"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <label className="mb-2 block text-sm text-slate-400">Пароль</label>
-            <PasswordField
-              className="input"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </div>
+        <AuthError>{error}</AuthError>
 
-          {error && (
-            <p className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-400">
-              {error}
-            </p>
-          )}
-
-          <button type="submit" className="btn-primary w-full" disabled={loading}>
-            {loading ? 'Вход...' : 'Войти'}
-          </button>
-
-          <p className="text-center text-sm text-slate-400">
-            Нет аккаунта?{' '}
-            <Link href="/register" className="text-fitgo-400">
-              Регистрация
-            </Link>
-            {' · '}
-            <Link href="/reset-password" className="text-fitgo-400">
-              Забыли пароль
-            </Link>
-          </p>
-        </form>
-      </div>
-    </div>
+        <Button type="submit" className="w-full" size="lg" loading={loading}>
+          Войти
+        </Button>
+      </form>
+    </AuthShell>
   );
 }

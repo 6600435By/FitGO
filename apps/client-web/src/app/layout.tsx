@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { ClubThemeProvider } from '@/components/club-theme-provider';
 import { FeaturesProvider } from '@/components/features-provider';
+import { ToastProvider } from '@/components/forma/toast';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -19,7 +20,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#14b88a',
+  themeColor: '#0B0B0C',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
@@ -33,9 +34,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ru">
-      <body>
+      <body className="font-sans">
         <FeaturesProvider>
-          <ClubThemeProvider>{children}</ClubThemeProvider>
+          <ClubThemeProvider>
+            <ToastProvider>{children}</ToastProvider>
+          </ClubThemeProvider>
         </FeaturesProvider>
       </body>
     </html>

@@ -2,24 +2,51 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { FormEvent, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { Check } from 'lucide-react';
+import {
+  AuthError,
+  AuthShell,
+  AuthStepBar,
+  AuthSuccess,
+  FieldLabel,
+} from '@/components/forma/auth-shell';
+import { Button } from '@/components/forma/button';
+import { OtpInput } from '@/components/forma/otp-input';
+import { PasswordStrength } from '@/components/forma/password-strength';
 import { PasswordField } from '@/components/ui/password-field';
 import { api } from '@/lib/api';
 
+type Step = 'phone' | 'code' | 'password' | 'done';
+
 export default function ResetPasswordPage() {
   const router = useRouter();
+  const [step, setStep] = useState<Step>('phone');
   const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [ok, setOk] = useState('');
   const [loading, setLoading] = useState(false);
   const [codeLoading, setCodeLoading] = useState(false);
+  const [resendIn, setResendIn] = useState(0);
+
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const id = window.setTimeout(() => setResendIn((v) => v - 1), 1000);
+    return () => window.clearTimeout(id);
+  }, [resendIn]);
 
   const sendCode = async () => {
     setError('');
+    setOk('');
     setCodeLoading(true);
     try {
       await api.sendPhoneCode(phone, 'reset_password');
+      setResendIn(60);
       setOk('Код отправлен SMS');
+      setStep('code');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось отправить код');
     } finally {
@@ -27,20 +54,18 @@ export default function ResetPasswordPage() {
     }
   };
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const savePassword = async () => {
     setError('');
     setOk('');
     setLoading(true);
-    const form = new FormData(e.currentTarget);
     try {
       await api.resetPassword({
-        phone: String(form.get('phone')),
-        verificationCode: String(form.get('verificationCode')),
-        password: String(form.get('password')),
+        phone,
+        verificationCode: code,
+        password,
       });
-      setOk('Пароль обновлён. Можно войти.');
-      setTimeout(() => router.push('/login'), 1200);
+      setStep('done');
+      window.setTimeout(() => router.push('/login'), 1400);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
     } finally {
@@ -48,66 +73,142 @@ export default function ResetPasswordPage() {
     }
   };
 
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center px-4">
-      <div className="w-full max-w-md">
-        <div className="mb-8 text-center">
-          <h1 className="text-3xl font-bold">Новый пароль</h1>
-          <p className="mt-2 text-slate-400">Код подтверждения придёт SMS</p>
-        </div>
-        <form onSubmit={handleSubmit} className="card space-y-4">
-          <div>
-            <label className="mb-2 block text-sm text-slate-400">Телефон</label>
-            <input
-              name="phone"
-              className="input"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              required
-            />
-          </div>
-          <button
-            type="button"
-            className="btn-secondary w-full"
-            disabled={codeLoading || phone.trim().length < 9}
-            onClick={() => void sendCode()}
+  const stepNum = step === 'phone' ? 1 : step === 'code' ? 2 : step === 'password' ? 3 : 3;
+
+  if (step === 'done') {
+    return (
+      <AuthShell>
+        <div className="flex flex-1 flex-col items-center justify-center text-center">
+          <motion.div
+            initial={{ scale: 0.7, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="mb-6 flex h-20 w-20 items-center justify-center rounded-3xl bg-forma-500 text-ink shadow-forma-glow"
           >
-            {codeLoading ? 'Отправка…' : 'Получить код'}
-          </button>
-          <div>
-            <label className="mb-2 block text-sm text-slate-400">Код</label>
-            <input
-              name="verificationCode"
-              className="input"
-              pattern="\d{6}"
-              maxLength={6}
-              required
-            />
-          </div>
-          <div>
-            <label className="mb-2 block text-sm text-slate-400">Новый пароль</label>
-            <PasswordField name="password" className="input" required minLength={6} />
-          </div>
-          {error && (
-            <p className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-400">
-              {error}
-            </p>
+            <Check className="h-10 w-10" strokeWidth={2.5} />
+          </motion.div>
+          <h1 className="font-display text-3xl font-bold text-white">
+            Пароль обновлён
+          </h1>
+          <p className="mt-2 text-zinc-400">Переходим ко входу…</p>
+        </div>
+      </AuthShell>
+    );
+  }
+
+  return (
+    <AuthShell
+      title="Новый пароль"
+      subtitle="Подтвердите телефон кодом из SMS"
+      footer={
+        <Link href="/login" className="font-semibold text-forma-400">
+          Назад ко входу
+        </Link>
+      }
+    >
+      <AuthStepBar step={stepNum} total={3} />
+
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={step}
+          initial={{ opacity: 0, x: 16 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -12 }}
+          className="card space-y-4"
+        >
+          {step === 'phone' && (
+            <>
+              <div>
+                <FieldLabel htmlFor="reset-phone">Телефон</FieldLabel>
+                <input
+                  id="reset-phone"
+                  name="phone"
+                  className="input"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="+375…"
+                  autoComplete="tel"
+                  required
+                />
+              </div>
+              <AuthError>{error}</AuthError>
+              <Button
+                className="w-full"
+                size="lg"
+                loading={codeLoading}
+                disabled={phone.trim().length < 9}
+                onClick={() => void sendCode()}
+              >
+                Получить код
+              </Button>
+            </>
           )}
-          {ok && (
-            <p className="rounded-xl bg-fitgo-500/10 px-4 py-3 text-sm text-fitgo-400">
-              {ok}
-            </p>
+
+          {step === 'code' && (
+            <>
+              <OtpInput value={code} onChange={setCode} autoFocus />
+              <AuthSuccess>{ok}</AuthSuccess>
+              <AuthError>{error}</AuthError>
+              <Button
+                className="w-full"
+                size="lg"
+                disabled={code.length < 6}
+                onClick={() => setStep('password')}
+              >
+                Продолжить
+              </Button>
+              <button
+                type="button"
+                className="w-full text-center text-sm text-zinc-400 disabled:opacity-40"
+                disabled={resendIn > 0 || codeLoading}
+                onClick={() => void sendCode()}
+              >
+                {resendIn > 0
+                  ? `Отправить ещё раз через ${resendIn} с`
+                  : 'Отправить код ещё раз'}
+              </button>
+            </>
           )}
-          <button type="submit" className="btn-primary w-full" disabled={loading}>
-            {loading ? 'Сохранение…' : 'Сохранить пароль'}
-          </button>
-          <p className="text-center text-sm text-slate-400">
-            <Link href="/login" className="text-fitgo-400">
-              Назад ко входу
-            </Link>
-          </p>
-        </form>
-      </div>
-    </div>
+
+          {step === 'password' && (
+            <>
+              <div>
+                <FieldLabel htmlFor="reset-password">Новый пароль</FieldLabel>
+                <PasswordField
+                  id="reset-password"
+                  className="input"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  isNew
+                  required
+                  minLength={6}
+                />
+                <div className="mt-2">
+                  <PasswordStrength password={password} />
+                </div>
+              </div>
+              <AuthError>{error}</AuthError>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => setStep('code')}
+                >
+                  Назад
+                </Button>
+                <Button
+                  className="flex-[2]"
+                  size="lg"
+                  loading={loading}
+                  disabled={password.length < 6}
+                  onClick={() => void savePassword()}
+                >
+                  Сохранить
+                </Button>
+              </div>
+            </>
+          )}
+        </motion.div>
+      </AnimatePresence>
+    </AuthShell>
   );
 }
