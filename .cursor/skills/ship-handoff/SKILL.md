@@ -31,9 +31,25 @@ description: >-
 - Пуш: `git push` в текущую ветку (обычно `main` / WIP) — только после вашего «закоммить/пуш»
 - Если уже закоммичено и запушено в этом чате — напиши SHA и что на remote ok
 
-**Сервер / деплой FitGO**
-- Что перезапустить: API / web / `pnpm db:push` (если была Prisma)
-- На Windows (если Mac↔Windows): pull ветки, `docker compose up -d` для Postgres
+**Сервер / деплой FitGO** (RDP клуба, Admin PowerShell)
+- Выбрать **узкий** скрипт по путям коммита (не гонять полный Update ради одной кнопки):
+
+| Что менялось | Команда |
+|--------------|---------|
+| Только ЛК `apps/client-web` | `.\Update-FitGO-Client.ps1` |
+| Только staff `apps/web` | `.\Update-FitGO-Staff.ps1` |
+| Только API / Prisma / adapter | `.\Update-FitGO-API.ps1` |
+| Несколько слоёв / неочевидно | `.\Update-FitGO.ps1` |
+
+```powershell
+cd C:\FitGO\FitGO\scripts\windows\fitgo-server
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\Update-FitGO-API.ps1   # подставь нужный скрипт из таблицы
+```
+
+- Полная инструкция: [UPDATE_INSTRUCTIONS.md](/Users/machome/Projects/FitGO/scripts/windows/fitgo-server/UPDATE_INSTRUCTIONS.md)
+- `-SkipPull` если код уже на диске; `-SkipBackup` только аварийно
+- Mac local: при необходимости `docker compose up -d` для Postgres — отдельно от Windows Update
 
 **1С (только если затронуто)**
 - Какие BSL/модули обновить — кликабельные ссылки
@@ -43,6 +59,7 @@ description: >-
 ```
 
 Если 1С не трогали — секцию **1С** опусти или напиши «1С не требуется».
+В «Дальше» **всегда** пиши имя `Update-FitGO-*.ps1`, не абстрактное «перезапустить API».
 
 ## Ссылки на 1С (формат)
 

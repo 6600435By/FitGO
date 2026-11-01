@@ -9,8 +9,10 @@ alwaysApply: true
 `git commit` / `git push` в этом чате:
 
 1. Прочитай skill [`.cursor/skills/fresh-chat/SKILL.md`](../skills/fresh-chat/SKILL.md)
-2. Закончи ответ блоком **«Новый чат»** по шаблону skill
-3. Не начинай следующую крупную задачу в этом же чате
+2. После **push** в «Дальше» укажи узкий `Update-FitGO-*.ps1` (шпаргалка в skill;
+   полная инструкция: [UPDATE_INSTRUCTIONS.md](../../scripts/windows/fitgo-server/UPDATE_INSTRUCTIONS.md))
+3. Закончи ответ блоком **«Новый чат»** по шаблону skill
+4. Не начинай следующую крупную задачу в этом же чате
 
 Hook сам пишет seed в `.cursor/fresh-chat-state/` и буфер; новый чат подхватит
 его на `sessionStart`.

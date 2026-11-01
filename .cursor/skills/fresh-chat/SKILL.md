@@ -22,10 +22,59 @@ Cursor **не умеет** сам открыть новый Agent-таб. Пос
 ## Что сделать в ТЕКУЩЕМ чате
 
 1. Кратко подтверди: commit/push ok (SHA если есть).
-2. Закончить ответ блоком ниже — **и остановиться** (не начинать следующую фичу здесь).
-3. Если есть ship-handoff «Дальше» — сначала он, потом «Новый чат».
+2. Если был **push на сервер клуба** (обычно `main`) — в блоке **«Дальше»** укажи
+   **конкретную** PowerShell-команду обновления (см. шпаргалку ниже), не общее
+   «перезапустить API/web».
+3. Закончить ответ блоком **«Новый чат»** — **и остановиться**.
+4. Порядок: сначала «Дальше» (Git + деплой), потом «Новый чат».
 
-### Шаблон
+Источник правды по деплою Windows:
+[UPDATE_INSTRUCTIONS.md](/Users/machome/Projects/FitGO/scripts/windows/fitgo-server/UPDATE_INSTRUCTIONS.md)
+
+### Шпаргалка «Сервер / деплой FitGO» (вставлять в «Дальше»)
+
+Выбрать **узкий** скрипт по изменённым путям в коммите. Полный Update — только
+если тронуто несколько слоёв или неочевидно.
+
+| Что менялось в коммите | Команда на RDP (Admin PowerShell) |
+|------------------------|-----------------------------------|
+| Только `apps/client-web` (ЛК) | `.\Update-FitGO-Client.ps1` |
+| Только `apps/web` (staff/админка) | `.\Update-FitGO-Staff.ps1` |
+| Только `apps/api` / Prisma / adapter | `.\Update-FitGO-API.ps1` |
+| Несколько из выше / shared-types + UI+API | `.\Update-FitGO.ps1` |
+
+Перед любой командой:
+
+```powershell
+cd C:\FitGO\FitGO\scripts\windows\fitgo-server
+Set-ExecutionPolicy Bypass -Scope Process -Force
+```
+
+Пример блока после push (подставь нужный скрипт):
+
+```markdown
+### Дальше
+
+**Git**
+- Запушено: `<SHA>` → `origin/main`
+
+**Сервер / деплой FitGO** (RDP, Admin PowerShell)
+```powershell
+cd C:\FitGO\FitGO\scripts\windows\fitgo-server
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\Update-FitGO-API.ps1
+# или: .\Update-FitGO-Staff.ps1 | .\Update-FitGO-Client.ps1 | .\Update-FitGO.ps1
+```
+- Инструкция: [UPDATE_INSTRUCTIONS.md](/Users/machome/Projects/FitGO/scripts/windows/fitgo-server/UPDATE_INSTRUCTIONS.md)
+- `-SkipPull` — если код уже на диске; `-SkipBackup` — только аварийно (API/полный)
+
+**1С** — не требуется / или конкретные BSL-ссылки
+```
+
+Службы: `FitGO-API` (:3001), `FitGO-Web` / app.ffs.by (:3000), `FitGO-Client` / lk.ffs.by (:3002).
+Узкий Update гасит только свою службу. Полный `Update-FitGO.ps1` — все три + бэкап.
+
+### Шаблон «Новый чат»
 
 ```markdown
 ### Новый чат
@@ -45,6 +94,7 @@ Cursor **не умеет** сам открыть новый Agent-таб. Пос
 
 ## Не делать
 
+- Не писать в «Дальше» голое «перезапустить API/web» без имени `Update-FitGO-*.ps1`
 - Не вызывать `followup` / не продолжать крупную работу в старом чате после handoff
 - Не коммитить `.cursor/fresh-chat-state/`
 - Не открывать `cursor --chat` сами «на всякий случай» — это другой UX
