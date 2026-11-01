@@ -23,10 +23,14 @@ import {
 import {
   classifyVisitKind,
   daysBetweenYmdInclusive,
+  findMembershipIncludedService,
+  isMassageBlockCompositionLine,
   MembershipStatus,
+  normalizeMembershipServiceName,
   SessionType,
   SPA_WAITLIST_MAX_WINDOW_DAYS,
   SPA_WAITLIST_WEEKDAY_ALL,
+  spaCatalogMatchesMembershipLine,
   UserRole,
   sessionApprovalLabelRu,
   toUsageControl,
@@ -475,19 +479,120 @@ export class SpaBookingService {
     };
   }
 
-  /** Catalog services / specialists allowed to consume any SPA membership quota. */
-  private async loadQuotaAllowlist(clubId: string) {
-    const rules = await this.prisma.spaQuotaRule.findMany({
+  /** Per membership-line SpaQuotaRule rows (not a flat union). */
+  private async loadQuotaRules(clubId: string) {
+    return this.prisma.spaQuotaRule.findMany({
       where: { clubId },
       include: { services: true, specialists: true },
     });
-    const serviceIds = new Set(
-      rules.flatMap((r) => r.services.map((s) => s.serviceId)),
+  }
+
+  private findQuotaRuleForLine<
+    T extends { membershipServiceName: string },
+  >(rules: T[], membershipServiceName: string): T | undefined {
+    const target = normalizeMembershipServiceName(membershipServiceName);
+    if (!target) return undefined;
+    return rules.find(
+      (r) =>
+        normalizeMembershipServiceName(r.membershipServiceName) === target,
     );
-    const specialistIds = new Set(
-      rules.flatMap((r) => r.specialists.map((s) => s.specialistId)),
-    );
-    return { rules, serviceIds, specialistIds };
+  }
+
+  /**
+   * Whether catalog service may be booked against this membership pack line.
+   *
+   * - VIP included lines → SpaQuotaRule + kind/name safety net.
+   * - Massage-block СоставУслуг («Массаж классический 25 мин») → name/duration
+   *   match only (admin picked those services at sale; ignore broad quota rules).
+   */
+  private catalogAllowedForMembershipLine(
+    service: { id: string; name: string; kind: string },
+    membershipServiceName: string,
+    rule:
+      | { services: Array<{ serviceId: string }> }
+      | null
+      | undefined,
+  ): boolean {
+    const nameMatch = () =>
+      spaCatalogMatchesMembershipLine({
+        membershipServiceName,
+        catalogName: service.name,
+        catalogKind: service.kind,
+      });
+
+    // Sold block composition is authoritative — do not widen via SpaQuotaRule.
+    if (isMassageBlockCompositionLine(membershipServiceName)) {
+      return nameMatch();
+    }
+
+    if (rule && rule.services.length > 0) {
+      if (!rule.services.some((s) => s.serviceId === service.id)) {
+        return false;
+      }
+      // Safety net: VIP known lines must not unlock the wrong kind even if
+      // admin still has a legacy shared allowlist.
+      const included = findMembershipIncludedService(membershipServiceName);
+      if (included?.spaQuotaServiceKey === 'BODY_COMPOSITION') {
+        return (
+          service.kind === 'BODY_COMPOSITION' || nameMatch()
+        );
+      }
+      if (included?.spaQuotaServiceKey === 'CLASSIC_MASSAGE') {
+        return nameMatch();
+      }
+      return true;
+    }
+    return nameMatch();
+  }
+
+  private resolveQuotaMatch(input: {
+    service: { id: string; name: string; kind: string };
+    membershipSpa: MembershipServiceQuota[];
+    rules: Array<{
+      membershipServiceName: string;
+      services: Array<{ serviceId: string }>;
+      specialists: Array<{ specialistId: string }>;
+    }>;
+    membershipServiceName?: string;
+  }): {
+    quotaAvailable: boolean;
+    quotaRemaining?: number;
+    matchedName?: string;
+    allowedSpecialistIds: Set<string>;
+  } {
+    const allowedSpecialistIds = new Set<string>();
+    for (const mSvc of input.membershipSpa) {
+      if (
+        input.membershipServiceName &&
+        mSvc.name !== input.membershipServiceName
+      ) {
+        continue;
+      }
+      const hasQuota = mSvc.unlimited || (mSvc.remaining ?? 0) > 0;
+      if (!hasQuota) continue;
+      const rule = this.findQuotaRuleForLine(input.rules, mSvc.name);
+      if (
+        !this.catalogAllowedForMembershipLine(
+          input.service,
+          mSvc.name,
+          rule,
+        )
+      ) {
+        continue;
+      }
+      if (rule) {
+        for (const sp of rule.specialists) {
+          allowedSpecialistIds.add(sp.specialistId);
+        }
+      }
+      return {
+        quotaAvailable: true,
+        quotaRemaining: mSvc.unlimited ? undefined : mSvc.remaining,
+        matchedName: mSvc.name,
+        allowedSpecialistIds,
+      };
+    }
+    return { quotaAvailable: false, allowedSpecialistIds };
   }
 
   // ─── Client: services / specialists / slots ────────────────────────────────
@@ -503,8 +608,7 @@ export class SpaBookingService {
     });
 
     const membership = await this.loadMembership(user);
-    const { serviceIds: allowedServiceIds } =
-      await this.loadQuotaAllowlist(clubId);
+    const rules = await this.loadQuotaRules(clubId);
 
     const membershipSpa = (membership?.services ?? []).filter((s) =>
       this.isSpaMembershipService(s.name),
@@ -512,34 +616,20 @@ export class SpaBookingService {
 
     const results: SpaServiceEligibility[] = [];
     for (const service of services) {
-      let quotaAvailable = false;
-      let quotaRemaining: number | undefined;
-      let matchedName: string | undefined;
+      const match = this.resolveQuotaMatch({
+        service,
+        membershipSpa,
+        rules,
+        membershipServiceName: opts?.membershipServiceName,
+      });
 
-      if (allowedServiceIds.has(service.id)) {
-        for (const mSvc of membershipSpa) {
-          if (
-            opts?.membershipServiceName &&
-            mSvc.name !== opts.membershipServiceName
-          ) {
-            continue;
-          }
-          const hasQuota = mSvc.unlimited || (mSvc.remaining ?? 0) > 0;
-          if (!hasQuota) continue;
-          quotaAvailable = true;
-          quotaRemaining = mSvc.unlimited ? undefined : mSvc.remaining;
-          matchedName = mSvc.name;
-          break;
-        }
-      }
-
-      if (opts?.quotaOnly && !quotaAvailable) continue;
+      if (opts?.quotaOnly && !match.quotaAvailable) continue;
 
       results.push({
         service: this.mapService(service),
-        quotaAvailable,
-        quotaRemaining,
-        membershipServiceName: matchedName,
+        quotaAvailable: match.quotaAvailable,
+        quotaRemaining: match.quotaRemaining,
+        membershipServiceName: match.matchedName,
         paidAvailable: true,
       });
     }
@@ -560,13 +650,24 @@ export class SpaBookingService {
 
     let specialistIds: string[] | null = null;
     if (opts?.paymentType === 'QUOTA') {
-      const { serviceIds, specialistIds: allowedSpecialists } =
-        await this.loadQuotaAllowlist(clubId);
-      if (!serviceIds.has(serviceId)) {
+      const membership = await this.loadMembership(user);
+      const rules = await this.loadQuotaRules(clubId);
+      const membershipSpa = (membership?.services ?? []).filter((s) =>
+        this.isSpaMembershipService(s.name),
+      );
+      const match = this.resolveQuotaMatch({
+        service,
+        membershipSpa,
+        rules,
+        membershipServiceName: opts.membershipServiceName,
+      });
+      if (!match.quotaAvailable) {
         return [];
       }
       specialistIds =
-        allowedSpecialists.size > 0 ? [...allowedSpecialists] : null;
+        match.allowedSpecialistIds.size > 0
+          ? [...match.allowedSpecialistIds]
+          : null;
     }
 
     const specialists = await this.prisma.user.findMany({
@@ -1229,21 +1330,24 @@ export class SpaBookingService {
           'Нет подходящей услуги в абонементе для списания',
         );
       }
-      const { serviceIds, specialistIds } =
-        await this.loadQuotaAllowlist(clubId);
-      if (serviceIds.size === 0) {
+      const rules = await this.loadQuotaRules(clubId);
+      const membershipSpa = (membership?.services ?? []).filter((s) =>
+        this.isSpaMembershipService(s.name),
+      );
+      const match = this.resolveQuotaMatch({
+        service,
+        membershipSpa,
+        rules,
+        membershipServiceName,
+      });
+      if (!match.quotaAvailable) {
         throw new BadRequestException(
-          'Не настроено правило списания с абонемента',
-        );
-      }
-      if (!serviceIds.has(input.serviceId)) {
-        throw new BadRequestException(
-          'Этот вид услуги нельзя списать по абонементу',
+          'Этот вид услуги нельзя списать по выбранной услуге абонемента',
         );
       }
       if (
-        specialistIds.size > 0 &&
-        !specialistIds.has(input.specialistId)
+        match.allowedSpecialistIds.size > 0 &&
+        !match.allowedSpecialistIds.has(input.specialistId)
       ) {
         throw new BadRequestException(
           'К этому специалисту нельзя записаться по абонементу',

@@ -1,7 +1,13 @@
 'use client';
 
 import type { Booking, ScheduleSlot } from '@fitgo/shared-types';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  isGeneralGroupMembershipService,
+  isGroupReformerMembershipService,
+  isReformerHallSession,
+} from '@fitgo/shared-types';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { ModuleGate } from '@/components/module-gate';
 import { api } from '@/lib/api';
 import { cancelGroupBooking } from '@/lib/cancel-booking';
@@ -16,15 +22,28 @@ interface FilterOption {
 export default function ClientSchedulePage() {
   return (
     <ModuleGate module="group_classes">
-      <ClientSchedulePageInner />
+      <Suspense fallback={<p className="text-slate-400">Загрузка…</p>}>
+        <ClientSchedulePageInner />
+      </Suspense>
     </ModuleGate>
   );
 }
 
 function ClientSchedulePageInner() {
+  const searchParams = useSearchParams();
+  const membershipServiceName = searchParams.get('service')?.trim() || undefined;
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [crmStatus, setCrmStatus] = useState<'LINKED' | 'PENDING_CRM' | null>(null);
+  const reformerHallOnly = Boolean(
+    membershipServiceName &&
+      isGroupReformerMembershipService(membershipServiceName),
+  );
+  const hideReformerHall = Boolean(
+    membershipServiceName &&
+      isGeneralGroupMembershipService(membershipServiceName) &&
+      !reformerHallOnly,
+  );
   const [weekOffset, setWeekOffset] = useState(0);
   const [serviceFilter, setServiceFilter] = useState('');
   const [trainerFilter, setTrainerFilter] = useState('');
@@ -187,6 +206,9 @@ function ClientSchedulePageInner() {
   };
 
   const filtered = slots.filter((slot) => {
+    const isReformer = isReformerHallSession(slot.roomTitle, slot.title);
+    if (reformerHallOnly && !isReformer) return false;
+    if (hideReformerHall && isReformer) return false;
     if (serviceFilter && slot.serviceId !== serviceFilter) return false;
     if (trainerFilter && slot.trainerId !== trainerFilter) return false;
     return true;
@@ -205,6 +227,16 @@ function ClientSchedulePageInner() {
       <p className="text-sm text-slate-400">
         Расписание групповых занятий из 1С. При заполнении группы открывается лист ожидания.
       </p>
+      {membershipServiceName ? (
+        <p className="rounded-xl border border-fitgo-500/30 bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-100">
+          Запись по абонементу: {membershipServiceName}
+          {reformerHallOnly
+            ? '. Показаны только групповые занятия зала реформеров.'
+            : hideReformerHall
+              ? '. Занятия зала реформеров скрыты — запишитесь через «Групповое занятие реформер».'
+              : ''}
+        </p>
+      ) : null}
 
       {!canBook && (
         <div className="card border border-amber-500/30 bg-amber-500/5 text-sm text-slate-300">

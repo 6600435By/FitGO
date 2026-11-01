@@ -6,6 +6,11 @@ import {
   humanDocumentNumber,
   MEMBERSHIP_INCLUDED_SERVICES,
   MEMBERSHIP_INCLUDED_SPA_NAMES,
+  isGeneralGroupMembershipService,
+  isGroupReformerMembershipService,
+  isMassageBlockCompositionLine,
+  membershipAllowsGroupReformer,
+  spaCatalogMatchesMembershipLine,
 } from '@fitgo/shared-types';
 import {
   awaitingPaymentLabel,
@@ -240,6 +245,91 @@ function sale(
   assert.equal(
     isMembershipIncludedSpaTitle('Подарочная ПТ с тренером'),
     false,
+  );
+  assert.equal(
+    spaCatalogMatchesMembershipLine({
+      membershipServiceName: 'Массаж классический общий',
+      catalogName: 'Массаж классический общий',
+      catalogKind: 'MASSAGE',
+    }),
+    true,
+  );
+  assert.equal(
+    spaCatalogMatchesMembershipLine({
+      membershipServiceName: 'Массаж классический общий',
+      catalogName: 'Массаж лица 40 мин',
+      catalogKind: 'MASSAGE',
+    }),
+    false,
+  );
+  assert.equal(
+    spaCatalogMatchesMembershipLine({
+      membershipServiceName: 'Анализ состава тела',
+      catalogName: 'Массаж классический 50 мин',
+      catalogKind: 'MASSAGE',
+    }),
+    false,
+  );
+  assert.equal(
+    spaCatalogMatchesMembershipLine({
+      membershipServiceName: 'Анализ состава тела',
+      catalogName: 'Анализ состава тела (InBody)',
+      catalogKind: 'BODY_COMPOSITION',
+    }),
+    true,
+  );
+  // Massage block СоставУслуг: only the sold timed SKU, not every classic duration.
+  assert.equal(isMassageBlockCompositionLine('Массаж классический 25 мин'), true);
+  assert.equal(isMassageBlockCompositionLine('Массаж классический 25 мин (10)'), true);
+  assert.equal(isMassageBlockCompositionLine('Массаж классический общий'), false);
+  assert.equal(
+    spaCatalogMatchesMembershipLine({
+      membershipServiceName: 'Массаж классический 25 мин (10)',
+      catalogName: 'Массаж классический 25 мин',
+      catalogKind: 'MASSAGE',
+    }),
+    true,
+  );
+  assert.equal(
+    spaCatalogMatchesMembershipLine({
+      membershipServiceName: 'Массаж классический 25 мин',
+      catalogName: 'Массаж классический 50 мин',
+      catalogKind: 'MASSAGE',
+    }),
+    false,
+  );
+  assert.equal(
+    spaCatalogMatchesMembershipLine({
+      membershipServiceName: 'Массаж классический 25 мин',
+      catalogName: 'Массаж лица 25 мин',
+      catalogKind: 'MASSAGE',
+    }),
+    false,
+  );
+  assert.equal(
+    membershipAllowsGroupReformer([
+      { name: 'Групповые программы' },
+    ]),
+    false,
+  );
+  assert.equal(
+    membershipAllowsGroupReformer([
+      { name: 'Групповые программы' },
+      { name: 'Групповое занятие реформер 1' },
+    ]),
+    true,
+  );
+  assert.equal(
+    isGroupReformerMembershipService('Групповое занятие реформер 1'),
+    true,
+  );
+  assert.equal(
+    isGeneralGroupMembershipService('Групповое занятие реформер 1'),
+    false,
+  );
+  assert.equal(
+    isGeneralGroupMembershipService('Групповые программы'),
+    true,
   );
 }
 

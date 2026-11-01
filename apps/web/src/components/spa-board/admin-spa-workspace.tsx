@@ -11,6 +11,7 @@ import type {
 } from '@fitgo/shared-types';
 import {
   MEMBERSHIP_INCLUDED_SPA_NAMES,
+  spaCatalogMatchesMembershipLine,
   spaWaitlistFitsSlot,
   UserRole,
 } from '@fitgo/shared-types';
@@ -36,6 +37,30 @@ import { SpaWeekBoard } from '@/components/spa-board/spa-week-board';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { formatDateTime } from '@/lib/utils';
+
+type QuotaRuleDraft = {
+  allowedServiceIds: string[];
+  allowedSpecialistIds: string[];
+};
+
+function emptyQuotaDraft(): QuotaRuleDraft {
+  return { allowedServiceIds: [], allowedSpecialistIds: [] };
+}
+
+function recommendedQuotaServiceIds(
+  membershipServiceName: string,
+  catalog: SpaService[],
+): string[] {
+  return catalog
+    .filter((s) =>
+      spaCatalogMatchesMembershipLine({
+        membershipServiceName,
+        catalogName: s.name,
+        catalogKind: s.kind,
+      }),
+    )
+    .map((s) => s.id);
+}
 
 function formatPrice(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)} ${currency}`;
@@ -113,10 +138,13 @@ function AdminSpaWorkspaceInner() {
     endAt: string;
     count: number;
   } | null>(null);
-  const [ruleDraft, setRuleDraft] = useState({
-    allowedServiceIds: [] as string[],
-    allowedSpecialistIds: [] as string[],
-  });
+  const [ruleLine, setRuleLine] = useState<string>(
+    MEMBERSHIP_INCLUDED_SPA_NAMES[0] ?? 'Массаж классический общий',
+  );
+  const [ruleDrafts, setRuleDrafts] = useState<Record<string, QuotaRuleDraft>>(
+    {},
+  );
+  const ruleDraft = ruleDrafts[ruleLine] ?? emptyQuotaDraft();
 
   const canEditQuotaRules = useMemo(() => {
     const roles = getUser()?.roles ?? [];
@@ -184,13 +212,17 @@ function AdminSpaWorkspaceInner() {
     setBookings(bks);
     setBoard(brd);
     setWaitlist(wl);
-    const allowedServiceIds = [
-      ...new Set(rls.flatMap((r) => r.allowedServiceIds)),
-    ];
-    const allowedSpecialistIds = [
-      ...new Set(rls.flatMap((r) => r.allowedSpecialistIds)),
-    ];
-    setRuleDraft({ allowedServiceIds, allowedSpecialistIds });
+    const drafts: Record<string, QuotaRuleDraft> = {};
+    for (const name of MEMBERSHIP_INCLUDED_SPA_NAMES) {
+      drafts[name] = emptyQuotaDraft();
+    }
+    for (const r of rls) {
+      drafts[r.membershipServiceName] = {
+        allowedServiceIds: [...r.allowedServiceIds],
+        allowedSpecialistIds: [...r.allowedSpecialistIds],
+      };
+    }
+    setRuleDrafts(drafts);
   }, [
     boardPeriod.end,
     boardPeriod.start,
@@ -306,26 +338,32 @@ function AdminSpaWorkspaceInner() {
     [services],
   );
 
+  const patchRuleDraft = (patch: Partial<QuotaRuleDraft>) => {
+    setRuleDrafts((prev) => ({
+      ...prev,
+      [ruleLine]: { ...(prev[ruleLine] ?? emptyQuotaDraft()), ...patch },
+    }));
+  };
+
   const saveRules = async () => {
     const token = getToken();
     if (!token || !canEditQuotaRules) return;
     setBusy(true);
     try {
-      // Exact 1C VIP pack lines (qty varies). One allowlist → each SPA line name.
+      // One SpaQuotaRule per membership pack line (VIP classic ≠ bodycomp ≠ massage block).
       // Gift PT is complimentary PT, not SpaQuotaRule.
-      const next =
-        ruleDraft.allowedServiceIds.length === 0
-          ? []
-          : MEMBERSHIP_INCLUDED_SPA_NAMES.map((membershipServiceName) => ({
-              membershipServiceName,
-              allowedServiceIds: ruleDraft.allowedServiceIds,
-              allowedSpecialistIds: ruleDraft.allowedSpecialistIds,
-            }));
+      const next = Object.entries(ruleDrafts)
+        .filter(([, d]) => d.allowedServiceIds.length > 0)
+        .map(([membershipServiceName, d]) => ({
+          membershipServiceName,
+          allowedServiceIds: d.allowedServiceIds,
+          allowedSpecialistIds: d.allowedSpecialistIds,
+        }));
       const updated = await api.adminSetSpaQuotaRules(token, next);
       setRules(updated);
       setMessage(
         next.length
-          ? `Правила квоты: ${MEMBERSHIP_INCLUDED_SPA_NAMES.join(', ')}`
+          ? `Правила квоты: ${next.map((r) => r.membershipServiceName).join(', ')}`
           : 'Правила квоты очищены',
       );
     } catch (err) {
@@ -335,14 +373,24 @@ function AdminSpaWorkspaceInner() {
     }
   };
 
+  const applyRecommendedForLine = () => {
+    const ids = recommendedQuotaServiceIds(ruleLine, activeCatalogServices);
+    const specialistIds =
+      ruleDraft.allowedSpecialistIds.length > 0
+        ? ruleDraft.allowedSpecialistIds
+        : specialists.map((s) => s.id);
+    patchRuleDraft({
+      allowedServiceIds: ids,
+      allowedSpecialistIds: specialistIds,
+    });
+  };
+
   const toggleAllCatalogServices = () => {
     const ids = activeCatalogServices.map((s) => s.id);
     const allOn =
-      ids.length > 0 && ids.every((id) => ruleDraft.allowedServiceIds.includes(id));
-    setRuleDraft((d) => ({
-      ...d,
-      allowedServiceIds: allOn ? [] : ids,
-    }));
+      ids.length > 0 &&
+      ids.every((id) => ruleDraft.allowedServiceIds.includes(id));
+    patchRuleDraft({ allowedServiceIds: allOn ? [] : ids });
   };
 
   const toggleSpecialistService = async (
@@ -775,29 +823,60 @@ function AdminSpaWorkspaceInner() {
           <div className="card space-y-3">
             <h3 className="font-medium">Списание с абонемента</h3>
             <p className="text-sm text-slate-400">
-              Услуги из абонемента (кол-во в карточке 1С разное):{' '}
-              {MEMBERSHIP_INCLUDED_SPA_NAMES.join(', ')}. Плюс «Подарочная ПТ с
-              тренером» — это ПТ, не SPA. Отметьте позиции каталога FitGO, на
-              которые списывается квота VIP / блока массажей.
+              Отдельное правило на каждую строку абонемента 1С. VIP «Массаж
+              классический общий» → только эта услуга; «Анализ состава тела» →
+              только анализ. Блок массажа: состав после продажи (СоставУслуг,
+              напр. «Массаж классический 25 мин») матчится по имени к каталогу —
+              правило квоты для него не нужно. «Подарочная ПТ» — не SPA.
             </p>
+            <div className="flex flex-wrap gap-2">
+              {Object.keys(ruleDrafts).map((name) => {
+                const count = ruleDrafts[name]?.allowedServiceIds.length ?? 0;
+                const on = name === ruleLine;
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    className={`rounded-full px-3 py-1 text-xs ${
+                      on ? 'bg-fitgo-500 text-white' : 'bg-slate-800 text-slate-300'
+                    }`}
+                    onClick={() => setRuleLine(name)}
+                  >
+                    {name}
+                    {count > 0 ? ` (${count})` : ''}
+                  </button>
+                );
+              })}
+            </div>
             <div>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm text-slate-400">
-                  Услуги каталога ({ruleDraft.allowedServiceIds.length} выбрано)
+                  Услуги каталога для «{ruleLine}» (
+                  {ruleDraft.allowedServiceIds.length} выбрано)
                 </p>
-                <button
-                  type="button"
-                  className="btn-secondary px-3 py-1 text-xs"
-                  onClick={toggleAllCatalogServices}
-                  disabled={activeCatalogServices.length === 0}
-                >
-                  {activeCatalogServices.length > 0 &&
-                  activeCatalogServices.every((s) =>
-                    ruleDraft.allowedServiceIds.includes(s.id),
-                  )
-                    ? 'Снять все'
-                    : 'Выбрать все'}
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary px-3 py-1 text-xs"
+                    onClick={applyRecommendedForLine}
+                    disabled={activeCatalogServices.length === 0}
+                  >
+                    Рекомендуемые
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary px-3 py-1 text-xs"
+                    onClick={toggleAllCatalogServices}
+                    disabled={activeCatalogServices.length === 0}
+                  >
+                    {activeCatalogServices.length > 0 &&
+                    activeCatalogServices.every((s) =>
+                      ruleDraft.allowedServiceIds.includes(s.id),
+                    )
+                      ? 'Снять все'
+                      : 'Выбрать все'}
+                  </button>
+                </div>
               </div>
               <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-slate-800 p-2">
                 {activeCatalogServices.map((s) => {
@@ -813,17 +892,20 @@ function AdminSpaWorkspaceInner() {
                         type="checkbox"
                         checked={on}
                         onChange={() =>
-                          setRuleDraft((d) => ({
-                            ...d,
+                          patchRuleDraft({
                             allowedServiceIds: on
-                              ? d.allowedServiceIds.filter((id) => id !== s.id)
-                              : [...d.allowedServiceIds, s.id],
-                          }))
+                              ? ruleDraft.allowedServiceIds.filter(
+                                  (id) => id !== s.id,
+                                )
+                              : [...ruleDraft.allowedServiceIds, s.id],
+                          })
                         }
                       />
                       <span className="min-w-0 flex-1 truncate">{s.name}</span>
                       <span className="shrink-0 text-xs text-slate-500">
-                        {s.durationMin} мин
+                        {s.kind === 'BODY_COMPOSITION'
+                          ? 'анализ'
+                          : `${s.durationMin} мин`}
                       </span>
                     </label>
                   );
@@ -850,14 +932,13 @@ function AdminSpaWorkspaceInner() {
                         on ? 'bg-fitgo-500 text-white' : 'bg-slate-800'
                       }`}
                       onClick={() =>
-                        setRuleDraft((d) => ({
-                          ...d,
+                        patchRuleDraft({
                           allowedSpecialistIds: on
-                            ? d.allowedSpecialistIds.filter(
+                            ? ruleDraft.allowedSpecialistIds.filter(
                                 (id) => id !== sp.id,
                               )
-                            : [...d.allowedSpecialistIds, sp.id],
-                        }))
+                            : [...ruleDraft.allowedSpecialistIds, sp.id],
+                        })
                       }
                     >
                       {sp.firstName} {sp.lastName}
@@ -872,11 +953,13 @@ function AdminSpaWorkspaceInner() {
               disabled={busy}
               onClick={saveRules}
             >
-              Сохранить
+              Сохранить все правила
             </button>
-            {rules.length > 0 && ruleDraft.allowedServiceIds.length === 0 ? (
+            {Object.values(ruleDrafts).every(
+              (d) => d.allowedServiceIds.length === 0,
+            ) && rules.length > 0 ? (
               <p className="text-xs text-amber-400/90">
-                Пустой список снимет все правила списания с абонемента.
+                Пустые списки снимут все правила списания с абонемента.
               </p>
             ) : null}
           </div>

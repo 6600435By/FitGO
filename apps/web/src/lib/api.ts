@@ -164,6 +164,8 @@ export interface ClientDashboard {
   accessCard: AccessCard | null;
   cardSource?: '1c' | 'osmi' | 'fitgo';
   crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
+  /** Pack in 1C segment «групповые реформеры» (or service-line heuristic). */
+  allowsGroupReformer?: boolean;
   club: {
     id: string;
     name: string;

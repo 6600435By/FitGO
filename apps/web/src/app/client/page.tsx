@@ -49,7 +49,9 @@ function membershipServiceAction(
   }
   if (kind === 'GROUP') {
     if (!isEnabled('group_classes')) return null;
-    return { href: '/client/schedule' };
+    return {
+      href: `/client/schedule?service=${encodeURIComponent(serviceName)}`,
+    };
   }
   if (kind === 'PT') {
     return { href: '/client/schedule/personal' };

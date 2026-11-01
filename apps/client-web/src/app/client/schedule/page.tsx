@@ -1,9 +1,15 @@
 'use client';
 
 import type { Booking, ScheduleSlot } from '@fitgo/shared-types';
+import {
+  isGeneralGroupMembershipService,
+  isGroupReformerMembershipService,
+  isReformerHallSession,
+} from '@fitgo/shared-types';
 import confetti from 'canvas-confetti';
 import { CalendarPlus, Filter, Share2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Avatar } from '@/components/forma/avatar';
 import { Button } from '@/components/forma/button';
 import { Chip } from '@/components/forma/chip';
@@ -38,7 +44,16 @@ type Period = '' | 'morning' | 'day' | 'evening';
 export default function ClientSchedulePage() {
   return (
     <ModuleGate module="group_classes">
-      <GroupScheduleInner />
+      <Suspense
+        fallback={
+          <div className="space-y-3">
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+        }
+      >
+        <GroupScheduleInner />
+      </Suspense>
     </ModuleGate>
   );
 }
@@ -46,6 +61,9 @@ export default function ClientSchedulePage() {
 function GroupScheduleInner() {
   const toast = useToast();
   const theme = useClubTheme();
+  const searchParams = useSearchParams();
+  /** From home «Использовать» on a membership group line; absent for bottom-nav schedule. */
+  const membershipServiceName = searchParams.get('service')?.trim() || undefined;
   const [slotsByWeek, setSlotsByWeek] = useState<Record<number, ScheduleSlot[]>>(
     {},
   );
@@ -66,6 +84,17 @@ function GroupScheduleInner() {
   const [confirmCancel, setConfirmCancel] = useState(false);
 
   const canBook = crmStatus !== 'PENDING_CRM';
+  /** «Групповое занятие реформер 1» → only REFORMER hall. */
+  const reformerHallOnly = Boolean(
+    membershipServiceName &&
+      isGroupReformerMembershipService(membershipServiceName),
+  );
+  /** «Групповые программы» → hide REFORMER (book reformer via its own pack line). */
+  const hideReformerHall = Boolean(
+    membershipServiceName &&
+      isGeneralGroupMembershipService(membershipServiceName) &&
+      !reformerHallOnly,
+  );
 
   useEffect(() => {
     try {
@@ -155,10 +184,20 @@ function GroupScheduleInner() {
 
   const { pulling, refreshing } = usePullToRefresh(refresh);
 
-  const allSlots = useMemo(
-    () => Object.values(slotsByWeek).flat(),
-    [slotsByWeek],
-  );
+  const allSlots = useMemo(() => {
+    const flat = Object.values(slotsByWeek).flat();
+    if (reformerHallOnly) {
+      return flat.filter((slot) =>
+        isReformerHallSession(slot.roomTitle, slot.title),
+      );
+    }
+    if (hideReformerHall) {
+      return flat.filter(
+        (slot) => !isReformerHallSession(slot.roomTitle, slot.title),
+      );
+    }
+    return flat;
+  }, [hideReformerHall, reformerHallOnly, slotsByWeek]);
 
   const bookedSessionIds = useMemo(
     () =>
@@ -422,6 +461,16 @@ function GroupScheduleInner() {
           ) : null}
         </div>
       )}
+      {membershipServiceName ? (
+        <div className="rounded-2xl border border-forma-400/25 bg-forma-400/10 px-4 py-3 text-sm text-ink/85">
+          Запись по абонементу: {membershipServiceName}
+          {reformerHallOnly
+            ? '. Показаны только групповые занятия зала реформеров.'
+            : hideReformerHall
+              ? '. Занятия зала реформеров скрыты — запишитесь через «Групповое занятие реформер».'
+              : null}
+        </div>
+      ) : null}
 
       <DateStrip
         days={dateStripDays}

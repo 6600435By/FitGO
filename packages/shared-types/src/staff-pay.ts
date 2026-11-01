@@ -329,6 +329,25 @@ export const PT_ALLSPORTS_SESSION_IDS = [
 export const REFORMER_PERSONAL_SEGMENT_UUID =
   '8deca45d-36c3-2cf1-11f1-c6f94643a7d2';
 
+/**
+ * 1C nomenclature segment «групповые реформеры»
+ * e1cib: Справочник.СегментыНоменклатуры?ref=8deca45d36c32cf111f1d5d07225f3f3
+ * Membership / pack SKUs that include group reformer classes (not personal reformer PT).
+ */
+export const REFORMER_GROUP_SEGMENT_UUID =
+  '8deca45d-36c3-2cf1-11f1-d5d07225f3f3';
+
+/**
+ * Pack-line / service «Групповое занятие реформер 1» (and same SKU on any membership).
+ * e1cib: Справочник.Номенклатура?ref=8ddba45d36c32cf111f0ec7c39900384
+ * «Использовать» → client schedule filtered to group REFORMER hall only.
+ */
+export const GROUP_REFORMER_SESSION_SERVICE_IDS = [
+  '8ddba45d-36c3-2cf1-11f0-ec7c39900384',
+  '8ddba45d36c32cf111f0ec7c39900384',
+  '39900384-ec7c-11f0-8ddb-a45d36c32cf1',
+] as const;
+
 /** @deprecated Prefer DEFAULT_REFORMER_RATE_TIERS on REFORMER track. */
 export const DEFAULT_REFORMER_GROUP_RATE_MINOR = 3500;
 

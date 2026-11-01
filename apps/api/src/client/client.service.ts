@@ -10,6 +10,7 @@ import {
   SessionType,
   UserRole,
   classifyVisitKind,
+  membershipAllowsGroupReformer,
   type AccessCard,
   type ClientVisitsResponse,
   type ClubCardView,
@@ -22,6 +23,7 @@ import {
   deriveMembershipFromVisits,
   type ScheduleFilters,
 } from '@fitgo/1c-adapter';
+import { ConfigService } from '@nestjs/config';
 import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { FitnessService } from '../fitness/fitness.service';
@@ -35,6 +37,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { BookingGateway } from '../club-sync/booking-gateway.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { loadPayrollSegmentSets } from '../admin-sales/admin-sales-segments';
 
 /** Short TTL so home / week-change do not open 3× 1C sessions each load. */
 const CLIENT_LIVE_TTL_MS = 90_000;
@@ -65,6 +68,7 @@ export class ClientService {
     private readonly clubMembership: ClubMembershipService,
     private readonly crmLink: ClubCrmLinkService,
     private readonly visitSync: VisitSyncService,
+    private readonly config: ConfigService,
   ) {}
 
   private readTtl<T>(map: Map<string, TtlEntry<T>>, key: string): T | null {
@@ -558,6 +562,33 @@ export class ClientService {
       activeMembership?.crmStatus ??
       (externalId ? 'LINKED' : activeMembership ? 'PENDING_CRM' : null);
 
+    // Segment «групповые реформеры» — which membership/pack SKUs unlock reformer hall.
+    let allowsGroupReformer = membershipAllowsGroupReformer(
+      membership?.services,
+    );
+    if (!allowsGroupReformer && externalId) {
+      try {
+        const provider = this.fitness.getProvider();
+        const packagesPromise = provider.getClientPackages
+          ? provider.getClientPackages(externalId)
+          : Promise.resolve([]);
+        const [segments, packages] = await Promise.all([
+          loadPayrollSegmentSets(this.config),
+          packagesPromise,
+        ]);
+        allowsGroupReformer = membershipAllowsGroupReformer(
+          membership?.services,
+          {
+            membershipName: membership?.name,
+            packageNames: (packages ?? []).map((p) => p.name),
+            reformerGroupSegmentKeys: segments?.reformerGroup,
+          },
+        );
+      } catch {
+        /* keep heuristic */
+      }
+    }
+
     return {
       profile: {
         id: user.sub,
@@ -575,6 +606,8 @@ export class ClientService {
       accessCard,
       cardSource,
       crmStatus,
+      /** True when client pack is in 1C segment групповые реформеры (or service-line heuristic). */
+      allowsGroupReformer,
       club: clubRecord
         ? {
             id: clubRecord.id,
@@ -925,6 +958,10 @@ export class ClientService {
     const filtered = slots
       .filter((slot) => new Date(slot.endAt).getTime() > now)
       .sort((a, b) => a.startAt.localeCompare(b.startAt));
+
+    // Reformer hide is client-side only when opening schedule via
+    // «Использовать» on «Групповые программы» (?service=…).
+    // Bottom-nav «Расписание» shows the full hall list including РЕФОРМЕР.
 
     return this.waitlist.enrichScheduleSlots(user, filtered);
   }

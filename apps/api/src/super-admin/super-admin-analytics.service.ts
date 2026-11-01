@@ -953,6 +953,7 @@ function salesMixKey(
         solarium: segments.solarium,
         training: segments.training,
         reformerPersonal: new Set<string>(),
+        reformerGroup: new Set<string>(),
       }
     : null;
   const bucket = classifySaleType(saleType, productName, payroll);
