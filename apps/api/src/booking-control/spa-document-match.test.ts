@@ -23,6 +23,9 @@ import {
   isMembershipIncludedSpaTitle,
   pickBestServiceByDuration,
   preferredServiceDurationMin,
+  saleAmountMajor,
+  saleIsSpaLinkCandidate,
+  saleTakenBlocksSpaLink,
   serviceNamesMatch,
   spaTitleHasDurationMin,
   type SpaBookingMatchInput,
@@ -492,6 +495,148 @@ function sale(
 }
 
 assert.equal(namesMatch('Бирюкова Екатерина', 'Бирюкова Е.'), true);
+
+// Soft list must not offer café sales; only SPA nomenclature.
+{
+  const visit = new Date('2026-10-30T10:50:00.000Z');
+  const b = booking({
+    id: 'b-loyko',
+    startAt: visit,
+    clientExternalId: 'cli-loyko',
+    clientName: 'Лойко Алексей',
+    specialistName: 'Бирюкова Екатерина',
+    specialistExternalId: '42',
+    serviceName: 'Массаж классический 40 мин',
+    serviceExternalId: 'svc-40',
+  });
+  const coffee = sale({
+    externalId: 'sale-cappuccino',
+    occurredAt: new Date('2026-10-30T10:45:00.000Z'),
+    saleAmount: 3.15,
+    paidAmount: 3.15,
+    productName: 'Капучино',
+    productExternalId: 'cafe-cap',
+    clientExternalId: 'cli-loyko',
+    clientName: 'Лойко Алексей',
+    performerExternalId: null,
+    performerName: null,
+  });
+  const lungo = sale({
+    externalId: 'sale-lungo',
+    occurredAt: new Date('2026-10-30T09:11:00.000Z'),
+    saleAmount: 3.5,
+    paidAmount: 3.5,
+    productName: 'Лунго',
+    productExternalId: 'cafe-lungo',
+    clientExternalId: 'cli-loyko',
+    clientName: 'Лойко Алексей',
+    performerExternalId: null,
+    performerName: null,
+  });
+  const mass = sale({
+    externalId: 'sale-mass-40',
+    occurredAt: new Date('2026-10-30T10:40:00.000Z'),
+    saleAmount: 80,
+    paidAmount: 80,
+    productName: 'Массаж классический 40 мин',
+    productExternalId: 'svc-40',
+    clientExternalId: 'cli-loyko',
+    clientName: 'Лойко Алексей',
+    performerExternalId: '42',
+    performerName: 'Бирюкова Екатерина',
+  });
+  assert.equal(saleIsSpaLinkCandidate(coffee), false);
+  assert.equal(saleIsSpaLinkCandidate(lungo), false);
+  assert.equal(saleIsSpaLinkCandidate(mass), true);
+  const r = matchSpaSale({
+    booking: b,
+    sales: [coffee, lungo, mass],
+  });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.sale.externalId, 'sale-mass-40');
+  }
+  const onlyCafe = matchSpaSale({
+    booking: b,
+    sales: [coffee, lungo],
+  });
+  assert.equal(onlyCafe.kind, 'none');
+}
+
+// Taken retail SPA sale is blocked; massage block may still be offered.
+{
+  const visit = new Date('2026-10-19T07:00:00.000Z');
+  const b = booking({ id: 'b-block', startAt: visit });
+  const takenRetail = sale({
+    externalId: 'sale-taken-retail',
+    occurredAt: visit,
+  });
+  const block = sale({
+    externalId: 'sale-mass-block',
+    occurredAt: visit,
+    saleAmount: 450,
+    paidAmount: 450,
+    productName: 'Блок массажа 10',
+    productExternalId: 'block-10',
+  });
+  assert.equal(
+    saleTakenBlocksSpaLink(takenRetail, new Set(['sale-taken-retail'])),
+    true,
+  );
+  assert.equal(
+    saleTakenBlocksSpaLink(block, new Set(['sale-mass-block'])),
+    false,
+  );
+  const r = matchSpaSale({
+    booking: b,
+    sales: [takenRetail, block],
+    takenSaleIds: new Set(['sale-taken-retail', 'sale-mass-block']),
+  });
+  // Exact auto would need same service name; block ≠ «Массаж классический 50 мин»
+  // → other nomenclature hint with only the block (taken retail filtered out).
+  assert.equal(r.kind, 'hint');
+  if (r.kind === 'hint') {
+    assert.equal(r.hint.candidates.length, 1);
+    assert.equal(r.hint.candidates[0]?.externalId, 'sale-mass-block');
+  }
+}
+
+// Guest booking (no clientExternalId) + 50% discount sale (catalog 80 → paid 40).
+// Match is by FIO + performer + nomenclature — amount must not block auto-link.
+{
+  const visit = new Date('2026-10-13T08:55:00.000Z');
+  const b = booking({
+    id: 'b-borich-guest',
+    startAt: visit,
+    clientExternalId: null,
+    clientName: 'Боричевский денис',
+    specialistName: 'Абрамчик Егор',
+    specialistExternalId: 'abr-egor',
+    serviceName: 'Массаж классический 40 мин',
+    serviceExternalId: 'svc-mass-40',
+  });
+  const s = sale({
+    externalId: 'sale-borich-40',
+    occurredAt: new Date('2026-10-13T13:38:00.000Z'),
+    saleAmount: 40,
+    paidAmount: 40,
+    cash: 40,
+    productName: 'Массаж классический 40 мин',
+    productExternalId: 'svc-mass-40',
+    clientExternalId: 'cli-borich',
+    clientName: 'Боричевский Денис Константинович',
+    performerExternalId: 'abr-egor',
+    performerName: 'Абрамчик Егор Викторович',
+  });
+  assert.equal(namesMatch(b.clientName, s.clientName), true);
+  const r = matchSpaSale({ booking: b, sales: [s] });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.sale.externalId, 'sale-borich-40');
+    assert.equal(r.paymentStatus, 'PAID');
+    assert.equal(saleAmountMajor(r.sale), 40);
+  }
+}
 
 // Paid cash sale must not leak the revenue key into the admin card.
 {

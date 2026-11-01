@@ -171,6 +171,18 @@ export function createBookingControlApi(
       if (!token) throw new Error('Нет сессии');
       await api.adminUpdateSpaBooking(token, bookingId, { serviceId });
     },
+    updateSpaGuestPhone: async (bookingId, guestPhone, opts) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      const res = await api.adminUpdateSpaBooking(token, bookingId, {
+        ...(guestPhone.trim() ? { guestPhone } : {}),
+        ...(opts?.guestName?.trim()
+          ? { guestName: opts.guestName.trim() }
+          : {}),
+        cascadeClientLink: opts?.cascadeClientLink,
+      });
+      return res.cascade;
+    },
     listSpaServices: async () => {
       const token = getToken();
       if (!token) return [];

@@ -229,11 +229,11 @@ export type BookingControlApi = {
   ) => Promise<import('@fitgo/shared-types').HallClassSnapshotItem[]>;
   /** Returns object URL for JPEG (caller must revoke). */
   loadHallSnapshotImage?: (snapshotId: string) => Promise<string>;
-  /** Admin: save phone on unlinked SPA booking and retry 1C link. */
+  /** Admin/manager/SA: save phone/FIO on SPA booking and retry 1C client link. */
   updateSpaGuestPhone?: (
     bookingId: string,
     guestPhone: string,
-    opts?: { cascadeClientLink?: boolean },
+    opts?: { cascadeClientLink?: boolean; guestName?: string },
   ) => Promise<
     | import('@fitgo/shared-types').SpaClientLinkCascadeResult
     | undefined
@@ -440,9 +440,10 @@ function shownPriceMinor(item: {
   priceMinor?: number;
   spaSettlement?: { amountMinor?: number };
 }): number | null {
-  if (item.priceMinor != null && item.priceMinor > 0) return item.priceMinor;
+  // Prefer fact sale amount (after 1C discount) over catalog list price.
   const fromSale = item.spaSettlement?.amountMinor;
   if (fromSale != null && fromSale > 0) return fromSale;
+  if (item.priceMinor != null && item.priceMinor > 0) return item.priceMinor;
   return null;
 }
 
@@ -457,8 +458,9 @@ function paymentCell(item: BookingControlListItem): string {
   if (item.payment && item.payment !== 'N_A' && item.payment !== 'UNKNOWN') {
     parts.push(paymentLabelRu(item.payment));
   }
-  if (item.priceMinor != null && item.priceMinor > 0) {
-    parts.push(`${(item.priceMinor / 100).toFixed(2)}`);
+  const price = shownPriceMinor(item);
+  if (price != null && price > 0) {
+    parts.push(`${(price / 100).toFixed(2)}`);
   }
   return parts.length ? parts.join(' · ') : '—';
 }
@@ -953,6 +955,7 @@ export function BookingControlPanel({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [approvalNotesOpen, setApprovalNotesOpen] = useState(false);
   const [linkPhone, setLinkPhone] = useState('');
+  const [linkGuestName, setLinkGuestName] = useState('');
   const [linkPhoneBusy, setLinkPhoneBusy] = useState(false);
   const [linkPhoneMsg, setLinkPhoneMsg] = useState('');
   const [linkCascadeCandidates, setLinkCascadeCandidates] = useState<
@@ -971,6 +974,8 @@ export function BookingControlPanel({
 
   const showSpaLinkHints =
     approvalActor === 'admin' || approvalActor === 'override';
+  /** Admin / manager / SA: patch 1C client/sale on approved SPA without rework. */
+  const canPatchSpaOneCWithoutRework = showSpaLinkHints;
 
   useEffect(() => {
     if (!selected?.remark || !api.payrollHoldPreview) {
@@ -1368,6 +1373,7 @@ export function BookingControlPanel({
     setSelected(d);
     setAdoptServiceId('');
     setLinkPhone(d.guestPhone ?? '');
+    setLinkGuestName(d.clientName?.trim() && d.clientName !== '—' ? d.clientName : '');
     setComment(d.groupApproval?.trainerComment ?? '');
     setRemarkAssigneeId(d.remark?.assigneeId ?? '');
     const seen = new Set(
@@ -1715,8 +1721,9 @@ export function BookingControlPanel({
   const saveSpaGuestPhone = async (opts?: { cascadeClientLink?: boolean }) => {
     if (!selected?.fitgoBookingId || !api.updateSpaGuestPhone) return;
     const phone = linkPhone.trim();
-    if (!phone) {
-      setLinkPhoneMsg('Введите номер телефона');
+    const name = linkGuestName.trim();
+    if (!phone && !name) {
+      setLinkPhoneMsg('Укажите телефон или ФИО клиента');
       return;
     }
     setLinkPhoneBusy(true);
@@ -1725,26 +1732,42 @@ export function BookingControlPanel({
       const cascade = await api.updateSpaGuestPhone(
         selected.fitgoBookingId,
         phone,
-        opts,
+        {
+          ...opts,
+          ...(name ? { guestName: name } : {}),
+        },
       );
       const d = await api.detail(selected.sessionKey);
       setSelected(d);
       setLinkPhone(d.guestPhone ?? phone);
+      setLinkGuestName(
+        d.clientName?.trim() && d.clientName !== '—' ? d.clientName : name,
+      );
       const applied = cascade?.applied ?? [];
       const candidates = cascade?.candidates ?? [];
       setLinkCascadeCandidates(candidates);
       if (d.spaSettlement?.status === 'AWAITING_CLIENT_LINK') {
         setLinkPhoneMsg(
           applied.length > 0
-            ? `В 1С не найден, номер сохранён. Ещё ${applied.length} записей: ${formatCascadeDates(applied)}`
-            : 'В 1С не найден, номер сохранён',
+            ? `В 1С не найден, данные сохранены. Ещё ${applied.length} записей: ${formatCascadeDates(applied)}`
+            : 'В 1С не найден, данные сохранены',
+        );
+      } else if (
+        d.spaSettlement?.status === 'PAID' ||
+        d.spaSettlement?.status === 'AWAITING_PAYMENT' ||
+        d.oneCLinked
+      ) {
+        setLinkPhoneMsg(
+          applied.length > 0
+            ? `Привязано. Ещё ${applied.length} записей: ${formatCascadeDates(applied)}`
+            : 'Привязано к 1С',
         );
       } else if (applied.length > 0) {
         setLinkPhoneMsg(
-          `Клиент привязан. Ещё ${applied.length} записей: ${formatCascadeDates(applied)}`,
+          `Сохранено. Ещё ${applied.length} записей: ${formatCascadeDates(applied)}`,
         );
       } else {
-        setLinkPhoneMsg('Клиент привязан');
+        setLinkPhoneMsg('Сохранено — при необходимости привяжите продажу ниже');
       }
       load();
     } catch (e) {
@@ -1753,6 +1776,23 @@ export function BookingControlPanel({
       setLinkPhoneBusy(false);
     }
   };
+
+  const spaSettlementNeedsClient =
+    selected?.spaSettlement?.status === 'AWAITING_CLIENT_LINK';
+  const spaSettlementNeedsDoc =
+    selected?.spaSettlement?.status === 'NOT_IN_1C' ||
+    selected?.spaSettlement?.status === 'DELETED_IN_1C' ||
+    (selected?.kind === 'SPA' &&
+      selected.source === 'FITGO' &&
+      !selected.oneCLinked);
+  /** Phone/FIO for admin/manager/SA when client or sale is not linked in 1C. */
+  const showSpaClientLinkForm =
+    selected?.kind === 'SPA' &&
+    Boolean(selected.fitgoBookingId) &&
+    selected.status !== 'CANCELLED' &&
+    canPatchSpaOneCWithoutRework &&
+    Boolean(api.updateSpaGuestPhone) &&
+    (Boolean(spaSettlementNeedsClient) || Boolean(spaSettlementNeedsDoc));
 
   const spaEditableInApp =
     selected?.kind === 'SPA' &&
@@ -3814,18 +3854,32 @@ export function BookingControlPanel({
                     </button>
                   </p>
                 ) : null}
-                {selected.kind === 'SPA' &&
-                selected.fitgoBookingId &&
-                api.updateSpaGuestPhone &&
-                selected.spaSettlement?.status === 'AWAITING_CLIENT_LINK' ? (
+                {showSpaClientLinkForm ? (
                   <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-950/50 p-3">
                     <p className="text-sm text-slate-300">
-                      Телефон для привязки к 1С
+                      Привязка клиента к 1С
                     </p>
+                    {selected.approvalPhase === 'APPROVED' ? (
+                      <p className="text-xs text-emerald-200/90">
+                        Запись уже подтверждена — можно поправить ФИО/телефон и
+                        привязать продажу без «На доработку».
+                      </p>
+                    ) : null}
+                    <label className="block space-y-1 text-sm">
+                      <span className="text-[11px] text-slate-500">
+                        ФИО в 1С
+                      </span>
+                      <input
+                        className="input"
+                        value={linkGuestName}
+                        onChange={(e) => setLinkGuestName(e.target.value)}
+                        placeholder="Фамилия Имя Отчество"
+                      />
+                    </label>
                     <div className="flex flex-wrap items-end gap-2">
                       <label className="min-w-0 flex-1 space-y-1 text-sm">
                         <span className="text-[11px] text-slate-500">
-                          Номер
+                          Телефон
                         </span>
                         <input
                           className="input"
@@ -3840,16 +3894,15 @@ export function BookingControlPanel({
                         disabled={linkPhoneBusy}
                         onClick={() => void saveSpaGuestPhone()}
                       >
-                        {linkPhoneBusy ? '…' : 'Сохранить номер'}
+                        {linkPhoneBusy ? '…' : 'Сохранить и привязать'}
                       </button>
                     </div>
                     {linkPhoneMsg ? (
                       <p className="text-xs text-slate-400">{linkPhoneMsg}</p>
                     ) : (
                       <p className="text-xs text-slate-500">
-                        Номер сохранится в записи. Если клиент есть в 1С —
-                        привязка выполнится автоматически. Записи с тем же
-                        ФИО (два и больше слова) обновятся сами.
+                        Телефон ищет клиента в 1С. Исправьте ФИО, если в записи
+                        мусор («или муж»). Подтверждение админа не сбрасывается.
                       </p>
                     )}
                     {linkCascadeCandidates.length > 0 ? (

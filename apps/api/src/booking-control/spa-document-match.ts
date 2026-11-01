@@ -4,6 +4,10 @@
  */
 
 import type { SpaLinkCandidate, SpaLinkHint } from '@fitgo/shared-types';
+import {
+  isServiceBlockPackageName,
+  isSpaLikeSessionTitle,
+} from '@fitgo/shared-types';
 
 /** Days before visit to look for a paid/debt sale. */
 export const SPA_SALE_LOOKBACK_DAYS = 21;
@@ -348,6 +352,35 @@ export function nomenclatureMatches(
   return serviceNamesMatch(sale.productName, booking.serviceName);
 }
 
+/**
+ * Sale product is a SPA catalog row, spa-like title, or multi-visit massage block.
+ * Bars / café / PT one-offs must not appear in booking-control link hints.
+ */
+export function saleIsSpaLinkCandidate(
+  sale: SpaSaleCandidate,
+  serviceIdByProduct?: Map<string, string>,
+): boolean {
+  if (isSpaLikeSessionTitle(sale.productName)) return true;
+  if (isServiceBlockPackageName(sale.productName)) return true;
+  if (!serviceIdByProduct) return false;
+  if (sale.productExternalId?.trim()) {
+    if (serviceIdByProduct.has(sale.productExternalId.trim())) return true;
+  }
+  const key = normalizeLabel(sale.productName);
+  if (key && serviceIdByProduct.has(`name:${key}`)) return true;
+  return false;
+}
+
+/** Massage/PT blocks may be linked to several visit cards; retail SPA sales may not. */
+export function saleTakenBlocksSpaLink(
+  sale: SpaSaleCandidate,
+  takenSaleIds?: Set<string>,
+): boolean {
+  if (!takenSaleIds?.has(sale.externalId)) return false;
+  if (isServiceBlockPackageName(sale.productName)) return false;
+  return true;
+}
+
 function addDays(d: Date, days: number): Date {
   const x = new Date(d.getTime());
   x.setUTCDate(x.getUTCDate() + days);
@@ -467,9 +500,10 @@ export function matchSpaSale(input: {
 
   const forClient = sales.filter(
     (s) =>
-      (!takenSaleIds || !takenSaleIds.has(s.externalId)) &&
+      !saleTakenBlocksSpaLink(s, takenSaleIds) &&
       inWindow(s) &&
-      clientMatchesSale(s, booking),
+      clientMatchesSale(s, booking) &&
+      saleIsSpaLinkCandidate(s, serviceIdByProduct),
   );
   if (forClient.length === 0) return { kind: 'none' };
 

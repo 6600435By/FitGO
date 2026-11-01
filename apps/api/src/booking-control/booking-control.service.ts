@@ -105,6 +105,8 @@ import {
   preferredServiceDurationMin,
   saleAmountMajor,
   saleIsComplimentaryPartner,
+  saleIsSpaLinkCandidate,
+  saleTakenBlocksSpaLink,
   namesMatch,
   serviceNamesMatch,
   toSaleCandidate,
@@ -1326,7 +1328,8 @@ export class BookingControlService {
           ? (matched as { crmDocRef?: string | null }).crmDocRef ??
             s.externalId
           : s.externalId,
-        priceMinor: unitPrice ?? matchedPrice,
+        priceMinor:
+          spaSettlement?.amountMinor ?? unitPrice ?? matchedPrice,
         groupApproval,
         spaSettlement,
         spaLinkHint,
@@ -1557,7 +1560,11 @@ export class BookingControlService {
         remarksHistory: mappedRemarks,
         fitgoBookedAt: b.createdAt.toISOString(),
         crmDocRef: b.crmDocRef ?? undefined,
-        priceMinor: b.priceMinor ?? b.service.priceMinor,
+        priceMinor:
+          settled.settlement.amountMinor ??
+          b.priceMinor ??
+          b.service.priceMinor ??
+          undefined,
         spaSettlement: settled.settlement,
         spaLinkHint,
         oneCTitle: settled.oneCTitle,
@@ -5339,6 +5346,12 @@ export class BookingControlService {
       !booking.consumedInCrmAt &&
       booking.oneCLinkStatus !== 'LINKED'
     ) {
+      // Paid guest / unlinked client: still soft-match ClubRevenue by FIO.
+      // Matching ignores catalog vs sale amount (manual % discounts etc.).
+      if (!isQuota) {
+        const saleHit = await this.tryResolveSpaSale(booking, input.clubId);
+        if (saleHit) return saleHit;
+      }
       return {
         settlement: {
           status: 'AWAITING_CLIENT_LINK',
@@ -5916,6 +5929,9 @@ export class BookingControlService {
             sale.productExternalId ?? booking.service?.externalId,
           title: sale.productName ?? booking.service?.name,
         });
+      const amountMajor = saleAmountMajor(sale);
+      const amountMinor =
+        amountMajor > 0 ? Math.round(amountMajor * 100) : undefined;
       if (booking.linkedSaleExternalId !== sale.externalId) {
         await this.prisma.spaBooking
           .update({
@@ -5925,6 +5941,15 @@ export class BookingControlService {
               oneCLinkStatus: SpaOneCLinkStatus.LINKED,
               saleAutoLinkBlocked: false,
               ...(partnerPay ? { partnerSource: 'ALLSPORTS' } : {}),
+              // Persist fact amount (after 1C discount), not catalog list price.
+              ...(amountMinor != null && amountMinor > 0
+                ? { priceMinor: amountMinor }
+                : {}),
+              // Guest bookings often lack clientExternalId — take it from the sale.
+              ...(!booking.clientExternalId?.trim() &&
+              sale.clientExternalId?.trim()
+                ? { clientExternalId: sale.clientExternalId.trim() }
+                : {}),
               paymentStatus:
                 result.paymentStatus === 'PAID'
                   ? ServicePaymentStatus.PAID
@@ -5936,9 +5961,6 @@ export class BookingControlService {
           })
           .catch(() => undefined);
       }
-      const amountMajor = saleAmountMajor(sale);
-      const amountMinor =
-        amountMajor > 0 ? Math.round(amountMajor * 100) : undefined;
       if (result.paymentStatus === 'PAID') {
         return {
           settlement: {
@@ -5993,24 +6015,42 @@ export class BookingControlService {
         hint: {
           kind: 'SALE_MULTIPLE',
           message: 'Документ отвязан — выберите продажу',
-          candidates: sales
-            .filter((s) => !takenSaleIds.has(s.externalId))
-            .slice(0, 8)
-            .map((s) => {
-              let serviceId: string | undefined;
-              if (s.productExternalId?.trim()) {
-                serviceId = serviceMap.get(s.productExternalId.trim());
-              }
-              if (!serviceId) {
-                const key = normalizeLabel(s.productName);
-                if (key) serviceId = serviceMap.get(`name:${key}`);
-              }
-              return toSaleCandidate(s, serviceId);
-            }),
+          candidates: this.mapSpaSaleLinkCandidates(
+            sales,
+            serviceMap,
+            takenSaleIds,
+          ),
         },
       };
     }
     return null;
+  }
+
+  /** SPA / massage-block sales only; skip retail already linked elsewhere. */
+  private mapSpaSaleLinkCandidates(
+    sales: SpaSaleCandidate[],
+    serviceMap: Map<string, string>,
+    takenSaleIds: Set<string>,
+    limit = 8,
+  ) {
+    return sales
+      .filter(
+        (s) =>
+          saleIsSpaLinkCandidate(s, serviceMap) &&
+          !saleTakenBlocksSpaLink(s, takenSaleIds),
+      )
+      .slice(0, limit)
+      .map((s) => {
+        let serviceId: string | undefined;
+        if (s.productExternalId?.trim()) {
+          serviceId = serviceMap.get(s.productExternalId.trim());
+        }
+        if (!serviceId) {
+          const key = normalizeLabel(s.productName);
+          if (key) serviceId = serviceMap.get(`name:${key}`);
+        }
+        return toSaleCandidate(s, serviceId);
+      });
   }
 
   /** Candidates to replace a wrong linked sale (open remark / admin relink). */
@@ -6096,20 +6136,7 @@ export class BookingControlService {
         ? result.hint.candidates
         : result.kind === 'auto'
           ? autoSaleAsHint(result.sale, serviceMap).candidates
-          : sales
-              .filter((s) => !takenSaleIds.has(s.externalId))
-              .slice(0, 8)
-              .map((s) => {
-                let serviceId: string | undefined;
-                if (s.productExternalId?.trim()) {
-                  serviceId = serviceMap.get(s.productExternalId.trim());
-                }
-                if (!serviceId) {
-                  const key = normalizeLabel(s.productName);
-                  if (key) serviceId = serviceMap.get(`name:${key}`);
-                }
-                return toSaleCandidate(s, serviceId);
-              });
+          : this.mapSpaSaleLinkCandidates(sales, serviceMap, takenSaleIds);
     // Prefer alternatives; keep current if it is the only row so admin still sees it.
     const others = candidates.filter((c) => c.externalId !== current);
     if (others.length) candidates = others;

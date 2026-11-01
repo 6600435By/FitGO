@@ -32,32 +32,16 @@ function AdminBookingControlInner() {
   const initialClient = searchParams.get('client')?.trim() || undefined;
   const initialClientId = searchParams.get('clientId')?.trim() || undefined;
 
-  const panelApi = useMemo(() => {
-    const base = createBookingControlApi('admin');
-    return {
-      ...base,
-      updateSpaGuestPhone: async (
-        bookingId: string,
-        guestPhone: string,
-        opts?: { cascadeClientLink?: boolean },
-      ) => {
-        const token = getToken();
-        if (!token) throw new Error('Нет сессии');
-        const res = await api.adminUpdateSpaBooking(token, bookingId, {
-          guestPhone,
-          cascadeClientLink: opts?.cascadeClientLink,
-        });
-        return res.cascade;
-      },
-    };
-  }, []);
+  const roles = useMemo(() => getUser()?.roles ?? [], []);
+  const isManagerOrSa = useMemo(
+    () =>
+      roles.includes(UserRole.SUPER_ADMIN) || roles.includes(UserRole.MANAGER),
+    [roles],
+  );
 
-  const canAssignRemark = useMemo(() => {
-    const roles = getUser()?.roles ?? [];
-    return (
-      roles.includes(UserRole.SUPER_ADMIN) || roles.includes(UserRole.MANAGER)
-    );
-  }, []);
+  const panelApi = useMemo(() => createBookingControlApi('admin'), []);
+
+  const canAssignRemark = isManagerOrSa;
 
   return (
     <BookingControlPanel
@@ -66,8 +50,9 @@ function AdminBookingControlInner() {
       canAssignRemark={canAssignRemark}
       canMarkAttendance
       canApproveGroup
-      approvalActor="admin"
+      approvalActor={isManagerOrSa ? 'override' : 'admin'}
       canReturnApproval
+      canManagerRework={isManagerOrSa}
       canViewHallPhotos
       initialSessionKey={initialSessionKey}
       initialFrom={initialFrom}
