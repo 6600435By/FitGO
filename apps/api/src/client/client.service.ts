@@ -304,6 +304,8 @@ export class ClientService {
     options?: { upcomingOnly?: boolean; includeAll?: boolean },
   ) {
     await this.syncGroupBookingStatuses(user.sub);
+    // Stale CONFIRMED after 1C admin cancel is cleared by class_sessions sync
+    // (hourly LIGHT + nightly FULL), not on every ЛК open.
 
     const where: {
       clientId: string;

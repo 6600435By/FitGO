@@ -571,10 +571,19 @@ export class ClubSyncOrchestrator {
         });
 
         await runStep('class_sessions', async () => {
-          const r = await this.classSessions.syncClub(clubId, {
-            from: classFrom,
-            to: classTo,
-          });
+          // LIGHT: near window + days with open FitGO group bookings (admin
+          // cancel in 1C → clear GroupClassBooking without live ЛК probe).
+          // FULL: operational window via syncClub() when classFrom/to unset.
+          const r =
+            isFull || !classFrom || !classTo
+              ? await this.classSessions.syncClub(clubId, {
+                  from: classFrom,
+                  to: classTo,
+                })
+              : await this.classSessions.syncClubOpenBookingDays(clubId, {
+                  nearFrom: classFrom,
+                  nearTo: classTo,
+                });
           if (r.endpointMissing) {
             throw new Error('GET /v1/class-sessions not published (1C)');
           }

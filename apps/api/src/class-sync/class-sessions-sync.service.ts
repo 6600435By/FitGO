@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import {
+  GroupClassBookingStatus,
   GroupClassSessionStatus,
   GroupSessionBaselineQuality,
   GroupSessionMemberAttendance,
@@ -11,10 +12,14 @@ import {
   TrustBand,
 } from '@prisma/client';
 import type { FitgoClassSessionRow } from '@fitgo/1c-adapter';
-import { isSpaLikeSessionTitle } from '@fitgo/shared-types';
+import {
+  GROUP_SCHEDULE_HORIZON_DAYS,
+  isSpaLikeSessionTitle,
+} from '@fitgo/shared-types';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
+import { addMoscowDays, moscowDayKey } from '../club-sync/moscow-time';
 
 const RESOURCE_KEY = 'class_sessions';
 const PAGE_SIZE = 100;
@@ -84,6 +89,101 @@ export class ClassSessionsSyncService {
             ? this.yearToDateWindow()
             : this.operationalWindow();
       return await this.syncRange(clubId, win.from, win.to);
+    } finally {
+      this.running.delete(clubId);
+    }
+  }
+
+  /**
+   * LIGHT daytime sync: near window (today±1) plus days that still have open
+   * GroupClassBooking rows — only inside the app booking horizon
+   * (`GROUP_SCHEDULE_HORIZON_DAYS` = 21). 1C may list classes a year ahead;
+   * we never pull those days here (site≈14d / app=21d).
+   */
+  async syncClubOpenBookingDays(
+    clubId: string,
+    opts?: { nearFrom?: string; nearTo?: string },
+  ): Promise<ClassSyncResult> {
+    const today = moscowDayKey();
+    const horizonEnd = addMoscowDays(today, GROUP_SCHEDULE_HORIZON_DAYS);
+    const nearFrom = opts?.nearFrom ?? addMoscowDays(today, -1);
+    // nearTo must not exceed app booking horizon
+    const nearToRaw = opts?.nearTo ?? addMoscowDays(today, 1);
+    const nearTo = nearToRaw > horizonEnd ? horizonEnd : nearToRaw;
+    const daySet = new Set(eachUtcDay(nearFrom, nearTo));
+
+    const open = await this.prisma.groupClassBooking.findMany({
+      where: {
+        status: {
+          in: [
+            GroupClassBookingStatus.CONFIRMED,
+            GroupClassBookingStatus.PENDING_1C,
+          ],
+        },
+        endAt: { gte: new Date() },
+        // App can book through today+21 only — ignore farther FitGO rows.
+        startAt: {
+          gte: new Date(`${today}T00:00:00.000Z`),
+          lte: new Date(`${horizonEnd}T23:59:59.999Z`),
+        },
+        client: { clubId },
+      },
+      select: { startAt: true },
+      take: 500,
+    });
+    for (const row of open) {
+      const day = moscowDayKey(row.startAt);
+      if (day >= today && day <= horizonEnd) daySet.add(day);
+    }
+
+    const days = [...daySet]
+      .filter((d) => d <= horizonEnd)
+      .sort();
+    if (days.length === 0) {
+      return {
+        from: nearFrom,
+        to: nearTo,
+        sessionsUpserted: 0,
+        membersUpserted: 0,
+        journalsTouched: 0,
+        endpointMissing: false,
+      };
+    }
+
+    if (this.running.has(clubId)) {
+      return {
+        from: days[0]!,
+        to: days[days.length - 1]!,
+        sessionsUpserted: 0,
+        membersUpserted: 0,
+        journalsTouched: 0,
+        endpointMissing: false,
+      };
+    }
+    this.running.add(clubId);
+    try {
+      let sessionsUpserted = 0;
+      let membersUpserted = 0;
+      let journalsTouched = 0;
+      let endpointMissing = false;
+      for (const day of days) {
+        const r = await this.syncRange(clubId, day, day);
+        sessionsUpserted += r.sessionsUpserted;
+        membersUpserted += r.membersUpserted;
+        journalsTouched += r.journalsTouched;
+        if (r.endpointMissing) {
+          endpointMissing = true;
+          break;
+        }
+      }
+      return {
+        from: days[0]!,
+        to: days[days.length - 1]!,
+        sessionsUpserted,
+        membersUpserted,
+        journalsTouched,
+        endpointMissing,
+      };
     } finally {
       this.running.delete(clubId);
     }
@@ -343,7 +443,11 @@ export class ClassSessionsSyncService {
     return { members: memberCount, journal };
   }
 
-  /** Mirror 1C-only enrollments into GroupClassBooking (origin=ONEC_IMPORTED). */
+  /**
+   * Mirror 1C roster into GroupClassBooking (origin=ONEC_IMPORTED) and
+   * clear FitGO bookings when 1C removed/cancelled the client.
+   * Forma often marks admin removals on future classes as NO_SHOW («Не прибыл»).
+   */
   private async importGroupBookingsFromMembers(
     clubId: string,
     session: {
@@ -357,10 +461,26 @@ export class ClassSessionsSyncService {
   ) {
     const endAt =
       session.endAt ?? new Date(session.startAt.getTime() + 60 * 60_000);
+    const now = Date.now();
+    const sessionUpcoming = session.startAt.getTime() > now;
+    const activeExternalIds = new Set<string>();
+    const dropExternalIds = new Set<string>();
+
     for (const m of members ?? []) {
       const ext = m.externalId?.trim();
       if (!ext) continue;
-      if (m.attendance === 'CANCELLED' || m.attendance === 'NO_SHOW') continue;
+      const cancelled =
+        Boolean(m.cancelled) || m.attendance === 'CANCELLED';
+      // Future NO_SHOW = admin removed client in 1C UI; past NO_SHOW = real no-show.
+      const drop =
+        cancelled || (m.attendance === 'NO_SHOW' && sessionUpcoming);
+      if (drop) {
+        dropExternalIds.add(ext.toLowerCase());
+        continue;
+      }
+      if (m.attendance === 'NO_SHOW') continue;
+      activeExternalIds.add(ext.toLowerCase());
+
       const client = await this.prisma.user.findFirst({
         where: { clubId, externalId: ext },
         select: { id: true },
@@ -411,6 +531,50 @@ export class ClassSessionsSyncService {
           presenceStatus: 'PENDING',
           performanceStatus: 'PENDING',
           eligibleForMotivation: false,
+        },
+      });
+    }
+
+    const openBookings = await this.prisma.groupClassBooking.findMany({
+      where: {
+        appointmentId: session.externalId,
+        status: {
+          in: [
+            GroupClassBookingStatus.CONFIRMED,
+            GroupClassBookingStatus.PENDING_1C,
+          ],
+        },
+        client: { clubId },
+      },
+      select: {
+        id: true,
+        status: true,
+        client: { select: { externalId: true } },
+      },
+    });
+
+    const cancelledAt = new Date();
+    for (const booking of openBookings) {
+      const ext = booking.client.externalId?.trim().toLowerCase();
+      if (!ext) continue;
+      if (activeExternalIds.has(ext)) continue;
+
+      const explicitlyDropped = dropExternalIds.has(ext);
+      const missingFromRoster = !explicitlyDropped;
+      // PENDING_1C may not be on roster yet — only drop when 1C says cancelled/NO_SHOW.
+      if (
+        booking.status === GroupClassBookingStatus.PENDING_1C &&
+        missingFromRoster
+      ) {
+        continue;
+      }
+
+      await this.prisma.groupClassBooking.update({
+        where: { id: booking.id },
+        data: {
+          status: GroupClassBookingStatus.CANCELLED,
+          cancelledAt,
+          usageStatus: 'CANCELLED',
         },
       });
     }
