@@ -110,7 +110,9 @@ export class ClassSessionsSyncService {
     // nearTo must not exceed app booking horizon
     const nearToRaw = opts?.nearTo ?? addMoscowDays(today, 1);
     const nearTo = nearToRaw > horizonEnd ? horizonEnd : nearToRaw;
-    const daySet = new Set(eachUtcDay(nearFrom, nearTo));
+    const nearDays = eachUtcDay(nearFrom, nearTo).filter(
+      (d) => d <= horizonEnd,
+    );
 
     const open = await this.prisma.groupClassBooking.findMany({
       where: {
@@ -129,16 +131,19 @@ export class ClassSessionsSyncService {
         client: { clubId },
       },
       select: { startAt: true },
-      take: 500,
+      take: 2000,
     });
+    const openDaySet = new Set<string>();
     for (const row of open) {
       const day = moscowDayKey(row.startAt);
-      if (day >= today && day <= horizonEnd) daySet.add(day);
+      if (day >= today && day <= horizonEnd) openDaySet.add(day);
     }
 
-    const days = [...daySet]
-      .filter((d) => d <= horizonEnd)
-      .sort();
+    // Open-booking days first (e.g. 21.11 cancel) so a short LIGHT budget
+    // still clears stale ЛК rows before spending time on today±1 alone.
+    const openDays = [...openDaySet].sort();
+    const nearOnly = nearDays.filter((d) => !openDaySet.has(d));
+    const days = [...openDays, ...nearOnly];
     if (days.length === 0) {
       return {
         from: nearFrom,
@@ -166,19 +171,21 @@ export class ClassSessionsSyncService {
       let membersUpserted = 0;
       let journalsTouched = 0;
       let endpointMissing = false;
+      const synced: string[] = [];
       for (const day of days) {
         const r = await this.syncRange(clubId, day, day);
         sessionsUpserted += r.sessionsUpserted;
         membersUpserted += r.membersUpserted;
         journalsTouched += r.journalsTouched;
+        synced.push(day);
         if (r.endpointMissing) {
           endpointMissing = true;
           break;
         }
       }
       return {
-        from: days[0]!,
-        to: days[days.length - 1]!,
+        from: synced[0] ?? days[0]!,
+        to: synced[synced.length - 1] ?? days[days.length - 1]!,
         sessionsUpserted,
         membersUpserted,
         journalsTouched,

@@ -215,7 +215,8 @@ export function DataFreshness({
   const dataLabel = status?.dataAsOf
     ? `Данные на ${status.dataAsOf}`
     : 'Данные ещё не загружены из 1С';
-  const hint = 'Только сегодня (±1 день). Прошлые дни — ночью 03–04.';
+  const hint =
+    'Занятия: сегодня ±1 и дни с открытыми записями в ЛК (до 21 дня). Продажи/архив — ночью 03–04.';
 
   // Trainer / specialist / tech: date only.
   if (!canRefresh && !isOps) {

@@ -46,6 +46,8 @@ type SlotRow = {
 @Injectable()
 export class BookingGateway {
   private readonly logger = new Logger(BookingGateway.name);
+  /** Throttle live 1C roster check per client (Записи / главная). */
+  private readonly clientReconcileAt = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -399,6 +401,109 @@ export class BookingGateway {
       }
     }
     return fixed;
+  }
+
+  /**
+   * Drop stale CONFIRMED group bookings when 1C already removed the client
+   * (admin cancel / «Не прибыл» on a future class). Called on client bookings
+   * load — LIGHT sync still does club-wide cleanup; this covers the UX gap
+   * before the next hourly run (only this client's open days, throttle 45s).
+   */
+  async reconcileClientUpcomingGroupBookings(clientId: string): Promise<number> {
+    const last = this.clientReconcileAt.get(clientId) ?? 0;
+    if (Date.now() - last < 45_000) return 0;
+    this.clientReconcileAt.set(clientId, Date.now());
+
+    const provider = this.fitness.getProvider();
+    if (!provider.getClassSessions) return 0;
+
+    const client = await this.prisma.user.findUnique({
+      where: { id: clientId },
+      select: { externalId: true },
+    });
+    const clientExt = client?.externalId?.trim().toLowerCase();
+    if (!clientExt) return 0;
+
+    const now = new Date();
+    const bookings = await this.prisma.groupClassBooking.findMany({
+      where: {
+        clientId,
+        status: GroupClassBookingStatus.CONFIRMED,
+        endAt: { gte: now },
+      },
+      select: { id: true, appointmentId: true, startAt: true },
+      take: 20,
+      orderBy: { startAt: 'asc' },
+    });
+    if (!bookings.length) return 0;
+
+    const byDay = new Map<string, typeof bookings>();
+    for (const b of bookings) {
+      const day = moscowDayKey(b.startAt);
+      const list = byDay.get(day) ?? [];
+      list.push(b);
+      byDay.set(day, list);
+    }
+
+    let cancelled = 0;
+    const cancelledAt = new Date();
+    for (const [day, dayBookings] of byDay) {
+      try {
+        const batch = await provider.getClassSessions({
+          from: day,
+          to: day,
+          page: 1,
+          pageSize: 100,
+        });
+        if (!batch?.data?.length) continue;
+
+        const byAppt = new Map(
+          batch.data
+            .filter((s) => s.id?.trim())
+            .map((s) => [s.id.trim().toLowerCase(), s]),
+        );
+
+        for (const booking of dayBookings) {
+          const session = byAppt.get(
+            booking.appointmentId.trim().toLowerCase(),
+          );
+          if (!session) continue; // unknown appointment — don't guess
+
+          const member = (session.members ?? []).find(
+            (m) => m.externalId?.trim().toLowerCase() === clientExt,
+          );
+          const drop =
+            !member ||
+            Boolean(member.cancelled) ||
+            member.attendance === 'CANCELLED' ||
+            member.attendance === 'NO_SHOW';
+          if (!drop) continue;
+
+          await this.prisma.groupClassBooking.update({
+            where: { id: booking.id },
+            data: {
+              status: GroupClassBookingStatus.CANCELLED,
+              cancelledAt,
+              usageStatus: 'CANCELLED',
+            },
+          });
+          cancelled += 1;
+        }
+      } catch (err) {
+        this.logger.warn(
+          `client group reconcile day=${day}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
+    if (cancelled > 0) {
+      this.logger.log(
+        `Cancelled ${cancelled} stale group booking(s) for client=${clientId}`,
+      );
+    }
+    return cancelled;
   }
 
   isExclusionViolation(err: unknown): boolean {

@@ -304,8 +304,13 @@ export class ClientService {
     options?: { upcomingOnly?: boolean; includeAll?: boolean },
   ) {
     await this.syncGroupBookingStatuses(user.sub);
-    // Stale CONFIRMED after 1C admin cancel is cleared by class_sessions sync
-    // (hourly LIGHT + nightly FULL), not on every ЛК open.
+    // LIVE: only this client's open days (throttle 45s) — covers UX before
+    // hourly LIGHT / nightly FULL class_sessions sync clears club-wide.
+    if (options?.upcomingOnly || options?.includeAll) {
+      await this.bookingGateway
+        .reconcileClientUpcomingGroupBookings(user.sub)
+        .catch(() => undefined);
+    }
 
     const where: {
       clientId: string;

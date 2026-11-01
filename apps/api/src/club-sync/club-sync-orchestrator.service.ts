@@ -550,6 +550,36 @@ export class ClubSyncOrchestrator {
           return { rows: r.upserted, from: r.from, to: r.to };
         });
       } else {
+        const runClassSessions = async () => {
+          // LIGHT: near window + days with open FitGO group bookings (admin
+          // cancel in 1C → clear GroupClassBooking). Must run early in LIGHT —
+          // sales/revenue often burn the 3min budget before ±1 alone finishes.
+          // FULL: operational window via syncClub() when classFrom/to unset.
+          const r =
+            isFull || !classFrom || !classTo
+              ? await this.classSessions.syncClub(clubId, {
+                  from: classFrom,
+                  to: classTo,
+                })
+              : await this.classSessions.syncClubOpenBookingDays(clubId, {
+                  nearFrom: classFrom,
+                  nearTo: classTo,
+                });
+          if (r.endpointMissing) {
+            throw new Error('GET /v1/class-sessions not published (1C)');
+          }
+          return {
+            rows: r.sessionsUpserted,
+            from: r.from,
+            to: r.to,
+          };
+        };
+
+        // LIGHT: clear stale ЛК bookings before heavy sales steps.
+        if (!isFull) {
+          await runStep('class_sessions', runClassSessions);
+        }
+
         await runStep('admin_sales', async () => {
           if (isFull) {
             // 60-day lookback — late/free 1C lines (e.g. :free bio) outside
@@ -570,29 +600,9 @@ export class ClubSyncOrchestrator {
           return { rows: r.upserted, from: r.from, to: r.to };
         });
 
-        await runStep('class_sessions', async () => {
-          // LIGHT: near window + days with open FitGO group bookings (admin
-          // cancel in 1C → clear GroupClassBooking without live ЛК probe).
-          // FULL: operational window via syncClub() when classFrom/to unset.
-          const r =
-            isFull || !classFrom || !classTo
-              ? await this.classSessions.syncClub(clubId, {
-                  from: classFrom,
-                  to: classTo,
-                })
-              : await this.classSessions.syncClubOpenBookingDays(clubId, {
-                  nearFrom: classFrom,
-                  nearTo: classTo,
-                });
-          if (r.endpointMissing) {
-            throw new Error('GET /v1/class-sessions not published (1C)');
-          }
-          return {
-            rows: r.sessionsUpserted,
-            from: r.from,
-            to: r.to,
-          };
-        });
+        if (isFull) {
+          await runStep('class_sessions', runClassSessions);
+        }
 
         await runStep('hall_visits', async () => {
           const r = await this.hallVisits.syncClub(clubId, {
