@@ -34,6 +34,7 @@ import {
   UserRole,
   sessionApprovalLabelRu,
   toUsageControl,
+  type ClientMembershipPackage,
   type Membership,
   type MembershipServiceQuota,
   type SpaBoardBooking,
@@ -479,6 +480,58 @@ export class SpaBookingService {
     };
   }
 
+  private async loadClientPackages(
+    externalId: string | undefined,
+  ): Promise<ClientMembershipPackage[]> {
+    if (!externalId) return [];
+    const provider = this.fitness.getProvider();
+    if (!provider.getClientPackages) return [];
+    try {
+      return (await provider.getClientPackages(externalId)) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Prefer ACTIVE package with quota for this line; optional preferred id. */
+  private findPackageForQuota(
+    packages: ClientMembershipPackage[],
+    membershipServiceName: string,
+    preferredPackageId?: string,
+  ): { id: string; name: string } | undefined {
+    const target = normalizeMembershipServiceName(membershipServiceName);
+    if (!target) return undefined;
+    const withQuota = packages.filter((p) => {
+      if (preferredPackageId && p.id !== preferredPackageId) return false;
+      if (
+        p.normalizedStatus === MembershipStatus.PENDING ||
+        p.normalizedStatus === MembershipStatus.EXPIRED
+      ) {
+        return false;
+      }
+      return (p.serviceQuotas ?? []).some((s) => {
+        if (normalizeMembershipServiceName(s.name) !== target) return false;
+        return Boolean(s.unlimited || (s.remaining ?? 0) > 0);
+      });
+    });
+    withQuota.sort((a, b) => {
+      const aActive =
+        a.normalizedStatus === MembershipStatus.ACTIVE ||
+        a.normalizedStatus === MembershipStatus.FROZEN
+          ? 0
+          : 1;
+      const bActive =
+        b.normalizedStatus === MembershipStatus.ACTIVE ||
+        b.normalizedStatus === MembershipStatus.FROZEN
+          ? 0
+          : 1;
+      if (aActive !== bActive) return aActive - bActive;
+      return (a.validUntil ?? '9999').localeCompare(b.validUntil ?? '9999');
+    });
+    const best = withQuota[0];
+    return best ? { id: best.id, name: best.name } : undefined;
+  }
+
   /** Per membership-line SpaQuotaRule rows (not a flat union). */
   private async loadQuotaRules(clubId: string) {
     return this.prisma.spaQuotaRule.findMany({
@@ -608,6 +661,16 @@ export class SpaBookingService {
     });
 
     const membership = await this.loadMembership(user);
+    let packages: ClientMembershipPackage[] = [];
+    try {
+      const { externalId } = await this.resolveExternalId(
+        user.sub,
+        user.externalId,
+      );
+      packages = await this.loadClientPackages(externalId);
+    } catch {
+      packages = [];
+    }
     const rules = await this.loadQuotaRules(clubId);
 
     const membershipSpa = (membership?.services ?? []).filter((s) =>
@@ -625,11 +688,18 @@ export class SpaBookingService {
 
       if (opts?.quotaOnly && !match.quotaAvailable) continue;
 
+      const pkg =
+        match.matchedName
+          ? this.findPackageForQuota(packages, match.matchedName)
+          : undefined;
+
       results.push({
         service: this.mapService(service),
         quotaAvailable: match.quotaAvailable,
         quotaRemaining: match.quotaRemaining,
         membershipServiceName: match.matchedName,
+        membershipPackageId: pkg?.id,
+        packageName: pkg?.name,
         paidAvailable: true,
       });
     }
@@ -1239,6 +1309,7 @@ export class SpaBookingService {
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      membershipPackageId?: string;
       origin: SpaBookingOrigin;
       visitNote?: string;
       overlapConfirmed?: boolean;
@@ -1318,6 +1389,7 @@ export class SpaBookingService {
     }
 
     let membershipServiceName = input.membershipServiceName;
+    let membershipPackageId = input.membershipPackageId?.trim() || undefined;
     let priceMinor: number | null = null;
 
     if (input.paymentType === 'QUOTA') {
@@ -1358,6 +1430,13 @@ export class SpaBookingService {
       );
       if (!quota || (!quota.unlimited && (quota.remaining ?? 0) <= 0)) {
         throw new ConflictException('Нет остатка услуги в абонементе');
+      }
+      if (!membershipPackageId && resolved.externalId) {
+        const packages = await this.loadClientPackages(resolved.externalId);
+        membershipPackageId = this.findPackageForQuota(
+          packages,
+          membershipServiceName,
+        )?.id;
       }
     } else {
       priceMinor = service.priceMinor;
@@ -1423,6 +1502,7 @@ export class SpaBookingService {
                 : SpaPaymentType.PAID,
             priceMinor,
             membershipServiceName: membershipServiceName ?? null,
+            membershipPackageId: membershipPackageId ?? null,
             status: SpaBookingStatus.CONFIRMED,
             consumedInCrmAt: null,
             crmDocRef: null,
@@ -1474,6 +1554,7 @@ export class SpaBookingService {
                 : SpaPaymentType.PAID,
             priceMinor,
             membershipServiceName: membershipServiceName ?? null,
+            membershipPackageId: membershipPackageId ?? null,
             visitNote,
             controlLevel: control.controlLevel,
             reviewFlag: control.reviewFlag,
@@ -1544,6 +1625,7 @@ export class SpaBookingService {
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      membershipPackageId?: string;
     },
   ) {
     return this.bookSpa(user, {

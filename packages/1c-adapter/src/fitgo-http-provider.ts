@@ -44,8 +44,12 @@ interface FitgoPackageData {
   id: string;
   name: string;
   status: string;
+  kind?: string;
   validFrom?: string;
   validUntil?: string;
+  visitsRemaining?: number;
+  visitsTotal?: number;
+  freezeAllowed?: boolean;
   serviceQuotas?: FitgoServiceQuotaData[];
   services?: FitgoServiceQuotaData[];
 }
@@ -271,6 +275,7 @@ export class FitgoHttpProvider {
       durationMin?: number;
       employeeName?: string;
       employeeCode?: string;
+      packageId?: string;
     },
   ): Promise<Membership> {
     const data = await this.request<FitgoMembershipData>(
@@ -1000,18 +1005,39 @@ function coerceOptionalNumber(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function mapPackageKind(
+  raw: string | undefined,
+): 'membership' | 'package' | undefined {
+  if (!raw) return undefined;
+  const lower = raw.toLowerCase();
+  if (lower === 'package' || lower.includes('пакет') || lower.includes('услуг')) {
+    return 'package';
+  }
+  if (lower === 'membership' || lower.includes('членств')) {
+    return 'membership';
+  }
+  return undefined;
+}
+
 function mapPackage(data: FitgoPackageData): ClientMembershipPackage | null {
   if (!data?.id || !data?.name) return null;
   const rawServices = data.serviceQuotas ?? data.services ?? [];
   const serviceQuotas = rawServices
     .map(mapServiceQuota)
     .filter((s): s is MembershipServiceQuota => s !== null);
+  const kind = mapPackageKind(data.kind);
   return {
     id: data.id,
     name: data.name,
     status: data.status,
+    normalizedStatus: mapMembershipStatus(data.status),
+    kind,
     validFrom: data.validFrom,
     validUntil: data.validUntil,
+    visitsRemaining: coerceOptionalNumber(data.visitsRemaining),
+    visitsTotal: coerceOptionalNumber(data.visitsTotal),
+    freezeAllowed:
+      typeof data.freezeAllowed === 'boolean' ? data.freezeAllowed : undefined,
     serviceQuotas,
   };
 }

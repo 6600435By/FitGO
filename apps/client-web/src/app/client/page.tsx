@@ -1,15 +1,12 @@
 'use client';
 
 import {
-  MembershipStatus,
   SessionType,
-  classifyVisitKind,
   type Booking,
+  type ClientMembershipPackage,
   type GamificationProfile,
   type Membership,
-  type ProductModuleKey,
   type Visit,
-  type VisitKind,
 } from '@fitgo/shared-types';
 import {
   Calendar,
@@ -25,7 +22,7 @@ import {
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
 import { ClientTrainerInvites } from '@/components/client/client-trainer-invites';
-import { HomeMembershipCard } from '@/components/client/home-membership-card';
+import { MembershipWallet } from '@/components/client/membership-wallet';
 import { WeekActivity } from '@/components/client/week-activity';
 import { Avatar } from '@/components/forma/avatar';
 import { Countdown } from '@/components/forma/countdown';
@@ -39,32 +36,6 @@ import {
   formatShortVisitDate,
   visitHeadline,
 } from '@/lib/utils';
-
-function membershipServiceAction(
-  serviceName: string,
-  isEnabled: (key: ProductModuleKey) => boolean,
-): { href: string } | null {
-  const kind: VisitKind = classifyVisitKind({
-    title: serviceName,
-    basisType: 'service',
-  });
-  if (kind === 'SPA_MASSAGE' || kind === 'SPA_BODYCOMP') {
-    if (!isEnabled('spa_booking')) return null;
-    return {
-      href: `/client/schedule/spa?service=${encodeURIComponent(serviceName)}`,
-    };
-  }
-  if (kind === 'GROUP') {
-    if (!isEnabled('group_classes')) return null;
-    return {
-      href: `/client/schedule?service=${encodeURIComponent(serviceName)}`,
-    };
-  }
-  if (kind === 'PT') {
-    return { href: '/client/schedule/personal' };
-  }
-  return null;
-}
 
 function clientWorkoutHref(booking: Booking): string | null {
   if (booking.source === 'fitgo' && booking.type === SessionType.PERSONAL) {
@@ -88,28 +59,9 @@ interface DashboardData {
     phone?: string;
     externalId?: string;
   };
-  membership: {
-    name: string;
-    status: MembershipStatus;
-    visitsRemaining?: number;
-    visitsTotal?: number;
-    validFrom: string;
-    validUntil: string;
-    services?: {
-      name: string;
-      remaining?: number;
-      total?: number;
-      unlimited?: boolean;
-    }[];
-    accountBalance?: number;
-    debtAmount?: number;
-    currency?: string;
-    freezeAllowed?: boolean;
-    freezeDaysRemaining?: number;
-    freezeDaysTotal?: number;
-    frozenUntil?: string;
-  } | null;
+  membership: Membership | null;
   membershipSource?: '1c' | 'osmi' | 'derived' | null;
+  packages?: ClientMembershipPackage[];
   visits: Visit[];
   accessCard?: {
     id: string;
@@ -286,9 +238,11 @@ function ClientHomePageInner() {
       )}
 
       {membership ? (
-        <HomeMembershipCard
-          membership={membership as Membership}
+        <MembershipWallet
+          membership={membership}
+          packages={data.packages ?? []}
           membershipSource={membershipSource}
+          isEnabled={isEnabled}
           onFrozen={(next) => {
             setData((prev) => {
               if (!prev) return prev;
@@ -304,46 +258,6 @@ function ClientHomePageInner() {
               return updated;
             });
           }}
-          serviceActions={
-            membership.services && membership.services.length > 0 ? (
-              <ul className="space-y-1.5 border-t border-ink/10 pt-3">
-                {membership.services.slice(0, 8).map((service) => {
-                  const hasQuota =
-                    service.unlimited || (service.remaining ?? 0) > 0;
-                  const action = hasQuota
-                    ? membershipServiceAction(service.name, isEnabled)
-                    : null;
-                  return (
-                    <li
-                      key={service.name}
-                      className="flex items-center justify-between gap-2 text-sm"
-                    >
-                      <span className="text-ink/80">{service.name}</span>
-                      <span className="flex items-center gap-2">
-                        <span className="tabular-nums text-ink/55">
-                          {service.unlimited
-                            ? '∞'
-                            : service.remaining !== undefined
-                              ? service.total
-                                ? `${service.remaining}/${service.total}`
-                                : String(service.remaining)
-                              : '—'}
-                        </span>
-                        {action ? (
-                          <Link
-                            href={action.href}
-                            className="rounded-lg bg-ink/15 px-2 py-1 text-xs font-semibold text-ink"
-                          >
-                            Использовать
-                          </Link>
-                        ) : null}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : null
-          }
         />
       ) : (
         <div className="card text-center">

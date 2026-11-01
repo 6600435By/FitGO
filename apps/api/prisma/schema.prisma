@@ -1867,6 +1867,8 @@ model SpaBooking {
   paymentType            SpaPaymentType
   priceMinor             Int?
   membershipServiceName  String?
+  /// UUID ЧленствоПакетУслуг to debit in 1C (optional; BSL falls back to auto-pick).
+  membershipPackageId    String?
   consumedInCrmAt        DateTime?
   /// Atomic claim for consume-to-1C (IN_PROGRESS → DONE/FAILED).
   consumeState           SpaConsumeState?

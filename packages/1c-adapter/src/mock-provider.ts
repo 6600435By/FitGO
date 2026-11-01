@@ -94,14 +94,58 @@ export class Mock1CProvider implements IFitnessClubProvider {
   async getClientPackages(externalId: string) {
     const membership = await this.getMembership(externalId);
     if (!membership) return [];
+    const primary = {
+      id: membership.id,
+      name: membership.name,
+      status: String(membership.status),
+      normalizedStatus: membership.status,
+      kind: 'membership' as const,
+      validFrom: membership.validFrom,
+      validUntil: membership.validUntil,
+      visitsRemaining: membership.visitsRemaining,
+      visitsTotal: membership.visitsTotal,
+      freezeAllowed: membership.freezeAllowed,
+      serviceQuotas: membership.services ?? [],
+    };
+    // Scenario: действующий VIP + купленный «Безлимит» в ожидании + блок массажей.
+    const pendingFrom = membership.validUntil;
+    const pendingUntil = (() => {
+      const d = new Date(`${membership.validUntil}T12:00:00`);
+      d.setDate(d.getDate() + 30);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    })();
     return [
+      primary,
       {
-        id: membership.id,
-        name: membership.name,
-        status: membership.status,
+        id: `${membership.id}-next`,
+        name: 'Безлимит (1 месяц)',
+        status: 'PENDING',
+        normalizedStatus: MembershipStatus.PENDING,
+        kind: 'membership' as const,
+        validFrom: pendingFrom,
+        validUntil: pendingUntil,
+        freezeAllowed: false,
+        serviceQuotas: [],
+      },
+      {
+        id: `${membership.id}-massage`,
+        name: 'Блок массажей',
+        status: 'ACTIVE',
+        normalizedStatus: MembershipStatus.ACTIVE,
+        kind: 'package' as const,
         validFrom: membership.validFrom,
         validUntil: membership.validUntil,
-        serviceQuotas: membership.services ?? [],
+        freezeAllowed: false,
+        serviceQuotas: [
+          {
+            name: 'Массаж классический общий',
+            remaining: 3,
+            total: 5,
+          },
+        ],
       },
     ];
   }
@@ -144,6 +188,7 @@ export class Mock1CProvider implements IFitnessClubProvider {
       bookingRef: string;
       occurredAt: string;
       durationMin?: number;
+      packageId?: string;
     },
   ) {
     const entry = Object.values(MOCK_USERS).find(

@@ -29,14 +29,18 @@ export function HomeMembershipCard({
     membership.validUntil,
   );
   const hasDebt = (membership.debtAmount ?? 0) > 0;
-  const ringMax =
-    membership.visitsTotal && membership.visitsRemaining !== undefined
-      ? membership.visitsTotal
-      : Math.max(progress.daysLeft + 1, 30);
-  const ringValue =
-    membership.visitsRemaining !== undefined
-      ? membership.visitsRemaining
-      : progress.daysLeft;
+  // Without visitsTotal, remaining 0 is usually «безлимит» mis-mapped from 1C — show days.
+  const showVisitCount =
+    membership.visitsTotal !== undefined ||
+    (membership.visitsRemaining !== undefined &&
+      membership.visitsRemaining > 0);
+  const ringMax = showVisitCount
+    ? (membership.visitsTotal ??
+      Math.max(membership.visitsRemaining ?? 1, 1))
+    : Math.max(progress.daysLeft + 1, 30);
+  const ringValue = showVisitCount
+    ? (membership.visitsRemaining ?? 0)
+    : progress.daysLeft;
 
   return (
     <div
@@ -60,12 +64,12 @@ export function HomeMembershipCard({
         >
           <div className="text-center">
             <p className="font-display text-lg font-bold leading-none tabular-nums">
-              {membership.visitsRemaining !== undefined
+              {showVisitCount
                 ? membership.visitsRemaining
                 : progress.daysLeft}
             </p>
             <p className="text-[9px] font-semibold uppercase tracking-wide text-ink/60">
-              {membership.visitsRemaining !== undefined ? 'виз.' : 'дн.'}
+              {showVisitCount ? 'виз.' : 'дн.'}
             </p>
           </div>
         </ProgressRing>
@@ -123,12 +127,10 @@ export function HomeMembershipCard({
             </div>
             <div className="rounded-2xl bg-ink/10 px-3 py-2.5">
               <p className="text-[11px] font-medium text-ink/55">
-                {membership.visitsRemaining !== undefined
-                  ? 'Осталось визитов'
-                  : 'Тип'}
+                {showVisitCount ? 'Осталось визитов' : 'Тип'}
               </p>
               <p className="font-display text-base font-bold">
-                {membership.visitsRemaining !== undefined
+                {showVisitCount
                   ? `${membership.visitsRemaining}${
                       membership.visitsTotal ? ` / ${membership.visitsTotal}` : ''
                     }`

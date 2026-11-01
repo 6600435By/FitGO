@@ -12,6 +12,7 @@ import {
   classifyVisitKind,
   membershipAllowsGroupReformer,
   type AccessCard,
+  type ClientMembershipPackage,
   type ClientVisitsResponse,
   type ClubCardView,
   type Membership,
@@ -47,6 +48,7 @@ type TtlEntry<T> = { expiresAt: number; value: T };
 
 type ClientLiveBundle = {
   membership: Membership | null;
+  packages: ClientMembershipPackage[];
   visits: Visit[];
   accessCard: AccessCard | null;
 };
@@ -98,27 +100,71 @@ export class ClientService {
     }
   }
 
-  /** Parallel membership + visits + card with per-user TTL. */
+  /** Parallel membership + packages + visits + card with per-user TTL. */
   private async fetchLiveBundle(
     userId: string,
     externalId: string | undefined,
     visitPeriod: { from: string; to: string },
   ): Promise<ClientLiveBundle> {
     if (!externalId) {
-      return { membership: null, visits: [], accessCard: null };
+      return { membership: null, packages: [], visits: [], accessCard: null };
     }
     const cached = this.readTtl(this.liveCache, userId);
     if (cached) return cached;
 
     const provider = this.fitness.getProvider();
-    const [membership, visits, accessCard] = await Promise.all([
+    const [membership, packages, visits, accessCard] = await Promise.all([
       provider.getMembership(externalId).catch(() => null),
+      provider.getClientPackages
+        ? provider.getClientPackages(externalId).catch(() => [] as ClientMembershipPackage[])
+        : Promise.resolve([] as ClientMembershipPackage[]),
       provider.getVisits(externalId, visitPeriod).catch(() => [] as Visit[]),
       provider.getAccessCard(externalId).catch(() => null),
     ]);
-    const bundle: ClientLiveBundle = { membership, visits, accessCard };
+    const bundle: ClientLiveBundle = {
+      membership,
+      packages: packages ?? [],
+      visits,
+      accessCard,
+    };
     this.writeTtl(this.liveCache, userId, bundle, CLIENT_LIVE_TTL_MS);
     return bundle;
+  }
+
+  /**
+   * Until BSL prefers ACTIVE over PENDING, Nest can promote an ACTIVE membership
+   * package when GET /membership still returns PENDING.
+   */
+  private pickPrimaryMembership(
+    membership: Membership | null,
+    packages: ClientMembershipPackage[],
+  ): Membership | null {
+    if (!membership || membership.status !== MembershipStatus.PENDING) {
+      return membership;
+    }
+    const activeMembershipPkg = packages
+      .filter(
+        (p) =>
+          (p.kind ?? 'membership') === 'membership' &&
+          p.normalizedStatus === MembershipStatus.ACTIVE,
+      )
+      .sort((a, b) =>
+        (a.validUntil ?? '9999').localeCompare(b.validUntil ?? '9999'),
+      )[0];
+    if (!activeMembershipPkg) return membership;
+    return {
+      ...membership,
+      id: activeMembershipPkg.id,
+      name: activeMembershipPkg.name,
+      status: MembershipStatus.ACTIVE,
+      validFrom: activeMembershipPkg.validFrom ?? membership.validFrom,
+      validUntil: activeMembershipPkg.validUntil ?? membership.validUntil,
+      visitsRemaining: activeMembershipPkg.visitsRemaining,
+      visitsTotal: activeMembershipPkg.visitsTotal,
+      freezeAllowed: activeMembershipPkg.freezeAllowed,
+      // Keep aggregated services from GET /membership (all packages).
+      services: membership.services,
+    };
   }
 
   private async resolveExternalId(user: JwtPayload): Promise<string> {
@@ -468,7 +514,11 @@ export class ClientService {
     ]);
 
     const externalVisits = liveBundle.visits;
-    let membership = liveBundle.membership;
+    const packages = liveBundle.packages ?? [];
+    let membership = this.pickPrimaryMembership(
+      liveBundle.membership,
+      packages,
+    );
     let membershipSource: '1c' | 'osmi' | 'derived' | null = membership
       ? '1c'
       : null;
@@ -568,19 +618,12 @@ export class ClientService {
     );
     if (!allowsGroupReformer && externalId) {
       try {
-        const provider = this.fitness.getProvider();
-        const packagesPromise = provider.getClientPackages
-          ? provider.getClientPackages(externalId)
-          : Promise.resolve([]);
-        const [segments, packages] = await Promise.all([
-          loadPayrollSegmentSets(this.config),
-          packagesPromise,
-        ]);
+        const segments = await loadPayrollSegmentSets(this.config);
         allowsGroupReformer = membershipAllowsGroupReformer(
           membership?.services,
           {
             membershipName: membership?.name,
-            packageNames: (packages ?? []).map((p) => p.name),
+            packageNames: packages.map((p) => p.name),
             reformerGroupSegmentKeys: segments?.reformerGroup,
           },
         );
@@ -602,6 +645,7 @@ export class ClientService {
       },
       membership,
       membershipSource,
+      packages,
       visits,
       accessCard,
       cardSource,

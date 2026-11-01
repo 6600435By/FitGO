@@ -73,7 +73,11 @@ Query: `phone` или `externalId` (GUID клиента в 1С).
 
 Query: `phone` или `externalId`.
 
-Активный абонемент + данные лицевого счёта для карточки клиента (те же поля, что 1С отдаёт в OSMI).
+Основной абонемент + данные лицевого счёта для карточки клиента (те же поля, что 1С отдаёт в OSMI).
+
+Выбор документа: тип «Членство» в статусе `ACTIVE`/`FROZEN` с датой активации ≤ сегодня
+(при нескольких — тот, что раньше заканчивается); если таких нет — `PENDING`.
+`services` — свод квот по всем неистёкшим пакетам клиента.
 
 ```json
 {
@@ -334,8 +338,8 @@ Bindings (scan Куделко VIP, 2026-09-08):
 ### GET `/packages`
 
 Несколько членств/пакетов на клиента (абонемент зала **и** отдельный блок массажей /
-`ЧленствоПакетУслуг`). Используется SPA-записью вместе с `GET /membership`
-(в membership.services квоты уже сводятся по всем пакетам после обновления BSL).
+`ЧленствоПакетУслуг`). Используется кошельком абонементов на главной и SPA-записью
+вместе с `GET /membership` (в `membership.services` квоты сводятся по всем пакетам).
 
 Query: `phone` или `externalId`. Обработчик: `PackagesGET` → `ПакетыКлиентаJSON`.
 
@@ -344,20 +348,49 @@ Query: `phone` или `externalId`. Обработчик: `PackagesGET` → `П�
   "data": [
     {
       "id": "uuid",
-      "name": "VIP (3 месяца)",
+      "name": "VIP (1 месяц)",
       "status": "ACTIVE",
-      "validUntil": "2026-06-20",
+      "kind": "membership",
+      "validFrom": "2026-11-24",
+      "validUntil": "2026-12-24",
+      "visitsRemaining": 0,
+      "freezeAllowed": true,
       "serviceQuotas": [
-        { "serviceName": "Солярий", "remaining": 0, "saleType": "service" },
+        { "serviceName": "Солярий", "remaining": 5, "saleType": "service" },
         { "serviceName": "Массаж классический общий", "remaining": 1, "saleType": "service" },
         { "serviceName": "Групповые программы", "unlimited": true }
       ]
+    },
+    {
+      "id": "uuid-2",
+      "name": "Безлимит (1 месяц)",
+      "status": "PENDING",
+      "kind": "membership",
+      "validFrom": "2026-11-25",
+      "validUntil": "2026-12-25",
+      "freezeAllowed": false,
+      "serviceQuotas": []
     }
   ]
 }
 ```
 
-Статусы пакета: `ACTIVE`, `SOLD_PENDING_ACTIVATION`, `EXPIRED`.
+| Поле | Описание |
+|------|----------|
+| `kind` | `membership` (абонемент) или `package` (блок услуг) из `ТипЧленстваПакетаУслуг` |
+| `status` | `ACTIVE` \| `PENDING` \| `FROZEN` (истёкшие не отдаются) |
+| `validFrom` | дата активации |
+| `visitsRemaining` | остаток посещений (если есть) |
+| `freezeAllowed` | тариф поддерживает заморозку |
+
+### POST `/membership/consume-service`
+
+Списание услуги пакета (SPA по квоте). Тело: `externalId`/`phone`, `serviceName`,
+`bookingRef`, `occurredAt`, опционально `durationMin`, `employeeName`, `employeeCode`,
+**`packageId`** (UUID `ЧленствоПакетУслуг` — списать только из этого пакета).
+
+Без `packageId` выбирается ACTIVE/FROZEN пакет с остатком (раньше заканчивается);
+`PENDING` пропускается.
 
 ### GET `/visits`
 

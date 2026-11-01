@@ -75,10 +75,21 @@ const monthLongFmt = new Intl.DateTimeFormat('ru-RU', {
   month: 'long',
 });
 
+export type SpaBookingSuccess = {
+  serviceName: string;
+  specialistName: string;
+  startAt: string;
+  paymentType: 'QUOTA' | 'PAID';
+  priceLabel?: string;
+  packageName?: string;
+  quotaRemaining?: number;
+};
+
 export function useSpaBooking() {
   const toast = useToast();
   const searchParams = useSearchParams();
   const membershipServiceName = searchParams.get('service') ?? undefined;
+  const membershipPackageIdParam = searchParams.get('package') ?? undefined;
   const forcedQuota = Boolean(membershipServiceName);
 
   const [services, setServices] = useState<SpaServiceEligibility[]>([]);
@@ -102,10 +113,18 @@ export function useSpaBooking() {
   const [waitlistBusy, setWaitlistBusy] = useState(false);
   const [waitlistDesiredTime, setWaitlistDesiredTime] = useState('10:00');
   const [joinedWaitlistIds, setJoinedWaitlistIds] = useState<string[]>([]);
+  const [pendingSlot, setPendingSlot] = useState<CalendarSlot | null>(null);
+  const [bookingSuccess, setBookingSuccess] =
+    useState<SpaBookingSuccess | null>(null);
 
   const selectedEligibility = useMemo(
     () => services.find((s) => s.service.id === selectedServiceId) ?? null,
     [services, selectedServiceId],
+  );
+
+  const quotaShortcuts = useMemo(
+    () => services.filter((s) => s.quotaAvailable),
+    [services],
   );
 
   const categories = useMemo(() => {
@@ -298,6 +317,11 @@ export function useSpaBooking() {
     }
   };
 
+  const requestBook = (slot: CalendarSlot) => {
+    setPendingSlot(slot);
+    setMessage('');
+  };
+
   const handleBook = async (slot: CalendarSlot) => {
     const token = getToken();
     if (!token || !selectedServiceId) {
@@ -323,14 +347,36 @@ export function useSpaBooking() {
           type === 'QUOTA'
             ? el?.membershipServiceName ?? membershipServiceName
             : undefined,
+        membershipPackageId:
+          type === 'QUOTA'
+            ? el?.membershipPackageId ?? membershipPackageIdParam
+            : undefined,
       });
       setMembership(result.membership);
+      setPendingSlot(null);
+      const svcName = el?.service.name ?? 'SPA';
       const okMsg =
         type === 'QUOTA'
           ? 'Запись подтверждена, услуга списана с абонемента'
           : 'Запись подтверждена (платно / к оплате на ресепшене)';
-      setMessage(okMsg);
-      const svcName = el?.service.name ?? 'SPA';
+      const remainingAfter =
+        type === 'QUOTA' && el?.membershipServiceName && result.membership
+          ? result.membership.services?.find(
+              (s) => s.name === el.membershipServiceName,
+            )?.remaining
+          : undefined;
+      setBookingSuccess({
+        serviceName: svcName,
+        specialistName: slot.specialistName,
+        startAt: slot.startAt,
+        paymentType: type,
+        priceLabel:
+          type === 'PAID' && el
+            ? formatPrice(el.service.priceMinor, el.service.currency)
+            : undefined,
+        packageName: el?.packageName,
+        quotaRemaining: remainingAfter,
+      });
       celebrateBooking(toast, {
         title: svcName,
         startAt: slot.startAt,
@@ -368,6 +414,7 @@ export function useSpaBooking() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка записи';
       setMessage(msg);
+      setPendingSlot(null);
       if (/занят|недоступ|конфликт|уже есть/i.test(msg)) {
         setWaitlistOffer(slot);
       }
@@ -427,13 +474,18 @@ export function useSpaBooking() {
 
   const pickService = (item: SpaServiceEligibility) => {
     setSelectedServiceId(item.service.id);
-    if (item.quotaAvailable && forcedQuota) {
+    if (item.quotaAvailable) {
       setPaymentType('QUOTA');
+    } else {
+      setPaymentType('PAID');
     }
   };
 
+  const resetBookingSuccess = () => setBookingSuccess(null);
+
   return {
     membershipServiceName,
+    membershipPackageIdParam,
     forcedQuota,
     services,
     selectedCategory,
@@ -465,7 +517,13 @@ export function useSpaBooking() {
     dateMax,
     daySlots,
     jumpToDate,
+    requestBook,
     handleBook,
+    pendingSlot,
+    setPendingSlot,
+    bookingSuccess,
+    resetBookingSuccess,
+    quotaShortcuts,
     joinWaitlist,
     joinWaitlistForDesiredTime,
     pickCategory,

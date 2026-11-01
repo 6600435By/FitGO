@@ -127,6 +127,8 @@ export interface IFitnessClubProvider {
       employeeName?: string;
       /** Код справочника Сотрудники в 1С, если известен */
       employeeCode?: string;
+      /** UUID ЧленствоПакетУслуг — списать только из этого пакета */
+      packageId?: string;
     },
   ): Promise<Membership>;
   /** Cancel FitGO SPA visit in 1C (unpost / status Отменено) by bookingRef. Optional. */

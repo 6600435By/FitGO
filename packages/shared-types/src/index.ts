@@ -81,9 +81,17 @@ export interface MembershipServiceQuota {
 export interface ClientMembershipPackage {
   id: string;
   name: string;
+  /** Raw status from 1C (ACTIVE / PENDING / FROZEN / …). */
   status: string;
+  /** Normalized MembershipStatus for UI. */
+  normalizedStatus: MembershipStatus;
+  /** membership = абонемент зала; package = блок услуг (массаж, ПТ, …). */
+  kind?: 'membership' | 'package';
   validFrom?: string;
   validUntil?: string;
+  visitsRemaining?: number;
+  visitsTotal?: number;
+  freezeAllowed?: boolean;
   serviceQuotas: MembershipServiceQuota[];
 }
 
@@ -1497,6 +1505,10 @@ export interface SpaServiceEligibility {
   /** Remaining quota for matched membership service name (if any) */
   quotaRemaining?: number;
   membershipServiceName?: string;
+  /** Package document id to debit (from GET /packages). */
+  membershipPackageId?: string;
+  /** Package display name for UI («из VIP»). */
+  packageName?: string;
   /** Can book as paid */
   paidAvailable: boolean;
 }

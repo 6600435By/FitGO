@@ -652,6 +652,7 @@ export class ServiceUsageService {
         durationMin: booking.service.durationMin,
         employeeName: employeeName || undefined,
         employeeCode,
+        packageId: booking.membershipPackageId ?? undefined,
       });
       const crmDocRef =
         consumed.docId?.trim() ||

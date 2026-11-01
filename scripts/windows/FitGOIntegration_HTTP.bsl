@@ -243,6 +243,10 @@
     Если Данные.Свойство("employeeCode") Тогда
         EmployeeCode = СокрЛП(Строка(Данные.employeeCode));
     КонецЕсли;
+    PackageId = "";
+    Если Данные.Свойство("packageId") Тогда
+        PackageId = СокрЛП(Строка(Данные.packageId));
+    КонецЕсли;
 
     Если ПустаяСтрока(ServiceName) Тогда
         Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "serviceName required");
@@ -287,7 +291,7 @@
     КонецЕсли;
 
     Результат = FitGOIntegrationКлиенты.СписатьУслугуЧленства(
-        Контрагент, ServiceName, BookingRef, OccurredAt, DurationMin, EmployeeName, EmployeeCode);
+        Контрагент, ServiceName, BookingRef, OccurredAt, DurationMin, EmployeeName, EmployeeCode, PackageId);
     Если НЕ Результат.ok Тогда
         Код = 400;
         Сообщение = Результат.error;

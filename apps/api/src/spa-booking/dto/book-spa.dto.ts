@@ -16,4 +16,9 @@ export class BookSpaDto {
   @IsOptional()
   @IsString()
   membershipServiceName?: string;
+
+  /** UUID ЧленствоПакетУслуг — списать квоту из этого пакета. */
+  @IsOptional()
+  @IsString()
+  membershipPackageId?: string;
 }

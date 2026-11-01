@@ -1000,6 +1000,7 @@ export const api = {
       startAt: string;
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
+      membershipPackageId?: string;
     },
   ) =>
     request<{ booking: SpaBooking; membership: Membership | null }>(
