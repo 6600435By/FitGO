@@ -80,6 +80,12 @@ Deploy-AppMaintenancePage -RepoRoot $FitGoRoot
 
 Stop-Service FitGO-Web -ErrorAction SilentlyContinue
 Stop-Service FitGO-API -ErrorAction SilentlyContinue
+# Must stop Client before client-web build — otherwise Windows locks .next chunks and
+# lk.ffs.by serves a mixed build (HTML 200 + critical JS/CSS 400 → Next app crash).
+$hasClientService = [bool](Get-Service FitGO-Client -ErrorAction SilentlyContinue)
+if ($hasClientService) {
+  Stop-Service FitGO-Client -ErrorAction SilentlyContinue
+}
 
 Push-Location $FitGoRoot
 try {
@@ -123,7 +129,7 @@ Deploy-AppMaintenancePage -RepoRoot $FitGoRoot
 
 Start-Service FitGO-API
 Start-Service FitGO-Web
-if (Get-Service FitGO-Client -ErrorAction SilentlyContinue) {
+if ($hasClientService) {
   Start-Service FitGO-Client
 }
 Write-Host 'Update done. Services restarted.' -ForegroundColor Green

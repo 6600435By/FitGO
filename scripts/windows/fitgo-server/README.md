@@ -12,6 +12,10 @@
 |------|------------|
 | [Install-FitGO.ps1](./Install-FitGO.ps1) | Первая установка: Node, pnpm, NSSM, build, `db push` + minimal seed, службы |
 | [Update-FitGO.ps1](./Update-FitGO.ps1) | Апдейт кода; перед апдейтом — бэкап; **не** трогает Postgres и `.env` при успехе |
+| [Update-FitGO-Client.ps1](./Update-FitGO-Client.ps1) | Только клиентский ЛК (`lk.ffs.by`, :3002) |
+| [Update-FitGO-Staff.ps1](./Update-FitGO-Staff.ps1) | Только staff (`app.ffs.by`, :3000) |
+| [Update-FitGO-API.ps1](./Update-FitGO-API.ps1) | Только API + prisma (:3001) |
+| [UPDATE_INSTRUCTIONS.md](./UPDATE_INSTRUCTIONS.md) | **Шпаргалка команд** обновления на сервере (сохранить / распечатать) |
 | [Deploy-AppMaintenance.ps1](./Deploy-AppMaintenance.ps1) | Страница «Идёт обновление» → `C:\Apache24\htdocs\app-maintenance.html` (без остановки служб) |
 | [Backup-FitGO.ps1](./Backup-FitGO.ps1) | Ночной / ручной комплект: `pg_dump` + `.env` + uploads + статус для UI |
 | [Restore-FitGO.ps1](./Restore-FitGO.ps1) | Восстановление Data / Release из комплекта |
@@ -47,13 +51,22 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 
 ## Update (повседневная доработка)
 
+Подробные команды, проверки и «что делать если ЛК упал»:  
+**[UPDATE_INSTRUCTIONS.md](./UPDATE_INSTRUCTIONS.md)**.
+
+Кратко — выбирайте узкий скрипт:
+
 ```powershell
-.\Update-FitGO.ps1
+cd C:\FitGO\FitGO\scripts\windows\fitgo-server
+.\Update-FitGO-Client.ps1   # только lk.ffs.by
+.\Update-FitGO-Staff.ps1    # только app.ffs.by
+.\Update-FitGO-API.ps1      # только API
+.\Update-FitGO.ps1          # всё сразу (+ бэкап)
 ```
 
-Перед апдейтом скрипт вызывает `Backup-FitGO.ps1`. Если бэкап упал — Update останавливается (схема не пушится). Аварийный повтор без дампа: `.\Update-FitGO.ps1 -SkipBackup`.
+Перед полным / API-апдейтом скрипт вызывает `Backup-FitGO.ps1`. Если бэкап упал — Update останавливается. Аварийно: `-SkipBackup`.
 
-Не нужно Uninstall → Install. Update = бэкап → `git pull` (или подложить код) → build → restart служб.
+Не нужно Uninstall → Install. Update = бэкап (где нужно) → `git pull` → build → restart служб.
 
 Если **`git` не найден** (часто на S2016 без Git for Windows):
 
