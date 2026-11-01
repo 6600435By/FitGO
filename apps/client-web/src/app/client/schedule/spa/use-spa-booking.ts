@@ -11,6 +11,7 @@ import { useSearchParams } from 'next/navigation';
 import { useToast } from '@/components/forma/toast';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { celebrateBooking } from '@/lib/celebrate-booking';
 
 export const CATEGORY_ORDER = [
   'Классический SPA-массаж',
@@ -329,7 +330,18 @@ export function useSpaBooking() {
           ? 'Запись подтверждена, услуга списана с абонемента'
           : 'Запись подтверждена (платно / к оплате на ресепшене)';
       setMessage(okMsg);
-      toast.success(okMsg);
+      const svcName = el?.service.name ?? 'SPA';
+      celebrateBooking(toast, {
+        title: svcName,
+        startAt: slot.startAt,
+        endAt: slot.endAt,
+        location: 'Forma SPA',
+        description: slot.specialistName
+          ? `Специалист: ${slot.specialistName}`
+          : undefined,
+        toastTitle: `Вы записаны: ${svcName}`,
+        toastDescription: okMsg,
+      });
       setSlots((prev) =>
         prev.filter((s) => {
           if (s.specialistId !== slot.specialistId) return true;

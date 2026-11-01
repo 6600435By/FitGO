@@ -395,6 +395,22 @@ Nest мапит `kind`/`basisType` (с эвристикой по `title`, есл
 
 Query: `from`, `to`, `page`, `pageSize`. Документы «Занятие» за период (ГП / ПТ / спа): статус, сотрудник, зал, состав с явкой. См. [FitGOIntegration_CLASS_SESSIONS_SPEC.md](../scripts/windows/FitGOIntegration_CLASS_SESSIONS_SPEC.md).
 
+### POST `/class-sessions/set-basis`
+
+Проставить `ОснованиеОплаты` (документ `ЧленствоПакетУслуг`) в строке состава группового занятия. Если клиента ещё нет в составе — добавить строку (путь ресепшена; минует онлайн-окно сайта / Forma `client_to_class`).
+
+Шаблон в конфигураторе: имя `class-sessions-set-basis`, URL `/v1/class-sessions/set-basis`, метод POST → `ClassSessionSetBasisPOST`.
+
+```json
+{
+  "appointmentId": "<uuid занятия>",
+  "clientExternalId": "<uuid контрагента>",
+  "membershipId": "<uuid ЧленствоПакетУслуг>"
+}
+```
+
+Ответ `data`: `{ ok, appointmentId, clientExternalId, membershipId, added, basisSet }`.
+
 ### GET `/card`
 
 Query: `phone` или `externalId`.

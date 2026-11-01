@@ -559,6 +559,51 @@ export class FitgoHttpProvider {
     };
   }
 
+  async setClassSessionBasis(input: {
+    appointmentId: string;
+    clientExternalId: string;
+    membershipId: string;
+  }): Promise<{
+    ok: boolean;
+    appointmentId: string;
+    clientExternalId: string;
+    membershipId: string;
+    added: boolean;
+    basisSet: boolean;
+  }> {
+    const data = await this.request<{
+      ok?: boolean;
+      appointmentId?: string;
+      clientExternalId?: string;
+      membershipId?: string;
+      added?: boolean;
+      basisSet?: boolean;
+      error?: string;
+    }>('/class-sessions/set-basis', {
+      method: 'POST',
+      body: {
+        appointmentId: input.appointmentId,
+        clientExternalId: input.clientExternalId,
+        membershipId: input.membershipId,
+      },
+      timeoutMs: 30_000,
+    });
+    if (!data?.ok) {
+      throw new Error(
+        data?.error?.trim() ||
+          'FitGO 1C API failed to set class session payment basis',
+      );
+    }
+    return {
+      ok: true,
+      appointmentId: data.appointmentId ?? input.appointmentId,
+      clientExternalId: data.clientExternalId ?? input.clientExternalId,
+      membershipId: data.membershipId ?? input.membershipId,
+      added: data.added === true,
+      basisSet: data.basisSet !== false,
+    };
+  }
+
   async getTrainerPtSales(input: {
     from: string;
     to: string;

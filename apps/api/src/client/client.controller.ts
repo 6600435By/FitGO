@@ -210,6 +210,7 @@ export class ClientController {
       user,
       dto.sessionId,
       dto.idempotencyKey,
+      dto.membershipServiceName,
     );
   }
 

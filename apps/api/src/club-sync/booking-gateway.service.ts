@@ -9,16 +9,38 @@ import {
   GroupClassBookingStatus,
   Prisma,
 } from '@prisma/client';
+import {
+  GROUP_SCHEDULE_HORIZON_DAYS,
+  isGeneralGroupMembershipService,
+  isGroupReformerMembershipService,
+  isReformerHallSession,
+  normalizeMembershipServiceName,
+  type ClientMembershipPackage,
+} from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { addMoscowDays, moscowDayKey } from './moscow-time';
+import { ScheduleSlotsSyncService } from './schedule-slots-sync.service';
+import { resolveFormaClubId } from './forma-club-id';
 
 export type BookGroupResult = {
   success: boolean;
   message?: string;
   bookingId?: string;
   status?: GroupClassBookingStatus;
+};
+
+type SlotRow = {
+  id: string;
+  capacity: number;
+  bookedIn1c: number;
+  title: string;
+  trainerName: string | null;
+  roomTitle: string | null;
+  startAt: Date;
+  endAt: Date;
 };
 
 @Injectable()
@@ -28,10 +50,12 @@ export class BookingGateway {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
+    private readonly scheduleSlots: ScheduleSlotsSyncService,
   ) {}
 
   /**
-   * Reserve seat in DB (FOR UPDATE on ClubScheduleSlot) → live Forma book → confirm.
+   * Reserve seat in DB (FOR UPDATE on ClubScheduleSlot) → live Forma book →
+   * attach membership basis in 1C → confirm.
    * Idempotent via optional idempotencyKey.
    */
   async bookGroupSession(
@@ -41,6 +65,7 @@ export class BookingGateway {
       idempotencyKey?: string;
       origin?: GroupBookingOrigin;
       bookedByUserId?: string;
+      membershipServiceName?: string;
     },
   ): Promise<BookGroupResult> {
     const clubId = requireClubId(user);
@@ -81,20 +106,12 @@ export class BookingGateway {
       name: `${u.firstName} ${u.lastName}`.trim() || undefined,
     };
 
+    await this.ensureSlotCached(clubId, appointmentId);
+
     // 1) DB reserve under row lock
     const reserved = await this.prisma.$transaction(async (tx) => {
-      const slots = await tx.$queryRaw<
-        Array<{
-          id: string;
-          capacity: number;
-          bookedIn1c: number;
-          title: string;
-          trainerName: string | null;
-          startAt: Date;
-          endAt: Date;
-        }>
-      >`
-        SELECT id, capacity, "bookedIn1c", title, "trainerName", "startAt", "endAt"
+      const slots = await tx.$queryRaw<SlotRow[]>`
+        SELECT id, capacity, "bookedIn1c", title, "trainerName", "roomTitle", "startAt", "endAt"
         FROM "ClubScheduleSlot"
         WHERE "clubId" = ${clubId} AND "externalId" = ${appointmentId}
         FOR UPDATE
@@ -102,7 +119,7 @@ export class BookingGateway {
       const slot = slots[0];
       if (!slot) {
         throw new NotFoundSlotError(
-          'Занятие не найдено в кэше расписания. Нажмите «Обновить из 1С» или дождитесь ночной выгрузки.',
+          'Занятие не найдено в кэше расписания. Обновите экран или дождитесь синхронизации.',
         );
       }
 
@@ -117,7 +134,6 @@ export class BookingGateway {
           },
         },
       });
-      // Prefer 1C booked count + pending not yet reflected; capacity 0 = unknown → allow
       const used = Math.max(slot.bookedIn1c, pendingCount);
       if (slot.capacity > 0 && used >= slot.capacity) {
         throw new ConflictException('Нет свободных мест на это занятие');
@@ -136,7 +152,7 @@ export class BookingGateway {
         (prior.status === GroupClassBookingStatus.CONFIRMED ||
           prior.status === GroupClassBookingStatus.PENDING_1C)
       ) {
-        return { booking: prior, already: true as const };
+        return { booking: prior, already: true as const, slot };
       }
 
       const booking = prior
@@ -177,10 +193,32 @@ export class BookingGateway {
             },
           });
 
-      return { booking, already: false as const };
+      return { booking, already: false as const, slot };
+    });
+
+    const membershipId = await this.resolveGroupMembershipId(externalId, {
+      membershipServiceName: opts?.membershipServiceName,
+      roomTitle: reserved.slot.roomTitle,
+      title: reserved.slot.title,
+      sessionAt: reserved.slot.startAt,
     });
 
     if (reserved.already) {
+      if (membershipId) {
+        const basis = await this.trySetBasis(
+          appointmentId,
+          externalId,
+          membershipId,
+        );
+        if (!basis.ok) {
+          return {
+            success: false,
+            bookingId: reserved.booking.id,
+            status: reserved.booking.status,
+            message: basis.message,
+          };
+        }
+      }
       return {
         success: true,
         bookingId: reserved.booking.id,
@@ -189,7 +227,10 @@ export class BookingGateway {
       };
     }
 
-    // 2) Live Forma write
+    // 2) Live Forma write (website online window) — may fail outside WP horizon
+    let formaEnrolled = false;
+    let formaAlready = false;
+    let formaMessage: string | undefined;
     try {
       const result = await this.fitness
         .getProvider()
@@ -200,45 +241,90 @@ export class BookingGateway {
         /уже|already|exists/i.test(result.message);
 
       if (result.success || alreadyMsg) {
-        await this.prisma.$transaction(async (tx) => {
-          await tx.groupClassBooking.update({
-            where: { id: reserved.booking.id },
-            data: { status: GroupClassBookingStatus.CONFIRMED },
-          });
-          await tx.clubScheduleSlot.updateMany({
-            where: { clubId, externalId: appointmentId },
-            data: { bookedIn1c: { increment: alreadyMsg ? 0 : 1 } },
-          });
-        });
+        formaEnrolled = true;
+        formaAlready = alreadyMsg;
+        formaMessage = result.message;
+      } else {
+        formaMessage = result.message || 'Не удалось записаться в 1С';
+        this.logger.warn(
+          `bookGroupSession forma fail club=${clubId} appt=${appointmentId}: ${formaMessage}`,
+        );
+      }
+    } catch (err) {
+      // Timeout / network — leave PENDING_1C for reconcile unless set-basis recovers
+      this.logger.warn(
+        `bookGroupSession forma error club=${clubId} appt=${appointmentId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      formaMessage =
+        err instanceof Error ? err.message : 'Ошибка связи с 1С при записи';
+    }
+
+    // 3) Attach membership basis (and enroll via FitGO if Forma window blocked)
+    if (membershipId) {
+      const basis = await this.trySetBasis(
+        appointmentId,
+        externalId,
+        membershipId,
+      );
+      if (basis.ok) {
+        const bump =
+          (formaEnrolled && !formaAlready) || (!formaEnrolled && basis.added);
+        await this.confirmBooking(
+          clubId,
+          appointmentId,
+          reserved.booking.id,
+          bump,
+        );
         return {
           success: true,
           bookingId: reserved.booking.id,
           status: GroupClassBookingStatus.CONFIRMED,
-          message: result.message,
+          message: formaMessage,
         };
       }
-
-      await this.prisma.groupClassBooking.update({
-        where: { id: reserved.booking.id },
-        data: {
-          status: GroupClassBookingStatus.FAILED,
-          cancelledAt: new Date(),
-          usageStatus: 'CANCELLED',
-        },
-      });
+      if (formaEnrolled) {
+        // Client is on roster without basis — surface 1C text
+        await this.confirmBooking(
+          clubId,
+          appointmentId,
+          reserved.booking.id,
+          !formaAlready,
+        );
+        return {
+          success: false,
+          bookingId: reserved.booking.id,
+          status: GroupClassBookingStatus.CONFIRMED,
+          message: basis.message,
+        };
+      }
+      await this.failBooking(reserved.booking.id);
       return {
         success: false,
         bookingId: reserved.booking.id,
         status: GroupClassBookingStatus.FAILED,
-        message: result.message || 'Не удалось записаться в 1С',
+        message: basis.message || formaMessage || 'Не удалось записаться в 1С',
       };
-    } catch (err) {
-      // Timeout / network — leave PENDING_1C for reconcile job
-      this.logger.warn(
-        `bookGroupSession PENDING_1C club=${clubId} appt=${appointmentId}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+    }
+
+    if (formaEnrolled) {
+      await this.confirmBooking(
+        clubId,
+        appointmentId,
+        reserved.booking.id,
+        !formaAlready,
       );
+      return {
+        success: true,
+        bookingId: reserved.booking.id,
+        status: GroupClassBookingStatus.CONFIRMED,
+        message: formaMessage,
+      };
+    }
+
+    // No membership + Forma failed: keep PENDING if it looked like a transport error
+    if (/связ|timeout|network|ECONN|fetch/i.test(formaMessage ?? '')) {
       return {
         success: true,
         bookingId: reserved.booking.id,
@@ -247,6 +333,14 @@ export class BookingGateway {
           'Запись принята, подтверждение из 1С ещё не получено. Статус обновится автоматически.',
       };
     }
+
+    await this.failBooking(reserved.booking.id);
+    return {
+      success: false,
+      bookingId: reserved.booking.id,
+      status: GroupClassBookingStatus.FAILED,
+      message: formaMessage || 'Не удалось записаться в 1С',
+    };
   }
 
   /**
@@ -315,6 +409,226 @@ export class BookingGateway {
         String(err.meta?.code) === '23P01')
     );
   }
+
+  /** Sync horizon into ClubScheduleSlot when booking a day outside last night sync. */
+  private async ensureSlotCached(
+    clubId: string,
+    appointmentId: string,
+  ): Promise<void> {
+    const existing = await this.prisma.clubScheduleSlot.findUnique({
+      where: { clubId_externalId: { clubId, externalId: appointmentId } },
+      select: { id: true },
+    });
+    if (existing) return;
+
+    const today = moscowDayKey();
+    const to = addMoscowDays(today, GROUP_SCHEDULE_HORIZON_DAYS);
+    try {
+      await this.scheduleSlots.syncClub(clubId, { from: today, to });
+    } catch (err) {
+      this.logger.warn(
+        `ensureSlotCached sync club=${clubId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    const after = await this.prisma.clubScheduleSlot.findUnique({
+      where: { clubId_externalId: { clubId, externalId: appointmentId } },
+      select: { id: true },
+    });
+    if (after) return;
+
+    // Live Forma lookup for this appointment within horizon (upsert one row)
+    const club = await this.prisma.club.findUnique({
+      where: { id: clubId },
+      select: { externalId: true },
+    });
+    const formaClub = resolveFormaClubId(club?.externalId).clubId;
+    if (!formaClub) return;
+
+    try {
+      const slots = await this.fitness.getProvider().getSchedule(formaClub, {
+        from: `${today}T00:00:00`,
+        to: `${to}T23:59:59`,
+      });
+      const hit = slots.find((s) => s.id === appointmentId);
+      if (!hit?.id) return;
+      const startAt = new Date(hit.startAt);
+      const endAt = new Date(hit.endAt);
+      if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
+        return;
+      }
+      const now = new Date();
+      await this.prisma.clubScheduleSlot.upsert({
+        where: { clubId_externalId: { clubId, externalId: hit.id } },
+        create: {
+          clubId,
+          externalId: hit.id,
+          title: hit.title,
+          trainerName: hit.trainerName ?? null,
+          roomTitle: hit.roomTitle ?? null,
+          startAt,
+          endAt,
+          capacity: hit.capacity ?? 0,
+          bookedIn1c: hit.booked ?? 0,
+          sessionType: hit.type ?? null,
+          syncedAt: now,
+        },
+        update: {
+          title: hit.title,
+          trainerName: hit.trainerName ?? null,
+          roomTitle: hit.roomTitle ?? null,
+          startAt,
+          endAt,
+          capacity: hit.capacity ?? 0,
+          bookedIn1c: hit.booked ?? 0,
+          sessionType: hit.type ?? null,
+          syncedAt: now,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `ensureSlotCached live club=${clubId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  private async resolveGroupMembershipId(
+    clientExternalId: string,
+    opts: {
+      membershipServiceName?: string;
+      roomTitle?: string | null;
+      title?: string;
+      sessionAt: Date;
+    },
+  ): Promise<string | null> {
+    const provider = this.fitness.getProvider();
+    let packages: ClientMembershipPackage[] = [];
+    try {
+      if (provider.getClientPackages) {
+        packages = await provider.getClientPackages(clientExternalId);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `resolveGroupMembershipId packages: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    const sessionDay = opts.sessionAt.toISOString().slice(0, 10);
+    const covering = packages.filter((p) =>
+      packageCoversDay(p, sessionDay),
+    );
+
+    const wanted = opts.membershipServiceName?.trim();
+    if (wanted) {
+      const target = normalizeMembershipServiceName(wanted);
+      const hit = covering.find((p) =>
+        p.serviceQuotas.some(
+          (q) => normalizeMembershipServiceName(q.name) === target,
+        ),
+      );
+      if (hit) return hit.id;
+    }
+
+    const reformer = isReformerHallSession(opts.roomTitle, opts.title);
+    const byLine = covering.find((p) =>
+      p.serviceQuotas.some((q) =>
+        reformer
+          ? isGroupReformerMembershipService(q.name)
+          : isGeneralGroupMembershipService(q.name),
+      ),
+    );
+    if (byLine) return byLine.id;
+
+    try {
+      const m = await provider.getMembership(clientExternalId);
+      if (m?.id) return m.id;
+    } catch {
+      /* ignore */
+    }
+    return covering[0]?.id ?? packages[0]?.id ?? null;
+  }
+
+  private async trySetBasis(
+    appointmentId: string,
+    clientExternalId: string,
+    membershipId: string,
+  ): Promise<{ ok: boolean; added: boolean; message?: string }> {
+    const provider = this.fitness.getProvider();
+    if (!provider.setClassSessionBasis) {
+      return {
+        ok: false,
+        added: false,
+        message:
+          'Привязка абонемента недоступна: опубликуйте FitGO /v1/class-sessions/set-basis',
+      };
+    }
+    try {
+      const r = await provider.setClassSessionBasis({
+        appointmentId,
+        clientExternalId,
+        membershipId,
+      });
+      return { ok: r.ok, added: r.added };
+    } catch (err) {
+      const raw =
+        err instanceof Error ? err.message : 'Не удалось привязать абонемент';
+      const message = raw.replace(/^FitGO 1C API error \d+:\s*/i, '').trim() || raw;
+      this.logger.warn(
+        `setClassSessionBasis appt=${appointmentId}: ${message}`,
+      );
+      return { ok: false, added: false, message };
+    }
+  }
+
+  private async confirmBooking(
+    clubId: string,
+    appointmentId: string,
+    bookingId: string,
+    incrementBooked: boolean,
+  ) {
+    await this.prisma.$transaction(async (tx) => {
+      await tx.groupClassBooking.update({
+        where: { id: bookingId },
+        data: { status: GroupClassBookingStatus.CONFIRMED },
+      });
+      if (incrementBooked) {
+        await tx.clubScheduleSlot.updateMany({
+          where: { clubId, externalId: appointmentId },
+          data: { bookedIn1c: { increment: 1 } },
+        });
+      }
+    });
+  }
+
+  private async failBooking(bookingId: string) {
+    await this.prisma.groupClassBooking.update({
+      where: { id: bookingId },
+      data: {
+        status: GroupClassBookingStatus.FAILED,
+        cancelledAt: new Date(),
+        usageStatus: 'CANCELLED',
+      },
+    });
+  }
+}
+
+function packageCoversDay(
+  pkg: ClientMembershipPackage,
+  dayKey: string,
+): boolean {
+  const from = pkg.validFrom?.slice(0, 10);
+  const until = pkg.validUntil?.slice(0, 10);
+  if (from && dayKey < from) return false;
+  if (until && dayKey > until) return false;
+  const st = (pkg.status ?? '').toUpperCase();
+  if (st === 'EXPIRED' || st === 'CANCELLED') return false;
+  return true;
 }
 
 class NotFoundSlotError extends BadRequestException {

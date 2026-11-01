@@ -2,11 +2,11 @@
 
 import type { Booking, ScheduleSlot } from '@fitgo/shared-types';
 import {
+  GROUP_SCHEDULE_HORIZON_DAYS,
   isGeneralGroupMembershipService,
   isGroupReformerMembershipService,
   isReformerHallSession,
 } from '@fitgo/shared-types';
-import confetti from 'canvas-confetti';
 import { CalendarPlus, Filter, Share2 } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
@@ -24,6 +24,7 @@ import { useClubTheme } from '@/components/club-theme-provider';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { cancelGroupBooking } from '@/lib/cancel-booking';
+import { celebrateBooking } from '@/lib/celebrate-booking';
 import {
   TIME_OF_DAY_LABEL,
   addDaysKey,
@@ -162,7 +163,11 @@ function GroupScheduleInner() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      await Promise.all([loadWeek(0), loadWeek(1), loadWeek(2), loadMeta()]);
+      const weekCount = Math.ceil(GROUP_SCHEDULE_HORIZON_DAYS / 7);
+      await Promise.all([
+        ...Array.from({ length: weekCount }, (_, i) => loadWeek(i)),
+        loadMeta(),
+      ]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Ошибка загрузки');
     } finally {
@@ -212,7 +217,7 @@ function GroupScheduleInner() {
 
   const dateStripDays: DateStripDay[] = useMemo(() => {
     const today = todayKey();
-    return Array.from({ length: 21 }, (_, i) => {
+    return Array.from({ length: GROUP_SCHEDULE_HORIZON_DAYS }, (_, i) => {
       const key = addDaysKey(today, i);
       const daySlots = allSlots.filter((s) => dayKey(s.startAt) === key);
       const highlight = daySlots.some((s) => bookedSessionIds.has(s.id));
@@ -285,29 +290,15 @@ function GroupScheduleInner() {
       ?.key;
   }, [dateStripDays]);
 
-  const celebrate = (title: string, startAt: string) => {
-    void confetti({
-      particleCount: 70,
-      spread: 60,
-      origin: { y: 0.7 },
-      colors: ['#FFD000', '#FFFFFF', '#FFE685'],
-    });
-    try {
-      navigator.vibrate?.(40);
-    } catch {
-      /* ignore */
-    }
-    toast.success(`Вы записаны: ${title}`, {
-      description: new Date(startAt).toLocaleString('ru-RU', {
-        weekday: 'short',
-        day: 'numeric',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-      actionLabel: 'В календарь',
-      onAction: () =>
-        downloadIcsEvent({ title, startAt, location: 'Forma' }),
+  const celebrate = (slot: ScheduleSlot) => {
+    celebrateBooking(toast, {
+      title: slot.title,
+      startAt: slot.startAt,
+      endAt: slot.endAt,
+      location: slot.roomTitle ?? 'Forma',
+      description: slot.trainerName
+        ? `Тренер: ${slot.trainerName}`
+        : undefined,
     });
   };
 
@@ -316,7 +307,9 @@ function GroupScheduleInner() {
     if (!token) return;
     setBusyId(slot.id);
     try {
-      const result = await api.clientBook(token, slot.id);
+      const result = await api.clientBook(token, slot.id, {
+        membershipServiceName,
+      });
       if (result.success) {
         setSlotsByWeek((prev) => {
           const next = { ...prev };
@@ -335,7 +328,7 @@ function GroupScheduleInner() {
           return next;
         });
         await loadMeta();
-        celebrate(slot.title, slot.startAt);
+        celebrate(slot);
         setSelected(null);
       } else {
         toast.error(result.message ?? 'Не удалось записаться');
@@ -390,7 +383,7 @@ function GroupScheduleInner() {
     try {
       const result = await api.clientConfirmWaitlist(token, slot.id);
       if (result.success) {
-        celebrate(slot.title, slot.startAt);
+        celebrate(slot);
         await refresh();
         setSelected(null);
       } else {
@@ -461,17 +454,6 @@ function GroupScheduleInner() {
           ) : null}
         </div>
       )}
-      {membershipServiceName ? (
-        <div className="rounded-2xl border border-forma-400/25 bg-forma-400/10 px-4 py-3 text-sm text-ink/85">
-          Запись по абонементу: {membershipServiceName}
-          {reformerHallOnly
-            ? '. Показаны только групповые занятия зала реформеров.'
-            : hideReformerHall
-              ? '. Занятия зала реформеров скрыты — запишитесь через «Групповое занятие реформер».'
-              : null}
-        </div>
-      ) : null}
-
       <DateStrip
         days={dateStripDays}
         value={selectedDay}

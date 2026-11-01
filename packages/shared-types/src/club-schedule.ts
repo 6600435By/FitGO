@@ -1,5 +1,11 @@
 import type { GroupApprovalPhase } from './booking-control';
 
+/**
+ * Client group schedule date-strip + ClubScheduleSlot sync horizon (days from today).
+ * Keep UI strip and night/full sync in lockstep so day N is bookable when visible.
+ */
+export const GROUP_SCHEDULE_HORIZON_DAYS = 21;
+
 /** Unified club calendar event status. */
 export type ClubScheduleStatus = 'planned' | 'done' | 'cancelled';
 

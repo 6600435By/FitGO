@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { pickFormaClubId } from '@fitgo/1c-adapter';
+import { GROUP_SCHEDULE_HORIZON_DAYS } from '@fitgo/shared-types';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { isFormaClubUuid, resolveFormaClubId } from './forma-club-id';
@@ -29,7 +30,7 @@ export class ScheduleSlotsSyncService {
   ): Promise<ScheduleSlotsSyncResult> {
     const today = moscowDayKey();
     const from = opts?.from ?? today;
-    const to = opts?.to ?? addMoscowDays(today, 14);
+    const to = opts?.to ?? addMoscowDays(today, GROUP_SCHEDULE_HORIZON_DAYS);
 
     await this.prisma.salesSyncState.upsert({
       where: { clubId_resourceKey: { clubId, resourceKey: RESOURCE_KEY } },

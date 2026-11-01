@@ -1064,6 +1064,7 @@ export class ClientService {
     user: JwtPayload,
     sessionId: string,
     idempotencyKey?: string,
+    membershipServiceName?: string,
   ) {
     try {
       await this.resolveExternalId(user);
@@ -1076,6 +1077,7 @@ export class ClientService {
       idempotencyKey,
       origin: 'CLIENT_BOOKED',
       bookedByUserId: user.sub,
+      membershipServiceName,
     });
     this.invalidateClientCaches(user.sub, requireClubId(user));
     return {

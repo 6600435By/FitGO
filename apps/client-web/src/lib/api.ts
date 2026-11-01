@@ -649,10 +649,21 @@ export const api = {
   clientBookings: (token: string) =>
     request<Booking[]>('/client/bookings', {}, token),
 
-  clientBook: (token: string, sessionId: string) =>
+  clientBook: (
+    token: string,
+    sessionId: string,
+    opts?: { membershipServiceName?: string; idempotencyKey?: string },
+  ) =>
     request<{ success: boolean; message?: string }>(
       '/client/book',
-      { method: 'POST', body: JSON.stringify({ sessionId }) },
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionId,
+          membershipServiceName: opts?.membershipServiceName,
+          idempotencyKey: opts?.idempotencyKey,
+        }),
+      },
       token,
     ),
 

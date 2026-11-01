@@ -241,6 +241,23 @@ export interface IFitnessClubProvider {
     cancelled: boolean;
   }>;
   /**
+   * Set ОснованиеОплаты on group-class roster row (membership document).
+   * Adds the client row when missing (bypasses website online booking window).
+   * Optional — unsupported providers throw.
+   */
+  setClassSessionBasis?(input: {
+    appointmentId: string;
+    clientExternalId: string;
+    membershipId: string;
+  }): Promise<{
+    ok: boolean;
+    appointmentId: string;
+    clientExternalId: string;
+    membershipId: string;
+    added: boolean;
+    basisSet: boolean;
+  }>;
+  /**
    * One-time PT sale lines with Исполнитель (no class document required).
    * Optional — returns [] when unsupported.
    */

@@ -6,6 +6,7 @@ import {
   ClubSyncTrigger,
   Prisma,
 } from '@prisma/client';
+import { GROUP_SCHEDULE_HORIZON_DAYS } from '@fitgo/shared-types';
 import { AdminSalesSyncService } from '../admin-sales/admin-sales-sync.service';
 import { ClubRevenueSyncService } from '../admin-sales/club-revenue-sync.service';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
@@ -438,7 +439,7 @@ export class ClubSyncOrchestrator {
       const schedFrom = today;
       const schedTo = isToday
         ? today
-        : addMoscowDays(today, isFull ? 14 : 2);
+        : addMoscowDays(today, isFull ? GROUP_SCHEDULE_HORIZON_DAYS : 2);
       const classFrom = isToday
         ? today
         : isFull
