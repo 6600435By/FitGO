@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   GroupClassBookingStatus,
   GroupClassSessionStatus,
@@ -35,6 +35,7 @@ export type ClassSyncResult = {
 
 @Injectable()
 export class ClassSessionsSyncService {
+  private readonly logger = new Logger(ClassSessionsSyncService.name);
   private readonly running = new Set<string>();
 
   constructor(
@@ -225,6 +226,7 @@ export class ClassSessionsSyncService {
       let page = 1;
       let total = Infinity;
       const seenIds = new Set<string>();
+      let dayFetched = false;
 
       while ((page - 1) * PAGE_SIZE < total) {
         const batch = await provider.getClassSessions({
@@ -237,6 +239,7 @@ export class ClassSessionsSyncService {
           if (page === 1 && day === days[0]) endpointMissing = true;
           break;
         }
+        dayFetched = true;
         total = batch.total;
         if (batch.data.length === 0) break;
 
@@ -252,8 +255,10 @@ export class ClassSessionsSyncService {
         if (page > 500) break;
       }
 
-      // Soft-deactivate sessions that day that disappeared from 1C (not locked)
-      if (!endpointMissing && seenIds.size > 0) {
+      // Soft-deactivate sessions that day that disappeared from 1C (not locked).
+      // Empty successful day (seenIds=0) still clears leftovers — e.g. all
+      // classes deleted in 1C — otherwise "Следующая тренировка" sticks forever.
+      if (!endpointMissing && dayFetched) {
         const fromD = new Date(`${day}T00:00:00.000Z`);
         const toD = new Date(`${day}T23:59:59.999Z`);
         const stale = await this.prisma.onexClassSession.findMany({
@@ -262,15 +267,21 @@ export class ClassSessionsSyncService {
             isActive: true,
             payrollLocked: false,
             startAt: { gte: fromD, lte: toD },
-            externalId: { notIn: [...seenIds] },
+            ...(seenIds.size > 0
+              ? { externalId: { notIn: [...seenIds] } }
+              : {}),
           },
-          select: { id: true },
+          select: { id: true, externalId: true },
         });
         if (stale.length) {
           await this.prisma.onexClassSession.updateMany({
             where: { id: { in: stale.map((s) => s.id) } },
             data: { isActive: false, syncedAt: new Date() },
           });
+          await this.cancelOpenGroupBookingsForAppointments(
+            clubId,
+            stale.map((s) => s.externalId),
+          );
         }
       }
 
@@ -442,12 +453,56 @@ export class ClassSessionsSyncService {
 
     const journal = await this.applyToGroupJournal(clubId, session, members);
     if (kind === OnexClassKind.GROUP) {
-      await this.importGroupBookingsFromMembers(clubId, session, members);
+      if (status === OnexClassStatus.CANCELLED) {
+        // Session cancelled in 1C — drop client cards even if roster still EXPECTED.
+        await this.cancelOpenGroupBookingsForAppointments(clubId, [
+          session.externalId,
+        ]);
+      } else {
+        await this.importGroupBookingsFromMembers(clubId, session, members);
+      }
     }
     if (kind === OnexClassKind.PT || kind === OnexClassKind.SPA) {
       await this.applyBookingPresence(clubId, session, members, kind);
     }
     return { members: memberCount, journal };
+  }
+
+  /** Mark open FitGO group bookings CANCELLED when the 1C appointment is gone/cancelled. */
+  private async cancelOpenGroupBookingsForAppointments(
+    clubId: string,
+    appointmentIds: string[],
+  ): Promise<number> {
+    const ids = [
+      ...new Set(
+        appointmentIds.map((id) => id.trim()).filter((id) => id.length > 0),
+      ),
+    ];
+    if (!ids.length) return 0;
+
+    const result = await this.prisma.groupClassBooking.updateMany({
+      where: {
+        appointmentId: { in: ids },
+        status: {
+          in: [
+            GroupClassBookingStatus.CONFIRMED,
+            GroupClassBookingStatus.PENDING_1C,
+          ],
+        },
+        client: { clubId },
+      },
+      data: {
+        status: GroupClassBookingStatus.CANCELLED,
+        cancelledAt: new Date(),
+        usageStatus: 'CANCELLED',
+      },
+    });
+    if (result.count > 0) {
+      this.logger.log(
+        `Cancelled ${result.count} group booking(s) for vanished/cancelled appointment(s) club=${clubId}`,
+      );
+    }
+    return result.count;
   }
 
   /**

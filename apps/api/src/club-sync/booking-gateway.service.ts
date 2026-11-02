@@ -449,25 +449,73 @@ export class BookingGateway {
     const cancelledAt = new Date();
     for (const [day, dayBookings] of byDay) {
       try {
-        const batch = await provider.getClassSessions({
-          from: day,
-          to: day,
-          page: 1,
-          pageSize: 100,
-        });
-        if (!batch?.data?.length) continue;
-
-        const byAppt = new Map(
-          batch.data
-            .filter((s) => s.id?.trim())
-            .map((s) => [s.id.trim().toLowerCase(), s]),
-        );
+        // Full day page-through so a missing appointmentId is real absence,
+        // not "not on page 1" — otherwise cancelled 1C classes stick on home.
+        const byAppt = new Map<
+          string,
+          {
+            status?: string;
+            members?: Array<{
+              externalId?: string;
+              cancelled?: boolean;
+              attendance?: string;
+            }>;
+          }
+        >();
+        let page = 1;
+        let total = Infinity;
+        let dayFetched = false;
+        while ((page - 1) * 100 < total) {
+          const batch = await provider.getClassSessions({
+            from: day,
+            to: day,
+            page,
+            pageSize: 100,
+          });
+          if (!batch) break;
+          dayFetched = true;
+          total = batch.total;
+          if (!batch.data.length) break;
+          for (const s of batch.data) {
+            const id = s.id?.trim();
+            if (!id) continue;
+            byAppt.set(id.toLowerCase(), s);
+          }
+          page += 1;
+          if (page > 50) break;
+        }
+        if (!dayFetched) continue;
 
         for (const booking of dayBookings) {
           const session = byAppt.get(
             booking.appointmentId.trim().toLowerCase(),
           );
-          if (!session) continue; // unknown appointment — don't guess
+          // Appointment gone from a successfully fetched day → cancel.
+          if (!session) {
+            await this.prisma.groupClassBooking.update({
+              where: { id: booking.id },
+              data: {
+                status: GroupClassBookingStatus.CANCELLED,
+                cancelledAt,
+                usageStatus: 'CANCELLED',
+              },
+            });
+            cancelled += 1;
+            continue;
+          }
+
+          if (session.status?.toUpperCase() === 'CANCELLED') {
+            await this.prisma.groupClassBooking.update({
+              where: { id: booking.id },
+              data: {
+                status: GroupClassBookingStatus.CANCELLED,
+                cancelledAt,
+                usageStatus: 'CANCELLED',
+              },
+            });
+            cancelled += 1;
+            continue;
+          }
 
           const member = (session.members ?? []).find(
             (m) => m.externalId?.trim().toLowerCase() === clientExt,
