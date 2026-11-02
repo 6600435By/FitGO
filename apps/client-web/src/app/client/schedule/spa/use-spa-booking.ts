@@ -20,7 +20,7 @@ export const CATEGORY_ORDER = [
   'Спортивный SPA-массаж',
   'Обертывание',
   'Анализ состава тела',
-  'Другое',
+  'Уход за лицом',
 ] as const;
 
 export function categoryOf(el: SpaServiceEligibility): string {
@@ -32,7 +32,7 @@ export function categoryOf(el: SpaServiceEligibility): string {
   if (/коррекц|медов/.test(name)) return 'Коррекция фигуры';
   if (/спортив/.test(name)) return 'Спортивный SPA-массаж';
   if (/бандаж|оберт/.test(name)) return 'Обертывание';
-  return 'Другое';
+  return 'Уход за лицом';
 }
 
 export interface CalendarSlot extends SpaBookingSlot {

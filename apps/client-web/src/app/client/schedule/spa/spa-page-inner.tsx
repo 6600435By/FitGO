@@ -9,6 +9,7 @@ import {
   Hand,
   Package,
   Pencil,
+  Smile,
   Sparkles,
   Waves,
 } from 'lucide-react';
@@ -68,6 +69,7 @@ function categoryIcon(name: string): ReactNode {
   if (/спортив/i.test(name)) return <Activity className="h-5 w-5" />;
   if (/оберт/i.test(name)) return <Droplets className="h-5 w-5" />;
   if (/состав|анализ/i.test(name)) return <Waves className="h-5 w-5" />;
+  if (/уход|лиц/i.test(name)) return <Smile className="h-5 w-5" />;
   return <Package className="h-5 w-5" />;
 }
 
