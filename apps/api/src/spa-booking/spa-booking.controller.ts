@@ -363,6 +363,7 @@ export class SpaBookingController {
       membershipServiceName: dto.membershipServiceName,
       visitNote: dto.visitNote,
       dates: dto.dates,
+      items: dto.items,
       overlapConfirmed: dto.overlapConfirmed,
     });
   }
@@ -638,6 +639,7 @@ export class SpaBookingController {
       membershipServiceName: dto.membershipServiceName,
       visitNote: dto.visitNote,
       dates: dto.dates,
+      items: dto.items,
       overlapConfirmed: dto.overlapConfirmed,
     });
   }

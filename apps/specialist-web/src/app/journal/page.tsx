@@ -160,11 +160,16 @@ export default function JournalPage() {
             onClick={() =>
               run(async () => {
                 const token = getToken()!;
-                await api.specialistFillFromTemplate(
+                const filled = await api.specialistFillFromTemplate(
                   token,
                   period.start,
                   period.end,
                 );
+                if (!filled.createdBlocks) {
+                  throw new Error(
+                    'Новых дней нет — всё уже опубликовано',
+                  );
+                }
                 await api.specialistPublishSchedule(
                   token,
                   period.start,

@@ -1,3 +1,4 @@
+import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
@@ -7,7 +8,22 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  ValidateIf,
+  ValidateNested,
 } from 'class-validator';
+
+export class BulkSpaBookingItemDto {
+  @IsISO8601()
+  startAt!: string;
+
+  @IsOptional()
+  @IsString()
+  serviceId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  overlapConfirmed?: boolean;
+}
 
 export class BulkSpaBookingDto {
   @IsOptional()
@@ -53,11 +69,19 @@ export class BulkSpaBookingDto {
   @IsISO8601()
   startAt!: string;
 
-  /** ISO date-times for each occurrence (own time per entry). */
+  /** Legacy: ISO date-times for each occurrence (own time per entry). */
+  @ValidateIf((o: BulkSpaBookingDto) => !o.items?.length)
   @IsArray()
   @ArrayMinSize(1)
   @IsString({ each: true })
-  dates!: string[];
+  dates?: string[];
+
+  /** Preferred: per-occurrence start + optional service / overlap flag. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => BulkSpaBookingItemDto)
+  items?: BulkSpaBookingItemDto[];
 
   /** Staff confirmed intentional overlap ≤ 15 min with a neighbor. */
   @IsOptional()

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   AvailabilityBlockStatus,
+  Prisma,
   Role,
   ServicePaymentStatus,
   ServiceUsageStatus,
@@ -28,9 +29,12 @@ import {
   MembershipStatus,
   normalizeMembershipServiceName,
   SessionType,
+  SPA_MAX_STACK_DEPTH,
+  SPA_OVERLAP_ALLOW_MIN,
   SPA_WAITLIST_MAX_WINDOW_DAYS,
   SPA_WAITLIST_WEEKDAY_ALL,
   spaCatalogMatchesMembershipLine,
+  spaStackDepth,
   UserRole,
   sessionApprovalLabelRu,
   toUsageControl,
@@ -1175,11 +1179,45 @@ export class SpaBookingService {
     };
   }
 
+  private isClientOverlapViolation(err: unknown): boolean {
+    // Do not treat all P2010 (raw query failures, e.g. advisory lock) as overlap.
+    const msg =
+      err instanceof Error
+        ? err.message
+        : typeof err === 'string'
+          ? err
+          : '';
+    const metaCode =
+      err instanceof Prisma.PrismaClientKnownRequestError
+        ? String(err.meta?.code ?? '')
+        : '';
+    return (
+      /23P01/i.test(msg) ||
+      metaCode === '23P01' ||
+      /spa_booking_no_overlap_client/i.test(msg)
+    );
+  }
+
+  private mapSpaBookingWriteError(err: unknown): never {
+    if (err instanceof ConflictException || err instanceof BadRequestException) {
+      throw err;
+    }
+    if (err instanceof Error && /Unique constraint/i.test(err.message)) {
+      throw new ConflictException('Слот уже занят');
+    }
+    if (this.isClientOverlapViolation(err)) {
+      throw new ConflictException(
+        'У клиента уже есть запись на это время',
+      );
+    }
+    throw err;
+  }
+
   /**
-   * Staff (specialist/admin) may pick any start that fits published hours.
+   * Staff (specialist/admin) may pick any start that fits draft or published hours.
    * Clean slots need no flag; overlaps of 1–15 min require overlapConfirmed;
-   * overlaps over 15 min are always rejected. Client self-book still uses
-   * the strict available-slot grid.
+   * overlaps over 15 min or a third stacked layer are always rejected.
+   * Client self-book still uses the strict available-slot grid.
    */
   private async assertStaffBookingWindow(
     specialistId: string,
@@ -1187,27 +1225,32 @@ export class SpaBookingService {
     end: Date,
     excludeBookingId?: string,
     overlapConfirmed?: boolean,
+    db: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
     // Past starts are allowed for staff backfill («забыли сразу добавить»).
     if (end <= start) {
       throw new BadRequestException('Некорректный интервал');
     }
 
-    const covers = await this.prisma.specialistAvailabilityBlock.findFirst({
+    // Staff may book into DRAFT or PUBLISHED hours; clients only see PUBLISHED.
+    const covers = await db.specialistAvailabilityBlock.findFirst({
       where: {
         specialistId,
-        status: AvailabilityBlockStatus.PUBLISHED,
+        status: {
+          in: [
+            AvailabilityBlockStatus.PUBLISHED,
+            AvailabilityBlockStatus.DRAFT,
+          ],
+        },
         startAt: { lte: start },
         endAt: { gte: end },
       },
     });
     if (!covers) {
-      throw new ConflictException(
-        'Время вне рабочих часов специалиста или не опубликовано',
-      );
+      throw new ConflictException('Время вне рабочих часов специалиста');
     }
 
-    const overlaps = await this.prisma.spaBooking.findMany({
+    const overlaps = await db.spaBooking.findMany({
       where: {
         specialistId,
         status: SpaBookingStatus.CONFIRMED,
@@ -1242,9 +1285,22 @@ export class SpaBookingService {
       }
     }
 
-    if (maxOverlapMin > 15) {
+    const depth = spaStackDepth([
+      { startMs, endMs },
+      ...overlaps.map((o) => ({
+        startMs: o.startAt.getTime(),
+        endMs: o.endAt.getTime(),
+      })),
+    ]);
+    if (depth > SPA_MAX_STACK_DEPTH) {
       throw new ConflictException(
-        `Пересечение ${maxOverlapMin} мин с «${peerLabel}» — больше 15 минут нельзя`,
+        'На это время уже две записи — третья накладка запрещена',
+      );
+    }
+
+    if (maxOverlapMin > SPA_OVERLAP_ALLOW_MIN) {
+      throw new ConflictException(
+        `Пересечение ${maxOverlapMin} мин с «${peerLabel}» — больше ${SPA_OVERLAP_ALLOW_MIN} минут нельзя`,
       );
     }
     if (!overlapConfirmed) {
@@ -1444,97 +1500,88 @@ export class SpaBookingService {
 
     let booking;
     try {
-      const existing = await this.prisma.spaBooking.findFirst({
-        where: {
-          specialistId: input.specialistId,
-          startAt: start,
-          status: { notIn: ['CANCELLED', 'FAILED'] },
-        },
-      });
+      booking = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          SELECT pg_advisory_xact_lock(hashtext(${input.specialistId}))
+        `;
+        if (staffOrigin) {
+          await this.assertStaffBookingWindow(
+            input.specialistId,
+            start,
+            end,
+            undefined,
+            input.overlapConfirmed,
+            tx,
+          );
+        }
 
-      // #region agent log
-      try {
-        const fs = await import('fs');
-        fs.appendFileSync(
-          '/Users/machome/Projects/FitGO/.cursor/debug-884e43.log',
-          JSON.stringify({
-            sessionId: '884e43',
-            runId: 'post-fix',
-            hypothesisId: 'F',
-            location: 'spa-booking.service.ts:bookSpa:existing',
-            message: 'existing booking at slot',
-            data: {
-              startAt: start.toISOString(),
-              specialistId: input.specialistId,
-              existingStatus: existing?.status ?? null,
-              existingId: existing?.id ?? null,
-            },
-            timestamp: Date.now(),
-          }) + '\n',
-        );
-      } catch {
-        /* ignore */
-      }
-      // #endregion
-
-      if (existing && existing.status === SpaBookingStatus.CANCELLED) {
-        const control = this.serviceUsage.controlFieldsForCreate({
-          origin: input.origin,
-          paymentType: input.paymentType,
-          bookedByUserId: actor.sub,
+        const existing = await tx.spaBooking.findFirst({
+          where: {
+            specialistId: input.specialistId,
+            startAt: start,
+            status: { notIn: ['CANCELLED', 'FAILED'] },
+          },
         });
-        booking = await this.prisma.spaBooking.update({
-          where: { id: existing.id },
-          data: {
-            clubId,
-            clientId: resolved.clientId ?? null,
-            guestName: resolved.guestName ?? null,
-            guestAlias: resolved.guestAlias ?? existing.guestAlias ?? null,
-            guestPhone: resolved.guestPhone ?? null,
-            clientExternalId: resolved.clientExternalId ?? null,
-            oneCLinkStatus: resolved.oneCLinkStatus,
-            serviceId: input.serviceId,
-            endAt: end,
+
+        if (existing && existing.status === SpaBookingStatus.CANCELLED) {
+          const control = this.serviceUsage.controlFieldsForCreate({
             origin: input.origin,
-            paymentType:
-              input.paymentType === 'QUOTA'
-                ? SpaPaymentType.QUOTA
-                : SpaPaymentType.PAID,
-            priceMinor,
-            membershipServiceName: membershipServiceName ?? null,
-            membershipPackageId: membershipPackageId ?? null,
-            status: SpaBookingStatus.CONFIRMED,
-            consumedInCrmAt: null,
-            crmDocRef: null,
-            cancelledBy: null,
-            cancelledAt: null,
-            controlLevel: control.controlLevel,
-            reviewFlag: control.reviewFlag,
-            paymentStatus: control.paymentStatus,
-            usageStatus: control.usageStatus,
-            presenceStatus: control.presenceStatus,
-            performanceStatus: control.performanceStatus,
-            eligibleForMotivation: control.eligibleForMotivation,
-            bookedByUserId: control.bookedByUserId,
-            specialistCompletedAt: null,
-            paidAt: null,
-            visitNote,
-          },
-          include: {
-            specialist: true,
-            client: true,
-            service: true,
-          },
-        });
-      } else if (existing) {
-        throw new ConflictException('Слот уже занят');
-      } else {
+            paymentType: input.paymentType,
+            bookedByUserId: actor.sub,
+          });
+          return tx.spaBooking.update({
+            where: { id: existing.id },
+            data: {
+              clubId,
+              clientId: resolved.clientId ?? null,
+              guestName: resolved.guestName ?? null,
+              guestAlias: resolved.guestAlias ?? existing.guestAlias ?? null,
+              guestPhone: resolved.guestPhone ?? null,
+              clientExternalId: resolved.clientExternalId ?? null,
+              oneCLinkStatus: resolved.oneCLinkStatus,
+              serviceId: input.serviceId,
+              endAt: end,
+              origin: input.origin,
+              paymentType:
+                input.paymentType === 'QUOTA'
+                  ? SpaPaymentType.QUOTA
+                  : SpaPaymentType.PAID,
+              priceMinor,
+              membershipServiceName: membershipServiceName ?? null,
+              membershipPackageId: membershipPackageId ?? null,
+              status: SpaBookingStatus.CONFIRMED,
+              consumedInCrmAt: null,
+              crmDocRef: null,
+              cancelledBy: null,
+              cancelledAt: null,
+              controlLevel: control.controlLevel,
+              reviewFlag: control.reviewFlag,
+              paymentStatus: control.paymentStatus,
+              usageStatus: control.usageStatus,
+              presenceStatus: control.presenceStatus,
+              performanceStatus: control.performanceStatus,
+              eligibleForMotivation: control.eligibleForMotivation,
+              bookedByUserId: control.bookedByUserId,
+              specialistCompletedAt: null,
+              paidAt: null,
+              visitNote,
+            },
+            include: {
+              specialist: true,
+              client: true,
+              service: true,
+            },
+          });
+        }
+        if (existing) {
+          throw new ConflictException('Слот уже занят');
+        }
         const control = this.serviceUsage.controlFieldsForCreate({
           origin: input.origin,
           paymentType: input.paymentType,
           bookedByUserId: actor.sub,
         });
-        booking = await this.prisma.spaBooking.create({
+        return tx.spaBooking.create({
           data: {
             clubId,
             specialistId: input.specialistId,
@@ -1571,16 +1618,9 @@ export class SpaBookingService {
             service: true,
           },
         });
-      }
+      });
     } catch (err) {
-      if (err instanceof ConflictException) throw err;
-      if (
-        err instanceof Error &&
-        /Unique constraint/i.test(err.message)
-      ) {
-        throw new ConflictException('Слот уже занят');
-      }
-      throw err;
+      this.mapSpaBookingWriteError(err);
     }
 
     // Quota/sale consume deferred until dual-gate ATTENDED → CONSUMED (phase 3).
@@ -1978,7 +2018,11 @@ export class SpaBookingService {
   }
 
   /**
-   * Replace published/draft hours for one calendar day.
+   * Replace hours for one calendar day.
+   * - Already-PUBLISHED day stays PUBLISHED when edited.
+   * - DRAFT day stays DRAFT.
+   * - Brand-new day: PUBLISHED only if it falls inside an already-published
+   *   horizon; otherwise DRAFT.
    * Pass null/empty start+end to mark the day as off.
    */
   private async setDayHoursById(
@@ -2011,6 +2055,42 @@ export class SpaBookingService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.specialistAvailabilityBlock.findMany({
+        where: {
+          specialistId,
+          startAt: { gte: start },
+          endAt: { lte: end },
+        },
+        select: { status: true },
+      });
+      const hadPublished = existing.some(
+        (b) => b.status === AvailabilityBlockStatus.PUBLISHED,
+      );
+      const hadDraft = existing.some(
+        (b) => b.status === AvailabilityBlockStatus.DRAFT,
+      );
+
+      let nextStatus: AvailabilityBlockStatus =
+        AvailabilityBlockStatus.DRAFT;
+      if (hadPublished) {
+        nextStatus = AvailabilityBlockStatus.PUBLISHED;
+      } else if (hadDraft) {
+        nextStatus = AvailabilityBlockStatus.DRAFT;
+      } else if (blockStart && blockEnd) {
+        // New day: PUBLISHED only if it is not after the published horizon end.
+        const publishedSpan = await tx.specialistAvailabilityBlock.aggregate({
+          where: {
+            specialistId,
+            status: AvailabilityBlockStatus.PUBLISHED,
+          },
+          _max: { endAt: true },
+        });
+        const spanEnd = publishedSpan._max.endAt;
+        if (spanEnd && end.getTime() <= spanEnd.getTime()) {
+          nextStatus = AvailabilityBlockStatus.PUBLISHED;
+        }
+      }
+
       await tx.specialistAvailabilityBlock.deleteMany({
         where: {
           specialistId,
@@ -2024,7 +2104,7 @@ export class SpaBookingService {
             specialistId,
             startAt: blockStart,
             endAt: blockEnd,
-            status: AvailabilityBlockStatus.PUBLISHED,
+            status: nextStatus,
           },
         });
       }
@@ -2155,18 +2235,41 @@ export class SpaBookingService {
       cursor.setDate(cursor.getDate() + 1);
     }
 
+    // Never wipe PUBLISHED. Replace DRAFT days; create DRAFT only where no block.
+    let createdBlocks = 0;
+    let bookingsOutsideHours = 0;
+
     await this.prisma.$transaction(async (tx) => {
-      // Replace previous draft/published hours in the period (re-apply template).
-      await tx.specialistAvailabilityBlock.deleteMany({
+      const existing = await tx.specialistAvailabilityBlock.findMany({
         where: {
           specialistId,
           startAt: { gte: start },
           endAt: { lte: end },
         },
+        select: { id: true, startAt: true, endAt: true, status: true },
       });
-      if (blocks.length > 0) {
+
+      const dayKey = (d: Date) =>
+        `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      const publishedDays = new Set(
+        existing
+          .filter((b) => b.status === AvailabilityBlockStatus.PUBLISHED)
+          .map((b) => dayKey(b.startAt)),
+      );
+      const draftIds = existing
+        .filter((b) => b.status === AvailabilityBlockStatus.DRAFT)
+        .map((b) => b.id);
+
+      if (draftIds.length > 0) {
+        await tx.specialistAvailabilityBlock.deleteMany({
+          where: { id: { in: draftIds } },
+        });
+      }
+
+      const toCreate = blocks.filter((b) => !publishedDays.has(dayKey(b.startAt)));
+      if (toCreate.length > 0) {
         await tx.specialistAvailabilityBlock.createMany({
-          data: blocks.map((b) => ({
+          data: toCreate.map((b) => ({
             specialistId,
             startAt: b.startAt,
             endAt: b.endAt,
@@ -2174,9 +2277,35 @@ export class SpaBookingService {
           })),
         });
       }
+      createdBlocks = toCreate.length;
+
+      // Bookings in the period that no longer sit inside any (draft|published) block.
+      const bookings = await tx.spaBooking.findMany({
+        where: {
+          specialistId,
+          status: SpaBookingStatus.CONFIRMED,
+          startAt: { gte: start },
+          endAt: { lte: end },
+        },
+        select: { startAt: true, endAt: true },
+      });
+      const allBlocks = await tx.specialistAvailabilityBlock.findMany({
+        where: {
+          specialistId,
+          startAt: { lt: end },
+          endAt: { gt: start },
+        },
+        select: { startAt: true, endAt: true },
+      });
+      for (const bk of bookings) {
+        const covered = allBlocks.some(
+          (h) => h.startAt <= bk.startAt && h.endAt >= bk.endAt,
+        );
+        if (!covered) bookingsOutsideHours += 1;
+      }
     });
 
-    return { createdBlocks: blocks.length };
+    return { createdBlocks, bookingsOutsideHours };
   }
 
   async fillFromTemplate(
@@ -2204,6 +2333,20 @@ export class SpaBookingService {
   ) {
     const start = new Date(periodStart);
     const end = new Date(periodEnd);
+    const drafts = await this.prisma.specialistAvailabilityBlock.findMany({
+      where: {
+        specialistId,
+        status: AvailabilityBlockStatus.DRAFT,
+        startAt: { gte: start },
+        endAt: { lte: end },
+      },
+      select: { id: true, startAt: true, endAt: true },
+    });
+    if (drafts.length === 0) {
+      throw new BadRequestException(
+        'Нет черновика для публикации в выбранном периоде',
+      );
+    }
     const result = await this.prisma.specialistAvailabilityBlock.updateMany({
       where: {
         specialistId,
@@ -2220,7 +2363,26 @@ export class SpaBookingService {
         periodEnd: end,
       },
     });
-    return { publishedBlocks: result.count };
+    const draftDayKeys = new Set(
+      drafts.map((b) => {
+        const d = b.startAt;
+        return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      }),
+    );
+    const bookingsInDraftDays = await this.prisma.spaBooking.count({
+      where: {
+        specialistId,
+        status: SpaBookingStatus.CONFIRMED,
+        OR: drafts.map((b) => ({
+          startAt: { gte: b.startAt, lt: b.endAt },
+        })),
+      },
+    });
+    return {
+      publishedBlocks: result.count,
+      publishedDays: draftDayKeys.size,
+      bookingsInPublishedDays: bookingsInDraftDays,
+    };
   }
 
   async publishSchedule(
@@ -2630,14 +2792,6 @@ export class SpaBookingService {
     const durationMs = (service.durationMin + service.bufferMin) * 60_000;
     const end = new Date(start.getTime() + durationMs);
 
-    await this.assertStaffBookingWindow(
-      specialistId,
-      start,
-      end,
-      existing.id,
-      input.overlapConfirmed,
-    );
-
     const paymentType = input.paymentType ?? (
       existing.paymentType === SpaPaymentType.QUOTA ? 'QUOTA' : 'PAID'
     );
@@ -2728,34 +2882,47 @@ export class SpaBookingService {
         input.visitNote !== undefined
           ? { visitNote: normalizeSpaNoteText(input.visitNote) || null }
           : {};
-      const updated = await this.prisma.spaBooking.update({
-        where: { id: existing.id },
-        data: {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          SELECT pg_advisory_xact_lock(hashtext(${specialistId}))
+        `;
+        await this.assertStaffBookingWindow(
           specialistId,
-          serviceId,
-          startAt: start,
-          endAt: end,
-          clientId,
-          guestName,
-          guestAlias,
-          guestPhone,
-          clientExternalId,
-          oneCLinkStatus,
-          ...(becameLinked
-            ? {
-                // Clear prior soft-hold / FAILED so consume can retry.
-                consumeState: null,
-              }
-            : {}),
-          paymentType:
-            paymentType === 'QUOTA'
-              ? SpaPaymentType.QUOTA
-              : SpaPaymentType.PAID,
-          priceMinor,
-          membershipServiceName,
-          ...visitNotePatch,
-        },
-        include: { specialist: true, client: true, service: true },
+          start,
+          end,
+          existing.id,
+          input.overlapConfirmed,
+          tx,
+        );
+        return tx.spaBooking.update({
+          where: { id: existing.id },
+          data: {
+            specialistId,
+            serviceId,
+            startAt: start,
+            endAt: end,
+            clientId,
+            guestName,
+            guestAlias,
+            guestPhone,
+            clientExternalId,
+            oneCLinkStatus,
+            ...(becameLinked
+              ? {
+                  // Clear prior soft-hold / FAILED so consume can retry.
+                  consumeState: null,
+                }
+              : {}),
+            paymentType:
+              paymentType === 'QUOTA'
+                ? SpaPaymentType.QUOTA
+                : SpaPaymentType.PAID,
+            priceMinor,
+            membershipServiceName,
+            ...visitNotePatch,
+          },
+          include: { specialist: true, client: true, service: true },
+        });
       });
       if (
         becameLinked &&
@@ -2809,13 +2976,7 @@ export class SpaBookingService {
 
       return { booking: this.mapBooking(updated), cascade };
     } catch (err) {
-      if (
-        err instanceof Error &&
-        /Unique constraint/i.test(err.message)
-      ) {
-        throw new ConflictException('Слот уже занят');
-      }
-      throw err;
+      this.mapSpaBookingWriteError(err);
     }
   }
 
@@ -4299,7 +4460,12 @@ export class SpaBookingService {
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
-      dates: string[];
+      dates?: string[];
+      items?: Array<{
+        startAt: string;
+        serviceId?: string;
+        overlapConfirmed?: boolean;
+      }>;
       overlapConfirmed?: boolean;
     },
   ): Promise<SpaBulkBookingResult> {
@@ -4324,19 +4490,51 @@ export class SpaBookingService {
       ? SpaBookingOrigin.SPECIALIST_ASSIGNED
       : SpaBookingOrigin.ADMIN_ASSIGNED;
 
-    const uniqueDates = [...new Set(input.dates)];
-    for (const raw of uniqueDates) {
-      const parsed = new Date(raw);
+    type BulkRow = {
+      startAt: string;
+      serviceId: string;
+      overlapConfirmed?: boolean;
+    };
+    const rows: BulkRow[] = [];
+    if (input.items?.length) {
+      for (const item of input.items) {
+        rows.push({
+          startAt: item.startAt,
+          serviceId: item.serviceId?.trim() || input.serviceId,
+          overlapConfirmed:
+            item.overlapConfirmed ?? input.overlapConfirmed,
+        });
+      }
+    } else {
+      const uniqueDates = [...new Set(input.dates ?? [])];
+      if (uniqueDates.length === 0) {
+        throw new BadRequestException('Укажите даты или items');
+      }
+      for (const raw of uniqueDates) {
+        rows.push({
+          startAt: raw,
+          serviceId: input.serviceId,
+          overlapConfirmed: input.overlapConfirmed,
+        });
+      }
+    }
+
+    const seenStarts = new Set<string>();
+    for (const row of rows) {
+      const parsed = new Date(row.startAt);
       if (Number.isNaN(parsed.getTime())) {
-        skipped.push({ date: raw, reason: 'Некорректная дата' });
+        skipped.push({ date: row.startAt, reason: 'Некорректная дата' });
         continue;
       }
-      // Prefer time-of-day from each dates[] ISO; fall back to startAt when date-only.
-      const hasTimeComponent = /T\d{2}:\d{2}/.test(raw);
+      // Prefer time-of-day from each ISO; fall back to startAt when date-only.
+      const hasTimeComponent = /T\d{2}:\d{2}/.test(row.startAt);
       const start = new Date(parsed);
       if (!hasTimeComponent) {
         start.setHours(fallbackHours, fallbackMinutes, fallbackSeconds, 0);
       }
+      const startIso = start.toISOString();
+      if (seenStarts.has(startIso)) continue;
+      seenStarts.add(startIso);
       try {
         const result = await this.bookSpa(user, {
           clientId: input.clientId,
@@ -4344,19 +4542,19 @@ export class SpaBookingService {
           guestPhone: input.guestPhone,
           clientExternalId: input.clientExternalId,
           specialistId: input.specialistId,
-          serviceId: input.serviceId,
-          startAt: start.toISOString(),
+          serviceId: row.serviceId,
+          startAt: startIso,
           paymentType: input.paymentType,
           membershipServiceName: input.membershipServiceName,
           visitNote: input.visitNote,
-          overlapConfirmed: input.overlapConfirmed,
+          overlapConfirmed: row.overlapConfirmed,
           origin,
         });
         created.push(result.booking);
       } catch (err) {
         const reason =
           err instanceof Error ? err.message : 'Не удалось создать запись';
-        skipped.push({ date: start.toISOString(), reason });
+        skipped.push({ date: startIso, reason });
       }
     }
 

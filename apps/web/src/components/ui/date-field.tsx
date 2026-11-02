@@ -71,6 +71,8 @@ export type TimeFieldProps = {
   onChange: (next: string) => void;
   className?: string;
   disabled?: boolean;
+  /** Narrow hour/minute selects for dense rows. */
+  compact?: boolean;
 };
 
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) =>
@@ -101,16 +103,22 @@ export function TimeField({
   onChange,
   className,
   disabled,
+  compact,
 }: TimeFieldProps) {
   const { hour, minute } = splitHm(value || '10:00');
+  const selectClass = compact
+    ? 'input !px-1 !py-1 text-xs tabular-nums'
+    : 'input';
   return (
     <label className={`block space-y-1 text-sm ${className ?? ''}`}>
       {label ? (
         <span className="block h-4 text-[11px] text-slate-500">{label}</span>
       ) : null}
-      <div className="grid grid-cols-2 gap-1.5">
+      <div
+        className={`grid grid-cols-2 ${compact ? 'gap-1' : 'gap-1.5'}`}
+      >
         <select
-          className="input"
+          className={selectClass}
           aria-label="Часы"
           disabled={disabled}
           value={hour}
@@ -123,7 +131,7 @@ export function TimeField({
           ))}
         </select>
         <select
-          className="input"
+          className={selectClass}
           aria-label="Минуты"
           disabled={disabled}
           value={minute}

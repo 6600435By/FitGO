@@ -25,11 +25,16 @@ import {
 import { SpaBookingNoteHint } from '@/components/spa-board/spa-booking-note-hint';
 import {
   addDays,
+  addMonths,
   defaultSpaWeekScale,
+  monthDays,
   nudgeSpaWeekScale,
+  readStoredMonthShowEmptyWork,
   startOfDay,
+  startOfMonth,
   startOfWeekMonday,
   weekDays,
+  writeStoredMonthShowEmptyWork,
   writeStoredSpaWeekScale,
   type SpaWeekScale,
 } from './spa-board-period';
@@ -90,7 +95,7 @@ function formatDayChip(d: Date) {
 
 function formatWeekRange(days: Date[]) {
   const a = days[0];
-  const b = days[6];
+  const b = days[days.length - 1] ?? days[0];
   if (!a || !b) return '';
   const left = a.toLocaleDateString('ru-RU', {
     day: 'numeric',
@@ -102,6 +107,32 @@ function formatWeekRange(days: Date[]) {
     year: 'numeric',
   });
   return `${left} – ${right}`;
+}
+
+function formatMonthTitle(anchor: Date, dayCount: number) {
+  const month = anchor.toLocaleDateString('ru-RU', {
+    month: 'long',
+    year: 'numeric',
+  });
+  return `${month} · ${dayCount} ${
+    dayCount === 1 ? 'день' : dayCount < 5 ? 'дня' : 'дней'
+  }`;
+}
+
+/** Surname (or first token) for compact journal cells. */
+function shortClientName(b: SpaBoardBooking): string {
+  if (b.busy) return 'Занято';
+  const raw = (b.clientName || b.guestName || 'Клиент').trim();
+  if (!raw) return 'Клиент';
+  const parts = raw.split(/\s+/);
+  return parts[0] || raw;
+}
+
+function bookingTitle(b: SpaBoardBooking, timeStart: string, timeEnd: string) {
+  if (b.busy) return `${timeStart}–${timeEnd} · Занято`;
+  const name = b.clientName || b.guestName || 'Клиент';
+  const svc = b.serviceName ? ` · ${b.serviceName}` : '';
+  return `${timeStart}–${timeEnd} · ${name}${svc}`;
 }
 
 function minutesFromDayStart(iso: string, day: Date) {
@@ -264,6 +295,8 @@ export function SpaWeekBoard({
   onBookingMove,
   filterSpecialistId,
   onFilterSpecialistChange,
+  boardView = 'week',
+  onDayHeaderClick,
 }: {
   board: SpaBoardResponse;
   mode: SpaBoardMode;
@@ -283,9 +316,42 @@ export function SpaWeekBoard({
   }) => void | Promise<void>;
   filterSpecialistId?: string;
   onFilterSpecialistChange?: (id: string) => void;
+  /** Week columns (7) or month columns (days with bookings / work). */
+  boardView?: 'week' | 'month';
+  /** Month: tap day header → open day view. */
+  onDayHeaderClick?: (d: Date) => void;
 }) {
-  const days = useMemo(() => weekDays(day), [day]);
+  const [showEmptyWorkDays, setShowEmptyWorkDays] = useState(false);
+  useEffect(() => {
+    setShowEmptyWorkDays(readStoredMonthShowEmptyWork());
+  }, []);
+
+  const days = useMemo(() => {
+    if (boardView !== 'month') return weekDays(day);
+    const all = monthDays(day);
+    const staffFilter =
+      mode === 'specialist' && viewerSpecialistId
+        ? viewerSpecialistId
+        : filterSpecialistId || undefined;
+    return all.filter((d) => {
+      const hasBooking =
+        bookingsForDay(board.bookings, d, staffFilter).length > 0;
+      if (hasBooking) return true;
+      if (!showEmptyWorkDays) return false;
+      return hourBandsForDay(board.hours, d, staffFilter).length > 0;
+    });
+  }, [
+    board.bookings,
+    board.hours,
+    boardView,
+    day,
+    filterSpecialistId,
+    mode,
+    showEmptyWorkDays,
+    viewerSpecialistId,
+  ]);
   const weekStart = days[0] ?? startOfWeekMonday(day);
+  const monthAnchor = startOfMonth(day);
   const [overlapConfirm, setOverlapConfirm] =
     useState<PendingOverlapConfirm | null>(null);
   const [overlapConfirmBusy, setOverlapConfirmBusy] = useState(false);
@@ -827,9 +893,26 @@ export function SpaWeekBoard({
     }
   };
 
-  const goPrev = () => onDayChange(addDays(weekStart, -7));
-  const goNext = () => onDayChange(addDays(weekStart, 7));
+  const goPrev = () =>
+    onDayChange(
+      boardView === 'month'
+        ? addMonths(monthAnchor, -1)
+        : addDays(weekStart, -7),
+    );
+  const goNext = () =>
+    onDayChange(
+      boardView === 'month'
+        ? addMonths(monthAnchor, 1)
+        : addDays(weekStart, 7),
+    );
   const goThisWeek = () => onDayChange(startOfDay(new Date()));
+  const toggleEmptyWorkDays = () => {
+    setShowEmptyWorkDays((prev) => {
+      const next = !prev;
+      writeStoredMonthShowEmptyWork(next);
+      return next;
+    });
+  };
 
   const halfHourMarks = useMemo(() => {
     const marks: number[] = [];
@@ -864,34 +947,76 @@ export function SpaWeekBoard({
     };
   }, [drag, isTracking]);
 
+  const [headerScrollLeft, setHeaderScrollLeft] = useState(0);
+  const monthScrollKeyRef = useRef<string>('');
+
+  // Month: scroll to today only when month or view changes (not on every poll/render).
+  useEffect(() => {
+    if (boardView !== 'month') {
+      monthScrollKeyRef.current = '';
+      return;
+    }
+    const monthKey = `${monthAnchor.getFullYear()}-${monthAnchor.getMonth()}`;
+    const scrollKey = `month:${monthKey}`;
+    if (monthScrollKeyRef.current === scrollKey) return;
+    const scroller = scrollRef.current;
+    if (!scroller || days.length === 0) return;
+    monthScrollKeyRef.current = scrollKey;
+    const todayKey = dateKey(startOfDay(new Date()));
+    const idx = Math.max(
+      0,
+      days.findIndex((d) => dateKey(d) === todayKey),
+    );
+    const col = scroller.querySelectorAll('[data-spa-day-col]')[idx] as
+      | HTMLElement
+      | undefined;
+    if (col) {
+      scroller.scrollLeft = Math.max(0, col.offsetLeft - 16);
+      setHeaderScrollLeft(scroller.scrollLeft);
+    }
+  }, [boardView, days, monthAnchor]);
+
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-1.5">
+      <div className="flex flex-nowrap items-center gap-1 overflow-x-auto pb-0.5 sm:flex-wrap sm:overflow-visible">
         <button
           type="button"
-          className="btn-secondary !px-2.5 !py-1 text-xs"
+          className="btn-secondary shrink-0 !px-2.5 !py-1 text-xs"
           onClick={goPrev}
         >
           ←
         </button>
-        <p className="min-w-[10rem] text-center text-sm font-medium capitalize">
-          {formatWeekRange(days)}
+        <p className="min-w-0 shrink truncate text-center text-sm font-medium capitalize sm:min-w-[10rem]">
+          {boardView === 'month'
+            ? formatMonthTitle(monthAnchor, days.length)
+            : formatWeekRange(days)}
         </p>
         <button
           type="button"
-          className="btn-secondary !px-2.5 !py-1 text-xs"
+          className="btn-secondary shrink-0 !px-2.5 !py-1 text-xs"
           onClick={goNext}
         >
           →
         </button>
         <button
           type="button"
-          className="btn-secondary !px-2.5 !py-1 text-xs"
+          className="btn-secondary shrink-0 !px-2.5 !py-1 text-xs"
           onClick={goThisWeek}
         >
-          Эта неделя
+          {boardView === 'month' ? 'Этот месяц' : 'Эта неделя'}
         </button>
-        <div className="ml-auto flex items-center gap-1">
+        {boardView === 'month' ? (
+          <button
+            type="button"
+            className={`shrink-0 !px-2.5 !py-1 text-xs ${
+              showEmptyWorkDays ? 'btn-primary' : 'btn-secondary'
+            }`}
+            onClick={toggleEmptyWorkDays}
+          >
+            + рабочие дни
+          </button>
+        ) : null}
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <button
             type="button"
             className="btn-secondary !px-2 !py-1 text-xs"
@@ -920,6 +1045,21 @@ export function SpaWeekBoard({
           </button>
         </div>
       </div>
+
+      {boardView === 'month' && days.length === 0 ? (
+        <div className="card !p-4 text-sm text-slate-400">
+          <p>В этом месяце нет записей.</p>
+          <button
+            type="button"
+            className="btn-secondary mt-3 text-xs"
+            onClick={() => {
+              if (!showEmptyWorkDays) toggleEmptyWorkDays();
+            }}
+          >
+            Показать рабочие дни
+          </button>
+        </div>
+      ) : null}
 
       {mode === 'admin' && staffOptions.length > 1 ? (
         <div className="flex flex-wrap gap-1.5">
@@ -953,11 +1093,69 @@ export function SpaWeekBoard({
 
       <div
         ref={boardScrollRef}
-        className="max-h-[calc(100dvh-var(--app-header-h,3rem)-4.5rem-env(safe-area-inset-bottom,0px))] select-none overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch] rounded-xl border border-slate-800 bg-slate-950/40 md:max-h-[calc(100dvh-var(--app-header-h,3rem)-2rem)]"
+        className="select-none rounded-xl border border-slate-800 bg-slate-950/40 md:max-h-[calc(100dvh-var(--app-header-h,3rem)-2rem)] md:overflow-y-auto md:overscroll-auto [-webkit-overflow-scrolling:touch]"
       >
+        {/* Sticky day headers (outside overflow-x) — synced via translateX */}
+        <div className="sticky top-[var(--app-header-h,3rem)] z-20 flex border-b border-slate-800 bg-slate-950/95 backdrop-blur-sm md:top-0">
+          <div className="admin-time-rail w-12 shrink-0 border-r border-slate-800" />
+          <div className="min-w-0 flex-1 overflow-hidden">
+            <div
+              className="flex w-max min-w-full md:min-w-0 md:w-full"
+              style={{ transform: `translateX(-${headerScrollLeft}px)` }}
+            >
+              {days.map((d) => {
+                const key = dateKey(d);
+                const isToday = sameCalendarDay(d, today);
+                const bands = hourBandsForDay(
+                  board.hours,
+                  d,
+                  filteredStaffId,
+                );
+                const hasWork = bands.length > 0;
+                const isDraftDay =
+                  bands.length > 0 &&
+                  bands.every((h) => h.status === 'DRAFT');
+                const isDropDay = drag?.dayKey === key;
+                const dropOk = Boolean(isDropDay && drag?.valid);
+                const dropBad = Boolean(isDropDay && drag && !drag.valid);
+                return (
+                  <button
+                    key={`hdr-${key}`}
+                    type="button"
+                    data-spa-day-hdr={key}
+                    className={`flex h-12 w-0 shrink-0 grow basis-0 flex-col items-center justify-center border-r border-slate-800 px-1 text-center last:border-r-0 ${
+                      isToday ? 'bg-fitgo-500/10' : ''
+                    } ${dropOk ? 'ring-1 ring-inset ring-fitgo-500/40' : ''} ${
+                      dropBad ? 'ring-1 ring-inset ring-rose-400/50' : ''
+                    }`}
+                    style={{ minWidth: `${colMinWidthRem}rem` }}
+                    onClick={() => onDayHeaderClick?.(d)}
+                  >
+                    <span
+                      className={`text-[11px] font-medium capitalize ${
+                        isToday ? 'text-fitgo-300' : 'text-slate-300'
+                      }`}
+                    >
+                      {formatDayHeader(d)}
+                    </span>
+                    {isDraftDay ? (
+                      <span className="text-[9px] text-amber-300/90">
+                        черновик
+                      </span>
+                    ) : !hasWork ? (
+                      <span className="text-[9px] text-slate-500">
+                        нет смены
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
         <div className="flex w-full">
           <div className="admin-time-rail w-12 shrink-0 border-r border-slate-800 bg-slate-950">
-            <div className="h-12 border-b border-slate-800" />
             <div className="relative" style={{ height: viewHeight }}>
               {hourMarks.map((m) => {
                 const clockHour = DAY_START_HOUR + m / 60;
@@ -986,6 +1184,9 @@ export function SpaWeekBoard({
           <div
             ref={scrollRef}
             className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] md:snap-x md:snap-mandatory"
+            onScroll={(e) => {
+              setHeaderScrollLeft(e.currentTarget.scrollLeft);
+            }}
           >
             <div className="flex w-max min-w-full md:min-w-0 md:w-full">
           {days.map((d) => {
@@ -997,7 +1198,6 @@ export function SpaWeekBoard({
               d,
               filteredStaffId,
             ).sort((a, b) => a.startAt.localeCompare(b.startAt));
-            const hasWork = bands.length > 0;
             const isDropDay = drag?.dayKey === key;
             const dropOk = Boolean(isDropDay && drag?.valid);
             const dropBad = Boolean(isDropDay && drag && !drag.valid);
@@ -1015,6 +1215,7 @@ export function SpaWeekBoard({
             return (
               <div
                 key={key}
+                data-spa-day-col={key}
                 className={`w-0 shrink-0 grow basis-0 snap-start border-r border-slate-800 last:border-r-0 ${
                   isToday ? 'bg-fitgo-500/5' : ''
                 } ${dropOk ? 'bg-fitgo-500/10' : ''} ${
@@ -1022,25 +1223,6 @@ export function SpaWeekBoard({
                 }`}
                 style={{ minWidth: `${colMinWidthRem}rem` }}
               >
-                <div
-                  className={`flex h-12 flex-col items-center justify-center border-b border-slate-800 px-1 text-center ${
-                    isToday ? 'bg-fitgo-500/10' : ''
-                  } ${dropOk ? 'ring-1 ring-inset ring-fitgo-500/40' : ''} ${
-                    dropBad ? 'ring-1 ring-inset ring-rose-400/50' : ''
-                  }`}
-                >
-                  <span
-                    className={`text-[11px] font-medium capitalize ${
-                      isToday ? 'text-fitgo-300' : 'text-slate-300'
-                    }`}
-                  >
-                    {formatDayHeader(d)}
-                  </span>
-                  {!hasWork ? (
-                    <span className="text-[9px] text-slate-500">нет смены</span>
-                  ) : null}
-                </div>
-
                 <div
                   ref={(el) => {
                     if (el) columnRefs.current.set(key, el);
@@ -1222,30 +1404,29 @@ export function SpaWeekBoard({
                   {(() => {
                     const dayBaseMs =
                       d.getTime() + DAY_START_HOUR * 60 * 60 * 1000;
+                    // Staff see free gaps on DRAFT and PUBLISHED hours (clients only see published).
                     const specialistIds = filteredStaffId
                       ? [filteredStaffId]
                       : [
                           ...new Set(
-                            bands
-                              .filter((h) => h.status === 'PUBLISHED')
-                              .map((h) => h.specialistId),
+                            bands.map((h) => h.specialistId),
                           ),
                         ];
                     const freeNodes: ReactNode[] = [];
                     for (const sid of specialistIds) {
-                      const pubBands = hourBandsForDay(board.hours, d, sid)
-                        .filter((h) => h.status === 'PUBLISHED')
-                        .map((h) => ({
+                      const workBands = hourBandsForDay(board.hours, d, sid).map(
+                        (h) => ({
                           startMs: new Date(h.startAt).getTime(),
                           endMs: new Date(h.endAt).getTime(),
-                        }));
+                        }),
+                      );
                       const dayBookings = bookingsForDay(
                         board.bookings,
                         d,
                         sid,
                       ).filter((b) => !b.busy);
                       const windows = computeSpaFreeWindows(
-                        pubBands,
+                        workBands,
                         dayBookings.map((b) => ({
                           startMs: new Date(b.startAt).getTime(),
                           endMs: new Date(b.endAt).getTime(),
@@ -1328,6 +1509,9 @@ export function SpaWeekBoard({
                         lane: 0,
                         laneCount: 1,
                       };
+                      const narrowLane = lane.laneCount > 1;
+                      const compact =
+                        height < 30 || (narrowLane && height < 40);
                       const peerOverlap = (() => {
                         if (b.busy) return 0;
                         const peers = items
@@ -1345,6 +1529,7 @@ export function SpaWeekBoard({
                           SPA_OVERLAP_ALLOW_MIN,
                         ).maxOverlapMin;
                       })();
+                      const tip = bookingTitle(b, timeStart, timeEnd);
 
                       return (
                         <div
@@ -1353,10 +1538,12 @@ export function SpaWeekBoard({
                           tabIndex={0}
                           title={
                             editable
-                              ? 'Удерживайте и перетащите на другой день или время'
-                              : undefined
+                              ? `${tip} · Удерживайте и перетащите`
+                              : tip
                           }
-                          className={`spa-booking-cell-week absolute z-10 overflow-hidden rounded-md border px-1.5 py-1 text-[10px] leading-tight text-white shadow-sm touch-manipulation ${color} ${
+                          className={`spa-booking-cell-week absolute z-10 overflow-hidden rounded-md border px-1.5 text-[10px] leading-tight text-white shadow-sm touch-manipulation ${
+                            compact ? 'py-0.5' : 'py-1'
+                          } ${color} ${
                             editable
                               ? 'cursor-grab active:cursor-grabbing'
                               : 'cursor-pointer'
@@ -1380,59 +1567,70 @@ export function SpaWeekBoard({
                           }}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {!b.busy ? (
+                          {!b.busy && !compact ? (
                             <SpaBookingNoteHint
                               clientNote={b.clientNote}
                               visitNote={b.visitNote}
                             />
                           ) : null}
-                          <div className="flex items-start gap-1">
-                            {editable ? (
-                              <span
-                                className="mt-px flex shrink-0 flex-col gap-0.5 opacity-80"
-                                aria-hidden
-                              >
-                                <span className="block h-0.5 w-2 rounded-full bg-white/90" />
-                                <span className="block h-0.5 w-2 rounded-full bg-white/90" />
-                                <span className="block h-0.5 w-2 rounded-full bg-white/90" />
-                              </span>
-                            ) : null}
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate font-semibold tabular-nums">
+                          {compact ? (
+                            <p className="truncate">
+                              <span className="font-semibold tabular-nums">
                                 {timeStart}
-                                {height >= 36 ? (
-                                  <span className="font-normal text-white/80">
-                                    –{timeEnd}
-                                  </span>
+                              </span>{' '}
+                              <span className="font-medium">
+                                {shortClientName(b)}
+                              </span>
+                            </p>
+                          ) : (
+                            <div className="flex items-start gap-1">
+                              {editable ? (
+                                <span
+                                  className="mt-px flex shrink-0 flex-col gap-0.5 opacity-80"
+                                  aria-hidden
+                                >
+                                  <span className="block h-0.5 w-2 rounded-full bg-white/90" />
+                                  <span className="block h-0.5 w-2 rounded-full bg-white/90" />
+                                  <span className="block h-0.5 w-2 rounded-full bg-white/90" />
+                                </span>
+                              ) : null}
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate font-semibold tabular-nums">
+                                  {timeStart}
+                                  {height >= 36 ? (
+                                    <span className="font-normal text-white/80">
+                                      –{timeEnd}
+                                    </span>
+                                  ) : null}
+                                </p>
+                                <p
+                                  className={`truncate font-medium ${
+                                    b.clientNote || b.visitNote ? 'pr-4' : ''
+                                  }`}
+                                >
+                                  {clientLabel(b)}
+                                </p>
+                                {peerOverlap > 0 ? (
+                                  <p className="truncate text-[9px] text-white/90">
+                                    ∩ {peerOverlap} мин
+                                  </p>
                                 ) : null}
-                              </p>
-                              <p
-                                className={`truncate font-medium ${
-                                  b.clientNote || b.visitNote ? 'pr-4' : ''
-                                }`}
-                              >
-                                {clientLabel(b)}
-                              </p>
-                              {peerOverlap > 0 ? (
-                                <p className="truncate text-[9px] text-white/90">
-                                  ∩ {peerOverlap} мин
-                                </p>
-                              ) : null}
-                              {height >= 44 && showMulti && staff ? (
-                                <p className="truncate text-[9px] text-white/80">
-                                  {staffShort(staff)}
-                                </p>
-                              ) : null}
-                              {height >= 44 &&
-                              !showMulti &&
-                              b.serviceName &&
-                              !b.busy ? (
-                                <p className="hidden truncate text-[9px] text-white/80 sm:block">
-                                  {b.serviceName}
-                                </p>
-                              ) : null}
+                                {height >= 44 && showMulti && staff ? (
+                                  <p className="truncate text-[9px] text-white/80">
+                                    {staffShort(staff)}
+                                  </p>
+                                ) : null}
+                                {height >= 44 &&
+                                !showMulti &&
+                                b.serviceName &&
+                                !b.busy ? (
+                                  <p className="hidden truncate text-[9px] text-white/80 sm:block">
+                                    {b.serviceName}
+                                  </p>
+                                ) : null}
+                              </div>
                             </div>
-                          </div>
+                          )}
                         </div>
                       );
                     });

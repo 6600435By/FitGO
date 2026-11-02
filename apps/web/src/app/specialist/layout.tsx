@@ -18,6 +18,7 @@ import { StaffTopNavLinks } from '@/components/staff/staff-top-nav';
 const PRIMARY_NAV = [
   { href: '/specialist', label: 'Главная', exact: true },
   { href: '/specialist/schedule', label: 'Расписание' },
+  { href: '/specialist/work-schedule', label: 'График' },
   { href: '/specialist/my-sessions', label: 'Контроль' },
 ];
 

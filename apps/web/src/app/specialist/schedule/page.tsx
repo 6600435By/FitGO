@@ -6,8 +6,6 @@ import type {
   SpaBooking,
   SpaService,
   SpaWaitlistEntry,
-  SpecialistCalendarResponse,
-  SpecialistWorkSlotInput,
 } from '@fitgo/shared-types';
 import { spaWaitlistFitsSlot } from '@fitgo/shared-types';
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
@@ -26,12 +24,8 @@ import {
 } from '@/components/spa-board/spa-booking-dialog';
 import { SpaBookingEditDialog } from '@/components/spa-board/spa-booking-edit-dialog';
 import { SpaDayHoursDialog } from '@/components/spa-board/spa-day-hours-dialog';
-import {
-  normalizeHm,
-  SpaHoursEditor,
-} from '@/components/spa-board/spa-hours-editor';
-import { SpaSpecialistShiftMonth } from '@/components/spa-board/spa-specialist-shift-month';
 import { SpaWaitlistPanel } from '@/components/spa-board/spa-waitlist-panel';
+import Link from 'next/link';
 import { SpaWaitlistPickDialog } from '@/components/spa-board/spa-waitlist-pick-dialog';
 import { SpaWeekBoard } from '@/components/spa-board/spa-week-board';
 import { api } from '@/lib/api';
@@ -52,24 +46,12 @@ function parseDayQuery(raw: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function normalizeSlots(slots: SpecialistWorkSlotInput[]) {
-  return slots.map((s) => ({
-    ...s,
-    startTime: normalizeHm(s.startTime),
-    endTime: normalizeHm(s.endTime),
-  }));
-}
-
 function SpecialistScheduleInner() {
   const me = getUser();
   const searchParams = useSearchParams();
   const deepLinkBookingId = searchParams.get('booking')?.trim() || '';
   const deepLinkDay = searchParams.get('day')?.trim() || '';
   const [board, setBoard] = useState<SpaBoardResponse | null>(null);
-  const [calendar, setCalendar] = useState<SpecialistCalendarResponse | null>(
-    null,
-  );
-  const [workSlots, setWorkSlots] = useState<SpecialistWorkSlotInput[]>([]);
   const [bookings, setBookings] = useState<SpaBooking[]>([]);
   const [services, setServices] = useState<SpaService[]>([]);
   const [message, setMessage] = useState('');
@@ -124,33 +106,25 @@ function SpecialistScheduleInner() {
     writeStoredSpaBoardView(v);
   };
 
-  const publishPeriod = useMemo(() => {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 28);
-    end.setHours(23, 59, 59, 999);
-    return { start: start.toISOString(), end: end.toISOString() };
-  }, []);
-
   const reload = useCallback(async () => {
     const token = getToken();
     if (!token) return;
-    const [brd, cal, slots, bks, svc, wl] = await Promise.all([
+    const [brd, bks, svc, wl] = await Promise.all([
       api.specialistSpaBoard(token, boardPeriod.start, boardPeriod.end),
-      api.specialistCalendar(token, publishPeriod.start, publishPeriod.end),
-      api.specialistWorkSchedule(token),
       api.specialistSpaBookings(token),
       api.specialistOwnServices(token),
       api.specialistSpaWaitlist(token, boardPeriod.start, boardPeriod.end),
     ]);
     setBoard(brd);
-    setCalendar(cal);
-    setWorkSlots(slots);
     setBookings(bks);
     setServices(svc);
     setWaitlist(wl);
-  }, [boardPeriod.end, boardPeriod.start, publishPeriod.end, publishPeriod.start]);
+  }, [boardPeriod.end, boardPeriod.start]);
+
+  const hasDraftHours = useMemo(
+    () => Boolean(board?.hours.some((h) => h.status === 'DRAFT')),
+    [board],
+  );
 
   /** Light poll so bookings from other accounts appear without page reload. */
   const refreshLive = useCallback(async () => {
@@ -282,84 +256,6 @@ function SpecialistScheduleInner() {
     return { startTime: fmt(start), endTime: fmt(end) };
   }, [board, boardPeriod.end, boardPeriod.start, me?.id]);
 
-  const saveTemplate = async () => {
-    const token = getToken();
-    if (!token) return;
-    if (workSlots.length === 0) {
-      setMessage('Отметьте хотя бы один рабочий день');
-      return;
-    }
-    setBusy(true);
-    setMessage('');
-    try {
-      const saved = await api.specialistSetWorkSchedule(
-        token,
-        normalizeSlots(workSlots),
-      );
-      setWorkSlots(saved);
-      setMessage('Шаблон сохранён');
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Ошибка сохранения');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const fillAndPublish = async () => {
-    const token = getToken();
-    if (!token) return;
-    if (workSlots.length === 0) {
-      setMessage('Отметьте хотя бы один рабочий день');
-      return;
-    }
-    setBusy(true);
-    setMessage('');
-    try {
-      const saved = await api.specialistSetWorkSchedule(
-        token,
-        normalizeSlots(workSlots),
-      );
-      setWorkSlots(saved);
-
-      const check = await api.specialistAvailabilityCheck(token, {
-        startAt: publishPeriod.start,
-        endAt: publishPeriod.end,
-      });
-      if (check.overlaps?.length) {
-        const names = check.overlaps
-          .map((o) => o.specialistName)
-          .filter(Boolean)
-          .slice(0, 5)
-          .join(', ');
-        const ok = window.confirm(
-          `Пересекается с другими специалистами (${names || 'коллеги'}). Всё равно открыть время?`,
-        );
-        if (!ok) {
-          setBusy(false);
-          return;
-        }
-      }
-      const filled = await api.specialistFillFromTemplate(
-        token,
-        publishPeriod.start,
-        publishPeriod.end,
-      );
-      const result = await api.specialistPublishSchedule(
-        token,
-        publishPeriod.start,
-        publishPeriod.end,
-      );
-      setMessage(
-        `Шаблон сохранён · создано ${filled.createdBlocks}, опубликовано ${result.publishedBlocks}`,
-      );
-      await reload();
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Ошибка публикации');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const saveDayHours = async (value: {
     startTime: string | null;
     endTime: string | null;
@@ -429,22 +325,30 @@ function SpecialistScheduleInner() {
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
     visitNote?: string;
-    dates: string[];
+    dates?: string[];
+    items?: Array<{
+      startAt: string;
+      serviceId?: string;
+      overlapConfirmed?: boolean;
+    }>;
     overlapConfirmed?: boolean;
   }) => {
     const token = getToken();
-    if (!token) return;
+    if (!token) throw new Error('Нет сессии');
     setBusy(true);
     setMessage('');
     try {
       const result = await api.specialistBulkAssignSpaBooking(token, payload);
-      setShowAssign(false);
+      if (result.skipped.length === 0) {
+        setShowAssign(false);
+      }
       const skipNote =
         result.skipped.length > 0
           ? ` · пропущено ${result.skipped.length}`
           : '';
       setMessage(`Создано записей: ${result.created.length}${skipNote}`);
       await reload();
+      return result;
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка записи');
       throw err;
@@ -629,18 +533,37 @@ function SpecialistScheduleInner() {
         }}
       />
 
+      {hasDraftHours ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          <span>
+            Черновик графика: клиенты пока не видят эти дни
+          </span>
+          <Link
+            href="/specialist/work-schedule"
+            className="btn-secondary text-xs"
+          >
+            Опубликовать →
+          </Link>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center gap-2">
         <SpaBoardViewToggle view={boardView} onChange={changeBoardView} />
       </div>
 
       {board ? (
-        boardView === 'week' ? (
+        boardView === 'week' || boardView === 'month' ? (
           <SpaWeekBoard
             board={board}
             mode="specialist"
             viewerSpecialistId={me?.id}
             day={day}
             onDayChange={setDay}
+            boardView={boardView}
+            onDayHeaderClick={(d) => {
+              setDay(d);
+              changeBoardView('day');
+            }}
             onEmptySlotClick={({ specialistId, startAt }) => {
               if (me?.id && specialistId !== me.id) return;
               const iso = startAt.toISOString();
@@ -697,22 +620,6 @@ function SpecialistScheduleInner() {
       ) : (
         <p className="text-sm text-slate-400">Загрузка доски…</p>
       )}
-
-      <SpaHoursEditor
-        workSlots={workSlots}
-        onChange={setWorkSlots}
-        busy={busy}
-        draftBlockCount={calendar?.draftBlockCount}
-        lastPublicationAt={calendar?.lastPublication?.publishedAt}
-        onSaveTemplate={saveTemplate}
-        onFillAndPublish={fillAndPublish}
-      />
-
-      <SpaSpecialistShiftMonth
-        onChanged={async () => {
-          await reload();
-        }}
-      />
 
       <SpaDayHoursDialog
         key={`${toDayIso(day)}-${dayHoursForMe?.startTime ?? 'off'}-${dayHoursForMe?.endTime ?? 'off'}`}

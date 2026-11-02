@@ -399,12 +399,13 @@ export function SpaBoard({
 
       const startMs = dayBaseMs + startMinutes * 60_000;
       const endMs = startMs + durationMin * 60_000;
-      const bands = hourBandsForStaff(board.hours, specialistId, dayStart)
-        .filter((h) => h.status === 'PUBLISHED')
-        .map((h) => ({
+      // Staff may drop onto DRAFT or PUBLISHED hours (clients only see published).
+      const bands = hourBandsForStaff(board.hours, specialistId, dayStart).map(
+        (h) => ({
           startMs: new Date(h.startAt).getTime(),
           endMs: new Date(h.endAt).getTime(),
-        }));
+        }),
+      );
       const inHours = bands.some((b) => startMs >= b.startMs && endMs <= b.endMs);
       if (!inHours) {
         return { ok: false, validity: 'invalid', overlapMin: 0, peerLabel: '' };
@@ -839,12 +840,10 @@ export function SpaBoard({
         {renderNowLine(nowTopInView)}
 
         {(() => {
-          const publishedBands = bands
-            .filter((h) => h.status === 'PUBLISHED')
-            .map((h) => ({
-              startMs: new Date(h.startAt).getTime(),
-              endMs: new Date(h.endAt).getTime(),
-            }));
+          const workBands = bands.map((h) => ({
+            startMs: new Date(h.startAt).getTime(),
+            endMs: new Date(h.endAt).getTime(),
+          }));
           const bookingIntervals = items
             .filter((b) => !b.busy)
             .map((b) => ({
@@ -852,7 +851,7 @@ export function SpaBoard({
               endMs: new Date(b.endAt).getTime(),
             }));
           const freeWindows = computeSpaFreeWindows(
-            publishedBands,
+            workBands,
             bookingIntervals,
             SPA_FREE_GAP_MIN,
           );

@@ -112,6 +112,10 @@ try {
   # Schema evolves; never drop data. Prefer migrate later; push OK for early SP.
   # --accept-data-loss: only for new unique warnings (not table drops); without it Update hangs on y/N.
   pnpm --filter @fitgo/api exec prisma db push --skip-generate --accept-data-loss
+  pnpm --filter @fitgo/api exec node ./scripts/apply-db-constraints.mjs
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host 'WARNING: apply-db-constraints.mjs failed — check Postgres EXCLUDE constraints manually.' -ForegroundColor Yellow
+  }
   pnpm --filter @fitgo/api build
   pnpm --filter @fitgo/web build
   # Client LK (optional service FitGO-Client). Prefer Update-FitGO-Client.ps1 alone when only UI changes.

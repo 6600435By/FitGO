@@ -473,14 +473,19 @@ function AdminSpaWorkspaceInner() {
     startAt: string;
     paymentType: 'QUOTA' | 'PAID';
     visitNote?: string;
-    dates: string[];
+    dates?: string[];
+    items?: Array<{
+      startAt: string;
+      serviceId?: string;
+      overlapConfirmed?: boolean;
+    }>;
     overlapConfirmed?: boolean;
   }) => {
     const token = getToken();
-    if (!token) return;
+    if (!token) throw new Error('Нет сессии');
     if (!payload.specialistId) {
       setMessage('Укажите специалиста');
-      return;
+      throw new Error('Укажите специалиста');
     }
     setBusy(true);
     setMessage('');
@@ -496,15 +501,19 @@ function AdminSpaWorkspaceInner() {
         clientExternalId: payload.clientExternalId,
         visitNote: payload.visitNote,
         dates: payload.dates,
+        items: payload.items,
         overlapConfirmed: payload.overlapConfirmed,
       });
-      setShowAssign(false);
+      if (result.skipped.length === 0) {
+        setShowAssign(false);
+      }
       const skipNote =
         result.skipped.length > 0
           ? ` · пропущено ${result.skipped.length}`
           : '';
       setMessage(`Создано записей: ${result.created.length}${skipNote}`);
       await reload();
+      return result;
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка записи');
       throw err;
@@ -1071,12 +1080,17 @@ function AdminSpaWorkspaceInner() {
           </div>
 
           {board ? (
-            boardView === 'week' ? (
+            boardView === 'week' || boardView === 'month' ? (
               <SpaWeekBoard
                 board={board}
                 mode="admin"
                 day={day}
                 onDayChange={setDay}
+                boardView={boardView}
+                onDayHeaderClick={(d) => {
+                  setDay(d);
+                  changeBoardView('day');
+                }}
                 filterSpecialistId={weekFilterSpecialistId}
                 onFilterSpecialistChange={setWeekFilterSpecialistId}
                 onEmptySlotClick={({ specialistId, startAt }) => {

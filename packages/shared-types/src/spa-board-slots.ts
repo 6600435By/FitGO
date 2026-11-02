@@ -22,13 +22,15 @@ export type SpaOverlapPeer = {
 };
 
 export type SpaPlacementCheck = {
-  /** Milliseconds of overlap with the worst neighbor (0 = fits clean). */
+  /** Minutes of overlap with the worst neighbor (0 = fits clean). */
   maxOverlapMin: number;
   peers: SpaOverlapPeer[];
-  /** True when every peer overlap is ≤ SPA_OVERLAP_ALLOW_MIN. */
+  /** True when every peer overlap is ≤ SPA_OVERLAP_ALLOW_MIN and stack depth ≤ 2. */
   allowedWithConfirm: boolean;
   /** True when there is no overlap at all. */
   fitsClean: boolean;
+  /** Max concurrent bookings if this interval is placed (1 = alone). */
+  maxStackDepth: number;
 };
 
 export type SpaFitSuggestion = {
@@ -98,8 +100,35 @@ export function computeSpaFreeWindows(
   return windows;
 }
 
+/** Max concurrent bookings at one instant when stacking (candidate + peers). */
+export const SPA_MAX_STACK_DEPTH = 2;
+
+/**
+ * Sweep-line max depth for half-open [start, end) intervals.
+ */
+export function spaStackDepth(
+  intervals: Array<{ startMs: number; endMs: number }>,
+): number {
+  const events: Array<{ t: number; d: number }> = [];
+  for (const iv of intervals) {
+    if (iv.endMs <= iv.startMs) continue;
+    events.push({ t: iv.startMs, d: 1 });
+    events.push({ t: iv.endMs, d: -1 });
+  }
+  // At the same timestamp process ends (-1) before starts (+1).
+  events.sort((a, b) => a.t - b.t || a.d - b.d);
+  let depth = 0;
+  let max = 0;
+  for (const e of events) {
+    depth += e.d;
+    if (depth > max) max = depth;
+  }
+  return max;
+}
+
 /**
  * How a candidate interval overlaps existing bookings (excluding excludeId).
+ * Stacking is allowed only for exactly two layers, each pairwise overlap ≤ allowMin.
  */
 export function checkSpaPlacement(
   startMs: number,
@@ -126,11 +155,18 @@ export function checkSpaPlacement(
   }
   hits.sort((a, b) => b.overlapMin - a.overlapMin);
   const maxOverlapMin = hits[0]?.overlapMin ?? 0;
+  const maxStackDepth = spaStackDepth([
+    { startMs, endMs },
+    ...hits.map((h) => ({ startMs: h.startMs, endMs: h.endMs })),
+  ]);
+  const overlapsOk = hits.every((h) => h.overlapMin <= allowMin);
+  const stackOk = maxStackDepth <= SPA_MAX_STACK_DEPTH;
   return {
     maxOverlapMin,
     peers: hits,
     fitsClean: maxOverlapMin === 0,
-    allowedWithConfirm: hits.every((h) => h.overlapMin <= allowMin),
+    allowedWithConfirm: overlapsOk && stackOk && maxOverlapMin > 0,
+    maxStackDepth,
   };
 }
 

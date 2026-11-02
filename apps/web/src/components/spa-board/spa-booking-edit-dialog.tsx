@@ -572,8 +572,9 @@ export function SpaBookingEditDialog({
             ) : null}
             {overlapBlocked ? (
               <p className="mt-2 text-xs text-rose-300">
-                Пересечение {placementCheck?.maxOverlapMin} мин — больше{' '}
-                {SPA_OVERLAP_ALLOW_MIN} минут нельзя. Выберите другое время.
+                {(placementCheck?.maxStackDepth ?? 0) > 2
+                  ? 'На это время уже две записи — третья накладка запрещена. Выберите другое время.'
+                  : `Пересечение ${placementCheck?.maxOverlapMin} мин — больше ${SPA_OVERLAP_ALLOW_MIN} минут нельзя. Выберите другое время.`}
               </p>
             ) : null}
           </div>

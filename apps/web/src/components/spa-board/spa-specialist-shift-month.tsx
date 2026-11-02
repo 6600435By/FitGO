@@ -27,11 +27,13 @@ function monthLabel(year: number, month: number) {
   });
 }
 
-/** Compact month of own published SPA shifts for the specialist schedule page. */
+/** Compact month of own SPA shifts (published + draft) for the specialist. */
 export function SpaSpecialistShiftMonth({
   onChanged,
+  defaultOpen = false,
 }: {
   onChanged?: () => void | Promise<void>;
+  defaultOpen?: boolean;
 }) {
   const now = useMemo(() => new Date(), []);
   const [year, setYear] = useState(now.getFullYear());
@@ -40,7 +42,7 @@ export function SpaSpecialistShiftMonth({
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -53,9 +55,7 @@ export function SpaSpecialistShiftMonth({
         start.toISOString(),
         end.toISOString(),
       );
-      setBlocks(
-        cal.availabilityBlocks.filter((b) => b.status === 'PUBLISHED'),
-      );
+      setBlocks(cal.availabilityBlocks);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка загрузки смен');
     }
@@ -147,11 +147,12 @@ export function SpaSpecialistShiftMonth({
               {monthLabel(year, month)}
               {blocks.length
                 ? ` · ${blocks.length} смен`
-                : ' · нет опубликованных смен'}
+                : ' · смен нет'}
             </span>
           ) : (
             <span className="mt-1 block text-sm text-slate-400">
-              Опубликованные часы месяца. Нажмите день, чтобы изменить.
+              Пунктир — черновик (клиенты не видят). Сплошной — опубликовано.
+              Нажмите день, чтобы изменить.
             </span>
           )}
         </span>
@@ -200,14 +201,22 @@ export function SpaSpecialistShiftMonth({
               const date = `${year}-${pad(month)}-${pad(day)}`;
               const dayBlocks = byDate.get(date) ?? [];
               const has = dayBlocks.length > 0;
+              const isDraft =
+                has && dayBlocks.every((b) => b.status === 'DRAFT');
+              const isMixed =
+                has &&
+                dayBlocks.some((b) => b.status === 'DRAFT') &&
+                dayBlocks.some((b) => b.status === 'PUBLISHED');
               return (
                 <button
                   key={date}
                   type="button"
                   className={`min-h-[3.25rem] rounded-lg border p-1 text-left transition ${
-                    has
-                      ? 'border-amber-500/40 bg-amber-500/10'
-                      : 'border-white/5 bg-slate-950/40 hover:border-white/20'
+                    isDraft
+                      ? 'border-dashed border-amber-500/50 bg-amber-500/5'
+                      : has
+                        ? 'border-amber-500/40 bg-amber-500/10'
+                        : 'border-white/5 bg-slate-950/40 hover:border-white/20'
                   }`}
                   onClick={() => setSelectedDay(date)}
                 >
@@ -216,6 +225,11 @@ export function SpaSpecialistShiftMonth({
                     <span className="mt-0.5 block text-[9px] tabular-nums text-amber-200/90">
                       {timeOf(dayBlocks[0]!.startAt)}–
                       {timeOf(dayBlocks[0]!.endAt)}
+                    </span>
+                  ) : null}
+                  {isDraft || isMixed ? (
+                    <span className="mt-0.5 block text-[8px] uppercase tracking-wide text-amber-300/80">
+                      черновик
                     </span>
                   ) : null}
                 </button>

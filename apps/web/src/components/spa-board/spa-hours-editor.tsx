@@ -53,7 +53,10 @@ export function SpaHoursEditor({
   lastPublicationAt,
   onSaveTemplate,
   onFillAndPublish,
+  onCreateDraft,
+  createDraftLabel = 'Создать черновик',
   title = 'Мой график (шаблон недели)',
+  defaultOpen = false,
 }: {
   workSlots: SpecialistWorkSlotInput[];
   onChange: (slots: SpecialistWorkSlotInput[]) => void;
@@ -61,10 +64,15 @@ export function SpaHoursEditor({
   draftBlockCount?: number;
   lastPublicationAt?: string;
   onSaveTemplate: () => void;
-  onFillAndPublish: () => void;
+  /** Legacy combined fill+publish (optional). */
+  onFillAndPublish?: () => void;
+  /** Create draft blocks from template without publishing. */
+  onCreateDraft?: () => void;
+  createDraftLabel?: string;
   title?: string;
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
 
   const setDayEnabled = (dow: number, enabled: boolean) => {
     const others = workSlots.filter((s) => s.dayOfWeek !== dow);
@@ -193,20 +201,36 @@ export function SpaHoursEditor({
             >
               Сохранить шаблон
             </button>
-            <button
-              type="button"
-              className="btn-primary text-sm"
-              disabled={busy || workSlots.length === 0}
-              onClick={onFillAndPublish}
-            >
-              Сохранить и опубликовать (28 дн.)
-            </button>
+            {onCreateDraft ? (
+              <button
+                type="button"
+                className="btn-primary text-sm"
+                disabled={busy || workSlots.length === 0}
+                onClick={onCreateDraft}
+              >
+                {createDraftLabel}
+              </button>
+            ) : null}
+            {onFillAndPublish ? (
+              <button
+                type="button"
+                className="btn-primary text-sm"
+                disabled={busy || workSlots.length === 0}
+                onClick={onFillAndPublish}
+              >
+                Сохранить и опубликовать (28 дн.)
+              </button>
+            ) : null}
           </div>
 
           <p className="text-xs text-slate-500">
-            «Сохранить шаблон» — только запомнить дни/время. «Сохранить и
-            опубликовать» — записать шаблон и открыть эти часы на доске на 28
-            дней.
+            «Сохранить шаблон» — запомнить дни и время.
+            {onCreateDraft
+              ? ' «Создать черновик» — заполнить дни по шаблону; клиенты ещё не видят. Сначала внесите постоянных, потом опубликуйте.'
+              : null}
+            {onFillAndPublish
+              ? ' «Сохранить и опубликовать» — записать шаблон и открыть часы клиентам на 28 дней.'
+              : null}
           </p>
 
           {(draftBlockCount != null || lastPublicationAt) && (

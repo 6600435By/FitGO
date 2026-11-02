@@ -3,6 +3,7 @@
 import type {
   SpaBoardBooking,
   SpaBoardHourBlock,
+  SpaBulkBookingResult,
   SpaService,
   SpaSpecialistClientSuggestion,
 } from '@fitgo/shared-types';
@@ -40,7 +41,13 @@ type BookingPayload = {
   overlapConfirmed?: boolean;
 };
 
-type PeriodEntry = { date: string; time: string };
+type PeriodEntry = {
+  date: string;
+  time: string;
+  serviceId: string;
+  /** True once the user changed service on this row (don't sync from main). */
+  serviceTouched?: boolean;
+};
 
 function pad2(n: number) {
   return String(n).padStart(2, '0');
@@ -57,6 +64,7 @@ function localTimeHm(d: Date) {
 function buildWeeklyEntries(
   startLocal: string,
   weeks: number,
+  serviceId: string,
 ): PeriodEntry[] {
   const base = new Date(startLocal);
   if (Number.isNaN(base.getTime()) || weeks < 1) return [];
@@ -65,34 +73,49 @@ function buildWeeklyEntries(
   for (let i = 0; i < weeks; i++) {
     const d = new Date(base);
     d.setDate(d.getDate() + i * 7);
-    out.push({ date: localDateKey(d), time });
+    out.push({ date: localDateKey(d), time, serviceId });
   }
   return out;
 }
 
-/** Keep custom times for dates that remain; fill new weeks from defaultTime. */
+/** Keep custom times/services for dates that remain; fill new weeks from defaults. */
 function mergePeriodEntries(
   prev: PeriodEntry[],
   suggested: PeriodEntry[],
   defaultTime: string,
+  defaultServiceId: string,
 ): PeriodEntry[] {
-  const byDate = new Map(prev.map((e) => [e.date, e.time]));
-  return suggested.map((s) => ({
-    date: s.date,
-    time: byDate.get(s.date) ?? s.time ?? defaultTime,
-  }));
+  const byDate = new Map(prev.map((e) => [e.date, e]));
+  return suggested.map((s) => {
+    const prevRow = byDate.get(s.date);
+    if (!prevRow) {
+      return {
+        date: s.date,
+        time: s.time || defaultTime,
+        serviceId: defaultServiceId,
+      };
+    }
+    return {
+      date: s.date,
+      time: prevRow.time || s.time || defaultTime,
+      serviceId: prevRow.serviceTouched
+        ? prevRow.serviceId
+        : defaultServiceId,
+      serviceTouched: prevRow.serviceTouched,
+    };
+  });
 }
 
 function entryToIso(entry: PeriodEntry) {
   return new Date(`${entry.date}T${entry.time}`).toISOString();
 }
 
-function formatDateShort(dateYmd: string) {
-  return new Date(`${dateYmd}T12:00:00`).toLocaleDateString('ru-RU', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-  });
+function formatDateCompact(dateYmd: string) {
+  const d = new Date(`${dateYmd}T12:00:00`);
+  const wd = d.toLocaleDateString('ru-RU', { weekday: 'short' });
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${wd} ${dd}.${mm}`;
 }
 
 export function SpaBookingDialog({
@@ -123,8 +146,15 @@ export function SpaBookingDialog({
   boardBookings?: SpaBoardBooking[];
   onSubmit: (payload: BookingPayload) => Promise<void>;
   onBulkSubmit?: (
-    payload: BookingPayload & { dates: string[] },
-  ) => Promise<void>;
+    payload: BookingPayload & {
+      dates?: string[];
+      items?: Array<{
+        startAt: string;
+        serviceId?: string;
+        overlapConfirmed?: boolean;
+      }>;
+    },
+  ) => Promise<SpaBulkBookingResult | void>;
   busy?: boolean;
 }) {
   const bookable = services.filter((s) => s.active && (s.bookable ?? true));
@@ -135,7 +165,11 @@ export function SpaBookingDialog({
   const [periodEntries, setPeriodEntries] = useState<PeriodEntry[]>([]);
   const [extraDate, setExtraDate] = useState('');
   const [extraTime, setExtraTime] = useState('10:00');
+  const [extraServiceId, setExtraServiceId] = useState('');
   const [overlapConfirmed, setOverlapConfirmed] = useState(false);
+  const [skippedRows, setSkippedRows] = useState<
+    Array<{ date: string; reason: string }>
+  >([]);
   const [form, setForm] = useState({
     specialistId: defaultSpecialistId ?? '',
     clientId: '',
@@ -160,6 +194,8 @@ export function SpaBookingDialog({
     setPeriodEntries([]);
     setExtraDate('');
     setExtraTime('10:00');
+    setExtraServiceId(bookable[0]?.id ?? '');
+    setSkippedRows([]);
     setClientExternalId('');
     setClientNote('');
     setClientNoteSaved('');
@@ -242,8 +278,11 @@ export function SpaBookingDialog({
   };
 
   const suggestedEntries = useMemo(
-    () => (periodMode ? buildWeeklyEntries(form.startAt, periodWeeks) : []),
-    [form.startAt, periodMode, periodWeeks],
+    () =>
+      periodMode
+        ? buildWeeklyEntries(form.startAt, periodWeeks, form.serviceId)
+        : [],
+    [form.serviceId, form.startAt, periodMode, periodWeeks],
   );
 
   useEffect(() => {
@@ -253,9 +292,14 @@ export function SpaBookingDialog({
     }
     const { timePart: defaultTime } = splitDatetimeLocal(form.startAt);
     setPeriodEntries((prev) =>
-      mergePeriodEntries(prev, suggestedEntries, defaultTime || '10:00'),
+      mergePeriodEntries(
+        prev,
+        suggestedEntries,
+        defaultTime || '10:00',
+        form.serviceId,
+      ),
     );
-  }, [periodMode, suggestedEntries, form.startAt]);
+  }, [form.serviceId, form.startAt, periodMode, suggestedEntries]);
 
   useEffect(() => {
     if (!open) return;
@@ -346,6 +390,95 @@ export function SpaBookingDialog({
     return checkSpaPlacement(startMs, endMs, peers, SPA_OVERLAP_ALLOW_MIN);
   }, [boardBookings, form.startAt, resolvedSpecialistId, selectedService]);
 
+  const periodRowStatuses = useMemo(() => {
+    type RowStatus = 'ok' | 'overlap' | 'bad' | 'unknown';
+    const out = new Map<string, { status: RowStatus; tip: string }>();
+    if (!periodMode) return out;
+    const sid = resolvedSpecialistId || defaultSpecialistId || '';
+    for (const entry of periodEntries) {
+      const svc =
+        bookable.find((s) => s.id === entry.serviceId) ?? selectedService;
+      const startMs = new Date(`${entry.date}T${entry.time}`).getTime();
+      const durationMin =
+        (svc?.durationMin ?? 60) + (svc?.bufferMin ?? 0);
+      const endMs = startMs + durationMin * 60_000;
+      if (!boardBookings || !boardHours || !sid || Number.isNaN(startMs)) {
+        out.set(entry.date, { status: 'unknown', tip: '' });
+        continue;
+      }
+      const peers = boardBookings
+        .filter(
+          (b) =>
+            !b.busy &&
+            b.specialistId === sid &&
+            new Date(b.startAt).getTime() < endMs &&
+            new Date(b.endAt).getTime() > startMs,
+        )
+        .map((b) => ({
+          id: b.id,
+          label: b.clientName ?? b.guestName ?? 'Клиент',
+          startMs: new Date(b.startAt).getTime(),
+          endMs: new Date(b.endAt).getTime(),
+        }));
+      const check = checkSpaPlacement(
+        startMs,
+        endMs,
+        peers,
+        SPA_OVERLAP_ALLOW_MIN,
+      );
+      const covered = boardHours.some(
+        (h) =>
+          h.specialistId === sid &&
+          new Date(h.startAt).getTime() <= startMs &&
+          new Date(h.endAt).getTime() >= endMs,
+      );
+      if (!covered) {
+        out.set(entry.date, { status: 'bad', tip: 'Вне часов' });
+      } else if (check.fitsClean) {
+        out.set(entry.date, { status: 'ok', tip: 'Свободно' });
+      } else if (check.allowedWithConfirm) {
+        out.set(entry.date, {
+          status: 'overlap',
+          tip: `Наслоение ${check.maxOverlapMin} мин`,
+        });
+      } else {
+        out.set(entry.date, {
+          status: 'bad',
+          tip:
+            (check.maxStackDepth ?? 0) > 2
+              ? 'Уже две записи'
+              : `Конфликт ${check.maxOverlapMin} мин`,
+        });
+      }
+    }
+    return out;
+  }, [
+    boardBookings,
+    boardHours,
+    bookable,
+    defaultSpecialistId,
+    periodEntries,
+    periodMode,
+    resolvedSpecialistId,
+    selectedService,
+  ]);
+
+  const periodNeedsOverlapConfirm = useMemo(() => {
+    if (!periodMode) return false;
+    for (const row of periodRowStatuses.values()) {
+      if (row.status === 'overlap' || row.status === 'unknown') return true;
+    }
+    return false;
+  }, [periodMode, periodRowStatuses]);
+
+  const periodHasBlocked = useMemo(() => {
+    if (!periodMode) return false;
+    for (const row of periodRowStatuses.values()) {
+      if (row.status === 'bad') return true;
+    }
+    return false;
+  }, [periodMode, periodRowStatuses]);
+
   if (!open) return null;
 
   const selected = selectedService;
@@ -353,10 +486,12 @@ export function SpaBookingDialog({
   const startIsPast =
     Boolean(form.startAt) && new Date(form.startAt).getTime() < Date.now();
   const needsOverlapConfirm =
+    !periodMode &&
     Boolean(placementCheck) &&
     !placementCheck!.fitsClean &&
     placementCheck!.allowedWithConfirm;
   const overlapBlocked =
+    !periodMode &&
     Boolean(placementCheck) &&
     !placementCheck!.fitsClean &&
     !placementCheck!.allowedWithConfirm;
@@ -483,15 +618,28 @@ export function SpaBookingDialog({
       setError('Укажите ФИО клиента');
       return;
     }
-    if (overlapBlocked) {
-      setError(
-        `Пересечение ${placementCheck?.maxOverlapMin ?? ''} мин — больше ${SPA_OVERLAP_ALLOW_MIN} минут нельзя`,
-      );
-      return;
-    }
-    if (needsOverlapConfirm && !overlapConfirmed) {
-      setError('Подтвердите наслоение записей');
-      return;
+    if (periodMode) {
+      if (periodHasBlocked) {
+        setError(
+          'В периоде есть конфликтующие даты (!). Уберите их или смените время.',
+        );
+        return;
+      }
+      if (periodNeedsOverlapConfirm && !overlapConfirmed) {
+        setError('Подтвердите наслоение для дат периода');
+        return;
+      }
+    } else {
+      if (overlapBlocked) {
+        setError(
+          `Пересечение ${placementCheck?.maxOverlapMin ?? ''} мин — больше ${SPA_OVERLAP_ALLOW_MIN} минут нельзя`,
+        );
+        return;
+      }
+      if (needsOverlapConfirm && !overlapConfirmed) {
+        setError('Подтвердите наслоение записей');
+        return;
+      }
     }
     const startIso = new Date(form.startAt).toISOString();
     if (Number.isNaN(new Date(startIso).getTime())) {
@@ -511,14 +659,45 @@ export function SpaBookingDialog({
           setError('Выберите хотя бы одну дату');
           return;
         }
-        const dates = periodEntries.map(entryToIso).filter((iso) => {
-          return !Number.isNaN(new Date(iso).getTime());
-        });
-        if (dates.length === 0) {
+        const items = periodEntries
+          .map((entry) => {
+            const iso = entryToIso(entry);
+            if (Number.isNaN(new Date(iso).getTime())) return null;
+            return {
+              startAt: iso,
+              serviceId: entry.serviceId || form.serviceId,
+              ...(periodNeedsOverlapConfirm && overlapConfirmed
+                ? { overlapConfirmed: true as const }
+                : {}),
+            };
+          })
+          .filter((x): x is NonNullable<typeof x> => Boolean(x));
+        if (items.length === 0) {
           setError('Некорректные даты периода');
           return;
         }
-        await onBulkSubmit({ ...payload, dates });
+        const result = await onBulkSubmit({
+          ...payload,
+          items,
+          dates: items.map((i) => i.startAt),
+        });
+        if (result?.skipped?.length) {
+          setSkippedRows(result.skipped);
+          setError(
+            `Создано ${result.created.length}, пропущено ${result.skipped.length}. Исправьте даты ниже и отправьте снова.`,
+          );
+          setPeriodEntries((prev) =>
+            prev.filter((e) =>
+              result.skipped.some((s) => {
+                const sk = new Date(s.date);
+                if (Number.isNaN(sk.getTime())) return false;
+                return localDateKey(sk) === e.date;
+              }),
+            ),
+          );
+          return;
+        }
+        setSkippedRows([]);
       } else {
         await onSubmit(payload);
       }
@@ -710,8 +889,9 @@ export function SpaBookingDialog({
             ) : null}
             {overlapBlocked ? (
               <p className="mt-2 text-xs text-rose-300">
-                Пересечение {placementCheck?.maxOverlapMin} мин — больше{' '}
-                {SPA_OVERLAP_ALLOW_MIN} минут нельзя. Выберите другое время.
+                {(placementCheck?.maxStackDepth ?? 0) > 2
+                  ? 'На это время уже две записи — третья накладка запрещена. Выберите другое время.'
+                  : `Пересечение ${placementCheck?.maxOverlapMin} мин — больше ${SPA_OVERLAP_ALLOW_MIN} минут нельзя. Выберите другое время.`}
               </p>
             ) : null}
           </div>
@@ -776,43 +956,131 @@ export function SpaBookingDialog({
                     >
                       Это время всем
                     </button>
+                    <button
+                      type="button"
+                      className="btn-secondary text-xs"
+                      onClick={() => {
+                        const sid = form.serviceId;
+                        setPeriodEntries((prev) =>
+                          prev.map((e) => ({
+                            ...e,
+                            serviceId: sid,
+                            serviceTouched: false,
+                          })),
+                        );
+                      }}
+                    >
+                      Эту услугу всем
+                    </button>
                   </div>
-                  <ul className="max-h-48 space-y-1.5 overflow-y-auto text-sm">
-                    {periodEntries.map((entry) => (
-                      <li
-                        key={entry.date}
-                        className="flex flex-wrap items-center gap-2"
-                      >
-                        <button
-                          type="button"
-                          className="text-slate-500 hover:text-rose-300"
-                          title="Убрать"
-                          onClick={() =>
-                            setPeriodEntries((prev) =>
-                              prev.filter((e) => e.date !== entry.date),
-                            )
-                          }
+                  {skippedRows.length > 0 ? (
+                    <ul className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-100">
+                      {skippedRows.map((s) => (
+                        <li key={`${s.date}-${s.reason}`}>
+                          {formatDateCompact(
+                            Number.isNaN(new Date(s.date).getTime())
+                              ? s.date.slice(0, 10)
+                              : localDateKey(new Date(s.date)),
+                          )}
+                          : {s.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {periodNeedsOverlapConfirm ? (
+                    <label className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-100">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={overlapConfirmed}
+                        onChange={(e) =>
+                          setOverlapConfirmed(e.target.checked)
+                        }
+                      />
+                      <span>
+                        Разрешить наслоение до {SPA_OVERLAP_ALLOW_MIN} мин в
+                        датах периода (≈ или ·).
+                      </span>
+                    </label>
+                  ) : null}
+                  <ul className="max-h-56 space-y-1.5 overflow-y-auto text-sm">
+                    {periodEntries.map((entry) => {
+                      const row = periodRowStatuses.get(entry.date);
+                      const rowStatus = row?.status ?? 'unknown';
+                      const rowTip = row?.tip ?? '';
+                      return (
+                        <li
+                          key={entry.date}
+                          className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-1.5 sm:grid-cols-[auto_auto_minmax(0,1fr)_5.5rem]"
                         >
-                          ×
-                        </button>
-                        <span className="min-w-[6.5rem] capitalize text-slate-300">
-                          {formatDateShort(entry.date)}
-                        </span>
-                        <TimeField
-                          className="min-w-[8.5rem] flex-1"
-                          value={entry.time}
-                          onChange={(t) => {
-                            setPeriodEntries((prev) =>
-                              prev.map((row) =>
-                                row.date === entry.date
-                                  ? { ...row, time: t }
-                                  : row,
-                              ),
-                            );
-                          }}
-                        />
-                      </li>
-                    ))}
+                          <button
+                            type="button"
+                            className="text-slate-500 hover:text-rose-300"
+                            title="Убрать"
+                            onClick={() =>
+                              setPeriodEntries((prev) =>
+                                prev.filter((e) => e.date !== entry.date),
+                              )
+                            }
+                          >
+                            ×
+                          </button>
+                          <span
+                            className="w-[4.75rem] shrink-0 capitalize text-slate-300"
+                            title={rowTip}
+                          >
+                            <span className="mr-1 inline-block w-2 text-center text-[10px]">
+                              {rowStatus === 'ok'
+                                ? '✓'
+                                : rowStatus === 'overlap'
+                                  ? '≈'
+                                  : rowStatus === 'bad'
+                                    ? '!'
+                                    : '·'}
+                            </span>
+                            {formatDateCompact(entry.date)}
+                          </span>
+                          <select
+                            className="input !px-1.5 !py-1 text-xs"
+                            value={entry.serviceId || form.serviceId}
+                            onChange={(e) => {
+                              const serviceId = e.target.value;
+                              setPeriodEntries((prev) =>
+                                prev.map((row) =>
+                                  row.date === entry.date
+                                    ? {
+                                        ...row,
+                                        serviceId,
+                                        serviceTouched: true,
+                                      }
+                                    : row,
+                                ),
+                              );
+                            }}
+                          >
+                            {bookable.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </select>
+                          <TimeField
+                            className="w-[5.5rem] shrink-0"
+                            compact
+                            value={entry.time}
+                            onChange={(t) => {
+                              setPeriodEntries((prev) =>
+                                prev.map((row) =>
+                                  row.date === entry.date
+                                    ? { ...row, time: t }
+                                    : row,
+                                ),
+                              );
+                            }}
+                          />
+                        </li>
+                      );
+                    })}
                   </ul>
                   <div className="flex flex-wrap items-end gap-2">
                     <DateField
@@ -820,9 +1088,26 @@ export function SpaBookingDialog({
                       value={extraDate}
                       onChange={setExtraDate}
                     />
+                    <label className="block min-w-[8rem] flex-1 space-y-1 text-sm">
+                      <span className="block h-4 text-[11px] text-slate-500">
+                        Услуга
+                      </span>
+                      <select
+                        className="input !py-1 text-xs"
+                        value={extraServiceId || form.serviceId}
+                        onChange={(e) => setExtraServiceId(e.target.value)}
+                      >
+                        {bookable.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                     <TimeField
                       label="Время"
-                      className="min-w-[8.5rem]"
+                      className="w-[5.5rem]"
+                      compact
                       value={extraTime}
                       onChange={setExtraTime}
                     />
@@ -831,17 +1116,28 @@ export function SpaBookingDialog({
                       className="btn-secondary text-xs"
                       onClick={() => {
                         if (!extraDate || !extraTime) return;
+                        const sid = extraServiceId || form.serviceId;
                         setPeriodEntries((prev) => {
                           if (prev.some((e) => e.date === extraDate)) {
                             return prev.map((e) =>
                               e.date === extraDate
-                                ? { ...e, time: extraTime }
+                                ? {
+                                    ...e,
+                                    time: extraTime,
+                                    serviceId: sid,
+                                    serviceTouched: true,
+                                  }
                                 : e,
                             );
                           }
                           return [
                             ...prev,
-                            { date: extraDate, time: extraTime },
+                            {
+                              date: extraDate,
+                              time: extraTime,
+                              serviceId: sid,
+                              serviceTouched: true,
+                            },
                           ].sort((a, b) => a.date.localeCompare(b.date));
                         });
                         setExtraDate('');

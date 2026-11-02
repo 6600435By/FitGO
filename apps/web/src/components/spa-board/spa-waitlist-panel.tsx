@@ -167,6 +167,16 @@ export function SpaWaitlistPanel({
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editEntry, setEditEntry] = useState<SpaWaitlistEntry | null>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem('fitgo.spa-waitlist.open') === '1') {
+        setOpen(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
   const bookable = services.filter((s) => s.active && (s.bookable ?? true));
   const dayKey = boardDayYmd ?? localDateKey(new Date());
 
@@ -181,19 +191,61 @@ export function SpaWaitlistPanel({
     [sorted, dayKey],
   );
 
+  const dayShortLabel = useMemo(() => {
+    try {
+      return new Date(`${dayKey}T12:00:00`).toLocaleDateString('ru-RU', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'numeric',
+      });
+    } catch {
+      return dayKey;
+    }
+  }, [dayKey]);
+
+  const toggleOpen = () => {
+    setOpen((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(
+          'fitgo.spa-waitlist.open',
+          next ? '1' : '0',
+        );
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="card !p-3 space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">
-          Лист ожидания
-          {entries.length > 0 ? (
-            <span className="ml-2 text-slate-400">· {entries.length}</span>
-          ) : (
-            <span className="ml-2 text-xs font-normal text-slate-500">
-              · заявок нет
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          aria-expanded={open}
+          onClick={toggleOpen}
+        >
+          <h3 className="text-sm font-medium">
+            Лист ожидания
+            {entries.length > 0 ? (
+              <span className="ml-2 text-slate-400">· {entries.length}</span>
+            ) : (
+              <span className="ml-2 text-xs font-normal text-slate-500">
+                · заявок нет
+              </span>
+            )}
+          </h3>
+          {fitCount > 0 ? (
+            <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-100">
+              {fitCount} подходят на {dayShortLabel}
             </span>
-          )}
-        </h3>
+          ) : null}
+          <span className="shrink-0 text-xs text-slate-500">
+            {open ? '▾' : '▸'}
+          </span>
+        </button>
         <button
           type="button"
           className="btn-secondary !px-2.5 !py-1 text-xs"
@@ -204,7 +256,7 @@ export function SpaWaitlistPanel({
         </button>
       </div>
 
-      {sorted.length === 0 ? null : (
+      {!open || sorted.length === 0 ? null : (
         <ul className="space-y-2">
           {sorted.map((e, idx) => {
             const fitsDay = spaWaitlistFitsBoardDay(e, dayKey);

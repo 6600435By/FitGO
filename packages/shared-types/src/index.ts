@@ -1670,6 +1670,12 @@ export interface SpaWaitlistEntry {
   createdAt: string;
 }
 
+export interface SpaBulkBookingItem {
+  startAt: string;
+  serviceId?: string;
+  overlapConfirmed?: boolean;
+}
+
 export interface SpaBulkBookingResult {
   created: SpaBooking[];
   skipped: Array<{ date: string; reason: string }>;

@@ -1060,7 +1060,7 @@ export const api = {
     periodStart: string,
     periodEnd: string,
   ) =>
-    request<{ createdBlocks: number }>(
+    request<{ createdBlocks: number; bookingsOutsideHours?: number }>(
       '/specialist/schedule/fill-from-template',
       {
         method: 'POST',
@@ -1074,7 +1074,11 @@ export const api = {
     periodStart: string,
     periodEnd: string,
   ) =>
-    request<{ publishedBlocks: number }>(
+    request<{
+      publishedBlocks: number;
+      publishedDays?: number;
+      bookingsInPublishedDays?: number;
+    }>(
       '/specialist/schedule/publish',
       {
         method: 'POST',
@@ -1181,7 +1185,12 @@ export const api = {
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
-      dates: string[];
+      dates?: string[];
+      items?: Array<{
+        startAt: string;
+        serviceId?: string;
+        overlapConfirmed?: boolean;
+      }>;
       overlapConfirmed?: boolean;
     },
   ) =>
@@ -1432,7 +1441,12 @@ export const api = {
       paymentType: 'QUOTA' | 'PAID';
       membershipServiceName?: string;
       visitNote?: string;
-      dates: string[];
+      dates?: string[];
+      items?: Array<{
+        startAt: string;
+        serviceId?: string;
+        overlapConfirmed?: boolean;
+      }>;
       overlapConfirmed?: boolean;
     },
   ) =>

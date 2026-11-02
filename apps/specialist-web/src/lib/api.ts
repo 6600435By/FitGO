@@ -120,17 +120,25 @@ export const api = {
     periodStart: string,
     periodEnd: string,
   ) =>
-    request('/specialist/schedule/fill-from-template', {
-      method: 'POST',
-      body: JSON.stringify({ periodStart, periodEnd }),
-    }, token),
+    request<{ createdBlocks: number; bookingsOutsideHours?: number }>(
+      '/specialist/schedule/fill-from-template',
+      {
+        method: 'POST',
+        body: JSON.stringify({ periodStart, periodEnd }),
+      },
+      token,
+    ),
 
   specialistPublishSchedule: (
     token: string,
     periodStart: string,
     periodEnd: string,
   ) =>
-    request<{ publishedBlocks: number }>('/specialist/schedule/publish', {
+    request<{
+      publishedBlocks: number;
+      publishedDays?: number;
+      bookingsInPublishedDays?: number;
+    }>('/specialist/schedule/publish', {
       method: 'POST',
       body: JSON.stringify({ periodStart, periodEnd }),
     }, token),

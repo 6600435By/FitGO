@@ -53,6 +53,10 @@ try {
   pnpm --filter @fitgo/osmi-adapter build
   pnpm --filter @fitgo/api exec prisma generate
   pnpm --filter @fitgo/api exec prisma db push --skip-generate --accept-data-loss
+  pnpm --filter @fitgo/api exec node ./scripts/apply-db-constraints.mjs
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host 'WARNING: apply-db-constraints.mjs failed — check Postgres EXCLUDE constraints manually.' -ForegroundColor Yellow
+  }
   pnpm --filter @fitgo/api exec node ./scripts/backfill-phone-verified.mjs
   pnpm --filter @fitgo/api build
 } finally {
