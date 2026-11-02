@@ -1965,6 +1965,9 @@ export class PayrollService {
    *   TECH / SPA / GP → period accrual; card is a share of earned (max(accrual, card)).
    *   Manager with card > 0 → card only; otherwise motivation for the range.
    * - MONTH_SETTLEMENT (15th): previous calendar month minus paid ADVANCE_HALF.
+   *
+   * `opts.light` — batch sheet: skip full period summary when the wave is
+   * card-only (fixed advance), and omit work-unit payloads from the response.
    */
   async previewPayout(
     clubId: string,
@@ -1972,7 +1975,7 @@ export class PayrollService {
     kind: PayrollPayoutKind,
     year: number,
     month: number,
-    opts?: { periodFrom?: string; periodTo?: string },
+    opts?: { periodFrom?: string; periodTo?: string; light?: boolean },
   ): Promise<PayrollPayoutPreview> {
     if (month < 1 || month > 12) {
       throw new BadRequestException('Месяц 1–12');
@@ -1984,6 +1987,7 @@ export class PayrollService {
     if (!user) throw new NotFoundException('Сотрудник не найден');
 
     const roles = user.roles.map((r) => r.role);
+    const performerName = `${user.lastName} ${user.firstName}`.trim();
 
     const defaultRange =
       kind === 'ADVANCE_HALF'
@@ -2003,6 +2007,7 @@ export class PayrollService {
       userId,
       range.to,
     );
+    const currency = waveCompensation?.currency ?? 'BYN';
     const resolvedFixedAdvance = resolveFixedAdvanceMinor(
       asPayProfile(waveCompensation?.payProfile),
       roles.map(String),
@@ -2029,18 +2034,26 @@ export class PayrollService {
         Boolean(user.groupPrograms));
     const fixedAdvanceMinor = resolvedFixedAdvance;
 
-    const hints: string[] = [];
-    let earnedMinor = 0;
-    const summary = await this.getPeriodSummary(
-      clubId,
-      userId,
-      range.from,
-      range.to,
-      useAdvanceHalfAccrual ? { forAdvanceHalf: true } : undefined,
-    );
-
     const periodOverridden =
       range.from !== defaultRange.from || range.to !== defaultRange.to;
+    // Default 25th card-only wave does not need work units / sales / hours.
+    const skipHeavySummary =
+      Boolean(opts?.light) &&
+      kind === 'ADVANCE_HALF' &&
+      usesFixedAdvance &&
+      !periodOverridden;
+
+    const hints: string[] = [];
+    let earnedMinor = 0;
+    const summary = skipHeavySummary
+      ? this.emptyPayoutSummary(userId, performerName, range, currency)
+      : await this.getPeriodSummary(
+          clubId,
+          userId,
+          range.from,
+          range.to,
+          useAdvanceHalfAccrual ? { forAdvanceHalf: true } : undefined,
+        );
 
     if (kind === 'ADVANCE_HALF' && !periodOverridden) {
       const accrualMinor = usesFixedAdvance ? 0 : summary.totalMinor;
@@ -2154,12 +2167,12 @@ export class PayrollService {
       hints.push('Выплата уже зафиксирована — повторно не начисляется');
     }
 
-    return {
+    const preview: PayrollPayoutPreview = {
       kind,
       periodFrom: range.from,
       periodTo: range.to,
       performerId: userId,
-      performerName: `${user.lastName} ${user.firstName}`.trim(),
+      performerName,
       usesFixedAdvance,
       fixedAdvanceMinor,
       earnedMinor,
@@ -2173,6 +2186,7 @@ export class PayrollService {
       summary,
       hints,
     };
+    return opts?.light ? this.slimPayoutPreview(preview) : preview;
   }
 
   async previewPayoutBatch(
@@ -2209,16 +2223,88 @@ export class PayrollService {
       }
       return true;
     });
-    const out: PayrollPayoutPreview[] = [];
-    for (const s of filtered) {
-      out.push(
-        await this.previewPayout(clubId, s.userId, kind, year, month, {
+    // Parallel + light payload: «Все» for a busy month otherwise times out
+    // (gateway 502 → «Не удалось выполнить действие»).
+    return mapPool(filtered, CLUB_SUMMARY_CONCURRENCY, async (s) => {
+      try {
+        return await this.previewPayout(clubId, s.userId, kind, year, month, {
           periodFrom: opts?.periodFrom,
           periodTo: opts?.periodTo,
-        }),
-      );
-    }
-    return out;
+          light: true,
+        });
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : 'Ошибка расчёта сотрудника';
+        const range =
+          kind === 'ADVANCE_HALF'
+            ? advanceHalfRange(year, month)
+            : monthSettlementRange(year, month);
+        const from = opts?.periodFrom?.trim() || range.from;
+        const to = opts?.periodTo?.trim() || range.to;
+        return {
+          kind,
+          periodFrom: from,
+          periodTo: to,
+          performerId: s.userId,
+          performerName: s.name,
+          usesFixedAdvance: false,
+          fixedAdvanceMinor: 0,
+          earnedMinor: 0,
+          priorPaidMinor: 0,
+          totalMinor: 0,
+          carryInMinor: 0,
+          payableMinor: 0,
+          currency: 'BYN',
+          summary: this.emptyPayoutSummary(s.userId, s.name, { from, to }, 'BYN'),
+          hints: [`Не удалось рассчитать: ${msg}`],
+        };
+      }
+    });
+  }
+
+  /** Minimal summary for card-only / failed batch rows (no work units). */
+  private emptyPayoutSummary(
+    performerId: string,
+    performerName: string,
+    range: { from: string; to: string },
+    currency: string,
+  ): PayrollPeriodSummary {
+    return {
+      from: range.from,
+      to: range.to,
+      performerId,
+      performerName,
+      openExceptions: 0,
+      greenCount: 0,
+      resolvedCount: 0,
+      workUnits: [],
+      baseSalaryMinor: 0,
+      motivationMinor: 0,
+      adjustmentsMinor: 0,
+      adjustments: [],
+      payChips: [],
+      totalMinor: 0,
+      currency,
+      canLock: true,
+      locked: false,
+      anomalyHints: [],
+    };
+  }
+
+  /** Drop bulky fields the payouts table never renders. */
+  private slimPayoutPreview(
+    preview: PayrollPayoutPreview,
+  ): PayrollPayoutPreview {
+    const { sales: _sales, motivationBreakdown: _mb, ...rest } =
+      preview.summary;
+    return {
+      ...preview,
+      summary: {
+        ...rest,
+        workUnits: [],
+        adjustments: [],
+      },
+    };
   }
 
   /**
