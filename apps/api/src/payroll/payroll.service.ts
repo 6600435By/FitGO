@@ -102,6 +102,7 @@ import {
 } from '../admin-sales/admin-sales-segments';
 import {
   clubRevenueHasPaidMoney,
+  clubRevenueIsDebtWriteOff,
   loadPackSalesForUnitPrice,
   loadTrainerPtSalesFromRevenue,
   matchPackSaleForUnitPrice,
@@ -734,19 +735,23 @@ export class PayrollService {
         serviceExternalId: b.service.externalId,
         title: b.service.name,
       });
-      // Debt / unpaid: never pay SPA from saleAmount. Only real money counts
-      // (same rule as PT one-shots and admin % from SaleTransaction paidAt).
-      if (!clubRevenueHasPaidMoney(sale) && !bioimpedance) continue;
+      // Debt / unpaid: never pay SPA from saleAmount — except СписаниеЗадолженности
+      // (debt_writeoff): specialist gets % from the written-off amount.
+      const debtWriteOff = clubRevenueIsDebtWriteOff(sale);
+      if (!clubRevenueHasPaidMoney(sale) && !bioimpedance && !debtWriteOff) {
+        continue;
+      }
       // Multi-visit pack sale («Блок массажа 10») is not SPA motivation —
       // only conducted write-offs pay (pack amount / N).
       if (isMultiVisitPackSale(sale.productName)) continue;
-      const amountMajor =
-        Number(sale.paidAmount) ||
-        Number(sale.personalAccount) ||
-        (Number(sale.cash) || 0) +
-          (Number(sale.card) || 0) +
-          (Number(sale.cashless) || 0) ||
-        0;
+      const amountMajor = debtWriteOff
+        ? Number(sale.saleAmount) || 0
+        : Number(sale.paidAmount) ||
+          Number(sale.personalAccount) ||
+          (Number(sale.cash) || 0) +
+            (Number(sale.card) || 0) +
+            (Number(sale.cashless) || 0) ||
+          0;
       // Free AllSports биоимпеданс: 0 BYN in 1C, pay spaPartnerRateMinor from profile.
       if (amountMajor < 0.01 && !bioimpedance) continue;
       const priceMinor = Math.round(amountMajor * 100);

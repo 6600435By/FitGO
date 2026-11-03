@@ -24,6 +24,8 @@ import {
   pickBestServiceByDuration,
   preferredServiceDurationMin,
   saleAmountMajor,
+  saleIsDebtWriteOff,
+  saleIsPaid,
   saleIsSpaLinkCandidate,
   saleTakenBlocksSpaLink,
   serviceNamesMatch,
@@ -129,6 +131,124 @@ function sale(
   assert.equal(r.kind, 'hint');
   if (r.kind === 'hint') {
     assert.equal(r.hint.kind, 'SALE_OTHER_NOMENCLATURE');
+  }
+}
+
+// --- Kishkis: 25 мин ≠ 40 мин; same-day unpaid wins over stale list ---
+{
+  assert.equal(
+    serviceNamesMatch('Массаж классический 25 мин', 'Массаж классический 40 мин'),
+    false,
+  );
+  const visit = new Date('2026-10-08T10:00:00.000Z');
+  const b = booking({
+    id: 'b-kishkis',
+    startAt: visit,
+    clientExternalId: 'cli-kish',
+    clientName: 'Кишкис Надежда',
+    serviceName: 'Массаж классический 25 мин',
+    serviceExternalId: 'svc-25',
+  });
+  const stale = sale({
+    externalId: 'sale-sept',
+    occurredAt: new Date('2026-09-30T12:00:00.000Z'),
+    productName: 'Массаж классический 25 мин',
+    productExternalId: 'svc-25',
+    clientExternalId: 'cli-kish',
+    clientName: 'Кишкис Надежда Геннадьевна',
+  });
+  const unpaidSameDay = sale({
+    externalId: 'sale-30863',
+    occurredAt: new Date('2026-10-08T11:00:00.000Z'),
+    paidAmount: 0,
+    saleAmount: 30,
+    operationType: 'unpaid',
+    productName: 'Массаж классический 25 мин',
+    productExternalId: 'svc-25',
+    clientExternalId: 'cli-kish',
+    clientName: 'Кишкис Надежда Геннадьевна (Сотрудник)',
+  });
+  const wrongDur = sale({
+    externalId: 'sale-40',
+    occurredAt: new Date('2026-10-08T12:00:00.000Z'),
+    productName: 'Массаж классический 40 мин',
+    productExternalId: 'svc-40',
+    clientExternalId: 'cli-kish',
+    clientName: 'Кишкис Надежда',
+  });
+  const r = matchSpaSale({
+    booking: b,
+    sales: [stale, unpaidSameDay, wrongDur],
+  });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.sale.externalId, 'sale-30863');
+    assert.equal(r.paymentStatus, 'DEBT');
+  }
+}
+
+// --- Shimanskaya: late sale + journal typo «моссажем» still auto-links ---
+{
+  assert.equal(
+    serviceNamesMatch(
+      'Уход за лицом с моссажем Angiorharm 50 мин',
+      'Уход за лицом с массажем Angiorharm 50 мин',
+    ),
+    true,
+  );
+  const visit = new Date('2026-10-08T08:00:00.000Z');
+  const b = booking({
+    id: 'b-shim',
+    startAt: visit,
+    clientName: 'Шиманская Екатерина',
+    serviceName: 'Уход за лицом с моссажем Angiorharm 50 мин',
+    serviceExternalId: 'svc-angio',
+  });
+  const s = sale({
+    externalId: 'sale-32774',
+    occurredAt: new Date('2026-10-23T12:00:00.000Z'),
+    paidAt: new Date('2026-10-17T12:09:00.000Z'),
+    saleAmount: 42.5,
+    paidAmount: 42.5,
+    cash: 42.5,
+    productName: 'Уход за лицом с массажем Angiorharm 50 мин',
+    productExternalId: 'svc-angio',
+    clientName: 'Шиманская Екатерина (Сотрудник)',
+  });
+  const r = matchSpaSale({ booking: b, sales: [s] });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.sale.externalId, 'sale-32774');
+    assert.equal(r.paymentStatus, 'PAID');
+  }
+}
+
+// --- Loyko: debt write-off counts as paid settlement base ---
+{
+  assert.equal(saleIsDebtWriteOff({ operationType: 'debt_writeoff' } as SpaSaleCandidate), true);
+  const visit = new Date('2026-10-13T08:00:00.000Z');
+  const b = booking({
+    id: 'b-loyko',
+    startAt: visit,
+    clientName: 'Лойко Алексей',
+    serviceName: 'Массаж классический 25 мин',
+  });
+  const s = sale({
+    externalId: 'sale-31354:u2026-10-13',
+    occurredAt: visit,
+    saleAmount: 30,
+    paidAmount: 0,
+    operationType: 'debt_writeoff',
+    productName: 'Массаж классический 25 мин',
+    clientName: 'Лойко Алексей Евгеньевич (Сотрудник)',
+  });
+  assert.equal(saleIsPaid(s), true);
+  const r = matchSpaSale({ booking: b, sales: [s] });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.paymentStatus, 'PAID');
+    assert.match(paidSaleSettlementLabel(r.sale), /Списание задолженности/);
+    assert.equal(saleAmountMajor(r.sale), 30);
   }
 }
 

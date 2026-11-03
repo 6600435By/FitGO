@@ -2319,7 +2319,7 @@ model ClubRevenueEntry {
   clubId               String
   externalId           String
   documentId           String?
-  /// payment | unpaid | refund | sale | personal_deposit | personal_credit | personal_burn
+  /// payment | unpaid | debt_writeoff | refund | sale | personal_deposit | personal_credit | personal_burn
   operationType        String
   occurredAt           DateTime
   paidAt               DateTime?

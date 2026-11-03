@@ -70,6 +70,7 @@ type Row = {
 const STATUS_LABELS: Record<string, string> = {
   payment: 'Оплата',
   unpaid: 'Не оплачена (долг)',
+  debt_writeoff: 'Списание задолженности',
   refund: 'Возврат',
   sale: 'Продажа',
   personal_deposit: 'Взнос на ЛС (от клиента)',
@@ -1065,6 +1066,8 @@ export class ClubRevenueService {
           return 'Лицевой счёт';
         case 'mixed':
           return 'Смешанная';
+        case 'debt_writeoff':
+          return 'Списание задолженности';
         default:
           return 'Не указан';
       }
@@ -1075,6 +1078,7 @@ export class ClubRevenueService {
         return -Math.abs(line.refundAmountMinor || line.amountMinor);
       }
       if (line.operationType === 'unpaid') return line.saleAmountMinor;
+      if (line.operationType === 'debt_writeoff') return line.saleAmountMinor;
       if (line.paidAmountMinor) return line.paidAmountMinor;
       return line.amountMinor;
     };

@@ -397,6 +397,20 @@ function monthEndIso() {
   return `${y}-${String(m + 1).padStart(2, '0')}-${String(last).padStart(2, '0')}`;
 }
 
+/** Inclusive bounds of the previous calendar month (local). */
+function prevMonthBoundsIso(): { from: string; to: string } {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = d.getMonth(); // 0-based current
+  const prevY = m === 0 ? y - 1 : y;
+  const prevM = m === 0 ? 12 : m; // 1-based previous month
+  const last = new Date(prevY, prevM, 0).getDate();
+  return {
+    from: `${prevY}-${String(prevM).padStart(2, '0')}-01`,
+    to: `${prevY}-${String(prevM).padStart(2, '0')}-${String(last).padStart(2, '0')}`,
+  };
+}
+
 function formatDay(iso: string) {
   return new Date(iso).toLocaleDateString('ru-RU', {
     day: 'numeric',
@@ -1332,6 +1346,7 @@ export function BookingControlPanel({
   };
 
   const today = todayIso();
+  const prevMonth = prevMonthBoundsIso();
   const periodPreset =
     from === today && to === today
       ? 'today'
@@ -1339,7 +1354,9 @@ export function BookingControlPanel({
         ? 'week'
         : from === monthStartIso() && to === today
           ? 'month'
-          : 'custom';
+          : from === prevMonth.from && to === prevMonth.to
+            ? 'prevMonth'
+            : 'custom';
   const moreActive =
     (status && status !== 'ALL') ||
     (payment && payment !== 'ALL') ||
@@ -2224,7 +2241,11 @@ export function BookingControlPanel({
         new Set(updated.groupApproval?.trainerSeenClientIds ?? []),
       );
       setComment('');
-      setMessage('Отправлено на доработку тренеру');
+      setMessage(
+        selected.kind === 'SPA' || selected.kind === 'PT'
+          ? 'Отправлено на доработку исполнителю'
+          : 'Отправлено на доработку тренеру',
+      );
       load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка возврата');
@@ -2232,6 +2253,19 @@ export function BookingControlPanel({
       setApproveBusy(false);
     }
   };
+
+  /** Admin can return SPA/PT even after dual confirm (APPROVED). */
+  const canReturnPtSpa = Boolean(
+    canReturnApproval &&
+      api.returnGroupApproval &&
+      selected &&
+      (selected.kind === 'SPA' || selected.kind === 'PT') &&
+      selected.status !== 'CANCELLED' &&
+      (selected.approvalPhase === 'PENDING_ADMIN' ||
+        selected.approvalPhase === 'APPROVED' ||
+        selected.approvalPhase === 'PENDING_PERFORMER' ||
+        selected.approvalPhase === 'PENDING_TRAINER'),
+  );
 
   const openManagerRework = async () => {
     if (!selected || !api.managerRework) return;
@@ -2412,6 +2446,12 @@ export function BookingControlPanel({
   const setMonth = () => {
     setFrom(monthStartIso());
     setTo(todayIso());
+  };
+
+  const setPrevMonth = () => {
+    const b = prevMonthBoundsIso();
+    setFrom(b.from);
+    setTo(b.to);
   };
 
   const clearConductedMode = () => {
@@ -2634,6 +2674,17 @@ export function BookingControlPanel({
             onClick={setMonth}
           >
             Месяц
+          </button>
+          <button
+            type="button"
+            className={
+              periodPreset === 'prevMonth'
+                ? 'btn-primary px-3 py-2 text-sm'
+                : 'btn-secondary px-3 py-2 text-sm'
+            }
+            onClick={setPrevMonth}
+          >
+            Прошлый месяц
           </button>
           <button
             type="button"
@@ -4197,6 +4248,16 @@ export function BookingControlPanel({
                                 Комментарий: {selected.returnComment}
                               </p>
                             ) : null}
+                            {canReturnPtSpa ? (
+                              <button
+                                type="button"
+                                className="btn-secondary w-full text-sm"
+                                onClick={() => void returnApproval()}
+                                disabled={approveBusy}
+                              >
+                                {approveBusy ? 'Отправляем…' : 'На доработку'}
+                              </button>
+                            ) : null}
                           </div>
                         );
                       }
@@ -4221,6 +4282,16 @@ export function BookingControlPanel({
                               disabled={approveBusy}
                             >
                               {approveBusy ? 'Подтверждаем…' : 'Подтвердить'}
+                            </button>
+                          ) : null}
+                          {canReturnPtSpa ? (
+                            <button
+                              type="button"
+                              className="btn-secondary w-full text-sm"
+                              onClick={() => void returnApproval()}
+                              disabled={approveBusy}
+                            >
+                              {approveBusy ? 'Отправляем…' : 'На доработку'}
                             </button>
                           ) : null}
                         </div>
@@ -4250,6 +4321,16 @@ export function BookingControlPanel({
                                 Комментарий: {selected.returnComment}
                               </p>
                             ) : null}
+                            {canReturnPtSpa ? (
+                              <button
+                                type="button"
+                                className="btn-secondary w-full text-sm"
+                                onClick={() => void returnApproval()}
+                                disabled={approveBusy}
+                              >
+                                {approveBusy ? 'Отправляем…' : 'На доработку'}
+                              </button>
+                            ) : null}
                           </div>
                         );
                       }
@@ -4275,6 +4356,16 @@ export function BookingControlPanel({
                               disabled={approveBusy}
                             >
                               {approveBusy ? 'Подтверждаем…' : 'Подтвердить'}
+                            </button>
+                          ) : null}
+                          {canReturnPtSpa ? (
+                            <button
+                              type="button"
+                              className="btn-secondary w-full text-sm"
+                              onClick={() => void returnApproval()}
+                              disabled={approveBusy}
+                            >
+                              {approveBusy ? 'Отправляем…' : 'На доработку'}
                             </button>
                           ) : null}
                         </div>

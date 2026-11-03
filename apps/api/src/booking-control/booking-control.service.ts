@@ -2629,9 +2629,10 @@ export class BookingControlService {
   }
 
   /**
-   * Admin / SA / Manager: return GROUP for rework.
-   * - trainer (default): clear trainer + admin + override → PENDING_TRAINER
-   * - admin: keep trainer, clear admin + override → PENDING_ADMIN
+   * Admin / SA / Manager: return GROUP / SPA / PT for rework.
+   * - trainer/performer (default): clear performer + admin → PENDING_PERFORMER
+   * - admin: keep performer, clear admin → PENDING_ADMIN
+   * Works for APPROVED sessions too (admin can send SPA back after dual confirm).
    */
   async returnGroupApproval(
     actor: JwtPayload,
@@ -2643,6 +2644,78 @@ export class BookingControlService {
     if (!this.isAdminLike(actor)) {
       throw new ForbiddenException('Только администратор');
     }
+
+    const parsed = parseSessionKey(sessionKey?.trim() ?? '');
+    const approvalTarget = target === 'admin' ? 'admin' : 'performer';
+
+    // FitGO SPA / PT
+    if (
+      parsed?.source === 'FITGO' &&
+      (parsed.kind === 'PT' || parsed.kind === 'SPA')
+    ) {
+      await this.sessionApproval.returnApproval(
+        actor,
+        parsed.kind === 'PT'
+          ? SessionApprovalKind.PT
+          : SessionApprovalKind.SPA,
+        parsed.id,
+        comment,
+        approvalTarget,
+      );
+      return this.detail(clubId, fitgoSessionKey(parsed.kind, parsed.id));
+    }
+
+    // 1C SPA / PT matched to FitGO booking
+    if (parsed?.source === '1C') {
+      const onex = await this.findOnexSessionForControl(
+        clubId,
+        parsed.id,
+        'narrow',
+      );
+      if (onex?.kind === OnexClassKind.SPA) {
+        const matched = await this.findMatchingFitgoBooking(
+          clubId,
+          'SPA',
+          onex,
+          undefined,
+        );
+        if (matched) {
+          await this.sessionApproval.returnApproval(
+            actor,
+            SessionApprovalKind.SPA,
+            matched.id,
+            comment,
+            approvalTarget,
+          );
+          return this.detail(clubId, sessionKey.trim());
+        }
+        throw new BadRequestException(
+          'SPA из 1С без записи FitGO — верните через задачу сотруднику',
+        );
+      }
+      if (onex?.kind === OnexClassKind.PT) {
+        const matched = await this.findMatchingFitgoBooking(
+          clubId,
+          'PT',
+          onex,
+          undefined,
+        );
+        if (matched) {
+          await this.sessionApproval.returnApproval(
+            actor,
+            SessionApprovalKind.PT,
+            matched.id,
+            comment,
+            approvalTarget,
+          );
+          return this.detail(clubId, sessionKey.trim());
+        }
+        throw new BadRequestException(
+          'ПТ из 1С без записи FitGO нельзя вернуть по цепочке — поставьте задачу сотруднику',
+        );
+      }
+    }
+
     const session = await this.requireGroupOnex(clubId, sessionKey);
     const key = onexSessionKey(session.externalId);
     this.assertGroupEditable(session);
@@ -5779,7 +5852,9 @@ export class BookingControlService {
           ...(linkedId ? [{ externalId: linkedId }] : []),
           {
             occurredAt: { gte: win.from, lte: win.to },
-            operationType: { in: ['payment', 'unpaid', 'sale'] },
+            operationType: {
+              in: ['payment', 'unpaid', 'sale', 'debt_writeoff'],
+            },
             ...(clientExt
               ? { clientExternalId: clientExt }
               : booking.clientName
@@ -6305,9 +6380,22 @@ export class BookingControlService {
     if (taken) {
       throw new BadRequestException('Эта продажа уже привязана к другой записи');
     }
+    const writeOff = sale.operationType === 'debt_writeoff';
     const paid =
-      sale.operationType !== 'unpaid' &&
-      (sale.paidAmount > 0.009 || sale.operationType === 'payment');
+      writeOff ||
+      (sale.operationType !== 'unpaid' &&
+        (sale.paidAmount > 0.009 || sale.operationType === 'payment'));
+    const amountMajor = writeOff
+      ? Number(sale.saleAmount) || 0
+      : Number(sale.paidAmount) ||
+        Number(sale.personalAccount) ||
+        (Number(sale.cash) || 0) +
+          (Number(sale.card) || 0) +
+          (Number(sale.cashless) || 0) ||
+        Number(sale.saleAmount) ||
+        0;
+    const amountMinor =
+      amountMajor > 0.009 ? Math.round(amountMajor * 100) : undefined;
     await this.prisma.spaBooking.update({
       where: { id: bookingId },
       data: {
@@ -6316,6 +6404,9 @@ export class BookingControlService {
         saleAutoLinkBlocked: false,
         ...(opts?.applyServiceId
           ? { serviceId: opts.applyServiceId }
+          : {}),
+        ...(amountMinor != null && amountMinor > 0
+          ? { priceMinor: amountMinor }
           : {}),
         paymentStatus: paid
           ? ServicePaymentStatus.PAID

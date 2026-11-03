@@ -11,8 +11,11 @@ import {
 
 /** Days before visit to look for a paid/debt sale. */
 export const SPA_SALE_LOOKBACK_DAYS = 21;
-/** Days after visit to look for a sale (paid later). */
-export const SPA_SALE_LOOKAHEAD_DAYS = 14;
+/**
+ * Days after visit to look for a sale (paid / posted later).
+ * Reception often posts/pays days after the visit (e.g. Oct 8 visit → Oct 23 sale).
+ */
+export const SPA_SALE_LOOKAHEAD_DAYS = 45;
 /** Open debt of same client+performer+service may be older. */
 export const SPA_DEBT_LOOKBACK_DAYS = 60;
 
@@ -57,6 +60,12 @@ export function saleAmountMajor(sale: SpaSaleCandidate): number {
 
 /** «Оплачено · наличные 90.00 BYN» — never the revenue externalId. */
 export function paidSaleSettlementLabel(sale: SpaSaleCandidate): string {
+  if (saleIsDebtWriteOff(sale)) {
+    const amt = saleAmountMajor(sale);
+    return amt > 0
+      ? `Списание задолженности · ${formatMajor(amt)}`
+      : 'Списание задолженности';
+  }
   const bits: string[] = [];
   const cash = positiveMajor(sale.cash);
   const card = positiveMajor(sale.card);
@@ -175,6 +184,45 @@ export function serviceNameCore(s: string | null | undefined): string {
     .trim();
 }
 
+/** Minutes from «25 мин» / «40 min» in a service title, if present. */
+export function serviceDurationMin(
+  s: string | null | undefined,
+): number | null {
+  const m = /(\d+)\s*(?:мин|min|м)(?=\s|$)/i.exec(s ?? '');
+  if (!m?.[1]) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** One-char typos in journal titles («моссажем» vs «массажем»). */
+function labelsNearlyEqual(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  if (a.length === b.length) {
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) diff += 1;
+      if (diff > 2) return false;
+    }
+    return diff <= 2;
+  }
+  const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
+  let i = 0;
+  let j = 0;
+  let skipped = 0;
+  while (i < shorter.length && j < longer.length) {
+    if (shorter[i] === longer[j]) {
+      i += 1;
+      j += 1;
+    } else {
+      skipped += 1;
+      if (skipped > 1) return false;
+      j += 1;
+    }
+  }
+  return true;
+}
+
 export function serviceNamesMatch(
   a?: string | null,
   b?: string | null,
@@ -182,13 +230,20 @@ export function serviceNamesMatch(
   const na = normalizeLabel(a);
   const nb = normalizeLabel(b);
   if (!na || !nb) return false;
+  // Retail SKUs with explicit duration must agree (25 ≠ 40 мин).
+  // Membership «классический общий» (no minutes) may still match timed SKUs.
+  const durA = serviceDurationMin(a);
+  const durB = serviceDurationMin(b);
+  if (durA != null && durB != null && durA !== durB) return false;
   if (na === nb) return true;
   if (na.includes(nb) || nb.includes(na)) return true;
+  if (labelsNearlyEqual(na, nb)) return true;
   const ca = serviceNameCore(a);
   const cb = serviceNameCore(b);
   if (!ca || !cb) return false;
   if (ca === cb) return true;
   if (ca.includes(cb) || cb.includes(ca)) return true;
+  if (labelsNearlyEqual(ca, cb)) return true;
   return false;
 }
 
@@ -275,8 +330,14 @@ export function saleIsComplimentaryPartner(sale: SpaSaleCandidate): boolean {
   return /биоимпеданс|bio.?imped/i.test(title);
 }
 
+/** Closed via Документ.СписаниеЗадолженности — no cash, still pays SPA motivation. */
+export function saleIsDebtWriteOff(sale: SpaSaleCandidate): boolean {
+  return (sale.operationType ?? '').toLowerCase() === 'debt_writeoff';
+}
+
 export function saleIsPaid(sale: SpaSaleCandidate): boolean {
   if (sale.operationType === 'unpaid') return false;
+  if (saleIsDebtWriteOff(sale)) return true;
   if (saleIsComplimentaryPartner(sale)) return true;
   if (sale.paidAmount > 0.009) return true;
   if (sale.operationType === 'payment' && sale.saleAmount > 0) return true;
@@ -485,13 +546,21 @@ export function matchSpaSale(input: {
   const win = saleSearchWindow(visitDay);
   const debtWin = debtSearchWindow(visitDay);
 
+  const saleAnchorTime = (s: SpaSaleCandidate) => {
+    const paid = s.paidAt?.getTime();
+    if (paid != null && Number.isFinite(paid)) return paid;
+    return s.occurredAt.getTime();
+  };
+
   const inWindow = (s: SpaSaleCandidate) => {
-    const t = s.occurredAt.getTime();
-    if (t >= win.from.getTime() && t <= win.to.getTime()) return true;
+    const anchors = [s.occurredAt.getTime()];
+    if (s.paidAt) anchors.push(s.paidAt.getTime());
+    const hit = (t: number, from: Date, to: Date) =>
+      t >= from.getTime() && t <= to.getTime();
+    if (anchors.some((t) => hit(t, win.from, win.to))) return true;
     if (
       !saleIsPaid(s) &&
-      t >= debtWin.from.getTime() &&
-      t <= debtWin.to.getTime()
+      anchors.some((t) => hit(t, debtWin.from, debtWin.to))
     ) {
       return true;
     }
@@ -518,8 +587,18 @@ export function matchSpaSale(input: {
     return undefined;
   };
 
-  const exact = forClient.filter(
-    (s) => performerMatchesBooking(s, booking) && nomenclatureMatches(s, booking),
+  const dayDist = (s: SpaSaleCandidate) =>
+    Math.abs(saleAnchorTime(s) - visitDay.getTime());
+
+  /** Prefer same calendar day / closest sale; drop far stale duplicates from the pick list. */
+  const rankByVisit = (list: SpaSaleCandidate[]) =>
+    [...list].sort((a, b) => dayDist(a) - dayDist(b));
+
+  const exact = rankByVisit(
+    forClient.filter(
+      (s) =>
+        performerMatchesBooking(s, booking) && nomenclatureMatches(s, booking),
+    ),
   );
   if (exact.length === 1) {
     const only = exact[0]!;
@@ -540,12 +619,26 @@ export function matchSpaSale(input: {
     };
   }
   if (exact.length > 1) {
+    // Same Minsk day as visit → auto when unique; else show nearest first.
+    const visitKey = minskDayKey(visitDay);
+    const sameDay = exact.filter((s) => minskDayKey(s.occurredAt) === visitKey);
+    if (sameDay.length === 1 && !blockAutoLink) {
+      const only = sameDay[0]!;
+      return {
+        kind: 'auto',
+        sale: only,
+        paymentStatus: salePaymentStatus(only),
+      };
+    }
+    const nearMs = 3 * 86400000;
+    const near = exact.filter((s) => dayDist(s) <= nearMs);
+    const pick = near.length > 0 ? near : exact.slice(0, 8);
     return {
       kind: 'hint',
       hint: {
         kind: 'SALE_MULTIPLE',
-        message: `Несколько продаж клиента (${exact.length}) — выберите документ`,
-        candidates: exact.map((s) => toSaleCandidate(s, resolveServiceId(s))),
+        message: `Несколько продаж клиента (${pick.length}) — выберите документ`,
+        candidates: pick.map((s) => toSaleCandidate(s, resolveServiceId(s))),
       },
     };
   }

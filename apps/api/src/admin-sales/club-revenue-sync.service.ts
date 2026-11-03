@@ -441,13 +441,13 @@ export class ClubRevenueSyncService {
       gte: new Date(`${r.from}T00:00:00.000Z`),
       lte: new Date(`${r.to}T23:59:59.999Z`),
     }));
-    // Only cash/receipt rows in the window — unpaid carries across months.
+    // Only cash/receipt rows in the window — unpaid / debt_writeoff carry across months.
     const existing = await this.prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
         isActive: true,
         operationType: {
-          notIn: ['unpaid'],
+          notIn: ['unpaid', 'debt_writeoff'],
         },
         OR: ranges.flatMap((r) => [{ occurredAt: r }, { paidAt: r }]),
       },
@@ -471,28 +471,86 @@ export class ClubRevenueSyncService {
     }
 
     if (!options.skipDebt && (debtSnapshot || unpaidExternalIds.size > 0)) {
+      // Include recently deactivated unpaid so already-dropped debts can become
+      // debt_writeoff after СписаниеЗадолженности (e.g. Loyko case).
+      const reviveAfter = new Date(Date.now() - 90 * 86400000);
       const staleUnpaid = await this.prisma.clubRevenueEntry.findMany({
         where: {
           clubId,
-          isActive: true,
           operationType: 'unpaid',
           ...(debtSnapshot
             ? {}
             : {
                 OR: ranges.map((r) => ({ occurredAt: r })),
               }),
+          OR: [
+            { isActive: true },
+            { isActive: false, syncedAt: { gte: reviveAfter } },
+          ],
         },
-        select: { id: true, externalId: true },
       });
-      const unpaidDrop = staleUnpaid
-        .filter((r) => !unpaidExternalIds.has(r.externalId))
-        .map((r) => r.id);
+      const unpaidDrop = staleUnpaid.filter(
+        (r) => !unpaidExternalIds.has(r.externalId),
+      );
       if (unpaidDrop.length) {
-        const res = await this.prisma.clubRevenueEntry.updateMany({
-          where: { id: { in: unpaidDrop } },
-          data: { isActive: false, syncedAt: new Date() },
-        });
-        deactivated += res.count;
+        // Debt left the register without a cash payment → СписаниеЗадолженности.
+        // Keep the row as debt_writeoff so SPA control can link it and payroll
+        // can pay the specialist from the written-off saleAmount.
+        const now = new Date();
+        let writeOffs = 0;
+        const deactivateIds: string[] = [];
+        for (const row of unpaidDrop) {
+          const saleAmt = Number(row.saleAmount) || 0;
+          const docId = row.documentId?.trim() || null;
+          const basePrefix = row.externalId.replace(/:u[\d-]+$/i, '');
+          const paid = await this.prisma.clubRevenueEntry.findFirst({
+            where: {
+              clubId,
+              isActive: true,
+              operationType: 'payment',
+              OR: [
+                ...(docId ? [{ documentId: docId }] : []),
+                ...(basePrefix
+                  ? [{ externalId: { startsWith: `${basePrefix}:p` } }]
+                  : []),
+              ],
+            },
+            select: { id: true },
+          });
+          if (!paid && saleAmt > 0.009) {
+            await this.prisma.clubRevenueEntry.update({
+              where: { id: row.id },
+              data: {
+                isActive: true,
+                operationType: 'debt_writeoff',
+                paidAmount: 0,
+                cash: 0,
+                card: 0,
+                cashless: 0,
+                personalAccount: 0,
+                paymentMethod: 'debt_writeoff',
+                countsTowardIncome: false,
+                countsTowardMotivation: true,
+                syncedAt: now,
+              },
+            });
+            writeOffs += 1;
+          } else if (row.isActive) {
+            deactivateIds.push(row.id);
+          }
+        }
+        if (deactivateIds.length) {
+          const res = await this.prisma.clubRevenueEntry.updateMany({
+            where: { id: { in: deactivateIds } },
+            data: { isActive: false, syncedAt: now },
+          });
+          deactivated += res.count;
+        }
+        if (writeOffs) {
+          this.logger.log(
+            `Club revenue debt write-offs club=${clubId} converted=${writeOffs}`,
+          );
+        }
       }
     }
 

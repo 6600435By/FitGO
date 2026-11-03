@@ -195,6 +195,13 @@ export function clubRevenueHasPaidMoney(e: {
   );
 }
 
+/** Closed client debt (СписаниеЗадолженности) — no cash, still SPA motivation base. */
+export function clubRevenueIsDebtWriteOff(e: {
+  operationType?: string | null;
+}): boolean {
+  return (e.operationType ?? '').toLowerCase() === 'debt_writeoff';
+}
+
 /**
  * Keys for open unpaid sales in ClubRevenue (scope=debt).
  * Doc keys: any unpaid collectible (PT / SPA / shop / membership) — match by
