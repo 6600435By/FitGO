@@ -1,9 +1,9 @@
-<#
+﻿<#
 .SYNOPSIS
   Register 1C RAS (Remote Administration Server) as a Windows service on port 1545.
 
 .DESCRIPTION
-  Night Backup-1C-Forma.ps1 needs rac → RAS on localhost:1545.
+  Night Backup-1C-Forma.ps1 needs rac -> RAS on localhost:1545.
   A console ras.exe dies after reboot / RDP logout. This installs a persistent service
   via NSSM (same tool FitGO uses) or falls back to sc.exe.
 
@@ -64,7 +64,7 @@ if (Test-Path -LiteralPath $NssmExe) {
   & $NssmExe set $ServiceName AppStderr 'C:\BackUp\ras-1545.err.log'
   & $NssmExe set $ServiceName AppRotateFiles 1
 } else {
-  Write-Host "NSSM not found at $NssmExe — using sc.exe" -ForegroundColor Yellow
+  Write-Host "NSSM not found at $NssmExe - using sc.exe" -ForegroundColor Yellow
   $bin = ('"{0}" {1}' -f $ras, $argsLine)
   & sc.exe create $ServiceName binPath= $bin start= auto DisplayName= '1C RAS (cluster admin port 1545)'
   if ($LASTEXITCODE -ne 0) { throw "sc create failed: $LASTEXITCODE" }

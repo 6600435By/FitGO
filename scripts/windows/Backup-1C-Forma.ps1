@@ -1,11 +1,11 @@
-<#
+﻿<#
 .SYNOPSIS
   Night DumpIB for 1C infobase "forma" with exclusive lock.
 
 .DESCRIPTION
   Compatible with Windows PowerShell 5.1 (Server 2016).
 
-  Stop-Apache alone is NOT enough: rphost "Фоновое задание" sessions stay alive
+  Stop-Apache alone is NOT enough: rphost "background job" sessions stay alive
   and block /DumpIB exclusive lock (seen 2026-11-03 00:56).
 
   This script:
@@ -232,7 +232,7 @@ function Clear-InfobaseSessions {
     $connections = @()
     foreach ($block in (Split-RacBlocks $connText)) {
       $cid = Get-RacField $block 'connection'
-      # Do NOT use $PID — automatic read-only var in PowerShell
+      # Do NOT use $PID - automatic read-only var in PowerShell
       $procId = Get-RacField $block 'process'
       if ($cid -and $procId) {
         $connections += [pscustomobject]@{ Connection = $cid; Process = $procId }
@@ -275,7 +275,7 @@ function Clear-InfobaseSessions {
     Start-Sleep -Seconds 2
   }
 
-  throw 'Sessions/connections still present after terminate rounds — refuse DumpIB'
+  throw 'Sessions/connections still present after terminate rounds - refuse DumpIB'
 }
 
 # --- bootstrap ---
@@ -395,7 +395,7 @@ try {
     } elseif ($svc) {
       Write-BackupLog ("{0} already stopped (status={1})" -f $ApacheService, $svc.Status)
     } else {
-      Write-BackupLog ("Apache service '{0}' not found — skip stop" -f $ApacheService)
+      Write-BackupLog ("Apache service '{0}' not found - skip stop" -f $ApacheService)
     }
   }
 
@@ -452,7 +452,7 @@ try {
       if ($dumpOk) { throw }
     }
   }
-  # Leave RAS running if we started it — next night needs 1545.
+  # Leave RAS running if we started it - next night needs 1545.
   if ($script:RasStartedByUs) {
     Write-BackupLog 'RAS left running (started by this script). Prefer Register-1C-RAS.ps1 as a Windows service.'
   }
