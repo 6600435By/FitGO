@@ -224,8 +224,17 @@ function Test-RacServiceConnectionError([string]$Message) {
   return $false
 }
 
+function Test-RacFatalParseError([string]$Message) {
+  # Wrong args for this rac subcommand - looping is useless
+  if ($Message -match 'разбора параметра|parse.*param|unknown option|неизвестн') {
+    return $true
+  }
+  return $false
+}
+
 function Clear-InfobaseSessions {
   $round = 0
+  $ibAuth = Get-IbAuthRacArgs
   while ($round -lt $TerminateRounds) {
     $round++
     $sessionText = Invoke-Rac -RacArgs @(
@@ -249,13 +258,10 @@ function Clear-InfobaseSessions {
       $cid = Get-RacField $block 'connection'
       # Do NOT use $PID - automatic read-only var in PowerShell
       $procId = Get-RacField $block 'process'
-      $appId = Get-RacField $block 'application'
-      if (-not $appId) { $appId = Get-RacField $block 'app-id' }
       if ($cid -and $procId) {
         $connections += [pscustomobject]@{
           Connection = $cid
           Process    = $procId
-          Application = $appId
         }
       }
     }
@@ -268,25 +274,30 @@ function Clear-InfobaseSessions {
     Write-BackupLog ('Round {0}: terminate {1} session(s), disconnect {2} connection(s).' -f `
       $round, $sessionIds.Count, $connections.Count)
 
-    $ibAuth = Get-IbAuthRacArgs
     $killedSomething = $false
     $onlyServiceLeft = $true
 
+    # rac 8.3.17 session terminate does NOT accept --infobase-user (parse error if passed)
     foreach ($sid in $sessionIds) {
       try {
-        [void](Invoke-Rac -RacArgs (@(
+        [void](Invoke-Rac -RacArgs @(
           'session', 'terminate',
           ('--cluster={0}' -f $script:ClusterId),
           ('--session={0}' -f $sid)
-        ) + $ibAuth))
+        ))
         $killedSomething = $true
         $onlyServiceLeft = $false
       } catch {
-        Write-BackupLog ("session terminate {0}: {1}" -f $sid, $_.Exception.Message)
+        $msg = $_.Exception.Message
+        if (Test-RacFatalParseError $msg) {
+          throw ("session terminate parse error (abort): {0}" -f $msg)
+        }
+        Write-BackupLog ("session terminate {0}: {1}" -f $sid, $msg)
         $onlyServiceLeft = $false
       }
     }
 
+    # connection disconnect needs IB admin credentials on this cluster
     foreach ($c in $connections) {
       try {
         [void](Invoke-Rac -RacArgs (@(
@@ -299,6 +310,9 @@ function Clear-InfobaseSessions {
         $onlyServiceLeft = $false
       } catch {
         $msg = $_.Exception.Message
+        if (Test-RacFatalParseError $msg) {
+          throw ("connection disconnect parse error (abort): {0}" -f $msg)
+        }
         if (Test-RacServiceConnectionError $msg) {
           Write-BackupLog ("skip service connection {0}" -f $c.Connection)
         } else {
@@ -447,8 +461,7 @@ try {
   Set-InfobaseSessionDeny -Deny $true
   $denied = $true
 
-  Clear-InfobaseSessions
-
+  # Stop Apache before terminate so HTTP does not recreate sessions mid-clear
   if (-not $SkipApacheStop) {
     $svc = Get-Service -Name $ApacheService -ErrorAction SilentlyContinue
     if ($svc -and $svc.Status -eq 'Running') {
@@ -456,14 +469,14 @@ try {
       Write-BackupLog ("Stopping {0}..." -f $ApacheService)
       Stop-Service -Name $ApacheService -Force
       Start-Sleep -Seconds $AfterStopWaitSec
-      # HTTP may have left sessions; clear again after Apache stop
-      Clear-InfobaseSessions
     } elseif ($svc) {
       Write-BackupLog ("{0} already stopped (status={1})" -f $ApacheService, $svc.Status)
     } else {
       Write-BackupLog ("Apache service '{0}' not found - skip stop" -f $ApacheService)
     }
   }
+
+  Clear-InfobaseSessions
 
   Write-BackupLog 'Starting DESIGNER DumpIB...'
   $argLine = @(
