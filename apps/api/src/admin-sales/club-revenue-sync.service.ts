@@ -27,6 +27,103 @@ import {
 
 const RESOURCE_KEY = 'club_revenue';
 
+/** Max extra /sales days to fill performer on open debt (LIGHT must stay light). */
+const DEBT_PERFORMER_ENRICH_MAX_DAYS = 45;
+
+function saleDocumentUuid(item: {
+  documentId?: string | null;
+  saleDocumentId?: string | null;
+}): string {
+  const direct = item.documentId?.trim();
+  if (direct) return direct;
+  const key = item.saleDocumentId?.trim() ?? '';
+  return key.split(':')[0]?.trim() || '';
+}
+
+function itemHasPerformer(item: FitgoAnalyticsSalesItem): boolean {
+  return Boolean(
+    item.performerExternalId?.trim() || item.performerName?.trim(),
+  );
+}
+
+/**
+ * Days to re-read /sales unpaid so debt rows get performer (and real SKU).
+ * Always includes the cash sync window. Extra soldAt days only when debt lacks
+ * performer — capped so LIGHT (1–2 days) does not fan out to the whole ledger.
+ */
+function debtPerformerEnrichDays(
+  unpaidDebt: FitgoAnalyticsSalesItem[],
+  syncDays: string[],
+): string[] {
+  const days = new Set(syncDays);
+  const missingSoldAt: string[] = [];
+  for (const item of unpaidDebt) {
+    if (itemHasPerformer(item)) continue;
+    const day = (item.soldAt ?? '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day)) missingSoldAt.push(day);
+  }
+  const uniqueMissing = [...new Set(missingSoldAt)].sort();
+  // FULL (~60d window): take all missing days up to cap.
+  // LIGHT: newest SPA-ish debts only (massage/service titles), max 10 extras.
+  const light = syncDays.length <= 3;
+  const extras = light
+    ? uniqueMissing
+        .filter((d) => {
+          const sample = unpaidDebt.find(
+            (i) => (i.soldAt ?? '').slice(0, 10) === d && !itemHasPerformer(i),
+          );
+          const title = `${sample?.productName ?? ''}`.toLowerCase();
+          return /массаж|спа|solarium|солярий|обёрт|пилинг|эпиляц|биоимпеданс|реформер|тренир/i.test(
+            title,
+          );
+        })
+        .slice(-10)
+    : uniqueMissing.slice(-DEBT_PERFORMER_ENRICH_MAX_DAYS);
+  for (const d of extras) days.add(d);
+  return [...days].sort();
+}
+
+/** Copy performer (+ placeholder product) from /sales unpaid onto scope=debt rows. */
+function enrichDebtItemsFromSalesUnpaid(
+  unpaidDebt: FitgoAnalyticsSalesItem[],
+  sales: FitgoAnalyticsSalesItem[],
+): void {
+  const byDoc = new Map<string, FitgoAnalyticsSalesItem>();
+  for (const s of sales) {
+    if (s.operationType !== 'unpaid') continue;
+    if (!itemHasPerformer(s) && !s.productName?.trim()) continue;
+    const doc = saleDocumentUuid(s);
+    if (!doc) continue;
+    const prev = byDoc.get(doc);
+    if (!prev || (!itemHasPerformer(prev) && itemHasPerformer(s))) {
+      byDoc.set(doc, s);
+    }
+  }
+  if (!byDoc.size) return;
+
+  const placeholderProduct = (name: string | null | undefined) => {
+    const t = (name ?? '').trim();
+    return !t || t === 'Долг' || /^продажа\s+\d+/i.test(t);
+  };
+
+  for (const d of unpaidDebt) {
+    const doc = saleDocumentUuid(d);
+    const src = doc ? byDoc.get(doc) : undefined;
+    if (!src) continue;
+    if (!itemHasPerformer(d) && itemHasPerformer(src)) {
+      d.performerExternalId = src.performerExternalId;
+      d.performerName = src.performerName;
+    }
+    if (placeholderProduct(d.productName) && src.productName?.trim()) {
+      d.productName = src.productName;
+      if (src.productExternalId) d.productExternalId = src.productExternalId;
+      if (src.productCode) d.productCode = src.productCode;
+      if (src.productGroupName) d.productGroupName = src.productGroupName;
+      if (src.saleType) d.saleType = src.saleType;
+    }
+  }
+}
+
 /** Free AllSports биоимпеданс from scope=sales (cash scope has no 0 BYN lines). */
 function isFreeAllSportsBioimpedanceSale(
   item: FitgoAnalyticsSalesItem,
@@ -299,6 +396,7 @@ export class ClubRevenueSyncService {
     if (!options.skipDebt) {
       // Open debt: prefer register balances (scope=debt). Old BSL falls through to
       // /sales for one day — then we pull unpaid lines day-by-day instead.
+      let unpaidDebt: FitgoAnalyticsSalesItem[] = [];
       try {
         const debtItems = await fetchSalesOnce(provider, {
           from: toStr,
@@ -309,7 +407,7 @@ export class ClubRevenueSyncService {
           (i.saleDocumentId ?? '').includes(':debt:'),
         );
         if (debtSnapshot) {
-          items.push(...debtItems.filter((i) => i.operationType === 'unpaid'));
+          unpaidDebt = debtItems.filter((i) => i.operationType === 'unpaid');
         }
       } catch {
         debtSnapshot = false;
@@ -331,13 +429,17 @@ export class ClubRevenueSyncService {
           );
         }
       } else {
-        // Debt snapshot covered unpaid; still need free partner sales from /sales.
-        for (let i = 0; i < days.length; i++) {
-          const day = days[i]!;
+        // scope=debt often omits performer (and sometimes product). Enrich from
+        // /sales unpaid for soldAt days, then keep debt keys for upsert.
+        const enrichDays = debtPerformerEnrichDays(unpaidDebt, days);
+        for (let i = 0; i < enrichDays.length; i++) {
+          const day = enrichDays[i]!;
           if (i > 0 && delay > 0) await sleep(delay);
           const sales = await fetchSalesOnce(provider, { from: day, to: day });
+          enrichDebtItemsFromSalesUnpaid(unpaidDebt, sales);
           items.push(...sales.filter(isFreeAllSportsBioimpedanceSale));
         }
+        items.push(...unpaidDebt);
       }
     } else {
       // Cash-only backfill: still pull free AllSports биоимпеданс for SPA link/payroll.

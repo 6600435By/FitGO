@@ -7,7 +7,9 @@ export type ClubRevenueOperationType =
   | 'sale'
   | 'personal_deposit'
   | 'personal_credit'
-  | 'personal_burn';
+  | 'personal_burn'
+  /** Closed via Документ.СписаниеЗадолженности — no cash, SPA/payroll base. */
+  | 'debt_writeoff';
 
 export type ClubRevenuePaymentMethod =
   | 'cash'
@@ -15,7 +17,9 @@ export type ClubRevenuePaymentMethod =
   | 'cashless'
   | 'personalAccount'
   | 'mixed'
-  | 'unknown';
+  | 'unknown'
+  | 'debt_writeoff'
+  | 'complimentary';
 
 /** Clickable summary metric → list filter */
 export type ClubRevenueSummaryFilter =

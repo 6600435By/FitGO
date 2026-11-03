@@ -242,8 +242,15 @@ export async function upsertRevenueRows(
         "clientName" = EXCLUDED."clientName",
         "employeeExternalId" = EXCLUDED."employeeExternalId",
         "employeeName" = EXCLUDED."employeeName",
-        "performerExternalId" = EXCLUDED."performerExternalId",
-        "performerName" = EXCLUDED."performerName",
+        -- scope=debt historically omits performer; never wipe a known specialist.
+        "performerExternalId" = COALESCE(
+          NULLIF(EXCLUDED."performerExternalId", ''),
+          "ClubRevenueEntry"."performerExternalId"
+        ),
+        "performerName" = COALESCE(
+          NULLIF(EXCLUDED."performerName", ''),
+          "ClubRevenueEntry"."performerName"
+        ),
         "countsTowardIncome" = EXCLUDED."countsTowardIncome",
         "countsTowardMotivation" = EXCLUDED."countsTowardMotivation",
         "isActive" = true,
