@@ -209,6 +209,21 @@ function Set-InfobaseSessionDeny {
   [void](Invoke-Rac -RacArgs $racArgs)
 }
 
+function Get-IbAuthRacArgs {
+  return @(
+    ('--infobase-user={0}' -f $script:IbUser),
+    ('--infobase-pwd={0}' -f $script:IbPassword)
+  )
+}
+
+function Test-RacServiceConnectionError([string]$Message) {
+  # "Служебное соединение не может быть удалено" / English variants
+  if ($Message -match 'службн|Service connection|cannot be (deleted|removed)|не может быть удален') {
+    return $true
+  }
+  return $false
+}
+
 function Clear-InfobaseSessions {
   $round = 0
   while ($round -lt $TerminateRounds) {
@@ -234,8 +249,14 @@ function Clear-InfobaseSessions {
       $cid = Get-RacField $block 'connection'
       # Do NOT use $PID - automatic read-only var in PowerShell
       $procId = Get-RacField $block 'process'
+      $appId = Get-RacField $block 'application'
+      if (-not $appId) { $appId = Get-RacField $block 'app-id' }
       if ($cid -and $procId) {
-        $connections += [pscustomobject]@{ Connection = $cid; Process = $procId }
+        $connections += [pscustomobject]@{
+          Connection = $cid
+          Process    = $procId
+          Application = $appId
+        }
       }
     }
 
@@ -247,35 +268,80 @@ function Clear-InfobaseSessions {
     Write-BackupLog ('Round {0}: terminate {1} session(s), disconnect {2} connection(s).' -f `
       $round, $sessionIds.Count, $connections.Count)
 
+    $ibAuth = Get-IbAuthRacArgs
+    $killedSomething = $false
+    $onlyServiceLeft = $true
+
     foreach ($sid in $sessionIds) {
       try {
-        [void](Invoke-Rac -RacArgs @(
+        [void](Invoke-Rac -RacArgs (@(
           'session', 'terminate',
           ('--cluster={0}' -f $script:ClusterId),
           ('--session={0}' -f $sid)
-        ))
+        ) + $ibAuth))
+        $killedSomething = $true
+        $onlyServiceLeft = $false
       } catch {
         Write-BackupLog ("session terminate {0}: {1}" -f $sid, $_.Exception.Message)
+        $onlyServiceLeft = $false
       }
     }
 
     foreach ($c in $connections) {
       try {
-        [void](Invoke-Rac -RacArgs @(
+        [void](Invoke-Rac -RacArgs (@(
           'connection', 'disconnect',
           ('--cluster={0}' -f $script:ClusterId),
           ('--process={0}' -f $c.Process),
           ('--connection={0}' -f $c.Connection)
-        ))
+        ) + $ibAuth))
+        $killedSomething = $true
+        $onlyServiceLeft = $false
       } catch {
-        Write-BackupLog ("connection disconnect {0}: {1}" -f $c.Connection, $_.Exception.Message)
+        $msg = $_.Exception.Message
+        if (Test-RacServiceConnectionError $msg) {
+          Write-BackupLog ("skip service connection {0}" -f $c.Connection)
+        } else {
+          Write-BackupLog ("connection disconnect {0}: {1}" -f $c.Connection, $msg)
+          $onlyServiceLeft = $false
+        }
       }
+    }
+
+    # Only undeletable service connection(s) remain - OK for DumpIB with /UC
+    if ($sessionIds.Count -eq 0 -and $onlyServiceLeft -and -not $killedSomething) {
+      Write-BackupLog ('Only service connection(s) remain (round {0}) - proceed to DumpIB.' -f $round)
+      return
     }
 
     Start-Sleep -Seconds 2
   }
 
-  throw 'Sessions/connections still present after terminate rounds - refuse DumpIB'
+  # Final check: empty or service-only
+  $connText = Invoke-Rac -RacArgs @(
+    'connection', 'list',
+    ('--cluster={0}' -f $script:ClusterId),
+    ('--infobase={0}' -f $script:InfobaseId)
+  )
+  $left = 0
+  foreach ($block in (Split-RacBlocks $connText)) {
+    if (Get-RacField $block 'connection') { $left++ }
+  }
+  $sessText = Invoke-Rac -RacArgs @(
+    'session', 'list',
+    ('--cluster={0}' -f $script:ClusterId),
+    ('--infobase={0}' -f $script:InfobaseId)
+  )
+  $sessLeft = 0
+  foreach ($block in (Split-RacBlocks $sessText)) {
+    if (Get-RacField $block 'session') { $sessLeft++ }
+  }
+  if ($sessLeft -eq 0 -and $left -le 1) {
+    Write-BackupLog ('After rounds: {0} connection(s), 0 sessions - proceed to DumpIB.' -f $left)
+    return
+  }
+
+  throw ('Sessions/connections still present after terminate rounds (sessions={0}, connections={1}) - refuse DumpIB' -f $sessLeft, $left)
 }
 
 # --- bootstrap ---
