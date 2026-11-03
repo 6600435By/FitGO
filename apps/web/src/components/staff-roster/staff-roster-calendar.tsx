@@ -104,6 +104,8 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
   const canEdit = mode === 'admin' || mode === 'super';
   /** SUPER_ADMIN may correct locked months; ADMIN cannot. */
   const canEditLockedMonths = mode === 'super';
+  /** SPA hours are not payroll StaffShift — admin/super may always edit. */
+  const spaBypassesRosterLock = isSpaTrack && canEdit;
   const monthSampleDate = `${year}-${pad(month)}-01`;
   const monthLocked = isRosterDateLocked(monthSampleDate);
   const firstWeekday = useMemo(() => {
@@ -114,6 +116,7 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
 
   const dayEditable = (dateStr: string) => {
     if (!canEdit) return false;
+    if (spaBypassesRosterLock) return true;
     if (!isRosterDateLocked(dateStr)) return true;
     return canEditLockedMonths;
   };
@@ -520,7 +523,7 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
         <p className="text-sm text-amber-300">{message}</p>
       )}
 
-      {monthLocked && mode !== 'trainer' && (
+      {monthLocked && mode !== 'trainer' && !spaBypassesRosterLock && (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
           {rosterLockMessage(monthSampleDate)}
           {canEditLockedMonths
@@ -544,7 +547,8 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
             const date = `${year}-${pad(month)}-${pad(day)}`;
             const shifts = shiftByDate.get(date) ?? [];
             const closed = clubDayHint(date) === 'закрыто';
-            const locked = isRosterDateLocked(date);
+            const locked =
+              isRosterDateLocked(date) && !spaBypassesRosterLock;
             const selected = selectedDate === date;
             return (
               <button

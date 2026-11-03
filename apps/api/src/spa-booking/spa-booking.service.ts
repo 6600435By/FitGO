@@ -2019,8 +2019,10 @@ export class SpaBookingService {
 
   /**
    * Replace hours for one calendar day.
+   * - forcePublish (admin): always PUBLISHED — club staff may set SPA shifts
+   *   even if the specialist never opened/published a draft horizon.
    * - Already-PUBLISHED day stays PUBLISHED when edited.
-   * - DRAFT day stays DRAFT.
+   * - DRAFT day stays DRAFT (specialist self-edit).
    * - Brand-new day: PUBLISHED only if it falls inside an already-published
    *   horizon; otherwise DRAFT.
    * Pass null/empty start+end to mark the day as off.
@@ -2030,6 +2032,7 @@ export class SpaBookingService {
     day: string,
     startTime?: string | null,
     endTime?: string | null,
+    opts?: { forcePublish?: boolean },
   ) {
     const { start, end, y, m, d } = localDayBounds(day);
     const hasStart = Boolean(startTime && String(startTime).trim());
@@ -2072,7 +2075,10 @@ export class SpaBookingService {
 
       let nextStatus: AvailabilityBlockStatus =
         AvailabilityBlockStatus.DRAFT;
-      if (hadPublished) {
+      if (opts?.forcePublish && blockStart && blockEnd) {
+        // Admin/manager: publish immediately so roster + client journal see hours.
+        nextStatus = AvailabilityBlockStatus.PUBLISHED;
+      } else if (hadPublished) {
         nextStatus = AvailabilityBlockStatus.PUBLISHED;
       } else if (hadDraft) {
         nextStatus = AvailabilityBlockStatus.DRAFT;
@@ -2140,7 +2146,9 @@ export class SpaBookingService {
     endTime?: string | null,
   ) {
     await this.assertClubSpecialist(user, specialistId);
-    return this.setDayHoursById(specialistId, day, startTime, endTime);
+    return this.setDayHoursById(specialistId, day, startTime, endTime, {
+      forcePublish: true,
+    });
   }
 
   private async getAvailabilityBlocksById(
