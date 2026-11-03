@@ -37,7 +37,9 @@ import {
   groupApprovalPhase,
   inferPaymentFromBasis,
   inferPayTag,
+  isPlaceholderClassEmployeeName,
   mapOnexStatusToControl,
+  normalizeClassEmployeeName,
   onexSessionKey,
   parseSessionKey,
   saleSessionKey,
@@ -396,8 +398,10 @@ export class BookingControlService {
         startAt: s.startAt.toISOString(),
         endAt: s.endAt?.toISOString(),
         status,
-        performerName: s.employeeName?.trim() || '—',
-        performerId,
+        performerName: normalizeClassEmployeeName(s.employeeName) || '—',
+        performerId: normalizeClassEmployeeName(s.employeeName)
+          ? performerId
+          : undefined,
         clientName:
           kind === 'GROUP'
             ? undefined
@@ -667,7 +671,42 @@ export class BookingControlService {
       }
     }
 
-    let out = items;
+    // Drop empty 1C stub twins (Сотрудник «- -», 0 записей) when a real
+    // sibling exists at the same title+time — e.g. duplicate «Йога FYSM».
+    const ghostDrop = new Set<string>();
+    const byTitleStart = new Map<string, BookingControlListItem[]>();
+    for (const i of items) {
+      if (i.kind !== 'GROUP' || i.source !== '1C') continue;
+      const k = `${i.title}\0${i.startAt}`;
+      const arr = byTitleStart.get(k);
+      if (arr) arr.push(i);
+      else byTitleStart.set(k, [i]);
+    }
+    for (const group of byTitleStart.values()) {
+      if (group.length < 2) continue;
+      const hasReal = group.some(
+        (g) =>
+          Boolean(g.performerName) &&
+          g.performerName !== '—' &&
+          !isPlaceholderClassEmployeeName(g.performerName),
+      );
+      if (!hasReal) continue;
+      for (const g of group) {
+        if (
+          (g.performerName === '—' ||
+            isPlaceholderClassEmployeeName(g.performerName)) &&
+          (g.bookedCount ?? 0) === 0 &&
+          (g.arrivedCount ?? 0) === 0
+        ) {
+          ghostDrop.add(g.sessionKey);
+        }
+      }
+    }
+
+    let out =
+      ghostDrop.size > 0
+        ? items.filter((i) => !ghostDrop.has(i.sessionKey))
+        : items;
 
     // Attach GROUP approval phase / waiting labels
     const groupKeys = out
@@ -1266,7 +1305,7 @@ export class BookingControlService {
             });
       }
 
-      const performerName = s.employeeName?.trim() || '—';
+      const performerName = normalizeClassEmployeeName(s.employeeName) || '—';
       const fitgoBookedAt = matched
         ? (matched as { createdAt: Date }).createdAt?.toISOString?.()
         : undefined;
@@ -1595,7 +1634,12 @@ export class BookingControlService {
     let sync: Awaited<ReturnType<ClassSessionsSyncService['syncClub']>>;
     try {
       // ClassSessionsSyncService pulls day-by-day (1C loads all refs in window).
-      sync = await this.classSessions.syncClub(clubId, { from, to });
+      // Wait up to 2 min if background club-sync holds the lock (was silent 0).
+      sync = await this.classSessions.syncClub(clubId, {
+        from,
+        to,
+        waitIfBusyMs: 120_000,
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new BadRequestException(
@@ -1675,6 +1719,10 @@ export class BookingControlService {
     const parts: string[] = [];
     if (sync.endpointMissing) {
       parts.push('Шаблон GET /v1/class-sessions ещё не опубликован в 1С.');
+    } else if (sync.skippedBusy) {
+      parts.push(
+        'Синхронизация занятий уже шла в фоне — повторите «Обновить из 1С» через минуту.',
+      );
     } else {
       parts.push(`Обновлено занятий: ${sync.sessionsUpserted}.`);
     }
@@ -3363,7 +3411,7 @@ export class BookingControlService {
         title: s.title,
         startAt: s.startAt.toISOString(),
         endAt: s.endAt?.toISOString(),
-        performerName: s.employeeName?.trim() || '—',
+        performerName: normalizeClassEmployeeName(s.employeeName) || '—',
         trainerName: row?.trainerName ?? undefined,
         trainerApprovedAt: row?.trainerApprovedAt?.toISOString(),
         roomTitle: s.roomTitle ?? undefined,

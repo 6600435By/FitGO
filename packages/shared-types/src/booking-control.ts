@@ -554,6 +554,29 @@ export function groupApprovalLabelRu(
   return undefined;
 }
 
+/**
+ * 1C often puts a catalog stub on Документ.Занятие.Сотрудник whose
+ * presentation is «-», «- -» or «Универсальный …» — not a real trainer.
+ */
+export function isPlaceholderClassEmployeeName(
+  name: string | null | undefined,
+): boolean {
+  const s = (name ?? '').trim();
+  if (!s) return true;
+  if (s === '-' || s === '- -' || s === '—' || s === '--') return true;
+  if (/универсальн/i.test(s)) return true;
+  return false;
+}
+
+/** Null when missing or a 1C stub; otherwise trimmed display name. */
+export function normalizeClassEmployeeName(
+  name: string | null | undefined,
+): string | null {
+  const s = (name ?? '').trim();
+  if (!s || isPlaceholderClassEmployeeName(s)) return null;
+  return s;
+}
+
 /** Queue segment on «Контроль записей» filter bar. */
 export type BookingControlQueueSegment = 'pending' | 'done' | 'upcoming';
 

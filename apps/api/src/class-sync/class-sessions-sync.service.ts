@@ -15,6 +15,7 @@ import type { FitgoClassSessionRow } from '@fitgo/1c-adapter';
 import {
   GROUP_SCHEDULE_HORIZON_DAYS,
   isSpaLikeSessionTitle,
+  normalizeClassEmployeeName,
 } from '@fitgo/shared-types';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -31,6 +32,8 @@ export type ClassSyncResult = {
   membersUpserted: number;
   journalsTouched: number;
   endpointMissing: boolean;
+  /** True when another sync held the club lock and this call gave up. */
+  skippedBusy?: boolean;
 };
 
 @Injectable()
@@ -69,17 +72,36 @@ export class ClassSessionsSyncService {
 
   async syncClub(
     clubId: string,
-    opts?: { from?: string; to?: string; forceYear?: boolean },
+    opts?: {
+      from?: string;
+      to?: string;
+      forceYear?: boolean;
+      /** Manual refresh: wait for in-flight club sync instead of silent 0. */
+      waitIfBusyMs?: number;
+    },
   ): Promise<ClassSyncResult> {
+    const emptyBusy = (from: string, to: string): ClassSyncResult => ({
+      from,
+      to,
+      sessionsUpserted: 0,
+      membersUpserted: 0,
+      journalsTouched: 0,
+      endpointMissing: false,
+      skippedBusy: true,
+    });
+    const winHint =
+      opts?.from && opts?.to
+        ? { from: opts.from, to: opts.to }
+        : { from: opts?.from ?? '', to: opts?.to ?? '' };
+
     if (this.running.has(clubId)) {
-      return {
-        from: opts?.from ?? '',
-        to: opts?.to ?? '',
-        sessionsUpserted: 0,
-        membersUpserted: 0,
-        journalsTouched: 0,
-        endpointMissing: false,
-      };
+      const waitMs = opts?.waitIfBusyMs ?? 0;
+      if (waitMs <= 0) return emptyBusy(winHint.from, winHint.to);
+      const deadline = Date.now() + waitMs;
+      while (this.running.has(clubId)) {
+        if (Date.now() >= deadline) return emptyBusy(winHint.from, winHint.to);
+        await new Promise((r) => setTimeout(r, 250));
+      }
     }
     this.running.add(clubId);
     try {
@@ -356,6 +378,11 @@ export class ClassSessionsSyncService {
       return { members: 0, journal: false };
     }
 
+    const employeeName = normalizeClassEmployeeName(row.employeeName);
+    const employeeExternalId = employeeName
+      ? row.employeeExternalId?.trim() || null
+      : null;
+
     const data = {
       number: row.number?.trim() || null,
       kind,
@@ -364,8 +391,8 @@ export class ClassSessionsSyncService {
       startAt,
       endAt,
       durationMin: row.durationMin ?? null,
-      employeeExternalId: row.employeeExternalId?.trim() || null,
-      employeeName: row.employeeName?.trim() || null,
+      employeeExternalId,
+      employeeName,
       roomTitle: row.roomTitle?.trim() || null,
       serviceExternalId: row.serviceExternalId?.trim() || null,
       fitgoBookingRef: row.fitgoBookingRef?.trim() || null,
@@ -573,6 +600,23 @@ export class ClassSessionsSyncService {
               endAt,
             },
           });
+        } else if (
+          existing.status === 'CONFIRMED' &&
+          (existing.trainerName !== session.employeeName ||
+            existing.title !== session.title ||
+            existing.startAt.getTime() !== session.startAt.getTime() ||
+            existing.endAt?.getTime() !== endAt.getTime())
+        ) {
+          // Keep client cards in sync when 1C changes trainer / time / title.
+          await this.prisma.groupClassBooking.update({
+            where: { id: existing.id },
+            data: {
+              title: session.title,
+              trainerName: session.employeeName,
+              startAt: session.startAt,
+              endAt,
+            },
+          });
         }
         continue;
       }
@@ -706,11 +750,15 @@ export class ClassSessionsSyncService {
       return false;
     }
 
+    // Prefer 1C employee; only keep previous journal trainer when 1C has none.
+    const hasOnexEmployee = Boolean(
+      session.employeeExternalId?.trim() || session.employeeName?.trim(),
+    );
     const trainer = await this.resolveTrainer(
       clubId,
       session.employeeExternalId,
       session.employeeName,
-      existing?.trainerId,
+      hasOnexEmployee ? undefined : existing?.trainerId,
     );
     if (!trainer) return false;
 
