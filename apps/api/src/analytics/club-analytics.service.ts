@@ -44,6 +44,7 @@ import { BookingControlService } from '../booking-control/booking-control.servic
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollService } from '../payroll/payroll.service';
 import { buildCapacityResolver } from './capacity-resolve';
+import { classifySpaPaymentBucket } from './staff-analytics.helpers';
 import {
   assertPeriod,
   metric,
@@ -1180,15 +1181,13 @@ export class ClubAnalyticsService {
     let allsports = 0;
     for (const s of spaCompleted) {
       const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
-      const payment = inferPaymentFromBasis(primary?.paymentBasis);
-      const paySource = (primary?.paySource ?? '').toUpperCase();
-      if (payment === 'PARTNER') {
-        allsports++;
-      } else if (payment === 'QUOTA' || paySource === 'PACKAGE') {
-        quota++;
-      } else if (payment === 'PAID' || paySource === 'SALE') {
-        paid++;
-      }
+      const bucket = classifySpaPaymentBucket({
+        paymentBasis: primary?.paymentBasis,
+        paySource: primary?.paySource,
+      });
+      if (bucket === 'PARTNER') allsports++;
+      else if (bucket === 'QUOTA') quota++;
+      else if (bucket === 'PAID') paid++;
     }
 
     return {

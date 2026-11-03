@@ -317,6 +317,7 @@ export interface SpaStaffKpi {
   newClients: number;
   /** New clients who returned within 60d. */
   repeatPct: number | null;
+  /** Massage/SPA ClubRevenue paidAmount for performer in the period (minor). */
   paidRevenueMinor: number;
   /** ATTENDED SPA members with VIP / «Все включено» payment basis (Абон.). */
   abonVisits: number;

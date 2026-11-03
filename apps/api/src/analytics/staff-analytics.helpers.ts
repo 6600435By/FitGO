@@ -49,15 +49,21 @@ export function classifySpaPaymentBucket(input: {
 }): 'QUOTA' | 'PAID' | 'PARTNER' | 'UNKNOWN' {
   const ps = (input.partnerSource ?? '').toUpperCase();
   if (ps.includes('ALLSPORT')) return 'PARTNER';
+  // FitGO journal payment type is authoritative when set.
   if (input.paymentType === SpaPaymentType.QUOTA) return 'QUOTA';
   if (input.paymentType === SpaPaymentType.PAID) return 'PAID';
 
   const payment = inferPaymentFromBasis(input.paymentBasis);
-  const paySource = (input.paySource ?? '').toUpperCase();
   if (payment === 'PARTNER') return 'PARTNER';
-  if (payment === 'QUOTA' || paySource === 'PACKAGE') return 'QUOTA';
-  if (payment === 'PAID' || paySource === 'SALE') return 'PAID';
+  // 1C often sets paySource=PACKAGE whenever paymentBasis is filled — prefer
+  // basis text (same note as classifyPtSessionOrigin). «Продажа N» stays PAID.
+  if (payment === 'QUOTA') return 'QUOTA';
+  if (payment === 'PAID' || payment === 'DEBT') return 'PAID';
   if (payment === 'GIFT') return 'UNKNOWN';
+
+  const paySource = (input.paySource ?? '').toUpperCase();
+  if (paySource === 'PACKAGE') return 'QUOTA';
+  if (paySource === 'SALE') return 'PAID';
   return 'UNKNOWN';
 }
 

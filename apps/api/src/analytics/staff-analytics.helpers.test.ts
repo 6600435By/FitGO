@@ -47,6 +47,21 @@ import {
     }),
     'PAID',
   );
+  // 1C tags one-shot «Продажа» write-offs as PACKAGE — basis wins.
+  assert.equal(
+    classifySpaPaymentBucket({
+      paymentBasis: 'Продажа 24679 от 04.08.2023',
+      paySource: 'PACKAGE',
+    }),
+    'PAID',
+  );
+  assert.equal(
+    classifySpaPaymentBucket({
+      paymentBasis: 'Пакет услуг "Блок массажа 5 новый" 73910 от 16.07.2026',
+      paySource: 'PACKAGE',
+    }),
+    'QUOTA',
+  );
   assert.equal(
     classifySpaPaymentBucket({
       paymentBasis: 'AllSports визит',
@@ -64,6 +79,12 @@ import {
       partnerSource: 'ALLSPORTS',
     }),
     'PARTNER',
+  );
+  assert.equal(
+    classifySpaPaymentBucket({
+      paySource: 'PACKAGE',
+    }),
+    'QUOTA',
   );
 }
 

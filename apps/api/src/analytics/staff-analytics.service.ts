@@ -15,7 +15,9 @@ import {
   inferPaymentFromBasis,
   isComplimentarySessionTitle,
   isMultiVisitPackSale,
+  isPlaceholderClassEmployeeName,
   isPtAllSportsSession,
+  isSpaLikeSessionTitle,
   visitMixFromCounts,
 } from '@fitgo/shared-types';
 import {
@@ -208,6 +210,14 @@ export class StaffAnalyticsService {
         // Manager rows: MANAGER viewer must not see other managers' pay / efficiency
         if (dept === 'MANAGER' && !isSuperAdmin) {
           if (s.id !== user.sub) continue;
+        }
+
+        // 1C stub «Универсальный …» is not a real SPA specialist.
+        if (
+          dept === 'SPECIALIST' &&
+          isPlaceholderClassEmployeeName(name)
+        ) {
+          continue;
         }
 
         let kpi: StaffDepartmentKpi | null = null;
@@ -1619,8 +1629,12 @@ export class StaffAnalyticsService {
     from: string,
     to: string,
   ) {
-    const specialists = staff.filter((s) =>
-      s.roles.some((r) => r.role === Role.SPECIALIST),
+    const specialists = staff.filter(
+      (s) =>
+        s.roles.some((r) => r.role === Role.SPECIALIST) &&
+        !isPlaceholderClassEmployeeName(
+          `${s.lastName} ${s.firstName}`.trim(),
+        ),
     );
     const map = new Map<string, StaffDepartmentKpi>();
     if (!specialists.length) return map;
@@ -1635,7 +1649,7 @@ export class StaffAnalyticsService {
     }
 
     const historyStart = rangeBounds(addDaysIso(from, -60), to).start;
-    const [bookings, onexRaw] = await Promise.all([
+    const [bookings, onexRaw, revenueRows] = await Promise.all([
       this.prisma.spaBooking.findMany({
         where: {
           clubId,
@@ -1688,6 +1702,29 @@ export class StaffAnalyticsService {
         },
         orderBy: { startAt: 'asc' },
       }),
+      // Выручка = оплаты массажа/SPA за период по исполнителю (не unitPrice занятия —
+      // в Onex он часто пустой; продажи живут в ClubRevenue).
+      this.prisma.clubRevenueEntry.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          countsTowardIncome: true,
+          occurredAt: { gte: start, lte: end },
+          OR: [
+            { saleType: 'massage' },
+            { productName: { contains: 'массаж', mode: 'insensitive' } },
+            { productName: { contains: 'биоимпеданс', mode: 'insensitive' } },
+            { productName: { contains: 'allsport', mode: 'insensitive' } },
+          ],
+        },
+        select: {
+          paidAmount: true,
+          saleType: true,
+          productName: true,
+          performerExternalId: true,
+          performerName: true,
+        },
+      }),
     ]);
 
     const onexSpa = onexRaw.filter((s) =>
@@ -1699,7 +1736,6 @@ export class StaffAnalyticsService {
       clientKey: string;
       startAt: Date;
       pay: 'QUOTA' | 'PAID' | 'PARTNER' | 'UNKNOWN';
-      revenueMinor: number;
     };
     const events: SpaEvt[] = [];
     const mixByUser = new Map<string, { abon: number; kp: number }>();
@@ -1731,8 +1767,6 @@ export class StaffAnalyticsService {
         paymentBasis: primary?.paymentBasis,
         paySource: primary?.paySource,
       });
-      const revenueMinor =
-        pay === 'PAID' ? Math.max(0, primary?.unitPriceMinor ?? 0) : 0;
       const clientKey =
         primary?.externalId?.trim() || `sess:${s.externalId}`;
       events.push({
@@ -1740,7 +1774,6 @@ export class StaffAnalyticsService {
         clientKey,
         startAt: s.startAt,
         pay,
-        revenueMinor,
       });
 
       if (s.startAt >= start && s.startAt <= end) {
@@ -1778,11 +1811,29 @@ export class StaffAnalyticsService {
         clientKey: key,
         startAt: b.startAt,
         pay,
-        revenueMinor:
-          pay === 'PAID' ? Math.max(0, b.priceMinor ?? 0) : 0,
       });
     }
     events.sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
+
+    const revenueByUser = new Map<string, number>();
+    for (const row of revenueRows) {
+      if (
+        row.saleType !== 'massage' &&
+        !isSpaLikeSessionTitle(row.productName)
+      ) {
+        continue;
+      }
+      const uid = resolveStaffUserId(
+        byExternal,
+        specialists,
+        row.performerExternalId,
+        row.performerName,
+      );
+      if (!uid) continue;
+      const minor = Math.round((Number(row.paidAmount) || 0) * 100);
+      if (minor === 0) continue;
+      revenueByUser.set(uid, (revenueByUser.get(uid) ?? 0) + minor);
+    }
 
     for (const sp of specialists) {
       const mine = events.filter((e) => e.specialistId === sp.id);
@@ -1794,14 +1845,11 @@ export class StaffAnalyticsService {
       let paid = 0;
       let allsports = 0;
       let unknown = 0;
-      let paidRevenue = 0;
       for (const e of inPeriod) {
         if (e.pay === 'PARTNER') allsports++;
         else if (e.pay === 'QUOTA') quota++;
-        else if (e.pay === 'PAID') {
-          paid++;
-          paidRevenue += e.revenueMinor;
-        } else unknown++;
+        else if (e.pay === 'PAID') paid++;
+        else unknown++;
       }
 
       const firstByClient = new Map<string, Date>();
@@ -1842,7 +1890,7 @@ export class StaffAnalyticsService {
           newClients.length > 0
             ? Math.round((repeats / newClients.length) * 1000) / 10
             : null,
-        paidRevenueMinor: paidRevenue,
+        paidRevenueMinor: revenueByUser.get(sp.id) ?? 0,
         ...mix,
       });
     }
