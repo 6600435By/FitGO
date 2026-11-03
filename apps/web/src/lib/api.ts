@@ -505,7 +505,10 @@ export const api = {
       } | null;
     }>('/staff/sync/status', {}, token),
 
-  postStaffSyncRefresh: (token: string) =>
+  postStaffSyncRefresh: (
+    token: string,
+    opts?: { profile?: 'LIGHT' | 'FULL' },
+  ) =>
     request<{
       status: 'started' | 'running' | 'cooldown' | 'already_nightly';
       reason?: 'manual_cooldown' | 'night_window';
@@ -524,7 +527,16 @@ export const api = {
       cooldownUntil: string | null;
       inNightWindow: boolean;
       lastError: string | null;
-    }>('/staff/sync/refresh', { method: 'POST', body: '{}' }, token),
+    }>(
+      '/staff/sync/refresh',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          profile: opts?.profile === 'FULL' ? 'FULL' : 'LIGHT',
+        }),
+      },
+      token,
+    ),
 
   clientDashboard: (token: string) =>
     request<ClientDashboard>('/client/dashboard', {}, token),

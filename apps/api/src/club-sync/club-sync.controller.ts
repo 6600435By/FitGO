@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Post,
   UseGuards,
@@ -45,8 +46,9 @@ export class ClubSyncController {
   }
 
   /**
-   * One light club-wide pull. Second concurrent caller gets { status: 'running' }.
-   * Admins / super-admins / managers.
+   * Club-wide pull. Default LIGHT (desk admins).
+   * FULL (= nightly dump) — super-admin / manager only.
+   * Second concurrent caller gets { status: 'running' }.
    */
   @Post('refresh')
   @Roles(SharedUserRole.ADMIN, SharedUserRole.SUPER_ADMIN, SharedUserRole.MANAGER)
@@ -55,8 +57,18 @@ export class ClubSyncController {
     @Body() body?: { profile?: 'LIGHT' | 'FULL' },
   ) {
     const clubId = requireClubId(user);
-    const profile =
-      body?.profile === 'FULL' ? ClubSyncProfile.FULL : ClubSyncProfile.LIGHT;
+    const wantFull = body?.profile === 'FULL';
+    if (wantFull) {
+      const canFull =
+        user.roles.includes(SharedUserRole.SUPER_ADMIN) ||
+        user.roles.includes(SharedUserRole.MANAGER);
+      if (!canFull) {
+        throw new ForbiddenException(
+          'Полную выгрузку (FULL) могут запускать управляющий и супер-админ',
+        );
+      }
+    }
+    const profile = wantFull ? ClubSyncProfile.FULL : ClubSyncProfile.LIGHT;
     const result = await this.orchestrator.start(clubId, {
       trigger: ClubSyncTrigger.MANUAL,
       profile,

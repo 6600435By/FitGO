@@ -7,6 +7,7 @@ import {
 } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
 import { AdminThemeSettingRow } from '@/components/admin/admin-theme';
+import { ClubFullSyncCard } from '@/components/admin/club-full-sync-card';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -87,10 +88,12 @@ export default function SuperAdminClubSettingsPage() {
           Настройки клуба
         </h1>
         <p className="mt-0.5 hidden text-xs text-slate-400 sm:block sm:text-sm">
-          Брендинг и часы работы. Часы ограничивают смены в графике и участвуют в
-          расчёте ЗП по отработанным часам.
+          Брендинг, часы работы и полная выгрузка из 1С. Часы ограничивают смены
+          в графике и участвуют в расчёте ЗП по отработанным часам.
         </p>
       </header>
+
+      <ClubFullSyncCard />
 
       <div className="card space-y-4">
         <h2 className="text-lg font-medium text-white">Оформление кабинета</h2>
