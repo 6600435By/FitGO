@@ -12,6 +12,7 @@ import {
   SPA_OVERLAP_ALLOW_MIN,
   checkSpaPlacement,
   computeSpaFreeWindows,
+  isSpaTimeBlock,
   packSpaBookingLanes,
 } from '@fitgo/shared-types';
 import {
@@ -235,6 +236,8 @@ export function SpaBoard({
   onEmptySlotClick?: (args: {
     specialistId: string;
     startAt: Date;
+    /** End of free gap when clicking a «свободно» strip. */
+    endAt?: Date;
   }) => void;
   onBookingDoubleClick?: (booking: SpaBoardBooking) => void;
   onBookingMove?: (args: {
@@ -878,7 +881,11 @@ export function SpaBoard({
                 onClick={(e) => {
                   e.stopPropagation();
                   if (!own || !onEmptySlotClick) return;
-                  onEmptySlotClick({ specialistId: staff.id, startAt });
+                  onEmptySlotClick({
+                    specialistId: staff.id,
+                    startAt,
+                    endAt: new Date(w.endMs),
+                  });
                 }}
               >
                 <span className="font-medium">
@@ -981,17 +988,24 @@ export function SpaBoard({
                         b.clientNote || b.visitNote ? 'pr-5' : ''
                       }`}
                     >
-                      {b.clientName ?? 'Клиент'}
+                      {isSpaTimeBlock(b) ? 'Закрыто' : (b.clientName ?? 'Клиент')}
                     </p>
-                    <p className="spa-booking-cell-meta truncate text-amber-100">
-                      {b.serviceName}
-                    </p>
+                    {isSpaTimeBlock(b) ? (
+                      <p className="spa-booking-cell-meta truncate text-slate-400">
+                        блок времени
+                      </p>
+                    ) : (
+                      <p className="spa-booking-cell-meta truncate text-amber-100">
+                        {b.serviceName}
+                      </p>
+                    )}
                     {peerOverlap > 0 ? (
                       <p className="spa-booking-cell-meta truncate text-amber-100">
                         ∩ {peerOverlap} мин
                       </p>
                     ) : null}
-                    {b.oneCLinkStatus === 'NOT_LINKED' &&
+                    {!isSpaTimeBlock(b) &&
+                    b.oneCLinkStatus === 'NOT_LINKED' &&
                     !b.manualPaymentConfirmed ? (
                       <p className="truncate text-rose-300">Нет в 1С</p>
                     ) : null}

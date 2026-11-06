@@ -4,6 +4,20 @@ export const SPA_OVERLAP_ALLOW_MIN = 15;
 /** Gaps shorter than this are not shown as free-time strips. */
 export const SPA_FREE_GAP_MIN = 15;
 
+/** Staff «закрыть запись» placeholder occupying a free gap. */
+export const SPA_TIME_BLOCK_GUEST_NAME = 'Закрыто';
+export const SPA_TIME_BLOCK_ALIAS = '__TIME_BLOCK__';
+
+export function isSpaTimeBlock(booking: {
+  guestAlias?: string | null;
+  guestName?: string | null;
+}): boolean {
+  return (
+    booking.guestAlias === SPA_TIME_BLOCK_ALIAS ||
+    booking.guestName === SPA_TIME_BLOCK_GUEST_NAME
+  );
+}
+
 export type SpaIntervalMs = {
   startMs: number;
   endMs: number;

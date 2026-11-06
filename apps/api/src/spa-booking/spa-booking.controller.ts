@@ -20,6 +20,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { RequireModule } from '../features/require-module.decorator';
 import { ModuleGuard } from '../features/module.guard';
 import { AssignSpaBookingDto } from './dto/assign-spa-booking.dto';
+import { BlockSpaSlotDto } from './dto/block-spa-slot.dto';
 import {
   SetSpaQuotaRulesDto,
   SetSpecialistServicesDto,
@@ -345,6 +346,19 @@ export class SpaBookingController {
     });
   }
 
+  @Post('specialist/spa-bookings/block')
+  @Roles(UserRole.SPECIALIST)
+  specialistBlockSlot(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: BlockSpaSlotDto,
+  ) {
+    return this.spa.specialistBlockSpaSlot(user, {
+      startAt: dto.startAt,
+      endAt: dto.endAt,
+      note: dto.note,
+    });
+  }
+
   @Post('specialist/spa-bookings/bulk')
   @Roles(UserRole.SPECIALIST)
   specialistBulkAssign(
@@ -615,6 +629,23 @@ export class SpaBookingController {
       membershipServiceName: dto.membershipServiceName,
       visitNote: dto.visitNote,
       overlapConfirmed: dto.overlapConfirmed,
+    });
+  }
+
+  @Post('admin/spa-bookings/block')
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  adminBlockSlot(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: BlockSpaSlotDto,
+  ) {
+    if (!dto.specialistId) {
+      throw new BadRequestException('Укажите специалиста');
+    }
+    return this.spa.adminBlockSpaSlot(user, {
+      specialistId: dto.specialistId,
+      startAt: dto.startAt,
+      endAt: dto.endAt,
+      note: dto.note,
     });
   }
 

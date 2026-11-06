@@ -31,6 +31,8 @@ import {
   SessionType,
   SPA_MAX_STACK_DEPTH,
   SPA_OVERLAP_ALLOW_MIN,
+  SPA_TIME_BLOCK_ALIAS,
+  SPA_TIME_BLOCK_GUEST_NAME,
   SPA_WAITLIST_MAX_WINDOW_DAYS,
   SPA_WAITLIST_WEEKDAY_ALL,
   spaCatalogMatchesMembershipLine,
@@ -1714,6 +1716,142 @@ export class SpaBookingService {
     },
   ) {
     return this.bookSpa(user, {
+      ...dto,
+      origin: SpaBookingOrigin.ADMIN_ASSIGNED,
+    });
+  }
+
+  /**
+   * Block a free gap so clients cannot book it («Закрыть запись»).
+   * Stored as a PAID guest booking with a marker alias; duration follows endAt.
+   */
+  async blockSpaSlot(
+    actor: JwtPayload,
+    input: {
+      specialistId: string;
+      startAt: string;
+      endAt?: string;
+      note?: string;
+      origin: SpaBookingOrigin;
+    },
+  ) {
+    const start = new Date(input.startAt);
+    if (Number.isNaN(start.getTime())) {
+      throw new BadRequestException('Некорректное начало');
+    }
+    const end = input.endAt
+      ? new Date(input.endAt)
+      : new Date(start.getTime() + 30 * 60_000);
+    if (Number.isNaN(end.getTime()) || end <= start) {
+      throw new BadRequestException('Некорректный конец интервала');
+    }
+    if (end.getTime() - start.getTime() > 8 * 60 * 60_000) {
+      throw new BadRequestException('Слишком длинный блок (макс. 8 ч)');
+    }
+
+    const clubId = requireClubId(actor);
+    const specialist = await this.prisma.user.findFirst({
+      where: { id: input.specialistId, clubId },
+      select: { id: true },
+    });
+    if (!specialist) throw new NotFoundException('Специалист не найден');
+
+    const link = await this.prisma.specialistService.findFirst({
+      where: {
+        specialistId: input.specialistId,
+        service: { clubId, active: true },
+      },
+      select: { serviceId: true },
+      orderBy: { service: { durationMin: 'asc' } },
+    });
+    if (!link) {
+      throw new BadRequestException('У специалиста нет активных услуг');
+    }
+
+    const visitNote = normalizeSpaNoteText(input.note) || null;
+    const control = this.serviceUsage.controlFieldsForCreate({
+      origin: input.origin,
+      paymentType: 'PAID',
+      bookedByUserId: actor.sub,
+    });
+
+    let booking;
+    try {
+      booking = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          SELECT pg_advisory_xact_lock(hashtext(${input.specialistId}))
+        `;
+        await this.assertStaffBookingWindow(
+          input.specialistId,
+          start,
+          end,
+          undefined,
+          false,
+          tx,
+        );
+        return tx.spaBooking.create({
+          data: {
+            clubId,
+            specialistId: input.specialistId,
+            clientId: null,
+            guestName: SPA_TIME_BLOCK_GUEST_NAME,
+            guestAlias: SPA_TIME_BLOCK_ALIAS,
+            guestPhone: null,
+            clientExternalId: null,
+            oneCLinkStatus: SpaOneCLinkStatus.NOT_LINKED,
+            serviceId: link.serviceId,
+            startAt: start,
+            endAt: end,
+            status: SpaBookingStatus.CONFIRMED,
+            origin: input.origin,
+            paymentType: SpaPaymentType.PAID,
+            priceMinor: 0,
+            visitNote,
+            controlLevel: control.controlLevel,
+            reviewFlag: control.reviewFlag,
+            paymentStatus: control.paymentStatus,
+            usageStatus: control.usageStatus,
+            presenceStatus: control.presenceStatus,
+            performanceStatus: control.performanceStatus,
+            eligibleForMotivation: false,
+            bookedByUserId: control.bookedByUserId,
+          },
+          include: {
+            specialist: true,
+            client: true,
+            service: true,
+          },
+        });
+      });
+    } catch (err) {
+      this.mapSpaBookingWriteError(err);
+    }
+
+    return { booking: this.mapBooking(booking), membership: null };
+  }
+
+  async specialistBlockSpaSlot(
+    user: JwtPayload,
+    dto: { startAt: string; endAt?: string; note?: string },
+  ) {
+    return this.blockSpaSlot(user, {
+      ...dto,
+      specialistId: user.sub,
+      origin: SpaBookingOrigin.SPECIALIST_ASSIGNED,
+    });
+  }
+
+  async adminBlockSpaSlot(
+    user: JwtPayload,
+    dto: {
+      specialistId: string;
+      startAt: string;
+      endAt?: string;
+      note?: string;
+    },
+  ) {
+    await this.assertClubSpecialist(user, dto.specialistId);
+    return this.blockSpaSlot(user, {
       ...dto,
       origin: SpaBookingOrigin.ADMIN_ASSIGNED,
     });

@@ -1093,30 +1093,19 @@ function AdminSpaWorkspaceInner() {
                 }}
                 filterSpecialistId={weekFilterSpecialistId}
                 onFilterSpecialistChange={setWeekFilterSpecialistId}
-                onEmptySlotClick={({ specialistId, startAt }) => {
+                onEmptySlotClick={({ specialistId, startAt, endAt }) => {
                   const iso = startAt.toISOString();
-                  const matches = matchingWaitlist(specialistId, iso);
-                  if (
-                    matches.length > 0 ||
-                    waitlist.some((e) => e.specialistId === specialistId)
-                  ) {
-                    setWaitlistPick({
-                      specialistId,
-                      startAt: iso,
-                      title: 'Свободный слот',
-                      allowNew: true,
-                    });
-                    setAssignDefaults({
-                      specialistId,
-                      startAt: toDatetimeLocalValue(startAt),
-                    });
-                    return;
-                  }
                   setAssignDefaults({
                     specialistId,
                     startAt: toDatetimeLocalValue(startAt),
                   });
-                  setShowAssign(true);
+                  setWaitlistPick({
+                    specialistId,
+                    startAt: iso,
+                    endAt: endAt?.toISOString(),
+                    title: 'Свободный слот',
+                    allowNew: true,
+                  });
                 }}
                 onBookingDoubleClick={(b) => {
                   if (!b.busy) setSelectedBooking(b);
@@ -1130,30 +1119,19 @@ function AdminSpaWorkspaceInner() {
                 day={day}
                 onDayChange={setDay}
                 focusSpecialistId={focusSpecialistId || undefined}
-                onEmptySlotClick={({ specialistId, startAt }) => {
+                onEmptySlotClick={({ specialistId, startAt, endAt }) => {
                   const iso = startAt.toISOString();
-                  const matches = matchingWaitlist(specialistId, iso);
-                  if (
-                    matches.length > 0 ||
-                    waitlist.some((e) => e.specialistId === specialistId)
-                  ) {
-                    setWaitlistPick({
-                      specialistId,
-                      startAt: iso,
-                      title: 'Свободный слот',
-                      allowNew: true,
-                    });
-                    setAssignDefaults({
-                      specialistId,
-                      startAt: toDatetimeLocalValue(startAt),
-                    });
-                    return;
-                  }
                   setAssignDefaults({
                     specialistId,
                     startAt: toDatetimeLocalValue(startAt),
                   });
-                  setShowAssign(true);
+                  setWaitlistPick({
+                    specialistId,
+                    startAt: iso,
+                    endAt: endAt?.toISOString(),
+                    title: 'Свободный слот',
+                    allowNew: true,
+                  });
                 }}
                 onBookingDoubleClick={(b) => {
                   if (!b.busy) setSelectedBooking(b);
@@ -1233,6 +1211,12 @@ function AdminSpaWorkspaceInner() {
             defaultStartAt={assignDefaults.startAt}
             boardHours={board?.hours}
             boardBookings={board?.bookings}
+            fetchBoardRange={async (from, to) => {
+              const token = getToken();
+              if (!token) return { hours: [], bookings: [] };
+              const brd = await api.adminSpaBoard(token, from, to);
+              return { hours: brd.hours, bookings: brd.bookings };
+            }}
             busy={busy}
             onSubmit={assignFromDialog}
             onBulkSubmit={bulkAssignFromDialog}
@@ -1256,6 +1240,41 @@ function AdminSpaWorkspaceInner() {
                 ? () => {
                     setWaitlistPick(null);
                     setShowAssign(true);
+                  }
+                : undefined
+            }
+            onBlockSlot={
+              waitlistPick?.startAt && waitlistPick.specialistId
+                ? async () => {
+                    const token = getToken();
+                    if (
+                      !token ||
+                      !waitlistPick.startAt ||
+                      !waitlistPick.specialistId
+                    ) {
+                      return;
+                    }
+                    setBusy(true);
+                    setMessage('');
+                    try {
+                      await api.adminBlockSpaSlot(token, {
+                        specialistId: waitlistPick.specialistId,
+                        startAt: waitlistPick.startAt,
+                        endAt: waitlistPick.endAt,
+                      });
+                      setWaitlistPick(null);
+                      setMessage('Время закрыто для записи');
+                      await reload();
+                    } catch (err) {
+                      setMessage(
+                        err instanceof Error
+                          ? err.message
+                          : 'Не удалось закрыть',
+                      );
+                      throw err;
+                    } finally {
+                      setBusy(false);
+                    }
                   }
                 : undefined
             }

@@ -11,6 +11,7 @@ import {
   SPA_OVERLAP_ALLOW_MIN,
   checkSpaPlacement,
   computeSpaFreeWindows,
+  isSpaTimeBlock,
   packSpaBookingLanes,
 } from '@fitgo/shared-types';
 import {
@@ -122,6 +123,7 @@ function formatMonthTitle(anchor: Date, dayCount: number) {
 /** Surname (or first token) for compact journal cells. */
 function shortClientName(b: SpaBoardBooking): string {
   if (b.busy) return 'Занято';
+  if (isSpaTimeBlock(b)) return 'Закрыто';
   const raw = (b.clientName || b.guestName || 'Клиент').trim();
   if (!raw) return 'Клиент';
   const parts = raw.split(/\s+/);
@@ -130,6 +132,7 @@ function shortClientName(b: SpaBoardBooking): string {
 
 function bookingTitle(b: SpaBoardBooking, timeStart: string, timeEnd: string) {
   if (b.busy) return `${timeStart}–${timeEnd} · Занято`;
+  if (isSpaTimeBlock(b)) return `${timeStart}–${timeEnd} · Закрыто`;
   const name = b.clientName || b.guestName || 'Клиент';
   const svc = b.serviceName ? ` · ${b.serviceName}` : '';
   return `${timeStart}–${timeEnd} · ${name}${svc}`;
@@ -244,6 +247,7 @@ function isTouchPointer(pointerType: string) {
 
 function clientLabel(b: SpaBoardBooking) {
   if (b.busy) return 'Занято';
+  if (isSpaTimeBlock(b)) return 'Закрыто';
   return b.clientName || b.guestName || 'Клиент';
 }
 
@@ -306,6 +310,8 @@ export function SpaWeekBoard({
   onEmptySlotClick?: (args: {
     specialistId: string;
     startAt: Date;
+    /** End of free gap when clicking a «свободно» strip. */
+    endAt?: Date;
   }) => void;
   onBookingDoubleClick?: (booking: SpaBoardBooking) => void;
   onBookingMove?: (args: {
@@ -1464,6 +1470,7 @@ export function SpaWeekBoard({
                               onEmptySlotClick({
                                 specialistId: sid,
                                 startAt: new Date(w.startMs),
+                                endAt: new Date(w.endMs),
                               });
                             }}
                           >
@@ -1623,7 +1630,8 @@ export function SpaWeekBoard({
                                 {height >= 44 &&
                                 !showMulti &&
                                 b.serviceName &&
-                                !b.busy ? (
+                                !b.busy &&
+                                !isSpaTimeBlock(b) ? (
                                   <p className="hidden truncate text-[9px] text-white/80 sm:block">
                                     {b.serviceName}
                                   </p>

@@ -20,6 +20,7 @@ export function SpaWaitlistPickDialog({
   onClose,
   onBook,
   onNewBooking,
+  onBlockSlot,
 }: {
   open: boolean;
   title?: string;
@@ -34,6 +35,8 @@ export function SpaWaitlistPickDialog({
   onClose: () => void;
   onBook: (entry: SpaWaitlistEntry) => Promise<void>;
   onNewBooking?: () => void;
+  /** Block this free gap so clients cannot book it. */
+  onBlockSlot?: () => Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -129,7 +132,7 @@ export function SpaWaitlistPickDialog({
         </div>
 
         <p className="text-xs text-slate-400">
-          Выберите клиента из листа или создайте обычную запись.
+          Выберите клиента из листа, создайте запись или закройте время.
         </p>
 
         {list.length === 0 ? (
@@ -210,6 +213,18 @@ export function SpaWaitlistPickDialog({
               onClick={onNewBooking}
             >
               Новая запись
+            </button>
+          ) : null}
+          {onBlockSlot ? (
+            <button
+              type="button"
+              className="btn-secondary w-full"
+              disabled={busy || !slotStartAt}
+              onClick={() => {
+                void onBlockSlot();
+              }}
+            >
+              Закрыть запись
             </button>
           ) : null}
         </div>

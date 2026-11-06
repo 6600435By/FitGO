@@ -1185,6 +1185,16 @@ export const api = {
       token,
     ),
 
+  specialistBlockSpaSlot: (
+    token: string,
+    data: { startAt: string; endAt?: string; note?: string },
+  ) =>
+    request<{ booking: SpaBooking; membership: Membership | null }>(
+      '/specialist/spa-bookings/block',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
   specialistBulkAssignSpaBooking: (
     token: string,
     data: {
@@ -1436,6 +1446,21 @@ export const api = {
   ) =>
     request<{ booking: SpaBooking; membership: Membership | null }>(
       '/admin/spa-bookings',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  adminBlockSpaSlot: (
+    token: string,
+    data: {
+      specialistId: string;
+      startAt: string;
+      endAt?: string;
+      note?: string;
+    },
+  ) =>
+    request<{ booking: SpaBooking; membership: Membership | null }>(
+      '/admin/spa-bookings/block',
       { method: 'POST', body: JSON.stringify(data) },
       token,
     ),

@@ -564,22 +564,19 @@ function SpecialistScheduleInner() {
               setDay(d);
               changeBoardView('day');
             }}
-            onEmptySlotClick={({ specialistId, startAt }) => {
+            onEmptySlotClick={({ specialistId, startAt, endAt }) => {
               if (me?.id && specialistId !== me.id) return;
               const iso = startAt.toISOString();
               setAssignDefaults({
                 startAt: toDatetimeLocalValue(startAt),
               });
-              if (waitlist.length > 0) {
-                setWaitlistPick({
-                  specialistId,
-                  startAt: iso,
-                  title: 'Свободный слот',
-                  allowNew: true,
-                });
-                return;
-              }
-              setShowAssign(true);
+              setWaitlistPick({
+                specialistId,
+                startAt: iso,
+                endAt: endAt?.toISOString(),
+                title: 'Свободный слот',
+                allowNew: true,
+              });
             }}
             onBookingDoubleClick={(b) => {
               if (!b.busy) setSelectedBooking(b);
@@ -593,22 +590,19 @@ function SpecialistScheduleInner() {
             viewerSpecialistId={me?.id}
             day={day}
             onDayChange={setDay}
-            onEmptySlotClick={({ specialistId, startAt }) => {
+            onEmptySlotClick={({ specialistId, startAt, endAt }) => {
               if (me?.id && specialistId !== me.id) return;
               const iso = startAt.toISOString();
               setAssignDefaults({
                 startAt: toDatetimeLocalValue(startAt),
               });
-              if (waitlist.length > 0) {
-                setWaitlistPick({
-                  specialistId,
-                  startAt: iso,
-                  title: 'Свободный слот',
-                  allowNew: true,
-                });
-                return;
-              }
-              setShowAssign(true);
+              setWaitlistPick({
+                specialistId,
+                startAt: iso,
+                endAt: endAt?.toISOString(),
+                title: 'Свободный слот',
+                allowNew: true,
+              });
             }}
             onBookingDoubleClick={(b) => {
               if (!b.busy) setSelectedBooking(b);
@@ -723,6 +717,12 @@ function SpecialistScheduleInner() {
         defaultStartAt={assignDefaults.startAt}
         boardHours={board?.hours}
         boardBookings={board?.bookings}
+        fetchBoardRange={async (from, to) => {
+          const token = getToken();
+          if (!token) return { hours: [], bookings: [] };
+          const brd = await api.specialistSpaBoard(token, from, to);
+          return { hours: brd.hours, bookings: brd.bookings };
+        }}
         busy={busy}
         onSubmit={assignClient}
         onBulkSubmit={bulkAssignClient}
@@ -745,6 +745,34 @@ function SpecialistScheduleInner() {
             ? () => {
                 setWaitlistPick(null);
                 setShowAssign(true);
+              }
+            : undefined
+        }
+        onBlockSlot={
+          waitlistPick?.startAt && waitlistPick.specialistId
+            ? async () => {
+                const token = getToken();
+                if (!token || !waitlistPick.startAt || !waitlistPick.specialistId) {
+                  return;
+                }
+                setBusy(true);
+                setMessage('');
+                try {
+                  await api.specialistBlockSpaSlot(token, {
+                    startAt: waitlistPick.startAt,
+                    endAt: waitlistPick.endAt,
+                  });
+                  setWaitlistPick(null);
+                  setMessage('Время закрыто для записи');
+                  await reload();
+                } catch (err) {
+                  setMessage(
+                    err instanceof Error ? err.message : 'Не удалось закрыть',
+                  );
+                  throw err;
+                } finally {
+                  setBusy(false);
+                }
               }
             : undefined
         }

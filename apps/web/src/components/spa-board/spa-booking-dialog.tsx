@@ -128,6 +128,7 @@ export function SpaBookingDialog({
   allowPickSpecialist,
   boardHours,
   boardBookings,
+  fetchBoardRange,
   onSubmit,
   onBulkSubmit,
   busy,
@@ -144,6 +145,11 @@ export function SpaBookingDialog({
   /** Current board data for «Куда влезет» suggestions. */
   boardHours?: SpaBoardHourBlock[];
   boardBookings?: SpaBoardBooking[];
+  /** Load hours/bookings for period dates beyond the visible board window. */
+  fetchBoardRange?: (
+    fromIso: string,
+    toIso: string,
+  ) => Promise<{ hours: SpaBoardHourBlock[]; bookings: SpaBoardBooking[] }>;
   onSubmit: (payload: BookingPayload) => Promise<void>;
   onBulkSubmit?: (
     payload: BookingPayload & {
@@ -170,6 +176,12 @@ export function SpaBookingDialog({
   const [skippedRows, setSkippedRows] = useState<
     Array<{ date: string; reason: string }>
   >([]);
+  const [rangeHours, setRangeHours] = useState<SpaBoardHourBlock[] | null>(
+    null,
+  );
+  const [rangeBookings, setRangeBookings] = useState<SpaBoardBooking[] | null>(
+    null,
+  );
   const [form, setForm] = useState({
     specialistId: defaultSpecialistId ?? '',
     clientId: '',
@@ -306,6 +318,33 @@ export function SpaBookingDialog({
     setOverlapConfirmed(false);
   }, [open, form.startAt, form.serviceId, form.specialistId]);
 
+  useEffect(() => {
+    if (!open || !periodMode || !fetchBoardRange || periodEntries.length === 0) {
+      setRangeHours(null);
+      setRangeBookings(null);
+      return;
+    }
+    const dates = [...periodEntries.map((e) => e.date)].sort();
+    const from = new Date(`${dates[0]}T00:00:00`);
+    const to = new Date(`${dates[dates.length - 1]}T23:59:59.999`);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return;
+    let cancelled = false;
+    void fetchBoardRange(from.toISOString(), to.toISOString())
+      .then((res) => {
+        if (cancelled) return;
+        setRangeHours(res.hours);
+        setRangeBookings(res.bookings);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setRangeHours(null);
+        setRangeBookings(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchBoardRange, open, periodEntries, periodMode]);
+
   const selectedService = useMemo(
     () => bookable.find((s) => s.id === form.serviceId),
     [bookable, form.serviceId],
@@ -315,8 +354,16 @@ export function SpaBookingDialog({
     ? form.specialistId
     : (defaultSpecialistId ?? form.specialistId);
 
+  const effectiveHours = rangeHours ?? boardHours;
+  const effectiveBookings = rangeBookings ?? boardBookings;
+
   const fitSuggestions = useMemo(() => {
-    if (!boardHours || !boardBookings || !selectedService || !resolvedSpecialistId) {
+    if (
+      !effectiveHours ||
+      !effectiveBookings ||
+      !selectedService ||
+      !resolvedSpecialistId
+    ) {
       return [];
     }
     if (!form.startAt) return [];
@@ -329,11 +376,12 @@ export function SpaBookingDialog({
     const dayStartMs = dayStart.getTime();
     const dayEndMs = dayEnd.getTime();
 
-    const workBands = boardHours
+    // Staff may book into DRAFT or PUBLISHED hours (same as API assertStaffBookingWindow).
+    const workBands = effectiveHours
       .filter(
         (h) =>
           h.specialistId === resolvedSpecialistId &&
-          h.status === 'PUBLISHED' &&
+          (h.status === 'PUBLISHED' || h.status === 'DRAFT') &&
           new Date(h.startAt).getTime() < dayEndMs &&
           new Date(h.endAt).getTime() > dayStartMs,
       )
@@ -341,7 +389,7 @@ export function SpaBookingDialog({
         startMs: new Date(h.startAt).getTime(),
         endMs: new Date(h.endAt).getTime(),
       }));
-    const bookings = boardBookings
+    const bookings = effectiveBookings
       .filter(
         (b) =>
           b.specialistId === resolvedSpecialistId &&
@@ -362,15 +410,20 @@ export function SpaBookingDialog({
       maxSuggestions: 10,
     });
   }, [
-    boardBookings,
-    boardHours,
+    effectiveBookings,
+    effectiveHours,
     form.startAt,
     resolvedSpecialistId,
     selectedService,
   ]);
 
   const placementCheck = useMemo(() => {
-    if (!boardBookings || !selectedService || !resolvedSpecialistId || !form.startAt) {
+    if (
+      !effectiveBookings ||
+      !selectedService ||
+      !resolvedSpecialistId ||
+      !form.startAt
+    ) {
       return null;
     }
     const start = new Date(form.startAt);
@@ -379,7 +432,7 @@ export function SpaBookingDialog({
       selectedService.durationMin + (selectedService.bufferMin ?? 0);
     const startMs = start.getTime();
     const endMs = startMs + durationMin * 60_000;
-    const peers = boardBookings
+    const peers = effectiveBookings
       .filter((b) => b.specialistId === resolvedSpecialistId && !b.busy)
       .map((b) => ({
         id: b.id,
@@ -388,7 +441,7 @@ export function SpaBookingDialog({
         endMs: new Date(b.endAt).getTime(),
       }));
     return checkSpaPlacement(startMs, endMs, peers, SPA_OVERLAP_ALLOW_MIN);
-  }, [boardBookings, form.startAt, resolvedSpecialistId, selectedService]);
+  }, [effectiveBookings, form.startAt, resolvedSpecialistId, selectedService]);
 
   const periodRowStatuses = useMemo(() => {
     type RowStatus = 'ok' | 'overlap' | 'bad' | 'unknown';
@@ -402,11 +455,11 @@ export function SpaBookingDialog({
       const durationMin =
         (svc?.durationMin ?? 60) + (svc?.bufferMin ?? 0);
       const endMs = startMs + durationMin * 60_000;
-      if (!boardBookings || !boardHours || !sid || Number.isNaN(startMs)) {
+      if (!effectiveBookings || !effectiveHours || !sid || Number.isNaN(startMs)) {
         out.set(entry.date, { status: 'unknown', tip: '' });
         continue;
       }
-      const peers = boardBookings
+      const peers = effectiveBookings
         .filter(
           (b) =>
             !b.busy &&
@@ -426,14 +479,34 @@ export function SpaBookingDialog({
         peers,
         SPA_OVERLAP_ALLOW_MIN,
       );
-      const covered = boardHours.some(
+      const dayStart = new Date(startMs);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(dayStart);
+      dayEnd.setDate(dayEnd.getDate() + 1);
+      const dayStartMs = dayStart.getTime();
+      const dayEndMs = dayEnd.getTime();
+      const dayHours = effectiveHours.filter(
         (h) =>
           h.specialistId === sid &&
+          (h.status === 'PUBLISHED' || h.status === 'DRAFT') &&
+          new Date(h.startAt).getTime() < dayEndMs &&
+          new Date(h.endAt).getTime() > dayStartMs,
+      );
+      // Board may only cover the visible week/day — missing days are unknown, not conflicts.
+      if (dayHours.length === 0) {
+        out.set(entry.date, {
+          status: 'unknown',
+          tip: 'Часы дня не в доске — проверит сервер',
+        });
+        continue;
+      }
+      const covered = dayHours.some(
+        (h) =>
           new Date(h.startAt).getTime() <= startMs &&
           new Date(h.endAt).getTime() >= endMs,
       );
       if (!covered) {
-        out.set(entry.date, { status: 'bad', tip: 'Вне часов' });
+        out.set(entry.date, { status: 'bad', tip: 'Вне часов смены' });
       } else if (check.fitsClean) {
         out.set(entry.date, { status: 'ok', tip: 'Свободно' });
       } else if (check.allowedWithConfirm) {
@@ -453,8 +526,8 @@ export function SpaBookingDialog({
     }
     return out;
   }, [
-    boardBookings,
-    boardHours,
+    effectiveBookings,
+    effectiveHours,
     bookable,
     defaultSpecialistId,
     periodEntries,
@@ -466,7 +539,7 @@ export function SpaBookingDialog({
   const periodNeedsOverlapConfirm = useMemo(() => {
     if (!periodMode) return false;
     for (const row of periodRowStatuses.values()) {
-      if (row.status === 'overlap' || row.status === 'unknown') return true;
+      if (row.status === 'overlap') return true;
     }
     return false;
   }, [periodMode, periodRowStatuses]);
@@ -837,12 +910,13 @@ export function SpaBookingDialog({
                 </span>
               ) : null}
             </p>
-            {boardHours && boardBookings && selected ? (
+            {effectiveHours && effectiveBookings && selected ? (
               <div className="space-y-1.5 pt-1">
                 <p className="text-xs font-medium text-slate-400">Куда влезет</p>
                 {fitSuggestions.length === 0 ? (
                   <p className="text-xs text-slate-500">
-                    На {selected.durationMin} мин в этот день окна нет
+                    На {selected.durationMin} мин в этот день окна нет (учтите
+                    часы смены, в т.ч. черновик)
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">
