@@ -5,14 +5,20 @@ import type {
   AnalyticsDepartment,
   ClubAnalyticsReport,
   ManagerEfficiencyBlock,
+  NomenclatureAnalyticsReport,
   PricingAnalyticsReport,
   StaffAnalyticsReport,
 } from '@fitgo/shared-types';
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import {
+  AnalyticsFiltersBar,
+  type AnalyticsFilterState,
+} from '@/components/analytics/analytics-filters-bar';
 import { ClubAnalyticsPanel } from '@/components/analytics/club-analytics-panel';
 import { MarketPricingPanel } from '@/components/analytics/market-pricing-panel';
 import { MembershipEfficiencyPanel } from '@/components/analytics/membership-efficiency-panel';
+import { NomenclatureAnalyticsPanel } from '@/components/analytics/nomenclature-analytics-panel';
 import {
   PayVisibilityToggle,
   readPayVisibility,
@@ -28,7 +34,7 @@ import {
 } from '@/lib/view-memory';
 import { UserRole } from '@fitgo/shared-types';
 
-type Tab = 'club' | 'staff' | 'market' | 'memberships';
+type Tab = 'club' | 'staff' | 'market' | 'nomenclature' | 'memberships';
 
 function isoDate(d: Date) {
   const y = d.getFullYear();
@@ -43,9 +49,26 @@ function monthBounds(ref = new Date()) {
   return { from: isoDate(from), to: isoDate(to) };
 }
 
+function filtersKey(f: AnalyticsFilterState) {
+  return [
+    f.segment,
+    f.employee,
+    f.performer,
+    f.product,
+    f.payment,
+    f.q,
+  ].join('|');
+}
+
 /** Department is filtered client-side — one server payload per period/pay. */
-function staffCacheKey(from: string, to: string, includePay: boolean) {
-  return `${from}|${to}|pay:${includePay ? 1 : 0}`;
+function staffCacheKey(
+  from: string,
+  to: string,
+  includePay: boolean,
+  compare: string,
+  f: AnalyticsFilterState,
+) {
+  return `${from}|${to}|${compare}|pay:${includePay ? 1 : 0}|${filtersKey(f)}`;
 }
 
 function clubCacheKey(
@@ -53,12 +76,22 @@ function clubCacheKey(
   to: string,
   compare: string,
   includePay: boolean,
+  f: AnalyticsFilterState,
 ) {
-  return `${from}|${to}|${compare}|pay:${includePay ? 1 : 0}`;
+  return `${from}|${to}|${compare}|pay:${includePay ? 1 : 0}|${filtersKey(f)}`;
 }
 
 function marketCacheKey(from: string, to: string, compare: string) {
   return `${from}|${to}|${compare}`;
+}
+
+function nomenclatureCacheKey(
+  from: string,
+  to: string,
+  compare: string,
+  f: AnalyticsFilterState,
+) {
+  return `${from}|${to}|${compare}|${filtersKey(f)}`;
 }
 
 function filterStaffReport(
@@ -155,6 +188,14 @@ function AnalyticsInner() {
   const compare = (searchParams.get('compare') as AnalyticsCompareMode) || 'prev';
   const department =
     (searchParams.get('department') as AnalyticsDepartment) || 'ALL';
+  const filters: AnalyticsFilterState = {
+    segment: searchParams.get('segment') || '',
+    employee: searchParams.get('employee') || '',
+    performer: searchParams.get('performer') || '',
+    product: searchParams.get('product') || '',
+    payment: searchParams.get('payment') || '',
+    q: searchParams.get('q') || '',
+  };
   const isSuperAdmin = Boolean(
     getUser()?.roles?.includes(UserRole.SUPER_ADMIN),
   );
@@ -163,6 +204,8 @@ function AnalyticsInner() {
   const [club, setClub] = useState<ClubAnalyticsReport | null>(null);
   const [staffAll, setStaffAll] = useState<StaffAnalyticsReport | null>(null);
   const [market, setMarket] = useState<PricingAnalyticsReport | null>(null);
+  const [nomenclature, setNomenclature] =
+    useState<NomenclatureAnalyticsReport | null>(null);
   const [managerEff, setManagerEff] = useState<ManagerEfficiencyBlock | null>(
     null,
   );
@@ -175,6 +218,9 @@ function AnalyticsInner() {
   const clubCache = useRef(new Map<string, ClubAnalyticsReport>());
   const staffCache = useRef(new Map<string, StaffAnalyticsReport>());
   const marketCache = useRef(new Map<string, PricingAnalyticsReport>());
+  const nomenclatureCache = useRef(
+    new Map<string, NomenclatureAnalyticsReport>(),
+  );
   const managerCache = useRef(new Map<string, ManagerEfficiencyBlock>());
   const staffAllRef = useRef(staffAll);
   staffAllRef.current = staffAll;
@@ -215,6 +261,15 @@ function AnalyticsInner() {
     let cancelled = false;
     setError('');
 
+    const filterParams = {
+      segment: filters.segment || undefined,
+      employee: filters.employee || undefined,
+      performer: filters.performer || undefined,
+      product: filters.product || undefined,
+      payment: filters.payment || undefined,
+      q: filters.q || undefined,
+    };
+
     const run = async () => {
       try {
         if (tab === 'memberships') {
@@ -222,7 +277,7 @@ function AnalyticsInner() {
           return;
         }
         if (tab === 'club') {
-          const key = clubCacheKey(from, to, compare, showPay);
+          const key = clubCacheKey(from, to, compare, showPay, filters);
           const hit = clubCache.current.get(key);
           if (hit) {
             if (!cancelled) {
@@ -237,10 +292,32 @@ function AnalyticsInner() {
             to,
             compare,
             includePay: showPay,
+            ...filterParams,
           });
           if (!cancelled) {
             clubCache.current.set(key, data);
             setClub(data);
+          }
+        } else if (tab === 'nomenclature') {
+          const key = nomenclatureCacheKey(from, to, compare, filters);
+          const hit = nomenclatureCache.current.get(key);
+          if (hit) {
+            if (!cancelled) {
+              setNomenclature(hit);
+              setLoading(false);
+            }
+            return;
+          }
+          setLoading(true);
+          const data = await api.analyticsNomenclature(token, {
+            from,
+            to,
+            compare,
+            ...filterParams,
+          });
+          if (!cancelled) {
+            nomenclatureCache.current.set(key, data);
+            setNomenclature(data);
           }
         } else if (tab === 'market') {
           const key = marketCacheKey(from, to, compare);
@@ -264,7 +341,7 @@ function AnalyticsInner() {
             setMarket(data);
           }
         } else {
-          const key = staffCacheKey(from, to, showPay);
+          const key = staffCacheKey(from, to, showPay, compare, filters);
           const hit = staffCache.current.get(key);
           if (hit) {
             if (!cancelled) {
@@ -279,6 +356,8 @@ function AnalyticsInner() {
             from,
             to,
             includePay: showPay,
+            compare,
+            ...filterParams,
             // Always ALL — ГП/ПТ/SPA switches are free client filters.
           });
           if (!cancelled) {
@@ -291,6 +370,7 @@ function AnalyticsInner() {
           setError(e instanceof Error ? e.message : 'Ошибка загрузки');
           if (tab === 'club') setClub(null);
           else if (tab === 'market') setMarket(null);
+          else if (tab === 'nomenclature') setNomenclature(null);
           else setStaffAll(null);
         }
       } finally {
@@ -301,7 +381,20 @@ function AnalyticsInner() {
     return () => {
       cancelled = true;
     };
-  }, [tab, from, to, compare, showPay, marketReload]);
+  }, [
+    tab,
+    from,
+    to,
+    compare,
+    showPay,
+    marketReload,
+    filters.segment,
+    filters.employee,
+    filters.performer,
+    filters.product,
+    filters.payment,
+    filters.q,
+  ]);
 
   // Manager efficiency: only when staff tab + ALL or MANAGER.
   useEffect(() => {
@@ -388,6 +481,11 @@ function AnalyticsInner() {
           [
             { id: 'club' as const, label: 'Клуб', superOnly: false },
             { id: 'staff' as const, label: 'Персонал', superOnly: false },
+            {
+              id: 'nomenclature' as const,
+              label: 'Номенклатура',
+              superOnly: false,
+            },
             { id: 'market' as const, label: 'Рынок и цены', superOnly: false },
             {
               id: 'memberships' as const,
@@ -422,7 +520,10 @@ function AnalyticsInner() {
           value={to}
           onChange={(v) => setParams({ to: v })}
         />
-        {(tab === 'club' || tab === 'market') && (
+        {(tab === 'club' ||
+          tab === 'market' ||
+          tab === 'nomenclature' ||
+          tab === 'staff') && (
           <label className="text-sm">
             <span className="mb-1 block text-slate-400">Сравнение</span>
             <select
@@ -467,10 +568,70 @@ function AnalyticsInner() {
             90 дн.
           </button>
         </div>
-        {tab !== 'market' && tab !== 'memberships' && (
+        {tab !== 'market' && tab !== 'memberships' && tab !== 'nomenclature' && (
           <PayVisibilityToggle show={showPay} onChange={setShowPay} />
         )}
       </div>
+
+      {tab !== 'memberships' && (
+        <AnalyticsFiltersBar
+          value={filters}
+          onChange={(patch) => {
+            if (
+              patch.segment === '' &&
+              patch.employee === '' &&
+              patch.performer === '' &&
+              patch.product === '' &&
+              patch.payment === '' &&
+              patch.q === ''
+            ) {
+              setParams({
+                segment: undefined,
+                employee: undefined,
+                performer: undefined,
+                product: undefined,
+                payment: undefined,
+                q: undefined,
+              });
+              return;
+            }
+            setParams(patch);
+          }}
+          sellerOptions={
+            staffAll?.rows
+              .filter((r) => r.employeeExternalId)
+              .map((r) => ({
+                id: r.employeeExternalId!,
+                name: r.name,
+              })) ?? []
+          }
+          performerOptions={
+            staffAll?.rows
+              .filter(
+                (r) =>
+                  r.employeeExternalId &&
+                  (r.department === 'PT_TRAINER' ||
+                    r.department === 'SPECIALIST' ||
+                    r.department === 'GROUP_TRAINER'),
+              )
+              .map((r) => ({
+                id: r.employeeExternalId!,
+                name: r.name,
+              })) ?? []
+          }
+        />
+      )}
+      {tab === 'memberships' &&
+        (filters.segment ||
+          filters.employee ||
+          filters.performer ||
+          filters.product ||
+          filters.payment ||
+          filters.q) && (
+          <p className="text-xs text-slate-500">
+            Фильтры продаж на вкладку «Абонементы» не влияют.
+          </p>
+        )}
 
       {error && <p className="text-red-400">{error}</p>}
 
@@ -478,7 +639,8 @@ function AnalyticsInner() {
         tab !== 'memberships' &&
         !(tab === 'staff' && staffView) &&
         !(tab === 'club' && club) &&
-        !(tab === 'market' && market) && (
+        !(tab === 'market' && market) &&
+        !(tab === 'nomenclature' && nomenclature) && (
         <div className="flex justify-center py-12">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
         </div>
@@ -499,7 +661,22 @@ function AnalyticsInner() {
 
       {tab === 'club' && club && (
         <div className={loading ? 'opacity-60 pointer-events-none' : undefined}>
-          <ClubAnalyticsPanel report={club} showPay={showPay} />
+          <ClubAnalyticsPanel
+            report={club}
+            showPay={showPay}
+            onFilterSegment={(segment) => setParams({ segment })}
+          />
+        </div>
+      )}
+
+      {tab === 'nomenclature' && nomenclature && (
+        <div className={loading ? 'opacity-60 pointer-events-none' : undefined}>
+          <NomenclatureAnalyticsPanel
+            report={nomenclature}
+            onPickSegment={(segment) => setParams({ segment })}
+            onPickProduct={(product) => setParams({ product })}
+            onPickEmployee={(employee) => setParams({ employee })}
+          />
         </div>
       )}
 
@@ -512,6 +689,17 @@ function AnalyticsInner() {
               setMarketReload((n) => n + 1);
             }}
           />
+          <p className="mt-2 text-sm">
+            <button
+              type="button"
+              className="text-fitgo-400 hover:underline"
+              onClick={() =>
+                setParams({ tab: 'nomenclature', segment: 'shop' })
+              }
+            >
+              Топ продаж магазина → Номенклатура
+            </button>
+          </p>
         </div>
       )}
 

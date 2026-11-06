@@ -1,4 +1,10 @@
-import { inferPaymentFromBasis, isSpaLikeSessionTitle } from '@fitgo/shared-types';
+import {
+  extractQuotedPackNameFromBasis,
+  inferPaymentFromBasis,
+  isServiceBlockPackageName,
+  isSpaAllSportsBioimpedance,
+  isSpaLikeSessionTitle,
+} from '@fitgo/shared-types';
 import { OnexClassKind, SpaPaymentType } from '@prisma/client';
 import { namesMatch } from '../booking-control/spa-document-match';
 
@@ -41,29 +47,107 @@ export function resolveStaffUserId(
   return undefined;
 }
 
+function isMembershipQuotaBasis(basis: string | null | undefined): boolean {
+  const b = (basis ?? '').toLowerCase();
+  if (!b) return false;
+  if (isServiceBlockPackageName(basis)) return false;
+  const pack = extractQuotedPackNameFromBasis(basis);
+  if (pack && isServiceBlockPackageName(pack)) return false;
+  return /членств|абонемент|квот|безлимит|\bvip\b/.test(b);
+}
+
+function isMassageBlockBasis(basis: string | null | undefined): boolean {
+  if (!basis?.trim()) return false;
+  if (isServiceBlockPackageName(basis)) return true;
+  const pack = extractQuotedPackNameFromBasis(basis);
+  return Boolean(pack && isServiceBlockPackageName(pack));
+}
+
+/**
+ * SPA payment buckets for club + staff analytics.
+ * - PAID: one-shot sale OR massage/service block write-off
+ * - QUOTA: membership / VIP subscription only
+ * - PARTNER: Allsports БИОИМПЕДАНС (UUID or name with both tokens)
+ * - UNKNOWN: cannot classify
+ */
 export function classifySpaPaymentBucket(input: {
   paymentBasis?: string | null;
   paySource?: string | null;
   paymentType?: SpaPaymentType | null;
   partnerSource?: string | null;
+  serviceExternalId?: string | null;
+  serviceTitle?: string | null;
 }): 'QUOTA' | 'PAID' | 'PARTNER' | 'UNKNOWN' {
+  const titleProbe = [
+    input.serviceTitle,
+    input.paymentBasis,
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  if (
+    isSpaAllSportsBioimpedance({
+      serviceExternalId: input.serviceExternalId,
+      title: titleProbe || input.serviceTitle,
+    })
+  ) {
+    return 'PARTNER';
+  }
+
+  // Massage / PT service blocks → paid pack, never membership quota.
+  if (isMassageBlockBasis(input.paymentBasis)) {
+    return 'PAID';
+  }
+
   const ps = (input.partnerSource ?? '').toUpperCase();
-  if (ps.includes('ALLSPORT')) return 'PARTNER';
-  // FitGO journal payment type is authoritative when set.
-  if (input.paymentType === SpaPaymentType.QUOTA) return 'QUOTA';
+  if (
+    ps.includes('ALLSPORT') &&
+    isSpaAllSportsBioimpedance({
+      serviceExternalId: input.serviceExternalId,
+      title: titleProbe,
+    })
+  ) {
+    return 'PARTNER';
+  }
+
+  // FitGO journal: QUOTA only when membership basis (blocks already handled).
   if (input.paymentType === SpaPaymentType.PAID) return 'PAID';
+  if (input.paymentType === SpaPaymentType.QUOTA) {
+    if (isMembershipQuotaBasis(input.paymentBasis)) return 'QUOTA';
+    // QUOTA flag without membership text (often a block booked as quota).
+    if (!input.paymentBasis?.trim()) return 'UNKNOWN';
+    return 'UNKNOWN';
+  }
 
   const payment = inferPaymentFromBasis(input.paymentBasis);
-  if (payment === 'PARTNER') return 'PARTNER';
-  // 1C often sets paySource=PACKAGE whenever paymentBasis is filled — prefer
-  // basis text (same note as classifyPtSessionOrigin). «Продажа N» stays PAID.
-  if (payment === 'QUOTA') return 'QUOTA';
-  if (payment === 'PAID' || payment === 'DEBT') return 'PAID';
+  if (payment === 'PARTNER') {
+    return isSpaAllSportsBioimpedance({ title: input.paymentBasis })
+      ? 'PARTNER'
+      : 'UNKNOWN';
+  }
+  if (payment === 'QUOTA') {
+    return isMembershipQuotaBasis(input.paymentBasis) ? 'QUOTA' : 'UNKNOWN';
+  }
+  if (payment === 'PAID' || payment === 'DEBT') {
+    const basis = input.paymentBasis ?? '';
+    // Bare AllSports visit without биоимпеданс SKU — not a paid SPA bucket.
+    if (
+      /allsports|all\s*sports/i.test(basis) &&
+      !isSpaAllSportsBioimpedance({ title: basis })
+    ) {
+      return 'UNKNOWN';
+    }
+    return 'PAID';
+  }
   if (payment === 'GIFT') return 'UNKNOWN';
 
   const paySource = (input.paySource ?? '').toUpperCase();
-  if (paySource === 'PACKAGE') return 'QUOTA';
   if (paySource === 'SALE') return 'PAID';
+  if (paySource === 'PACKAGE') {
+    // Bare PACKAGE without membership name — not quota.
+    if (isMembershipQuotaBasis(input.paymentBasis)) return 'QUOTA';
+    return 'UNKNOWN';
+  }
   return 'UNKNOWN';
 }
 

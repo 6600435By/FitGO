@@ -60,6 +60,12 @@ export class AnalyticsController {
     @Query('cmpFrom') cmpFrom?: string,
     @Query('cmpTo') cmpTo?: string,
     @Query('includePay') includePay?: string,
+    @Query('segment') segment?: string,
+    @Query('employee') employee?: string,
+    @Query('performer') performer?: string,
+    @Query('product') product?: string,
+    @Query('payment') payment?: string,
+    @Query('q') q?: string,
   ) {
     return this.club.getClubReport(user, {
       from,
@@ -68,6 +74,42 @@ export class AnalyticsController {
       cmpFrom,
       cmpTo,
       includePay: includePay === '1' || includePay === 'true',
+      segment,
+      employee,
+      performer,
+      product,
+      payment,
+      q,
+    });
+  }
+
+  @Get('nomenclature')
+  nomenclatureReport(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('compare') compare?: AnalyticsCompareMode,
+    @Query('cmpFrom') cmpFrom?: string,
+    @Query('cmpTo') cmpTo?: string,
+    @Query('segment') segment?: string,
+    @Query('employee') employee?: string,
+    @Query('performer') performer?: string,
+    @Query('product') product?: string,
+    @Query('payment') payment?: string,
+    @Query('q') q?: string,
+  ) {
+    return this.club.getNomenclatureReport(user, {
+      from,
+      to,
+      compare,
+      cmpFrom,
+      cmpTo,
+      segment,
+      employee,
+      performer,
+      product,
+      payment,
+      q,
     });
   }
 
@@ -79,6 +121,13 @@ export class AnalyticsController {
     @Query('department') department?: AnalyticsDepartment,
     @Query('userId') userId?: string,
     @Query('includePay') includePay?: string,
+    @Query('compare') compare?: AnalyticsCompareMode,
+    @Query('segment') segment?: string,
+    @Query('employee') employee?: string,
+    @Query('performer') performer?: string,
+    @Query('product') product?: string,
+    @Query('payment') payment?: string,
+    @Query('q') q?: string,
   ) {
     return this.staff.getStaffReport(user, {
       from,
@@ -86,19 +135,22 @@ export class AnalyticsController {
       department,
       userId,
       includePay: includePay === '1' || includePay === 'true',
+      compare,
+      segment,
+      employee,
+      performer,
+      product,
+      payment,
+      q,
     });
   }
 
   @Get('staff/manager-efficiency')
-  @Roles(UserRole.SUPER_ADMIN)
   managerEfficiency(
     @CurrentUser() user: JwtPayload,
     @Query('from') from: string,
     @Query('to') to: string,
   ) {
-    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
-      throw new ForbiddenException();
-    }
     return this.staff.getManagerEfficiency(user, { from, to });
   }
 

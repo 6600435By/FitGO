@@ -36,13 +36,22 @@ import {
   isStaffDebtorName,
 } from '../admin-sales/club-revenue-debt';
 import { ClubRevenueService } from '../admin-sales/club-revenue.service';
-import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
 import { isExcludedFromPtBookingControl } from '../admin-sales/trainer-pt-sales-from-revenue';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { BookingControlService } from '../booking-control/booking-control.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollService } from '../payroll/payroll.service';
+import {
+  appliedFilters,
+  filtersCacheKey,
+  parseAnalyticsFilters,
+  type AnalyticsMoneyFilters,
+} from './analytics-filters';
+import {
+  ANALYTICS_SEG_LABEL,
+  aggregateAnalyticsMoney,
+} from './analytics-money';
 import { buildCapacityResolver } from './capacity-resolve';
 import { classifySpaPaymentBucket } from './staff-analytics.helpers';
 import {
@@ -53,16 +62,6 @@ import {
   resolveCompareRange,
   weekBuckets,
 } from './analytics-period';
-
-const SEG_LABEL: Record<string, string> = {
-  membership: 'Абонементы',
-  training: 'ПТ / тренинги',
-  spa: 'СПА',
-  solarium: 'Солярий',
-  shop: 'Магазин',
-  corporate: 'Корпо',
-  other: 'Прочее',
-};
 
 const INSTALLMENTS_CACHE_TTL_MS = 15 * 60 * 1000;
 const REPORT_CACHE_TTL_MS = 3 * 60 * 1000;
@@ -103,6 +102,12 @@ export class ClubAnalyticsService {
       cmpFrom?: string;
       cmpTo?: string;
       includePay?: boolean;
+      segment?: string;
+      employee?: string;
+      performer?: string;
+      product?: string;
+      payment?: string;
+      q?: string;
     },
   ): Promise<ClubAnalyticsReport> {
     const clubId = requireClubId(user);
@@ -115,6 +120,7 @@ export class ClubAnalyticsService {
       params.cmpFrom,
       params.cmpTo,
     );
+    const filters = parseAnalyticsFilters(params);
     const cacheKey = [
       clubId,
       params.from,
@@ -123,6 +129,7 @@ export class ClubAnalyticsService {
       compareTo,
       compareMode,
       params.includePay ? 'pay' : 'nopay',
+      filtersCacheKey(filters),
     ].join('|');
     const cached = this.reportCache.get(cacheKey);
     if (cached && Date.now() - cached.at < REPORT_CACHE_TTL_MS) {
@@ -135,6 +142,7 @@ export class ClubAnalyticsService {
       compareMode,
       compareFrom,
       compareTo,
+      filters,
     })
       .then((report) => {
         setTimeout(() => {
@@ -164,9 +172,11 @@ export class ClubAnalyticsService {
       compareFrom: string;
       compareTo: string;
       includePay?: boolean;
+      filters?: AnalyticsMoneyFilters;
     },
   ): Promise<ClubAnalyticsReport> {
     const { compareFrom, compareTo, compareMode } = params;
+    const filters = params.filters ?? {};
 
     const club = await this.prisma.club.findUnique({
       where: { id: clubId },
@@ -186,17 +196,19 @@ export class ClubAnalyticsService {
       visitsCur,
       visitsCmp,
       dataSince,
+      visitCoverage,
       fot,
       installments,
       debtSnap,
     ] = await Promise.all([
-      this.moneyBlock(clubId, params.from, params.to),
-      this.moneyBlock(clubId, compareFrom, compareTo),
+      this.moneyBlock(clubId, params.from, params.to, filters),
+      this.moneyBlock(clubId, compareFrom, compareTo, filters),
       this.membersBlock(clubId, params.from, params.to),
       this.membersBlock(clubId, compareFrom, compareTo),
       this.visitsBlock(clubId, params.from, params.to, workingHours),
       this.visitsBlock(clubId, compareFrom, compareTo, workingHours),
       this.earliestSaleDate(clubId),
+      this.visitCoverageBounds(clubId),
       params.includePay
         ? this.fotBlock(clubId, params.from, params.to, compareFrom, compareTo)
         : Promise.resolve(null),
@@ -221,18 +233,42 @@ export class ClubAnalyticsService {
     servicesCur.pt.completed = ptClubTotals.completed;
     servicesCur.pt.giftSharePct = ptClubTotals.giftSharePct;
 
+    const moneyCompareOk =
+      !dataSince || dataSince <= compareFrom;
+    const visitsCompareOk =
+      !visitCoverage.since ||
+      (visitCoverage.since <= compareFrom &&
+        (!visitCoverage.until || visitCoverage.until >= compareTo));
+    const compareCovered = moneyCompareOk && visitsCompareOk;
+    const compareHint = !moneyCompareOk
+      ? `Сравнение выручки н/д — в кэше с ${dataSince}`
+      : !visitsCompareOk
+        ? `Сравнение визитов н/д — проходы в кэше с ${visitCoverage.since ?? '—'}`
+        : undefined;
+
     const money: ClubAnalyticsMoney = {
       revenue: metric(moneyCur.revenueMinor, moneyCmp.revenueMinor, {
         unit: 'money' as const,
         trend: moneyCur.revenueTrend,
+        unavailable: false,
+        skipCompare: !moneyCompareOk,
+        hint: !moneyCompareOk
+          ? `В кэше выручки с ${dataSince}`
+          : moneyCur.segmentGapMinor !== 0
+            ? `Сегменты: расхождение ${Math.round(moneyCur.segmentGapMinor / 100)} BYN`
+            : undefined,
       }),
       byPayment: moneyCur.byPayment,
       bySegment: moneyCur.bySegment,
+      segmentSumMinor: moneyCur.segmentSumMinor,
+      segmentGapMinor: moneyCur.segmentGapMinor,
       avgCheck: metric(moneyCur.avgCheckMinor, moneyCmp.avgCheckMinor, {
         unit: 'money' as const,
+        skipCompare: !moneyCompareOk,
       }),
       refunds: metric(moneyCur.refundsMinor, moneyCmp.refundsMinor, {
         unit: 'money' as const,
+        skipCompare: !moneyCompareOk,
       }),
       debtOutstanding: metric(debtSnap.totalMinor, null, {
         unit: 'money' as const,
@@ -295,9 +331,12 @@ export class ClubAnalyticsService {
       total: metric(visitsCur.total, visitsCmp.total, {
         unit: 'count',
         trend: visitsCur.trend,
+        skipCompare: !visitsCompareOk,
+        hint: 'Проходы в зал (ClubHallVisit)',
       }),
       uniqueClients: metric(visitsCur.unique, visitsCmp.unique, {
         unit: 'count',
+        skipCompare: !visitsCompareOk,
       }),
       avgPerActiveMembership: metric(
         visitsCur.avgPerActive,
@@ -364,7 +403,9 @@ export class ClubAnalyticsService {
         quota: servicesCur.spa.quota,
         paid: servicesCur.spa.paid,
         allsports: servicesCur.spa.allsports,
+        unknown: servicesCur.spa.unknown,
       },
+      groupOps: servicesCur.groupOps,
     };
 
     const insights = this.buildInsights({
@@ -374,6 +415,20 @@ export class ClubAnalyticsService {
       services,
     });
 
+    const providerRaw = (
+      this.config.get<string>('FITNESS_PROVIDER') ??
+      process.env.FITNESS_PROVIDER ??
+      ''
+    ).trim();
+    const analyticsUrl = this.config
+      .get<string>('FORMA_ANALYTICS_URL')
+      ?.trim();
+    const providerLabel = providerRaw
+      ? providerRaw
+      : analyticsUrl
+        ? 'forma'
+        : 'не настроен';
+
     return {
       from: params.from,
       to: params.to,
@@ -382,6 +437,18 @@ export class ClubAnalyticsService {
       compareMode,
       currency: club?.currency ?? 'BYN',
       dataSince,
+      appliedFilters: appliedFilters(filters),
+      coverage: {
+        revenueSince: dataSince,
+        visitsSince: visitCoverage.since,
+        visitsUntil: visitCoverage.until,
+        revenueSyncedAt: visitCoverage.revenueSyncedAt,
+        visitsSyncedAt: visitCoverage.visitsSyncedAt,
+        membersSource: membersCur.stockSource,
+        membersPartial: membersCur.stockSource === 'snapshots',
+        compareCovered,
+        compareHint,
+      },
       money,
       members,
       visits,
@@ -391,11 +458,49 @@ export class ClubAnalyticsService {
       trainerRankings,
       trainerRankingsPt,
       trainerRankingsGroup,
+      groupPrograms: servicesCur.groupPrograms,
       integrationHealth: {
-        provider: process.env.FITNESS_PROVIDER ?? 'mock',
+        provider: providerLabel,
         clubExternalId: club?.externalId ?? null,
-        ok: Boolean(club?.externalId),
+        ok: Boolean(club?.externalId) && Boolean(analyticsUrl || providerRaw === 'forma'),
       },
+    };
+  }
+
+  private async visitCoverageBounds(clubId: string): Promise<{
+    since: string | null;
+    until: string | null;
+    visitsSyncedAt: string | null;
+    revenueSyncedAt: string | null;
+  }> {
+    const [firstVisit, lastVisit, lastVisitSync, lastRevSync] =
+      await Promise.all([
+        this.prisma.clubHallVisit.findFirst({
+          where: { clubId, isActive: true },
+          orderBy: { visitDate: 'asc' },
+          select: { visitDate: true },
+        }),
+        this.prisma.clubHallVisit.findFirst({
+          where: { clubId, isActive: true },
+          orderBy: { visitDate: 'desc' },
+          select: { visitDate: true, syncedAt: true },
+        }),
+        this.prisma.clubHallVisit.findFirst({
+          where: { clubId, isActive: true },
+          orderBy: { syncedAt: 'desc' },
+          select: { syncedAt: true },
+        }),
+        this.prisma.clubRevenueEntry.findFirst({
+          where: { clubId, isActive: true },
+          orderBy: { syncedAt: 'desc' },
+          select: { syncedAt: true },
+        }),
+      ]);
+    return {
+      since: firstVisit?.visitDate ?? null,
+      until: lastVisit?.visitDate ?? null,
+      visitsSyncedAt: lastVisitSync?.syncedAt?.toISOString() ?? null,
+      revenueSyncedAt: lastRevSync?.syncedAt?.toISOString() ?? null,
     };
   }
 
@@ -508,11 +613,14 @@ export class ClubAnalyticsService {
     };
   }
 
-  private async moneyBlock(clubId: string, from: string, to: string) {
-    const revenueMinor = await this.revenue.cashRevenueMinor(clubId, from, to);
+  private async moneyBlock(
+    clubId: string,
+    from: string,
+    to: string,
+    filters: AnalyticsMoneyFilters = {},
+  ) {
     const { start, end } = rangeBounds(from, to);
-
-    const [receipts, manuals] = await Promise.all([
+    const [receipts, manuals, payrollSegs] = await Promise.all([
       this.prisma.clubRevenueEntry.findMany({
         where: {
           clubId,
@@ -535,151 +643,45 @@ export class ClubAnalyticsService {
             },
           ],
         },
-      }),
-      this.prisma.clubRevenueManualEntry.findMany({
-        where: { clubId, entryDate: { gte: start, lte: end } },
-      }),
-    ]);
-
-    let cash = 0;
-    let card = 0;
-    let cashless = 0;
-    let personalAccount = 0;
-    let refunds = 0;
-    /** Distinct sale-basis docs — not CRE row count (multi-pay / SKU fan-out). */
-    const paymentDocs = new Set<string>();
-    const byDay = new Map<string, number>();
-
-    for (const r of receipts) {
-      const day = (r.paidAt ?? r.occurredAt).toISOString().slice(0, 10);
-      const cashR = Math.round((Number(r.cash) || 0) * 100);
-      const cardR = Math.round((Number(r.card) || 0) * 100);
-      const cashlessR = Math.round((Number(r.cashless) || 0) * 100);
-      const paR = Math.round((Number(r.personalAccount) || 0) * 100);
-      if (r.operationType === 'refund') {
-        const ref = Math.round((Number(r.refundAmount) || Number(r.amount) || 0) * 100);
-        refunds += Math.abs(ref);
-        byDay.set(day, (byDay.get(day) ?? 0) - Math.abs(ref));
-        continue;
-      }
-      cash += cashR;
-      card += cardR;
-      cashless += cashlessR;
-      personalAccount += paR;
-      const line = cashR + cardR + cashlessR + paR;
-      if (line > 0) {
-        paymentDocs.add(
-          preferredSaleBasisId({
-            externalId: r.externalId,
-            documentId: r.documentId,
-          }),
-        );
-      }
-      byDay.set(day, (byDay.get(day) ?? 0) + line);
-    }
-
-    let corpoMinor = 0;
-    let otherMinor = 0;
-    for (const m of manuals) {
-      if (m.kind === 'corpo') corpoMinor += m.amountMinor;
-      else otherMinor += m.amountMinor;
-    }
-
-    const bySegment = await this.salesMix(clubId, from, to);
-    const paymentCount = paymentDocs.size;
-    const avgCheckMinor =
-      paymentCount > 0 ? Math.round(revenueMinor / paymentCount) : 0;
-
-    return {
-      revenueMinor,
-      avgCheckMinor,
-      refundsMinor: refunds,
-      byPayment: {
-        cashMinor: cash,
-        cardMinor: card,
-        cashlessMinor: cashless,
-        personalAccountMinor: personalAccount,
-        corpoMinor,
-        otherMinor,
-      },
-      bySegment,
-      revenueTrend: weekBuckets(from, to, byDay),
-    };
-  }
-
-  private async salesMix(clubId: string, from: string, to: string) {
-    const { start, end } = rangeBounds(from, to);
-    const [sales, corpo, payrollSegs] = await Promise.all([
-      this.prisma.saleTransaction.findMany({
-        where: { clubId, isActive: true, paidAt: { gte: start, lte: end } },
         select: {
+          externalId: true,
+          documentId: true,
+          operationType: true,
+          occurredAt: true,
+          paidAt: true,
           amount: true,
           cash: true,
           card: true,
           cashless: true,
           personalAccount: true,
+          refundAmount: true,
+          paidAmount: true,
           saleType: true,
           productName: true,
+          productExternalId: true,
+          clientName: true,
+          clientExternalId: true,
+          employeeExternalId: true,
+          employeeName: true,
+          performerExternalId: true,
+          performerName: true,
         },
       }),
-      this.prisma.clubRevenueManualEntry.aggregate({
-        where: {
-          clubId,
-          kind: 'corpo',
-          entryDate: { gte: start, lte: end },
-        },
-        _sum: { amountMinor: true },
+      this.prisma.clubRevenueManualEntry.findMany({
+        where: { clubId, entryDate: { gte: start, lte: end } },
+        select: { kind: true, amountMinor: true, entryDate: true },
       }),
       loadPayrollSegmentSets(this.config),
     ]);
 
-    const minor: Record<string, number> = {
-      membership: 0,
-      training: 0,
-      spa: 0,
-      solarium: 0,
-      shop: 0,
-      corporate: corpo._sum.amountMinor ?? 0,
-      other: 0,
-    };
-    for (const row of sales) {
-      const classified = classifySaleType(
-        row.saleType ?? undefined,
-        row.productName,
-        payrollSegs,
-      );
-      const key =
-        classified === 'membership'
-          ? 'membership'
-          : classified === 'training'
-            ? 'training'
-            : classified === 'massage'
-              ? 'spa'
-              : classified === 'solarium'
-                ? 'solarium'
-                : classified === 'shop'
-                  ? 'shop'
-                  : 'other';
-      const cash = Number(row.cash) || 0;
-      const card = Number(row.card) || 0;
-      const cashless = Number(row.cashless) || 0;
-      const pa = Number(row.personalAccount) || 0;
-      const split = cash + card + cashless + pa;
-      const major =
-        split > 0.009 ? cash + card + pa : Number(row.amount) || 0;
-      if (major <= 0) continue;
-      minor[key] = (minor[key] ?? 0) + Math.round(major * 100);
-    }
-    const total = Object.values(minor).reduce((s, n) => s + n, 0);
-    const prefer = new Set(['membership', 'training', 'spa']);
-    return Object.entries(minor)
-      .filter(([key, v]) => v > 0 || prefer.has(key))
-      .map(([key, amountMinor]) => ({
-        key,
-        label: SEG_LABEL[key] ?? key,
-        amountMinor,
-        share: total > 0 ? amountMinor / total : 0,
-      }));
+    return aggregateAnalyticsMoney({
+      from,
+      to,
+      receipts,
+      manuals,
+      payrollSegs,
+      filters,
+    });
   }
 
   /**
@@ -877,6 +879,7 @@ export class ClubAnalyticsService {
       renewalRatePct,
       churn,
       stockAvailable: stock.available,
+      stockSource: stock.source,
       renewalRateAvailable,
       churnAvailable: stock.available,
     };
@@ -1054,12 +1057,15 @@ export class ClubAnalyticsService {
           externalId: true,
           number: true,
           capacity: true,
+          serviceExternalId: true,
           startAt: true,
           members: {
             select: {
               cancelled: true,
               paymentBasis: true,
               paySource: true,
+              attendance: true,
+              externalId: true,
             },
           },
         },
@@ -1091,11 +1097,24 @@ export class ClubAnalyticsService {
     const completed = groupSessions.filter(
       (s) => s.status === OnexClassStatus.COMPLETED,
     );
+    const cancelledGroup = groupSessions.filter(
+      (s) => s.status === OnexClassStatus.CANCELLED,
+    );
     let fillSum = 0;
     let fillN = 0;
+    let bookedTotal = 0;
+    let attendedTotal = 0;
     const byTitle = new Map<
       string,
-      { sessions: number; attended: number; fill: number; fillN: number }
+      {
+        sessions: number;
+        cancelled: number;
+        booked: number;
+        attended: number;
+        fill: number;
+        fillN: number;
+        unique: Set<string>;
+      }
     >();
     for (const s of completed) {
       const cap = resolveCapacity(s);
@@ -1105,18 +1124,40 @@ export class ClubAnalyticsService {
         fillSum += fill;
         fillN++;
       }
+      bookedTotal += s.bookedCount;
+      attendedTotal += s.attendedCount;
       const cur = byTitle.get(s.title) ?? {
         sessions: 0,
+        cancelled: 0,
+        booked: 0,
         attended: 0,
         fill: 0,
         fillN: 0,
+        unique: new Set<string>(),
       };
       cur.sessions++;
+      cur.booked += s.bookedCount;
       cur.attended += s.attendedCount;
       if (cap > 0) {
         cur.fill += fill;
         cur.fillN++;
       }
+      for (const m of s.members) {
+        if (!m.cancelled && m.externalId) cur.unique.add(m.externalId);
+      }
+      byTitle.set(s.title, cur);
+    }
+    for (const s of cancelledGroup) {
+      const cur = byTitle.get(s.title) ?? {
+        sessions: 0,
+        cancelled: 0,
+        booked: 0,
+        attended: 0,
+        fill: 0,
+        fillN: 0,
+        unique: new Set<string>(),
+      };
+      cur.cancelled++;
       byTitle.set(s.title, cur);
     }
     const directions = [...byTitle.entries()]
@@ -1133,6 +1174,39 @@ export class ClubAnalyticsService {
       .filter((d) => d.sessions >= 2)
       .sort((a, b) => a.fillPct - b.fillPct)
       .slice(0, 5);
+    const groupPrograms = [...byTitle.entries()]
+      .map(([title, v]) => {
+        const totalSlots = v.sessions + v.cancelled;
+        return {
+          title,
+          sessions: v.sessions,
+          cancelledSessions: v.cancelled,
+          bookedTotal: v.booked,
+          attendedTotal: v.attended,
+          uniqueClients: v.unique.size,
+          fillPct: v.fillN > 0 ? Math.round(v.fill / v.fillN) : null,
+          cancelRatePct:
+            totalSlots > 0
+              ? Math.round((v.cancelled / totalSlots) * 1000) / 10
+              : null,
+        };
+      })
+      .sort((a, b) => (b.fillPct ?? -1) - (a.fillPct ?? -1));
+    const noShowPct =
+      bookedTotal > 0
+        ? Math.round(
+            (Math.max(0, bookedTotal - attendedTotal) / bookedTotal) * 1000,
+          ) / 10
+        : null;
+    const attendancePct =
+      bookedTotal > 0
+        ? Math.round((attendedTotal / bookedTotal) * 1000) / 10
+        : null;
+    const totalGroupSlots = completed.length + cancelledGroup.length;
+    const cancelRatePct =
+      totalGroupSlots > 0
+        ? Math.round((cancelledGroup.length / totalGroupSlots) * 1000) / 10
+        : null;
 
     // Same exclusions as booking-control PT list (SPA-like, solarium, gym).
     const onexPtCompleted = sessions.filter(
@@ -1179,15 +1253,19 @@ export class ClubAnalyticsService {
     let quota = 0;
     let paid = 0;
     let allsports = 0;
+    let unknown = 0;
     for (const s of spaCompleted) {
       const primary = s.members.find((m) => !m.cancelled) ?? s.members[0];
       const bucket = classifySpaPaymentBucket({
         paymentBasis: primary?.paymentBasis,
         paySource: primary?.paySource,
+        serviceExternalId: s.serviceExternalId,
+        serviceTitle: s.title,
       });
       if (bucket === 'PARTNER') allsports++;
       else if (bucket === 'QUOTA') quota++;
       else if (bucket === 'PAID') paid++;
+      else unknown++;
     }
 
     return {
@@ -1198,6 +1276,18 @@ export class ClubAnalyticsService {
         topDirections,
         bottomDirections,
       },
+      groupOps: {
+        sessionsConducted: completed.length,
+        cancelledSessions: cancelledGroup.length,
+        bookedTotal,
+        attendedTotal,
+        avgFillPct: fillN > 0 ? Math.round(fillSum / fillN) : null,
+        attendancePct,
+        noShowPct,
+        cancelRatePct,
+        fillUnavailable: fillN === 0 && completed.length > 0,
+      },
+      groupPrograms,
       pt: {
         completed: ptCompletedCount,
         giftSharePct,
@@ -1207,6 +1297,7 @@ export class ClubAnalyticsService {
         quota,
         paid,
         allsports,
+        unknown,
       },
     };
   }
@@ -1644,6 +1735,171 @@ export class ClubAnalyticsService {
       });
     }
     return out.slice(0, 8);
+  }
+
+  async getNomenclatureReport(
+    user: JwtPayload,
+    params: {
+      from: string;
+      to: string;
+      compare?: AnalyticsCompareMode;
+      cmpFrom?: string;
+      cmpTo?: string;
+      segment?: string;
+      employee?: string;
+      performer?: string;
+      product?: string;
+      payment?: string;
+      q?: string;
+    },
+  ) {
+    const clubId = requireClubId(user);
+    assertPeriod(params.from, params.to);
+    const compareMode: AnalyticsCompareMode = params.compare ?? 'prev';
+    const { compareFrom, compareTo } = resolveCompareRange(
+      params.from,
+      params.to,
+      compareMode,
+      params.cmpFrom,
+      params.cmpTo,
+    );
+    const filters = parseAnalyticsFilters(params);
+    const club = await this.prisma.club.findUnique({
+      where: { id: clubId },
+      select: { currency: true },
+    });
+    const [cur, cmp, dataSince, visitCoverage] = await Promise.all([
+      this.moneyBlock(clubId, params.from, params.to, filters),
+      this.moneyBlock(clubId, compareFrom, compareTo, filters),
+      this.earliestSaleDate(clubId),
+      this.visitCoverageBounds(clubId),
+    ]);
+    const moneyCompareOk = !dataSince || dataSince <= compareFrom;
+    const cmpByKey = new Map<string, number>();
+    for (const p of cmp.products) {
+      const key =
+        (p.productExternalId ?? '').trim().toLowerCase() ||
+        `name:${p.productName.trim().toLowerCase()}`;
+      cmpByKey.set(key, p.amountMinor);
+    }
+
+    const { SHOP_TOP_N } = await import('./pricing-analytics.rules');
+
+    const bySeg = new Map<string, typeof cur.products>();
+    for (const p of cur.products) {
+      const list = bySeg.get(p.segment) ?? [];
+      list.push(p);
+      bySeg.set(p.segment, list);
+    }
+    // Always include empty preferred segments when filtering all.
+    for (const key of [
+      'membership',
+      'training',
+      'spa',
+      'solarium',
+      'shop',
+    ] as const) {
+      if (!filters.segment && !bySeg.has(key)) bySeg.set(key, []);
+    }
+
+    const segments = [...bySeg.entries()]
+      .map(([key, products]) => {
+        const sorted = [...products].sort(
+          (a, b) => b.amountMinor - a.amountMinor,
+        );
+        const segTotal = sorted.reduce((s, p) => s + p.amountMinor, 0);
+        let shopRemainder: {
+          productCount: number;
+          amountMinor: number;
+          shareOfSegment: number;
+        } | null = null;
+        let visible = sorted;
+        let shopTopShare: number | null = null;
+        if (key === 'shop' && !filters.product && sorted.length > SHOP_TOP_N) {
+          visible = sorted.slice(0, SHOP_TOP_N);
+          const rest = sorted.slice(SHOP_TOP_N);
+          const remMinor = rest.reduce((s, p) => s + p.amountMinor, 0);
+          shopRemainder = {
+            productCount: rest.length,
+            amountMinor: remMinor,
+            shareOfSegment: segTotal > 0 ? remMinor / segTotal : 0,
+          };
+          const topMinor = visible.reduce((s, p) => s + p.amountMinor, 0);
+          shopTopShare = segTotal > 0 ? topMinor / segTotal : 0;
+        }
+        return {
+          key,
+          label: ANALYTICS_SEG_LABEL[key] ?? key,
+          amountMinor: segTotal,
+          share: cur.revenueMinor > 0 ? segTotal / cur.revenueMinor : 0,
+          products: visible.map((p) => {
+            const pid =
+              (p.productExternalId ?? '').trim().toLowerCase() ||
+              `name:${p.productName.trim().toLowerCase()}`;
+            const prev = cmpByKey.get(pid) ?? 0;
+            const deltaPct =
+              moneyCompareOk && prev > 0
+                ? Math.round(((p.amountMinor - prev) / prev) * 1000) / 10
+                : moneyCompareOk && prev === 0 && p.amountMinor > 0
+                  ? null
+                  : moneyCompareOk
+                    ? 0
+                    : null;
+            const topSellers = [...p.sellers.entries()]
+              .map(([id, v]) => ({
+                employeeExternalId: id === 'none' ? null : id,
+                employeeName: v.name,
+                amountMinor: v.minor,
+              }))
+              .sort((a, b) => b.amountMinor - a.amountMinor)
+              .slice(0, 3);
+            return {
+              productExternalId: p.productExternalId,
+              productName: p.productName,
+              segment: key,
+              segmentLabel: ANALYTICS_SEG_LABEL[key] ?? key,
+              amountMinor: p.amountMinor,
+              shareOfSegment: segTotal > 0 ? p.amountMinor / segTotal : 0,
+              lines: p.lines,
+              docs: p.docs.size,
+              avgCheckMinor:
+                p.docs.size > 0 ? Math.round(p.amountMinor / p.docs.size) : 0,
+              deltaPct,
+              topSellers,
+            };
+          }),
+          shopRemainder,
+          shopTopShareOfSegment: shopTopShare,
+        };
+      })
+      .filter((s) => s.amountMinor > 0 || !filters.segment)
+      .sort((a, b) => b.amountMinor - a.amountMinor);
+
+    return {
+      from: params.from,
+      to: params.to,
+      compareFrom,
+      compareTo,
+      compareMode,
+      currency: club?.currency ?? 'BYN',
+      dataSince,
+      appliedFilters: appliedFilters(filters),
+      coverage: {
+        revenueSince: dataSince,
+        visitsSince: visitCoverage.since,
+        visitsUntil: visitCoverage.until,
+        revenueSyncedAt: visitCoverage.revenueSyncedAt,
+        visitsSyncedAt: visitCoverage.visitsSyncedAt,
+        membersSource: 'none' as const,
+        membersPartial: false,
+        compareCovered: moneyCompareOk,
+        compareHint: moneyCompareOk
+          ? undefined
+          : `Сравнение н/д — в кэше с ${dataSince}`,
+      },
+      segments,
+      revenueMinor: cur.revenueMinor,
+    };
   }
 }
 

@@ -2679,6 +2679,12 @@ export const api = {
       cmpFrom?: string;
       cmpTo?: string;
       includePay?: boolean;
+      segment?: string;
+      employee?: string;
+      performer?: string;
+      product?: string;
+      payment?: string;
+      q?: string;
     },
   ) => {
     const q = new URLSearchParams({
@@ -2689,8 +2695,50 @@ export const api = {
     if (params.cmpFrom) q.set('cmpFrom', params.cmpFrom);
     if (params.cmpTo) q.set('cmpTo', params.cmpTo);
     if (params.includePay) q.set('includePay', '1');
+    if (params.segment) q.set('segment', params.segment);
+    if (params.employee) q.set('employee', params.employee);
+    if (params.performer) q.set('performer', params.performer);
+    if (params.product) q.set('product', params.product);
+    if (params.payment) q.set('payment', params.payment);
+    if (params.q) q.set('q', params.q);
     return request<ClubAnalyticsReport>(
       `/super-admin/analytics/club?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsNomenclature: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      compare?: AnalyticsCompareMode;
+      cmpFrom?: string;
+      cmpTo?: string;
+      segment?: string;
+      employee?: string;
+      performer?: string;
+      product?: string;
+      payment?: string;
+      q?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.compare) q.set('compare', params.compare);
+    if (params.cmpFrom) q.set('cmpFrom', params.cmpFrom);
+    if (params.cmpTo) q.set('cmpTo', params.cmpTo);
+    if (params.segment) q.set('segment', params.segment);
+    if (params.employee) q.set('employee', params.employee);
+    if (params.performer) q.set('performer', params.performer);
+    if (params.product) q.set('product', params.product);
+    if (params.payment) q.set('payment', params.payment);
+    if (params.q) q.set('q', params.q);
+    return request<import('@fitgo/shared-types').NomenclatureAnalyticsReport>(
+      `/super-admin/analytics/nomenclature?${q}`,
       {},
       token,
     );
@@ -2704,6 +2752,13 @@ export const api = {
       department?: AnalyticsDepartment;
       userId?: string;
       includePay?: boolean;
+      compare?: AnalyticsCompareMode;
+      segment?: string;
+      employee?: string;
+      performer?: string;
+      product?: string;
+      payment?: string;
+      q?: string;
     },
   ) => {
     const q = new URLSearchParams({
@@ -2713,6 +2768,13 @@ export const api = {
     if (params.department) q.set('department', params.department);
     if (params.userId) q.set('userId', params.userId);
     if (params.includePay) q.set('includePay', '1');
+    if (params.compare) q.set('compare', params.compare);
+    if (params.segment) q.set('segment', params.segment);
+    if (params.employee) q.set('employee', params.employee);
+    if (params.performer) q.set('performer', params.performer);
+    if (params.product) q.set('product', params.product);
+    if (params.payment) q.set('payment', params.payment);
+    if (params.q) q.set('q', params.q);
     return request<StaffAnalyticsReport>(
       `/super-admin/analytics/staff?${q}`,
       {},

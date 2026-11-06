@@ -2,6 +2,7 @@
 
 import type { ClubAnalyticsReport } from '@fitgo/shared-types';
 import Link from 'next/link';
+import { AnalyticsDataQualityBar } from './analytics-filters-bar';
 import { MetricCard } from './metric-card';
 
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -39,11 +40,22 @@ function controlHref(
 export function ClubAnalyticsPanel({
   report,
   showPay,
+  onFilterSegment,
 }: {
   report: ClubAnalyticsReport;
   showPay: boolean;
+  onFilterSegment?: (segment: string) => void;
 }) {
   const { money: m, members, visits, services, currency, from, to } = report;
+  const netRevenue = {
+    ...m.revenue,
+    value: Math.max(0, m.revenue.value - m.refunds.value),
+    compareValue:
+      m.revenue.compareValue != null && m.refunds.compareValue != null
+        ? Math.max(0, m.revenue.compareValue - m.refunds.compareValue)
+        : null,
+    deltaPct: null as number | null,
+  };
   const heatMax = Math.max(1, ...report.visits.heatmap.flat());
   const hourFrom = visits.heatmapHours?.from ?? 0;
   const hourTo = visits.heatmapHours?.to ?? 23;
@@ -59,10 +71,20 @@ export function ClubAnalyticsPanel({
 
   return (
     <div className="space-y-4">
+      <AnalyticsDataQualityBar
+        coverage={report.coverage}
+        filtersActive={report.appliedFilters?.active}
+        provider={report.integrationHealth?.provider}
+      />
       {report.dataSince && (
         <p className="text-xs text-slate-500">
           История продаж / выручки с {report.dataSince}. Сравнение:{' '}
           {report.compareFrom} — {report.compareTo}
+        </p>
+      )}
+      {report.appliedFilters?.active && (
+        <p className="text-xs text-amber-300/90">
+          Деньги отфильтрованы. Проходы, база и заполняемость — по всему клубу.
         </p>
       )}
 
@@ -100,6 +122,11 @@ export function ClubAnalyticsPanel({
             href={salesHref(from, to, { op: 'payment' })}
           />
           <MetricCard
+            label="Чистая после возвратов"
+            metric={netRevenue}
+            currency={currency}
+          />
+          <MetricCard
             label="Средний чек"
             metric={m.avgCheck}
             currency={currency}
@@ -112,12 +139,18 @@ export function ClubAnalyticsPanel({
             href={salesHref(from, to, { op: 'refund' })}
           />
           <MetricCard
-            label="Дебиторка"
+            label="Дебиторка (на сегодня)"
             metric={m.debtOutstanding}
             currency={currency}
             href={salesHref(from, to, { op: 'unpaid' })}
           />
         </div>
+        {m.segmentGapMinor != null && Math.abs(m.segmentGapMinor) > 100 && (
+          <p className="mt-2 text-xs text-amber-300">
+            Сегменты не сходятся с приходом на{' '}
+            {money(Math.abs(m.segmentGapMinor), currency)}
+          </p>
+        )}
         {m.debtBreakdown && (
           <div className="card mt-3">
             <p className="mb-2 text-sm font-medium">Дебиторка — расшифровка</p>
@@ -145,7 +178,7 @@ export function ClubAnalyticsPanel({
         )}
         {m.installments && (
           <div className="card mt-3">
-            <p className="mb-2 text-sm font-medium">Рассрочки</p>
+            <p className="mb-2 text-sm font-medium">Рассрочки (на сегодня)</p>
             <ul className="space-y-1 text-sm text-slate-300">
               <li className="flex justify-between gap-3">
                 <span>К оплате в этом месяце</span>
@@ -206,19 +239,30 @@ export function ClubAnalyticsPanel({
           <ul className="space-y-2">
             {m.bySegment.map((s) => (
               <li key={s.key} className="text-sm">
-                <div className="flex justify-between">
-                  <Link
-                    href={salesHref(from, to, {
-                      op: 'payment',
-                      segment: s.key,
-                    })}
-                    className="text-fitgo-400 hover:underline"
+                <div className="flex justify-between gap-2">
+                  <button
+                    type="button"
+                    className="text-left text-fitgo-400 hover:underline"
+                    onClick={() => onFilterSegment?.(s.key)}
                   >
                     {s.label}
-                  </Link>
+                  </button>
                   <span className="text-slate-400">
-                    {money(s.amountMinor, currency)} ·{' '}
-                    {Math.round(s.share * 100)}%
+                    <Link
+                      href={salesHref(from, to, {
+                        op: 'payment',
+                        segment:
+                          s.key === 'spa'
+                            ? 'massage'
+                            : s.key === 'unclassified'
+                              ? undefined
+                              : s.key,
+                      })}
+                      className="hover:underline"
+                    >
+                      {money(s.amountMinor, currency)}
+                    </Link>{' '}
+                    · {Math.round(s.share * 100)}%
                   </span>
                 </div>
                 <div className="mt-1 h-2 rounded-full bg-slate-800">
@@ -251,13 +295,13 @@ export function ClubAnalyticsPanel({
 
       <section>
         <h3 className="mb-2 text-sm font-semibold text-slate-300">
-          Посещаемость
+          Проходы в зал
         </h3>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <MetricCard label="Визиты" metric={visits.total} />
+          <MetricCard label="Проходы" metric={visits.total} />
           <MetricCard label="Уникальные" metric={visits.uniqueClients} />
           <MetricCard
-            label="Визитов / абонемент"
+            label="Проходов / абонемент"
             metric={visits.avgPerActiveMembership}
           />
           <MetricCard label="Спящие 14+ дн." metric={visits.sleeping} />
@@ -309,10 +353,12 @@ export function ClubAnalyticsPanel({
       </section>
 
       <section>
-        <h3 className="mb-2 text-sm font-semibold text-slate-300">Услуги</h3>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+        <h3 className="mb-2 text-sm font-semibold text-slate-300">
+          Групповые программы
+        </h3>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <MetricCard
-            label="ГП занятий"
+            label="Проведено"
             metric={services.group.sessions}
             href={controlHref(from, to, {
               kind: 'GROUP',
@@ -320,9 +366,84 @@ export function ClubAnalyticsPanel({
             })}
           />
           <MetricCard
-            label="ГП заполняемость"
+            label="Заполняемость"
             metric={services.group.avgFillPct}
           />
+          {services.groupOps && (
+            <>
+              <div className="card p-3 text-sm">
+                <p className="text-slate-400">Явка</p>
+                <p className="text-lg font-semibold">
+                  {services.groupOps.attendancePct != null
+                    ? `${services.groupOps.attendancePct}%`
+                    : 'н/д'}
+                </p>
+              </div>
+              <div className="card p-3 text-sm">
+                <p className="text-slate-400">Отмены / неявка</p>
+                <p className="text-lg font-semibold">
+                  {services.groupOps.cancelRatePct ?? '—'}% /{' '}
+                  {services.groupOps.noShowPct ?? '—'}%
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+        {(report.groupPrograms?.length ?? 0) > 0 && (
+          <div className="card mt-3 overflow-x-auto">
+            <p className="mb-2 text-sm font-medium">Программы по заполняемости</p>
+            <table className="w-full min-w-[520px] text-left text-sm">
+              <thead className="text-xs text-slate-500">
+                <tr>
+                  <th className="py-1">Программа</th>
+                  <th className="px-2 text-right">Занятия</th>
+                  <th className="px-2 text-right">Отменено</th>
+                  <th className="px-2 text-right">Пришло</th>
+                  <th className="px-2 text-right">Заполн.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.groupPrograms!.slice(0, 8).map((p) => (
+                  <tr key={p.title} className="border-t border-slate-700/50">
+                    <td className="py-1">{p.title}</td>
+                    <td className="px-2 text-right">{p.sessions}</td>
+                    <td className="px-2 text-right">{p.cancelledSessions}</td>
+                    <td className="px-2 text-right">{p.attendedTotal}</td>
+                    <td className="px-2 text-right">
+                      {p.fillPct != null ? `${p.fillPct}%` : 'н/д'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <Link
+              href={`/super-admin/analytics?tab=staff&department=GROUP_TRAINER&from=${from}&to=${to}`}
+              className="mt-2 inline-block text-sm text-fitgo-400 hover:underline"
+            >
+              Тренеры ГП →
+            </Link>
+          </div>
+        )}
+        {services.group.bottomDirections.length > 0 && (
+          <div className="card mt-3">
+            <p className="mb-2 text-sm font-medium">Низкая заполняемость</p>
+            <ul className="space-y-1 text-sm">
+              {services.group.bottomDirections.map((d) => (
+                <li key={d.title} className="flex justify-between">
+                  <span>{d.title}</span>
+                  <span className="text-slate-400">
+                    {d.sessions} · {d.fillPct}%
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-semibold text-slate-300">ПТ и SPA</h3>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
           <MetricCard
             label="ПТ проведено"
             metric={services.pt.completed}
@@ -344,24 +465,26 @@ export function ClubAnalyticsPanel({
           />
         </div>
         <div className="card mt-3 text-sm text-slate-300">
-          SPA: абонемент {services.spa.quota} · оплата {services.spa.paid} ·
-          Allsports {services.spa.allsports}
+          SPA: квота абонемента {services.spa.quota} · оплата / блоки{' '}
+          {services.spa.paid} · Allsports БИОИМПЕДАНС {services.spa.allsports}
+          {(services.spa.unknown ?? 0) > 0
+            ? ` · без источника ${services.spa.unknown}`
+            : ''}
         </div>
-        {services.group.topDirections.length > 0 && (
-          <div className="card mt-3">
-            <p className="mb-2 text-sm font-medium">Топ направлений ГП</p>
-            <ul className="space-y-1 text-sm">
-              {services.group.topDirections.map((d) => (
-                <li key={d.title} className="flex justify-between">
-                  <span>{d.title}</span>
-                  <span className="text-slate-400">
-                    {d.sessions} · ср. {d.avgAttended} · {d.fillPct}%
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <div className="mt-2 flex flex-wrap gap-3 text-sm">
+          <Link
+            href={`/super-admin/analytics?tab=staff&department=PT_TRAINER&from=${from}&to=${to}`}
+            className="text-fitgo-400 hover:underline"
+          >
+            Персональные тренеры →
+          </Link>
+          <Link
+            href={`/super-admin/analytics?tab=staff&department=SPECIALIST&from=${from}&to=${to}`}
+            className="text-fitgo-400 hover:underline"
+          >
+            SPA-специалисты →
+          </Link>
+        </div>
       </section>
 
       {showPay && report.fot && (
@@ -591,7 +714,7 @@ export function ClubAnalyticsPanel({
       )}
 
       <div className="card text-sm text-slate-400">
-        Интеграция: {report.integrationHealth?.provider ?? 'mock'}
+        Интеграция: {report.integrationHealth?.provider ?? 'не настроен'}
         {report.integrationHealth?.clubExternalId &&
           ` · ${report.integrationHealth.clubExternalId}`}
       </div>

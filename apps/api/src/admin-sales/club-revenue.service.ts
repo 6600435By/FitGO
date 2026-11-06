@@ -976,8 +976,9 @@ export class ClubRevenueService {
     fromIso: string,
     toIso: string,
   ): Promise<number> {
-    const from = new Date(`${fromIso}T00:00:00.000Z`);
-    const to = new Date(`${toIso}T23:59:59.999Z`);
+    // Europe/Minsk calendar day — same window as analytics moneyBlock.
+    const from = new Date(`${fromIso}T00:00:00+03:00`);
+    const to = new Date(`${toIso}T23:59:59.999+03:00`);
     const [receipts, manuals] = await Promise.all([
       this.prisma.clubRevenueEntry.findMany({
         where: {

@@ -456,10 +456,16 @@ export function inferPaymentFromBasis(
   const b = (basis ?? '').trim().toLowerCase();
   if (!b) return 'UNKNOWN';
   // Free AllSports биоимпеданс often has «беспл.» in basis — still PARTNER, not gift.
-  if (/биоимпеданс|bio.?imped/.test(b)) return 'PARTNER';
+  // Require both Allsports and биоимпеданс (UUID checked separately in analytics/payroll).
+  if (
+    /биоимпеданс|bio.?imped|биоимп/.test(b) &&
+    /allsports|all.?sports/.test(b)
+  ) {
+    return 'PARTNER';
+  }
   if (/подарок|gift|комплимент|бесплат/.test(b)) return 'GIFT';
-  if (/allsports|all.?sports/.test(b)) return 'PARTNER';
-  if (/членств|абонемент|пакет|квот|безлимит/.test(b)) return 'QUOTA';
+  // Membership / VIP quota — not bare «пакет услуг» (massage blocks are PAID packs).
+  if (/членств|абонемент|квот|безлимит/.test(b)) return 'QUOTA';
   if (/долг|рассроч/.test(b)) return 'DEBT';
   if (/оплач|нал|карт|безнал|лс|лицевой|продаж/.test(b)) return 'PAID';
   return 'PAID';

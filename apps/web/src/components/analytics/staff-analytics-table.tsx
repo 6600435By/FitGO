@@ -218,6 +218,9 @@ function kpiCells(
         <td className="px-2 py-2 text-right">
           <CountCell value={k.sessionsConducted} href={controlHref('PT')} />
         </td>
+        <td className="px-2 py-2 text-right">
+          {k.giftSharePct != null ? `${k.giftSharePct}%` : '—'}
+        </td>
         <td
           className="px-2 py-2 text-right"
           title="Уникальные клиенты за период"
@@ -249,6 +252,9 @@ function kpiCells(
             href={salesHref}
           />
         </td>
+        <td className="px-2 py-2 text-right">
+          {k.sessionsPerHour != null ? k.sessionsPerHour : '—'}
+        </td>
       </>
     );
   }
@@ -268,9 +274,22 @@ function kpiCells(
         <td className="px-2 py-2 text-right" title={mixTitle}>
           {k.kpPct != null ? `${k.kpPct}%` : '—'}
         </td>
-        <td className="px-2 py-2 text-right">{k.quotaCount}</td>
-        <td className="px-2 py-2 text-right">{k.paidCount}</td>
-        <td className="px-2 py-2 text-right">{k.allsportsCount}</td>
+        <td className="px-2 py-2 text-right" title="Только абонемент / VIP">
+          {k.quotaCount}
+        </td>
+        <td
+          className="px-2 py-2 text-right"
+          title="Разовые продажи и блоки массажа"
+        >
+          {k.paidCount}
+        </td>
+        <td
+          className="px-2 py-2 text-right"
+          title="Allsports БИОИМПЕДАНС"
+        >
+          {k.allsportsCount}
+        </td>
+        <td className="px-2 py-2 text-right">{k.unknownPayCount}</td>
         <td className="px-2 py-2 text-right">
           {k.repeatPct != null ? `${k.repeatPct}%` : '—'}
         </td>
@@ -280,6 +299,9 @@ function kpiCells(
             currency={currency}
             href={salesHref}
           />
+        </td>
+        <td className="px-2 py-2 text-right">
+          {k.utilizationPct != null ? `${k.utilizationPct}%` : '—'}
         </td>
       </>
     );
@@ -334,18 +356,30 @@ function kpiHeaders(dept: AnalyticsDepartment) {
     ];
   }
   if (dept === 'PT_TRAINER') {
-    return ['ПТ', 'Уник.', 'Новые', 'Конв.', 'Удерж.90', 'Активн.', 'Продажи'];
+    return [
+      'ПТ',
+      'Подар %',
+      'Уник.',
+      'Новые',
+      'Конв.',
+      'Удерж.90',
+      'Активн.',
+      'Продажи',
+      'ПТ/час',
+    ];
   }
   if (dept === 'SPECIALIST') {
     return [
       'Услуги',
       'Абон %',
       'КП %',
-      'Абон.',
+      'Квота',
       'Оплата',
       'Allsport',
+      'Без ист.',
       'Повтор',
       'Выручка',
+      'Загрузка',
     ];
   }
   if (dept === 'TECH') return ['Смены', 'Перераб. мин'];
@@ -398,6 +432,8 @@ export function StaffAnalyticsTable({
       : department;
   const headers = kpiHeaders(headerDept);
 
+  const summary = report.departmentSummary;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -414,6 +450,77 @@ export function StaffAnalyticsTable({
           {exporting ? 'Excel…' : 'Выгрузить Excel'}
         </button>
       </div>
+      {summary && (department === 'ALL' || department === 'GROUP_TRAINER' || department === 'PT_TRAINER' || department === 'SPECIALIST') && (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          {(department === 'ALL' || department === 'GROUP_TRAINER') &&
+            summary.group && (
+              <div className="card text-sm">
+                <p className="font-medium">Групповые</p>
+                <p className="text-slate-400">
+                  {summary.group.sessionsConducted} занятий · заполн.{' '}
+                  {summary.group.avgFillPct ?? 'н/д'}% · явка{' '}
+                  {summary.group.attendancePct ?? 'н/д'}%
+                </p>
+              </div>
+            )}
+          {(department === 'ALL' || department === 'PT_TRAINER') &&
+            summary.pt && (
+              <div className="card text-sm">
+                <p className="font-medium">Персональные</p>
+                <p className="text-slate-400">
+                  {summary.pt.sessionsConducted} ПТ · конв.{' '}
+                  {summary.pt.conversionPct ?? 'н/д'}% · подар.{' '}
+                  {summary.pt.giftSharePct ?? 'н/д'}%
+                </p>
+              </div>
+            )}
+          {(department === 'ALL' || department === 'SPECIALIST') &&
+            summary.spa && (
+              <div className="card text-sm">
+                <p className="font-medium">SPA</p>
+                <p className="text-slate-400">
+                  {summary.spa.servicesTotal} услуг · квота{' '}
+                  {summary.spa.quotaCount} · оплата {summary.spa.paidCount} ·
+                  Allsports {summary.spa.allsportsCount}
+                  {summary.spa.unknownPayCount > 0
+                    ? ` · без ист. ${summary.spa.unknownPayCount}`
+                    : ''}
+                </p>
+              </div>
+            )}
+        </div>
+      )}
+      {report.groupProgramsClub &&
+        report.groupProgramsClub.length > 0 &&
+        (department === 'ALL' || department === 'GROUP_TRAINER') && (
+          <div className="card overflow-x-auto">
+            <p className="mb-2 text-sm font-medium">Программы клуба</p>
+            <table className="w-full min-w-[480px] text-left text-xs">
+              <thead className="text-slate-500">
+                <tr>
+                  <th className="py-1">Программа</th>
+                  <th className="px-2 text-right">Занятия</th>
+                  <th className="px-2 text-right">Заполн.</th>
+                  <th className="px-2 text-right">Отмены</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.groupProgramsClub.slice(0, 12).map((p) => (
+                  <tr key={p.title} className="border-t border-slate-700/50">
+                    <td className="py-1">{p.title}</td>
+                    <td className="px-2 text-right">{p.sessionsConducted}</td>
+                    <td className="px-2 text-right">
+                      {p.fillPct != null ? `${p.fillPct}%` : 'н/д'}
+                    </td>
+                    <td className="px-2 text-right">
+                      {p.cancelRatePct != null ? `${p.cancelRatePct}%` : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
       {(department === 'ALL' || department === 'MANAGER') && (
         <>

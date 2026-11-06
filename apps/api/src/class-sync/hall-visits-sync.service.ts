@@ -35,6 +35,14 @@ export class HallVisitsSyncService {
     };
   }
 
+  /** ~13 months — analytics YoY / long presets (one-shot backfill). */
+  thirteenMonthWindow(now = new Date()): { from: string; to: string } {
+    const to = now.toISOString().slice(0, 10);
+    const fromD = new Date(now);
+    fromD.setUTCDate(fromD.getUTCDate() - 400);
+    return { from: fromD.toISOString().slice(0, 10), to };
+  }
+
   /** Last 14 days — operational. */
   operationalWindow(now = new Date()): { from: string; to: string } {
     const to = now.toISOString().slice(0, 10);

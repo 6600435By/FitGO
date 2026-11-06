@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type {
   AnalyticsDepartment,
   ManagerEfficiencyBlock,
@@ -98,6 +99,7 @@ export class StaffAnalyticsService {
     private readonly payroll: PayrollService,
     private readonly clubAnalytics: ClubAnalyticsService,
     private readonly trainerMonth: TrainerMonthAnalyticsService,
+    private readonly config: ConfigService,
   ) {}
 
   async getStaffReport(
@@ -108,6 +110,13 @@ export class StaffAnalyticsService {
       department?: AnalyticsDepartment;
       userId?: string;
       includePay?: boolean;
+      compare?: 'prev' | 'yoy' | 'custom';
+      segment?: string;
+      employee?: string;
+      performer?: string;
+      product?: string;
+      payment?: string;
+      q?: string;
     },
   ): Promise<StaffAnalyticsReport> {
     const clubId = requireClubId(user);
@@ -117,6 +126,17 @@ export class StaffAnalyticsService {
     const isManager = user.roles.includes(UserRole.MANAGER);
     const canSeePay = isSuperAdmin || isManager;
     const includePay = Boolean(params.includePay) && canSeePay;
+    const { parseAnalyticsFilters, appliedFilters } = await import(
+      './analytics-filters'
+    );
+    const { resolveCompareRange } = await import('./analytics-period');
+    const moneyFilters = parseAnalyticsFilters(params);
+    const compareMode = params.compare ?? 'prev';
+    const { compareFrom, compareTo } = resolveCompareRange(
+      params.from,
+      params.to,
+      compareMode,
+    );
 
     const club = await this.prisma.club.findUnique({
       where: { id: clubId },
@@ -141,11 +161,28 @@ export class StaffAnalyticsService {
       new Map<string, StaffPayColumns & { openExceptions: number }>(),
     );
 
-    // One club payroll summary for pay columns + admin sales KPIs (cached in PayrollService).
-    const paySummary =
-      includePay || needAdmin
-        ? await this.payroll.getClubSummary(clubId, params.from, params.to)
-        : null;
+    // Pay columns still need payroll; admin sales come from ClubRevenueEntry.
+    const paySummary = includePay
+      ? await this.payroll.getClubSummary(clubId, params.from, params.to)
+      : null;
+
+    const salesByExternal = needAdmin
+      ? await this.loadCreSalesByEmployee(
+          clubId,
+          params.from,
+          params.to,
+          moneyFilters,
+        )
+      : new Map<
+          string,
+          {
+            membershipMinor: number;
+            spaMinor: number;
+            shopMinor: number;
+            corporateMinor: number;
+            totalMinor: number;
+          }
+        >();
 
     const [
       hoursByUser,
@@ -160,7 +197,13 @@ export class StaffAnalyticsService {
       this.collectHours(clubId, start, end),
       this.collectRemarks(clubId, start, end),
       needAdmin
-        ? this.collectAdminKpis(clubId, staff, start, end, paySummary)
+        ? this.collectAdminKpis(
+            clubId,
+            staff,
+            start,
+            end,
+            salesByExternal,
+          )
         : emptyKpi,
       needGroup
         ? this.collectGroupTrainerKpis(clubId, staff, start, end)
@@ -271,8 +314,8 @@ export class StaffAnalyticsService {
       }
     }
 
-    // Enrich manager corporate sales
-    if (includePay || isSuperAdmin) {
+    // Manager corporate sales — always (not gated by pay toggle).
+    {
       const corpo = await this.prisma.payrollCorporateSale.findMany({
         where: {
           clubId,
@@ -286,6 +329,49 @@ export class StaffAnalyticsService {
           .filter((c) => c.userId === row.userId)
           .reduce((a, c) => a + c.amountMinor, 0);
         row.kpi.corporateSalesMinor = sum;
+      }
+    }
+
+    // Enrich PT / SPA / GROUP derived fields.
+    for (const row of rows) {
+      if (row.kpi.kind === 'PT_TRAINER') {
+        const k = row.kpi;
+        k.giftSharePct =
+          k.sessionsConducted > 0
+            ? Math.round((k.giftSessions / k.sessionsConducted) * 1000) / 10
+            : null;
+        k.salesPerSessionMinor =
+          k.sessionsConducted > 0
+            ? Math.round(k.ptSalesMinor / k.sessionsConducted)
+            : null;
+        k.sessionsPerHour =
+          row.hours > 0
+            ? Math.round((k.sessionsConducted / row.hours) * 100) / 100
+            : null;
+      }
+      if (row.kpi.kind === 'GROUP_TRAINER') {
+        const k = row.kpi;
+        k.attendancePct =
+          k.bookedTotal > 0
+            ? Math.round((k.attendedTotal / k.bookedTotal) * 1000) / 10
+            : null;
+        k.sessionsPerHour =
+          row.hours > 0
+            ? Math.round((k.sessionsConducted / row.hours) * 100) / 100
+            : null;
+      }
+      if (row.kpi.kind === 'SPECIALIST') {
+        const k = row.kpi;
+        const paidLike = k.paidCount + k.quotaCount;
+        k.revenuePerPaidServiceMinor =
+          k.paidCount > 0
+            ? Math.round(k.paidRevenueMinor / k.paidCount)
+            : null;
+        k.utilizationPct =
+          row.hours > 0
+            ? Math.round((k.servicesTotal / row.hours) * 1000) / 10
+            : null;
+        void paidLike;
       }
     }
 
@@ -313,23 +399,139 @@ export class StaffAnalyticsService {
         : {}),
     };
 
+    const groupRows = flagged.filter((r) => r.kpi.kind === 'GROUP_TRAINER');
+    const ptRows = flagged.filter((r) => r.kpi.kind === 'PT_TRAINER');
+    const spaRows = flagged.filter((r) => r.kpi.kind === 'SPECIALIST');
+    const departmentSummary = {
+      group:
+        groupRows.length > 0
+          ? {
+              sessionsConducted: groupRows.reduce(
+                (a, r) =>
+                  a +
+                  (r.kpi.kind === 'GROUP_TRAINER'
+                    ? r.kpi.sessionsConducted
+                    : 0),
+                0,
+              ),
+              avgFillPct: medianNullable(
+                groupRows.map((r) =>
+                  r.kpi.kind === 'GROUP_TRAINER' ? r.kpi.avgFillPct : null,
+                ),
+              ),
+              attendancePct: medianNullable(
+                groupRows.map((r) =>
+                  r.kpi.kind === 'GROUP_TRAINER'
+                    ? (r.kpi.attendancePct ?? null)
+                    : null,
+                ),
+              ),
+              cancelRatePct: medianNullable(
+                groupRows.map((r) =>
+                  r.kpi.kind === 'GROUP_TRAINER' ? r.kpi.cancelRatePct : null,
+                ),
+              ),
+            }
+          : undefined,
+      pt:
+        ptRows.length > 0
+          ? {
+              sessionsConducted: ptRows.reduce(
+                (a, r) =>
+                  a +
+                  (r.kpi.kind === 'PT_TRAINER' ? r.kpi.sessionsConducted : 0),
+                0,
+              ),
+              giftSharePct: medianNullable(
+                ptRows.map((r) =>
+                  r.kpi.kind === 'PT_TRAINER'
+                    ? (r.kpi.giftSharePct ?? null)
+                    : null,
+                ),
+              ),
+              conversionPct: medianNullable(
+                ptRows.map((r) =>
+                  r.kpi.kind === 'PT_TRAINER' ? r.kpi.conversionPct : null,
+                ),
+              ),
+              uniqueClients: ptRows.reduce(
+                (a, r) =>
+                  a + (r.kpi.kind === 'PT_TRAINER' ? r.kpi.uniqueClients : 0),
+                0,
+              ),
+            }
+          : undefined,
+      spa:
+        spaRows.length > 0
+          ? {
+              servicesTotal: spaRows.reduce(
+                (a, r) =>
+                  a +
+                  (r.kpi.kind === 'SPECIALIST' ? r.kpi.servicesTotal : 0),
+                0,
+              ),
+              quotaCount: spaRows.reduce(
+                (a, r) =>
+                  a + (r.kpi.kind === 'SPECIALIST' ? r.kpi.quotaCount : 0),
+                0,
+              ),
+              paidCount: spaRows.reduce(
+                (a, r) =>
+                  a + (r.kpi.kind === 'SPECIALIST' ? r.kpi.paidCount : 0),
+                0,
+              ),
+              allsportsCount: spaRows.reduce(
+                (a, r) =>
+                  a +
+                  (r.kpi.kind === 'SPECIALIST' ? r.kpi.allsportsCount : 0),
+                0,
+              ),
+              unknownPayCount: spaRows.reduce(
+                (a, r) =>
+                  a +
+                  (r.kpi.kind === 'SPECIALIST' ? r.kpi.unknownPayCount : 0),
+                0,
+              ),
+              repeatPct: medianNullable(
+                spaRows.map((r) =>
+                  r.kpi.kind === 'SPECIALIST' ? r.kpi.repeatPct : null,
+                ),
+              ),
+            }
+          : undefined,
+    };
+
+    const groupProgramsClub =
+      department === 'ALL' || department === 'GROUP_TRAINER'
+        ? mergeGroupPrograms(
+            groupRows.flatMap((r) =>
+              r.kpi.kind === 'GROUP_TRAINER' ? r.kpi.programs : [],
+            ),
+          )
+        : undefined;
+
     return {
       from: params.from,
       to: params.to,
+      compareFrom,
+      compareTo,
+      compareMode,
       currency: club?.currency ?? 'BYN',
       includePay,
       department,
+      appliedFilters: appliedFilters(moneyFilters),
       rows: flagged,
       problemCount,
       achievementCount,
       managerEfficiency: null,
+      groupProgramsClub,
+      departmentSummary,
       totals,
     };
   }
 
   /**
-   * SUPER_ADMIN only — loaded separately when department is ALL or MANAGER.
-   * Avoids hitting 1C installments + club FOT on every staff report open.
+   * Club indicators for SUPER_ADMIN and MANAGER (no foreign pay).
    */
   async getManagerEfficiency(
     user: JwtPayload,
@@ -892,17 +1094,119 @@ export class StaffAnalyticsService {
     return map;
   }
 
+  private async loadCreSalesByEmployee(
+    clubId: string,
+    from: string,
+    to: string,
+    filters: import('./analytics-filters').AnalyticsMoneyFilters,
+  ) {
+    const { start, end } = rangeBounds(from, to);
+    const { loadPayrollSegmentSets } = await import(
+      '../admin-sales/admin-sales-segments'
+    );
+    const { aggregateAnalyticsMoney } = await import('./analytics-money');
+    const [receipts, manuals, payrollSegs] = await Promise.all([
+      this.prisma.clubRevenueEntry.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          OR: [
+            {
+              operationType: { in: ['payment', 'refund'] },
+              paidAt: { gte: start, lte: end },
+            },
+            {
+              operationType: {
+                in: ['personal_deposit', 'personal_credit', 'personal_burn'],
+              },
+              occurredAt: { gte: start, lte: end },
+            },
+            {
+              operationType: 'sale',
+              paidAt: { gte: start, lte: end },
+              paidAmount: { gt: 0 },
+            },
+          ],
+        },
+        select: {
+          externalId: true,
+          documentId: true,
+          operationType: true,
+          occurredAt: true,
+          paidAt: true,
+          amount: true,
+          cash: true,
+          card: true,
+          cashless: true,
+          personalAccount: true,
+          refundAmount: true,
+          paidAmount: true,
+          saleType: true,
+          productName: true,
+          productExternalId: true,
+          clientName: true,
+          clientExternalId: true,
+          employeeExternalId: true,
+          employeeName: true,
+          performerExternalId: true,
+          performerName: true,
+        },
+      }),
+      this.prisma.clubRevenueManualEntry.findMany({
+        where: { clubId, entryDate: { gte: start, lte: end } },
+        select: { kind: true, amountMinor: true, entryDate: true },
+      }),
+      loadPayrollSegmentSets(this.config),
+    ]);
+    const agg = aggregateAnalyticsMoney({
+      from,
+      to,
+      receipts,
+      manuals,
+      payrollSegs,
+      filters,
+    });
+    const out = new Map<
+      string,
+      {
+        membershipMinor: number;
+        spaMinor: number;
+        shopMinor: number;
+        corporateMinor: number;
+        totalMinor: number;
+      }
+    >();
+    for (const [empId, v] of agg.byEmployee) {
+      out.set(empId.toLowerCase(), {
+        membershipMinor: v.membershipMinor,
+        spaMinor: v.spaMinor,
+        shopMinor: v.shopMinor,
+        corporateMinor: v.corporateMinor,
+        totalMinor: v.totalMinor,
+      });
+    }
+    return out;
+  }
+
   private async collectAdminKpis(
     clubId: string,
     staff: StaffUser[],
     start: Date,
     end: Date,
-    paySummary: Awaited<ReturnType<PayrollService['getClubSummary']>> | null,
+    salesByExternal: Map<
+      string,
+      {
+        membershipMinor: number;
+        spaMinor: number;
+        shopMinor: number;
+        corporateMinor: number;
+        totalMinor: number;
+      }
+    >,
   ) {
     const admins = staff.filter((s) =>
       s.roles.some((r) => r.role === Role.ADMIN || r.role === Role.MANAGER),
     );
-    const adminIds = new Set(admins.map((a) => a.id));
     const map = new Map<string, StaffDepartmentKpi>();
 
     const [tasks, groupApprovals, sessionApprovals, remarks] = await Promise.all([
@@ -945,7 +1249,6 @@ export class StaffAnalyticsService {
       }),
     ]);
 
-    // Sales from shared payroll summary (already loaded once for the report)
     const salesByUser = new Map<
       string,
       {
@@ -956,25 +1259,27 @@ export class StaffAnalyticsService {
         totalMinor: number;
       }
     >();
-    if (paySummary) {
-      for (const section of paySummary.sections) {
-        for (const r of section.rows) {
-          if (!adminIds.has(r.userId)) continue;
-          const s = r.sales;
-          salesByUser.set(r.userId, {
-            membershipMinor: s?.membershipMinor ?? 0,
-            spaMinor: (s?.massageMinor ?? 0) + (s?.solariumMinor ?? 0),
-            shopMinor: s?.shopMinor ?? 0,
-            corporateMinor: s?.corporateMinor ?? 0,
-            totalMinor:
-              (s?.membershipMinor ?? 0) +
-              (s?.massageMinor ?? 0) +
-              (s?.solariumMinor ?? 0) +
-              (s?.shopMinor ?? 0) +
-              (s?.corporateMinor ?? 0),
-          });
-        }
+    for (const admin of admins) {
+      const codes = staffEmployeeCodes(admin);
+      let merged = {
+        membershipMinor: 0,
+        spaMinor: 0,
+        shopMinor: 0,
+        corporateMinor: 0,
+        totalMinor: 0,
+      };
+      for (const code of codes) {
+        const hit = salesByExternal.get(code.toLowerCase());
+        if (!hit) continue;
+        merged = {
+          membershipMinor: merged.membershipMinor + hit.membershipMinor,
+          spaMinor: merged.spaMinor + hit.spaMinor,
+          shopMinor: merged.shopMinor + hit.shopMinor,
+          corporateMinor: merged.corporateMinor + hit.corporateMinor,
+          totalMinor: merged.totalMinor + hit.totalMinor,
+        };
       }
+      salesByUser.set(admin.id, merged);
     }
 
     const hours = await this.collectHours(clubId, start, end);
@@ -1685,6 +1990,7 @@ export class StaffAnalyticsService {
           number: true,
           kind: true,
           title: true,
+          serviceExternalId: true,
           startAt: true,
           employeeExternalId: true,
           employeeName: true,
@@ -1766,6 +2072,8 @@ export class StaffAnalyticsService {
       const pay = classifySpaPaymentBucket({
         paymentBasis: primary?.paymentBasis,
         paySource: primary?.paySource,
+        serviceExternalId: s.serviceExternalId,
+        serviceTitle: s.title,
       });
       const clientKey =
         primary?.externalId?.trim() || `sess:${s.externalId}`;
@@ -1935,11 +2243,12 @@ export class StaffAnalyticsService {
     extras: { payrollExceptions: number; adminTasksDonePct: number | null },
   ): Promise<ManagerEfficiencyBlock> {
     const { start, end } = rangeBounds(from, to);
+    const isSuperAdmin = user.roles.includes(UserRole.SUPER_ADMIN);
     const clubReport = await this.clubAnalytics.getClubReport(user, {
       from,
       to,
       compare: 'prev',
-      includePay: true,
+      includePay: isSuperAdmin,
     });
 
     const completedGroup = await this.prisma.onexClassSession.findMany({
@@ -2036,20 +2345,24 @@ export class StaffAnalyticsService {
               : 'red',
         value: churnUnavailable ? 'н/д' : churn,
       },
-      {
-        id: 'fot',
-        label: 'ФОТ / выручка',
-        status:
-          fotShare == null
-            ? 'yellow'
-            : fotShare <= 40
-              ? 'green'
-              : fotShare <= 55
-                ? 'yellow'
-                : 'red',
-        value: fotShare ?? '—',
-        hint: 'Ориентир ≤ 40%',
-      },
+      ...(isSuperAdmin
+        ? [
+            {
+              id: 'fot',
+              label: 'ФОТ / выручка',
+              status:
+                fotShare == null
+                  ? ('yellow' as const)
+                  : fotShare <= 40
+                    ? ('green' as const)
+                    : fotShare <= 55
+                      ? ('yellow' as const)
+                      : ('red' as const),
+              value: fotShare ?? '—',
+              hint: 'Ориентир ≤ 40%',
+            },
+          ]
+        : []),
       {
         id: 'booking_control',
         label: 'Очередь контроля',
@@ -2087,17 +2400,21 @@ export class StaffAnalyticsService {
           openRemarks === 0 ? 'green' : openRemarks <= 5 ? 'yellow' : 'red',
         value: openRemarks,
       },
-      {
-        id: 'exceptions',
-        label: 'Исключения ЗП',
-        status:
-          payrollExceptions === 0
-            ? 'green'
-            : payrollExceptions <= 3
-              ? 'yellow'
-              : 'red',
-        value: payrollExceptions,
-      },
+      ...(isSuperAdmin
+        ? [
+            {
+              id: 'exceptions',
+              label: 'Исключения ЗП',
+              status:
+                payrollExceptions === 0
+                  ? ('green' as const)
+                  : payrollExceptions <= 3
+                    ? ('yellow' as const)
+                    : ('red' as const),
+              value: payrollExceptions,
+            },
+          ]
+        : []),
     ];
 
     return {
@@ -2106,7 +2423,85 @@ export class StaffAnalyticsService {
       oldestPendingApprovalHours,
       adminTasksDonePct,
       openRemarks,
-      payrollExceptions,
+      payrollExceptions: isSuperAdmin ? payrollExceptions : 0,
     };
   }
+}
+
+function medianNullable(values: Array<number | null>): number | null {
+  const nums = values.filter((v): v is number => v != null && !Number.isNaN(v));
+  if (!nums.length) return null;
+  nums.sort((a, b) => a - b);
+  const mid = Math.floor(nums.length / 2);
+  if (nums.length % 2 === 0) {
+    return Math.round(((nums[mid - 1]! + nums[mid]!) / 2) * 10) / 10;
+  }
+  return nums[mid]!;
+}
+
+function mergeGroupPrograms(
+  programs: Array<{
+    title: string;
+    sessionsConducted: number;
+    cancelledSessions: number;
+    bookedTotal: number;
+    attendedTotal: number;
+    uniqueClients: number;
+    cancelRatePct: number | null;
+    fillPct: number | null;
+  }>,
+) {
+  const map = new Map<
+    string,
+    {
+      title: string;
+      sessionsConducted: number;
+      cancelledSessions: number;
+      bookedTotal: number;
+      attendedTotal: number;
+      uniqueClients: number;
+      fillSum: number;
+      fillN: number;
+    }
+  >();
+  for (const p of programs) {
+    const cur = map.get(p.title) ?? {
+      title: p.title,
+      sessionsConducted: 0,
+      cancelledSessions: 0,
+      bookedTotal: 0,
+      attendedTotal: 0,
+      uniqueClients: 0,
+      fillSum: 0,
+      fillN: 0,
+    };
+    cur.sessionsConducted += p.sessionsConducted;
+    cur.cancelledSessions += p.cancelledSessions;
+    cur.bookedTotal += p.bookedTotal;
+    cur.attendedTotal += p.attendedTotal;
+    cur.uniqueClients += p.uniqueClients;
+    if (p.fillPct != null) {
+      cur.fillSum += p.fillPct;
+      cur.fillN++;
+    }
+    map.set(p.title, cur);
+  }
+  return [...map.values()]
+    .map((v) => {
+      const total = v.sessionsConducted + v.cancelledSessions;
+      return {
+        title: v.title,
+        sessionsConducted: v.sessionsConducted,
+        cancelledSessions: v.cancelledSessions,
+        bookedTotal: v.bookedTotal,
+        attendedTotal: v.attendedTotal,
+        uniqueClients: v.uniqueClients,
+        fillPct: v.fillN > 0 ? Math.round(v.fillSum / v.fillN) : null,
+        cancelRatePct:
+          total > 0
+            ? Math.round((v.cancelledSessions / total) * 1000) / 10
+            : null,
+      };
+    })
+    .sort((a, b) => (b.fillPct ?? -1) - (a.fillPct ?? -1));
 }

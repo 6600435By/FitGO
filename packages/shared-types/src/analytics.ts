@@ -56,6 +56,10 @@ export interface ClubAnalyticsMoney {
     amountMinor: number;
     share: number;
   }>;
+  /** Sum of bySegment amounts (before refunds). */
+  segmentSumMinor: number;
+  /** money-in − segmentSum; non-zero means classification gap. */
+  segmentGapMinor: number;
   avgCheck: AnalyticMetric;
   refunds: AnalyticMetric;
   debtOutstanding: AnalyticMetric;
@@ -76,6 +80,76 @@ export interface ClubAnalyticsMoney {
     /** Unpaid plan amount with planDate before today (Minsk). */
     overdueMinor: number;
   } | null;
+}
+
+/** Money filters applied to club / staff / nomenclature reports. */
+export interface AnalyticsAppliedFilters {
+  segment: string | null;
+  employee: string | null;
+  performer: string | null;
+  product: string | null;
+  payment: string | null;
+  q: string | null;
+  active: boolean;
+}
+
+export interface AnalyticsDataCoverage {
+  revenueSince: string | null;
+  visitsSince: string | null;
+  visitsUntil: string | null;
+  revenueSyncedAt: string | null;
+  visitsSyncedAt: string | null;
+  membersSource: 'summary' | 'snapshots' | 'none';
+  membersPartial: boolean;
+  compareCovered: boolean;
+  compareHint?: string;
+}
+
+export interface NomenclatureProductRow {
+  productExternalId: string | null;
+  productName: string;
+  segment: string;
+  segmentLabel: string;
+  amountMinor: number;
+  shareOfSegment: number;
+  lines: number;
+  docs: number;
+  avgCheckMinor: number;
+  deltaPct: number | null;
+  topSellers: Array<{
+    employeeExternalId: string | null;
+    employeeName: string;
+    amountMinor: number;
+  }>;
+}
+
+export interface NomenclatureSegmentBlock {
+  key: string;
+  label: string;
+  amountMinor: number;
+  share: number;
+  products: NomenclatureProductRow[];
+  /** Shop-only: rows beyond top-N rolled up. */
+  shopRemainder?: {
+    productCount: number;
+    amountMinor: number;
+    shareOfSegment: number;
+  } | null;
+  shopTopShareOfSegment?: number | null;
+}
+
+export interface NomenclatureAnalyticsReport {
+  from: string;
+  to: string;
+  compareFrom: string;
+  compareTo: string;
+  compareMode: AnalyticsCompareMode;
+  currency: string;
+  dataSince: string | null;
+  appliedFilters: AnalyticsAppliedFilters;
+  coverage: AnalyticsDataCoverage;
+  segments: NomenclatureSegmentBlock[];
+  revenueMinor: number;
 }
 
 export interface ClubAnalyticsMembers {
@@ -115,9 +189,26 @@ export interface ClubAnalyticsServices {
   };
   spa: {
     completed: AnalyticMetric;
+    /** Membership / VIP write-offs only. */
     quota: number;
+    /** One-shot sales + massage blocks. */
     paid: number;
+    /** Allsports БИОИМПЕДАНС only. */
     allsports: number;
+    /** Could not classify payment source. */
+    unknown: number;
+  };
+  /** Group program fill / attendance rollup for club tab. */
+  groupOps?: {
+    sessionsConducted: number;
+    cancelledSessions: number;
+    bookedTotal: number;
+    attendedTotal: number;
+    avgFillPct: number | null;
+    attendancePct: number | null;
+    noShowPct: number | null;
+    cancelRatePct: number | null;
+    fillUnavailable: boolean;
   };
 }
 
@@ -136,6 +227,8 @@ export interface ClubAnalyticsReport {
   currency: string;
   /** Earliest sale/revenue cache date — renewals/new clients limited by this. */
   dataSince: string | null;
+  appliedFilters?: AnalyticsAppliedFilters;
+  coverage?: AnalyticsDataCoverage;
   money: ClubAnalyticsMoney;
   members: ClubAnalyticsMembers;
   visits: ClubAnalyticsVisits;
@@ -184,6 +277,17 @@ export interface ClubAnalyticsReport {
     cancelRatePct: number | null;
     activeClients: number;
     reformerGroup?: number;
+  }>;
+  /** Club-wide group programs ranked by fill (top + bottom). */
+  groupPrograms?: Array<{
+    title: string;
+    sessions: number;
+    cancelledSessions: number;
+    bookedTotal: number;
+    attendedTotal: number;
+    uniqueClients: number;
+    fillPct: number | null;
+    cancelRatePct: number | null;
   }>;
   integrationHealth?: {
     provider: string;
@@ -253,9 +357,13 @@ export interface GroupTrainerStaffKpi {
   uniqueClients: number;
   avgAttendees: number;
   avgFillPct: number | null;
+  /** attended / booked × 100 when booked > 0. */
+  attendancePct?: number | null;
   cancelRatePct: number | null;
   noShowPct: number | null;
   cancelledSessions: number;
+  /** Sessions per worked hour when hours known. */
+  sessionsPerHour?: number | null;
   topDirections: Array<{ title: string; count: number }>;
   /** Per-program breakdown for expandable staff row. */
   programs: GroupTrainerProgramKpi[];
@@ -274,6 +382,7 @@ export interface PtTrainerStaffKpi {
   sessionsConducted: number;
   paidSessions: number;
   giftSessions: number;
+  giftSharePct?: number | null;
   /** Distinct clients with ≥1 PT in the selected period (sessions + one-shot sales). */
   uniqueClients: number;
   newClients: number;
@@ -285,6 +394,10 @@ export interface PtTrainerStaffKpi {
   retentionCohortTo: string | null;
   activeClients30d: number;
   ptSalesMinor: number;
+  /** Sales per completed session. */
+  salesPerSessionMinor?: number | null;
+  /** Sessions per worked hour (shifts / day sheets). */
+  sessionsPerHour?: number | null;
   /**
    * Gift clients in period who later had PAID/QUOTA PT or a training sale
    * (not the 30d new-client conversionPct).
@@ -319,12 +432,18 @@ export interface SpaStaffKpi {
   repeatPct: number | null;
   /** Massage/SPA ClubRevenue paidAmount for performer in the period (minor). */
   paidRevenueMinor: number;
+  /** Revenue per paid+block service (excludes Allsports zeros). */
+  revenuePerPaidServiceMinor?: number | null;
+  /** Completed services / published availability hours. */
+  utilizationPct?: number | null;
   /** ATTENDED SPA members with VIP / «Все включено» payment basis (Абон.). */
   abonVisits: number;
   /** ATTENDED SPA members not on VIP (КП). */
   kpVisits: number;
   abonPct: number | null;
   kpPct: number | null;
+  /** Top services by count for this specialist. */
+  topServices?: Array<{ title: string; count: number; amountMinor: number }>;
 }
 
 export interface TechStaffKpi {
@@ -384,14 +503,43 @@ export interface ManagerEfficiencyBlock {
 export interface StaffAnalyticsReport {
   from: string;
   to: string;
+  compareFrom?: string;
+  compareTo?: string;
+  compareMode?: AnalyticsCompareMode;
   currency: string;
   includePay: boolean;
   department: AnalyticsDepartment;
+  appliedFilters?: AnalyticsAppliedFilters;
+  coverage?: AnalyticsDataCoverage;
   rows: StaffKpiRow[];
   problemCount: number;
   achievementCount: number;
-  /** SUPER_ADMIN only. */
+  /** Club-level indicators (SUPER_ADMIN + MANAGER; no foreign pay). */
   managerEfficiency?: ManagerEfficiencyBlock | null;
+  /** Club-wide program table for GROUP_TRAINER view. */
+  groupProgramsClub?: GroupTrainerProgramKpi[];
+  departmentSummary?: {
+    group?: {
+      sessionsConducted: number;
+      avgFillPct: number | null;
+      attendancePct: number | null;
+      cancelRatePct: number | null;
+    };
+    pt?: {
+      sessionsConducted: number;
+      giftSharePct: number | null;
+      conversionPct: number | null;
+      uniqueClients: number;
+    };
+    spa?: {
+      servicesTotal: number;
+      quotaCount: number;
+      paidCount: number;
+      allsportsCount: number;
+      unknownPayCount: number;
+      repeatPct: number | null;
+    };
+  };
   totals: {
     staffCount: number;
     hours: number;

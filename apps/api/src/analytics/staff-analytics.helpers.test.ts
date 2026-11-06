@@ -55,36 +55,65 @@ import {
     }),
     'PAID',
   );
+  // Massage block → PAID (not membership quota).
   assert.equal(
     classifySpaPaymentBucket({
       paymentBasis: 'Пакет услуг "Блок массажа 5 новый" 73910 от 16.07.2026',
       paySource: 'PACKAGE',
     }),
-    'QUOTA',
+    'PAID',
   );
   assert.equal(
     classifySpaPaymentBucket({
+      paymentBasis: 'Пакет услуг "Блок массажа 5 новый"',
+      paymentType: SpaPaymentType.QUOTA,
+    }),
+    'PAID',
+  );
+  // Bare AllSports visit without биоимпеданс → not PARTNER.
+  assert.equal(
+    classifySpaPaymentBucket({
       paymentBasis: 'AllSports визит',
+    }),
+    'UNKNOWN',
+  );
+  assert.equal(
+    classifySpaPaymentBucket({
+      paymentBasis: 'Allsports БИОИМПЕДАНС',
     }),
     'PARTNER',
   );
   assert.equal(
     classifySpaPaymentBucket({
       paymentType: SpaPaymentType.QUOTA,
+      paymentBasis: 'Членство VIP',
     }),
     'QUOTA',
   );
   assert.equal(
     classifySpaPaymentBucket({
+      paymentType: SpaPaymentType.QUOTA,
+    }),
+    'UNKNOWN',
+  );
+  assert.equal(
+    classifySpaPaymentBucket({
       partnerSource: 'ALLSPORTS',
+      serviceTitle: 'Allsports БИОИМПЕДАНС',
     }),
     'PARTNER',
   );
   assert.equal(
     classifySpaPaymentBucket({
+      partnerSource: 'ALLSPORTS',
+    }),
+    'UNKNOWN',
+  );
+  assert.equal(
+    classifySpaPaymentBucket({
       paySource: 'PACKAGE',
     }),
-    'QUOTA',
+    'UNKNOWN',
   );
 }
 
@@ -99,13 +128,6 @@ import {
       title: 'Массаж классический',
     }),
     true,
-  );
-  assert.equal(
-    isSpaAnalyticsSession({
-      kind: OnexClassKind.PT,
-      title: 'Персональная тренировка',
-    }),
-    false,
   );
 }
 

@@ -405,7 +405,10 @@ export function isSpaAllSportsBioimpedance(input: {
   )
     return true;
   const title = (input.title ?? '').toLowerCase();
-  return /биоимпеданс|bio.?imped/i.test(title);
+  // Require both Allsports and биоимпеданс — bare bio / bare AllSports are other SKUs.
+  const bio = /биоимпеданс|bio.?imped|биоимп/.test(title);
+  const partner = /allsports|all\s*sports/.test(title);
+  return bio && partner;
 }
 
 /** PT «Занятие с тренером ALL SPORTS» — fixed ptAllSportsRateMinor. */
