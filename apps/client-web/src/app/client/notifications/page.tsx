@@ -9,8 +9,8 @@ export default function ClientNotificationsPage() {
     <ModuleGate module="messaging">
       <div className="space-y-3">
         <PageHeader
-          title="Сообщения"
-          subtitle="Чат с клубом и тренерами"
+          title="Чат"
+          subtitle="Переписка с клубом и тренерами"
         />
         <ChatInbox
           role="client"

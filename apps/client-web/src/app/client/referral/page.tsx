@@ -42,8 +42,8 @@ export default function ClientReferralPage() {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: 'Forma — приглашение',
-          text: `Присоединяйся в Forma по моему коду ${referral.code}`,
+          title: 'Форма — приглашение',
+          text: `Присоединяйся в Форма по моему коду ${referral.code}`,
           url: referral.link,
         });
         return;
@@ -68,7 +68,7 @@ export default function ClientReferralPage() {
     <div className="space-y-4">
       <PageHeader
         title="Приведи друга"
-        subtitle="Делитесь Forma — получайте бонусы"
+        subtitle="Делитесь Форма — получайте бонусы"
       />
 
       <div className="overflow-hidden rounded-[1.75rem] border border-forma-500/35 bg-gradient-to-br from-forma-500 via-forma-400 to-amber-500 p-6 text-ink shadow-forma-glow">

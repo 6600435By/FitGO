@@ -20,8 +20,10 @@ import {
   normalizeWorkoutSheet,
   summarizeCircuitSession,
   workoutSheetForClient,
+  sliceForTrack,
   type PersonalSessionStatus,
   type PersonalTrainingSessionDetail,
+  type StaffPayProfile,
   type WorkoutSheet,
   type CircuitHistoryPoint,
   type TrainerCalendarResponse,
@@ -575,6 +577,7 @@ export class PersonalTrainingService {
         where: { id: bookingId },
         data: { status: PersonalBookingStatus.CANCELLED },
       });
+      await this.visitSync.clearPendingEventsForBookings([bookingId]);
       return { id: bookingId, status: 'CANCELLED' as const };
     }
 
@@ -660,6 +663,37 @@ export class PersonalTrainingService {
       },
     });
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const compensations = await this.prisma.staffCompensation.findMany({
+      where: {
+        clubId,
+        userId: { in: trainers.map((t) => t.id) },
+        effectiveFrom: { lte: today },
+      },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+    });
+    const priceByTrainer = new Map<string, { minor: number; currency: string }>();
+    for (const row of compensations) {
+      if (priceByTrainer.has(row.userId)) continue;
+      const profile =
+        row.payProfile &&
+        typeof row.payProfile === 'object' &&
+        !Array.isArray(row.payProfile)
+          ? (row.payProfile as unknown as StaffPayProfile)
+          : undefined;
+      const minor =
+        sliceForTrack(profile, 'PT').ptSessionPriceMinor ||
+        profile?.ptSessionPriceMinor ||
+        0;
+      if (minor > 0) {
+        priceByTrainer.set(row.userId, {
+          minor,
+          currency: row.currency || 'BYN',
+        });
+      }
+    }
+
     const results = await Promise.all(
       trainers.map(async (trainer) => {
         const slots = await this.getTrainerAvailableSlots(
@@ -671,11 +705,14 @@ export class PersonalTrainingService {
         const profile = trainer.staffProfile;
         const showPublic = !profile?.hiddenByAdminAt;
         const photoV = profile?.photoUpdatedAt?.getTime();
+        const price = priceByTrainer.get(trainer.id);
         return {
           id: trainer.id,
           firstName: trainer.firstName,
           lastName: trainer.lastName,
           hasSchedule: slots.length > 0,
+          sessionPriceMinor: price?.minor ?? null,
+          currency: price?.currency ?? 'BYN',
           bio: showPublic ? (profile?.bio ?? '') : '',
           photoUrl:
             showPublic && profile?.photoPath
@@ -1349,6 +1386,7 @@ export class PersonalTrainingService {
       where: { id: bookingId },
       data: { status: PersonalBookingStatus.CANCELLED },
     });
+    await this.visitSync.clearPendingEventsForBookings([bookingId]);
 
     if (booking.clientId === user.sub) {
       const clientName =

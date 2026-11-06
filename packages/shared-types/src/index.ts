@@ -687,6 +687,12 @@ export interface TrainerSummary {
   firstName: string;
   lastName: string;
   hasSchedule: boolean;
+  /** Catalog PT session price from trainer pay profile (minor). */
+  sessionPriceMinor?: number | null;
+  currency?: string;
+  bio?: string;
+  photoUrl?: string | null;
+  photoThumbUrl?: string | null;
 }
 
 export interface PersonalTrainingSlot {

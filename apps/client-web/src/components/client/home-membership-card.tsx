@@ -114,7 +114,7 @@ export function HomeMembershipCard({
         <div className="space-y-3 border-t border-ink/10 bg-ink/[0.06] px-5 py-4">
           {membershipSource === 'derived' && (
             <p className="text-xs text-ink/60">
-              Срок уточняется из 1С — оценка по последнему визиту
+              Срок уточняется — оценка по последнему визиту
             </p>
           )}
 

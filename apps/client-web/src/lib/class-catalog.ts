@@ -52,10 +52,75 @@ export const CLASS_CATALOG: ClassCatalogEntry[] = [
 ];
 
 const FALLBACK: Omit<ClassCatalogEntry, 'match'> = {
-  blurb: 'Групповое занятие студии Forma. Приходите за 5–10 минут до старта.',
+  blurb: 'Групповое занятие студии Форма. Приходите за 5–10 минут до старта.',
   intensity: 3,
   accent: '#ffd000',
 };
+
+/** Known English / mixed titles → Russian for client schedule. */
+const TITLE_ALIASES: Array<[RegExp, string]> = [
+  [/^pilates(?:\s+reformer)?$/i, 'Пилатес'],
+  [/^yoga$/i, 'Йога'],
+  [/^stretch(?:ing)?$/i, 'Стретчинг'],
+  [/^functional(?:\s+training)?$/i, 'Функциональный тренинг'],
+  [/^hiit$/i, 'HIIT'],
+  [/^(?:cycle|spin(?:ning)?)$/i, 'Сайкл'],
+  [/^barre+$/i, 'Барре'],
+  [/^zumba$/i, 'Зумба'],
+  [/^pump|body\s*pump$/i, 'Силовая'],
+  [/^cross(?:fit)?$/i, 'Кросс'],
+  [/^personal(?:\s+training)?$|^pt$/i, 'Персональная'],
+];
+
+function softenWordCase(word: string): string {
+  if (word.length <= 1) return word;
+  const letters = word.replace(/[^A-Za-zА-Яа-яЁё]/g, '');
+  if (!letters) return word;
+  const upper = letters === letters.toLocaleUpperCase('ru-RU');
+  const lower = letters === letters.toLocaleLowerCase('ru-RU');
+  if (!upper || lower) return word;
+  return word.charAt(0) + word.slice(1).toLocaleLowerCase('ru-RU');
+}
+
+/** Client-facing class title: no ALL CAPS / raw English catalog codes. */
+export function formatClassTitle(raw: string | null | undefined): string {
+  const t = (raw ?? '').trim().replace(/\s+/g, ' ');
+  if (!t) return '';
+  for (const [re, label] of TITLE_ALIASES) {
+    if (re.test(t)) return label;
+  }
+  return t.split(' ').map(softenWordCase).join(' ');
+}
+
+/** Фамилия + Имя only (drop отчество / extra tokens); soften ALL CAPS. */
+export function formatPersonName(raw: string | null | undefined): string {
+  const parts = (raw ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map(softenWordCase);
+  if (parts.length === 0) return '';
+  return parts.slice(0, 2).join(' ');
+}
+
+export function formatTrainerName(
+  lastName: string | null | undefined,
+  firstName: string | null | undefined,
+): string {
+  return formatPersonName(
+    [lastName?.trim(), firstName?.trim()].filter(Boolean).join(' '),
+  );
+}
+
+export function ruKindWord(count: number): string {
+  const n = Math.abs(count) % 100;
+  const n1 = n % 10;
+  if (n > 10 && n < 20) return 'видов';
+  if (n1 === 1) return 'вид';
+  if (n1 >= 2 && n1 <= 4) return 'вида';
+  return 'видов';
+}
 
 export function lookupClass(title: string) {
   for (const entry of CLASS_CATALOG) {

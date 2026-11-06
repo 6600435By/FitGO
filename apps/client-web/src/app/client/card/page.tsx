@@ -213,8 +213,7 @@ function ClientCardPageInner() {
       <div className="space-y-4 px-4 pt-6">
         <div className="card space-y-3 text-center">
           <p className="text-zinc-400">
-            Укажите телефон в профиле — по нему найдём клиента в 1С и клубную
-            карту.
+            Укажите телефон в профиле — по нему найдём клубную карту.
           </p>
           <Link href="/client/profile/complete" className="btn-primary inline-block">
             Заполнить профиль
@@ -242,11 +241,10 @@ function ClientCardPageInner() {
         />
         <div className="card space-y-3 text-center">
           <p className="font-display text-lg font-semibold">
-            Ожидает оформления в 1С
+            Ожидает оформления на ресепшен
           </p>
           <p className="text-zinc-400">
-            Штрихкод и запись на групповые появятся после заведения клиента на
-            ресепшен.
+            Штрихкод и запись на групповые появятся после оформления карты.
           </p>
           <Link href="/client/schedule" className="btn-primary inline-block">
             Смотреть расписание
@@ -333,7 +331,7 @@ function ClientCardPageInner() {
 
       {!card && membership ? (
         <p className="text-center text-sm text-zinc-400">
-          Штрихкод ещё не присвоен в 1С. Обратитесь на ресепшен.
+          Штрихкод ещё не присвоен. Обратитесь на ресепшен.
         </p>
       ) : null}
     </div>

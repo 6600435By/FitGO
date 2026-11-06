@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/forma/page-header';
 import { api } from '@/lib/api';
@@ -63,14 +62,6 @@ export default function ClientWorkoutsPage() {
       <PageHeader
         title="Тренировки вне клуба"
         subtitle="Записывайте самостоятельные занятия — они дают XP"
-        action={
-          <Link
-            href="/client/engagement"
-            className="text-sm font-medium text-forma-400 hover:text-forma-300"
-          >
-            Достижения
-          </Link>
-        }
       />
 
       <form onSubmit={submit} className="card space-y-3">

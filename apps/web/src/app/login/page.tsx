@@ -32,13 +32,16 @@ export default function LoginPage() {
     try {
       const result = await api.login(email, password);
       saveAuth(result.accessToken, result.user);
-      router.push(
-        getHomePath(result.user.roles, {
-          groupPrograms: result.user.groupPrograms,
-          trainerStaff: result.user.trainerStaff,
-          trainerClub: result.user.trainerClub,
-        }),
-      );
+      const home = getHomePath(result.user.roles, {
+        groupPrograms: result.user.groupPrograms,
+        trainerStaff: result.user.trainerStaff,
+        trainerClub: result.user.trainerClub,
+      });
+      if (/^https?:\/\//i.test(home)) {
+        window.location.assign(home);
+        return;
+      }
+      router.push(home);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка входа');
     } finally {
@@ -53,7 +56,13 @@ export default function LoginPage() {
           <p className="text-sm uppercase tracking-[0.3em] text-fitgo-400">FITGO</p>
           <h1 className="mt-2 text-3xl font-bold">Вход в клуб</h1>
           <p className="mt-2 text-slate-400">
-            Единая платформа для клиентов, тренеров и администраторов
+            Рабочий кабинет сотрудников. Клиентам —{' '}
+            <a
+              href="https://lk.ffs.by"
+              className="text-fitgo-400 underline-offset-2 hover:underline"
+            >
+              lk.ffs.by
+            </a>
           </p>
         </div>
 

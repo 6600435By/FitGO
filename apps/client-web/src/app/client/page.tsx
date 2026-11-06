@@ -4,7 +4,6 @@ import {
   SessionType,
   type Booking,
   type ClientMembershipPackage,
-  type GamificationProfile,
   type Membership,
   type Visit,
 } from '@fitgo/shared-types';
@@ -16,7 +15,6 @@ import {
   Flower2,
   ShoppingBag,
   Sparkles,
-  Trophy,
   UserRound,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -30,6 +28,10 @@ import { SkeletonCard } from '@/components/forma/skeleton';
 import { useFeatures } from '@/components/features-provider';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import {
+  formatClassTitle,
+  formatPersonName,
+} from '@/lib/class-catalog';
 import { ensureFormaClub } from '@/lib/ensure-forma-club';
 import {
   formatDateTime,
@@ -93,9 +95,6 @@ function ClientHomePageInner() {
   const { isEnabled } = useFeatures();
   const [data, setData] = useState<DashboardData | null>(null);
   const [upcomingBookings, setUpcomingBookings] = useState<Booking[]>([]);
-  const [gamification, setGamification] = useState<GamificationProfile | null>(
-    null,
-  );
   const [error, setError] = useState('');
   const [joiningClub, setJoiningClub] = useState(false);
 
@@ -154,13 +153,6 @@ function ClientHomePageInner() {
       })
       .catch(() => {});
 
-    api
-      .gamification(token)
-      .then((g) => {
-        if (!cancelled) setGamification(g);
-      })
-      .catch(() => {});
-
     return () => {
       cancelled = true;
     };
@@ -191,7 +183,7 @@ function ClientHomePageInner() {
         <div>
           <p className="text-sm text-zinc-500">{timeGreeting()}</p>
           <h1 className="font-display text-2xl font-bold tracking-tight text-white">
-            {firstName || 'Forma'}
+            {firstName || 'Форма'}
           </h1>
         </div>
         {joiningClub ? (
@@ -344,47 +336,11 @@ function ClientHomePageInner() {
             label="Абонементы"
           />
         )}
-        {isEnabled('engagement') && (
-          <QuickAction
-            href="/client/engagement"
-            icon={Trophy}
-            label="Достижения"
-          />
-        )}
       </div>
 
       {isEnabled('club_card') && visits.length > 0 ? (
         <WeekActivity visits={visits} />
       ) : null}
-
-      {gamification?.activated && isEnabled('engagement') && (
-        <Link
-          href="/client/engagement"
-          className="card flex items-center gap-3 transition hover:border-forma-500/30"
-        >
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-forma-500/15 text-forma-400">
-            <Trophy className="h-6 w-6" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="font-display font-semibold text-white">
-              {gamification.league?.tierLabel ?? 'Бронза'}
-            </p>
-            {gamification.league?.myRank ? (
-              <p className="text-sm text-zinc-500">
-                #{gamification.league.myRank} в группе
-              </p>
-            ) : (
-              <p className="text-sm text-zinc-500">Ваша лига</p>
-            )}
-            {gamification.decayWarning ? (
-              <p className="mt-1 text-xs text-amber-300">
-                {gamification.decayWarning.message}
-              </p>
-            ) : null}
-          </div>
-          <ChevronRight className="h-5 w-5 text-zinc-500" />
-        </Link>
-      )}
 
       <div className="card">
         <div className="mb-3 flex items-center justify-between gap-2">
@@ -461,19 +417,25 @@ function NextBookingCard({ booking }: { booking: Booking }) {
       </div>
       <div className="flex items-start gap-3">
         <Avatar
-          name={booking.trainerName || booking.title}
+          name={
+            booking.trainerName
+              ? formatPersonName(booking.trainerName)
+              : formatClassTitle(booking.title)
+          }
           size="lg"
           className="rounded-2xl"
         />
         <div className="min-w-0 flex-1">
           <p className="font-display text-lg font-bold leading-tight text-white">
-            {booking.title}
+            {formatClassTitle(booking.title)}
           </p>
           <p className="mt-1 text-sm text-zinc-400">
             {formatDateTime(booking.startAt)}
           </p>
           {booking.trainerName ? (
-            <p className="text-sm text-zinc-500">{booking.trainerName}</p>
+            <p className="text-sm text-zinc-500">
+              {formatPersonName(booking.trainerName)}
+            </p>
           ) : null}
         </div>
         <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-zinc-500" />

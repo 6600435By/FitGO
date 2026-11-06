@@ -158,7 +158,7 @@ export default function RegisterPage() {
           <h1 className="font-display text-3xl font-bold text-white">
             Добро пожаловать!
           </h1>
-          <p className="mt-2 text-zinc-400">Аккаунт Forma готов</p>
+          <p className="mt-2 text-zinc-400">Аккаунт Форма готов</p>
         </div>
       </AuthShell>
     );

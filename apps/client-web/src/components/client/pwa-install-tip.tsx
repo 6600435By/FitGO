@@ -101,7 +101,7 @@ export function PwaInstallTip() {
     <div className="mb-3 rounded-3xl border border-forma-500/35 bg-ink-elevated/95 p-4 text-sm text-zinc-200 shadow-forma-glow/20">
       <div className="flex items-start justify-between gap-2">
         <p className="font-display font-semibold text-forma-400">
-          Forma на экран Домой
+          Форма на экран Домой
         </p>
         <button
           type="button"

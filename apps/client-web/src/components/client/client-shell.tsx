@@ -72,6 +72,16 @@ const DOCK: DockItem[] = [
   { href: '/client/profile', label: 'Профиль', icon: UserRound },
 ];
 
+/** Единый бренд: Форма / Forma; «Фитнесстудия» → «Фитнес студия». */
+function normalizeClubBrand(raw: string): string {
+  const t = raw.trim().replace(/\s+/g, ' ');
+  if (!t) return 'Форма';
+  if (/^forma$/i.test(t) || /^форма$/i.test(t)) return 'Форма';
+  return t
+    .replace(/фитнесстудия/gi, 'Фитнес студия')
+    .replace(/fitness\s*studio/gi, 'Фитнес студия');
+}
+
 function navActive(pathname: string, item: DockItem) {
   if (pathname === item.href) return true;
   if (item.matchSubpaths && pathname.startsWith(`${item.href}/`)) return true;
@@ -220,8 +230,11 @@ export function ClientShell({ children }: { children: ReactNode }) {
                 </button>
               ) : null}
 
-              <Link href="/client" className="min-w-0 touch-manipulation">
-                <FormaWordmark size="sm" />
+              <Link
+                href="/client"
+                className="block min-w-0 max-w-[12.75rem] flex-1 touch-manipulation"
+              >
+                <FormaWordmark fluid />
               </Link>
 
               <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -229,7 +242,8 @@ export function ClientShell({ children }: { children: ReactNode }) {
                   <Link
                     href="/client/notifications"
                     className="relative flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 text-zinc-300 touch-manipulation hover:bg-white/[0.06] hover:text-white"
-                    aria-label="Сообщения"
+                    aria-label="Чат"
+                    title="Чат"
                   >
                     <Bell className="h-5 w-5" />
                     {unread > 0 ? (
@@ -248,11 +262,15 @@ export function ClientShell({ children }: { children: ReactNode }) {
                 </Link>
               </div>
             </div>
-            {theme?.clubName && theme.clubName !== 'Forma' ? (
-              <p className="-mt-1 pb-2 text-[11px] text-zinc-500">
-                {theme.clubName}
-              </p>
-            ) : null}
+            {(() => {
+              const brand = theme?.clubName
+                ? normalizeClubBrand(theme.clubName)
+                : '';
+              if (!brand || brand === 'Форма') return null;
+              return (
+                <p className="-mt-1 pb-2 text-[11px] text-zinc-500">{brand}</p>
+              );
+            })()}
           </header>
         ) : null}
 

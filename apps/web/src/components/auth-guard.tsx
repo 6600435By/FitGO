@@ -10,6 +10,14 @@ interface AuthGuardProps {
   allowedRoles: UserRole[];
 }
 
+function goHome(home: string, router: ReturnType<typeof useRouter>) {
+  if (/^https?:\/\//i.test(home)) {
+    window.location.replace(home);
+    return;
+  }
+  router.replace(home);
+}
+
 export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
   const router = useRouter();
   const [ready, setReady] = useState(false);
@@ -25,12 +33,13 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
 
     const hasRole = allowedRoles.some((role) => user.roles.includes(role));
     if (!hasRole) {
-      router.replace(
+      goHome(
         getHomePath(user.roles, {
           groupPrograms: user.groupPrograms,
           trainerStaff: user.trainerStaff,
           trainerClub: user.trainerClub,
         }),
+        router,
       );
       return;
     }

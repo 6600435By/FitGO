@@ -75,7 +75,7 @@ function ClientProductsPageInner() {
     <div className="space-y-4">
       <PageHeader
         title="Абонементы"
-        subtitle="Тарифы студии Forma"
+        subtitle="Тарифы студии Форма"
       />
 
       <div className="rounded-2xl border border-white/10 bg-ink-raised/60 px-4 py-3 text-sm text-zinc-400">

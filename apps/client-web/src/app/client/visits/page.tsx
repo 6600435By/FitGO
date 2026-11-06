@@ -33,7 +33,7 @@ const KIND_FILTERS: Array<{ value: '' | VisitKind; label: string }> = [
 function verificationLabel(visit: Visit): string {
   switch (visit.verification) {
     case 'VERIFIED_1C':
-      return 'Из 1С';
+      return 'Подтверждён';
     case 'VERIFIED_TRAINER':
       return 'Подтвердил тренер';
     case 'VERIFIED_CLIENT_SELF':
@@ -236,7 +236,7 @@ function ClientVisitsPageInner() {
     <div className="space-y-5">
       <PageHeader
         title="Визиты"
-        subtitle="Зал — через 1С; группа и персональная — после подтверждения"
+        subtitle="Зал, группы и персональные — после подтверждения визита"
       />
 
       <div className="grid grid-cols-3 gap-2">

@@ -30,6 +30,8 @@ import {
   addDaysKey,
   dayKey,
   durationLabel,
+  formatClassTitle,
+  formatPersonName,
   lookupClass,
   timeOfDay,
   todayKey,
@@ -237,7 +239,7 @@ function GroupScheduleInner() {
     const map = new Map<string, string>();
     for (const slot of allSlots) {
       if (slot.trainerId && slot.trainerName) {
-        map.set(slot.trainerId, slot.trainerName);
+        map.set(slot.trainerId, formatPersonName(slot.trainerName));
       }
     }
     return Array.from(map.entries()).map(([value, label]) => ({ value, label }));
@@ -292,12 +294,12 @@ function GroupScheduleInner() {
 
   const celebrate = (slot: ScheduleSlot) => {
     celebrateBooking(toast, {
-      title: slot.title,
+      title: formatClassTitle(slot.title),
       startAt: slot.startAt,
       endAt: slot.endAt,
-      location: slot.roomTitle ?? 'Forma',
+      location: slot.roomTitle ?? 'Форма',
       description: slot.trainerName
-        ? `Тренер: ${slot.trainerName}`
+        ? `Тренер: ${formatPersonName(slot.trainerName)}`
         : undefined,
     });
   };
@@ -653,6 +655,8 @@ function ClassCard({
   onOpen: () => void;
   onQuickBook: () => void;
 }) {
+  const title = formatClassTitle(slot.title);
+  const trainer = formatPersonName(slot.trainerName);
   const info = lookupClass(slot.title);
   const start = new Date(slot.startAt);
   const time = start.toLocaleTimeString('ru-RU', {
@@ -692,12 +696,12 @@ function ClassCard({
         <div className="min-w-0 flex-1 space-y-2">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="font-display font-semibold text-white">{slot.title}</p>
+              <p className="font-display font-semibold text-white">{title}</p>
               <div className="mt-1 flex flex-wrap items-center gap-2">
-                {slot.trainerName ? (
+                {trainer ? (
                   <span className="inline-flex items-center gap-1.5 text-sm text-zinc-400">
-                    <Avatar name={slot.trainerName} size="sm" className="!h-6 !w-6 !text-[9px]" />
-                    {slot.trainerName}
+                    <Avatar name={trainer} size="sm" className="!h-6 !w-6 !text-[9px]" />
+                    {trainer}
                   </span>
                 ) : null}
                 {slot.roomTitle ? (
@@ -741,7 +745,7 @@ function ClassCard({
             loading={busy}
             onClick={onQuickBook}
           >
-            {!canBook ? 'Нужна карта 1С' : 'Записаться'}
+            {!canBook ? 'Нужна карта клуба' : 'Записаться'}
           </Button>
         </div>
       )}
@@ -789,6 +793,8 @@ function ClassSheet({
   onConfirmWaitlist: () => void;
   onCancel: () => void;
 }) {
+  const title = slot ? formatClassTitle(slot.title) : undefined;
+  const trainer = slot ? formatPersonName(slot.trainerName) : '';
   const info = slot ? lookupClass(slot.title) : null;
   const wl = slot?.waitlist;
 
@@ -798,7 +804,7 @@ function ClassSheet({
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
-      title={slot?.title}
+      title={title}
       description={
         slot
           ? new Date(slot.startAt).toLocaleString('ru-RU', {
@@ -826,10 +832,10 @@ function ClassSheet({
           </div>
 
           <div className="grid grid-cols-2 gap-2 text-sm">
-            {slot.trainerName ? (
+            {trainer ? (
               <div className="rounded-2xl bg-ink-raised p-3">
                 <p className="text-zinc-500">Тренер</p>
-                <p className="mt-0.5 font-medium text-white">{slot.trainerName}</p>
+                <p className="mt-0.5 font-medium text-white">{trainer}</p>
               </div>
             ) : null}
             {slot.roomTitle ? (
@@ -844,12 +850,6 @@ function ClassSheet({
                 {durationLabel(slot.startAt, slot.endAt) ?? '—'}
               </p>
             </div>
-            <div className="rounded-2xl bg-ink-raised p-3">
-              <p className="text-zinc-500">Места</p>
-              <p className="mt-0.5 font-medium text-white">
-                {slot.booked}/{slot.capacity}
-              </p>
-            </div>
           </div>
 
           <SeatsMeter
@@ -862,7 +862,7 @@ function ClassSheet({
             confirmCancel ? (
               <div className="space-y-2">
                 <p className="text-sm text-zinc-400">
-                  Отменить запись на «{slot.title}»?
+                  Отменить запись на «{title}»?
                 </p>
                 <Button
                   className="w-full"
@@ -935,7 +935,7 @@ function ClassSheet({
               loading={busy}
               onClick={onBook}
             >
-              {!canBook ? 'Нужна карта 1С' : 'Записаться'}
+              {!canBook ? 'Нужна карта клуба' : 'Записаться'}
             </Button>
           ) : wl?.open ? (
             <Button
@@ -945,7 +945,7 @@ function ClassSheet({
               loading={busy}
               onClick={onWaitlist}
             >
-              {!canBook ? 'Нужна карта 1С' : 'В лист ожидания'}
+              {!canBook ? 'Нужна карта клуба' : 'В лист ожидания'}
             </Button>
           ) : (
             <Button className="w-full" disabled>
@@ -959,12 +959,12 @@ function ClassSheet({
               className="flex-1"
               onClick={() =>
                 downloadIcsEvent({
-                  title: slot.title,
+                  title: title ?? slot.title,
                   startAt: slot.startAt,
                   endAt: slot.endAt,
-                  location: slot.roomTitle ?? 'Forma',
-                  description: slot.trainerName
-                    ? `Тренер: ${slot.trainerName}`
+                  location: slot.roomTitle ?? 'Форма',
+                  description: trainer
+                    ? `Тренер: ${trainer}`
                     : undefined,
                 })
               }
@@ -978,8 +978,8 @@ function ClassSheet({
                 className="flex-1"
                 onClick={() => {
                   void navigator.share({
-                    title: slot.title,
-                    text: `${slot.title} · ${new Date(slot.startAt).toLocaleString('ru-RU')}`,
+                    title: title ?? slot.title,
+                    text: `${title ?? slot.title} · ${new Date(slot.startAt).toLocaleString('ru-RU')}`,
                   });
                 }}
               >

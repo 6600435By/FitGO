@@ -18,15 +18,18 @@ import {
   TIME_OF_DAY_LABEL,
   dayKey,
   durationLabel,
+  formatTrainerName,
   timeOfDay,
   todayKey,
 } from '@/lib/class-catalog';
 import { downloadIcsEvent } from '@/lib/ics';
-import { cn } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 
 type SlotWithTrainer = PersonalTrainingSlot & {
   trainerId: string;
   trainerName: string;
+  sessionPriceMinor?: number | null;
+  currency?: string;
 };
 
 export default function ClientPersonalSchedulePage() {
@@ -108,7 +111,9 @@ function PersonalInner() {
             list.map((slot) => ({
               ...slot,
               trainerId: tr.id,
-              trainerName: `${tr.firstName} ${tr.lastName}`.trim(),
+              trainerName: formatTrainerName(tr.lastName, tr.firstName),
+              sessionPriceMinor: tr.sessionPriceMinor ?? null,
+              currency: tr.currency ?? 'BYN',
             })),
           )
           .catch(() => [] as SlotWithTrainer[]),
@@ -252,9 +257,13 @@ function PersonalInner() {
           <span className="mt-2 text-xs font-semibold">Любой тренер</span>
         </button>
         {trainers.map((tr) => {
-          const name = `${tr.firstName} ${tr.lastName}`.trim();
+          const name = formatTrainerName(tr.lastName, tr.firstName);
           const next = nearestByTrainer.get(tr.id);
           const active = selectedTrainerId === tr.id;
+          const price =
+            tr.sessionPriceMinor && tr.sessionPriceMinor > 0
+              ? formatCurrency(tr.sessionPriceMinor / 100, tr.currency ?? 'BYN')
+              : null;
           return (
             <button
               key={tr.id}
@@ -269,10 +278,20 @@ function PersonalInner() {
             >
               <Avatar name={name} size="lg" />
               <span className="mt-2 line-clamp-2 text-xs font-semibold leading-tight">
-                {tr.firstName}
-                <br />
                 {tr.lastName}
+                <br />
+                {tr.firstName}
               </span>
+              {price ? (
+                <span
+                  className={cn(
+                    'mt-1 text-[10px] font-semibold',
+                    active ? 'text-forma-300' : 'text-zinc-400',
+                  )}
+                >
+                  {price}
+                </span>
+              ) : null}
               <span
                 className={cn(
                   'mt-1 text-[10px]',
@@ -347,6 +366,15 @@ function PersonalInner() {
                                   '60 мин'}
                               </span>
                             )}
+                            {slot.sessionPriceMinor &&
+                            slot.sessionPriceMinor > 0 ? (
+                              <span className="mt-0.5 block text-[10px] font-medium text-forma-400">
+                                {formatCurrency(
+                                  slot.sessionPriceMinor / 100,
+                                  slot.currency ?? 'BYN',
+                                )}
+                              </span>
+                            ) : null}
                           </button>
                         );
                       })}
@@ -387,6 +415,15 @@ function PersonalInner() {
                 <p className="text-sm text-zinc-500">
                   {durationLabel(pending.startAt, pending.endAt) ?? '60 мин'}
                 </p>
+                {pending.sessionPriceMinor && pending.sessionPriceMinor > 0 ? (
+                  <p className="mt-1 text-sm font-semibold text-forma-400">
+                    {formatCurrency(
+                      pending.sessionPriceMinor / 100,
+                      pending.currency ?? 'BYN',
+                    )}{' '}
+                    / занятие
+                  </p>
+                ) : null}
               </div>
             </div>
             <Button className="w-full" size="lg" loading={busy} onClick={() => void confirmBook()}>
@@ -400,7 +437,7 @@ function PersonalInner() {
                   title: `ПТ · ${pending.trainerName}`,
                   startAt: pending.startAt,
                   endAt: pending.endAt,
-                  location: 'Forma',
+                  location: 'Форма',
                 })
               }
             >

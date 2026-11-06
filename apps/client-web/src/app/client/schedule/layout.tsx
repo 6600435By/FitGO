@@ -60,7 +60,7 @@ export default function ClientScheduleLayout({
     <div className="space-y-4">
       <PageHeader
         title="Расписание"
-        subtitle="Запись на занятия студии Forma"
+        subtitle="Запись на занятия студии Форма"
       />
 
       {tabs.length > 1 ? (

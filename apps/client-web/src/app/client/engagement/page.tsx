@@ -66,7 +66,7 @@ function ClientEngagementPageInner() {
         res.message ??
           (res.xpAwarded > 0
             ? `Check-in успешен! +${res.xpAwarded} XP`
-            : 'Визит в зал засчитывается через 1С'),
+            : 'Визит в зал засчитывается после прохода'),
       );
       load();
     } catch (e) {
@@ -121,7 +121,7 @@ function ClientEngagementPageInner() {
     <div className="space-y-4">
       <PageHeader
         title="Достижения"
-        subtitle="Лиги, бейджи и челленджи Forma"
+        subtitle="Лиги, бейджи и челленджи Форма"
       />
 
       {profile.decayWarning ? (
@@ -213,10 +213,6 @@ function ClientEngagementPageInner() {
 
       <Link href="/client/workouts" className="btn-secondary block text-center">
         Тренировки вне клуба
-      </Link>
-
-      <Link href="/client/referral" className="btn-secondary block text-center">
-        Приведи друга
       </Link>
     </div>
   );

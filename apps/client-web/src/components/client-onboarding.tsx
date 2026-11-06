@@ -7,7 +7,7 @@ import { FormaWordmark } from '@/components/forma/wordmark';
 
 const STEPS = [
   {
-    title: 'Добро пожаловать в Forma',
+    title: 'Добро пожаловать в Форма',
     text: 'Личный кабинет вашего клуба: расписание, записи и прогресс — в одном месте.',
     href: '/client',
     cta: 'На главную',

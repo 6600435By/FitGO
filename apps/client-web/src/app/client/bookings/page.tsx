@@ -16,6 +16,10 @@ import { useToast } from '@/components/forma/toast';
 import { api } from '@/lib/api';
 import { cancelClientBooking } from '@/lib/cancel-booking';
 import { getToken } from '@/lib/auth';
+import {
+  formatClassTitle,
+  formatPersonName,
+} from '@/lib/class-catalog';
 import { formatDateTime, sessionTypeLabel } from '@/lib/utils';
 
 type Tab = 'upcoming' | 'past';
@@ -137,18 +141,24 @@ export default function ClientBookingsPage() {
             <li key={booking.id} className="card space-y-3">
               <div className="flex items-start gap-3">
                 <Avatar
-                  name={booking.trainerName || booking.title}
+                  name={
+                    booking.trainerName
+                      ? formatPersonName(booking.trainerName)
+                      : formatClassTitle(booking.title)
+                  }
                   size="lg"
                 />
                 <div className="min-w-0 flex-1">
                   <p className="font-display text-lg font-semibold text-white">
-                    {booking.title}
+                    {formatClassTitle(booking.title)}
                   </p>
                   <p className="text-sm text-zinc-400">
                     {formatDateTime(booking.startAt)}
                   </p>
                   {booking.trainerName ? (
-                    <p className="text-sm text-zinc-500">{booking.trainerName}</p>
+                    <p className="text-sm text-zinc-500">
+                      {formatPersonName(booking.trainerName)}
+                    </p>
                   ) : null}
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-zinc-400">

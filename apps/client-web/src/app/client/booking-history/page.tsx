@@ -10,6 +10,10 @@ import { SkeletonCard } from '@/components/forma/skeleton';
 import { useToast } from '@/components/forma/toast';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import {
+  formatClassTitle,
+  formatPersonName,
+} from '@/lib/class-catalog';
 import { formatDateTime, sessionTypeLabel } from '@/lib/utils';
 
 type HistoryFilter = 'all' | 'upcoming' | 'completed' | 'cancelled';
@@ -91,13 +95,15 @@ export default function ClientBookingHistoryPage() {
               <div className="mb-2 flex items-start justify-between gap-2">
                 <div>
                   <p className="font-display font-semibold text-white">
-                    {booking.title}
+                    {formatClassTitle(booking.title)}
                   </p>
                   <p className="text-sm text-zinc-400">
                     {formatDateTime(booking.startAt)}
                   </p>
                   {booking.trainerName ? (
-                    <p className="text-sm text-zinc-500">{booking.trainerName}</p>
+                    <p className="text-sm text-zinc-500">
+                      {formatPersonName(booking.trainerName)}
+                    </p>
                   ) : null}
                 </div>
                 <div className="flex flex-col items-end gap-1">

@@ -5,8 +5,8 @@ import { ToastProvider } from '@/components/forma/toast';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Forma — личный кабинет',
-  description: 'Абонемент, запись и визиты фитнес-студии Forma',
+  title: 'Форма — личный кабинет',
+  description: 'Абонемент, запись и визиты фитнес-студии Форма',
   manifest: '/manifest.json',
   icons: {
     icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }],
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
-    title: 'Forma',
+    title: 'Форма',
   },
 };
 

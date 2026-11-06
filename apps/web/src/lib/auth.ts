@@ -44,6 +44,15 @@ export function patchStoredUser(patch: Partial<AuthUser>): AuthUser | null {
   return next;
 }
 
+/** Client ЛК — separate app (lk.ffs.by). */
+export function getClientWebUrl() {
+  if (typeof process !== 'undefined') {
+    const fromEnv = process.env.NEXT_PUBLIC_CLIENT_WEB_URL?.replace(/\/$/, '');
+    if (fromEnv) return fromEnv;
+  }
+  return 'https://lk.ffs.by';
+}
+
 export function getHomePath(
   roles: UserRole[],
   flags?: {
@@ -60,5 +69,6 @@ export function getHomePath(
   }
   if (roles.includes(UserRole.SPECIALIST)) return '/specialist';
   if (roles.includes(UserRole.TECH)) return '/tech';
-  return '/client';
+  // Client channel is lk.ffs.by — never keep a second client UI on app.ffs.by
+  return `${getClientWebUrl()}/client`;
 }

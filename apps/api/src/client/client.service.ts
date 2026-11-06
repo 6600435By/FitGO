@@ -450,6 +450,7 @@ export class ClientService {
           cancelledAt,
         },
       });
+      await this.visitSync.clearPendingEventsForBookings([existing.id]);
       return true;
     }
 
@@ -459,7 +460,16 @@ export class ClientService {
       GroupClassBookingStatus.CANCELLED,
       cancelledAt,
     );
-    if (savedFromSchedule) return true;
+    if (savedFromSchedule) {
+      const cancelled = await this.prisma.groupClassBooking.findFirst({
+        where: { clientId: user.sub, appointmentId: sessionId },
+        select: { id: true },
+      });
+      if (cancelled) {
+        await this.visitSync.clearPendingEventsForBookings([cancelled.id]);
+      }
+      return true;
+    }
 
     return false;
   }
@@ -877,17 +887,37 @@ export class ClientService {
       kind: kindFilter,
     });
 
-    const pendingGroupBookingIds = new Set(
-      events
-        .filter(
-          (e) =>
-            e.kind === 'GROUP' &&
-            e.verification === 'PENDING' &&
-            e.bookingId &&
-            e.source === VisitSource.BOOKING_GROUP,
-        )
-        .map((e) => e.bookingId!),
+    const pendingGroupBookingIds = [
+      ...new Set(
+        events
+          .filter(
+            (e) =>
+              e.kind === 'GROUP' &&
+              e.verification === 'PENDING' &&
+              e.bookingId &&
+              e.source === VisitSource.BOOKING_GROUP,
+          )
+          .map((e) => e.bookingId!),
+      ),
+    ];
+
+    const livePendingBookings =
+      pendingGroupBookingIds.length > 0
+        ? await this.prisma.groupClassBooking.findMany({
+            where: {
+              id: { in: pendingGroupBookingIds },
+              status: { not: GroupClassBookingStatus.CANCELLED },
+            },
+            select: { id: true },
+          })
+        : [];
+    const livePendingIds = new Set(livePendingBookings.map((b) => b.id));
+    const orphanCancelled = pendingGroupBookingIds.filter(
+      (id) => !livePendingIds.has(id),
     );
+    if (orphanCancelled.length) {
+      await this.visitSync.clearPendingEventsForBookings(orphanCancelled);
+    }
 
     const onecDates = new Set(
       events
@@ -895,14 +925,23 @@ export class ClientService {
         .map((e) => e.visitDate),
     );
 
-    const visits = events.map((event) => {
-      const canSelfConfirm =
-        !!event.bookingId &&
-        pendingGroupBookingIds.has(event.bookingId) &&
-        event.verification === 'PENDING' &&
-        !onecDates.has(event.visitDate);
-      return this.visitSync.eventToVisit(event, clubName, { canSelfConfirm });
-    });
+    const visits = events
+      .filter(
+        (event) =>
+          !(
+            event.bookingId &&
+            orphanCancelled.includes(event.bookingId) &&
+            event.verification === 'PENDING'
+          ),
+      )
+      .map((event) => {
+        const canSelfConfirm =
+          !!event.bookingId &&
+          livePendingIds.has(event.bookingId) &&
+          event.verification === 'PENDING' &&
+          !onecDates.has(event.visitDate);
+        return this.visitSync.eventToVisit(event, clubName, { canSelfConfirm });
+      });
 
     return {
       visits,
@@ -1121,7 +1160,7 @@ export class ClientService {
       await this.resolveExternalId(user);
     } catch {
       throw new BadRequestException(
-        'Запись на групповые доступна после оформления в 1С. Посмотрите расписание или обратитесь на ресепшен.',
+        'Запись на групповые доступна после оформления карты. Посмотрите расписание или обратитесь на ресепшен.',
       );
     }
     const result = await this.bookingGateway.bookGroupSession(user, sessionId, {

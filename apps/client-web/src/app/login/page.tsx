@@ -65,7 +65,7 @@ export default function LoginPage() {
   return (
     <AuthShell
       title="С возвращением"
-      subtitle="Абонемент, запись и визиты Forma — с телефона и компьютера"
+      subtitle="Абонемент, запись и визиты Форма — с телефона и компьютера"
       footer={
         <>
           Нет аккаунта?{' '}

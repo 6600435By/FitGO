@@ -29,10 +29,8 @@ import {
 } from '@fitgo/shared-types';
 import {
   ChevronRight,
-  Gift,
   LogOut,
   ShoppingBag,
-  Trophy,
   Dumbbell,
   User,
   Target,
@@ -40,7 +38,6 @@ import {
   Activity,
   Ban,
   SlidersHorizontal,
-  Star,
 } from 'lucide-react';
 import { Avatar } from '@/components/forma/avatar';
 import { Button } from '@/components/forma/button';
@@ -102,7 +99,6 @@ const SHEET_META: {
   { id: 'training', label: 'Опыт', hint: 'Уровень и стаж', icon: Activity },
   { id: 'limits', label: 'Ограничения', hint: 'Зоны и противопоказания', icon: Ban },
   { id: 'prefs', label: 'Предпочтения', hint: 'Время, интенсивность', icon: SlidersHorizontal },
-  { id: 'rating', label: 'Рейтинг', hint: 'Ник и лиги', icon: Star },
 ];
 
 function membershipStatusLabel(m: Membership | null): string {
@@ -507,19 +503,9 @@ export default function ClientProfilePage() {
                 icon: Dumbbell,
               },
               {
-                href: '/client/engagement',
-                label: 'Достижения',
-                icon: Trophy,
-              },
-              {
                 href: '/client/products',
                 label: 'Абонементы',
                 icon: ShoppingBag,
-              },
-              {
-                href: '/client/referral',
-                label: 'Пригласить друга',
-                icon: Gift,
               },
             ] as const
           ).map((item, i, arr) => (
@@ -1185,10 +1171,6 @@ export default function ClientProfilePage() {
               ? 'Сохранить настройки'
               : 'Активировать геймификацию'}
           </button>
-
-          <Link href="/client/engagement" className="btn-secondary border-white/10 bg-ink-raised text-white hover:bg-ink-elevated block text-center">
-            Перейти к достижениям
-          </Link>
         </div>
       )}
       </Sheet>

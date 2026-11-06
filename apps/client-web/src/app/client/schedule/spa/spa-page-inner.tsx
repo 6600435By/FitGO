@@ -24,6 +24,11 @@ import { SegmentedControl } from '@/components/forma/segmented-control';
 import { Sheet } from '@/components/forma/sheet';
 import { SkeletonCard } from '@/components/forma/skeleton';
 import {
+  formatPersonName,
+  formatTrainerName,
+  ruKindWord,
+} from '@/lib/class-catalog';
+import {
   formatPrice,
   todayKey,
   useSpaBooking,
@@ -277,8 +282,20 @@ export default function ClientSpaSchedulePage() {
     [spa.availableDays],
   );
 
+  const servicePrice = spa.selectedEligibility
+    ? formatPrice(
+        spa.selectedEligibility.service.priceMinor,
+        spa.selectedEligibility.service.currency,
+      )
+    : '';
   const serviceSummary = spa.selectedEligibility
-    ? `${spa.selectedEligibility.service.name} · ${spa.selectedEligibility.service.durationMin} мин · ${formatPrice(spa.selectedEligibility.service.priceMinor, spa.selectedEligibility.service.currency)}`
+    ? [
+        spa.selectedEligibility.service.name,
+        `${spa.selectedEligibility.service.durationMin} мин`,
+        servicePrice || null,
+      ]
+        .filter(Boolean)
+        .join(' · ')
     : '';
 
   const paymentSummary =
@@ -289,7 +306,7 @@ export default function ClientSpaSchedulePage() {
       ? null
       : spa.specialists.find((s) => s.id === spa.specialistFilter);
   const specialistSummary = specialist
-    ? `${specialist.firstName} ${specialist.lastName}`.trim()
+    ? formatTrainerName(specialist.lastName, specialist.firstName)
     : 'Любой специалист';
 
   const editingPayment = editStep === 'payment';
@@ -351,7 +368,9 @@ export default function ClientSpaSchedulePage() {
               <p className="text-[11px] uppercase tracking-wider text-zinc-500">
                 Специалист
               </p>
-              <p className="font-medium text-white">{s.specialistName}</p>
+              <p className="font-medium text-white">
+                {formatPersonName(s.specialistName)}
+              </p>
             </div>
           ) : null}
           <div>
@@ -503,9 +522,10 @@ export default function ClientSpaSchedulePage() {
                           active ? 'text-ink/70' : 'text-zinc-500'
                         }`}
                       >
-                        {cat.items.length}{' '}
-                        {cat.items.length === 1 ? 'вид' : 'вида'} · от{' '}
-                        {formatPrice(minPrice, currency)}
+                        {cat.items.length} {ruKindWord(cat.items.length)}
+                        {minPrice > 0
+                          ? ` · от ${formatPrice(minPrice, currency)}`
+                          : ''}
                       </span>
                       {cat.quota ? (
                         <span
@@ -557,12 +577,14 @@ export default function ClientSpaSchedulePage() {
                             <Chip className="!px-2 !py-0.5 text-xs">
                               {item.service.durationMin} мин
                             </Chip>
-                            <Chip className="!px-2 !py-0.5 text-xs">
-                              {formatPrice(
-                                item.service.priceMinor,
-                                item.service.currency,
-                              )}
-                            </Chip>
+                            {item.service.priceMinor > 0 ? (
+                              <Chip className="!px-2 !py-0.5 text-xs">
+                                {formatPrice(
+                                  item.service.priceMinor,
+                                  item.service.currency,
+                                )}
+                              </Chip>
+                            ) : null}
                             {item.quotaAvailable ? (
                               <Chip className="!border-forma-500/40 !bg-forma-500/15 !px-2 !py-0.5 text-xs !text-forma-300">
                                 {item.packageName
@@ -630,7 +652,7 @@ export default function ClientSpaSchedulePage() {
                     <span className="mt-2 font-semibold">Любой</span>
                   </button>
                   {spa.specialists.map((sp) => {
-                    const name = `${sp.firstName} ${sp.lastName}`.trim();
+                    const name = formatTrainerName(sp.lastName, sp.firstName);
                     const active = spa.specialistFilter === sp.id;
                     return (
                       <button
@@ -922,7 +944,7 @@ export default function ClientSpaSchedulePage() {
                     : formatPrice(
                         spa.selectedEligibility.service.priceMinor,
                         spa.selectedEligibility.service.currency,
-                      )}
+                      ) || 'На ресепшен'}
                 </span>
               </p>
             </div>

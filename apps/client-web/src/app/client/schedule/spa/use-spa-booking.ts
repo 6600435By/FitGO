@@ -41,7 +41,20 @@ export interface CalendarSlot extends SpaBookingSlot {
 }
 
 export function formatPrice(minor: number, currency: string) {
-  return `${(minor / 100).toFixed(2)} ${currency}`;
+  if (!minor || minor <= 0) return '';
+  const major = minor / 100;
+  const amount =
+    Number.isInteger(major) || major >= 100
+      ? String(Math.round(major))
+      : major.toFixed(2);
+  const symbol = currency === 'BYN' ? 'Br' : currency;
+  return `${amount} ${symbol}`;
+}
+
+function specialistLabel(firstName?: string | null, lastName?: string | null) {
+  const last = (lastName ?? '').trim();
+  const first = (firstName ?? '').trim();
+  return [last, first].filter(Boolean).join(' ');
 }
 
 export function toDateKey(d: Date | string): string {
@@ -251,7 +264,7 @@ export function useSpaBooking() {
             list.map((slot) => ({
               ...slot,
               specialistId: sp.id,
-              specialistName: `${sp.firstName} ${sp.lastName}`.trim(),
+              specialistName: specialistLabel(sp.firstName, sp.lastName),
             })),
           )
           .catch(() => [] as CalendarSlot[]),
@@ -381,7 +394,7 @@ export function useSpaBooking() {
         title: svcName,
         startAt: slot.startAt,
         endAt: slot.endAt,
-        location: 'Forma SPA',
+        location: 'Форма SPA',
         description: slot.specialistName
           ? `Специалист: ${slot.specialistName}`
           : undefined,
