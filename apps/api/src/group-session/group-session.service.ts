@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -288,9 +289,12 @@ export class GroupSessionService {
     const isAdmin = roles.some(
       (r) => r.role === Role.ADMIN || r.role === Role.SUPER_ADMIN,
     );
-    const source = isAdmin
-      ? GroupSessionMemberSource.ADMIN_ADDED
-      : GroupSessionMemberSource.TRAINER_ADDED;
+    if (!isAdmin) {
+      throw new ForbiddenException(
+        'Тренер не может записывать клиентов в группу — только просмотр и присутствие',
+      );
+    }
+    const source = GroupSessionMemberSource.ADMIN_ADDED;
 
     let clientId = input.clientId ?? null;
     let externalId = input.externalId ?? null;

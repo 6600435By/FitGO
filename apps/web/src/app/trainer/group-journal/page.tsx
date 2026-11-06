@@ -26,7 +26,6 @@ export default function TrainerGroupJournalPage() {
   const [to, setTo] = useState(isoDate(today));
   const [sessions, setSessions] = useState<GroupClassSessionDto[]>([]);
   const [active, setActive] = useState<GroupClassSessionDto | null>(null);
-  const [newName, setNewName] = useState('');
   const [message, setMessage] = useState('');
   const [openForm, setOpenForm] = useState({
     appointmentId: '',
@@ -88,16 +87,6 @@ export default function TrainerGroupJournalPage() {
     setActive(s);
   };
 
-  const addMember = async () => {
-    const token = getToken();
-    if (!token || !active || !newName.trim()) return;
-    const s = await api.trainerAddGroupMember(token, active.id, {
-      displayName: newName.trim(),
-    });
-    setActive(s);
-    setNewName('');
-  };
-
   const submit = async () => {
     const token = getToken();
     if (!token || !active) return;
@@ -119,8 +108,9 @@ export default function TrainerGroupJournalPage() {
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Журнал групп</h1>
       <p className="text-sm text-slate-400">
-        Эталон из записи → отметьте кто был → Сдать. Для ЗП подтвердите занятие в
-        «Мои занятия» (контроль записей).
+        Состав из 1С / записи клиентов. Отметьте присутствие → Сдать. Добавлять
+        клиентов в группу тренер не может. Для ЗП подтвердите занятие в «Мои
+        занятия» (контроль записей).
       </p>
       {message && <p className="text-sm text-amber-300">{message}</p>}
 
@@ -240,17 +230,11 @@ export default function TrainerGroupJournalPage() {
               </li>
             ))}
           </ul>
-          <div className="flex gap-2">
-            <input
-              className="input flex-1"
-              placeholder="Добавить (имя) — будет с флагом"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-            />
-            <button type="button" className="btn-secondary" onClick={addMember}>
-              +
-            </button>
-          </div>
+          {active.members.length === 0 && (
+            <p className="text-sm text-slate-500">
+              В эталоне никого нет — состав подтянется из 1С при открытии журнала.
+            </p>
+          )}
         </div>
       )}
     </div>

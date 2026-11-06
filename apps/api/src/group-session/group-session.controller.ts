@@ -71,8 +71,9 @@ export class GroupSessionController {
     );
   }
 
+  /** Trainers: view roster + attendance only. Adding members is admin. */
   @Post('trainer/group-sessions/:id/members')
-  @Roles(UserRole.TRAINER, UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   addMember(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
