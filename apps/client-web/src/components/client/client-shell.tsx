@@ -230,11 +230,8 @@ export function ClientShell({ children }: { children: ReactNode }) {
                 </button>
               ) : null}
 
-              <Link
-                href="/client"
-                className="block min-w-0 max-w-[12.75rem] flex-1 touch-manipulation"
-              >
-                <FormaWordmark fluid />
+              <Link href="/client" className="min-w-0 touch-manipulation">
+                <FormaWordmark size="sm" />
               </Link>
 
               <div className="ml-auto flex shrink-0 items-center gap-1.5">
