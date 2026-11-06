@@ -94,9 +94,10 @@ export class ClubScheduleService {
       if (query.approval === 'PENDING') {
         out = out.filter(
           (e) =>
-            e.approvalPhase === 'PENDING_ADMIN' ||
-            e.approvalPhase === 'PENDING_TRAINER' ||
-            e.approvalPhase === 'PENDING_PERFORMER',
+            Boolean(e.sessionKey) &&
+            (e.approvalPhase === 'PENDING_ADMIN' ||
+              e.approvalPhase === 'PENDING_TRAINER' ||
+              e.approvalPhase === 'PENDING_PERFORMER'),
         );
       } else {
         out = out.filter((e) => e.approvalPhase === query.approval);
@@ -268,15 +269,15 @@ export class ClubScheduleService {
 
     const sessionKeys = [
       ...new Set(
-        slots
-          .map((slot) => {
-            const linkedId = link.slotOnexId.get(slot.id);
-            const onexId =
-              linkedId ??
-              (onexById.has(slot.id) ? slot.id : undefined);
-            return onexId ? onexSessionKey(onexId) : null;
-          })
-          .filter((k): k is string => Boolean(k)),
+        slots.flatMap((slot) => {
+          const linkedId = link.slotOnexId.get(slot.id);
+          const onexId =
+            linkedId ??
+            (onexById.has(slot.id) ? slot.id : undefined);
+          if (!onexId) return [] as string[];
+          // Canonical 1c:… plus raw id aliases (same as booking-control findGroupApprovalRow).
+          return [onexSessionKey(onexId), onexId];
+        }),
       ),
     ];
     const approvals = sessionKeys.length
@@ -296,7 +297,8 @@ export class ClubScheduleService {
         ? onexSessionKey(onex.externalId)
         : undefined;
       const approval = sessionKey
-        ? approvalByKey.get(sessionKey)
+        ? (approvalByKey.get(sessionKey) ??
+          (onex ? approvalByKey.get(onex.externalId) : undefined))
         : undefined;
       const status = inferSlotStatus(slot, onex);
       const endMs = Date.parse(
@@ -304,6 +306,8 @@ export class ClubScheduleService {
       );
       const ended = !Number.isNaN(endMs) && endMs <= Date.now();
       // Past/done GROUP without a row still waits for trainer (same as booking-control).
+      // Only with linked Onex — Forma-only ghosts have no sessionKey to confirm and
+      // often duplicate an already-approved 1C session after a failed match.
       // Gym floor visits need no trainer/admin confirm.
       const skipApproval = isGymFloorSessionTitle(slot.title);
       const phase = skipApproval
@@ -316,7 +320,7 @@ export class ClubScheduleService {
               overrideApprovedAt:
                 approval.overrideApprovedAt?.toISOString() ?? null,
             })
-          : ended && status !== 'cancelled'
+          : onex && ended && status !== 'cancelled'
             ? groupApprovalPhase({})
             : undefined;
       const staffId =

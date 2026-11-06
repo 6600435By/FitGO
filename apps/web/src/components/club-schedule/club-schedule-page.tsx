@@ -40,12 +40,17 @@ const TYPE_PRESETS = new Set(['GROUP,PT,SPA', 'GROUP', 'PT', 'SPA']);
 
 type ScheduleViewMode = 'day' | 'week';
 
-function isPendingPhase(phase: string | undefined): boolean {
-  return (
-    phase === 'PENDING_ADMIN' ||
-    phase === 'PENDING_TRAINER' ||
-    phase === 'PENDING_PERFORMER'
-  );
+function isPendingConfirmation(ev: ClubScheduleEvent): boolean {
+  const phase = ev.approvalPhase;
+  if (
+    phase !== 'PENDING_ADMIN' &&
+    phase !== 'PENDING_TRAINER' &&
+    phase !== 'PENDING_PERFORMER'
+  ) {
+    return false;
+  }
+  // Without sessionKey the card cannot be opened/confirmed — not a real queue item.
+  return Boolean(ev.sessionKey);
 }
 
 function normalizeTypes(raw: string | null): string {
@@ -243,9 +248,7 @@ export function ClubSchedulePage({
     void load();
   }, [load]);
 
-  const pendingCount = events.filter((e) =>
-    isPendingPhase(e.approvalPhase),
-  ).length;
+  const pendingCount = events.filter(isPendingConfirmation).length;
 
   const sorted = useMemo(() => {
     const base = [...events].sort(
@@ -253,7 +256,7 @@ export function ClubSchedulePage({
         new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
     );
     if (!pendingOnly) return base;
-    return base.filter((e) => isPendingPhase(e.approvalPhase));
+    return base.filter(isPendingConfirmation);
   }, [events, pendingOnly]);
 
   const eventsByDay = useMemo(() => {
