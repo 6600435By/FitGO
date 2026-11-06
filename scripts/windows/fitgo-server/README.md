@@ -106,17 +106,19 @@ Web build: пустой `NEXT_PUBLIC_API_URL`, `FITGO_API_PROXY_TARGET=http://12
 ```powershell
 cd C:\FitGO\FitGO\scripts\windows\fitgo-server
 # пароль postgres — один раз выдаёт CREATEDB роли fitgo (в задачу не пишется)
-.\Register-FitGOBackupTask.ps1 -PostgresSuperPassword 'YOUR_POSTGRES_PASSWORD'
+.\Register-FitGOBackupTask.ps1 -PostgresSuperPassword 'YOUR_POSTGRES_PASSWORD' -RunNow
 # опционально второй диск/шара:
-# .\Register-FitGOBackupTask.ps1 -OffsitePath E:\FitGO-Offsite -PostgresSuperPassword '...'
-.\Backup-FitGO.ps1   # первая копия сразу
+# .\Register-FitGOBackupTask.ps1 -OffsitePath E:\FitGO-Offsite -PostgresSuperPassword '...' -RunNow
+.\Backup-FitGO.ps1   # первая копия сразу (если без -RunNow)
 ```
 
-Задачи: `FitGO-Backup` (ежедневно **01:30**), `FitGO-Backup-Verify` (вс **06:15**, подъём в `fitgo_backup_check`).
+Задачи: `FitGO-Backup` (ежедневно **01:30**), `FitGO-Backup-Verify` (вс **06:15**, подъём в `fitgo_backup_check`). Задача идёт от **SYSTEM / ServiceAccount** (без залогиненного RDP). Задачу **1s-backup** (1С) скрипт **не** меняет.
 
-Каталог по умолчанию: параметр `-BackupRoot` = `E:\FitGO-Backups` (fallback: E → D → C). Папки: `daily\`, `weekly\`, `files-mirror\`, `LAST_OK.txt`. Храните 14 дневных + 8 недельных. Offsite — дамп + `.env`, без 14 копий hall. После смены диска перерегистрируйте задачу: `.\Register-FitGOBackupTask.ps1 -BackupRoot E:\FitGO-Backups`.
+Каталог по умолчанию: параметр `-BackupRoot` = `E:\FitGO-Backups` (fallback: E → D → C). Папки: `daily\`, `weekly\`, `files-mirror\`, `logs\`, `LAST_OK.txt`. Храните 14 дневных + 8 недельных. Offsite — дамп + `.env`, без 14 копий hall. После смены диска перерегистрируйте задачу: `.\Register-FitGOBackupTask.ps1 -BackupRoot E:\FitGO-Backups -RunNow`.
 
-Статус для UI: `C:\FitGO\FitGO\apps\api\var\backup-status.json` (переопределение `FITGO_BACKUP_STATUS_PATH` в `.env`).
+Статус для UI: `C:\FitGO\FitGO\apps\api\var\backup-status.json` (переопределение `FITGO_BACKUP_STATUS_PATH` в `.env`). Ночной лог: `E:\FitGO-Backups\logs\fitgo-backup.log`.
+
+Если в UI «резервная копия устарела», а ручной `.\Backup-FitGO.ps1` / Update работает — перерегистрируйте задачу (`-RunNow`) и проверьте `Get-ScheduledTaskInfo -TaskName FitGO-Backup`.
 
 ### SUPER_ADMIN в приложении
 

@@ -69,6 +69,36 @@ if (-not $SkipBackup) {
   if ($BackupRoot) { $backupArgs['BackupRoot'] = $BackupRoot }
   if ($OffsitePath) { $backupArgs['OffsitePath'] = $OffsitePath }
   & $backupScript @backupArgs
+
+  # Heal nightly task if missing/disabled/broken. Does not touch 1C (1s-backup).
+  $regBackup = Join-Path $ScriptDir 'Register-FitGOBackupTask.ps1'
+  $nightTask = Get-ScheduledTask -TaskName 'FitGO-Backup' -ErrorAction SilentlyContinue
+  $needRegister = $false
+  if (-not $nightTask) {
+    $needRegister = $true
+  } elseif ($nightTask.State -eq 'Disabled') {
+    $needRegister = $true
+  } else {
+    $act = @($nightTask.Actions) | Select-Object -First 1
+    $uid = [string]$nightTask.Principal.UserId
+    $logon = [string]$nightTask.Principal.LogonType
+    if (-not $act -or -not $act.Arguments -or ($act.Arguments -notmatch 'Backup-FitGO\.ps1')) {
+      $needRegister = $true
+    } elseif ($act.Arguments -match '-File\s+"') {
+      # Quoted -File breaks under Task Scheduler / SYSTEM
+      $needRegister = $true
+    } elseif ($uid -notmatch 'SYSTEM') {
+      $needRegister = $true
+    } elseif ($logon -and $logon -ne 'ServiceAccount') {
+      $needRegister = $true
+    }
+  }
+  if ($needRegister -and (Test-Path -LiteralPath $regBackup)) {
+    Write-Host 'FitGO-Backup task missing/broken - re-registering (1C task untouched)...' -ForegroundColor Yellow
+    $regArgs = @{ InstallRoot = $InstallRoot; BackupRoot = $BackupRoot }
+    if ($OffsitePath) { $regArgs['OffsitePath'] = $OffsitePath }
+    & $regBackup @regArgs
+  }
 } else {
   Write-Host 'SkipBackup: continuing without pre-update dump.' -ForegroundColor Yellow
 }

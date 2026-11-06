@@ -255,7 +255,16 @@ cd C:\FitGO\FitGO\scripts\windows\fitgo-server
 .\Backup-FitGO.ps1
 ```
 
-Каталог по умолчанию: `E:\FitGO-Backups`. Ночная задача уже должна стоять через `Register-FitGOBackupTask.ps1`.
+Каталог по умолчанию: `E:\FitGO-Backups`. Ночная задача: `Register-FitGOBackupTask.ps1` (SYSTEM, 01:30). **Не трогает** `1s-backup` / 1С.
+
+Если в UI «резервная копия устарела», а ручной бэкап / Update работает:
+
+```powershell
+cd C:\FitGO\FitGO\scripts\windows\fitgo-server
+.\Register-FitGOBackupTask.ps1 -RunNow
+Get-ScheduledTaskInfo -TaskName FitGO-Backup
+Get-Content E:\FitGO-Backups\logs\fitgo-backup.log -Tail 40
+```
 
 Откат:
 

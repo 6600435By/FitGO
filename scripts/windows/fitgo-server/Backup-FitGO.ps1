@@ -239,19 +239,36 @@ function Rotate-Bundles {
   }
 }
 
-# --- resolve paths ---
-if (-not (Test-Path (Join-Path $FitGoRoot 'pnpm-workspace.yaml'))) {
-  throw "FitGO not found at $FitGoRoot"
+function Write-BackupLog([string]$Message) {
+  $line = ('[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message)
+  Write-Host $line
+  if ($script:BackupLogPath) {
+    try {
+      Add-Content -LiteralPath $script:BackupLogPath -Value $line -Encoding UTF8
+    } catch {}
+  }
 }
 
-$envMap = Get-EnvMap $ApiEnv
-$statusPath = $StatusPathDefault
-if ($envMap['FITGO_BACKUP_STATUS_PATH']) {
-  $statusPath = $envMap['FITGO_BACKUP_STATUS_PATH']
-}
-
+# --- resolve paths (log + status even on early failure so UI is not stuck on "stale") ---
 $backupRoot = Resolve-BackupRoot $BackupRoot
-Write-Host ("Backup root: " + $backupRoot) -ForegroundColor DarkGray
+$logDir = Join-Path $backupRoot 'logs'
+try {
+  New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+} catch {}
+$script:BackupLogPath = Join-Path $logDir 'fitgo-backup.log'
+
+$statusPath = $StatusPathDefault
+$envMap = @{}
+try {
+  $envMap = Get-EnvMap $ApiEnv
+  if ($envMap['FITGO_BACKUP_STATUS_PATH']) {
+    $statusPath = $envMap['FITGO_BACKUP_STATUS_PATH']
+  }
+} catch {
+  Write-BackupLog ("WARNING: cannot read api .env yet: " + $_.Exception.Message)
+}
+
+Write-BackupLog ("Backup root: " + $backupRoot + " mode=" + $Mode + " user=" + $env:USERNAME + " session=" + $env:SESSIONNAME)
 $dailyRoot = Join-Path $backupRoot 'daily'
 $weeklyRoot = Join-Path $backupRoot 'weekly'
 $mirrorRoot = Join-Path $backupRoot 'files-mirror'
@@ -262,8 +279,15 @@ try {
   $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
 } catch {}
 
+if (-not (Test-Path (Join-Path $FitGoRoot 'pnpm-workspace.yaml'))) {
+  $msg = "FitGO not found at $FitGoRoot"
+  Write-BackupStatus -StatusPath $statusPath -Ok $false -ErrorText $msg -BundleId $null -DumpBytes $null -DurationSec ([int]((Get-Date) - $started).TotalSeconds)
+  Write-BackupLog ("FAILED: " + $msg)
+  throw $msg
+}
+
 if ($Mode -eq 'VerifyLast') {
-  Write-Host '=== FitGO Backup VerifyLast ===' -ForegroundColor Cyan
+  Write-BackupLog '=== FitGO Backup VerifyLast ==='
   if (-not (Test-Path $lastOkPath)) {
     Write-BackupStatus -StatusPath $statusPath -Ok $false -ErrorText 'VerifyLast: LAST_OK.txt missing' -BundleId $null -DumpBytes $null -DurationSec ([int]((Get-Date) - $started).TotalSeconds)
     throw 'LAST_OK.txt not found - no successful backup yet'
@@ -320,12 +344,12 @@ if ($Mode -eq 'VerifyLast') {
   $dur = [int]((Get-Date) - $started).TotalSeconds
   # Keep last successful backup ok; verify only fails the status when restore check fails
   Write-BackupStatus -StatusPath $statusPath -Ok $true -ErrorText $null -BundleId $bundleId -DumpBytes $null -DurationSec $dur
-  Write-Host ("VerifyLast OK: users=" + $userCount + " bundle=" + $bundleId) -ForegroundColor Green
+  Write-BackupLog ("VerifyLast OK: users=" + $userCount + " bundle=" + $bundleId)
   return
 }
 
 # --- Backup mode ---
-Write-Host '=== FitGO Backup ===' -ForegroundColor Cyan
+Write-BackupLog '=== FitGO Backup ==='
 New-Item -ItemType Directory -Force -Path $dailyRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $weeklyRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $mirrorRoot | Out-Null
@@ -347,7 +371,7 @@ try {
   New-Item -ItemType Directory -Force -Path $bundlePath | Out-Null
   $dumpFile = Join-Path $bundlePath 'fitgo.dump'
 
-  Write-Host ("Dumping " + $db.Database + " -> " + $dumpFile)
+  Write-BackupLog ("Dumping " + $db.Database + " -> " + $dumpFile)
   $env:PGPASSWORD = $db.Password
   $dumpArgs = @(
     '-h', $db.Host,
@@ -365,7 +389,7 @@ try {
   if (-not (Test-Path $dumpFile)) { throw 'pg_dump produced no file' }
   $dumpBytes = (Get-Item $dumpFile).Length
 
-  Write-Host 'Verifying dump (pg_restore --list)...'
+  Write-BackupLog 'Verifying dump (pg_restore --list)...'
   $listRes = Invoke-Native -FilePath $pgRestore -ArgumentList @('--list', $dumpFile)
   if ($listRes.Code -ne 0) {
     throw ("pg_restore --list failed: " + $listRes.Output)
@@ -463,7 +487,7 @@ try {
 
   Rotate-Bundles -Root $backupRoot -DailyKeep $KeepDaily -WeeklyKeep $KeepWeekly
 
-  Write-Host ("Backup OK: " + $bundlePath + " (" + [math]::Round($dumpBytes / 1MB, 1) + " MB, " + $dur + "s)") -ForegroundColor Green
+  Write-BackupLog ("Backup OK: " + $bundlePath + " (" + [math]::Round($dumpBytes / 1MB, 1) + " MB, " + $dur + "s)")
   return
 }
 catch {
@@ -474,6 +498,6 @@ catch {
   if ((Test-Path $bundlePath) -and -not (Test-Path (Join-Path $bundlePath 'manifest.json'))) {
     try { Remove-Item -Recurse -Force $bundlePath } catch {}
   }
-  Write-Host ("Backup FAILED: " + $msg) -ForegroundColor Red
+  Write-BackupLog ("Backup FAILED: " + $msg)
   throw
 }
