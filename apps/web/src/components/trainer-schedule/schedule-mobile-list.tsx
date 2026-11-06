@@ -71,6 +71,11 @@ export function ScheduleMobileList({
                       Нет в 1С — ждёт привязки
                     </p>
                   ) : null}
+                  {event.ptControlLabel ? (
+                    <p className="mt-1 text-xs text-slate-400">
+                      {event.ptControlLabel}
+                    </p>
+                  ) : null}
                   <p className="mt-1 text-[10px] uppercase tracking-wide opacity-60">
                     {eventKindLabel(event.kind)}
                   </p>

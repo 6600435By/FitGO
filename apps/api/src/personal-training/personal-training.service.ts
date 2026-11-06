@@ -33,15 +33,38 @@ import {
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import {
+  matchPtDocument,
+  PT_DOC_LOOKAHEAD_DAYS,
+  PT_DOC_LOOKBACK_DAYS,
+  type PtSaleCandidate,
+} from '../booking-control/pt-document-match';
 import { SessionApprovalService } from '../booking-control/session-approval.service';
 import { FormaScheduleCacheService } from '../club-schedule/forma-schedule-cache.service';
 import { staffOwnsScheduleSlot } from '../club-schedule/trainer-schedule.helpers';
 import { moscowDayKey } from '../club-sync/moscow-time';
 import { VisitSyncService } from '../engagement/visit-sync.service';
+import { FeaturesService } from '../features/features.service';
+import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
+
+/** Club-only trainers skip admin PT control (prep for «Тренер клуб»). */
+function isClubTrainerOnly(user: {
+  trainerClub?: boolean | null;
+  trainerStaff?: boolean | null;
+  groupPrograms?: boolean | null;
+  trainerReformers?: boolean | null;
+}): boolean {
+  return Boolean(
+    user.trainerClub &&
+      !user.trainerStaff &&
+      !user.groupPrograms &&
+      !user.trainerReformers,
+  );
+}
 
 const SESSION_DURATION_MIN = 60;
 
@@ -79,7 +102,149 @@ export class PersonalTrainingService {
     private readonly serviceUsage: ServiceUsageService,
     private readonly formaCache: FormaScheduleCacheService,
     private readonly sessionApproval: SessionApprovalService,
+    private readonly features: FeaturesService,
+    private readonly fitness: FitnessService,
   ) {}
+
+  private async shouldApplyPtControl(trainerId: string): Promise<boolean> {
+    if (!(await this.features.isEnabled('trainer_pt_control'))) return false;
+    const trainer = await this.prisma.user.findUnique({
+      where: { id: trainerId },
+      select: {
+        trainerClub: true,
+        trainerStaff: true,
+        groupPrograms: true,
+        trainerReformers: true,
+      },
+    });
+    if (!trainer || isClubTrainerOnly(trainer)) return false;
+    return true;
+  }
+
+  /**
+   * Auto-link a free 1C PT sale / payment probe when exactly one candidate.
+   * No-op when flag off, complimentary, already linked, or blocked.
+   */
+  async tryAutoLinkPtDocument(bookingId: string, clubId: string) {
+    const booking = await this.prisma.personalTrainingBooking.findFirst({
+      where: { id: bookingId },
+      include: {
+        client: true,
+        trainer: true,
+      },
+    });
+    if (!booking) return null;
+    if (booking.isComplimentary) return null;
+    if (booking.linkedDocExternalId || booking.docAutoLinkBlocked) return null;
+    if (!(await this.shouldApplyPtControl(booking.trainerId))) return null;
+
+    const from = new Date(booking.startAt);
+    from.setUTCDate(from.getUTCDate() - PT_DOC_LOOKBACK_DAYS);
+    const to = new Date(booking.startAt);
+    to.setUTCDate(to.getUTCDate() + PT_DOC_LOOKAHEAD_DAYS);
+
+    const [sales, taken] = await Promise.all([
+      this.prisma.trainerPtSale.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          occurredAt: { gte: from, lte: to },
+        },
+      }),
+      this.prisma.personalTrainingBooking.findMany({
+        where: { linkedDocExternalId: { not: null } },
+        select: { linkedDocExternalId: true },
+      }),
+    ]);
+    const takenIds = new Set(
+      taken
+        .map((t) => t.linkedDocExternalId)
+        .filter((id): id is string => Boolean(id)),
+    );
+
+    const candidates: PtSaleCandidate[] = sales.map((s) => ({
+      externalId: s.externalId,
+      occurredAt: s.occurredAt,
+      clientName: s.clientName,
+      employeeCode: s.employeeCode,
+      employeeName: s.employeeName,
+      docRef: s.docRef,
+      paymentStatus: s.paymentStatus,
+      amount: s.amount,
+      serviceName: s.serviceName,
+    }));
+
+    const match = matchPtDocument(
+      {
+        id: booking.id,
+        startAt: booking.startAt,
+        clientExternalId: booking.client.externalId,
+        clientName:
+          `${booking.client.lastName} ${booking.client.firstName}`.trim(),
+        trainerEmployeeCode: booking.trainer.employeeCode,
+        trainerExternalId: booking.trainer.externalId,
+        trainerName:
+          `${booking.trainer.lastName} ${booking.trainer.firstName}`.trim(),
+        linkedDocExternalId: booking.linkedDocExternalId,
+        crmDocRef: booking.crmDocRef,
+        isComplimentary: booking.isComplimentary,
+      },
+      candidates,
+      takenIds,
+    );
+
+    if (match.kind === 'auto') {
+      try {
+        return await this.prisma.personalTrainingBooking.update({
+          where: { id: bookingId },
+          data: {
+            linkedDocExternalId: match.sale.externalId,
+            crmDocRef: match.sale.docRef ?? match.sale.externalId,
+            paymentStatus:
+              match.sale.paymentStatus === 'DEBT' ? 'DEBT' : 'PAID',
+            ...(match.sale.paymentStatus !== 'DEBT'
+              ? { paidAt: new Date() }
+              : {}),
+          },
+        });
+      } catch {
+        // Unique conflict — another booking grabbed the doc.
+        return null;
+      }
+    }
+
+    if (match.kind === 'none') {
+      const provider = this.fitness.getProvider();
+      const live = await provider.getPtSessionPayment?.({
+        clientExternalId: booking.client.externalId ?? undefined,
+        clientPhone: booking.client.phone ?? undefined,
+        trainerExternalId: booking.trainer.externalId ?? undefined,
+        occurredAt: booking.startAt.toISOString(),
+      });
+      const docId = live?.docRef?.trim();
+      if (docId && !takenIds.has(docId)) {
+        try {
+          return await this.prisma.personalTrainingBooking.update({
+            where: { id: bookingId },
+            data: {
+              linkedDocExternalId: docId,
+              crmDocRef: docId,
+              paymentStatus: (live?.paymentStatus as never) ?? undefined,
+              ...(live?.payKind ? { payKind: live.payKind as never } : {}),
+              ...(live?.priceMinor != null
+                ? { priceMinor: live.priceMinor }
+                : {}),
+              ...(live?.paymentStatus === 'PAID' ? { paidAt: new Date() } : {}),
+            },
+          });
+        } catch {
+          return null;
+        }
+      }
+    }
+
+    return null;
+  }
 
   async getTrainerWorkSchedule(user: JwtPayload) {
     const slots = await this.prisma.trainerWorkSlot.findMany({
@@ -148,12 +313,19 @@ export class PersonalTrainingService {
       throw new BadRequestException('Некорректный период');
     }
 
+    const ptControlOn = await this.shouldApplyPtControl(user.sub);
+
     const [groupSlots, bookings, blocks, duties, lastPublication] = await Promise.all([
       this.fetchTrainerGroupSchedule(user, rangeStart, rangeEnd),
       this.prisma.personalTrainingBooking.findMany({
         where: {
           trainerId: user.sub,
-          status: PersonalBookingStatus.CONFIRMED,
+          status: {
+            in: [
+              PersonalBookingStatus.CONFIRMED,
+              PersonalBookingStatus.COMPLETED,
+            ],
+          },
           startAt: { lt: rangeEnd },
           endAt: { gt: rangeStart },
         },
@@ -174,6 +346,26 @@ export class PersonalTrainingService {
         orderBy: { publishedAt: 'desc' },
       }),
     ]);
+
+    const approvalByBooking = new Map<
+      string,
+      {
+        performerConfirmedAt: Date | null;
+        adminApprovedAt: Date | null;
+        overrideApprovedAt: Date | null;
+      }
+    >();
+    if (ptControlOn && bookings.length) {
+      const approvals = await this.prisma.sessionApproval.findMany({
+        where: {
+          kind: SessionApprovalKind.PT,
+          bookingId: { in: bookings.map((b) => b.id) },
+        },
+      });
+      for (const a of approvals) {
+        approvalByBooking.set(a.bookingId, a);
+      }
+    }
 
     const events: TrainerCalendarEvent[] = [];
 
@@ -201,6 +393,38 @@ export class PersonalTrainingService {
     }
 
     for (const booking of bookings) {
+      let ptControlStatus: TrainerCalendarEvent['ptControlStatus'];
+      let ptControlLabel: string | undefined;
+      if (ptControlOn) {
+        if (booking.docAutoLinkBlocked) {
+          ptControlStatus = 'NO_BASIS';
+          ptControlLabel = 'Нет основания в 1С';
+        } else if (booking.linkedDocExternalId) {
+          const appr = approvalByBooking.get(booking.id);
+          if (appr?.adminApprovedAt || appr?.overrideApprovedAt) {
+            ptControlStatus = 'APPROVED';
+            ptControlLabel = 'Подтверждена';
+          } else {
+            ptControlStatus = 'LINKED';
+            ptControlLabel = 'Документ привязан';
+          }
+        } else {
+          const appr = approvalByBooking.get(booking.id);
+          const phase = appr
+            ? this.sessionApproval.phase(appr)
+            : 'PENDING_PERFORMER';
+          if (phase === 'APPROVED') {
+            ptControlStatus = 'APPROVED';
+            ptControlLabel = 'Подтверждена';
+          } else if (phase === 'PENDING_ADMIN') {
+            ptControlStatus = 'PENDING_ADMIN';
+            ptControlLabel = 'На проверке';
+          } else {
+            ptControlStatus = 'PENDING_PERFORMER';
+            ptControlLabel = 'Ждёт подтверждения';
+          }
+        }
+      }
       events.push({
         id: `personal-${booking.id}`,
         kind: 'PERSONAL',
@@ -215,6 +439,8 @@ export class PersonalTrainingService {
           booking.clientIssue === 'NONE'
             ? undefined
             : (booking.clientIssue as TrainerCalendarEvent['clientIssue']),
+        ptControlStatus,
+        ptControlLabel,
       });
     }
 
@@ -540,6 +766,15 @@ export class PersonalTrainingService {
         trainerName,
         startAt: start,
       });
+    }
+
+    if (await this.shouldApplyPtControl(user.sub)) {
+      const clubId = requireClubId(user);
+      await this.sessionApproval.ensureApproval(
+        SessionApprovalKind.PT,
+        booking.id,
+        clubId,
+      );
     }
 
     return {
@@ -1234,6 +1469,15 @@ export class PersonalTrainingService {
         checkIn: booking.startAt.toISOString().slice(11, 16),
         checkOut: booking.endAt.toISOString().slice(11, 16),
       });
+
+      if (await this.shouldApplyPtControl(booking.trainerId)) {
+        await this.sessionApproval.confirmPerformer(
+          user,
+          SessionApprovalKind.PT,
+          bookingId,
+        );
+        await this.tryAutoLinkPtDocument(bookingId, clubId);
+      }
     }
 
     return this.getSessionDetail(user, bookingId);

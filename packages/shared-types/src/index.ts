@@ -147,7 +147,8 @@ export type ProductModuleKey =
   | 'messaging'
   | 'engagement'
   | 'wearables'
-  | 'trainer_ui_v2';
+  | 'trainer_ui_v2'
+  | 'trainer_pt_control';
 
 export interface ProductModuleDefinition {
   key: ProductModuleKey;
@@ -292,6 +293,14 @@ export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
       'Оболочка Forma, онбординг и новый UI /trainer. Откат на старый кабинет при выключении.',
     defaultEnabled: false,
     surfaces: ['/trainer'],
+  },
+  {
+    key: 'trainer_pt_control',
+    label: 'Контроль ПТ тренера (основание 1С)',
+    description:
+      'Запись ПТ штатного тренера → SessionApproval, автопривязка документа 1С, ЗП только после подтверждения админа. Не трогает поток Onex.',
+    defaultEnabled: false,
+    surfaces: ['/trainer/schedule', '/admin/booking-control'],
   },
 ];
 
@@ -825,6 +834,13 @@ export type TrainerCalendarEventKind =
   | 'OPEN_SLOT'
   | 'DRAFT_SLOT';
 
+export type TrainerPtControlStatus =
+  | 'PENDING_PERFORMER'
+  | 'PENDING_ADMIN'
+  | 'APPROVED'
+  | 'NO_BASIS'
+  | 'LINKED';
+
 export interface TrainerCalendarEvent {
   id: string;
   kind: TrainerCalendarEventKind;
@@ -837,6 +853,9 @@ export interface TrainerCalendarEvent {
   origin?: PersonalBookingOrigin;
   /** PT: CRM link / phone issue on the booking. */
   clientIssue?: import('./pt-timesheet').PtClientIssue;
+  /** When trainer_pt_control: control / document status for FitGO PT. */
+  ptControlStatus?: TrainerPtControlStatus;
+  ptControlLabel?: string;
   available?: boolean;
   capacity?: number;
   booked?: number;

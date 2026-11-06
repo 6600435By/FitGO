@@ -129,6 +129,10 @@ export interface BookingControlListItem {
   oneCLinked?: boolean;
   /** ClubRevenueEntry.externalId when SPA is linked to a reception sale. */
   linkedSaleExternalId?: string;
+  /** FitGO PT: linked 1C sale / write-off (trainer_pt_control). */
+  linkedDocExternalId?: string;
+  /** FitGO PT: admin blocked auto-link / no basis. */
+  docAutoLinkBlocked?: boolean;
   /**
    * 1C SPA visit with no matching FitGO journal row.
    * When true, UI shows «нет в журнале» and «Добавить в журнал».

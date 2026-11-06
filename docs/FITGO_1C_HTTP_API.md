@@ -28,6 +28,30 @@
 
 ## Эндпоинты
 
+### GET `/pt-session-payment`
+
+Сверка оплаты одной ПТ для контроля записей (`trainer_pt_control`).
+
+Query: `occurredAt` (ISO), плюс `clientPhone` или `clientExternalId`; опционально `trainerExternalId`.
+
+Ответ `data`:
+
+```json
+{
+  "paymentStatus": "PAID",
+  "payKind": "PAID",
+  "priceMinor": 5000,
+  "docRef": "0000123#1"
+}
+```
+
+или `null`, если однозначного документа нет. Кандидаты — те же разовые ПТ, что `/trainer-pt-sales` (±7…+14 дней).
+
+В конфигураторе: шаблон `/v1/pt-session-payment`, GET → `PtSessionPaymentGET`.  
+BSL: [FitGOIntegration_HTTP.bsl](../scripts/windows/FitGOIntegration_HTTP.bsl), [FitGOIntegration_Клиенты.bsl](../scripts/windows/FitGOIntegration_Клиенты.bsl) (`ОплатаПтСессииJSON`).
+
+Рядом уже есть `GET /trainer-pt-sales` — выгрузка продаж ПТ с исполнителем (номер, клиент, тренер, дата, `paymentStatus`).
+
 ### GET `/health`
 
 ```json

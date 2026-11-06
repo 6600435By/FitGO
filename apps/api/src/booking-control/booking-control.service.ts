@@ -536,6 +536,10 @@ export class BookingControlService {
           payment,
           needsReview: openKeys.has(sessionKey),
           fitgoBookingId: b.id,
+          linkedDocExternalId: b.linkedDocExternalId ?? undefined,
+          docAutoLinkBlocked: b.docAutoLinkBlocked,
+          oneCLinked: Boolean(b.linkedDocExternalId || b.crmDocRef),
+          number: b.crmDocRef ?? undefined,
         });
       }
     }
@@ -7542,5 +7546,64 @@ export class BookingControlService {
     });
     if (pairs.length !== 1) return null;
     return dayBookings.find((b) => b.id === pairs[0]!.bookingId) ?? null;
+  }
+
+  /** Admin: link FitGO PT booking to a TrainerPtSale / doc external id. */
+  async linkPtDocument(
+    user: JwtPayload,
+    bookingId: string,
+    docExternalId: string,
+  ) {
+    const clubId = requireClubId(user);
+    const booking = await this.prisma.personalTrainingBooking.findFirst({
+      where: { id: bookingId, trainer: { clubId } },
+    });
+    if (!booking) throw new NotFoundException('Запись ПТ не найдена');
+    const docId = docExternalId.trim();
+    if (!docId) throw new BadRequestException('Укажите документ');
+    const taken = await this.prisma.personalTrainingBooking.findFirst({
+      where: {
+        linkedDocExternalId: docId,
+        id: { not: bookingId },
+      },
+      select: { id: true },
+    });
+    if (taken) {
+      throw new BadRequestException(
+        'Этот документ уже привязан к другой записи ПТ',
+      );
+    }
+    const sale = await this.prisma.trainerPtSale.findFirst({
+      where: { clubId, externalId: docId, isActive: true },
+    });
+    return this.prisma.personalTrainingBooking.update({
+      where: { id: bookingId },
+      data: {
+        linkedDocExternalId: docId,
+        crmDocRef: sale?.docRef ?? booking.crmDocRef ?? docId,
+        docAutoLinkBlocked: false,
+        paymentStatus:
+          sale?.paymentStatus === 'DEBT'
+            ? ServicePaymentStatus.DEBT
+            : ServicePaymentStatus.PAID,
+        ...(sale?.paymentStatus !== 'DEBT' ? { paidAt: new Date() } : {}),
+      },
+    });
+  }
+
+  /** Admin: mark FitGO PT as having no 1C basis (blocks auto-link). */
+  async markPtNoBasis(user: JwtPayload, bookingId: string) {
+    const clubId = requireClubId(user);
+    const booking = await this.prisma.personalTrainingBooking.findFirst({
+      where: { id: bookingId, trainer: { clubId } },
+    });
+    if (!booking) throw new NotFoundException('Запись ПТ не найдена');
+    return this.prisma.personalTrainingBooking.update({
+      where: { id: bookingId },
+      data: {
+        docAutoLinkBlocked: true,
+        linkedDocExternalId: null,
+      },
+    });
   }
 }

@@ -12,7 +12,7 @@
 //   POST /v1/spa/service-sale            → обработчик SpaSalePOST
 //   POST /v1/spa/cleanup-broken-visits   → обработчик CleanupBrokenSpaVisitsPOST
 //   GET  /v1/specialist-service-debts    → обработчик SpecialistServiceDebtsGET
-//   GET  /v1/pt-session-payment         → (план) сверка оплаты ПТ: clientPhone|clientExternalId + occurredAt
+//   GET  /v1/pt-session-payment         → PtSessionPaymentGET (?clientPhone|clientExternalId&occurredAt&trainerExternalId)
 //   GET  /v1/visits                       → VisitsGET (?externalId|phone | club from/to/page)
 //   GET  /v1/card
 //   GET  /v1/group-session-roster         → GroupSessionRosterGET (?appointmentId=)
@@ -38,12 +38,12 @@
 //                | /v1/spa/cleanup-broken-visits | /v1/specialist-service-debts
 //                | /v1/group-session-roster | /v1/class-sessions | /v1/class-sessions/attendance
 //                | /v1/class-sessions/cancel-member | /v1/class-sessions/set-basis
-//                | /v1/trainer-pt-sales
+//                | /v1/trainer-pt-sales | /v1/pt-session-payment
 //                | /v1/segments/config | /v1/segments/members
 //                | /v1/memberships/expiring | /v1/memberships/renewal-coverage
 //                | /v1/packages | /v1/clients/birthdays
 //   Метод GET  → SpecialistServiceDebtsGET | GroupSessionRosterGET | ClassSessionsGET
-//                | TrainerPtSalesGET | SegmentsConfigGET | SegmentsMembersGET
+//                | TrainerPtSalesGET | PtSessionPaymentGET | SegmentsConfigGET | SegmentsMembersGET
 //                | MembershipsExpiringGET | PackagesGET | ClientsBirthdaysGET
 //   Метод POST → ClassSessionAttendancePOST | ClassSessionCancelMemberPOST
 //                | ClassSessionSetBasisPOST | MembershipsRenewalCoveragePOST
@@ -830,6 +830,36 @@
     КонецЕсли;
 
     Данные = FitGOIntegrationКлиенты.ПродажиПтИсполнителейJSON(ДатаСтрС, ДатаСтрПо);
+    Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
+КонецФункции
+
+// Сверка оплаты одной ПТ: клиент (phone|externalId) + дата (+ опционально тренер).
+// Ответ: { paymentStatus, payKind, priceMinor, docRef } или null.
+Функция PtSessionPaymentGET(Запрос)
+    Если НЕ FitGOIntegrationОбщегоНазначения.ПроверитьАвторизациюFitGO(Запрос) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(401, "Unauthorized");
+    КонецЕсли;
+
+    OccurredAt = "";
+    TrainerExt = "";
+    Попытка
+        OccurredAt = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("occurredAt")));
+    Исключение
+    КонецПопытки;
+    Попытка
+        TrainerExt = СокрЛП(Строка(Запрос.ПараметрыЗапроса.Получить("trainerExternalId")));
+    Исключение
+    КонецПопытки;
+    Если ПустаяСтрока(OccurredAt) Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветОшибки(400, "occurredAt required");
+    КонецЕсли;
+
+    Контрагент = РазрешитьКонтрагента(Запрос);
+    Если Контрагент = Неопределено Тогда
+        Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Неопределено);
+    КонецЕсли;
+
+    Данные = FitGOIntegrationКлиенты.ОплатаПтСессииJSON(Контрагент, OccurredAt, TrainerExt);
     Возврат FitGOIntegrationОбщегоНазначения.ОтветJSON(200, Данные);
 КонецФункции
 

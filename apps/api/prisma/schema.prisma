@@ -1172,6 +1172,10 @@ model PersonalTrainingBooking {
   payKind            PtSessionPayKind      @default(UNKNOWN)
   priceMinor         Int?
   forceIncludeInPayroll Boolean            @default(false)
+  /// 1C sale / write-off id linked for payroll (trainer_pt_control). Unique when set.
+  linkedDocExternalId String?              @unique
+  /// Admin blocked auto-link (ambiguous or «нет основания»).
+  docAutoLinkBlocked Boolean               @default(false)
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
 
@@ -1189,6 +1193,7 @@ model PersonalTrainingBooking {
   @@index([clientIssue, clientIssueEscalated])
   @@index([isLateAdd])
   @@index([status])
+  @@index([docAutoLinkBlocked, linkedDocExternalId])
 }
 
 model PersonalTrainingSessionGoal {
