@@ -37,7 +37,12 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollService } from '../payroll/payroll.service';
-import { isExcludedFromPtBookingControl } from '../admin-sales/trainer-pt-sales-from-revenue';
+import {
+  isExcludedFromPtBookingControl,
+  loadTrainerPtSalesFromRevenue,
+  mergeTrainerPtSaleRows,
+  type TrainerPtSaleRow,
+} from '../admin-sales/trainer-pt-sales-from-revenue';
 import { namesMatch } from '../booking-control/spa-document-match';
 import { buildCapacityResolver } from './capacity-resolve';
 import { addDaysIso, assertPeriod, rangeBounds } from './analytics-period';
@@ -1637,7 +1642,7 @@ export class StaffAnalyticsService {
     const cohortFrom = addDaysIso(from, -150);
     const cohortTo = addDaysIso(to, -60);
 
-    const [onexPt, fitgoBookings, sales] = await Promise.all([
+    const [onexPt, fitgoBookings, salesRaw, fromRevenue] = await Promise.all([
       this.prisma.onexClassSession.findMany({
         where: {
           clubId,
@@ -1699,7 +1704,38 @@ export class StaffAnalyticsService {
           paymentStatus: true,
         },
       }),
+      // Same universe as ЗП / Контроль: ClubRevenue by Исполнитель.
+      loadTrainerPtSalesFromRevenue(
+        this.prisma,
+        clubId,
+        historyStartDate,
+        end,
+        { excludeSolariumAndGym: true },
+      ),
     ]);
+
+    const fromPt: TrainerPtSaleRow[] = salesRaw.map((r) => ({
+      externalId: r.externalId,
+      clientName: r.clientName ?? undefined,
+      serviceName: r.serviceName ?? undefined,
+      occurredAt: r.occurredAt.toISOString(),
+      amount: Number(r.amount) || 0,
+      employeeCode: r.employeeCode ?? undefined,
+      employeeName: r.employeeName ?? undefined,
+      docRef: r.docRef ?? undefined,
+      paymentStatus: r.paymentStatus ?? undefined,
+    }));
+    const sales = mergeTrainerPtSaleRows(fromPt, fromRevenue).map((r) => ({
+      employeeCode: r.employeeCode ?? null,
+      employeeName: r.employeeName ?? null,
+      amount: r.amount,
+      serviceName: r.serviceName ?? null,
+      clientName: r.clientName ?? null,
+      externalId: r.externalId ?? null,
+      docRef: r.docRef ?? null,
+      occurredAt: new Date(r.occurredAt),
+      paymentStatus: r.paymentStatus ?? null,
+    }));
 
     type PtEvt = {
       trainerId: string;

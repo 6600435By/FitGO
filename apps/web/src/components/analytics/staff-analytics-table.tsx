@@ -7,7 +7,7 @@ import type {
   StaffKpiRow,
 } from '@fitgo/shared-types';
 import Link from 'next/link';
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { KpiFlagBadge } from './kpi-flag-badge';
 
 const DEPTS: { id: AnalyticsDepartment; label: string }[] = [
@@ -78,15 +78,33 @@ function salesLink(
   from: string,
   to: string,
   employeeExternalId?: string | null,
+  person: 'employee' | 'performer' = 'employee',
 ) {
   if (!employeeExternalId) return null;
   const q = new URLSearchParams({
     from,
     to,
     op: 'payment',
-    employee: employeeExternalId,
+    [person]: employeeExternalId,
   });
   return `/super-admin/sales?${q.toString()}`;
+}
+
+function sessionRank(row: StaffKpiRow): number {
+  const k = row.kpi;
+  if (k.kind === 'PT_TRAINER' || k.kind === 'GROUP_TRAINER') {
+    return k.sessionsConducted;
+  }
+  if (k.kind === 'SPECIALIST') return k.servicesTotal;
+  return 0;
+}
+
+function defaultSortKey(
+  dept: AnalyticsDepartment,
+): 'name' | 'hours' | 'sessions' {
+  return dept === 'PT_TRAINER' || dept === 'GROUP_TRAINER'
+    ? 'sessions'
+    : 'name';
 }
 
 function controlLink(
@@ -140,7 +158,16 @@ function kpiCells(
   to: string,
 ) {
   const k = row.kpi;
-  const salesHref = salesLink(from, to, row.employeeExternalId);
+  const salesPerson =
+    k.kind === 'PT_TRAINER' || k.kind === 'SPECIALIST'
+      ? 'performer'
+      : 'employee';
+  const salesHref = salesLink(
+    from,
+    to,
+    row.employeeExternalId,
+    salesPerson,
+  );
   const controlHref = (kind?: string) =>
     controlLink(from, to, row.userId, kind);
   if (k.kind === 'ADMIN') {
@@ -251,6 +278,16 @@ function kpiCells(
             currency={currency}
             href={salesHref}
           />
+        </td>
+        <td
+          className="px-2 py-2 text-right"
+          title={
+            k.ladder
+              ? `Ступень мотивации ПТ: ${k.ladder.percent}% · объём ${k.ladder.volumeCount}`
+              : 'Ступень мотивации ПТ (% от продажи)'
+          }
+        >
+          {k.ladder != null ? `${k.ladder.percent}%` : '—'}
         </td>
         <td className="px-2 py-2 text-right">
           {k.sessionsPerHour != null ? k.sessionsPerHour : '—'}
@@ -365,6 +402,7 @@ function kpiHeaders(dept: AnalyticsDepartment) {
       'Удерж.90',
       'Активн.',
       'Продажи',
+      '%',
       'ПТ/час',
     ];
   }
@@ -408,8 +446,14 @@ export function StaffAnalyticsTable({
   managerLoading?: boolean;
 }) {
   const [q, setQ] = useState('');
-  const [sortKey, setSortKey] = useState<'name' | 'hours'>('name');
+  const [sortKey, setSortKey] = useState<'name' | 'hours' | 'sessions'>(() =>
+    defaultSortKey(department),
+  );
   const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSortKey(defaultSortKey(department));
+  }, [department]);
 
   const rows = useMemo(() => {
     let list = report.rows;
@@ -422,6 +466,10 @@ export function StaffAnalyticsTable({
     }
     return [...list].sort((a, b) => {
       if (sortKey === 'hours') return b.hours - a.hours;
+      if (sortKey === 'sessions') {
+        const delta = sessionRank(b) - sessionRank(a);
+        if (delta !== 0) return delta;
+      }
       return a.name.localeCompare(b.name, 'ru');
     });
   }, [report.rows, department, q, sortKey]);
@@ -560,10 +608,13 @@ export function StaffAnalyticsTable({
           onChange={(e) => setQ(e.target.value)}
         />
         <select
-          className="input max-w-[10rem]"
+          className="input max-w-[12rem]"
           value={sortKey}
-          onChange={(e) => setSortKey(e.target.value as 'name' | 'hours')}
+          onChange={(e) =>
+            setSortKey(e.target.value as 'name' | 'hours' | 'sessions')
+          }
         >
+          <option value="sessions">По тренировкам</option>
           <option value="name">По имени</option>
           <option value="hours">По часам</option>
         </select>
