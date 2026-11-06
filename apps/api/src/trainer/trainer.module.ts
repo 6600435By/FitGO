@@ -8,6 +8,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import { TrainerRosterModule } from '../trainer-roster/trainer-roster.module';
 import { GpScheduleService } from './gp-schedule.service';
+import { TrainerClientLookupService } from './trainer-client-lookup.service';
 import { TrainerController } from './trainer.controller';
 import { TrainerService } from './trainer.service';
 
@@ -23,6 +24,6 @@ import { TrainerService } from './trainer.service';
     FloorHomeModule,
   ],
   controllers: [TrainerController],
-  providers: [TrainerService, GpScheduleService],
+  providers: [TrainerService, GpScheduleService, TrainerClientLookupService],
 })
 export class TrainerModule {}

@@ -330,36 +330,110 @@ export class TrainerService {
       orderBy: { joinedAt: 'desc' },
     });
 
-    if (client.externalId || membershipRow?.externalId) {
-      const membership = await provider.getMembership(
-        membershipRow?.externalId ?? client.externalId!,
-      );
-      membershipName = membership?.name;
-      membershipStatus = membership?.status;
+    const clubId = membershipRow?.clubId ?? user.clubId;
+    const extId = membershipRow?.externalId ?? client.externalId ?? undefined;
+
+    let membershipValidUntil: string | undefined;
+    let sessionsRemaining: number | undefined;
+    let lastHallVisit: string | undefined;
+
+    if (clubId && extId) {
+      const snap = await this.prisma.clubMembershipSnapshot.findUnique({
+        where: {
+          clubId_clientExternalId: {
+            clubId,
+            clientExternalId: extId,
+          },
+        },
+      });
+      if (snap) {
+        membershipName = snap.packageName ?? membershipName;
+        membershipStatus =
+          (snap.status
+            ? (Object.values(MembershipStatus) as string[]).includes(
+                snap.status.toUpperCase(),
+              )
+              ? (snap.status.toUpperCase() as MembershipStatus)
+              : membershipStatus
+            : membershipStatus) ?? membershipStatus;
+        membershipValidUntil = snap.endDate ?? undefined;
+        if (Array.isArray(snap.servicesJson)) {
+          let sum = 0;
+          let any = false;
+          for (const row of snap.servicesJson as Array<{ remaining?: number }>) {
+            if (typeof row?.remaining === 'number') {
+              sum += row.remaining;
+              any = true;
+            }
+          }
+          if (any) sessionsRemaining = sum;
+        }
+      }
+      const hall = await this.prisma.clubHallVisit.findFirst({
+        where: { clubId, clientExternalId: extId, isActive: true },
+        orderBy: { visitDate: 'desc' },
+        select: { visitDate: true },
+      });
+      if (hall?.visitDate) {
+        lastHallVisit = String(hall.visitDate).slice(0, 10);
+      }
     }
 
-    const [goals, notes, measurements, questionnaire] = await Promise.all([
-      this.prisma.clientGoal.findMany({
-        where: { clientId, trainerId: user.sub },
-        orderBy: { updatedAt: 'desc' },
-      }),
-      this.prisma.trainerNote.findMany({
-        where: { clientId, trainerId: user.sub },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-      }),
-      this.prisma.clientMeasurement.findMany({
-        where: { clientId, trainerId: user.sub },
-        orderBy: { recordedAt: 'desc' },
-        take: 10,
-      }),
-      this.clientProfile.getQuestionnaireForTrainer(clientId),
-    ]);
+    if ((!membershipName || !membershipStatus) && extId) {
+      const membership = await provider.getMembership(extId);
+      membershipName = membershipName ?? membership?.name;
+      membershipStatus = membershipStatus ?? membership?.status;
+      membershipValidUntil =
+        membershipValidUntil ??
+        (membership as { validUntil?: string } | null)?.validUntil;
+    }
+
+    const since90 = new Date(Date.now() - 90 * 24 * 60 * 60_000);
+    const [goals, notes, measurements, questionnaire, cancelNoShows, recentDone] =
+      await Promise.all([
+        this.prisma.clientGoal.findMany({
+          where: { clientId, trainerId: user.sub },
+          orderBy: { updatedAt: 'desc' },
+        }),
+        this.prisma.trainerNote.findMany({
+          where: { clientId, trainerId: user.sub },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        }),
+        this.prisma.clientMeasurement.findMany({
+          where: { clientId, trainerId: user.sub },
+          orderBy: { recordedAt: 'desc' },
+          take: 10,
+        }),
+        this.clientProfile.getQuestionnaireForTrainer(clientId),
+        this.prisma.personalTrainingBooking.count({
+          where: {
+            trainerId: user.sub,
+            clientId,
+            startAt: { gte: since90 },
+            OR: [
+              { status: PersonalBookingStatus.CANCELLED },
+              { usageStatus: { in: ['NO_SHOW', 'CANCELLED'] } },
+            ],
+          },
+        }),
+        this.prisma.personalTrainingBooking.count({
+          where: {
+            trainerId: user.sub,
+            clientId,
+            status: PersonalBookingStatus.COMPLETED,
+            startAt: { gte: since90 },
+          },
+        }),
+      ]);
+
+    const weeks = 90 / 7;
+    const visitFrequencyPerWeek =
+      recentDone > 0 ? Math.round((recentDone / weeks) * 10) / 10 : 0;
 
     return {
       id: client.id,
-      externalId:
-        membershipRow?.externalId ?? client.externalId ?? undefined,
+      externalId: extId,
       firstName: client.firstName,
       lastName: client.lastName,
       phone: client.phone ?? undefined,
@@ -367,14 +441,19 @@ export class TrainerService {
       dateOfBirth: client.dateOfBirth?.toISOString().slice(0, 10) ?? null,
       crmStatus:
         membershipRow?.crmStatus ??
-        (membershipRow?.externalId || client.externalId
+        (extId
           ? 'LINKED'
           : membershipRow
             ? 'PENDING_CRM'
             : null),
       membershipName,
       membershipStatus,
+      membershipValidUntil,
+      sessionsRemaining,
       lastVisit,
+      lastHallVisit,
+      cancelNoShowCount: cancelNoShows,
+      visitFrequencyPerWeek,
       questionnaire,
       sessions,
       goals: goals.map((g) => ({
@@ -394,6 +473,70 @@ export class TrainerService {
         notes: m.notes ?? undefined,
         recordedAt: m.recordedAt.toISOString(),
       })),
+    };
+  }
+
+  async getClientProgress(user: JwtPayload, clientId: string) {
+    await this.roster.ensureRosterAccess(user.sub, clientId);
+    const since = new Date(Date.now() - 180 * 24 * 60 * 60_000);
+
+    const [measurements, bookings] = await Promise.all([
+      this.prisma.clientMeasurement.findMany({
+        where: {
+          clientId,
+          trainerId: user.sub,
+          weight: { not: null },
+          recordedAt: { gte: since },
+        },
+        orderBy: { recordedAt: 'asc' },
+        take: 60,
+      }),
+      this.prisma.personalTrainingBooking.findMany({
+        where: {
+          trainerId: user.sub,
+          clientId,
+          startAt: { gte: since },
+        },
+        orderBy: { startAt: 'desc' },
+        take: 80,
+      }),
+    ]);
+
+    const weightSeries = measurements
+      .filter((m) => m.weight != null)
+      .map((m) => ({
+        at: m.recordedAt.toISOString(),
+        weightKg: m.weight as number,
+      }));
+
+    const byWeek = new Map<string, number>();
+    for (const b of bookings) {
+      if (b.status === PersonalBookingStatus.CANCELLED) continue;
+      const d = new Date(b.startAt);
+      const day = d.getUTCDay() || 7;
+      const monday = new Date(d);
+      monday.setUTCDate(d.getUTCDate() - (day - 1));
+      const key = monday.toISOString().slice(0, 10);
+      byWeek.set(key, (byWeek.get(key) ?? 0) + 1);
+    }
+    const visitFrequency = [...byWeek.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([weekStart, count]) => ({ weekStart, count }));
+
+    const recentSessions = bookings.slice(0, 20).map((booking) => ({
+      id: booking.id,
+      startAt: booking.startAt.toISOString(),
+      status: booking.status,
+      hasWorkoutSheet: workoutSheetHasData(
+        normalizeWorkoutSheet(booking.workoutSheet),
+      ),
+    }));
+
+    return {
+      clientId,
+      weightSeries,
+      visitFrequency,
+      recentSessions,
     };
   }
 

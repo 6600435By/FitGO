@@ -70,7 +70,7 @@ export function TrainerSchedulePage() {
   const [showWorkSchedule, setShowWorkSchedule] = useState(false);
   const [showAddTraining, setShowAddTraining] = useState(false);
   const [clients, setClients] = useState<
-    Array<{ id: string; firstName: string; lastName: string }>
+    Array<{ id: string; firstName: string; lastName: string; phone?: string }>
   >([]);
   const [selectedEvent, setSelectedEvent] = useState<TrainerCalendarEvent | null>(
     null,
@@ -83,9 +83,25 @@ export function TrainerSchedulePage() {
     const token = getToken();
     if (!token) return;
     api
-      .trainerMessageRecipients(token)
-      .then(setClients)
-      .catch(() => api.trainerDashboard(token).then((d) => setClients(d.clients)));
+      .trainerClients(token)
+      .then((list) =>
+        setClients(
+          list.map((c) => ({
+            id: c.id,
+            firstName: c.firstName,
+            lastName: c.lastName,
+            phone: c.phone,
+          })),
+        ),
+      )
+      .catch(() =>
+        api
+          .trainerMessageRecipients(token)
+          .then(setClients)
+          .catch(() =>
+            api.trainerDashboard(token).then((d) => setClients(d.clients)),
+          ),
+      );
   }, []);
 
   const handleCancelBooking = async (bookingId: string) => {

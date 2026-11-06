@@ -12,6 +12,8 @@ import {
   type ReferralInfo,
   type ScheduleSlot,
   type TrainerClientDetail,
+  type TrainerClientLookupResult,
+  type TrainerClientProgress,
   type TrainerClientSummary,
   type TrainerInviteRequest,
   type Visit,
@@ -1691,9 +1693,34 @@ export const api = {
   trainerClients: (token: string) =>
     request<TrainerClientSummary[]>('/trainer/clients', {}, token),
 
+  trainerClientLookup: (token: string, phone: string) =>
+    request<TrainerClientLookupResult>(
+      `/trainer/clients/lookup?phone=${encodeURIComponent(phone)}`,
+      {},
+      token,
+    ),
+
+  trainerClientSearchRoster: (token: string, q: string) =>
+    request<
+      Array<{
+        clientId: string;
+        firstName: string;
+        lastName: string;
+        phone?: string;
+        externalId?: string;
+        inRoster: true;
+      }>
+    >(`/trainer/clients/lookup?q=${encodeURIComponent(q)}`, {}, token),
+
   trainerAddOfflineClient: (
     token: string,
-    data: { firstName: string; lastName: string; phone: string; notes?: string },
+    data: {
+      firstName: string;
+      lastName: string;
+      phone: string;
+      notes?: string;
+      clientExternalId?: string;
+    },
   ) =>
     request<TrainerClientSummary | { message: string }>(
       '/trainer/clients',
@@ -1734,6 +1761,13 @@ export const api = {
 
   trainerClient: (token: string, clientId: string) =>
     request<TrainerClientDetail>(`/trainer/clients/${clientId}`, {}, token),
+
+  trainerClientProgress: (token: string, clientId: string) =>
+    request<TrainerClientProgress>(
+      `/trainer/clients/${clientId}/progress`,
+      {},
+      token,
+    ),
 
   trainerAddNote: (token: string, clientId: string, content: string) =>
     request(`/trainer/clients/${clientId}/notes`, {

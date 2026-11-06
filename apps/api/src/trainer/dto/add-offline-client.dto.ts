@@ -16,4 +16,9 @@ export class AddOfflineClientDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  /** From phone lookup (1С / FitGO) — stored on User.externalId. */
+  @IsOptional()
+  @IsString()
+  clientExternalId?: string;
 }

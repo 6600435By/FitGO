@@ -8,6 +8,7 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { ClubMembershipService } from '../common/club-membership.service';
 import { FloorStaffHomeService } from '../floor-home/floor-staff-home.service';
 import { GpScheduleService } from './gp-schedule.service';
+import { TrainerClientLookupService } from './trainer-client-lookup.service';
 import { TrainerService } from './trainer.service';
 import { TrainerRosterService } from './trainer-roster.service';
 import { AddGoalDto } from './dto/add-goal.dto';
@@ -24,6 +25,7 @@ export class TrainerController {
   constructor(
     private readonly trainerService: TrainerService,
     private readonly roster: TrainerRosterService,
+    private readonly clientLookup: TrainerClientLookupService,
     private readonly clubMembership: ClubMembershipService,
     private readonly gpSchedule: GpScheduleService,
     private readonly floorHome: FloorStaffHomeService,
@@ -70,9 +72,39 @@ export class TrainerController {
     return this.roster.inviteClient(user.sub, dto.phone);
   }
 
+  /** Phone-first lookup for add-client / assign-PT sheets. Before :clientId. */
+  @Get('clients/lookup')
+  lookupClient(
+    @CurrentUser() user: JwtPayload,
+    @Query('phone') phone?: string,
+    @Query('q') q?: string,
+  ) {
+    if (phone?.trim()) {
+      return this.clientLookup.lookupByPhone(user, phone);
+    }
+    if (q?.trim()) {
+      return this.clientLookup.searchRosterByName(user.sub, q);
+    }
+    return {
+      source: 'none' as const,
+      phone: '',
+      inRoster: false,
+      found: false,
+      pending: false,
+    };
+  }
+
   @Get('message-recipients')
   getMessageRecipients(@CurrentUser() user: JwtPayload) {
     return this.trainerService.getMessageRecipients(user);
+  }
+
+  @Get('clients/:clientId/progress')
+  getClientProgress(
+    @CurrentUser() user: JwtPayload,
+    @Param('clientId') clientId: string,
+  ) {
+    return this.trainerService.getClientProgress(user, clientId);
   }
 
   @Get('clients/:clientId')

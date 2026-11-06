@@ -49,6 +49,21 @@ function parseMembershipStatus(
   return undefined;
 }
 
+function sumRemainingSessions(servicesJson: unknown): number | undefined {
+  if (!Array.isArray(servicesJson) || servicesJson.length === 0) return undefined;
+  let sum = 0;
+  let any = false;
+  for (const row of servicesJson) {
+    if (!row || typeof row !== 'object') continue;
+    const rem = (row as { remaining?: unknown }).remaining;
+    if (typeof rem === 'number' && Number.isFinite(rem)) {
+      sum += rem;
+      any = true;
+    }
+  }
+  return any ? sum : undefined;
+}
+
 @Injectable()
 export class TrainerRosterService {
   constructor(
@@ -133,7 +148,7 @@ export class TrainerRosterService {
       ),
     ];
 
-    const snapshots =
+        const snapshots =
       clubId && externalIds.length
         ? await this.prisma.clubMembershipSnapshot.findMany({
             where: { clubId, clientExternalId: { in: externalIds } },
@@ -141,12 +156,41 @@ export class TrainerRosterService {
               clientExternalId: true,
               packageName: true,
               status: true,
+              endDate: true,
+              servicesJson: true,
             },
           })
         : [];
     const snapByExt = new Map(
       snapshots.map((s) => [s.clientExternalId, s]),
     );
+
+    const clientIds = links.map((l) => l.clientId);
+    const recentBookings =
+      clientIds.length > 0
+        ? await this.prisma.personalTrainingBooking.findMany({
+            where: {
+              trainerId,
+              clientId: { in: clientIds },
+              OR: [
+                { status: 'CANCELLED' },
+                { usageStatus: { in: ['NO_SHOW', 'CANCELLED'] } },
+              ],
+              startAt: {
+                gte: new Date(Date.now() - 90 * 24 * 60 * 60_000),
+              },
+            },
+            select: { clientId: true },
+          })
+        : [];
+    const cancelNoShowByClient = new Map<string, number>();
+    for (const b of recentBookings) {
+      if (!b.clientId) continue;
+      cancelNoShowByClient.set(
+        b.clientId,
+        (cancelNoShowByClient.get(b.clientId) ?? 0) + 1,
+      );
+    }
 
     const lastVisits =
       clubId && externalIds.length
@@ -197,15 +241,25 @@ export class TrainerRosterService {
         (externalId ? visitByExt.get(externalId) : undefined) ??
         visitByUser.get(client.id);
 
+      const hallVisit = externalId ? visitByExt.get(externalId) : undefined;
       return {
         id: client.id,
         externalId: client.externalId ?? undefined,
         firstName: client.firstName,
         lastName: client.lastName,
         phone: client.phone ?? undefined,
+        dateOfBirth: client.dateOfBirth
+          ? client.dateOfBirth.toISOString().slice(0, 10)
+          : undefined,
         membershipName: snap?.packageName ?? undefined,
         membershipStatus: parseMembershipStatus(snap?.status),
+        membershipValidUntil: snap?.endDate ?? undefined,
+        sessionsRemaining: sumRemainingSessions(snap?.servicesJson),
         lastVisit,
+        lastHallVisit: hallVisit
+          ? String(hallVisit).slice(0, 10)
+          : undefined,
+        cancelNoShowCount: cancelNoShowByClient.get(client.id) ?? 0,
         rosterStatus: link.status,
         hasApp: client.accountStatus === AccountStatus.ACTIVE,
         clientAccepted: link.clientAcceptedAt != null,
@@ -248,18 +302,51 @@ export class TrainerRosterService {
 
   async addOfflineClient(
     trainerId: string,
-    dto: { firstName: string; lastName: string; phone: string; notes?: string },
+    dto: {
+      firstName: string;
+      lastName: string;
+      phone: string;
+      notes?: string;
+      clientExternalId?: string;
+    },
   ) {
     const phoneNormalized = normalizePhone(dto.phone);
     if (phoneNormalized.length < 9) {
       throw new BadRequestException('Некорректный номер телефона');
     }
 
+    const externalId = dto.clientExternalId?.trim() || undefined;
+
     const existing = await this.prisma.user.findFirst({
       where: { phoneNormalized },
     });
 
     if (existing) {
+      const link = await this.prisma.trainerClientLink.findUnique({
+        where: {
+          trainerId_clientId: { trainerId, clientId: existing.id },
+        },
+      });
+      if (link && link.status !== TrainerClientLinkStatus.REJECTED) {
+        if (externalId && !existing.externalId) {
+          await this.prisma.user.update({
+            where: { id: existing.id },
+            data: { externalId },
+          });
+        }
+        return {
+          id: existing.id,
+          firstName: existing.firstName,
+          lastName: existing.lastName,
+          phone: existing.phone ?? undefined,
+          externalId: existing.externalId ?? externalId,
+          rosterStatus: link.status,
+          hasApp: existing.accountStatus === AccountStatus.ACTIVE,
+          clientAccepted: link.clientAcceptedAt != null,
+          inRosterSince: link.createdAt.toISOString(),
+          source: link.source,
+        };
+      }
       return { message: INVITE_GENERIC_MESSAGE };
     }
 
@@ -273,6 +360,7 @@ export class TrainerRosterService {
         lastName: dto.lastName.trim(),
         phone: dto.phone.trim(),
         phoneNormalized,
+        externalId,
         accountStatus: AccountStatus.SHADOW,
         createdByTrainerId: trainerId,
         roles: { create: { role: Role.CLIENT } },
@@ -295,6 +383,7 @@ export class TrainerRosterService {
       firstName: client.firstName,
       lastName: client.lastName,
       phone: client.phone ?? undefined,
+      externalId: client.externalId ?? undefined,
       rosterStatus: TrainerClientLinkStatus.CONFIRMED,
       hasApp: false,
       clientAccepted: false,

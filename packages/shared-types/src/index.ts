@@ -457,14 +457,47 @@ export interface TrainerClientSummary {
   firstName: string;
   lastName: string;
   phone?: string;
+  dateOfBirth?: string;
   membershipName?: string;
   membershipStatus?: MembershipStatus;
+  /** Membership / package end date YYYY-MM-DD from snapshot. */
+  membershipValidUntil?: string;
+  /** Sum of remaining countable services from snapshot (if known). */
+  sessionsRemaining?: number;
   lastVisit?: string;
+  /** Club hall visit (not only PT with this trainer). */
+  lastHallVisit?: string;
+  cancelNoShowCount?: number;
   rosterStatus?: 'CONFIRMED' | 'PENDING' | 'REJECTED';
   hasApp?: boolean;
   clientAccepted?: boolean;
   inRosterSince?: string;
   source?: 'MANUAL' | 'INVITE';
+}
+
+/** GET /trainer/clients/lookup */
+export interface TrainerClientLookupResult {
+  source: 'roster' | 'fitgo' | '1c' | 'none';
+  phone: string;
+  clientId?: string;
+  firstName?: string;
+  lastName?: string;
+  externalId?: string;
+  inRoster: boolean;
+  found: boolean;
+  pending: boolean;
+}
+
+export interface TrainerClientProgress {
+  clientId: string;
+  weightSeries: Array<{ at: string; weightKg: number }>;
+  visitFrequency: Array<{ weekStart: string; count: number }>;
+  recentSessions: Array<{
+    id: string;
+    startAt: string;
+    status: string;
+    hasWorkoutSheet: boolean;
+  }>;
 }
 
 export interface TrainerInviteRequest {
@@ -1062,7 +1095,12 @@ export interface TrainerClientDetail {
   crmStatus?: ClubCrmLinkStatus | null;
   membershipName?: string;
   membershipStatus?: MembershipStatus;
+  membershipValidUntil?: string;
+  sessionsRemaining?: number;
   lastVisit?: string;
+  lastHallVisit?: string;
+  cancelNoShowCount?: number;
+  visitFrequencyPerWeek?: number;
   /** Client self-filled questionnaire (no gamification). */
   questionnaire?: {
     training: import('./client-training-profile').ClientTrainingProfile | null;

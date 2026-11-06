@@ -1,8 +1,13 @@
 'use client';
 
-import { MembershipStatus, type TrainerClientSummary } from '@fitgo/shared-types';
+import {
+  MembershipStatus,
+  type TrainerClientLookupResult,
+  type TrainerClientSummary,
+} from '@fitgo/shared-types';
+import { Chip, ResponsiveSheet } from '@fitgo/forma-ui';
 import Link from 'next/link';
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import {
@@ -10,6 +15,14 @@ import {
   membershipStatusColor,
   membershipStatusLabel,
 } from '@/lib/utils';
+
+type Segment =
+  | 'all'
+  | 'active'
+  | 'expiring'
+  | 'ghosting'
+  | 'new'
+  | 'birthday';
 
 function rosterStatusLabel(client: TrainerClientSummary): string {
   if (client.rosterStatus === 'REJECTED') return 'Отклонён';
@@ -26,18 +39,83 @@ function rosterStatusColor(client: TrainerClientSummary): string {
   return 'bg-fitgo-500/20 text-fitgo-300';
 }
 
+function daysUntil(ymd?: string): number | null {
+  if (!ymd) return null;
+  const t = Date.parse(`${ymd.slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(t)) return null;
+  return Math.ceil((t - Date.now()) / (24 * 60 * 60_000));
+}
+
+function isBirthdayThisWeek(dob?: string): boolean {
+  if (!dob || dob.length < 10) return false;
+  const [, m, d] = dob.slice(0, 10).split('-').map(Number);
+  if (!m || !d) return false;
+  const now = new Date();
+  for (let i = 0; i < 7; i++) {
+    const day = new Date(now);
+    day.setDate(now.getDate() + i);
+    if (day.getMonth() + 1 === m && day.getDate() === d) return true;
+  }
+  return false;
+}
+
+function lookupBadge(lookup: TrainerClientLookupResult | null): string | null {
+  if (!lookup || lookup.pending) return lookup?.pending ? 'Ищем в 1С…' : null;
+  if (lookup.source === 'roster' || lookup.inRoster) return 'Уже в вашей базе';
+  if (lookup.source === '1c') return 'Найден в 1С';
+  if (lookup.source === 'fitgo') return 'Есть в FitGO';
+  if (lookup.found === false && lookup.phone.length >= 12) return 'Нет в 1С';
+  return null;
+}
+
+function matchesSegment(client: TrainerClientSummary, seg: Segment): boolean {
+  if (seg === 'all') return true;
+  if (seg === 'active') {
+    return (
+      client.rosterStatus === 'CONFIRMED' &&
+      client.membershipStatus === MembershipStatus.ACTIVE
+    );
+  }
+  if (seg === 'expiring') {
+    const days = daysUntil(client.membershipValidUntil);
+    const lowSessions =
+      client.sessionsRemaining != null && client.sessionsRemaining <= 2;
+    return lowSessions || (days != null && days >= 0 && days <= 7);
+  }
+  if (seg === 'ghosting') {
+    const ref = client.lastHallVisit ?? client.lastVisit;
+    const days = daysUntil(ref);
+    return days != null && days <= -14;
+  }
+  if (seg === 'new') {
+    if (!client.inRosterSince) return false;
+    const days = daysUntil(client.inRosterSince.slice(0, 10));
+    return days != null && days <= 0 && days >= -14;
+  }
+  if (seg === 'birthday') return isBirthdayThisWeek(client.dateOfBirth);
+  return true;
+}
+
 export default function TrainerClientsPage() {
   const [clients, setClients] = useState<TrainerClientSummary[]>([]);
   const [error, setError] = useState('');
   const [mode, setMode] = useState<'offline' | 'invite' | null>(null);
+  const [segment, setSegment] = useState<Segment>('all');
+  const [query, setQuery] = useState('');
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
   const [saving, setSaving] = useState(false);
 
+  const [phone, setPhone] = useState('+375');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [notes, setNotes] = useState('');
+  const [lookup, setLookup] = useState<TrainerClientLookupResult | null>(null);
+  const [looking, setLooking] = useState(false);
+
   const loadClients = useCallback(() => {
     const token = getToken();
     if (!token) return;
-
     api
       .trainerClients(token)
       .then(setClients)
@@ -48,29 +126,91 @@ export default function TrainerClientsPage() {
     loadClients();
   }, [loadClients]);
 
+  useEffect(() => {
+    if (mode !== 'offline' && mode !== 'invite') return;
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 12) {
+      setLookup(null);
+      return;
+    }
+    const token = getToken();
+    if (!token) return;
+    const t = window.setTimeout(() => {
+      setLooking(true);
+      api
+        .trainerClientLookup(token, phone)
+        .then((res) => {
+          setLookup(res);
+          if (res.firstName) setFirstName(res.firstName);
+          if (res.lastName) setLastName(res.lastName);
+        })
+        .catch(() => setLookup(null))
+        .finally(() => setLooking(false));
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [phone, mode]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return clients.filter((c) => {
+      if (!matchesSegment(c, segment)) return false;
+      if (!q) return true;
+      const hay =
+        `${c.firstName} ${c.lastName} ${c.phone ?? ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [clients, query, segment]);
+
+  const segmentCounts = useMemo(() => {
+    const counts: Record<Segment, number> = {
+      all: clients.length,
+      active: 0,
+      expiring: 0,
+      ghosting: 0,
+      new: 0,
+      birthday: 0,
+    };
+    for (const c of clients) {
+      (['active', 'expiring', 'ghosting', 'new', 'birthday'] as Segment[]).forEach(
+        (s) => {
+          if (matchesSegment(c, s)) counts[s] += 1;
+        },
+      );
+    }
+    return counts;
+  }, [clients]);
+
+  const resetForm = () => {
+    setPhone('+375');
+    setFirstName('');
+    setLastName('');
+    setNotes('');
+    setLookup(null);
+    setFormError('');
+    setFormSuccess('');
+  };
+
   const handleOfflineSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const token = getToken();
     if (!token) return;
-
-    const form = new FormData(e.currentTarget);
     setSaving(true);
     setFormError('');
     setFormSuccess('');
-
     try {
       const result = await api.trainerAddOfflineClient(token, {
-        firstName: String(form.get('firstName')),
-        lastName: String(form.get('lastName')),
-        phone: String(form.get('phone')),
-        notes: String(form.get('notes') || '') || undefined,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        phone: phone.trim(),
+        notes: notes.trim() || undefined,
+        clientExternalId: lookup?.externalId,
       });
-
       if ('message' in result) {
         setFormSuccess(result.message);
       } else {
         setFormSuccess('Клиент добавлен в вашу базу');
         setMode(null);
+        resetForm();
         loadClients();
       }
     } catch (err) {
@@ -84,16 +224,14 @@ export default function TrainerClientsPage() {
     e.preventDefault();
     const token = getToken();
     if (!token) return;
-
-    const form = new FormData(e.currentTarget);
     setSaving(true);
     setFormError('');
     setFormSuccess('');
-
     try {
-      const result = await api.trainerInviteClient(token, String(form.get('phone')));
+      const result = await api.trainerInviteClient(token, phone.trim());
       setFormSuccess(result.message);
       setMode(null);
+      resetForm();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Ошибка');
     } finally {
@@ -102,6 +240,8 @@ export default function TrainerClientsPage() {
   };
 
   if (error) return <p className="text-red-400">{error}</p>;
+
+  const badge = lookupBadge(lookup);
 
   return (
     <div className="space-y-4">
@@ -112,20 +252,18 @@ export default function TrainerClientsPage() {
             type="button"
             className="btn-secondary text-sm"
             onClick={() => {
+              resetForm();
               setMode('offline');
-              setFormError('');
-              setFormSuccess('');
             }}
           >
-            Добавить офлайн
+            Добавить
           </button>
           <button
             type="button"
             className="btn-primary text-sm"
             onClick={() => {
+              resetForm();
               setMode('invite');
-              setFormError('');
-              setFormSuccess('');
             }}
           >
             Пригласить
@@ -133,96 +271,205 @@ export default function TrainerClientsPage() {
         </div>
       </div>
 
-      {mode === 'offline' && (
-        <form onSubmit={handleOfflineSubmit} className="card space-y-3">
-          <h3 className="font-medium">Офлайн-клиент</h3>
-          <p className="text-sm text-slate-400">
-            Клиент дал телефон лично. Если номер свободен — сразу попадёт в базу.
-          </p>
+      <input
+        className="input w-full"
+        placeholder="Поиск по имени или телефону"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {(
+          [
+            ['all', 'Все'],
+            ['active', 'Активные'],
+            ['expiring', 'Пакет заканчивается'],
+            ['ghosting', 'Пропадают'],
+            ['new', 'Новые'],
+            ['birthday', 'ДР'],
+          ] as const
+        ).map(([id, label]) => (
+          <Chip
+            key={id}
+            active={segment === id}
+            count={segmentCounts[id]}
+            onClick={() => setSegment(id)}
+          >
+            {label}
+          </Chip>
+        ))}
+      </div>
+
+      <ResponsiveSheet
+        open={mode === 'offline'}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMode(null);
+            resetForm();
+          }
+        }}
+        title="Добавить клиента"
+        description="Сначала телефон — подтянем ФИО из базы или 1С"
+        desktop="dialog"
+      >
+        <form onSubmit={handleOfflineSubmit} className="space-y-3">
+          <input
+            className="input w-full"
+            inputMode="tel"
+            autoComplete="tel"
+            placeholder="+375…"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            required
+          />
+          {looking && (
+            <p className="text-xs text-slate-400">Ищем клиента…</p>
+          )}
+          {badge && (
+            <p className="rounded-lg bg-slate-800/60 px-3 py-2 text-sm text-slate-200">
+              {badge}
+            </p>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
-            <input name="firstName" className="input" placeholder="Имя" required />
-            <input name="lastName" className="input" placeholder="Фамилия" required />
+            <input
+              className="input"
+              placeholder="Имя"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              required
+            />
+            <input
+              className="input"
+              placeholder="Фамилия"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              required
+            />
           </div>
-          <input name="phone" className="input" placeholder="Телефон" required />
-          <input name="notes" className="input" placeholder="Заметка (необязательно)" />
+          <input
+            className="input w-full"
+            placeholder="Заметка (необязательно)"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
           {formError && <p className="text-sm text-red-400">{formError}</p>}
-          {formSuccess && <p className="text-sm text-fitgo-400">{formSuccess}</p>}
-          <div className="flex gap-2">
-            <button type="button" className="btn-secondary" onClick={() => setMode(null)}>
-              Отмена
-            </button>
-            <button type="submit" className="btn-primary" disabled={saving}>
-              {saving ? 'Сохранение...' : 'Добавить'}
-            </button>
-          </div>
+          {formSuccess && (
+            <p className="text-sm text-fitgo-400">{formSuccess}</p>
+          )}
+          <button type="submit" className="btn-primary w-full" disabled={saving}>
+            {saving ? 'Сохранение…' : 'Добавить в базу'}
+          </button>
         </form>
-      )}
+      </ResponsiveSheet>
 
-      {mode === 'invite' && (
-        <form onSubmit={handleInviteSubmit} className="card space-y-3">
-          <h3 className="font-medium">Пригласить клиента</h3>
-          <p className="text-sm text-slate-400">
-            Клиент должен подтвердить приглашение в приложении. Ответ всегда одинаковый.
-          </p>
-          <input name="phone" className="input" placeholder="Телефон" required />
+      <ResponsiveSheet
+        open={mode === 'invite'}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMode(null);
+            resetForm();
+          }
+        }}
+        title="Пригласить клиента"
+        description="Клиент подтвердит приглашение в приложении"
+        desktop="dialog"
+      >
+        <form onSubmit={handleInviteSubmit} className="space-y-3">
+          <input
+            className="input w-full"
+            inputMode="tel"
+            placeholder="+375…"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            required
+          />
+          {badge && (
+            <p className="rounded-lg bg-slate-800/60 px-3 py-2 text-sm text-slate-200">
+              {badge}
+            </p>
+          )}
           {formError && <p className="text-sm text-red-400">{formError}</p>}
-          {formSuccess && <p className="text-sm text-fitgo-400">{formSuccess}</p>}
-          <div className="flex gap-2">
-            <button type="button" className="btn-secondary" onClick={() => setMode(null)}>
-              Отмена
-            </button>
-            <button type="submit" className="btn-primary" disabled={saving}>
-              {saving ? 'Отправка...' : 'Отправить приглашение'}
-            </button>
-          </div>
+          {formSuccess && (
+            <p className="text-sm text-fitgo-400">{formSuccess}</p>
+          )}
+          <button type="submit" className="btn-primary w-full" disabled={saving}>
+            {saving ? 'Отправка…' : 'Отправить приглашение'}
+          </button>
         </form>
-      )}
+      </ResponsiveSheet>
 
-      {clients.length === 0 ? (
+      {filtered.length === 0 ? (
         <div className="card text-center text-slate-400">
-          <p>Пока нет клиентов в вашей базе</p>
-          <p className="mt-2 text-sm">
-            Добавьте офлайн-клиента или отправьте приглашение по телефону
+          <p>
+            {clients.length === 0
+              ? 'Пока нет клиентов в вашей базе'
+              : 'Нет клиентов в этом сегменте'}
           </p>
         </div>
       ) : (
         <ul className="space-y-3">
-          {clients.map((client) => (
-            <Link key={client.id} href={`/trainer/clients/${client.id}`} className="card block">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="font-medium">
-                    {client.firstName} {client.lastName}
-                  </p>
-                  {client.phone && (
-                    <p className="text-sm text-slate-400">{client.phone}</p>
-                  )}
+          {filtered.map((client) => {
+            const risk =
+              (client.cancelNoShowCount ?? 0) >= 2 ||
+              matchesSegment(client, 'ghosting') ||
+              matchesSegment(client, 'expiring');
+            return (
+              <Link
+                key={client.id}
+                href={`/trainer/clients/${client.id}`}
+                className="card block"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="font-medium">
+                      {client.firstName} {client.lastName}
+                    </p>
+                    {client.phone && (
+                      <p className="text-sm text-slate-400">{client.phone}</p>
+                    )}
+                    {client.membershipName && (
+                      <p className="mt-1 text-sm text-slate-300">
+                        {client.membershipName}
+                        {client.sessionsRemaining != null
+                          ? ` · осталось ${client.sessionsRemaining}`
+                          : ''}
+                        {client.membershipValidUntil
+                          ? ` · до ${formatDate(client.membershipValidUntil)}`
+                          : ''}
+                      </p>
+                    )}
+                    {(client.lastHallVisit || client.lastVisit) && (
+                      <p className="text-xs text-slate-500">
+                        Визит:{' '}
+                        {formatDate(
+                          client.lastHallVisit ?? client.lastVisit ?? '',
+                        )}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-1">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs ${rosterStatusColor(client)}`}
+                    >
+                      {rosterStatusLabel(client)}
+                    </span>
+                    {client.membershipStatus && (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs ${membershipStatusColor(client.membershipStatus)}`}
+                      >
+                        {membershipStatusLabel(client.membershipStatus)}
+                      </span>
+                    )}
+                    {risk && (
+                      <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs text-amber-200">
+                        Внимание
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <span
-                  className={`shrink-0 rounded-full px-2 py-1 text-xs ${rosterStatusColor(client)}`}
-                >
-                  {rosterStatusLabel(client)}
-                </span>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {client.membershipStatus && (
-                  <span
-                    className={`rounded-full px-2 py-1 text-xs ${membershipStatusColor(client.membershipStatus)}`}
-                  >
-                    {membershipStatusLabel(client.membershipStatus)}
-                  </span>
-                )}
-              </div>
-              {client.membershipName && (
-                <p className="mt-2 text-sm text-slate-300">{client.membershipName}</p>
-              )}
-              {client.lastVisit && (
-                <p className="mt-1 text-sm text-slate-400">
-                  Последний визит: {formatDate(client.lastVisit)}
-                </p>
-              )}
-            </Link>
-          ))}
+              </Link>
+            );
+          })}
         </ul>
       )}
     </div>
