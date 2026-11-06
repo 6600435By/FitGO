@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Role } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import sharp from 'sharp';
@@ -76,6 +76,10 @@ export class StaffProfileService {
         photoUpdatedAt: Date | null;
         bioUpdatedAt: Date | null;
         hiddenByAdminAt: Date | null;
+        specializations: string[];
+        experienceYears: number | null;
+        certificates: unknown;
+        onboardedAt: Date | null;
       } | null;
     },
     opts?: { forClient?: boolean },
@@ -110,6 +114,10 @@ export class StaffProfileService {
       photoUpdatedAt: p?.photoUpdatedAt?.toISOString() ?? null,
       hiddenByAdmin: hidden,
       bioMax: BIO_MAX,
+      specializations: showPublic ? (p?.specializations ?? []) : [],
+      experienceYears: showPublic ? (p?.experienceYears ?? null) : null,
+      certificates: showPublic ? (p?.certificates ?? null) : null,
+      onboardedAt: forClient ? null : (p?.onboardedAt?.toISOString() ?? null),
     };
   }
 
@@ -122,26 +130,101 @@ export class StaffProfileService {
     return this.formatProfile(user);
   }
 
-  async updateBio(userId: string, bio: string) {
+  async updateMine(
+    userId: string,
+    body: {
+      bio?: string;
+      specializations?: string[];
+      experienceYears?: number | null;
+      certificates?: unknown;
+      onboardedAt?: string | null | true;
+    },
+  ) {
     const user = await this.ensureStaffUser(userId);
-    const trimmed = (bio ?? '').trim();
-    if (trimmed.length > BIO_MAX) {
-      throw new BadRequestException(`Описание не длиннее ${BIO_MAX} символов`);
+    const data: Prisma.StaffProfileUpdateInput = {};
+
+    if (typeof body.bio === 'string') {
+      const trimmed = body.bio.trim();
+      if (trimmed.length > BIO_MAX) {
+        throw new BadRequestException(`Описание не длиннее ${BIO_MAX} символов`);
+      }
+      data.bio = trimmed;
+      data.bioUpdatedAt = new Date();
     }
-    const profile = await this.prisma.staffProfile.upsert({
+
+    if (Array.isArray(body.specializations)) {
+      data.specializations = body.specializations
+        .map((s) => String(s).trim())
+        .filter(Boolean)
+        .slice(0, 20);
+    }
+
+    if (body.experienceYears === null) {
+      data.experienceYears = null;
+    } else if (typeof body.experienceYears === 'number') {
+      if (
+        !Number.isFinite(body.experienceYears) ||
+        body.experienceYears < 0 ||
+        body.experienceYears > 60
+      ) {
+        throw new BadRequestException('Стаж: от 0 до 60 лет');
+      }
+      data.experienceYears = Math.round(body.experienceYears);
+    }
+
+    if (body.certificates !== undefined) {
+      data.certificates =
+        body.certificates === null
+          ? Prisma.JsonNull
+          : (body.certificates as Prisma.InputJsonValue);
+    }
+
+    if (body.onboardedAt === true) {
+      data.onboardedAt = new Date();
+    } else if (body.onboardedAt === null) {
+      data.onboardedAt = null;
+    } else if (typeof body.onboardedAt === 'string' && body.onboardedAt) {
+      const d = new Date(body.onboardedAt);
+      if (Number.isNaN(d.getTime())) {
+        throw new BadRequestException('Некорректная дата онбординга');
+      }
+      data.onboardedAt = d;
+    }
+
+    if (Object.keys(data).length === 0) {
+      return this.getMine(user.id);
+    }
+
+    const createData: Prisma.StaffProfileCreateInput = {
+      user: { connect: { id: userId } },
+      bio: typeof data.bio === 'string' ? data.bio : '',
+      bioUpdatedAt:
+        data.bioUpdatedAt instanceof Date ? data.bioUpdatedAt : undefined,
+      specializations: Array.isArray(data.specializations)
+        ? data.specializations
+        : [],
+      experienceYears:
+        typeof data.experienceYears === 'number' ? data.experienceYears : null,
+      certificates:
+        data.certificates === Prisma.JsonNull
+          ? Prisma.JsonNull
+          : data.certificates !== undefined
+            ? (data.certificates as Prisma.InputJsonValue)
+            : undefined,
+      onboardedAt: data.onboardedAt instanceof Date ? data.onboardedAt : null,
+    };
+
+    await this.prisma.staffProfile.upsert({
       where: { userId },
-      create: {
-        userId,
-        bio: trimmed,
-        bioUpdatedAt: new Date(),
-      },
-      update: {
-        bio: trimmed,
-        bioUpdatedAt: new Date(),
-      },
+      create: createData,
+      update: data,
     });
-    void profile;
     return this.getMine(user.id);
+  }
+
+  /** @deprecated use updateMine — kept for call sites that only patch bio */
+  async updateBio(userId: string, bio: string) {
+    return this.updateMine(userId, { bio });
   }
 
   async uploadPhoto(userId: string, buffer: Buffer, mime?: string) {

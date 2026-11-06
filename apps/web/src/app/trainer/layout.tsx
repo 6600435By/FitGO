@@ -17,6 +17,7 @@ import { PushBridge } from '@/components/push-bridge';
 import { StaffMessagesBadge } from '@/components/staff/staff-messages-badge';
 import { StaffTopNavLinks } from '@/components/staff/staff-top-nav';
 import { StaffTasksInbox } from '@/components/staff-tasks-inbox';
+import { TrainerShell } from '@/components/trainer-shell/trainer-shell';
 import { api, type AuthUser } from '@/lib/api';
 import { getToken, getUser, saveAuth } from '@/lib/auth';
 import {
@@ -40,7 +41,6 @@ function splitMobileNav(items: NavItem[]): {
   if (items.length <= MOBILE_PRIMARY_MAX) {
     return { primary: items, more: [] };
   }
-  // Prefer: home, main schedule, control, messages in the bar when present.
   const preferred = [
     '/trainer',
     '/trainer/gp-schedule',
@@ -66,10 +66,13 @@ function splitMobileNav(items: NavItem[]): {
 }
 
 export default function TrainerLayout({ children }: { children: ReactNode }) {
-  const { isEnabled } = useFeatures();
+  const { isEnabled, loading: featuresLoading } = useFeatures();
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(() => getUser());
+  const [onboarded, setOnboarded] = useState<boolean | null>(null);
+
+  const uiV2 = isEnabled('trainer_ui_v2');
 
   useEffect(() => {
     const token = getToken();
@@ -87,6 +90,31 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!uiV2 || featuresLoading) return;
+    const token = getToken();
+    if (!token) return;
+    let cancelled = false;
+    api
+      .staffProfileMine(token)
+      .then((p) => {
+        if (cancelled) return;
+        setOnboarded(Boolean(p.onboardedAt));
+      })
+      .catch(() => {
+        if (!cancelled) setOnboarded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [uiV2, featuresLoading]);
+
+  useEffect(() => {
+    if (!uiV2 || onboarded !== false) return;
+    if (pathname.startsWith('/trainer/welcome')) return;
+    router.replace('/trainer/welcome');
+  }, [uiV2, onboarded, pathname, router]);
 
   const cabinet = useMemo(() => trainerCabinetMode(user), [user]);
   const { groupCabinet, showGp, showPt, showPayroll } = cabinet;
@@ -130,7 +158,6 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
         { href: '/trainer/profile', label: 'Профиль' },
       );
     } else {
-      // PT-only / legacy (no flags): previous surface.
       items.push({ href: '/trainer', label: 'Обзор', exact: true });
       if (showGp) {
         items.push({
@@ -176,6 +203,14 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     () => splitMobileNav(allNavItems),
     [allNavItems],
   );
+
+  if (uiV2) {
+    return (
+      <AuthGuard allowedRoles={[UserRole.TRAINER]}>
+        <TrainerShell>{children}</TrainerShell>
+      </AuthGuard>
+    );
+  }
 
   if (groupCabinet) {
     return (

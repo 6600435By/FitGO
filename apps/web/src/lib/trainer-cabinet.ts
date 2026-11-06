@@ -20,8 +20,10 @@ export type TrainerCabinetMode = {
   showGp: boolean;
   /** Show PT calendar / timesheet / CRM. */
   showPt: boolean;
-  /** Payroll menu entry. */
+  /** Payroll menu entry (club salary). */
   showPayroll: boolean;
+  /** Personal ledger «Мои оплаты» for trainerClub. */
+  showOwnLedger: boolean;
   /** Messages like pure GP (no client chat). */
   groupOnlyMessaging: boolean;
 };
@@ -37,6 +39,7 @@ export function trainerCabinetMode(
   const showGp = groupCabinet || isLegacy;
   const showPt = hasPt || isLegacy;
   const showPayroll = isGp || isReformer || Boolean(flags?.trainerStaff);
+  const showOwnLedger = Boolean(flags?.trainerClub);
   const groupOnlyMessaging = groupCabinet && !hasPt;
 
   return {
@@ -48,8 +51,24 @@ export function trainerCabinetMode(
     showGp,
     showPt,
     showPayroll,
+    showOwnLedger,
     groupOnlyMessaging,
   };
+}
+
+/** Primary schedule href for Forma Coach dock (unified screen comes in stage 6). */
+export function trainerScheduleHref(mode: TrainerCabinetMode): string {
+  if (mode.showPt) return '/trainer/schedule';
+  return '/trainer/gp-schedule';
+}
+
+/** Dock «Клиенты» vs «Контроль» for pure GP. */
+export function trainerCrmOrControlHref(mode: TrainerCabinetMode): {
+  href: string;
+  label: string;
+} {
+  if (mode.showPt) return { href: '/trainer/clients', label: 'Клиенты' };
+  return { href: '/trainer/my-sessions', label: 'Контроль' };
 }
 
 /** PT-only routes hidden in the pure group cabinet (GP / reformers). */

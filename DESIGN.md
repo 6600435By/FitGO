@@ -12,19 +12,24 @@
 
 | Приложение | Кто | Характер |
 |---|---|---|
-| `apps/client-web` | клиент Forma (`lk.ffs.by`) | тёмный бренд Forma: графит + жёлтый `#FFD000`, Unbounded + Manrope, плавающий док |
-| `apps/web` | тренер, админ, суперадмин (`app.ffs.by`) | тёмная операционная оболочка FitGO teal, телефон `max-w-lg`, широкие столы админа на `md+` |
+| `apps/client-web` | клиент Forma (`lk.ffs.by`) | тёмный бренд Forma: графит + жёлтый `#FFD000`, Unbounded + Manrope, плавающий док; kit из `@fitgo/forma-ui` |
+| `apps/web` `/trainer` | тренер Forma Coach (`app.ffs.by`) | при флаге `trainer_ui_v2` — Forma (графит + `#FFD000`), `TrainerShell` (док / рейл / сайдбар), `.forma-theme`; иначе legacy FitGO teal |
+| `apps/web` `/admin`, `/super-admin` | админ, суперадмин | тёмная операционная оболочка FitGO teal, широкие столы на `md+` — **без** Forma |
 | `apps/specialist-web` | SPA-специалист | светлая и тёмная тема, узкая колонка `max-w-3xl`, нижний док |
 
 ## apps/client-web (Forma)
 
-Источник: `apps/client-web/src/app/globals.css`, `tailwind.config.ts`, `src/components/forma/`.
+Источник: `packages/forma-ui` (preset + kit), `apps/client-web/src/app/globals.css`, `tailwind.config.ts`. Реэкспорт в `src/components/forma/*`.
 
 Фон `#0B0B0C` (`ink`), поверхности `#141416` / `#1C1C1F`, линии `white/8%`. Акцент Forma `#FFD000` (`forma-500`); шкала `fitgo-*` в этом приложении алиасится на жёлтый, чтобы старые классы не ломали вид. Текст на акценте — чёрный (`ink`). Шрифты: `font-display` = Unbounded, `font-sans` = Manrope.
 
-Классы: `.card`, `.btn-primary`, `.btn-secondary`, `.btn-ghost`, `.input`, `.stat-value`, `.stat-label`, `.glass`. UI-kit: `src/components/forma/*` (Button, Sheet/vaul, SegmentedControl, Chip, DateStrip, Toast, SeatsMeter, OtpInput, …).
+Классы: `.card`, `.btn-primary`, `.btn-secondary`, `.btn-ghost`, `.input`, `.stat-value`, `.stat-label`, `.glass`. UI-kit: `@fitgo/forma-ui` (Button, Sheet/ResponsiveSheet, SegmentedControl, Chip, DateStrip, Toast, CommandSheet, …).
 
 Оболочка: `ClientShell` (`src/components/client/client-shell.tsx`) — шапка с вордмарком, док из 5 вкладок с центральным «Пропуском». Экран `/client/card` без шапки.
+
+### apps/web /trainer (Forma Coach)
+
+При `trainer_ui_v2`: обёртка `.forma-theme`, `TrainerShell` (`components/trainer-shell/`), PWA `trainer-manifest.json`, онбординг `/trainer/welcome`. Брейкпоинты: телефон &lt;768 док, 768–1279 рейл, ≥1280 сайдбар. Админка не затрагивается.
 
 Профиль: аватар + `ProgressRing`, iOS-группы ссылок (визиты / достижения / абонементы / реферал), push, горизонтальные `Chip`-вкладки анкеты, выход. Без выбора клуба — клиент Forma. Онбординг и PWA-tip — бренд Forma, без «Выберите клуб».
 

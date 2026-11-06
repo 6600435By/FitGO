@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@fitgo/forma-ui": "workspace:*",
     "@fitgo/shared-types": "workspace:*",
     "canvas-confetti": "^1.9.4",
     "clsx": "^2.1.1",

@@ -125,6 +125,8 @@ export interface AuthUser {
     name: string;
     slug: string;
     address?: string;
+    phone?: string;
+    website?: string;
   };
 }
 
@@ -144,6 +146,10 @@ export type StaffProfileDto = {
   photoThumbUrl: string | null;
   bioMax: number;
   hiddenByAdmin: boolean;
+  specializations?: string[];
+  experienceYears?: number | null;
+  certificates?: unknown;
+  onboardedAt?: string | null;
 };
 
 export interface RegisterResponse {
@@ -5244,6 +5250,22 @@ export const api = {
     request<StaffProfileDto>(
       '/me/staff-profile',
       { method: 'PATCH', body: JSON.stringify({ bio }) },
+      token,
+    ),
+
+  staffProfileUpdate: (
+    token: string,
+    body: {
+      bio?: string;
+      specializations?: string[];
+      experienceYears?: number | null;
+      certificates?: unknown;
+      onboardedAt?: string | null | true;
+    },
+  ) =>
+    request<StaffProfileDto>(
+      '/me/staff-profile',
+      { method: 'PATCH', body: JSON.stringify(body) },
       token,
     ),
 

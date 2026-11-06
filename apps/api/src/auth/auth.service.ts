@@ -58,6 +58,8 @@ export class AuthService {
       name: string;
       slug: string;
       address: string | null;
+      phone?: string | null;
+      website?: string | null;
     } | null;
   }) {
     const roles = user.roles.map((r) => ROLE_MAP[r.role]);
@@ -82,6 +84,8 @@ export class AuthService {
             name: user.club.name,
             slug: user.club.slug,
             address: user.club.address ?? undefined,
+            phone: user.club.phone ?? undefined,
+            website: user.club.website ?? undefined,
           }
         : undefined,
     };

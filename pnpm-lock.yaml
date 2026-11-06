@@ -120,6 +120,9 @@ importers:
 
   apps/client-web:
     dependencies:
+      '@fitgo/forma-ui':
+        specifier: workspace:*
+        version: link:../../packages/forma-ui
       '@fitgo/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
@@ -227,9 +230,15 @@ importers:
 
   apps/web:
     dependencies:
+      '@fitgo/forma-ui':
+        specifier: workspace:*
+        version: link:../../packages/forma-ui
       '@fitgo/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
+      canvas-confetti:
+        specifier: ^1.9.4
+        version: 1.9.4
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -242,6 +251,9 @@ importers:
       lucide-react:
         specifier: ^0.511.0
         version: 0.511.0(react@19.2.7)
+      motion:
+        specifier: ^14.9.0
+        version: 14.9.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       next:
         specifier: ^15.3.3
         version: 15.5.19(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -254,7 +266,13 @@ importers:
       react-dom:
         specifier: ^19.1.0
         version: 19.2.7(react@19.2.7)
+      vaul:
+        specifier: ^1.1.2
+        version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
     devDependencies:
+      '@types/canvas-confetti':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@types/jsbarcode':
         specifier: ^3.11.4
         version: 3.11.4
@@ -289,6 +307,40 @@ importers:
         specifier: workspace:*
         version: link:../shared-types
     devDependencies:
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  packages/forma-ui:
+    dependencies:
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      lucide-react:
+        specifier: ^0.511.0
+        version: 0.511.0(react@19.2.7)
+      motion:
+        specifier: ^14.0.0
+        version: 14.9.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      next:
+        specifier: ^15.0.0
+        version: 15.5.19(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.7(react@19.2.7)
+      vaul:
+        specifier: ^1.1.0
+        version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.1.6
+        version: 19.2.17
+      tailwindcss:
+        specifier: ^3.4.17
+        version: 3.4.19
       typescript:
         specifier: ^5.8.3
         version: 5.9.3

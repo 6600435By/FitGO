@@ -8,13 +8,16 @@ alwaysApply: false
 
 Функционал и настройки клуба важнее внешнего вида. При правке экрана сохраняй текущие классы и токены из `DESIGN.md`.
 
-**Исключение:** `apps/client-web` — идёт редизайн Forma (графит + жёлтый, `src/components/forma/`, `ClientShell`). Там собирай UI из Forma-токенов и kit, не откатывай к teal FitGO.
+**Исключения (Forma):**
 
-Не делай без явной просьбы (для `apps/web` и `apps/specialist-web`):
+- `apps/client-web` — Forma (графит + жёлтый, `@fitgo/forma-ui` / `ClientShell`).
+- `apps/web` `/trainer` при флаге `trainer_ui_v2` — Forma Coach (`TrainerShell`, `.forma-theme`, `@fitgo/forma-ui`). Не откатывай к teal FitGO.
+
+Не делай без явной просьбы (для `apps/web` `/admin`/`/super-admin` и `apps/specialist-web`):
 
 - смену палитры, шрифтов, радиусов, теней, плотности
-- перенос вида `apps/web` ↔ `apps/specialist-web` ↔ `apps/client-web`
+- перенос вида admin ↔ specialist ↔ client ↔ trainer
 - подстановку чужого DESIGN.md, 21st.dev, Kinetics или другого референса
 - «освежить» соседние экраны заодно с фиксом
 
-Новый кусок UI: в `apps/web` — `.card` / `.btn-primary` / `.input`; в `apps/specialist-web` — `.panel` / `.btn-primary` / `.field`; в `apps/client-web` — `forma/*` и Forma-токены. Если класса не хватает, повтори ближайший существующий в том же приложении.
+Новый кусок UI: в `apps/web` admin — `.card` / `.btn-primary` / `.input`; в `/trainer` v2 — Forma-kit; в `apps/specialist-web` — `.panel` / `.btn-primary` / `.field`; в `apps/client-web` — `@fitgo/forma-ui`. Если класса не хватает, повтори ближайший существующий в том же приложении.

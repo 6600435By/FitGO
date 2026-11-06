@@ -6,7 +6,7 @@ const apiProxyTarget =
   'http://127.0.0.1:3001';
 
 const nextConfig: NextConfig = {
-  transpilePackages: ['@fitgo/shared-types'],
+  transpilePackages: ['@fitgo/shared-types', '@fitgo/forma-ui'],
   // Nest refresh-from-1c can run ~2–3 min per week of class sessions.
   experimental: {
     proxyTimeout: 300_000,

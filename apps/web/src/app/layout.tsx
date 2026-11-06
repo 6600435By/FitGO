@@ -1,7 +1,22 @@
 import type { Metadata, Viewport } from 'next';
+import { Manrope, Unbounded } from 'next/font/google';
 import { ClubThemeProvider } from '@/components/club-theme-provider';
 import { FeaturesProvider } from '@/components/features-provider';
 import './globals.css';
+
+const formaDisplay = Unbounded({
+  subsets: ['latin', 'cyrillic'],
+  weight: ['500', '600', '700', '800'],
+  variable: '--font-forma-display',
+  display: 'swap',
+});
+
+const formaSans = Manrope({
+  subsets: ['latin', 'cyrillic'],
+  weight: ['400', '500', '600', '700', '800'],
+  variable: '--font-forma-sans',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'FITGO — Фитнес-клуб',
@@ -32,7 +47,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="ru">
+    <html lang="ru" className={`${formaDisplay.variable} ${formaSans.variable}`}>
       <body>
         <FeaturesProvider>
           <ClubThemeProvider>{children}</ClubThemeProvider>

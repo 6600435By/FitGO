@@ -789,6 +789,11 @@ model StaffProfile {
   bioUpdatedAt    DateTime?
   /// Admin can hide bio/photo from clients without deleting.
   hiddenByAdminAt DateTime?
+  /// Trainer onboarding (Forma Coach): specializations, experience, certificates.
+  specializations String[]  @default([])
+  experienceYears Int?
+  certificates    Json?
+  onboardedAt     DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

@@ -1,8 +1,11 @@
 import type { Config } from 'tailwindcss';
-import plugin from 'tailwindcss/plugin';
+import { formaThemeExtend, formaTailwindPlugin } from '@fitgo/forma-ui/preset';
 
 const config: Config = {
-  content: ['./src/**/*.{js,ts,jsx,tsx,mdx}'],
+  content: [
+    './src/**/*.{js,ts,jsx,tsx,mdx}',
+    '../../packages/forma-ui/src/**/*.{js,ts,jsx,tsx}',
+  ],
   theme: {
     extend: {
       colors: {
@@ -18,19 +21,20 @@ const config: Config = {
           800: '#115e4b',
           900: '#134e3f',
         },
+        // Forma tokens available under .forma-theme (trainer v2)
+        forma: formaThemeExtend.colors.forma,
+        ink: formaThemeExtend.colors.ink,
       },
+      fontFamily: formaThemeExtend.fontFamily,
+      borderRadius: formaThemeExtend.borderRadius,
+      boxShadow: formaThemeExtend.boxShadow,
+      backgroundImage: formaThemeExtend.backgroundImage,
+      keyframes: formaThemeExtend.keyframes,
+      animation: formaThemeExtend.animation,
+      screens: formaThemeExtend.screens,
     },
   },
-  plugins: [
-    plugin(({ addVariant }) => {
-      // Phone landscape is often ≥768px wide, so Tailwind `md:` treats it as
-      // desktop. Keep mobile chrome (bottom nav, phone-width rules) instead.
-      addVariant(
-        'phone-land',
-        '@media (orientation: landscape) and (max-height: 500px)',
-      );
-    }),
-  ],
+  plugins: [formaTailwindPlugin()],
 };
 
 export default config;

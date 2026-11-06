@@ -146,7 +146,8 @@ export type ProductModuleKey =
   | 'club_admin'
   | 'messaging'
   | 'engagement'
-  | 'wearables';
+  | 'wearables'
+  | 'trainer_ui_v2';
 
 export interface ProductModuleDefinition {
   key: ProductModuleKey;
@@ -283,6 +284,14 @@ export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
     description: 'Apple Health / Google Fit (пока stub)',
     defaultEnabled: false,
     surfaces: ['/client/wearables'],
+  },
+  {
+    key: 'trainer_ui_v2',
+    label: 'Forma Coach (новый кабинет тренера)',
+    description:
+      'Оболочка Forma, онбординг и новый UI /trainer. Откат на старый кабинет при выключении.',
+    defaultEnabled: false,
+    surfaces: ['/trainer'],
   },
 ];
 

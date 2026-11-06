@@ -5,27 +5,47 @@ import { clearViewMemory } from './view-memory';
 const TOKEN_KEY = 'fitgo_token';
 const USER_KEY = 'fitgo_user';
 
-export function saveAuth(token: string, user: AuthUser) {
+function storage(remember: boolean): Storage {
+  return remember ? localStorage : sessionStorage;
+}
+
+function readStorage(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(key) ?? sessionStorage.getItem(key);
+}
+
+export function saveAuth(
+  token: string,
+  user: AuthUser,
+  opts?: { remember?: boolean },
+) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  const remember = opts?.remember !== false;
+  // Drop the other store so only one session source remains.
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USER_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(USER_KEY);
+  const store = storage(remember);
+  store.setItem(TOKEN_KEY, token);
+  store.setItem(USER_KEY, JSON.stringify(user));
 }
 
 export function clearAuth() {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(USER_KEY);
   clearViewMemory();
 }
 
 export function getToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem(TOKEN_KEY);
+  return readStorage(TOKEN_KEY);
 }
 
 export function getUser(): AuthUser | null {
-  if (typeof window === 'undefined') return null;
-  const raw = localStorage.getItem(USER_KEY);
+  const raw = readStorage(USER_KEY);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as AuthUser;
@@ -40,7 +60,11 @@ export function patchStoredUser(patch: Partial<AuthUser>): AuthUser | null {
   const prev = getUser();
   if (!prev) return null;
   const next = { ...prev, ...patch };
-  localStorage.setItem(USER_KEY, JSON.stringify(next));
+  if (localStorage.getItem(TOKEN_KEY)) {
+    localStorage.setItem(USER_KEY, JSON.stringify(next));
+  } else if (sessionStorage.getItem(TOKEN_KEY)) {
+    sessionStorage.setItem(USER_KEY, JSON.stringify(next));
+  }
   return next;
 }
 

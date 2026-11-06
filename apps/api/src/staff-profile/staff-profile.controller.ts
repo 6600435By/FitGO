@@ -82,9 +82,16 @@ export class StaffProfileController {
   @Roles(UserRole.TRAINER, UserRole.SPECIALIST)
   updateMine(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { bio?: string },
+    @Body()
+    body: {
+      bio?: string;
+      specializations?: string[];
+      experienceYears?: number | null;
+      certificates?: unknown;
+      onboardedAt?: string | null | true;
+    },
   ) {
-    return this.profiles.updateBio(user.sub, body.bio ?? '');
+    return this.profiles.updateMine(user.sub, body ?? {});
   }
 
   /**
