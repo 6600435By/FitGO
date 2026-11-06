@@ -8,6 +8,7 @@ import {
 import {
   AdminTaskStatus,
   AvailabilityBlockStatus,
+  GroupClassBookingStatus,
   OnexClassKind,
   OnexClassMemberAttendance,
   OnexClassStatus,
@@ -25,6 +26,8 @@ import {
   SpaBookingStatus,
   SpaOneCLinkStatus,
   SpaPaymentType,
+  VisitSource,
+  VisitVerification,
 } from '@prisma/client';
 import { requireClubId } from '../auth/require-club-id';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
@@ -1938,8 +1941,58 @@ export class BookingControlService {
     }
 
     await this.syncBookingConfirmAfterExclude(clubId, key, clientId);
+    await this.cancelFitgoGroupBookingAfterExclude(
+      clubId,
+      session.externalId,
+      clientId,
+    );
 
     return this.detail(clubId, key);
+  }
+
+  /** Mirror admin exclude into FitGO GP booking + drop orphan PENDING visit. */
+  private async cancelFitgoGroupBookingAfterExclude(
+    clubId: string,
+    appointmentId: string,
+    clientExternalId: string,
+  ) {
+    const client = await this.prisma.user.findFirst({
+      where: { clubId, externalId: clientExternalId },
+      select: { id: true },
+    });
+    if (!client) return;
+
+    const booking = await this.prisma.groupClassBooking.findFirst({
+      where: {
+        clientId: client.id,
+        appointmentId,
+        status: {
+          in: [
+            GroupClassBookingStatus.CONFIRMED,
+            GroupClassBookingStatus.PENDING_1C,
+            GroupClassBookingStatus.COMPLETED,
+          ],
+        },
+      },
+      select: { id: true },
+    });
+    if (!booking) return;
+
+    await this.prisma.groupClassBooking.update({
+      where: { id: booking.id },
+      data: {
+        status: GroupClassBookingStatus.CANCELLED,
+        cancelledAt: new Date(),
+        usageStatus: 'CANCELLED',
+      },
+    });
+    await this.prisma.clubVisitEvent.deleteMany({
+      where: {
+        bookingId: booking.id,
+        verification: VisitVerification.PENDING,
+        source: VisitSource.BOOKING_GROUP,
+      },
+    });
   }
 
   /** Drop client from open BOOKING_CONFIRM task for this session (reformer queue). */

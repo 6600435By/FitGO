@@ -211,6 +211,82 @@ export class VisitSyncService {
     return event;
   }
 
+  /** Drop PENDING booking-sourced events when the booking was cancelled. */
+  async clearPendingEventsForBookings(bookingIds: string[]) {
+    const ids = [...new Set(bookingIds.filter(Boolean))];
+    if (!ids.length) return;
+    await this.prisma.clubVisitEvent.deleteMany({
+      where: {
+        bookingId: { in: ids },
+        verification: VisitVerification.PENDING,
+        source: {
+          in: [VisitSource.BOOKING_GROUP, VisitSource.BOOKING_PT],
+        },
+      },
+    });
+  }
+
+  /**
+   * Orphan PENDING rows remain after client/admin cancel (or 1C roster drop).
+   * Visits UI must not show them or offer self-confirm.
+   */
+  async dropPendingEventsForCancelledBookings(userId: string, clubId: string) {
+    const pending = await this.prisma.clubVisitEvent.findMany({
+      where: {
+        userId,
+        clubId,
+        verification: VisitVerification.PENDING,
+        source: {
+          in: [VisitSource.BOOKING_GROUP, VisitSource.BOOKING_PT],
+        },
+        bookingId: { not: null },
+      },
+      select: { id: true, bookingId: true, source: true },
+    });
+    if (!pending.length) return;
+
+    const groupIds = pending
+      .filter((p) => p.source === VisitSource.BOOKING_GROUP && p.bookingId)
+      .map((p) => p.bookingId!);
+    const ptIds = pending
+      .filter((p) => p.source === VisitSource.BOOKING_PT && p.bookingId)
+      .map((p) => p.bookingId!);
+
+    const [cancelledGroup, cancelledPt] = await Promise.all([
+      groupIds.length
+        ? this.prisma.groupClassBooking.findMany({
+            where: {
+              id: { in: groupIds },
+              status: GroupClassBookingStatus.CANCELLED,
+            },
+            select: { id: true },
+          })
+        : Promise.resolve([] as { id: string }[]),
+      ptIds.length
+        ? this.prisma.personalTrainingBooking.findMany({
+            where: {
+              id: { in: ptIds },
+              status: PersonalBookingStatus.CANCELLED,
+            },
+            select: { id: true },
+          })
+        : Promise.resolve([] as { id: string }[]),
+    ]);
+
+    const cancelled = new Set([
+      ...cancelledGroup.map((b) => b.id),
+      ...cancelledPt.map((b) => b.id),
+    ]);
+    const idsToDelete = pending
+      .filter((p) => p.bookingId && cancelled.has(p.bookingId))
+      .map((p) => p.id);
+    if (!idsToDelete.length) return;
+
+    await this.prisma.clubVisitEvent.deleteMany({
+      where: { id: { in: idsToDelete } },
+    });
+  }
+
   async recordTrainerConfirm(input: {
     userId: string;
     clubId: string;
@@ -339,6 +415,8 @@ export class VisitSyncService {
         }
       }
     }
+
+    await this.dropPendingEventsForCancelledBookings(userId, clubId);
 
     const now = new Date();
     const [groupBookings, personalBookings] = await Promise.all([

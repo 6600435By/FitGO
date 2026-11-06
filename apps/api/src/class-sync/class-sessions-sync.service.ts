@@ -10,6 +10,8 @@ import {
   OnexClassStatus,
   Role,
   TrustBand,
+  VisitSource,
+  VisitVerification,
 } from '@prisma/client';
 import type { FitgoClassSessionRow } from '@fitgo/1c-adapter';
 import {
@@ -21,6 +23,13 @@ import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { addMoscowDays, moscowDayKey } from '../club-sync/moscow-time';
+
+/** Open / finished GP bookings that should flip to CANCELLED when 1C drops the client. */
+const CANCELLABLE_GROUP_BOOKING_STATUSES: GroupClassBookingStatus[] = [
+  GroupClassBookingStatus.CONFIRMED,
+  GroupClassBookingStatus.PENDING_1C,
+  GroupClassBookingStatus.COMPLETED,
+];
 
 const RESOURCE_KEY = 'class_sessions';
 const PAGE_SIZE = 100;
@@ -507,29 +516,44 @@ export class ClassSessionsSyncService {
     ];
     if (!ids.length) return 0;
 
-    const result = await this.prisma.groupClassBooking.updateMany({
+    const toCancel = await this.prisma.groupClassBooking.findMany({
       where: {
         appointmentId: { in: ids },
-        status: {
-          in: [
-            GroupClassBookingStatus.CONFIRMED,
-            GroupClassBookingStatus.PENDING_1C,
-          ],
-        },
+        status: { in: CANCELLABLE_GROUP_BOOKING_STATUSES },
         client: { clubId },
       },
+      select: { id: true },
+    });
+    if (!toCancel.length) return 0;
+
+    const bookingIds = toCancel.map((b) => b.id);
+    const result = await this.prisma.groupClassBooking.updateMany({
+      where: { id: { in: bookingIds } },
       data: {
         status: GroupClassBookingStatus.CANCELLED,
         cancelledAt: new Date(),
         usageStatus: 'CANCELLED',
       },
     });
+    await this.clearPendingVisitEventsForBookings(bookingIds);
     if (result.count > 0) {
       this.logger.log(
         `Cancelled ${result.count} group booking(s) for vanished/cancelled appointment(s) club=${clubId}`,
       );
     }
     return result.count;
+  }
+
+  private async clearPendingVisitEventsForBookings(bookingIds: string[]) {
+    const ids = [...new Set(bookingIds.filter(Boolean))];
+    if (!ids.length) return;
+    await this.prisma.clubVisitEvent.deleteMany({
+      where: {
+        bookingId: { in: ids },
+        verification: VisitVerification.PENDING,
+        source: VisitSource.BOOKING_GROUP,
+      },
+    });
   }
 
   /**
@@ -644,12 +668,7 @@ export class ClassSessionsSyncService {
     const openBookings = await this.prisma.groupClassBooking.findMany({
       where: {
         appointmentId: session.externalId,
-        status: {
-          in: [
-            GroupClassBookingStatus.CONFIRMED,
-            GroupClassBookingStatus.PENDING_1C,
-          ],
-        },
+        status: { in: CANCELLABLE_GROUP_BOOKING_STATUSES },
         client: { clubId },
       },
       select: {
@@ -660,6 +679,7 @@ export class ClassSessionsSyncService {
     });
 
     const cancelledAt = new Date();
+    const cancelledBookingIds: string[] = [];
     for (const booking of openBookings) {
       const ext = booking.client.externalId?.trim().toLowerCase();
       if (!ext) continue;
@@ -674,6 +694,14 @@ export class ClassSessionsSyncService {
       ) {
         continue;
       }
+      // Past COMPLETED: only cancel on explicit 1C cancel, not mere roster absence
+      // (no-show / unmarked still deserve self-confirm / history).
+      if (
+        booking.status === GroupClassBookingStatus.COMPLETED &&
+        !explicitlyDropped
+      ) {
+        continue;
+      }
 
       await this.prisma.groupClassBooking.update({
         where: { id: booking.id },
@@ -683,7 +711,9 @@ export class ClassSessionsSyncService {
           usageStatus: 'CANCELLED',
         },
       });
+      cancelledBookingIds.push(booking.id);
     }
+    await this.clearPendingVisitEventsForBookings(cancelledBookingIds);
   }
 
   private async applyBookingPresence(
