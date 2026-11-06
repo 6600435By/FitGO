@@ -65,6 +65,7 @@ type StaffUser = {
   groupPrograms: boolean;
   trainerStaff: boolean;
   trainerClub: boolean;
+  trainerReformers: boolean;
   roles: { role: Role }[];
 };
 
@@ -349,10 +350,6 @@ export class StaffAnalyticsService {
           k.sessionsConducted > 0
             ? Math.round(k.ptSalesMinor / k.sessionsConducted)
             : null;
-        k.sessionsPerHour =
-          row.hours > 0
-            ? Math.round((k.sessionsConducted / row.hours) * 100) / 100
-            : null;
       }
       if (row.kpi.kind === 'GROUP_TRAINER') {
         const k = row.kpi;
@@ -453,6 +450,11 @@ export class StaffAnalyticsService {
                     ? (r.kpi.giftSharePct ?? null)
                     : null,
                 ),
+              ),
+              giftSessions: ptRows.reduce(
+                (a, r) =>
+                  a + (r.kpi.kind === 'PT_TRAINER' ? r.kpi.giftSessions : 0),
+                0,
               ),
               conversionPct: medianNullable(
                 ptRows.map((r) =>
@@ -944,9 +946,15 @@ export class StaffAnalyticsService {
     if (roleSet.has(Role.MANAGER)) out.push('MANAGER');
     if (roleSet.has(Role.ADMIN) && !roleSet.has(Role.MANAGER)) out.push('ADMIN');
     if (roleSet.has(Role.TRAINER)) {
-      if (s.groupPrograms) out.push('GROUP_TRAINER');
-      // PT: штат/клуб или тренер без флага ГП (чистый ПТ)
-      if (s.trainerStaff || s.trainerClub || !s.groupPrograms) {
+      // ГП: групповые программы + реформеры (групповой зал реформеров)
+      if (s.groupPrograms || s.trainerReformers) out.push('GROUP_TRAINER');
+      // PT: штат/клуб/реформер или тренер без флага ГП (чистый ПТ)
+      if (
+        s.trainerStaff ||
+        s.trainerClub ||
+        s.trainerReformers ||
+        !s.groupPrograms
+      ) {
         out.push('PT_TRAINER');
       }
     }
@@ -984,6 +992,7 @@ export class StaffAnalyticsService {
         groupPrograms: true,
         trainerStaff: true,
         trainerClub: true,
+        trainerReformers: true,
         roles: { select: { role: true } },
       },
     });
@@ -1383,7 +1392,8 @@ export class StaffAnalyticsService {
   ) {
     const trainers = staff.filter(
       (s) =>
-        s.roles.some((r) => r.role === Role.TRAINER) && s.groupPrograms,
+        s.roles.some((r) => r.role === Role.TRAINER) &&
+        (s.groupPrograms || s.trainerReformers),
     );
     const byExternal = new Map<string, string>();
     for (const t of trainers) {
@@ -1615,12 +1625,15 @@ export class StaffAnalyticsService {
     const trainers = staff.filter(
       (s) =>
         s.roles.some((r) => r.role === Role.TRAINER) &&
-        (s.trainerStaff || s.trainerClub || !s.groupPrograms),
+        (s.trainerStaff ||
+          s.trainerClub ||
+          s.trainerReformers ||
+          !s.groupPrograms),
     );
     const ptTrainers = staff.filter(
       (s) =>
         s.roles.some((r) => r.role === Role.TRAINER) &&
-        (s.trainerStaff || s.trainerClub),
+        (s.trainerStaff || s.trainerClub || s.trainerReformers),
     );
     const all = new Map<string, StaffUser>();
     for (const t of [...trainers, ...ptTrainers]) all.set(t.id, t);
@@ -1737,11 +1750,13 @@ export class StaffAnalyticsService {
       paymentStatus: r.paymentStatus ?? null,
     }));
 
+    type PtPayBucket = 'PAID' | 'GIFT' | 'DEBT';
     type PtEvt = {
       trainerId: string;
       clientKey: string;
+      clientName: string;
       startAt: Date;
-      isGift: boolean;
+      bucket: PtPayBucket;
       externalId: string;
     };
     const events: PtEvt[] = [];
@@ -1758,6 +1773,26 @@ export class StaffAnalyticsService {
       if (!name) return;
       const day = startAt.toISOString().slice(0, 10);
       coveredDayClient.add(`${trainerId}|${day}|${name}`);
+    };
+
+    const displayName = (
+      raw: string | null | undefined,
+      fallbackKey: string,
+    ) => {
+      const n = raw?.trim();
+      if (n) return n;
+      if (fallbackKey.startsWith('name:')) return fallbackKey.slice(5);
+      return '—';
+    };
+
+    const saleBucket = (
+      serviceName: string | null | undefined,
+      paymentStatus: string | null | undefined,
+    ): PtPayBucket => {
+      if (isComplimentarySessionTitle(serviceName)) return 'GIFT';
+      const st = (paymentStatus ?? '').toUpperCase();
+      if (st === 'DEBT' || st === 'UNPAID') return 'DEBT';
+      return 'PAID';
     };
 
     for (const s of onexPt) {
@@ -1781,11 +1816,17 @@ export class StaffAnalyticsService {
         payment === 'GIFT' ||
         isComplimentarySessionTitle(s.title) ||
         isComplimentarySessionTitle(primary?.paymentBasis);
+      const bucket: PtPayBucket = isGift
+        ? 'GIFT'
+        : payment === 'DEBT'
+          ? 'DEBT'
+          : 'PAID';
       events.push({
         trainerId: uid,
         clientKey,
+        clientName: displayName(primary?.clientName, clientKey),
         startAt: s.startAt,
-        isGift,
+        bucket,
         externalId: s.externalId,
       });
       coveredCrm.add(s.externalId);
@@ -1800,8 +1841,9 @@ export class StaffAnalyticsService {
       events.push({
         trainerId: b.trainerId,
         clientKey: b.clientId,
+        clientName: displayName(null, b.clientId),
         startAt: b.startAt,
-        isGift: b.isComplimentary,
+        bucket: b.isComplimentary ? 'GIFT' : 'PAID',
         externalId: ref || `fitgo:${b.trainerId}:${b.startAt.toISOString()}`,
       });
       if (ref) coveredCrm.add(ref);
@@ -1839,8 +1881,9 @@ export class StaffAnalyticsService {
       events.push({
         trainerId: uid,
         clientKey,
+        clientName: displayName(s.clientName, clientKey),
         startAt: s.occurredAt,
-        isGift: isComplimentarySessionTitle(s.serviceName),
+        bucket: saleBucket(s.serviceName, s.paymentStatus),
         externalId: unitId,
       });
       if (clientName) coveredDayClient.add(`${uid}|${day}|${clientName}`);
@@ -1879,9 +1922,89 @@ export class StaffAnalyticsService {
       const inPeriod = mine.filter(
         (e) => e.startAt >= start && e.startAt <= end,
       );
-      const gift = inPeriod.filter((e) => e.isGift).length;
+      const gift = inPeriod.filter((e) => e.bucket === 'GIFT').length;
       const paid = inPeriod.length - gift;
       const uniqueClients = new Set(inPeriod.map((e) => e.clientKey)).size;
+
+      type ClientAcc = {
+        clientKey: string;
+        name: string;
+        sessions: number;
+        paid: number;
+        gift: number;
+        debt: number;
+        salesMinor: number;
+      };
+      const byClient = new Map<string, ClientAcc>();
+      for (const e of inPeriod) {
+        const cur = byClient.get(e.clientKey) ?? {
+          clientKey: e.clientKey,
+          name: e.clientName,
+          sessions: 0,
+          paid: 0,
+          gift: 0,
+          debt: 0,
+          salesMinor: 0,
+        };
+        cur.sessions++;
+        if (e.bucket === 'GIFT') cur.gift++;
+        else if (e.bucket === 'DEBT') cur.debt++;
+        else cur.paid++;
+        if (e.clientName && e.clientName !== '—' && cur.name === '—') {
+          cur.name = e.clientName;
+        }
+        byClient.set(e.clientKey, cur);
+      }
+      for (const s of sales) {
+        if (s.occurredAt < start || s.occurredAt > end) continue;
+        if (isExcludedFromPtBookingControl(s.serviceName)) continue;
+        if (isMultiVisitPackSale(s.serviceName)) continue;
+        if (isPtAllSportsSession({ serviceName: s.serviceName })) continue;
+        const byCode =
+          s.employeeCode &&
+          codes.some((c) => codesMatch(c, s.employeeCode));
+        const byName =
+          Boolean(s.employeeName) &&
+          nameAliases.some((n) => namesMatch(n, s.employeeName));
+        if (!byCode && !byName) continue;
+        const nameLower = s.clientName?.trim().toLowerCase() || '';
+        const clientKey = nameLower
+          ? `name:${nameLower}`
+          : `sale:${(s.docRef || s.externalId || s.occurredAt.toISOString()).trim().toLowerCase()}`;
+        // Prefer matching an existing clientKey from sessions (externalId).
+        let acc = byClient.get(clientKey);
+        if (!acc && nameLower) {
+          for (const [key, row] of byClient) {
+            if (row.name.trim().toLowerCase() === nameLower) {
+              acc = row;
+              break;
+            }
+            if (key === clientKey) {
+              acc = row;
+              break;
+            }
+          }
+        }
+        if (!acc) {
+          acc = {
+            clientKey,
+            name: displayName(s.clientName, clientKey),
+            sessions: 0,
+            paid: 0,
+            gift: 0,
+            debt: 0,
+            salesMinor: 0,
+          };
+          byClient.set(clientKey, acc);
+        }
+        acc.salesMinor += Math.round((Number(s.amount) || 0) * 100);
+      }
+      const clients = [...byClient.values()].sort(
+        (a, b) =>
+          b.sessions - a.sessions ||
+          b.salesMinor - a.salesMinor ||
+          a.name.localeCompare(b.name, 'ru'),
+      );
 
       const newClientIds: string[] = [];
       for (const [key, first] of firstByPair) {
@@ -1901,7 +2024,7 @@ export class StaffAnalyticsService {
             e.clientKey === clientId &&
             e.startAt >= first &&
             e.startAt <= windowEnd &&
-            !e.isGift,
+            e.bucket !== 'GIFT',
         );
         if (hasPaid) converted++;
       }
@@ -1957,6 +2080,7 @@ export class StaffAnalyticsService {
         retentionCohortTo: cohortClients.length ? cohortTo : null,
         activeClients30d,
         ptSalesMinor,
+        clients,
       });
     }
     return map;

@@ -377,6 +377,19 @@ export interface GroupTrainerStaffKpi {
   kpPct: number | null;
 }
 
+/** Per-client PT breakdown under a trainer row (expand). */
+export interface PtTrainerClientKpi {
+  clientKey: string;
+  name: string;
+  /** Completed PT units in the period (sessions + one-shot sales). */
+  sessions: number;
+  paid: number;
+  gift: number;
+  debt: number;
+  /** Sum of PT sale lines for this client in the period (minor). */
+  salesMinor: number;
+}
+
 export interface PtTrainerStaffKpi {
   kind: 'PT_TRAINER';
   sessionsConducted: number;
@@ -396,7 +409,7 @@ export interface PtTrainerStaffKpi {
   ptSalesMinor: number;
   /** Sales per completed session. */
   salesPerSessionMinor?: number | null;
-  /** Sessions per worked hour (shifts / day sheets). */
+  /** @deprecated Not shown — kept optional for older clients. */
   sessionsPerHour?: number | null;
   /**
    * Gift clients in period who later had PAID/QUOTA PT or a training sale
@@ -418,6 +431,8 @@ export interface PtTrainerStaffKpi {
   reformerGroupSessions?: number;
   /** Completed personal reformer PT (title match). */
   reformerPersonalSessions?: number;
+  /** Clients of this trainer in the period (sorted by sessions desc). */
+  clients?: PtTrainerClientKpi[];
 }
 
 export interface SpaStaffKpi {
@@ -528,6 +543,8 @@ export interface StaffAnalyticsReport {
     pt?: {
       sessionsConducted: number;
       giftSharePct: number | null;
+      /** Sum of gift PT across trainers in the filter. */
+      giftSessions?: number;
       conversionPct: number | null;
       uniqueClients: number;
     };

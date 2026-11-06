@@ -245,8 +245,11 @@ function kpiCells(
         <td className="px-2 py-2 text-right">
           <CountCell value={k.sessionsConducted} href={controlHref('PT')} />
         </td>
-        <td className="px-2 py-2 text-right">
-          {k.giftSharePct != null ? `${k.giftSharePct}%` : '—'}
+        <td
+          className="px-2 py-2 text-right"
+          title="Подарочные занятия за период"
+        >
+          {k.giftSessions}
         </td>
         <td
           className="px-2 py-2 text-right"
@@ -288,9 +291,6 @@ function kpiCells(
           }
         >
           {k.ladder != null ? `${k.ladder.percent}%` : '—'}
-        </td>
-        <td className="px-2 py-2 text-right">
-          {k.sessionsPerHour != null ? k.sessionsPerHour : '—'}
         </td>
       </>
     );
@@ -395,7 +395,7 @@ function kpiHeaders(dept: AnalyticsDepartment) {
   if (dept === 'PT_TRAINER') {
     return [
       'ПТ',
-      'Подар %',
+      'Подар',
       'Уник.',
       'Новые',
       'Конв.',
@@ -403,7 +403,6 @@ function kpiHeaders(dept: AnalyticsDepartment) {
       'Активн.',
       'Продажи',
       '%',
-      'ПТ/час',
     ];
   }
   if (dept === 'SPECIALIST') {
@@ -518,7 +517,7 @@ export function StaffAnalyticsTable({
                 <p className="text-slate-400">
                   {summary.pt.sessionsConducted} ПТ · конв.{' '}
                   {summary.pt.conversionPct ?? 'н/д'}% · подар.{' '}
-                  {summary.pt.giftSharePct ?? 'н/д'}%
+                  {summary.pt.giftSessions ?? 'н/д'}
                 </p>
               </div>
             )}
@@ -835,6 +834,39 @@ function DetailRow({ row, currency }: { row: StaffKpiRow; currency: string }) {
             ? ` Реформер: группы ${k.reformerGroupSessions ?? 0}, инд. ${k.reformerPersonalSessions ?? 0}.`
             : ''}
         </p>
+      )}
+      {k.kind === 'PT_TRAINER' && (k.clients?.length ?? 0) > 0 && (
+        <div className="overflow-x-auto">
+          <p className="mb-1 text-xs font-medium text-slate-400">
+            Клиенты тренера
+          </p>
+          <table className="w-full min-w-[520px] text-left text-xs">
+            <thead className="text-slate-500">
+              <tr>
+                <th className="py-1 pr-2">Клиент</th>
+                <th className="px-2 py-1 text-right">Занятия</th>
+                <th className="px-2 py-1 text-right">Оплачено</th>
+                <th className="px-2 py-1 text-right">Подарок</th>
+                <th className="px-2 py-1 text-right">Долг</th>
+                <th className="px-2 py-1 text-right">Продажи</th>
+              </tr>
+            </thead>
+            <tbody>
+              {k.clients!.map((c) => (
+                <tr key={c.clientKey} className="border-t border-slate-700/60">
+                  <td className="py-1 pr-2">{c.name}</td>
+                  <td className="px-2 py-1 text-right">{c.sessions}</td>
+                  <td className="px-2 py-1 text-right">{c.paid}</td>
+                  <td className="px-2 py-1 text-right">{c.gift}</td>
+                  <td className="px-2 py-1 text-right">{c.debt}</td>
+                  <td className="px-2 py-1 text-right">
+                    {money(c.salesMinor, currency)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {k.kind === 'SPECIALIST' && (
         <p>
