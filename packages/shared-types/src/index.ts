@@ -865,6 +865,8 @@ export interface TrainerCalendarEvent {
   bookingId?: string;
   seriesId?: string;
   origin?: PersonalBookingOrigin;
+  /** PERSONAL = «Тренер клуб» ledger; CLUB = staff / 1C control. */
+  ptFlow?: 'CLUB' | 'PERSONAL';
   /** PT: CRM link / phone issue on the booking. */
   clientIssue?: import('./pt-timesheet').PtClientIssue;
   /** When trainer_pt_control: control / document status for FitGO PT. */
@@ -1233,6 +1235,7 @@ export * from './workout-sheet-templates';
 export * from './homework-templates';
 export * from './block-session';
 export * from './trainer-ledger';
+export * from './trainer-personal-goals';
 export * from './trainer-insights';
 
 export interface StaffMember {

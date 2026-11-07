@@ -135,8 +135,27 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     }
     if (!showTimesheet && isTrainerStaffTimesheetPath(pathname)) {
       router.replace('/trainer');
+      return;
     }
-  }, [user, groupCabinet, showPt, showTimesheet, pathname, router]);
+    // Pure «Тренер клуб»: no booking-control surface.
+    if (
+      !showPtControl &&
+      !showGp &&
+      (pathname === '/trainer/my-sessions' ||
+        pathname.startsWith('/trainer/my-sessions/'))
+    ) {
+      router.replace('/trainer');
+    }
+  }, [
+    user,
+    groupCabinet,
+    showPt,
+    showGp,
+    showTimesheet,
+    showPtControl,
+    pathname,
+    router,
+  ]);
 
   const allNavItems = useMemo(() => {
     const items: NavItem[] = [];

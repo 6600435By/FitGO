@@ -135,8 +135,23 @@ function formatShort(sec: number): string {
   return `${sec} с`;
 }
 
+/** Basic timer modes shown in Forma live session. */
+export const BASIC_PRESET_IDS = ['stopwatch', 'rest', 'intervals'] as const;
+export type BasicPresetId = (typeof BASIC_PRESET_IDS)[number];
+
+export function isBasicPresetId(id: string): id is BasicPresetId {
+  return (BASIC_PRESET_IDS as readonly string[]).includes(id);
+}
+
+export const DEFAULT_INTERVAL_PARAMS: IntervalPresetParams = {
+  workSec: 40,
+  restSec: 20,
+  rounds: 8,
+  prepSec: 3,
+};
+
 export const BUILTIN_PRESET_CARDS: Array<{
-  id: PresetBuildInput['id'];
+  id: BasicPresetId;
   title: string;
   subtitle: string;
   defaultInput: PresetBuildInput;
@@ -148,10 +163,10 @@ export const BUILTIN_PRESET_CARDS: Array<{
     defaultInput: { id: 'stopwatch' },
   },
   {
-    id: 'countdown',
-    title: 'Отсчёт',
-    subtitle: '5 минут',
-    defaultInput: { id: 'countdown', params: { durationSec: 300 } },
+    id: 'rest',
+    title: 'Отдых',
+    subtitle: '60 секунд',
+    defaultInput: { id: 'rest', params: { durationSec: 60 } },
   },
   {
     id: 'intervals',
@@ -159,48 +174,7 @@ export const BUILTIN_PRESET_CARDS: Array<{
     subtitle: '40/20 × 8',
     defaultInput: {
       id: 'intervals',
-      params: { workSec: 40, restSec: 20, rounds: 8, prepSec: 3 },
-    },
-  },
-  {
-    id: 'tabata',
-    title: 'Tabata',
-    subtitle: '20/10 × 8',
-    defaultInput: { id: 'tabata' },
-  },
-  {
-    id: 'emom',
-    title: 'EMOM',
-    subtitle: '10 минут',
-    defaultInput: { id: 'emom', params: { minutes: 10, prepSec: 3 } },
-  },
-  {
-    id: 'amrap',
-    title: 'AMRAP',
-    subtitle: '12 минут',
-    defaultInput: { id: 'amrap', params: { totalSec: 12 * 60, prepSec: 3 } },
-  },
-  {
-    id: 'rest',
-    title: 'Отдых',
-    subtitle: '60 секунд',
-    defaultInput: { id: 'rest', params: { durationSec: 60 } },
-  },
-  {
-    id: 'custom',
-    title: 'Своя цепочка',
-    subtitle: 'Несколько сегментов',
-    defaultInput: {
-      id: 'custom',
-      params: {
-        name: 'Своя цепочка',
-        phases: [
-          { kind: 'prep', durationSec: 3, label: 'Приготовьтесь' },
-          { kind: 'work', durationSec: 45, label: 'Работа' },
-          { kind: 'rest', durationSec: 15, label: 'Отдых' },
-          { kind: 'work', durationSec: 45, label: 'Работа' },
-        ],
-      },
+      params: { ...DEFAULT_INTERVAL_PARAMS },
     },
   },
 ];

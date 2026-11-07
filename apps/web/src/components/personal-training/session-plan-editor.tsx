@@ -17,6 +17,7 @@ import {
 import { SegmentedControl } from '@fitgo/forma-ui';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { useFeatures } from '@/components/features-provider';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import {
@@ -47,6 +48,8 @@ export function SessionPlanEditor({
   backLabel,
   viewerRole,
 }: SessionPlanEditorProps) {
+  const { isEnabled } = useFeatures();
+  const formaLive = isEnabled('trainer_ui_v2');
   const [session, setSession] = useState<PersonalTrainingSessionDetail | null>(
     null,
   );
@@ -376,6 +379,7 @@ export function SessionPlanEditor({
             clientRestingHr={session.clientRestingHr}
             canEdit={session.canEdit}
             isTrainer={isTrainer}
+            hideLegacyTimer={formaLive}
             onChange={(sheet) => {
               setDraftWorkoutSheet(sheet);
               if (isTrainer) setEditing(true);

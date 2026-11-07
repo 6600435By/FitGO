@@ -7,46 +7,52 @@ import {
   normalizeWorkoutSheet,
 } from '@fitgo/shared-types';
 import { NotebookPen, Flag } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react';
 import { SessionFinishSummary } from '@/components/personal-training/session-finish-summary';
 import { SessionNotesSheet } from '@/components/personal-training/session-notes-sheet';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import {
-  buildCircuitTimer,
-  CIRCUIT_SHEET_PRESET_ID,
-  type BuiltPreset,
-  type CircuitPhaseBinding,
-  type TimerEvent,
-  type TimerPersistedState,
-} from '@/lib/training-timer';
-import { applyCircuitTimerEvents } from './apply-circuit-timer-fact';
-
-export type LiveTimerFactHandler = (
-  events: TimerEvent[],
-  state: TimerPersistedState,
-) => void;
 
 export function LivePtSessionChrome({
   bookingId,
   clientId,
   elapsedMs,
-  applyPreset,
-  factHandlerRef,
+  sheet,
+  setSheet,
   onFinished,
+  hideActionButtons = false,
+  notesOpen: notesOpenProp,
+  onNotesOpenChange,
+  finishOpen: finishOpenProp,
+  onFinishOpenChange,
 }: {
   bookingId: string;
   clientId?: string;
   elapsedMs: number;
-  /** Seed / switch live timer from the sheet circuit. */
-  applyPreset?: (preset: BuiltPreset) => void;
-  /** Parent timer commits phase_end here so we write fact into the sheet. */
-  factHandlerRef?: MutableRefObject<LiveTimerFactHandler | null>;
+  sheet: WorkoutSheet;
+  setSheet: Dispatch<SetStateAction<WorkoutSheet>>;
   onFinished?: () => void;
+  /** When parent renders its own footer buttons. */
+  hideActionButtons?: boolean;
+  notesOpen?: boolean;
+  onNotesOpenChange?: (open: boolean) => void;
+  finishOpen?: boolean;
+  onFinishOpenChange?: (open: boolean) => void;
 }) {
-  const [notesOpen, setNotesOpen] = useState(false);
-  const [finishOpen, setFinishOpen] = useState(false);
-  const [sheet, setSheet] = useState<WorkoutSheet>(createEmptyWorkoutSheet());
+  const [notesOpenLocal, setNotesOpenLocal] = useState(false);
+  const [finishOpenLocal, setFinishOpenLocal] = useState(false);
+  const notesOpen = notesOpenProp ?? notesOpenLocal;
+  const setNotesOpen = onNotesOpenChange ?? setNotesOpenLocal;
+  const finishOpen = finishOpenProp ?? finishOpenLocal;
+  const setFinishOpen = onFinishOpenChange ?? setFinishOpenLocal;
+
   const [homeworkDraft, setHomeworkDraft] = useState('');
   const [homeworkItems, setHomeworkItems] = useState<
     Array<{
@@ -63,35 +69,41 @@ export function LivePtSessionChrome({
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const [goals, setGoals] = useState<Array<{ title: string }>>([]);
-  const bindingsRef = useRef<CircuitPhaseBinding[]>([]);
-  const sheetRef = useRef(sheet);
-  sheetRef.current = sheet;
-  const seededCircuitRef = useRef(false);
-  const saveTimerRef = useRef<number | null>(null);
 
-  const reload = useCallback(async () => {
+  useEffect(() => {
     const token = getToken();
     if (!token) return;
-    const detail = await api.personalSessionDetail(token, bookingId);
-    setSheet(normalizeWorkoutSheet(detail.workoutSheet));
-    setGoals(detail.goals.map((g) => ({ title: g.title })));
+    let cancelled = false;
+    api
+      .personalSessionDetail(token, bookingId)
+      .then((detail) => {
+        if (cancelled) return;
+        setGoals(detail.goals.map((g) => ({ title: g.title })));
+      })
+      .catch(() => undefined);
     if (clientId) {
-      try {
-        const list = await api.trainerClientHomework(token, clientId);
-        const active = list.find((h) => h.status === 'ACTIVE');
-        setActiveHomeworkProgress(
-          active
-            ? {
-                done: active.progress.done,
-                total: active.progress.total,
-                summary: active.summary,
-              }
-            : null,
-        );
-      } catch {
-        setActiveHomeworkProgress(null);
-      }
+      api
+        .trainerClientHomework(token, clientId)
+        .then((list) => {
+          if (cancelled) return;
+          const active = list.find((h) => h.status === 'ACTIVE');
+          setActiveHomeworkProgress(
+            active
+              ? {
+                  done: active.progress.done,
+                  total: active.progress.total,
+                  summary: active.summary,
+                }
+              : null,
+          );
+        })
+        .catch(() => {
+          if (!cancelled) setActiveHomeworkProgress(null);
+        });
     }
+    return () => {
+      cancelled = true;
+    };
   }, [bookingId, clientId]);
 
   const homeworkPayload = () => {
@@ -129,63 +141,6 @@ export function LivePtSessionChrome({
       })),
     );
   };
-
-  useEffect(() => {
-    reload().catch(() => undefined);
-  }, [reload]);
-
-  useEffect(() => {
-    const circuit = sheet.circuit;
-    if (!circuit?.stations?.length) return;
-    const built = buildCircuitTimer(circuit);
-    if (built.phases.length === 0) return;
-    bindingsRef.current = built.bindings;
-    if (!applyPreset || seededCircuitRef.current) return;
-    seededCircuitRef.current = true;
-    applyPreset(built.preset);
-  }, [sheet.circuit, applyPreset]);
-
-  const persistSheet = useCallback(
-    async (next: WorkoutSheet) => {
-      const token = getToken();
-      if (!token) return;
-      await api.personalSessionUpdatePlan(token, bookingId, {
-        goals: goals.filter((g) => g.title.trim()),
-        workoutSheet: next,
-      });
-    },
-    [bookingId, goals],
-  );
-
-  const handleTimerEvents = useCallback(
-    (events: TimerEvent[], state: TimerPersistedState) => {
-      if (state.presetId !== CIRCUIT_SHEET_PRESET_ID) return;
-      if (!events.some((e) => e.kind === 'phase_end' || e.kind === 'complete')) {
-        return;
-      }
-      const next = applyCircuitTimerEvents(
-        sheetRef.current,
-        events,
-        state,
-        bindingsRef.current,
-      );
-      if (next === sheetRef.current) return;
-      setSheet(next);
-      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = window.setTimeout(() => {
-        persistSheet(next).catch(() => undefined);
-      }, 400);
-    },
-    [persistSheet],
-  );
-
-  useEffect(() => {
-    if (!factHandlerRef) return;
-    factHandlerRef.current = handleTimerEvents;
-    return () => {
-      factHandlerRef.current = null;
-    };
-  }, [factHandlerRef, handleTimerEvents]);
 
   const saveNotes = async () => {
     const token = getToken();
@@ -241,24 +196,26 @@ export function LivePtSessionChrome({
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-center gap-2 px-4 pb-2">
-        <button
-          type="button"
-          onClick={() => setNotesOpen(true)}
-          className="inline-flex items-center gap-1.5 rounded-2xl border border-white/10 px-3 py-2 text-sm text-zinc-200"
-        >
-          <NotebookPen className="h-4 w-4 text-forma-400" />
-          Заметка
-        </button>
-        <button
-          type="button"
-          onClick={() => setFinishOpen(true)}
-          className="inline-flex items-center gap-1.5 rounded-2xl bg-forma-500 px-3 py-2 text-sm font-semibold text-ink"
-        >
-          <Flag className="h-4 w-4" />
-          Завершить
-        </button>
-      </div>
+      {!hideActionButtons ? (
+        <div className="flex flex-wrap items-center justify-center gap-2 px-4 pb-2">
+          <button
+            type="button"
+            onClick={() => setNotesOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-2xl border border-white/10 px-3 py-2 text-sm text-zinc-200"
+          >
+            <NotebookPen className="h-4 w-4 text-forma-400" />
+            Заметка
+          </button>
+          <button
+            type="button"
+            onClick={() => setFinishOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-2xl bg-forma-500 px-3 py-2 text-sm font-semibold text-ink"
+          >
+            <Flag className="h-4 w-4" />
+            Завершить
+          </button>
+        </div>
+      ) : null}
 
       <SessionNotesSheet
         open={notesOpen}
@@ -293,4 +250,64 @@ export function LivePtSessionChrome({
       />
     </>
   );
+}
+
+/** Load + debounce-save helper used by LiveTimerScreen for PT sheet. */
+export function useLivePtSheet(bookingId: string | undefined) {
+  const [sheet, setSheet] = useState<WorkoutSheet>(createEmptyWorkoutSheet());
+  const [loaded, setLoaded] = useState(false);
+  const saveTimerRef = useRef<number | null>(null);
+  const goalsRef = useRef<Array<{ title: string }>>([]);
+
+  useEffect(() => {
+    if (!bookingId) return;
+    let cancelled = false;
+    const token = getToken();
+    if (!token) return;
+    api
+      .personalSessionDetail(token, bookingId)
+      .then((detail) => {
+        if (cancelled) return;
+        setSheet(normalizeWorkoutSheet(detail.workoutSheet));
+        goalsRef.current = detail.goals.map((g) => ({ title: g.title }));
+        setLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bookingId]);
+
+  const persistSoon = useCallback(
+    (next: WorkoutSheet) => {
+      if (!bookingId) return;
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = window.setTimeout(() => {
+        const token = getToken();
+        if (!token) return;
+        api
+          .personalSessionUpdatePlan(token, bookingId, {
+            goals: goalsRef.current.filter((g) => g.title.trim()),
+            workoutSheet: next,
+          })
+          .catch(() => undefined);
+      }, 400);
+    },
+    [bookingId],
+  );
+
+  const updateSheet = useCallback(
+    (next: SetStateAction<WorkoutSheet>) => {
+      setSheet((prev) => {
+        const resolved = typeof next === 'function' ? next(prev) : next;
+        persistSoon(resolved);
+        return resolved;
+      });
+    },
+    [persistSoon],
+  );
+
+  return { sheet, setSheet: updateSheet, loaded, goalsRef };
 }

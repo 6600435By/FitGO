@@ -19,6 +19,12 @@ export function BookingActionSheet({
 }) {
   const me = getUser();
   const isPersonal = Boolean(me?.trainerClub);
+  const canHardDelete =
+    Boolean(me?.trainerClub) &&
+    event.kind === 'PERSONAL' &&
+    Boolean(event.bookingId) &&
+    (event.ptFlow === 'PERSONAL' ||
+      (!event.ptFlow && Boolean(me?.trainerClub) && !me?.trainerStaff));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [reason, setReason] = useState('');
@@ -51,7 +57,7 @@ export function BookingActionSheet({
   return (
     <ResponsiveSheet open onOpenChange={(o) => !o && onClose()} title={event.title}>
       <div className="space-y-4 pb-2">
-        {event.ptControlLabel ? (
+        {event.ptControlLabel && event.ptFlow !== 'PERSONAL' ? (
           <p className="text-sm text-zinc-400">{event.ptControlLabel}</p>
         ) : null}
         {event.clientIssue && event.clientIssue !== 'NONE' ? (
@@ -234,6 +240,41 @@ export function BookingActionSheet({
             </Button>
           </div>
         </div>
+
+        {canHardDelete ? (
+          <div className="space-y-2 border-t border-white/10 pt-4">
+            <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+              Удаление
+            </p>
+            <p className="text-xs text-zinc-500">
+              Запись исчезнет без следа. Если занятие уже списано с пакета —
+              занятие вернётся клиенту.
+            </p>
+            <Button
+              type="button"
+              variant="secondary"
+              className="w-full border-red-500/40 text-red-300"
+              disabled={busy}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    'Удалить запись полностью? Это нельзя отменить.',
+                  )
+                ) {
+                  return;
+                }
+                run(() =>
+                  api.trainerDeletePersonalBooking(
+                    getToken()!,
+                    event.bookingId!,
+                  ),
+                );
+              }}
+            >
+              Удалить запись
+            </Button>
+          </div>
+        ) : null}
 
         {error ? <p className="text-sm text-red-400">{error}</p> : null}
         <Button type="button" variant="ghost" className="w-full" onClick={onClose}>

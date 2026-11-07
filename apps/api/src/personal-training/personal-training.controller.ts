@@ -216,6 +216,15 @@ export class PersonalTrainingController {
     );
   }
 
+  @Delete('trainer/personal-bookings/:bookingId')
+  @Roles(UserRole.TRAINER)
+  deleteTrainerPersonalBooking(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+  ) {
+    return this.personalTraining.deleteTrainerPersonalBooking(user, bookingId);
+  }
+
   @Get('client/trainers')
   @Roles(UserRole.CLIENT)
   listTrainers(@CurrentUser() user: JwtPayload) {

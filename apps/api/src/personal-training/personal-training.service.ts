@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -15,6 +16,7 @@ import {
   StaffShiftTrack,
   SessionApprovalKind,
   ServiceUsageStatus,
+  TrainerOwnPackageStatus,
 } from '@prisma/client';
 import {
   PERSONAL_TRAINING_GOAL_TEMPLATES,
@@ -499,6 +501,10 @@ export class PersonalTrainingService {
         bookingId: booking.id,
         seriesId: booking.seriesId ?? undefined,
         origin: booking.origin,
+        ptFlow:
+          booking.ptFlow === 'PERSONAL' || booking.ptFlow === 'CLUB'
+            ? booking.ptFlow
+            : undefined,
         bufferBeforeMin: booking.bufferBeforeMin || undefined,
         bufferAfterMin: booking.bufferAfterMin || undefined,
         clientIssue:
@@ -1850,6 +1856,96 @@ export class PersonalTrainingService {
     }
 
     return booking;
+  }
+
+  /**
+   * Hard-delete a PERSONAL ledger booking owned by a club trainer.
+   * Restores package session / reverses raised debt when the booking was settled.
+   */
+  async deleteTrainerPersonalBooking(user: JwtPayload, bookingId: string) {
+    const booking = await this.prisma.personalTrainingBooking.findFirst({
+      where: { id: bookingId, trainerId: user.sub },
+      include: {
+        trainer: {
+          select: {
+            trainerClub: true,
+            trainerStaff: true,
+          },
+        },
+      },
+    });
+    if (!booking) {
+      throw new NotFoundException('Запись не найдена');
+    }
+    if (!booking.trainer.trainerClub) {
+      throw new ForbiddenException(
+        'Удаление доступно только тренерам клуба',
+      );
+    }
+    if (!isPersonalPtBooking(booking, booking.trainer)) {
+      throw new ForbiddenException(
+        'Нельзя удалить запись под контролем клуба / 1С',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (booking.ledgerSettledAt && booking.ledgerPackageId) {
+        const pkg = await tx.trainerClientPackage.findUnique({
+          where: { id: booking.ledgerPackageId },
+        });
+        if (pkg) {
+          const remaining = pkg.sessionsRemaining + 1;
+          await tx.trainerClientPackage.update({
+            where: { id: pkg.id },
+            data: {
+              sessionsRemaining: remaining,
+              status:
+                pkg.status === TrainerOwnPackageStatus.EXHAUSTED
+                  ? TrainerOwnPackageStatus.ACTIVE
+                  : pkg.status,
+            },
+          });
+        }
+      } else if (
+        booking.ledgerSettledAt &&
+        booking.paymentStatus === 'DEBT' &&
+        (booking.priceMinor ?? 0) > 0
+      ) {
+        const bal = await tx.trainerClientBalance.findUnique({
+          where: {
+            trainerId_clientId: {
+              trainerId: booking.trainerId,
+              clientId: booking.clientId,
+            },
+          },
+        });
+        if (bal) {
+          await tx.trainerClientBalance.update({
+            where: { id: bal.id },
+            data: {
+              debtMinor: Math.max(0, bal.debtMinor - (booking.priceMinor ?? 0)),
+            },
+          });
+        }
+      }
+
+      await tx.trainerClientPayment.updateMany({
+        where: { bookingId },
+        data: { bookingId: null },
+      });
+      await tx.clientHomework.updateMany({
+        where: { bookingId },
+        data: { bookingId: null },
+      });
+      await tx.sessionApproval.deleteMany({
+        where: { kind: SessionApprovalKind.PT, bookingId },
+      });
+      // sessionGoals / daySheetLines cascade on booking delete
+      await tx.personalTrainingBooking.delete({ where: { id: bookingId } });
+    });
+
+    await this.visitSync.clearPendingEventsForBookings([bookingId]);
+    return { success: true as const };
   }
 
   async cancelPersonalBooking(user: JwtPayload, bookingId: string) {

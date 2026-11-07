@@ -16,6 +16,7 @@ import { TrainerController } from './trainer.controller';
 import { TrainerInsightsSchedulerService } from './trainer-insights.scheduler';
 import { TrainerInsightsService } from './trainer-insights.service';
 import { TrainerLedgerModule } from './trainer-ledger.module';
+import { TrainerPersonalGoalsService } from './trainer-personal-goals.service';
 import { TrainerService } from './trainer.service';
 
 @Module({
@@ -39,6 +40,7 @@ import { TrainerService } from './trainer.service';
     TrainerClientLookupService,
     TrainerInsightsService,
     TrainerInsightsSchedulerService,
+    TrainerPersonalGoalsService,
   ],
   exports: [TrainerLedgerModule, TrainerInsightsService, TrainerService],
 })

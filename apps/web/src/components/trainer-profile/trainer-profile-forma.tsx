@@ -15,12 +15,18 @@ import { Bell, LogOut, Volume2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MotivationCard } from '@/components/trainer-motivation/motivation-card';
+import {
+  PersonalGoalsCard,
+  PersonalGoalsEditor,
+  usePersonalGoals,
+} from '@/components/trainer-motivation/personal-goals-card';
 import { api, type StaffProfileDto } from '@/lib/api';
 import { clearAuth, getToken, getUser } from '@/lib/auth';
 import {
   buildMotivationRecords,
   loadJournalWeekStreak,
 } from '@/lib/trainer-motivation';
+import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 import {
   loadTrainerTimerPrefs,
   saveTrainerTimerPrefs,
@@ -59,6 +65,10 @@ function money(minor: number, currency = 'BYN') {
 export function TrainerProfileForma() {
   const router = useRouter();
   const user = getUser();
+  const cabinet = trainerCabinetMode(user);
+  const isPureClub =
+    Boolean(user?.trainerClub) && !user?.trainerStaff && !cabinet.showGp;
+  const personalGoals = usePersonalGoals(isPureClub);
   const [profile, setProfile] = useState<StaffProfileDto | null>(null);
   const [bio, setBio] = useState('');
   const [specs, setSpecs] = useState<string[]>([]);
@@ -268,7 +278,22 @@ export function TrainerProfileForma() {
         </BentoCard>
       ) : null}
 
-      {motivation ? <MotivationCard records={motivation} /> : null}
+      {isPureClub ? (
+        <>
+          <PersonalGoalsCard
+            data={personalGoals.data}
+            onEdit={() => personalGoals.setEditorOpen(true)}
+          />
+          <PersonalGoalsEditor
+            open={personalGoals.editorOpen}
+            onOpenChange={personalGoals.setEditorOpen}
+            initial={personalGoals.initialInputs}
+            onSaved={(d) => personalGoals.setData(d)}
+          />
+        </>
+      ) : motivation ? (
+        <MotivationCard records={motivation} />
+      ) : null}
 
       <BentoCard title="Фото и описание">
         <div className="mb-3 flex items-center gap-3">

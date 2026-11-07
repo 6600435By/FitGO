@@ -1,88 +1,43 @@
 'use client';
 
-import { ProgressRing } from '@fitgo/forma-ui';
+import { ResponsiveSheet, SegmentedControl } from '@fitgo/forma-ui';
 import {
   ExternalLink,
-  Minus,
-  Pause,
-  Play,
-  Plus,
-  RotateCcw,
-  SkipForward,
-  Volume2,
-  VolumeX,
+  Flag,
+  MoreHorizontal,
+  NotebookPen,
+  Timer as TimerIcon,
   X,
 } from 'lucide-react';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   buildPreset,
   formatTimerMs,
-  phaseAccent,
   useTrainingTimer,
-  type BuiltPreset,
-  type SoundPackId,
-  type TimerEvent,
-  type TimerPersistedState,
-  type TimerPhase,
   type TimerSessionMeta,
 } from '@/lib/training-timer';
-import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
 import { cn } from '@/lib/utils';
+import {
+  BasicTimerPanel,
+  startRestPreset,
+} from './basic-timer-panel';
+import {
+  hasLiveStrengthExercises,
+  LiveExerciseCard,
+} from './live-exercise-card';
 import { LiveGpRoster } from './live-gp-roster';
-import { LivePresetPicker } from './live-preset-picker';
 import {
   LivePtSessionChrome,
-  type LiveTimerFactHandler,
+  useLivePtSheet,
 } from './live-pt-session-chrome';
+import { useLiveMode, type LiveWorkMode } from './use-live-mode';
+import { useSessionClock } from './use-session-clock';
 
-const ACCENT: Record<ReturnType<typeof phaseAccent>, string> = {
-  work: '#ffd000',
-  rest: '#22d3ee',
-  prep: '#f4f4f5',
-};
-
-function displayMs(snapshot: {
-  isOpenPhase: boolean;
-  remainingMs: number | null;
-  elapsedMs: number;
-}): number {
-  if (snapshot.isOpenPhase) return snapshot.elapsedMs;
-  return snapshot.remainingMs ?? 0;
-}
-
-function RoundDots({
-  phases,
-  phaseIndex,
-}: {
-  phases: TimerPhase[];
-  phaseIndex: number;
-}) {
-  const workPhases = phases
-    .map((p, i) => ({ p, i }))
-    .filter((x) => x.p.kind === 'work');
-  if (workPhases.length <= 1 || workPhases.length > 16) return null;
-  return (
-    <div className="mt-4 flex flex-wrap justify-center gap-1.5">
-      {workPhases.map(({ i }, idx) => {
-        const done = i < phaseIndex;
-        const current = i === phaseIndex;
-        return (
-          <span
-            key={`${i}-${idx}`}
-            className={cn(
-              'h-2 w-2 rounded-full',
-              done && 'bg-forma-500',
-              current && 'bg-white scale-125',
-              !done && !current && 'bg-white/20',
-            )}
-          />
-        );
-      })}
-    </div>
-  );
+function sessionStorageKey(meta: TimerSessionMeta): string {
+  if (meta.kind === 'pt' && meta.bookingId) return `pt:${meta.bookingId}`;
+  if (meta.kind === 'gp' && meta.sessionKey) return `gp:${meta.sessionKey}`;
+  return meta.kind;
 }
 
 export function LiveTimerScreen({
@@ -94,64 +49,42 @@ export function LiveTimerScreen({
   mirrorOnly?: boolean;
   hallHref?: string;
 }) {
-  const reduceMotion = useReducedMotion();
-  const initial = useMemo(() => buildPreset({ id: 'tabata' }), []);
-  const factHandlerRef = useRef<LiveTimerFactHandler | null>(null);
-  const onEvents = useCallback((events: TimerEvent[], state: TimerPersistedState) => {
-    factHandlerRef.current?.(events, state);
-  }, []);
+  const initial = useMemo(() => buildPreset({ id: 'stopwatch' }), []);
   const timer = useTrainingTimer({
     meta,
     initialPreset: initial,
     mirrorOnly,
-    onEvents: mirrorOnly ? undefined : onEvents,
   });
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [personal, setPersonal] = useState<
-    Array<{ id: string; name: string; phases: BuiltPreset['phases'] }>
-  >([]);
-  const [prefsOpen, setPrefsOpen] = useState(false);
-
-  const seedCircuitFromSheet = useCallback(
-    (preset: BuiltPreset) => {
-      if (timer.state.status !== 'idle') return;
-      if (timer.state.presetId !== 'tabata') return;
-      timer.applyPreset(preset);
-    },
-    [timer.applyPreset, timer.state.presetId, timer.state.status],
+  const liveMode = useLiveMode();
+  const clockKey = sessionStorageKey(meta);
+  const clock = useSessionClock(clockKey);
+  const ptSheet = useLivePtSheet(
+    !mirrorOnly && meta.kind === 'pt' ? meta.bookingId : undefined,
   );
 
-  useEffect(() => {
-    if (mirrorOnly) return;
-    const token = getToken();
-    if (!token) return;
-    let cancelled = false;
-    api
-      .trainerTimerPresets(token)
-      .then((rows) => {
-        if (cancelled) return;
-        setPersonal(
-          rows.map((r) => ({
-            id: r.id,
-            name: r.name,
-            phases: r.phases as BuiltPreset['phases'],
-          })),
-        );
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [mirrorOnly]);
+  const [oneshotOpen, setOneshotOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [finishOpen, setFinishOpen] = useState(false);
+
+  const showTimerUi =
+    mirrorOnly || liveMode.mode === 'timer' || oneshotOpen;
+  const hasExercises =
+    meta.kind === 'pt' && hasLiveStrengthExercises(ptSheet.sheet);
 
   useEffect(() => {
     if (mirrorOnly) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
         return;
       }
+      if (!showTimerUi) return;
       if (e.code === 'Space') {
         e.preventDefault();
+        clock.markActive();
         void timer.toggle();
       } else if (e.code === 'ArrowRight') {
         e.preventDefault();
@@ -163,60 +96,114 @@ export function LiveTimerScreen({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [timer, mirrorOnly]);
+  }, [timer, mirrorOnly, showTimerUi, clock]);
 
-  const accent = phaseAccent(timer.snapshot.phase?.kind);
-  const accentColor = ACCENT[accent];
-  const ms = displayMs(timer.snapshot);
-  const progressValue =
-    timer.snapshot.isOpenPhase
-      ? 0
-      : Math.round((1 - (timer.snapshot.phaseProgress || 0)) * 1000) / 10;
+  const onSetCompleted = useCallback(
+    (restSec: number | undefined) => {
+      clock.markActive();
+      if (liveMode.mode !== 'timer' || !liveMode.autoRest) return;
+      startRestPreset(
+        timer.applyPreset,
+        () => {
+          clock.markActive();
+          return timer.play();
+        },
+        restSec ?? 90,
+      );
+    },
+    [clock, liveMode.mode, liveMode.autoRest, timer],
+  );
 
-  const ringSize =
-    typeof window !== 'undefined' && window.innerWidth >= 768 ? 320 : 260;
+  const timerControls = {
+    state: timer.state,
+    snapshot: timer.snapshot,
+    flash: timer.flash,
+    applyPreset: (preset: Parameters<typeof timer.applyPreset>[0]) => {
+      clock.markActive();
+      timer.applyPreset(preset);
+    },
+    toggle: async () => {
+      clock.markActive();
+      await timer.toggle();
+    },
+    reset: timer.reset,
+    skip: timer.skip,
+    bumpRest: timer.bumpRest,
+    bumpOpen: timer.bumpOpen,
+    patchPrefs: timer.patchPrefs,
+  };
+
+  const elapsedForFinish = Math.max(
+    clock.elapsedMs,
+    timer.snapshot.totalElapsedMs,
+  );
+
+  if (mirrorOnly) {
+    return (
+      <div className="relative flex min-h-dvh flex-col bg-[#070708] text-white">
+        <header className="flex items-start justify-between gap-3 px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-wide text-zinc-500">
+              Экран зала
+              {timer.state.presetName ? ` · ${timer.state.presetName}` : ''}
+            </p>
+            <p className="truncate font-display text-lg font-semibold text-white">
+              {meta.title || 'Тренировка'}
+            </p>
+          </div>
+        </header>
+        <div className="flex flex-1 items-center justify-center px-4 pb-8">
+          <BasicTimerPanel timer={timerControls} />
+        </div>
+        <p className="px-4 pb-6 text-center text-xs text-zinc-600">
+          Управление с основного окна
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div
-      className={cn(
-        'relative flex min-h-dvh flex-col bg-[#070708] text-white',
-        timer.flash && !reduceMotion && 'animate-[pulse_0.28s_ease-out]',
-      )}
-      style={
-        timer.flash && !reduceMotion
-          ? { boxShadow: `inset 0 0 80px ${accentColor}55` }
-          : undefined
-      }
-    >
+    <div className="relative flex min-h-dvh flex-col bg-[#070708] text-white">
       <header className="flex items-start justify-between gap-3 px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <div className="min-w-0">
           <p className="text-[11px] uppercase tracking-wide text-zinc-500">
-            {meta.kind === 'gp' ? 'Группа' : meta.kind === 'hall' ? 'Экран зала' : 'ПТ'}
-            {timer.state.presetName ? ` · ${timer.state.presetName}` : ''}
+            {meta.kind === 'gp' ? 'Группа' : 'ПТ'}
+            {clock.isRunning
+              ? ` · ${formatTimerMs(clock.elapsedMs, true)}`
+              : ''}
           </p>
           <p className="truncate font-display text-lg font-semibold text-white">
             {meta.title || 'Тренировка'}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!mirrorOnly ? (
-            <Link
-              href={hallHref}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2.5 py-1.5 text-[11px] text-zinc-300"
-              title="Экран для зала"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Зал
-            </Link>
+          {liveMode.hydrated ? (
+            <SegmentedControl<LiveWorkMode>
+              size="sm"
+              layoutId="live-work-mode"
+              options={[
+                { value: 'free', label: 'Свободно' },
+                { value: 'timer', label: 'Таймер' },
+              ]}
+              value={liveMode.mode}
+              onChange={liveMode.setMode}
+              className="hidden sm:flex"
+            />
           ) : null}
+          <button
+            type="button"
+            onClick={() => setMenuOpen(true)}
+            className="rounded-full border border-white/10 p-2 text-zinc-400"
+            aria-label="Ещё"
+          >
+            <MoreHorizontal className="h-5 w-5" />
+          </button>
           <Link
             href={meta.planHref || '/trainer'}
             className="rounded-full border border-white/10 p-2 text-zinc-400"
             aria-label="Закрыть"
             onClick={() => {
-              if (!mirrorOnly && timer.state.status === 'complete') {
+              if (timer.state.status === 'complete') {
                 timer.endAndClear();
               }
             }}
@@ -226,386 +213,193 @@ export function LiveTimerScreen({
         </div>
       </header>
 
-      <div className="flex flex-1 flex-col lg:flex-row lg:items-stretch lg:gap-8 lg:px-8">
-        <div className="flex flex-1 flex-col items-center justify-center px-4 pb-6 lg:pb-8">
-          <p
-            className="mb-3 text-sm font-medium"
-            style={{ color: accentColor }}
-          >
-            {timer.snapshot.phase?.label || '—'}
-          </p>
-
-          <motion.div
-            animate={
-              timer.snapshot.isLastThreeSec && !reduceMotion
-                ? { scale: [1, 1.04, 1] }
-                : { scale: 1 }
-            }
-            transition={{
-              repeat: timer.snapshot.isLastThreeSec ? Infinity : 0,
-              duration: 0.7,
-            }}
-          >
-            <ProgressRing
-              value={timer.snapshot.isOpenPhase ? 0 : progressValue}
-              max={100}
-              size={ringSize}
-              stroke={10}
-              accent="forma"
-              className="[&_circle:last-child]:transition-none"
-            >
-              <div className="flex flex-col items-center">
-                <AnimatePresence mode="popLayout">
-                  <motion.span
-                    key={`${timer.snapshot.phaseIndex}-${Math.floor(ms / 1000)}`}
-                    initial={reduceMotion ? false : { opacity: 0.5, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="font-display text-6xl font-semibold tabular-nums tracking-tight sm:text-7xl"
-                    style={{
-                      color: accentColor,
-                      textShadow: timer.snapshot.isLastThreeSec
-                        ? `0 0 24px ${accentColor}66`
-                        : undefined,
-                    }}
-                  >
-                    {formatTimerMs(ms)}
-                  </motion.span>
-                </AnimatePresence>
-                <span className="mt-1 text-xs text-zinc-500">
-                  {timer.state.status === 'running'
-                    ? 'идёт'
-                    : timer.state.status === 'paused'
-                      ? 'пауза'
-                      : timer.state.status === 'complete'
-                        ? 'готово'
-                        : 'ожидание'}
-                  {timer.wakeLockActive ? ' · экран' : ''}
-                </span>
-              </div>
-            </ProgressRing>
-          </motion.div>
-
-          <RoundDots
-            phases={timer.state.phases}
-            phaseIndex={timer.snapshot.phaseIndex}
+      {liveMode.hydrated ? (
+        <div className="px-4 pb-2 sm:hidden">
+          <SegmentedControl<LiveWorkMode>
+            size="sm"
+            layoutId="live-work-mode-mobile"
+            className="w-full"
+            options={[
+              { value: 'free', label: 'Свободно' },
+              { value: 'timer', label: 'Таймер' },
+            ]}
+            value={liveMode.mode}
+            onChange={liveMode.setMode}
           />
-
-          {timer.snapshot.nextPhase ? (
-            <p className="mt-3 text-sm text-zinc-500">
-              Далее: {timer.snapshot.nextPhase.label}
-              {timer.snapshot.nextPhase.durationSec != null
-                ? ` · ${timer.snapshot.nextPhase.durationSec} с`
-                : ''}
-            </p>
-          ) : null}
-
-          {timer.state.presetId === 'amrap' ? (
-            <div className="mt-4 flex items-center gap-3">
-              <span className="text-sm text-zinc-400">Раунды</span>
-              <span className="font-display text-3xl font-semibold text-forma-400">
-                {timer.state.amrapRounds}
-              </span>
-              {!mirrorOnly ? (
-                <button
-                  type="button"
-                  onClick={timer.amrapPlus}
-                  className="rounded-2xl bg-forma-500 px-3 py-2 text-sm font-semibold text-ink"
-                >
-                  + раунд
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-
-          {timer.state.status === 'complete' && !reduceMotion ? (
-            <motion.p
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-4 text-sm text-forma-400"
-            >
-              Интервал завершён ·{' '}
-              {formatTimerMs(timer.snapshot.totalElapsedMs)}
-            </motion.p>
-          ) : null}
         </div>
+      ) : null}
 
-        {!mirrorOnly ? (
-          <aside className="hidden w-full max-w-sm flex-col justify-center border-l border-white/5 px-6 py-8 desktop:flex">
-            <p className="text-xs uppercase tracking-wide text-zinc-500">
-              Подсказки
+      <div
+        className={cn(
+          'flex flex-1 flex-col gap-4 px-4 pb-4',
+          liveMode.mode === 'timer' && hasExercises
+            ? 'lg:flex-row lg:items-start lg:gap-8 lg:px-8'
+            : '',
+        )}
+      >
+        {hasExercises ? (
+          <div
+            className={cn(
+              'flex-1',
+              liveMode.mode === 'timer' ? 'lg:max-w-md' : 'mx-auto w-full',
+            )}
+          >
+            <LiveExerciseCard
+              sheet={ptSheet.sheet}
+              onChangeSheet={ptSheet.setSheet}
+              onSetCompleted={onSetCompleted}
+            />
+          </div>
+        ) : null}
+
+        {liveMode.mode === 'timer' ? (
+          <div
+            className={cn(
+              'flex flex-1 flex-col items-center justify-center',
+              hasExercises ? 'lg:pt-2' : 'min-h-[50dvh]',
+            )}
+          >
+            <BasicTimerPanel
+              timer={timerControls}
+              compact={hasExercises}
+              showAutoRest={hasExercises}
+              autoRest={liveMode.autoRest}
+              onAutoRestChange={liveMode.setAutoRest}
+            />
+          </div>
+        ) : !hasExercises ? (
+          <div className="flex flex-1 flex-col items-center justify-center px-4 text-center">
+            <p className="font-display text-2xl font-semibold text-white">
+              Тренировка идёт
             </p>
-            <p className="mt-2 font-display text-xl font-semibold text-white">
-              {meta.title || 'Тренировка'}
+            <p className="mt-2 font-display text-4xl font-semibold tabular-nums text-forma-400">
+              {formatTimerMs(clock.elapsedMs, true)}
             </p>
-            <ul className="mt-4 space-y-2 text-sm text-zinc-400">
-              <li>
-                <kbd className="rounded bg-white/10 px-1.5 py-0.5 text-xs text-zinc-200">
-                  Пробел
-                </kbd>{' '}
-                — старт / пауза
-              </li>
-              <li>
-                <kbd className="rounded bg-white/10 px-1.5 py-0.5 text-xs text-zinc-200">
-                  ←
-                </kbd>{' '}
-                /{' '}
-                <kbd className="rounded bg-white/10 px-1.5 py-0.5 text-xs text-zinc-200">
-                  →
-                </kbd>{' '}
-                — фаза назад / вперёд
-              </li>
-              <li>Заметки, план и задание — кнопки внизу экрана</li>
-              <li>
-                <Link
-                  href={hallHref}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-forma-400 underline-offset-2 hover:underline"
-                >
-                  Экран для зала
-                </Link>{' '}
-                — зеркало таймера на второй монитор
-              </li>
-            </ul>
-          </aside>
+            <p className="mt-3 max-w-xs text-sm text-zinc-500">
+              Свободный режим — отмечайте подходы и ведите занятие без таймера.
+              Таймер можно открыть кнопкой внизу или переключателем сверху.
+            </p>
+            {!clock.isRunning ? (
+              <button
+                type="button"
+                onClick={() => clock.markActive()}
+                className="mt-6 rounded-2xl bg-forma-500 px-4 py-2.5 text-sm font-semibold text-ink"
+              >
+                Начать
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
 
-      {!mirrorOnly && meta.kind === 'pt' && meta.bookingId ? (
+      {meta.kind === 'pt' && meta.bookingId ? (
         <LivePtSessionChrome
           bookingId={meta.bookingId}
           clientId={meta.clientId}
-          elapsedMs={timer.snapshot.totalElapsedMs}
-          applyPreset={seedCircuitFromSheet}
-          factHandlerRef={factHandlerRef}
+          elapsedMs={elapsedForFinish}
+          sheet={ptSheet.sheet}
+          setSheet={ptSheet.setSheet}
+          hideActionButtons
+          notesOpen={notesOpen}
+          onNotesOpenChange={setNotesOpen}
+          finishOpen={finishOpen}
+          onFinishOpenChange={setFinishOpen}
+          onFinished={() => {
+            clock.clear();
+            timer.endAndClear();
+          }}
         />
       ) : null}
 
-      {!mirrorOnly && meta.kind === 'gp' && meta.sessionKey ? (
+      {meta.kind === 'gp' && meta.sessionKey ? (
         <LiveGpRoster sessionKey={meta.sessionKey} title={meta.title} />
       ) : null}
 
-      {!mirrorOnly ? (
-        <footer className="space-y-3 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
-          {(timer.state.presetId === 'rest' ||
-            timer.snapshot.phase?.kind === 'rest' ||
-            timer.snapshot.phase?.kind === 'roundRest') && (
-            <div className="flex justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => timer.bumpRest(-15)}
-                className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-1.5 text-xs text-zinc-300"
-              >
-                <Minus className="h-3.5 w-3.5" /> 15 с
-              </button>
-              <button
-                type="button"
-                onClick={() => timer.bumpRest(15)}
-                className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-1.5 text-xs text-zinc-300"
-              >
-                <Plus className="h-3.5 w-3.5" /> 15 с
-              </button>
-            </div>
-          )}
-
-          {timer.snapshot.isOpenPhase ? (
-            <div className="flex justify-center gap-2">
-              <button
-                type="button"
-                onClick={() => timer.bumpOpen(-15)}
-                className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-1.5 text-xs text-zinc-300"
-              >
-                <Minus className="h-3.5 w-3.5" /> 15 с
-              </button>
-              <button
-                type="button"
-                onClick={() => timer.bumpOpen(15)}
-                className="inline-flex items-center gap-1 rounded-full border border-white/10 px-3 py-1.5 text-xs text-zinc-300"
-              >
-                <Plus className="h-3.5 w-3.5" /> 15 с
-              </button>
-            </div>
-          ) : null}
-
-          <div className="flex items-center justify-center gap-3">
+      <footer className="space-y-3 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {liveMode.mode === 'free' ? (
             <button
               type="button"
-              onClick={timer.reset}
-              className="rounded-full border border-white/10 p-3 text-zinc-400"
-              aria-label="Сброс"
-            >
-              <RotateCcw className="h-5 w-5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => void timer.toggle()}
-              className="flex h-16 w-16 items-center justify-center rounded-full bg-forma-500 text-ink shadow-lg shadow-forma-500/20"
-              aria-label={timer.state.status === 'running' ? 'Пауза' : 'Старт'}
-            >
-              {timer.state.status === 'running' ? (
-                <Pause className="h-7 w-7" />
-              ) : (
-                <Play className="h-7 w-7 pl-0.5" />
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={timer.skip}
-              className="rounded-full border border-white/10 p-3 text-zinc-400"
-              aria-label="Следующая фаза"
-            >
-              <SkipForward className="h-5 w-5" />
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={() => setPickerOpen(true)}
-              className="rounded-2xl border border-white/10 px-3 py-2 text-sm text-zinc-200"
-            >
-              Пресет
-            </button>
-            <button
-              type="button"
-              onClick={() => setPrefsOpen((v) => !v)}
+              onClick={() => {
+                clock.markActive();
+                setOneshotOpen(true);
+              }}
               className="inline-flex items-center gap-1.5 rounded-2xl border border-white/10 px-3 py-2 text-sm text-zinc-200"
             >
-              {timer.state.soundEnabled ? (
-                <Volume2 className="h-4 w-4" />
-              ) : (
-                <VolumeX className="h-4 w-4" />
-              )}
-              Звук
+              <TimerIcon className="h-4 w-4 text-forma-400" />
+              Таймер
             </button>
-            {meta.planHref ? (
-              <Link
-                href={meta.planHref}
-                className="rounded-2xl border border-white/10 px-3 py-2 text-sm text-zinc-200"
-              >
-                План
-              </Link>
-            ) : null}
-          </div>
-
-          {prefsOpen ? (
-            <div className="rounded-2xl border border-white/10 bg-ink-elevated p-3 text-sm">
-              <div className="flex flex-wrap gap-2">
-                {(
-                  [
-                    ['classic', 'Классика'],
-                    ['gong', 'Гонг'],
-                    ['whistle', 'Свисток'],
-                  ] as Array<[SoundPackId, string]>
-                ).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => timer.setSoundPack(id)}
-                    className={cn(
-                      'rounded-full px-3 py-1 text-xs',
-                      timer.state.soundPack === id
-                        ? 'bg-forma-500 text-ink'
-                        : 'bg-white/5 text-zinc-400',
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-3 flex flex-wrap gap-3 text-xs text-zinc-400">
-                <label className="inline-flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    checked={timer.state.soundEnabled}
-                    onChange={(e) =>
-                      timer.patchPrefs({ soundEnabled: e.target.checked })
-                    }
-                  />
-                  Звук
-                </label>
-                <label className="inline-flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    checked={timer.state.voiceEnabled}
-                    onChange={(e) =>
-                      timer.patchPrefs({ voiceEnabled: e.target.checked })
-                    }
-                  />
-                  Голос
-                </label>
-                <label className="inline-flex items-center gap-1.5">
-                  <input
-                    type="checkbox"
-                    checked={timer.state.vibrateEnabled}
-                    onChange={(e) =>
-                      timer.patchPrefs({ vibrateEnabled: e.target.checked })
-                    }
-                  />
-                  Вибрация
-                </label>
-              </div>
-              <label className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
-                Громкость
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={timer.state.volume}
-                  onChange={(e) =>
-                    timer.patchPrefs({ volume: Number(e.target.value) })
-                  }
-                  className="flex-1"
-                />
-              </label>
+          ) : null}
+          {meta.kind === 'pt' ? (
+            <>
               <button
                 type="button"
-                className="mt-3 w-full rounded-2xl border border-white/10 py-2 text-xs text-zinc-300"
-                onClick={async () => {
-                  const token = getToken();
-                  if (!token) return;
-                  const name =
-                    window.prompt('Название пресета', timer.state.presetName) ||
-                    '';
-                  if (!name.trim()) return;
-                  try {
-                    const created = await api.trainerCreateTimerPreset(token, {
-                      name: name.trim(),
-                      phases: timer.state.phases,
-                      soundPack: timer.state.soundPack,
-                    });
-                    setPersonal((prev) => [
-                      {
-                        id: created.id,
-                        name: name.trim(),
-                        phases: timer.state.phases,
-                      },
-                      ...prev,
-                    ]);
-                  } catch {
-                    /* ignore */
-                  }
-                }}
+                onClick={() => setNotesOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-2xl border border-white/10 px-3 py-2 text-sm text-zinc-200"
               >
-                Сохранить как мой пресет
+                <NotebookPen className="h-4 w-4 text-forma-400" />
+                Заметка
               </button>
-            </div>
+              <button
+                type="button"
+                onClick={() => {
+                  clock.markActive();
+                  setFinishOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-2xl bg-forma-500 px-3 py-2 text-sm font-semibold text-ink"
+              >
+                <Flag className="h-4 w-4" />
+                Завершить
+              </button>
+            </>
           ) : null}
-        </footer>
-      ) : (
-        <p className="px-4 pb-6 text-center text-xs text-zinc-600">
-          Управление с основного окна · пробел — пауза · стрелки — фаза вперёд /
-          назад
-        </p>
-      )}
+          {meta.planHref ? (
+            <Link
+              href={meta.planHref}
+              className="rounded-2xl border border-white/10 px-3 py-2 text-sm text-zinc-200"
+            >
+              План
+            </Link>
+          ) : null}
+        </div>
+      </footer>
 
-      <LivePresetPicker
-        open={pickerOpen}
-        onOpenChange={setPickerOpen}
-        onPick={timer.applyPreset}
-        personal={personal}
-      />
+      <ResponsiveSheet
+        open={oneshotOpen}
+        onOpenChange={setOneshotOpen}
+        title="Таймер"
+        description="Разовый инструмент — закрытие не меняет режим «Свободно»"
+      >
+        <BasicTimerPanel timer={timerControls} compact />
+      </ResponsiveSheet>
+
+      <ResponsiveSheet
+        open={menuOpen}
+        onOpenChange={setMenuOpen}
+        title="Ещё"
+      >
+        <div className="space-y-2">
+          <Link
+            href={hallHref}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-2 rounded-2xl border border-white/10 px-3 py-3 text-sm text-zinc-200"
+            onClick={() => setMenuOpen(false)}
+          >
+            <ExternalLink className="h-4 w-4 text-forma-400" />
+            Экран для зала
+          </Link>
+          {meta.planHref ? (
+            <Link
+              href={meta.planHref}
+              className="flex items-center gap-2 rounded-2xl border border-white/10 px-3 py-3 text-sm text-zinc-200"
+              onClick={() => setMenuOpen(false)}
+            >
+              Открыть план
+            </Link>
+          ) : null}
+        </div>
+      </ResponsiveSheet>
     </div>
   );
 }

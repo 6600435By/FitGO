@@ -27,6 +27,11 @@ import {
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MotivationCard } from '@/components/trainer-motivation/motivation-card';
+import {
+  PersonalGoalsCard,
+  PersonalGoalsEditor,
+  usePersonalGoals,
+} from '@/components/trainer-motivation/personal-goals-card';
 import { useLadderConfetti } from '@/components/trainer-motivation/use-ladder-confetti';
 import { StaffTasksInbox } from '@/components/staff-tasks-inbox';
 import { api } from '@/lib/api';
@@ -137,7 +142,7 @@ function HeroNext({
 }: {
   next: FloorStaffHomeSession | null | undefined;
   scheduleHref: string;
-  journalHref: string;
+  journalHref?: string | null;
 }) {
   if (!next) {
     return (
@@ -149,7 +154,9 @@ function HeroNext({
           Свободное утро
         </p>
         <p className="mt-1 text-sm text-zinc-400">
-          Записей рядом нет — можно закрыть контроль или открыть расписание.
+          {journalHref
+            ? 'Записей рядом нет — можно закрыть контроль или открыть расписание.'
+            : 'Записей рядом нет — откройте расписание или клиентов.'}
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Link
@@ -158,12 +165,14 @@ function HeroNext({
           >
             Расписание
           </Link>
-          <Link
-            href={journalHref}
-            className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-zinc-300"
-          >
-            Журнал
-          </Link>
+          {journalHref ? (
+            <Link
+              href={journalHref}
+              className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-zinc-300"
+            >
+              Журнал
+            </Link>
+          ) : null}
         </div>
       </BentoCard>
     );
@@ -229,16 +238,18 @@ function HeroNext({
             Расписание
           </Link>
         )}
-        <Link
-          href={
-            next.sessionKey
-              ? `${journalHref}?session=${encodeURIComponent(next.sessionKey)}`
-              : journalHref
-          }
-          className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-zinc-300"
-        >
-          Журнал
-        </Link>
+        {journalHref ? (
+          <Link
+            href={
+              next.sessionKey
+                ? `${journalHref}?session=${encodeURIComponent(next.sessionKey)}`
+                : journalHref
+            }
+            className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-zinc-300"
+          >
+            Журнал
+          </Link>
+        ) : null}
       </div>
     </BentoCard>
   );
@@ -319,7 +330,7 @@ function DayTimeline({
 }: {
   sessions: FloorStaffHomeSession[];
   scheduleHref: string;
-  controlHref: (s: FloorStaffHomeSession) => string;
+  controlHref?: ((s: FloorStaffHomeSession) => string) | null;
 }) {
   return (
     <BentoCard
@@ -340,7 +351,7 @@ function DayTimeline({
           {sessions.map((s) => {
             const plan = planHref(s);
             const href =
-              s.status === 'DONE' && s.sessionKey
+              s.status === 'DONE' && s.sessionKey && controlHref
                 ? controlHref(s)
                 : plan ?? scheduleHref;
             return (
@@ -465,72 +476,75 @@ function TasksBlock({
   controlBase,
 }: {
   data: FloorStaffHome;
-  controlBase: string;
+  controlBase?: string | null;
 }) {
   const controlFrom = daysAgoIso(CONTROL_PENDING_LOOKBACK_DAYS);
   const controlTo = todayIso();
   const controlPendingQs = `from=${encodeURIComponent(controlFrom)}&to=${encodeURIComponent(controlTo)}&needsReview=1`;
-  const reviewHref = `${controlBase}?${controlPendingQs}`;
   const pending = data.control.pendingMe;
 
   return (
     <div className="space-y-3">
       <StaffTasksInbox />
-      <Link
-        href={reviewHref}
-        className={cn(
-          'block rounded-3xl border p-4 transition',
-          pending > 0
-            ? 'border-amber-500/40 bg-amber-500/5 hover:border-amber-500/60'
-            : 'border-white/[0.08] bg-ink-elevated/90 hover:border-forma-500/30',
-        )}
-      >
-        <div className="flex items-start gap-3">
-          <ClipboardCheck
+      {controlBase ? (
+        <>
+          <Link
+            href={`${controlBase}?${controlPendingQs}`}
             className={cn(
-              'mt-0.5 h-5 w-5 shrink-0',
-              pending > 0 ? 'text-amber-400' : 'text-forma-400',
+              'block rounded-3xl border p-4 transition',
+              pending > 0
+                ? 'border-amber-500/40 bg-amber-500/5 hover:border-amber-500/60'
+                : 'border-white/[0.08] bg-ink-elevated/90 hover:border-forma-500/30',
             )}
-          />
-          <div>
-            <p className="text-xs uppercase tracking-wide text-zinc-500">
-              Закрыть сейчас
-            </p>
-            <p className="font-display text-2xl font-bold tabular-nums text-white">
-              {pending}
-            </p>
-            <p className="mt-0.5 text-xs text-zinc-500">
-              {pending > 0
-                ? 'Ждут вашей отметки'
-                : 'Всё закрыто с вашей стороны'}
-            </p>
-          </div>
-        </div>
-      </Link>
-      {data.control.queue.length > 0 ? (
-        <BentoCard title="Очередь">
-          <ul className="space-y-2">
-            {data.control.queue.map((item) => (
-              <li key={item.sessionKey}>
-                <Link
-                  href={`${controlBase}?session=${encodeURIComponent(item.sessionKey)}&${controlPendingQs}`}
-                  className="flex items-start gap-2 rounded-2xl border border-white/[0.06] bg-ink-raised/50 px-3 py-2 text-sm transition hover:border-forma-500/30"
-                >
-                  <ListTodo className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
-                  <span className="min-w-0">
-                    <span className="block font-medium text-white">
-                      {item.title}
-                    </span>
-                    <span className="block text-xs text-zinc-500">
-                      {formatDateTime(item.startAt)}
-                      {item.subtitle ? ` · ${item.subtitle}` : ''}
-                    </span>
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </BentoCard>
+          >
+            <div className="flex items-start gap-3">
+              <ClipboardCheck
+                className={cn(
+                  'mt-0.5 h-5 w-5 shrink-0',
+                  pending > 0 ? 'text-amber-400' : 'text-forma-400',
+                )}
+              />
+              <div>
+                <p className="text-xs uppercase tracking-wide text-zinc-500">
+                  Закрыть сейчас
+                </p>
+                <p className="font-display text-2xl font-bold tabular-nums text-white">
+                  {pending}
+                </p>
+                <p className="mt-0.5 text-xs text-zinc-500">
+                  {pending > 0
+                    ? 'Ждут вашей отметки'
+                    : 'Всё закрыто с вашей стороны'}
+                </p>
+              </div>
+            </div>
+          </Link>
+          {data.control.queue.length > 0 ? (
+            <BentoCard title="Очередь">
+              <ul className="space-y-2">
+                {data.control.queue.map((item) => (
+                  <li key={item.sessionKey}>
+                    <Link
+                      href={`${controlBase}?session=${encodeURIComponent(item.sessionKey)}&${controlPendingQs}`}
+                      className="flex items-start gap-2 rounded-2xl border border-white/[0.06] bg-ink-raised/50 px-3 py-2 text-sm transition hover:border-forma-500/30"
+                    >
+                      <ListTodo className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                      <span className="min-w-0">
+                        <span className="block font-medium text-white">
+                          {item.title}
+                        </span>
+                        <span className="block text-xs text-zinc-500">
+                          {formatDateTime(item.startAt)}
+                          {item.subtitle ? ` · ${item.subtitle}` : ''}
+                        </span>
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </BentoCard>
+          ) : null}
+        </>
       ) : null}
     </div>
   );
@@ -559,7 +573,12 @@ export function TrainerTodayHome({
   scheduleHref?: string;
 }) {
   const user = getUser();
-  const { showPt, showGp, showOwnLedger } = trainerCabinetMode(user);
+  const { showPt, showGp, showOwnLedger, showPtControl } =
+    trainerCabinetMode(user);
+  /** Staff PT / GP see booking control; pure «Тренер клуб» does not. */
+  const showControlLinks = showPtControl || showGp;
+  const isPureClub = Boolean(user?.trainerClub) && !user?.trainerStaff && !showGp;
+  const personalGoals = usePersonalGoals(isPureClub);
   const [home, setHome] = useState<FloorStaffHome | null>(null);
   const [insights, setInsights] = useState<TrainerInsightsResponse | null>(
     null,
@@ -621,7 +640,7 @@ export function TrainerTodayHome({
       (showGp ? '/trainer/gp-schedule' : '/trainer/schedule'),
     [scheduleHref, showGp],
   );
-  const controlBase = '/trainer/my-sessions';
+  const controlBase = showControlLinks ? '/trainer/my-sessions' : null;
 
   const a = home?.monthAnalytics;
   useLadderConfetti(
@@ -646,10 +665,12 @@ export function TrainerTodayHome({
       a.group.avgFillPct != null ||
       home.today.sessions.some((s) => s.kind === 'GROUP'));
 
-  const controlSessionHref = (s: FloorStaffHomeSession) =>
-    s.sessionKey
-      ? `${controlBase}?session=${encodeURIComponent(s.sessionKey)}`
-      : controlBase;
+  const controlSessionHref = controlBase
+    ? (s: FloorStaffHomeSession) =>
+        s.sessionKey
+          ? `${controlBase}?session=${encodeURIComponent(s.sessionKey)}`
+          : controlBase
+    : null;
 
   return (
     <div className="mx-auto max-w-[1440px] space-y-4">
@@ -721,7 +742,22 @@ export function TrainerTodayHome({
         </div>
       ) : null}
 
-      {motivation ? <MotivationCard records={motivation} /> : null}
+      {isPureClub ? (
+        <>
+          <PersonalGoalsCard
+            data={personalGoals.data}
+            onEdit={() => personalGoals.setEditorOpen(true)}
+          />
+          <PersonalGoalsEditor
+            open={personalGoals.editorOpen}
+            onOpenChange={personalGoals.setEditorOpen}
+            initial={personalGoals.initialInputs}
+            onSaved={(d) => personalGoals.setData(d)}
+          />
+        </>
+      ) : motivation ? (
+        <MotivationCard records={motivation} />
+      ) : null}
     </div>
   );
 }

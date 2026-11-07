@@ -781,6 +781,7 @@ model User {
   clientTrainerBalances   TrainerClientBalance[] @relation("ClientTrainerBalances")
   trainerInsightDismissals TrainerInsightDismissal[]
   trainerTimerPresets      TrainerTimerPreset[]
+  trainerPersonalGoals     TrainerPersonalGoal[]
   trainerHomework          ClientHomework[]          @relation("TrainerHomework")
   clientHomework           ClientHomework[]          @relation("ClientHomework")
   groupClassNotes          GroupClassNote[]
@@ -3415,6 +3416,31 @@ model TrainerInsightDismissal {
 
   @@unique([trainerId, insightKey])
   @@index([trainerId, dismissUntil])
+}
+
+enum TrainerGoalMetric {
+  PT_SESSIONS
+  SALES_SUM
+  ACTIVE_CLIENTS
+  PACKAGES_SOLD
+  NEW_CLIENTS
+}
+
+/// Optional personal motivation goals for «Тренер клуб» (up to 3).
+model TrainerPersonalGoal {
+  id        String            @id @default(cuid())
+  trainerId String
+  metric    TrainerGoalMetric
+  /// Target value for the current calendar month (sessions / clients / packages)
+  /// or sales in minor units (SALES_SUM).
+  target    Int
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  trainer User @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@unique([trainerId, metric])
+  @@index([trainerId])
 }
 
 /// Homework assigned by trainer until the next PT (Forma Coach mode 4).

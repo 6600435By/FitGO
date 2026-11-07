@@ -990,6 +990,23 @@ export const api = {
       token,
     ),
 
+  trainerMotivationGoals: (token: string) =>
+    request<import('@fitgo/shared-types').TrainerPersonalGoalsResponse>(
+      '/trainer/motivation-goals',
+      {},
+      token,
+    ),
+
+  trainerPutMotivationGoals: (
+    token: string,
+    goals: import('@fitgo/shared-types').TrainerPersonalGoalInput[],
+  ) =>
+    request<import('@fitgo/shared-types').TrainerPersonalGoalsResponse>(
+      '/trainer/motivation-goals',
+      { method: 'PUT', body: JSON.stringify({ goals }) },
+      token,
+    ),
+
   trainerLedgerOverview: (token: string) =>
     request<import('@fitgo/shared-types').TrainerLedgerOverview>(
       '/trainer/ledger/overview',
@@ -1092,6 +1109,14 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(data),
     }, token),
+
+  /** Hard-delete PERSONAL ledger booking («Тренер клуб»). */
+  trainerDeletePersonalBooking: (token: string, bookingId: string) =>
+    request<{ success: boolean }>(
+      `/trainer/personal-bookings/${encodeURIComponent(bookingId)}`,
+      { method: 'DELETE' },
+      token,
+    ),
 
   clientProducts: (token: string) =>
     request<MembershipProduct[]>('/client/products', {}, token),

@@ -177,7 +177,7 @@ export function ScheduleDayGrid({
                       Нет в 1С — ждёт привязки
                     </span>
                   ) : null}
-                  {event.ptControlLabel ? (
+                  {event.ptControlLabel && event.ptFlow !== 'PERSONAL' ? (
                     <span className="block truncate text-slate-400/90">
                       {event.ptControlLabel}
                     </span>

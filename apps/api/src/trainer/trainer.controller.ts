@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -20,6 +21,7 @@ import { FloorStaffHomeService } from '../floor-home/floor-staff-home.service';
 import { GpScheduleService } from './gp-schedule.service';
 import { TrainerClientLookupService } from './trainer-client-lookup.service';
 import { TrainerInsightsService } from './trainer-insights.service';
+import { TrainerPersonalGoalsService } from './trainer-personal-goals.service';
 import { TrainerService } from './trainer.service';
 import { TrainerRosterService } from './trainer-roster.service';
 import { AddGoalDto } from './dto/add-goal.dto';
@@ -28,6 +30,7 @@ import { AddNoteDto } from './dto/add-note.dto';
 import { AddOfflineClientDto } from './dto/add-offline-client.dto';
 import { DismissInsightDto } from './dto/dismiss-insight.dto';
 import { InviteClientDto } from './dto/invite-client.dto';
+import { PutPersonalGoalsDto } from './dto/personal-goals.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import {
   CreateTimerPresetDto,
@@ -50,6 +53,7 @@ export class TrainerController {
     private readonly gpSchedule: GpScheduleService,
     private readonly floorHome: FloorStaffHomeService,
     private readonly insights: TrainerInsightsService,
+    private readonly personalGoals: TrainerPersonalGoalsService,
   ) {}
 
   @Get('gp-schedule')
@@ -82,6 +86,19 @@ export class TrainerController {
     @Body() dto: DismissInsightDto,
   ) {
     return this.insights.dismiss(user, dto.key, dto.days);
+  }
+
+  @Get('motivation-goals')
+  getMotivationGoals(@CurrentUser() user: JwtPayload) {
+    return this.personalGoals.getGoals(user);
+  }
+
+  @Put('motivation-goals')
+  putMotivationGoals(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: PutPersonalGoalsDto,
+  ) {
+    return this.personalGoals.putGoals(user, dto.goals);
   }
 
   @Get('clients')

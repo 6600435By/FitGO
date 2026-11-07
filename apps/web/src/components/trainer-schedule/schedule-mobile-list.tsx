@@ -71,7 +71,7 @@ export function ScheduleMobileList({
                       Нет в 1С — ждёт привязки
                     </p>
                   ) : null}
-                  {event.ptControlLabel ? (
+                  {event.ptControlLabel && event.ptFlow !== 'PERSONAL' ? (
                     <p className="mt-1 text-xs text-slate-400">
                       {event.ptControlLabel}
                     </p>

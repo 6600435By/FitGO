@@ -22,6 +22,7 @@ import {
   saveTimerState,
   type TimerSyncMessage,
 } from './persistence';
+import { buildPreset, isBasicPresetId } from './presets';
 import { handleTimerSoundEvents, unlockAudio } from './sound';
 import type {
   BuiltPreset,
@@ -131,6 +132,22 @@ export function useTrainingTimer(opts: {
       meta.kind === 'hall' ||
       mirrorOnly;
     if (!sameSession && !mirrorOnly) return;
+    // Drop advanced presets left from older live UI when idle.
+    const needsBasicReset =
+      !mirrorOnly &&
+      saved.status === 'idle' &&
+      !isBasicPresetId(saved.presetId);
+    if (needsBasicReset) {
+      const stopwatch = buildPreset({ id: 'stopwatch' });
+      commit(
+        idleWithPrefs(stopwatch.phases, {
+          presetId: stopwatch.id,
+          presetName: stopwatch.name,
+          meta: { ...saved.meta, ...meta },
+        }),
+      );
+      return;
+    }
     const hydrated = {
       ...saved,
       meta: mirrorOnly || meta.kind === 'hall' ? saved.meta : { ...saved.meta, ...meta },

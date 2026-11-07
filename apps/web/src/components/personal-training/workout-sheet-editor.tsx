@@ -97,6 +97,8 @@ interface WorkoutSheetEditorProps {
   isTrainer: boolean;
   onChange: (sheet: WorkoutSheet) => void;
   onCopyPrevious?: () => void;
+  /** Forma Coach: hide legacy guided session + timer dock (use /trainer/live instead). */
+  hideLegacyTimer?: boolean;
 }
 
 function weekdayIndex(isoDate: string): number {
@@ -150,6 +152,7 @@ export function WorkoutSheetEditor({
   isTrainer,
   onChange,
   onCopyPrevious,
+  hideLegacyTimer = false,
 }: WorkoutSheetEditorProps) {
   const readOnly = !canEdit || !isTrainer;
   const activeWeekday = weekdayIndex(sessionDate);
@@ -476,21 +479,25 @@ export function WorkoutSheetEditor({
           </p>
         )}
 
-        <WorkoutSessionController
-          sheet={sheet}
-          canStart={canStartSession}
-          onChange={onChange}
-        />
+        {!hideLegacyTimer ? (
+          <>
+            <WorkoutSessionController
+              sheet={sheet}
+              canStart={canStartSession}
+              onChange={onChange}
+            />
 
-        {!readOnly && timerDockBlocks.length > 0 && (
-          <WorkoutTimerDock
-            sheet={sheet}
-            readOnly={readOnly}
-            circuit={sheet.circuit}
-            blocks={timerDockBlocks}
-            onChange={onChange}
-          />
-        )}
+            {!readOnly && timerDockBlocks.length > 0 && (
+              <WorkoutTimerDock
+                sheet={sheet}
+                readOnly={readOnly}
+                circuit={sheet.circuit}
+                blocks={timerDockBlocks}
+                onChange={onChange}
+              />
+            )}
+          </>
+        ) : null}
 
       </div>
 
