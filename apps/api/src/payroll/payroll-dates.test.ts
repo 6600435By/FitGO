@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import {
   addCalendarDays,
+  clubDayIso,
   dateOnly,
   localMonthStartIso,
   localTodayIso,
@@ -16,6 +17,16 @@ import {
   assert.equal(utcDateKey(d), '2026-10-01');
   // Must not drift to previous UTC day in Europe/Minsk.
   assert.equal(d.toISOString(), '2026-10-01T12:00:00.000Z');
+}
+
+{
+  // FitGO/Onex day|client keys: 00:00–02:59 Minsk is still "today", UTC slice is yesterday.
+  const lateMinsk = new Date('2026-11-07T21:30:00.000Z'); // 00:30 Minsk Nov 8
+  assert.equal(lateMinsk.toISOString().slice(0, 10), '2026-11-07');
+  assert.equal(clubDayIso(lateMinsk), '2026-11-08');
+  assert.equal(clubDayIso('2026-11-07T21:30:00.000Z'), '2026-11-08');
+  // Date-only sale day stays the same calendar day.
+  assert.equal(clubDayIso('2026-11-07'), '2026-11-07');
 }
 
 {

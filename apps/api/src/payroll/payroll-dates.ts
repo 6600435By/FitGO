@@ -3,6 +3,19 @@
  * Local `T00:00:00` shifts the stored day in UTC+ (Minsk) — always use UTC noon.
  */
 
+/** Club calendar timezone (no DST). */
+export const CLUB_TZ = 'Europe/Minsk';
+
+/** Calendar day YYYY-MM-DD in club TZ — not UTC `toISOString().slice(0, 10)`. */
+export function clubDayIso(date: Date | string | number = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: CLUB_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date instanceof Date ? date : new Date(date));
+}
+
 /** YYYY-MM-DD → Date at UTC noon (stable for `@db.Date` write/compare). */
 export function dateOnly(iso: string): Date {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());

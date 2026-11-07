@@ -127,6 +127,7 @@ import {
   type SpaBlockSaleDoc,
 } from './spa-block-unit-price';
 import {
+  clubDayIso,
   dateOnly,
   localMonthStartIso,
   localTodayIso,
@@ -995,7 +996,7 @@ export class PayrollService {
           if (!eligible || !b.linkedDocExternalId) continue;
           const clientName =
             `${b.client.lastName} ${b.client.firstName}`.trim();
-          const day = b.startAt.toISOString().slice(0, 10);
+          const day = clubDayIso(b.startAt);
           const dayClient = `${day}|${clientName.toLowerCase()}`;
           fitgoPtPaidDayClient.add(dayClient);
           const sk = fitgoSessionKey('PT', b.id);
@@ -1304,7 +1305,7 @@ export class PayrollService {
         primary?.clientName
       ) {
         coveredSaleDays.add(
-          `${o.startAt.toISOString().slice(0, 10)}|${primary.clientName.trim().toLowerCase()}`,
+          `${clubDayIso(o.startAt)}|${primary.clientName.trim().toLowerCase()}`,
         );
       }
     }
@@ -1318,7 +1319,7 @@ export class PayrollService {
       if (sale.paymentStatus !== 'PAID') continue;
       const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
       if (amountMinor <= 0) continue;
-      const day = (sale.occurredAt || '').slice(0, 10);
+      const day = sale.occurredAt ? clubDayIso(sale.occurredAt) : '';
       const clientKey = `${day}|${(sale.clientName ?? '').trim().toLowerCase()}`;
       if (coveredSaleDays.has(clientKey)) continue;
       if (ptControlOn) {
@@ -3958,18 +3959,8 @@ export class PayrollService {
     return this.clubRevenue.detail(clubId, id);
   }
 
-  /** Club calendar day YYYY-MM-DD (Europe/Minsk). */
-  private clubDayIso(occurredAt: string): string {
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Europe/Minsk',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date(occurredAt));
-  }
-
   private isAdvanceHalfClubDay(occurredAt: string): boolean {
-    const day = Number(this.clubDayIso(occurredAt).slice(8, 10));
+    const day = Number(clubDayIso(occurredAt).slice(8, 10));
     return day >= 1 && day <= 15;
   }
 
