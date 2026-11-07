@@ -841,6 +841,31 @@ export class NotificationsService implements OnModuleInit {
     });
   }
 
+  async notifyTrainerSessionNotes(params: {
+    clientId: string;
+    trainerId: string;
+    trainerName: string;
+    hasHomework: boolean;
+    bookingId?: string;
+  }) {
+    const body = params.hasHomework
+      ? `${params.trainerName} оставил(а) заметку и задание после тренировки.`
+      : `${params.trainerName} оставил(а) заметку после тренировки.`;
+    await this.createNotification({
+      userId: params.clientId,
+      title: params.hasHomework
+        ? 'Заметка и задание от тренера'
+        : 'Заметка от тренера',
+      body,
+      senderId: params.trainerId,
+      status: NotificationStatus.PENDING,
+      url: params.bookingId
+        ? `/client/personal-bookings/${params.bookingId}`
+        : '/client',
+      tag: 'pt-notes',
+    });
+  }
+
   getMockClientData() {
     return MOCK_USERS;
   }

@@ -14,6 +14,7 @@ import {
   normalizeWorkoutSheet,
   workoutSheetHasData,
 } from '@fitgo/shared-types';
+import { SegmentedControl } from '@fitgo/forma-ui';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
@@ -23,6 +24,7 @@ import {
   sessionStatusColor,
   sessionStatusLabel,
 } from '@/lib/utils';
+import { SessionNotesSheet } from './session-notes-sheet';
 import { WorkoutSheetEditor } from './workout-sheet-editor';
 
 type DraftGoal = {
@@ -60,6 +62,8 @@ export function SessionPlanEditor({
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [homeworkDraft, setHomeworkDraft] = useState('');
 
   const load = async () => {
     const token = getToken();
@@ -209,18 +213,35 @@ export function SessionPlanEditor({
   const myGoalConfirmed = (goal: PersonalTrainingSessionGoal) =>
     isClient ? goal.clientConfirmed : goal.trainerConfirmed;
 
+  const primaryGoal =
+    draftGoals.find((g) => g.title.trim())?.title ||
+    session.goals.find((g) => g.title.trim())?.title;
+
+  const liveHref =
+    isTrainer && session.clientId
+      ? `/trainer/live/pt/${encodeURIComponent(bookingId)}?title=${encodeURIComponent(session.clientName || 'ПТ')}&clientId=${encodeURIComponent(session.clientId)}`
+      : isTrainer
+        ? `/trainer/live/pt/${encodeURIComponent(bookingId)}?title=${encodeURIComponent(session.clientName || 'ПТ')}`
+        : null;
+
   return (
     <div className="space-y-4">
-      <Link href={backHref} className="text-sm text-fitgo-400">
+      <Link href={backHref} className="text-sm text-forma-400 text-fitgo-400">
         ← {backLabel}
       </Link>
 
       <div className="card">
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold">Персональная тренировка</h2>
-            <p className="mt-1 text-sm text-slate-400">
-              {formatDateTime(session.startAt)} · {counterpartName}
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-wide text-zinc-500 text-slate-500">
+              Персональная тренировка
+            </p>
+            <h2 className="mt-1 font-display text-xl font-semibold text-white sm:text-2xl">
+              {counterpartName || 'Клиент'}
+            </h2>
+            <p className="mt-1 text-sm text-zinc-400 text-slate-400">
+              {formatDateTime(session.startAt)}
+              {primaryGoal ? ` · ${primaryGoal}` : ''}
             </p>
           </div>
           <span
@@ -229,6 +250,23 @@ export function SessionPlanEditor({
             {sessionStatusLabel(session.status)}
           </span>
         </div>
+
+        {isTrainer ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {liveHref ? (
+              <Link href={liveHref} className="btn-primary">
+                Режим тренировки
+              </Link>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setNotesOpen(true)}
+              className="btn-secondary"
+            >
+              Заметки
+            </button>
+          </div>
+        ) : null}
 
         {session.status === 'COMPLETED' && (
           <p className="mt-3 text-sm text-slate-400">
@@ -257,30 +295,15 @@ export function SessionPlanEditor({
         </p>
       )}
 
-      <div className="flex gap-2 rounded-xl bg-slate-800/50 p-1">
-        <button
-          type="button"
-          onClick={() => setActiveTab('sheet')}
-          className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium ${
-            activeTab === 'sheet'
-              ? 'bg-fitgo-500 text-white'
-              : 'text-slate-400'
-          }`}
-        >
-          Тренировочный лист
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('goals')}
-          className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium ${
-            activeTab === 'goals'
-              ? 'bg-fitgo-500 text-white'
-              : 'text-slate-400'
-          }`}
-        >
-          Цели и задачи
-        </button>
-      </div>
+      <SegmentedControl
+        options={[
+          { value: 'sheet', label: 'Лист' },
+          { value: 'goals', label: 'Цели' },
+        ]}
+        value={activeTab}
+        onChange={setActiveTab}
+        layoutId="session-plan-tab"
+      />
 
       {activeTab === 'sheet' ? (
         <div className="space-y-3">
@@ -558,6 +581,45 @@ export function SessionPlanEditor({
           Подтвердить завершение тренировки
         </button>
       )}
+
+      {isTrainer ? (
+        <SessionNotesSheet
+          open={notesOpen}
+          onOpenChange={setNotesOpen}
+          clientNotes={draftWorkoutSheet.notes ?? ''}
+          privateNotes={draftWorkoutSheet.trainerPrivateNotes ?? ''}
+          homeworkDraft={homeworkDraft}
+          onChangeClient={(notes) => {
+            setDraftWorkoutSheet((s) => ({ ...s, notes }));
+            setEditing(true);
+          }}
+          onChangePrivate={(trainerPrivateNotes) => {
+            setDraftWorkoutSheet((s) => ({ ...s, trainerPrivateNotes }));
+            setEditing(true);
+          }}
+          onChangeHomework={setHomeworkDraft}
+          busy={busy}
+          onSave={async () => {
+            await savePlan();
+            if (homeworkDraft.trim()) {
+              const token = getToken();
+              if (token) {
+                try {
+                  await api.trainerCreateHomework(token, {
+                    clientId: session.clientId,
+                    bookingId,
+                    summary: homeworkDraft.trim(),
+                  });
+                  setMessage('Заметки и задание сохранены');
+                } catch {
+                  setMessage('Заметки сохранены; задание — позже');
+                }
+              }
+            }
+            setNotesOpen(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

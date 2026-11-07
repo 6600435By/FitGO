@@ -322,7 +322,7 @@ export function WorkoutSheetEditor({
                 onClick={handleCopyPrevious}
                 className="text-xs text-fitgo-400 hover:text-fitgo-300 disabled:opacity-50"
               >
-                {copyBusy ? 'Загрузка…' : 'С прошлой тренировки'}
+                {copyBusy ? 'Загрузка…' : 'Повторить прошлую'}
               </button>
             )}
             {isTrainer && canEdit && onResetTemplate && (
@@ -331,7 +331,7 @@ export function WorkoutSheetEditor({
                 onClick={onResetTemplate}
                 className="text-xs text-amber-400 hover:text-amber-300"
               >
-                Сбросить шаблон
+                Шаблон
               </button>
             )}
           </div>

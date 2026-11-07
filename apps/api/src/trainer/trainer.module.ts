@@ -10,6 +10,7 @@ import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import { TrainerRosterModule } from '../trainer-roster/trainer-roster.module';
 import { GpScheduleService } from './gp-schedule.service';
 import { TrainerClientLookupService } from './trainer-client-lookup.service';
+import { ClientHomeworkController } from './client-homework.controller';
 import { TrainerController } from './trainer.controller';
 import { TrainerInsightsSchedulerService } from './trainer-insights.scheduler';
 import { TrainerInsightsService } from './trainer-insights.service';
@@ -29,7 +30,7 @@ import { TrainerService } from './trainer.service';
     TrainerLedgerModule,
     AnalyticsModule,
   ],
-  controllers: [TrainerController],
+  controllers: [TrainerController, ClientHomeworkController],
   providers: [
     TrainerService,
     GpScheduleService,
@@ -37,6 +38,6 @@ import { TrainerService } from './trainer.service';
     TrainerInsightsService,
     TrainerInsightsSchedulerService,
   ],
-  exports: [TrainerLedgerModule, TrainerInsightsService],
+  exports: [TrainerLedgerModule, TrainerInsightsService, TrainerService],
 })
 export class TrainerModule {}

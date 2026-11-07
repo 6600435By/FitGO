@@ -684,4 +684,370 @@ export class TrainerService {
       verification: 'VERIFIED_TRAINER',
     };
   }
+
+  listTimerPresets(user: JwtPayload) {
+    return this.prisma.trainerTimerPreset.findMany({
+      where: { trainerId: user.sub },
+      orderBy: [{ sortOrder: 'asc' }, { updatedAt: 'desc' }],
+    });
+  }
+
+  createTimerPreset(
+    user: JwtPayload,
+    data: {
+      name: string;
+      phases: Array<{
+        kind: string;
+        durationSec?: number | null;
+        label: string;
+      }>;
+      soundPack?: string;
+      sortOrder?: number;
+    },
+  ) {
+    return this.prisma.trainerTimerPreset.create({
+      data: {
+        trainerId: user.sub,
+        name: data.name.trim(),
+        phases: data.phases as object[],
+        soundPack: data.soundPack ?? 'classic',
+        sortOrder: data.sortOrder ?? 0,
+      },
+    });
+  }
+
+  async updateTimerPreset(
+    user: JwtPayload,
+    presetId: string,
+    data: {
+      name?: string;
+      phases?: Array<{
+        kind: string;
+        durationSec?: number | null;
+        label: string;
+      }>;
+      soundPack?: string;
+      sortOrder?: number;
+    },
+  ) {
+    const existing = await this.prisma.trainerTimerPreset.findFirst({
+      where: { id: presetId, trainerId: user.sub },
+    });
+    if (!existing) throw new NotFoundException('Пресет не найден');
+    return this.prisma.trainerTimerPreset.update({
+      where: { id: presetId },
+      data: {
+        ...(data.name != null ? { name: data.name.trim() } : {}),
+        ...(data.phases != null ? { phases: data.phases as object[] } : {}),
+        ...(data.soundPack != null ? { soundPack: data.soundPack } : {}),
+        ...(data.sortOrder != null ? { sortOrder: data.sortOrder } : {}),
+      },
+    });
+  }
+
+  async deleteTimerPreset(user: JwtPayload, presetId: string) {
+    const existing = await this.prisma.trainerTimerPreset.findFirst({
+      where: { id: presetId, trainerId: user.sub },
+    });
+    if (!existing) throw new NotFoundException('Пресет не найден');
+    await this.prisma.trainerTimerPreset.delete({ where: { id: presetId } });
+    return { ok: true as const };
+  }
+
+  async createHomework(
+    user: JwtPayload,
+    data: {
+      clientId: string;
+      bookingId?: string;
+      summary?: string;
+      dueAt?: string;
+      items?: Array<{
+        kind?: string;
+        title: string;
+        target?: string;
+        timesRequired?: number;
+      }>;
+    },
+  ) {
+    await this.roster.ensureRosterAccess(user.sub, data.clientId);
+
+    let dueAt: Date | undefined;
+    if (data.dueAt) {
+      dueAt = new Date(data.dueAt);
+    } else {
+      const next = await this.prisma.personalTrainingBooking.findFirst({
+        where: {
+          trainerId: user.sub,
+          clientId: data.clientId,
+          startAt: { gt: new Date() },
+          status: { not: PersonalBookingStatus.CANCELLED },
+        },
+        orderBy: { startAt: 'asc' },
+      });
+      dueAt = next?.startAt;
+    }
+
+    const items =
+      data.items && data.items.length > 0
+        ? data.items
+        : data.summary?.trim()
+          ? [{ kind: 'habit', title: data.summary.trim(), timesRequired: 1 }]
+          : [];
+    if (items.length === 0) {
+      throw new BadRequestException('Добавьте пункты задания или текст');
+    }
+
+    // Cancel previous active homework for this pair.
+    await this.prisma.clientHomework.updateMany({
+      where: {
+        trainerId: user.sub,
+        clientId: data.clientId,
+        status: 'ACTIVE',
+      },
+      data: { status: 'CANCELLED' },
+    });
+
+    const homework = await this.prisma.clientHomework.create({
+      data: {
+        trainerId: user.sub,
+        clientId: data.clientId,
+        bookingId: data.bookingId,
+        summary: data.summary?.trim() || null,
+        dueAt: dueAt ?? null,
+        items: {
+          create: items.map((item, i) => ({
+            kind: item.kind ?? 'habit',
+            title: item.title.trim(),
+            target: item.target?.trim() || null,
+            timesRequired: item.timesRequired ?? 1,
+            sortOrder: i,
+          })),
+        },
+      },
+      include: { items: { include: { checks: true } } },
+    });
+
+    const trainer = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { firstName: true, lastName: true },
+    });
+    const trainerName =
+      `${trainer?.firstName ?? ''} ${trainer?.lastName ?? ''}`.trim() ||
+      'Тренер';
+    await this.notifications.notifyTrainerSessionNotes({
+      clientId: data.clientId,
+      trainerId: user.sub,
+      trainerName,
+      hasHomework: true,
+      bookingId: data.bookingId,
+    });
+
+    return this.mapHomework(homework);
+  }
+
+  async listClientHomework(user: JwtPayload, clientId: string) {
+    await this.roster.ensureRosterAccess(user.sub, clientId);
+    const rows = await this.prisma.clientHomework.findMany({
+      where: { trainerId: user.sub, clientId },
+      orderBy: { createdAt: 'desc' },
+      take: 10,
+      include: { items: { include: { checks: true }, orderBy: { sortOrder: 'asc' } } },
+    });
+    return rows.map((r) => this.mapHomework(r));
+  }
+
+  async getActiveHomeworkForClient(clientId: string) {
+    const row = await this.prisma.clientHomework.findFirst({
+      where: { clientId, status: 'ACTIVE' },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        items: { include: { checks: true }, orderBy: { sortOrder: 'asc' } },
+        trainer: { select: { firstName: true, lastName: true } },
+      },
+    });
+    if (!row) return null;
+    return {
+      ...this.mapHomework(row),
+      trainerName: `${row.trainer.firstName} ${row.trainer.lastName}`.trim(),
+    };
+  }
+
+  async checkHomeworkItem(
+    clientId: string,
+    itemId: string,
+    dayKey: string,
+    done = true,
+  ) {
+    const item = await this.prisma.clientHomeworkItem.findFirst({
+      where: { id: itemId, homework: { clientId, status: 'ACTIVE' } },
+      include: { homework: true, checks: true },
+    });
+    if (!item) throw new NotFoundException('Пункт задания не найден');
+
+    await this.prisma.clientHomeworkCheck.upsert({
+      where: { itemId_dayKey: { itemId, dayKey } },
+      create: { itemId, dayKey, done },
+      update: { done },
+    });
+
+    const refreshed = await this.prisma.clientHomework.findUnique({
+      where: { id: item.homeworkId },
+      include: {
+        items: { include: { checks: true }, orderBy: { sortOrder: 'asc' } },
+        trainer: { select: { firstName: true, lastName: true } },
+      },
+    });
+    if (!refreshed) throw new NotFoundException('Задание не найдено');
+
+    const mapped = this.mapHomework(refreshed);
+    if (mapped.progress.done >= mapped.progress.total && mapped.progress.total > 0) {
+      await this.prisma.clientHomework.update({
+        where: { id: refreshed.id },
+        data: { status: 'DONE', completedAt: new Date() },
+      });
+      mapped.status = 'DONE';
+    }
+
+    return {
+      ...mapped,
+      trainerName: `${refreshed.trainer.firstName} ${refreshed.trainer.lastName}`.trim(),
+    };
+  }
+
+  async getPreviousHomework(user: JwtPayload, clientId: string) {
+    await this.roster.ensureRosterAccess(user.sub, clientId);
+    const row = await this.prisma.clientHomework.findFirst({
+      where: {
+        trainerId: user.sub,
+        clientId,
+        status: { in: ['DONE', 'CANCELLED', 'ACTIVE'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      include: { items: { orderBy: { sortOrder: 'asc' } } },
+    });
+    if (!row) return null;
+    return {
+      id: row.id,
+      summary: row.summary,
+      items: row.items.map((i) => ({
+        kind: i.kind,
+        title: i.title,
+        target: i.target,
+        timesRequired: i.timesRequired,
+      })),
+    };
+  }
+
+  private mapHomework(row: {
+    id: string;
+    trainerId: string;
+    clientId: string;
+    bookingId: string | null;
+    summary: string | null;
+    status: string;
+    dueAt: Date | null;
+    completedAt: Date | null;
+    createdAt: Date;
+    items: Array<{
+      id: string;
+      kind: string;
+      title: string;
+      target: string | null;
+      timesRequired: number;
+      sortOrder: number;
+      checks: Array<{ id: string; dayKey: string; done: boolean }>;
+    }>;
+  }) {
+    const items = row.items.map((item) => {
+      const doneCount = item.checks.filter((c) => c.done).length;
+      return {
+        id: item.id,
+        kind: item.kind,
+        title: item.title,
+        target: item.target ?? undefined,
+        timesRequired: item.timesRequired,
+        sortOrder: item.sortOrder,
+        doneCount,
+        checks: item.checks.map((c) => ({
+          dayKey: c.dayKey,
+          done: c.done,
+        })),
+        complete: doneCount >= item.timesRequired,
+      };
+    });
+    const total = items.length;
+    const done = items.filter((i) => i.complete).length;
+    return {
+      id: row.id,
+      trainerId: row.trainerId,
+      clientId: row.clientId,
+      bookingId: row.bookingId ?? undefined,
+      summary: row.summary ?? undefined,
+      status: row.status,
+      dueAt: row.dueAt?.toISOString(),
+      completedAt: row.completedAt?.toISOString(),
+      createdAt: row.createdAt.toISOString(),
+      items,
+      progress: { done, total },
+    };
+  }
+
+  async notifySessionNotes(
+    user: JwtPayload,
+    bookingId: string,
+    hasHomework: boolean,
+  ) {
+    const booking = await this.prisma.personalTrainingBooking.findFirst({
+      where: { id: bookingId, trainerId: user.sub },
+      include: {
+        trainer: { select: { firstName: true, lastName: true } },
+      },
+    });
+    if (!booking) throw new NotFoundException('Запись не найдена');
+    const trainerName =
+      `${booking.trainer.firstName} ${booking.trainer.lastName}`.trim() ||
+      'Тренер';
+    await this.notifications.notifyTrainerSessionNotes({
+      clientId: booking.clientId,
+      trainerId: user.sub,
+      trainerName,
+      hasHomework,
+      bookingId,
+    });
+    return { ok: true as const };
+  }
+
+  async upsertGroupClassNote(
+    user: JwtPayload,
+    data: { sessionKey: string; text?: string; groupRpe?: number },
+  ) {
+    const sessionKey = data.sessionKey.trim();
+    if (!sessionKey) throw new BadRequestException('sessionKey обязателен');
+    return this.prisma.groupClassNote.upsert({
+      where: {
+        trainerId_sessionKey: { trainerId: user.sub, sessionKey },
+      },
+      create: {
+        trainerId: user.sub,
+        sessionKey,
+        text: data.text?.trim() ?? '',
+        groupRpe: data.groupRpe ?? null,
+      },
+      update: {
+        ...(data.text != null ? { text: data.text.trim() } : {}),
+        ...(data.groupRpe !== undefined ? { groupRpe: data.groupRpe } : {}),
+      },
+    });
+  }
+
+  async getGroupClassNote(user: JwtPayload, sessionKey: string) {
+    return this.prisma.groupClassNote.findUnique({
+      where: {
+        trainerId_sessionKey: {
+          trainerId: user.sub,
+          sessionKey: decodeURIComponent(sessionKey),
+        },
+      },
+    });
+  }
 }

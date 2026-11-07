@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
+import { ClientHomeworkCard } from '@/components/client/client-homework-card';
 import { ClientTrainerInvites } from '@/components/client/client-trainer-invites';
 import { MembershipWallet } from '@/components/client/membership-wallet';
 import { WeekActivity } from '@/components/client/week-activity';
@@ -192,6 +193,8 @@ function ClientHomePageInner() {
       </header>
 
       <ClientTrainerInvites />
+
+      <ClientHomeworkCard />
 
       {crmStatus === 'PENDING_CRM' && club && (
         <div className="rounded-3xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">

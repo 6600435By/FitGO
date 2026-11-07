@@ -1879,6 +1879,153 @@ export const api = {
       token,
     ),
 
+  trainerTimerPresets: (token: string) =>
+    request<
+      Array<{
+        id: string;
+        name: string;
+        phases: Array<{
+          kind: string;
+          durationSec: number | null;
+          label: string;
+        }>;
+        soundPack: string;
+        sortOrder: number;
+      }>
+    >('/trainer/timer-presets', {}, token),
+
+  trainerCreateTimerPreset: (
+    token: string,
+    data: {
+      name: string;
+      phases: Array<{
+        kind: string;
+        durationSec?: number | null;
+        label: string;
+      }>;
+      soundPack?: string;
+      sortOrder?: number;
+    },
+  ) =>
+    request<{ id: string }>(
+      '/trainer/timer-presets',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerUpdateTimerPreset: (
+    token: string,
+    presetId: string,
+    data: {
+      name?: string;
+      phases?: Array<{
+        kind: string;
+        durationSec?: number | null;
+        label: string;
+      }>;
+      soundPack?: string;
+      sortOrder?: number;
+    },
+  ) =>
+    request<{ id: string }>(
+      `/trainer/timer-presets/${encodeURIComponent(presetId)}`,
+      { method: 'PATCH', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerDeleteTimerPreset: (token: string, presetId: string) =>
+    request<{ ok: true }>(
+      `/trainer/timer-presets/${encodeURIComponent(presetId)}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  trainerCreateHomework: (
+    token: string,
+    data: {
+      clientId: string;
+      bookingId?: string;
+      summary?: string;
+      dueAt?: string;
+      items?: Array<{
+        kind?: string;
+        title: string;
+        target?: string;
+        timesRequired?: number;
+      }>;
+    },
+  ) =>
+    request<{ id: string; progress: { done: number; total: number } }>(
+      '/trainer/homework',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerClientHomework: (token: string, clientId: string) =>
+    request<
+      Array<{
+        id: string;
+        summary?: string;
+        status: string;
+        progress: { done: number; total: number };
+      }>
+    >(
+      `/trainer/clients/${encodeURIComponent(clientId)}/homework`,
+      {},
+      token,
+    ),
+
+  trainerPreviousHomework: (token: string, clientId: string) =>
+    request<{
+      id: string;
+      summary?: string | null;
+      items: Array<{
+        kind: string;
+        title: string;
+        target?: string | null;
+        timesRequired: number;
+      }>;
+    } | null>(
+      `/trainer/clients/${encodeURIComponent(clientId)}/homework/previous`,
+      {},
+      token,
+    ),
+
+  trainerNotifySessionNotes: (
+    token: string,
+    bookingId: string,
+    hasHomework: boolean,
+  ) =>
+    request<{ ok: true }>(
+      `/trainer/sessions/${encodeURIComponent(bookingId)}/notify-notes`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ hasHomework }),
+      },
+      token,
+    ),
+
+  trainerGetGroupNote: (token: string, sessionKey: string) =>
+    request<{
+      id: string;
+      text: string;
+      groupRpe: number | null;
+    } | null>(
+      `/trainer/group-notes/${encodeURIComponent(sessionKey)}`,
+      {},
+      token,
+    ),
+
+  trainerUpsertGroupNote: (
+    token: string,
+    data: { sessionKey: string; text?: string; groupRpe?: number },
+  ) =>
+    request<{ id: string }>(
+      '/trainer/group-notes',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
   specialistHome: (token: string) =>
     request<FloorStaffHome>('/specialist/home', {}, token),
 

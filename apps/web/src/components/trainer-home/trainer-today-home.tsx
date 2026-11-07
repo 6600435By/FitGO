@@ -106,6 +106,24 @@ function planHref(s: FloorStaffHomeSession): string | null {
   return null;
 }
 
+function liveHref(s: FloorStaffHomeSession): string | null {
+  if (s.kind === 'PT') {
+    const q = new URLSearchParams();
+    if (s.title) q.set('title', s.title);
+    if (s.clientId) q.set('clientId', s.clientId);
+    const qs = q.toString();
+    return `/trainer/live/pt/${encodeURIComponent(s.id)}${qs ? `?${qs}` : ''}`;
+  }
+  if (s.kind === 'GROUP') {
+    const key = s.sessionKey || s.id;
+    const q = new URLSearchParams();
+    if (s.title) q.set('title', s.title);
+    const qs = q.toString();
+    return `/trainer/live/gp/${encodeURIComponent(key)}${qs ? `?${qs}` : ''}`;
+  }
+  return null;
+}
+
 function HeroNext({
   next,
   scheduleHref,
@@ -146,6 +164,7 @@ function HeroNext({
   }
 
   const plan = planHref(next);
+  const live = liveHref(next);
   const kind =
     next.kind === 'PT' ? 'ПТ' : next.kind === 'GROUP' ? 'ГП' : 'Запись';
 
@@ -174,17 +193,32 @@ function HeroNext({
         </div>
       ) : null}
       <div className="mt-4 flex flex-wrap gap-2">
+        {live ? (
+          <Link
+            href={live}
+            className="rounded-2xl bg-forma-500 px-4 py-2 text-sm font-semibold text-ink"
+          >
+            Начать
+          </Link>
+        ) : null}
         {plan ? (
           <Link
             href={plan}
-            className="rounded-2xl bg-forma-500 px-4 py-2 text-sm font-semibold text-ink"
+            className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-zinc-300"
           >
             Открыть план
+          </Link>
+        ) : !live ? (
+          <Link
+            href={scheduleHref}
+            className="rounded-2xl bg-forma-500 px-4 py-2 text-sm font-semibold text-ink"
+          >
+            Расписание
           </Link>
         ) : (
           <Link
             href={scheduleHref}
-            className="rounded-2xl bg-forma-500 px-4 py-2 text-sm font-semibold text-ink"
+            className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-zinc-300"
           >
             Расписание
           </Link>

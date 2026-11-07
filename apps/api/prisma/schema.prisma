@@ -777,11 +777,33 @@ model User {
   trainerClientBalances   TrainerClientBalance[] @relation("TrainerClientBalances")
   clientTrainerBalances   TrainerClientBalance[] @relation("ClientTrainerBalances")
   trainerInsightDismissals TrainerInsightDismissal[]
+  trainerTimerPresets      TrainerTimerPreset[]
+  trainerHomework          ClientHomework[]          @relation("TrainerHomework")
+  clientHomework           ClientHomework[]          @relation("ClientHomework")
+  groupClassNotes          GroupClassNote[]
 
   @@unique([clubId, gamificationNickname])
   @@unique([clubId, employeeCode])
   @@index([externalId])
   @@index([clubId, employeeCode])
+}
+
+/// Personal timer presets for Forma Coach live mode (synced across devices).
+model TrainerTimerPreset {
+  id        String   @id @default(cuid())
+  trainerId String
+  name      String
+  /// TimerPhase[] JSON: { kind, durationSec, label }
+  phases    Json
+  /// classic | gong | whistle
+  soundPack String   @default("classic")
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  trainer User @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@index([trainerId, sortOrder])
 }
 
 /// Per-admin personal /admin home: which data cards and pins to show.
@@ -3390,4 +3412,73 @@ model TrainerInsightDismissal {
 
   @@unique([trainerId, insightKey])
   @@index([trainerId, dismissUntil])
+}
+
+/// Homework assigned by trainer until the next PT (Forma Coach mode 4).
+model ClientHomework {
+  id           String    @id @default(cuid())
+  trainerId    String
+  clientId     String
+  bookingId    String?
+  /// Free-form summary shown on client home.
+  summary      String?
+  status       String    @default("ACTIVE") // ACTIVE | DONE | CANCELLED
+  dueAt        DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  trainer User                 @relation("TrainerHomework", fields: [trainerId], references: [id], onDelete: Cascade)
+  client  User                 @relation("ClientHomework", fields: [clientId], references: [id], onDelete: Cascade)
+  items   ClientHomeworkItem[]
+
+  @@index([clientId, status])
+  @@index([trainerId, clientId])
+  @@index([bookingId])
+}
+
+model ClientHomeworkItem {
+  id            String @id @default(cuid())
+  homeworkId    String
+  /// exercise | cardio | nutrition | habit
+  kind          String @default("habit")
+  title         String
+  target        String?
+  timesRequired Int    @default(1)
+  sortOrder     Int    @default(0)
+
+  homework ClientHomework        @relation(fields: [homeworkId], references: [id], onDelete: Cascade)
+  checks   ClientHomeworkCheck[]
+
+  @@index([homeworkId, sortOrder])
+}
+
+model ClientHomeworkCheck {
+  id        String   @id @default(cuid())
+  itemId    String
+  /// Calendar day YYYY-MM-DD (club local / client day).
+  dayKey    String
+  done      Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  item ClientHomeworkItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, dayKey])
+  @@index([itemId])
+}
+
+/// Trainer-only note for a group class (Forma Coach mode 5).
+model GroupClassNote {
+  id         String   @id @default(cuid())
+  trainerId  String
+  sessionKey String
+  text       String   @default("")
+  groupRpe   Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  trainer User @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+
+  @@unique([trainerId, sessionKey])
+  @@index([trainerId])
 }

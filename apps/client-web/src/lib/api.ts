@@ -574,6 +574,45 @@ export const api = {
   clientDashboard: (token: string) =>
     request<ClientDashboard>('/client/dashboard', {}, token),
 
+  clientActiveHomework: (token: string) =>
+    request<{
+      id: string;
+      summary?: string;
+      trainerName?: string;
+      status: string;
+      dueAt?: string;
+      progress: { done: number; total: number };
+      items: Array<{
+        id: string;
+        kind: string;
+        title: string;
+        target?: string;
+        timesRequired: number;
+        doneCount: number;
+        complete: boolean;
+      }>;
+    } | null>('/client/homework/active', {}, token),
+
+  clientCheckHomeworkItem: (
+    token: string,
+    itemId: string,
+    dayKey: string,
+    done = true,
+  ) =>
+    request<{
+      id: string;
+      progress: { done: number; total: number };
+      status: string;
+      items: Array<{ id: string; complete: boolean; doneCount: number }>;
+    }>(
+      `/client/homework/items/${encodeURIComponent(itemId)}/check`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ dayKey, done }),
+      },
+      token,
+    ),
+
   clientVisits: (
     token: string,
     params?: { from?: string; to?: string; kind?: string },

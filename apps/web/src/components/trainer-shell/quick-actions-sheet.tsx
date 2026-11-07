@@ -40,10 +40,10 @@ export function QuickActionsSheet({
       <ListGroup>
         <ListRow
           title="Начать тренировку"
-          subtitle="Ближайшая ПТ или группа"
+          subtitle="Ближайшая ПТ или группа · таймер"
           leading={<Play className="h-5 w-5 text-forma-400" />}
           chevron
-          onClick={() => go('/trainer')}
+          onClick={() => go('/trainer/live')}
         />
         {mode.showPt ? (
           <ListRow

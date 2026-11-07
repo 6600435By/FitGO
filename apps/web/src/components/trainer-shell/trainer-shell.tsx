@@ -63,7 +63,7 @@ export function TrainerShell({ children }: { children: ReactNode }) {
   const [cmdOpen, setCmdOpen] = useState(false);
 
   const immersive =
-    pathname.startsWith('/trainer/live/') ||
+    pathname.startsWith('/trainer/live') ||
     pathname.startsWith('/trainer/welcome');
 
   const { mode, dock, more, all } = useMemo(

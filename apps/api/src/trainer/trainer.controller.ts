@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { UserRole } from '@fitgo/shared-types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -19,6 +29,14 @@ import { AddOfflineClientDto } from './dto/add-offline-client.dto';
 import { DismissInsightDto } from './dto/dismiss-insight.dto';
 import { InviteClientDto } from './dto/invite-client.dto';
 import { SendMessageDto } from './dto/send-message.dto';
+import {
+  CreateTimerPresetDto,
+  UpdateTimerPresetDto,
+} from './dto/timer-preset.dto';
+import {
+  CreateHomeworkDto,
+  UpsertGroupClassNoteDto,
+} from './dto/homework.dto';
 
 @Controller('trainer')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -173,5 +191,88 @@ export class TrainerController {
     @Param('bookingId') bookingId: string,
   ) {
     return this.trainerService.confirmGroupAttendance(user, bookingId);
+  }
+
+  @Get('timer-presets')
+  listTimerPresets(@CurrentUser() user: JwtPayload) {
+    return this.trainerService.listTimerPresets(user);
+  }
+
+  @Post('timer-presets')
+  createTimerPreset(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateTimerPresetDto,
+  ) {
+    return this.trainerService.createTimerPreset(user, dto);
+  }
+
+  @Patch('timer-presets/:presetId')
+  updateTimerPreset(
+    @CurrentUser() user: JwtPayload,
+    @Param('presetId') presetId: string,
+    @Body() dto: UpdateTimerPresetDto,
+  ) {
+    return this.trainerService.updateTimerPreset(user, presetId, dto);
+  }
+
+  @Delete('timer-presets/:presetId')
+  deleteTimerPreset(
+    @CurrentUser() user: JwtPayload,
+    @Param('presetId') presetId: string,
+  ) {
+    return this.trainerService.deleteTimerPreset(user, presetId);
+  }
+
+  @Post('homework')
+  createHomework(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateHomeworkDto,
+  ) {
+    return this.trainerService.createHomework(user, dto);
+  }
+
+  @Post('sessions/:bookingId/notify-notes')
+  notifySessionNotes(
+    @CurrentUser() user: JwtPayload,
+    @Param('bookingId') bookingId: string,
+    @Body() body: { hasHomework?: boolean },
+  ) {
+    return this.trainerService.notifySessionNotes(
+      user,
+      bookingId,
+      Boolean(body.hasHomework),
+    );
+  }
+
+  @Get('clients/:clientId/homework')
+  listClientHomework(
+    @CurrentUser() user: JwtPayload,
+    @Param('clientId') clientId: string,
+  ) {
+    return this.trainerService.listClientHomework(user, clientId);
+  }
+
+  @Get('clients/:clientId/homework/previous')
+  previousHomework(
+    @CurrentUser() user: JwtPayload,
+    @Param('clientId') clientId: string,
+  ) {
+    return this.trainerService.getPreviousHomework(user, clientId);
+  }
+
+  @Get('group-notes/:sessionKey')
+  getGroupNote(
+    @CurrentUser() user: JwtPayload,
+    @Param('sessionKey') sessionKey: string,
+  ) {
+    return this.trainerService.getGroupClassNote(user, sessionKey);
+  }
+
+  @Post('group-notes')
+  upsertGroupNote(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpsertGroupClassNoteDto,
+  ) {
+    return this.trainerService.upsertGroupClassNote(user, dto);
   }
 }

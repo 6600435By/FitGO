@@ -69,6 +69,11 @@ export default function TrainerClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [client, setClient] = useState<TrainerClientDetail | null>(null);
   const [progress, setProgress] = useState<TrainerClientProgress | null>(null);
+  const [homework, setHomework] = useState<{
+    progress: { done: number; total: number };
+    status: string;
+    summary?: string;
+  } | null>(null);
   const [tab, setTab] = useState<Tab>('overview');
   const [note, setNote] = useState('');
   const [goalTitle, setGoalTitle] = useState('');
@@ -84,6 +89,13 @@ export default function TrainerClientDetailPage() {
       .trainerClient(token, id)
       .then(setClient)
       .catch((err) => setError(err.message));
+    api
+      .trainerClientHomework(token, id)
+      .then((rows) => {
+        const active = rows.find((r) => r.status === 'ACTIVE') ?? rows[0];
+        setHomework(active ?? null);
+      })
+      .catch(() => setHomework(null));
   };
 
   useEffect(() => {
@@ -275,6 +287,22 @@ export default function TrainerClientDetailPage() {
 
       {tab === 'overview' && (
         <>
+          {homework ? (
+            <div className="card">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold">Задание</h3>
+                  <p className="mt-1 text-sm text-zinc-400 text-slate-400">
+                    {homework.summary || 'Домашнее задание'}
+                  </p>
+                </div>
+                <p className="font-display text-xl font-semibold text-forma-400 text-fitgo-400">
+                  {homework.progress.done} из {homework.progress.total}
+                </p>
+              </div>
+            </div>
+          ) : null}
+
           <div className="card space-y-2">
             <h3 className="font-semibold">Шаблоны сообщений</h3>
             <div className="flex flex-wrap gap-2">
