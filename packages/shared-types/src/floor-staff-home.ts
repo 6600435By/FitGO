@@ -13,6 +13,8 @@ export interface FloorStaffHomeSession {
   endAt?: string;
   /** Client name (SPA) or room (GP). */
   subtitle?: string;
+  /** FitGO PT booking client — for plan deep-link. */
+  clientId?: string;
   booked?: number;
   capacity?: number;
   /** GROUP / PT when both appear on the trainer home list. */

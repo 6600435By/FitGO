@@ -1161,6 +1161,7 @@ export {
 export * from './workout-sheet';
 export * from './block-session';
 export * from './trainer-ledger';
+export * from './trainer-insights';
 
 export interface StaffMember {
   id: string;

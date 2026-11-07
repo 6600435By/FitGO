@@ -77,6 +77,8 @@ import {
   type AnalyticsCompareMode,
   type AnalyticsDepartment,
   type FloorStaffHome,
+  type TrainerInsightsResponse,
+  type DismissTrainerInsightBody,
   AdminPermission,
   AdminTaskStatus,
   type ProductModulesState,
@@ -1778,6 +1780,16 @@ export const api = {
 
   trainerGpHome: (token: string) =>
     request<FloorStaffHome>('/trainer/gp-home', {}, token),
+
+  trainerInsights: (token: string) =>
+    request<TrainerInsightsResponse>('/trainer/insights', {}, token),
+
+  trainerDismissInsight: (token: string, data: DismissTrainerInsightBody) =>
+    request<{ ok: true; dismissUntil: string }>(
+      '/trainer/insights/dismiss',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
 
   specialistHome: (token: string) =>
     request<FloorStaffHome>('/specialist/home', {}, token),

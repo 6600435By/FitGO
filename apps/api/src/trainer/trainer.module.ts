@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AnalyticsModule } from '../analytics/analytics.module';
 import { ClientModule } from '../client/client.module';
 import { ClubScheduleModule } from '../club-schedule/club-schedule.module';
 import { EngagementModule } from '../engagement/engagement.module';
@@ -10,6 +11,8 @@ import { TrainerRosterModule } from '../trainer-roster/trainer-roster.module';
 import { GpScheduleService } from './gp-schedule.service';
 import { TrainerClientLookupService } from './trainer-client-lookup.service';
 import { TrainerController } from './trainer.controller';
+import { TrainerInsightsSchedulerService } from './trainer-insights.scheduler';
+import { TrainerInsightsService } from './trainer-insights.service';
 import { TrainerLedgerModule } from './trainer-ledger.module';
 import { TrainerService } from './trainer.service';
 
@@ -24,9 +27,16 @@ import { TrainerService } from './trainer.service';
     ClubScheduleModule,
     FloorHomeModule,
     TrainerLedgerModule,
+    AnalyticsModule,
   ],
   controllers: [TrainerController],
-  providers: [TrainerService, GpScheduleService, TrainerClientLookupService],
-  exports: [TrainerLedgerModule],
+  providers: [
+    TrainerService,
+    GpScheduleService,
+    TrainerClientLookupService,
+    TrainerInsightsService,
+    TrainerInsightsSchedulerService,
+  ],
+  exports: [TrainerLedgerModule, TrainerInsightsService],
 })
 export class TrainerModule {}

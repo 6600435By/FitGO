@@ -9,12 +9,14 @@ import { ClubMembershipService } from '../common/club-membership.service';
 import { FloorStaffHomeService } from '../floor-home/floor-staff-home.service';
 import { GpScheduleService } from './gp-schedule.service';
 import { TrainerClientLookupService } from './trainer-client-lookup.service';
+import { TrainerInsightsService } from './trainer-insights.service';
 import { TrainerService } from './trainer.service';
 import { TrainerRosterService } from './trainer-roster.service';
 import { AddGoalDto } from './dto/add-goal.dto';
 import { AddMeasurementDto } from './dto/add-measurement.dto';
 import { AddNoteDto } from './dto/add-note.dto';
 import { AddOfflineClientDto } from './dto/add-offline-client.dto';
+import { DismissInsightDto } from './dto/dismiss-insight.dto';
 import { InviteClientDto } from './dto/invite-client.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 
@@ -29,6 +31,7 @@ export class TrainerController {
     private readonly clubMembership: ClubMembershipService,
     private readonly gpSchedule: GpScheduleService,
     private readonly floorHome: FloorStaffHomeService,
+    private readonly insights: TrainerInsightsService,
   ) {}
 
   @Get('gp-schedule')
@@ -48,6 +51,19 @@ export class TrainerController {
   @Get('dashboard')
   getDashboard(@CurrentUser() user: JwtPayload) {
     return this.trainerService.getDashboard(user);
+  }
+
+  @Get('insights')
+  getInsights(@CurrentUser() user: JwtPayload) {
+    return this.insights.listForTrainer(user);
+  }
+
+  @Post('insights/dismiss')
+  dismissInsight(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: DismissInsightDto,
+  ) {
+    return this.insights.dismiss(user, dto.key, dto.days);
   }
 
   @Get('clients')

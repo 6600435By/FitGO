@@ -594,6 +594,7 @@ export class FloorStaffHomeService {
         startAt: b.startAt.toISOString(),
         endAt: b.endAt.toISOString(),
         subtitle: clientName,
+        clientId: b.clientId,
         kind: 'PT' as const,
         status: sessionStatus(
           b.startAt,

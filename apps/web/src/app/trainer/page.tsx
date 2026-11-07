@@ -4,7 +4,9 @@ import { SessionType } from '@fitgo/shared-types';
 import { Users, Calendar, Target, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { useFeatures } from '@/components/features-provider';
 import { FloorStaffHomePage } from '@/components/staff/floor-staff-home';
+import { TrainerTodayHome } from '@/components/trainer-home/trainer-today-home';
 import { MessagesHomeLink } from '@/components/messages-home-link';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -155,6 +157,16 @@ function PtTrainerHome() {
 export default function TrainerHomePage() {
   const user = getUser();
   const { groupCabinet, showPt, showGp } = trainerCabinetMode(user);
+  const { isEnabled } = useFeatures();
+  const uiV2 = isEnabled('trainer_ui_v2');
+
+  if (uiV2 && (groupCabinet || showPt)) {
+    return (
+      <TrainerTodayHome
+        scheduleHref={showGp ? '/trainer/gp-schedule' : '/trainer/schedule'}
+      />
+    );
+  }
 
   // Floor home: GP / reformers / PT (conducted counts + today list).
   if (groupCabinet || showPt) {
