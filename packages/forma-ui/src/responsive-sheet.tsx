@@ -70,8 +70,8 @@ export function ResponsiveSheet({
           <Drawer.Overlay className="fixed inset-0 z-50 bg-black/70 backdrop-blur-[2px]" />
           <Drawer.Content
             className={cn(
-              'fixed bottom-0 left-0 right-0 z-50 mx-auto flex max-h-[92dvh] max-w-lg flex-col rounded-t-[1.75rem] border border-white/10 bg-ink-elevated outline-none',
-              'pb-[env(safe-area-inset-bottom)]',
+              'forma-theme fixed bottom-0 left-0 right-0 z-50 mx-auto flex max-h-[min(92dvh,100dvh)] max-w-lg flex-col rounded-t-[1.75rem] border border-white/10 bg-ink-elevated text-zinc-100 outline-none',
+              'pb-[max(0.75rem,env(safe-area-inset-bottom))]',
               className,
             )}
           >
@@ -82,7 +82,9 @@ export function ResponsiveSheet({
               onClose={() => onOpenChange(false)}
               drawer
             />
-            <div className="overflow-y-auto px-5 pb-5 pt-2">{children}</div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5 pt-2">
+              {children}
+            </div>
           </Drawer.Content>
         </Drawer.Portal>
       </Drawer.Root>
@@ -106,7 +108,7 @@ export function ResponsiveSheet({
         aria-modal="true"
         aria-labelledby={title ? 'forma-sheet-title' : undefined}
         className={cn(
-          'relative z-10 flex max-h-[min(92dvh,880px)] flex-col border border-white/10 bg-ink-elevated shadow-forma-card outline-none',
+          'forma-theme relative z-10 flex max-h-[min(92dvh,880px)] flex-col border border-white/10 bg-ink-elevated text-zinc-100 shadow-forma-card outline-none',
           side
             ? 'ml-auto h-full max-h-none w-full max-w-md rounded-none border-y-0 border-r-0 sm:rounded-l-[1.5rem]'
             : 'm-auto w-full max-w-lg rounded-[1.5rem]',
@@ -118,7 +120,9 @@ export function ResponsiveSheet({
           description={description}
           onClose={() => onOpenChange(false)}
         />
-        <div className="overflow-y-auto px-5 pb-5 pt-2">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5 pt-2">
+          {children}
+        </div>
       </div>
     </div>
   );

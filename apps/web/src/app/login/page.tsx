@@ -1,11 +1,5 @@
 'use client';
 
-import {
-  AuthError,
-  AuthShell,
-  Button,
-  FieldLabel,
-} from '@fitgo/forma-ui';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useEffect, useState } from 'react';
 import { PasswordField } from '@/components/ui/password-field';
@@ -66,23 +60,29 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="forma-theme min-h-dvh bg-ink text-zinc-100">
-      <AuthShell
-        brand="coach"
-        title="Вход"
-        subtitle="Кабинет тренера и сотрудников Forma. Клиентам — lk.ffs.by"
-        footer={
-          <a
-            href="https://lk.ffs.by"
-            className="text-forma-400 underline-offset-2 hover:underline"
-          >
-            Личный кабинет клиента
-          </a>
-        }
-      >
-        <form onSubmit={handleSubmit} className="space-y-4">
+    <div className="flex min-h-screen flex-col items-center justify-center px-4">
+      <div className="w-full max-w-md">
+        <div className="mb-8 text-center">
+          <p className="text-sm uppercase tracking-[0.3em] text-fitgo-400">
+            FITGO
+          </p>
+          <h1 className="mt-2 text-3xl font-bold">Вход в клуб</h1>
+          <p className="mt-2 text-slate-400">
+            Рабочий кабинет сотрудников. Клиентам —{' '}
+            <a
+              href="https://lk.ffs.by"
+              className="text-fitgo-400 underline-offset-2 hover:underline"
+            >
+              lk.ffs.by
+            </a>
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="card space-y-4">
           <div>
-            <FieldLabel htmlFor="login">Телефон или логин</FieldLabel>
+            <label className="mb-2 block text-sm text-slate-400" htmlFor="login">
+              Телефон или логин
+            </label>
             <input
               id="login"
               type="text"
@@ -95,7 +95,12 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <FieldLabel htmlFor="password">Пароль</FieldLabel>
+            <label
+              className="mb-2 block text-sm text-slate-400"
+              htmlFor="password"
+            >
+              Пароль
+            </label>
             <PasswordField
               id="password"
               className="input"
@@ -105,23 +110,27 @@ export default function LoginPage() {
             />
           </div>
 
-          <label className="flex items-center gap-2 text-sm text-zinc-400">
+          <label className="flex items-center gap-2 text-sm text-slate-400">
             <input
               type="checkbox"
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
-              className="h-4 w-4 rounded border-white/20 bg-ink-elevated accent-forma-500"
+              className="h-4 w-4 rounded border-slate-600 bg-slate-900 accent-fitgo-500"
             />
             Запомнить меня на этом устройстве
           </label>
 
-          <AuthError>{error}</AuthError>
+          {error ? (
+            <p className="rounded-xl bg-red-500/10 px-4 py-3 text-sm text-red-400">
+              {error}
+            </p>
+          ) : null}
 
-          <Button type="submit" className="w-full" loading={loading}>
+          <button type="submit" className="btn-primary w-full" disabled={loading}>
             {loading ? 'Вход…' : 'Войти'}
-          </Button>
+          </button>
         </form>
-      </AuthShell>
+      </div>
     </div>
   );
 }

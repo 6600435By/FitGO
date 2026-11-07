@@ -428,38 +428,68 @@ export class TrainerRosterService {
     }
 
     const externalId = dto.clientExternalId?.trim() || undefined;
+    const firstName = dto.firstName.trim();
+    const lastName = dto.lastName.trim();
+    const now = new Date();
 
     const existing = await this.prisma.user.findFirst({
       where: { phoneNormalized },
     });
 
     if (existing) {
-      const link = await this.prisma.trainerClientLink.findUnique({
+      const userPatch: {
+        externalId?: string;
+        firstName?: string;
+        lastName?: string;
+      } = {};
+      if (externalId && !existing.externalId) userPatch.externalId = externalId;
+      if (firstName && existing.firstName !== firstName) {
+        userPatch.firstName = firstName;
+      }
+      if (lastName && existing.lastName !== lastName) {
+        userPatch.lastName = lastName;
+      }
+      if (Object.keys(userPatch).length > 0) {
+        await this.prisma.user.update({
+          where: { id: existing.id },
+          data: userPatch,
+        });
+      }
+
+      const link = await this.prisma.trainerClientLink.upsert({
         where: {
           trainerId_clientId: { trainerId, clientId: existing.id },
         },
+        create: {
+          trainerId,
+          clientId: existing.id,
+          status: TrainerClientLinkStatus.CONFIRMED,
+          source: TrainerClientSource.MANUAL,
+          notes: dto.notes,
+          confirmedAt: now,
+          clientAcceptedAt: now,
+        },
+        update: {
+          status: TrainerClientLinkStatus.CONFIRMED,
+          source: TrainerClientSource.MANUAL,
+          notes: dto.notes ?? undefined,
+          confirmedAt: now,
+          clientAcceptedAt: now,
+        },
       });
-      if (link && link.status !== TrainerClientLinkStatus.REJECTED) {
-        if (externalId && !existing.externalId) {
-          await this.prisma.user.update({
-            where: { id: existing.id },
-            data: { externalId },
-          });
-        }
-        return {
-          id: existing.id,
-          firstName: existing.firstName,
-          lastName: existing.lastName,
-          phone: existing.phone ?? undefined,
-          externalId: existing.externalId ?? externalId,
-          rosterStatus: link.status,
-          hasApp: existing.accountStatus === AccountStatus.ACTIVE,
-          clientAccepted: link.clientAcceptedAt != null,
-          inRosterSince: link.createdAt.toISOString(),
-          source: link.source,
-        };
-      }
-      return { message: INVITE_GENERIC_MESSAGE };
+
+      return {
+        id: existing.id,
+        firstName: userPatch.firstName ?? existing.firstName,
+        lastName: userPatch.lastName ?? existing.lastName,
+        phone: existing.phone ?? undefined,
+        externalId: userPatch.externalId ?? existing.externalId ?? externalId,
+        rosterStatus: TrainerClientLinkStatus.CONFIRMED,
+        hasApp: existing.accountStatus === AccountStatus.ACTIVE,
+        clientAccepted: true,
+        inRosterSince: link.createdAt.toISOString(),
+        source: TrainerClientSource.MANUAL,
+      };
     }
 
     const passwordHash = await bcrypt.hash(randomBytes(32).toString('hex'), 10);
@@ -468,8 +498,8 @@ export class TrainerRosterService {
       data: {
         email: shadowEmailForPhone(phoneNormalized),
         password: passwordHash,
-        firstName: dto.firstName.trim(),
-        lastName: dto.lastName.trim(),
+        firstName,
+        lastName,
         phone: dto.phone.trim(),
         phoneNormalized,
         externalId,
@@ -486,7 +516,8 @@ export class TrainerRosterService {
         status: TrainerClientLinkStatus.CONFIRMED,
         source: TrainerClientSource.MANUAL,
         notes: dto.notes,
-        confirmedAt: new Date(),
+        confirmedAt: now,
+        clientAcceptedAt: now,
       },
     });
 
@@ -498,8 +529,8 @@ export class TrainerRosterService {
       externalId: client.externalId ?? undefined,
       rosterStatus: TrainerClientLinkStatus.CONFIRMED,
       hasApp: false,
-      clientAccepted: false,
-      inRosterSince: new Date().toISOString(),
+      clientAccepted: true,
+      inRosterSince: now.toISOString(),
       source: TrainerClientSource.MANUAL,
     };
   }
@@ -546,39 +577,44 @@ export class TrainerRosterService {
       });
     }
 
-    if (existingUser) {
-      const pendingLink = await this.prisma.trainerClientLink.findUnique({
-        where: {
-          trainerId_clientId: { trainerId, clientId: existingUser.id },
-        },
-      });
-      if (!pendingLink) {
-        await this.prisma.trainerClientLink.create({
-          data: {
-            trainerId,
-            clientId: existingUser.id,
-            status: TrainerClientLinkStatus.PENDING,
-            source: TrainerClientSource.INVITE,
-          },
-        });
-      }
-
-      const invite = await this.prisma.trainerClientInvite.findFirst({
-        where: {
-          trainerId,
-          phoneNormalized,
-          status: TrainerClientInviteStatus.PENDING,
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      await this.notifications.sendDirectMessage(
-        existingUser.id,
-        'Приглашение от тренера',
-        `${trainerName} хочет вести вас как клиента. Откройте раздел «Приглашения тренеров», чтобы принять или отклонить.${invite ? ` invite:${invite.id}` : ''}`,
-        trainerId,
-      );
+    if (!existingUser || existingUser.accountStatus !== AccountStatus.ACTIVE) {
+      return {
+        message:
+          'У клиента нет приложения Forma. Используйте «Добавить» — клиент попадёт в базу сразу, без подтверждения.',
+      };
     }
+
+    const pendingLink = await this.prisma.trainerClientLink.findUnique({
+      where: {
+        trainerId_clientId: { trainerId, clientId: existingUser.id },
+      },
+    });
+    if (!pendingLink) {
+      await this.prisma.trainerClientLink.create({
+        data: {
+          trainerId,
+          clientId: existingUser.id,
+          status: TrainerClientLinkStatus.PENDING,
+          source: TrainerClientSource.INVITE,
+        },
+      });
+    }
+
+    const invite = await this.prisma.trainerClientInvite.findFirst({
+      where: {
+        trainerId,
+        phoneNormalized,
+        status: TrainerClientInviteStatus.PENDING,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    await this.notifications.sendDirectMessage(
+      existingUser.id,
+      'Приглашение от тренера',
+      `${trainerName} хочет вести вас как клиента. Откройте раздел «Приглашения тренеров», чтобы принять или отклонить.${invite ? ` invite:${invite.id}` : ''}`,
+      trainerId,
+    );
 
     return { message: INVITE_GENERIC_MESSAGE };
   }

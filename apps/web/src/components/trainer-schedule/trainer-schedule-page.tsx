@@ -13,7 +13,7 @@ import { addDays, format } from 'date-fns';
 import { useEffect, useMemo, useState } from 'react';
 import { useFeatures } from '@/components/features-provider';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 import { AddTrainingDialog } from './add-training-dialog';
 import { AssignClientDialog } from './assign-client-dialog';
 import { BookingActionSheet } from './booking-action-sheet';
@@ -67,6 +67,8 @@ function LegacyEventDialog({
 export function TrainerSchedulePage() {
   const { isEnabled } = useFeatures();
   const forma = isEnabled('trainer_ui_v2');
+  const me = getUser();
+  const freeSchedule = Boolean(me?.trainerClub && !me?.trainerStaff);
   const [date, setDate] = useState(defaultCalendarDate);
   const [view, setView] = useState<ScheduleView>(() =>
     typeof window !== 'undefined' && window.innerWidth < 640 ? 'day' : 'week',
@@ -184,38 +186,38 @@ export function TrainerSchedulePage() {
   return (
     <div className={forma ? 'space-y-4 pb-28 lg:pb-8' : 'space-y-4 pb-8'}>
       {forma ? (
-        <PageHeader
-          title="Расписание"
-          subtitle="ПТ и группы в одном экране · черновик → публикация"
-          action={
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" onClick={() => setShowAddTraining(true)}>
-                Записать
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setReserveAt(new Date(date).toISOString())}
-              >
-                Резерв
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setShowSeries(true)}
-              >
-                Серия
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setShowWorkSchedule(true)}
-              >
-                График
-              </Button>
-            </div>
-          }
-        />
+        <div className="space-y-3">
+          <PageHeader title="Расписание" />
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+            <Button size="sm" className="w-full sm:w-auto" onClick={() => setShowAddTraining(true)}>
+              Записать
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="w-full sm:w-auto"
+              onClick={() => setReserveAt(new Date(date).toISOString())}
+            >
+              Резерв
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="w-full sm:w-auto"
+              onClick={() => setShowSeries(true)}
+            >
+              Серия
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="w-full sm:w-auto"
+              onClick={() => setShowWorkSchedule(true)}
+            >
+              График
+            </Button>
+          </div>
+        </div>
       ) : (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -349,6 +351,7 @@ export function TrainerSchedulePage() {
           periodEnd={period.periodEnd}
           availabilityBlocks={availabilityBlocks}
           dutyEvents={events.filter((event) => event.kind === 'DUTY')}
+          freeSchedule={freeSchedule}
           onClose={() => setShowWorkSchedule(false)}
           onUpdated={reload}
         />

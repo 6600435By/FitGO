@@ -69,7 +69,7 @@ export function QuickActionsSheet({
             subtitle="В свою базу"
             leading={<UserPlus className="h-5 w-5 text-zinc-400" />}
             chevron
-            onClick={() => go('/trainer/clients')}
+            onClick={() => go('/trainer/clients?add=1')}
           />
         ) : null}
         <ListRow

@@ -62,8 +62,13 @@ export function ReserveSheet({
   };
 
   return (
-    <ResponsiveSheet open onOpenChange={(o) => !o && onClose()} title="Резерв">
-      <div className="space-y-4 pb-2">
+    <ResponsiveSheet
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="Резерв"
+      className="max-h-[85dvh]"
+    >
+      <div className="flex flex-col gap-3">
         <div className="flex gap-2">
           <button
             type="button"
@@ -89,21 +94,21 @@ export function ReserveSheet({
           </button>
         </div>
 
-        <div className="grid gap-2 sm:grid-cols-2">
-          <label className="text-sm text-zinc-400">
+        <div className="grid grid-cols-2 gap-2">
+          <label className="min-w-0 text-sm text-zinc-400">
             С
             <input
               type="datetime-local"
-              className="input mt-1 w-full"
+              className="input mt-1 w-full min-w-0 max-w-full text-[13px]"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
             />
           </label>
-          <label className="text-sm text-zinc-400">
+          <label className="min-w-0 text-sm text-zinc-400">
             По
             <input
               type="datetime-local"
-              className="input mt-1 w-full"
+              className="input mt-1 w-full min-w-0 max-w-full text-[13px]"
               value={to}
               onChange={(e) => setTo(e.target.value)}
             />
@@ -112,13 +117,16 @@ export function ReserveSheet({
 
         {kind === 'HOLD_CLIENT' ? (
           <>
-            <label className="block text-sm text-zinc-400">
+            <label className="block min-w-0 text-sm text-zinc-400">
               Клиент
               <select
                 className="input mt-1 w-full"
                 value={clientId}
                 onChange={(e) => setClientId(e.target.value)}
               >
+                {clients.length === 0 ? (
+                  <option value="">Нет клиентов в базе</option>
+                ) : null}
                 {clients.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.firstName} {c.lastName}
@@ -132,6 +140,7 @@ export function ReserveSheet({
                 type="number"
                 min={1}
                 max={168}
+                inputMode="numeric"
                 className="input mt-1 w-full"
                 value={holdHours}
                 onChange={(e) => setHoldHours(Number(e.target.value) || 12)}
@@ -156,7 +165,7 @@ export function ReserveSheet({
 
         <Button
           type="button"
-          className="w-full"
+          className="sticky bottom-0 w-full"
           disabled={busy || (kind === 'HOLD_CLIENT' && !clientId)}
           onClick={save}
         >

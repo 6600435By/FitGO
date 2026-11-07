@@ -15,6 +15,7 @@ export function WorkScheduleSheet({
   periodEnd,
   availabilityBlocks,
   dutyEvents,
+  freeSchedule = false,
   onClose,
   onUpdated,
 }: {
@@ -22,6 +23,8 @@ export function WorkScheduleSheet({
   periodEnd: string;
   availabilityBlocks: TrainerAvailabilityBlock[];
   dutyEvents: TrainerCalendarEvent[];
+  /** «Тренер клуб» without staff: own hours, no admin duty required. */
+  freeSchedule?: boolean;
   onClose: () => void;
   onUpdated: () => void;
 }) {
@@ -30,6 +33,8 @@ export function WorkScheduleSheet({
   );
   const [side, setSide] = useState<'before' | 'after'>('after');
   const [edgeTime, setEdgeTime] = useState('23:30');
+  const [fromTime, setFromTime] = useState('09:00');
+  const [toTime, setToTime] = useState('18:00');
   const [dutyId, setDutyId] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -78,9 +83,32 @@ export function WorkScheduleSheet({
     endAt: b.endAt,
   }));
 
+  const handleSaveFreeDay = async () => {
+    if (fromTime >= toTime) {
+      setMessage('Начало должно быть раньше конца');
+      return;
+    }
+    setBusy(true);
+    setMessage('');
+    try {
+      const withoutSameDay = existingDraftPayload.filter(
+        (block) => dateKey(new Date(block.startAt)) !== selectedDate,
+      );
+      await saveDraftBlocks([
+        ...withoutSameDay,
+        buildBlock(selectedDate, fromTime, toTime),
+      ]);
+      setMessage('Сохранено в черновик. Опубликуйте, чтобы клиенты увидели запись.');
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleSaveDay = async () => {
     if (!duty) {
-      setMessage('В этот день нет дежурства. Его ставит администратор.');
+      setMessage('В этот день дежурства нет. Его ставит администратор.');
       return;
     }
     const boundary = side === 'before' ? timeOf(duty.startAt) : timeOf(duty.endAt);
@@ -138,40 +166,78 @@ export function WorkScheduleSheet({
   };
 
   return (
-    <div className="fixed inset-0 z-40 flex flex-col bg-slate-950">
-      <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-        <div>
-          <h2 className="text-lg font-semibold">Время вне дежурства</h2>
-          <p className="text-sm text-slate-400">
-            Только сразу до или после дежурства. Клиенты могут записаться, ставка за эти часы не начисляется.
+    <div className="fixed inset-0 z-40 flex flex-col bg-ink text-zinc-100">
+      <header className="flex items-start justify-between gap-3 border-b border-white/10 px-4 py-3">
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold">
+            {freeSchedule ? 'Рабочее время' : 'Время вне дежурства'}
+          </h2>
+          <p className="text-sm text-zinc-400">
+            {freeSchedule
+              ? 'Откройте часы приёма на день и опубликуйте — клиенты смогут записаться.'
+              : 'Только сразу до или после дежурства. Клиенты могут записаться, ставка за эти часы не начисляется.'}
           </p>
         </div>
         <button
           type="button"
           onClick={onClose}
-          className="rounded-lg p-2 text-slate-400 hover:bg-slate-800"
+          className="rounded-lg p-2 text-zinc-400 hover:bg-white/10"
           aria-label="Закрыть"
         >
           <X className="h-5 w-5" />
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {message && (
-          <p className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-400">
+      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+        {message ? (
+          <p className="rounded-xl bg-forma-500/10 px-3 py-2 text-sm text-forma-400">
             {message}
           </p>
-        )}
+        ) : null}
 
         <div className="card space-y-3">
-          <p className="font-medium">До или после дежурства</p>
+          <p className="font-medium">
+            {freeSchedule ? 'Часы на день' : 'До или после дежурства'}
+          </p>
           <DateField
             label="Дата"
             value={selectedDate}
             onChange={setSelectedDate}
           />
-          {dutiesForDate.length === 0 ? (
-            <p className="text-sm text-slate-400">
+
+          {freeSchedule ? (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs text-zinc-400">
+                  С
+                  <input
+                    type="time"
+                    value={fromTime}
+                    onChange={(e) => setFromTime(e.target.value)}
+                    className="input mt-1"
+                  />
+                </label>
+                <label className="block text-xs text-zinc-400">
+                  По
+                  <input
+                    type="time"
+                    value={toTime}
+                    onChange={(e) => setToTime(e.target.value)}
+                    className="input mt-1"
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveFreeDay}
+                disabled={busy}
+                className="btn-primary text-sm disabled:opacity-50"
+              >
+                Сохранить в черновик
+              </button>
+            </>
+          ) : dutiesForDate.length === 0 ? (
+            <p className="text-sm text-zinc-400">
               В этот день дежурства нет. Его ставит администратор в графике смен.
             </p>
           ) : (
@@ -210,7 +276,7 @@ export function WorkScheduleSheet({
                   После
                 </button>
               </div>
-              <label className="block text-xs text-slate-400">
+              <label className="block text-xs text-zinc-400">
                 {side === 'before' ? 'Начать приём с' : 'Принимать до'}
                 <input
                   type="time"
@@ -220,7 +286,7 @@ export function WorkScheduleSheet({
                 />
               </label>
               {duty && (
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-zinc-500">
                   {side === 'before'
                     ? `Запись ${edgeTime}–${timeOf(duty.startAt)}. Ставка не начисляется.`
                     : `Запись ${timeOf(duty.endAt)}–${edgeTime}. Ставка не начисляется.`}
@@ -240,7 +306,7 @@ export function WorkScheduleSheet({
 
         {publishedForDate.length > 0 && (
           <div className="space-y-2">
-            <p className="text-sm font-medium text-slate-300">Опубликовано на этот день</p>
+            <p className="text-sm font-medium text-zinc-300">Опубликовано на этот день</p>
             {publishedForDate.map((block) => (
               <div key={block.id} className="card text-sm text-emerald-300/90">
                 {format(new Date(block.startAt), 'HH:mm', { locale: ru })} —{' '}
@@ -251,11 +317,11 @@ export function WorkScheduleSheet({
         )}
 
         <div className="space-y-2">
-          <p className="text-sm font-medium text-slate-300">
+          <p className="text-sm font-medium text-zinc-300">
             Черновики ({draftBlocks.length})
           </p>
           {draftBlocks.length === 0 ? (
-            <p className="text-sm text-slate-500">Нет черновиков — сохраните день и опубликуйте</p>
+            <p className="text-sm text-zinc-500">Нет черновиков — сохраните день и опубликуйте</p>
           ) : (
             draftBlocks.map((block) => (
               <div
@@ -279,7 +345,7 @@ export function WorkScheduleSheet({
         </div>
       </div>
 
-      <div className="border-t border-slate-800 p-4">
+      <div className="border-t border-white/10 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
         <button
           type="button"
           onClick={handlePublish}

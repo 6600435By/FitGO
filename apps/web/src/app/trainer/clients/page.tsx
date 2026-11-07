@@ -7,7 +7,15 @@ import {
 } from '@fitgo/shared-types';
 import { Chip, ResponsiveSheet } from '@fitgo/forma-ui';
 import Link from 'next/link';
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import {
+  FormEvent,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import { ClientDesktopCard } from '@/components/trainer-clients/client-desktop-card';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -99,6 +107,15 @@ function matchesSegment(client: TrainerClientSummary, seg: Segment): boolean {
 }
 
 export default function TrainerClientsPage() {
+  return (
+    <Suspense fallback={<p className="text-zinc-400">Загрузка…</p>}>
+      <TrainerClientsInner />
+    </Suspense>
+  );
+}
+
+function TrainerClientsInner() {
+  const searchParams = useSearchParams();
   const [clients, setClients] = useState<TrainerClientSummary[]>([]);
   const [error, setError] = useState('');
   const [mode, setMode] = useState<'offline' | 'invite' | null>(null);
@@ -130,6 +147,12 @@ export default function TrainerClientsPage() {
   useEffect(() => {
     loadClients();
   }, [loadClients]);
+
+  useEffect(() => {
+    if (searchParams.get('add') === '1') {
+      setMode('offline');
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (mode !== 'offline' && mode !== 'invite') return;
@@ -208,21 +231,17 @@ export default function TrainerClientsPage() {
     setFormError('');
     setFormSuccess('');
     try {
-      const result = await api.trainerAddOfflineClient(token, {
+      await api.trainerAddOfflineClient(token, {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         phone: phone.trim(),
         notes: notes.trim() || undefined,
         clientExternalId: lookup?.externalId,
       });
-      if ('message' in result) {
-        setFormSuccess(result.message);
-      } else {
-        setFormSuccess('Клиент добавлен в вашу базу');
-        setMode(null);
-        resetForm();
-        loadClients();
-      }
+      setFormSuccess('Клиент добавлен в вашу базу');
+      setMode(null);
+      resetForm();
+      loadClients();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Ошибка');
     } finally {
@@ -334,7 +353,7 @@ export default function TrainerClientsPage() {
           }
         }}
         title="Добавить клиента"
-        description="Сначала телефон — подтянем ФИО из базы или 1С"
+        description="Телефон и ФИО — сразу в вашу базу, без подтверждения в приложении"
         desktop="dialog"
       >
         <form onSubmit={handleOfflineSubmit} className="space-y-3">
@@ -348,10 +367,10 @@ export default function TrainerClientsPage() {
             required
           />
           {looking && (
-            <p className="text-xs text-slate-400">Ищем клиента…</p>
+            <p className="text-xs text-zinc-400">Ищем клиента…</p>
           )}
           {badge && (
-            <p className="rounded-lg bg-slate-800/60 px-3 py-2 text-sm text-slate-200">
+            <p className="rounded-lg bg-ink-raised px-3 py-2 text-sm text-zinc-200">
               {badge}
             </p>
           )}
@@ -379,7 +398,7 @@ export default function TrainerClientsPage() {
           />
           {formError && <p className="text-sm text-red-400">{formError}</p>}
           {formSuccess && (
-            <p className="text-sm text-fitgo-400">{formSuccess}</p>
+            <p className="text-sm text-forma-400">{formSuccess}</p>
           )}
           <button type="submit" className="btn-primary w-full" disabled={saving}>
             {saving ? 'Сохранение…' : 'Добавить в базу'}
@@ -396,7 +415,7 @@ export default function TrainerClientsPage() {
           }
         }}
         title="Пригласить клиента"
-        description="Клиент подтвердит приглашение в приложении"
+        description="Только если у клиента уже есть приложение Forma. Иначе используйте «Добавить» — без подтверждения."
         desktop="dialog"
       >
         <form onSubmit={handleInviteSubmit} className="space-y-3">
@@ -409,13 +428,13 @@ export default function TrainerClientsPage() {
             required
           />
           {badge && (
-            <p className="rounded-lg bg-slate-800/60 px-3 py-2 text-sm text-slate-200">
+            <p className="rounded-lg bg-ink-raised px-3 py-2 text-sm text-zinc-200">
               {badge}
             </p>
           )}
           {formError && <p className="text-sm text-red-400">{formError}</p>}
           {formSuccess && (
-            <p className="text-sm text-fitgo-400">{formSuccess}</p>
+            <p className="text-sm text-forma-400">{formSuccess}</p>
           )}
           <button type="submit" className="btn-primary w-full" disabled={saving}>
             {saving ? 'Отправка…' : 'Отправить приглашение'}
@@ -424,7 +443,7 @@ export default function TrainerClientsPage() {
       </ResponsiveSheet>
 
       {inviteHint ? (
-        <p className="text-sm text-fitgo-400">{inviteHint}</p>
+        <p className="text-sm text-forma-400">{inviteHint}</p>
       ) : null}
 
       <div className="desktop:grid desktop:grid-cols-[minmax(0,1fr)_minmax(280px,380px)] desktop:items-start desktop:gap-4">

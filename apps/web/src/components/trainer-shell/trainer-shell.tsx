@@ -142,13 +142,6 @@ export function TrainerShell({ children }: { children: ReactNode }) {
     ? `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || 'Тренер'
     : 'Тренер';
 
-  const clubLine = useMemo(() => {
-    const c = user?.club;
-    if (!c) return 'Forma';
-    const bits = [c.name || 'Forma', c.phone, c.address].filter(Boolean);
-    return bits.join(' · ');
-  }, [user?.club]);
-
   const commandItems: CommandItem[] = useMemo(() => {
     const items: CommandItem[] = all.map((item) => ({
       id: item.href,
@@ -267,11 +260,6 @@ export function TrainerShell({ children }: { children: ReactNode }) {
                 </button>
               )}
             </nav>
-            {navMode === 'sidebar' ? (
-              <p className="mt-auto px-2 pt-4 text-[11px] leading-snug text-zinc-600">
-                {clubLine}
-              </p>
-            ) : null}
           </aside>
         ) : null}
 
@@ -293,7 +281,6 @@ export function TrainerShell({ children }: { children: ReactNode }) {
                   <p className="truncate font-display text-sm font-semibold text-white">
                     Привет, {user?.firstName || 'тренер'}
                   </p>
-                  <p className="truncate text-[11px] text-zinc-500">{clubLine}</p>
                 </div>
               )}
 
@@ -346,11 +333,6 @@ export function TrainerShell({ children }: { children: ReactNode }) {
                 </Link>
               </div>
             </div>
-            {navMode === 'dock' ? (
-              <p className="-mt-1 truncate pb-2 text-[11px] text-zinc-500">
-                {clubLine}
-              </p>
-            ) : null}
           </header>
 
           <main
@@ -389,7 +371,7 @@ export function TrainerShell({ children }: { children: ReactNode }) {
           aria-label="Основная навигация"
         >
           <div className="mx-auto w-full max-w-lg px-3 pb-2 phone-land:max-w-none">
-            <div className="relative flex items-end justify-between gap-1 rounded-[1.75rem] border border-white/10 bg-ink-elevated/95 px-2 pb-2 pt-2 shadow-dock backdrop-blur-xl">
+            <div className="relative flex items-stretch justify-between gap-1 rounded-[1.75rem] border border-white/10 bg-ink-elevated/95 px-2 py-1.5 shadow-dock backdrop-blur-xl">
               {dock.map((item) => {
                 const active = navItemActive(pathname, item);
                 const Icon = item.icon;
@@ -399,13 +381,11 @@ export function TrainerShell({ children }: { children: ReactNode }) {
                       key={item.href}
                       type="button"
                       onClick={openQuick}
-                      className="relative -mt-7 flex flex-1 flex-col items-center touch-manipulation"
+                      className="relative flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-2xl px-1 py-1.5 text-center text-forma-400 touch-manipulation transition"
                       aria-label={item.label}
                     >
-                      <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-forma-500 text-ink shadow-forma-glow transition active:scale-95">
-                        <Icon className="h-6 w-6" strokeWidth={2.25} />
-                      </span>
-                      <span className="mt-1 text-[10px] font-semibold text-forma-400">
+                      <Icon className="h-5 w-5" strokeWidth={2.25} />
+                      <span className="text-[10px] font-medium leading-tight">
                         {item.label}
                       </span>
                     </button>

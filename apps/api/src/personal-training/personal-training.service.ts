@@ -510,10 +510,12 @@ export class PersonalTrainingService {
       });
     }
 
+    const freeAvailability = await this.allowsFreeAvailability(user.sub);
     const openBlocks = blocks.filter(
       (block) =>
         block.kind === AvailabilityBlockKind.OPEN &&
         (block.status === AvailabilityBlockStatus.DRAFT ||
+          freeAvailability ||
           extraBesideDuty(block.startAt, block.endAt, duties) === 'ok'),
     );
 
@@ -1206,10 +1208,13 @@ export class PersonalTrainingService {
       orderBy: { startAt: 'asc' },
     });
     const duties = await this.dutyWindows(trainerId, rangeStart, rangeEnd);
+    const freeAvailability = await this.allowsFreeAvailability(trainerId);
     const bookable = [
       ...duties.map((d) => ({ startAt: d.startAt, endAt: d.endAt })),
       ...publishedBlocks.filter(
-        (block) => extraBesideDuty(block.startAt, block.endAt, duties) === 'ok',
+        (block) =>
+          freeAvailability ||
+          extraBesideDuty(block.startAt, block.endAt, duties) === 'ok',
       ),
     ];
 
@@ -1976,8 +1981,18 @@ export class PersonalTrainingService {
     });
   }
 
+  /** «Тренер клуб» alone sets own hours; staff PT stays tied to admin duty. */
+  private async allowsFreeAvailability(trainerId: string): Promise<boolean> {
+    const trainer = await this.prisma.user.findUnique({
+      where: { id: trainerId },
+      select: { trainerClub: true, trainerStaff: true },
+    });
+    return Boolean(trainer?.trainerClub && !trainer?.trainerStaff);
+  }
+
   private async assertExtraBesideDuty(trainerId: string, blocks: DutyWindow[]) {
     if (blocks.length === 0) return;
+    if (await this.allowsFreeAvailability(trainerId)) return;
     const min = new Date(Math.min(...blocks.map((b) => b.startAt.getTime())));
     const max = new Date(Math.max(...blocks.map((b) => b.endAt.getTime())));
     const duties = await this.dutyWindows(trainerId, min, max);
