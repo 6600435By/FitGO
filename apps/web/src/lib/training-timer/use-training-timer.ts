@@ -29,8 +29,29 @@ import type {
   TimerSessionMeta,
   TimerSnapshot,
 } from './types';
+import { loadTrainerTimerPrefs, saveTrainerTimerPrefs } from '@/lib/trainer-timer-prefs';
 
 const TICK_MS = 200;
+
+function idleWithPrefs(
+  phases: TimerPersistedState['phases'],
+  opts: {
+    presetId: string;
+    presetName: string;
+    meta: TimerSessionMeta;
+  },
+): TimerPersistedState {
+  const prefs = loadTrainerTimerPrefs();
+  const next = createIdleState(phases, {
+    ...opts,
+    soundPack: prefs.soundPack,
+  });
+  next.voiceEnabled = prefs.voiceEnabled;
+  next.vibrateEnabled = prefs.vibrateEnabled;
+  next.soundEnabled = prefs.soundEnabled;
+  next.volume = prefs.volume;
+  return next;
+}
 
 export function useTrainingTimer(opts: {
   meta: TimerSessionMeta;
@@ -40,7 +61,7 @@ export function useTrainingTimer(opts: {
 }) {
   const { meta, initialPreset, mirrorOnly = false } = opts;
   const [state, setState] = useState<TimerPersistedState>(() =>
-    createIdleState(initialPreset.phases, {
+    idleWithPrefs(initialPreset.phases, {
       presetId: initialPreset.id,
       presetName: initialPreset.name,
       meta,
@@ -48,7 +69,7 @@ export function useTrainingTimer(opts: {
   );
   const [snapshot, setSnapshot] = useState<TimerSnapshot>(() =>
     getSnapshot(
-      createIdleState(initialPreset.phases, {
+      idleWithPrefs(initialPreset.phases, {
         presetId: initialPreset.id,
         presetName: initialPreset.name,
         meta,
@@ -279,7 +300,15 @@ export function useTrainingTimer(opts: {
       >,
     ) => {
       if (mirrorOnly) return;
-      commit({ ...stateRef.current, ...patch, updatedAt: Date.now() });
+      const next = { ...stateRef.current, ...patch, updatedAt: Date.now() };
+      saveTrainerTimerPrefs({
+        soundPack: next.soundPack,
+        soundEnabled: next.soundEnabled,
+        voiceEnabled: next.voiceEnabled,
+        vibrateEnabled: next.vibrateEnabled,
+        volume: next.volume,
+      });
+      commit(next);
     },
     [commit, mirrorOnly],
   );

@@ -102,6 +102,19 @@
   color: #71717a;
 }
 
+/* Trainer control: wider filters + card density under Forma Coach */
+.forma-theme .trainer-forma-control {
+  max-width: 100%;
+}
+
+.forma-theme .trainer-forma-control .card {
+  transition: border-color 0.15s ease;
+}
+
+.forma-theme .trainer-forma-control .card:hover {
+  border-color: rgba(255, 208, 0, 0.28);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .forma-theme *,
   .forma-theme *::before,

@@ -18,6 +18,7 @@ import {
   rosterLockMessage,
   trackDayCapMinutes,
 } from '@fitgo/shared-types';
+import { AnimatedNumber } from '@fitgo/forma-ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -78,9 +79,15 @@ type Props = {
   mode: 'admin' | 'super' | 'trainer';
   /** When true, show hourly pay summary panel. */
   showMotivation?: boolean;
+  /** Parent already rendered PageHeader (Forma Coach). */
+  hideTitle?: boolean;
 };
 
-export function StaffRosterCalendar({ mode, showMotivation }: Props) {
+export function StaffRosterCalendar({
+  mode,
+  showMotivation,
+  hideTitle = false,
+}: Props) {
   const now = useMemo(() => new Date(), []);
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -475,18 +482,22 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
   return (
     <div className="space-y-5 pb-10">
       <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold text-white">График смен</h1>
-          <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
-            {mode === 'trainer'
-              ? 'Дежурство ставит администратор. Здесь его можно только смотреть. Время до или после дежурства открывается в Расписании: клиенты записываются, но ставка за эти часы не начисляется.'
-              : isSpaTrack
-                ? 'Рабочие часы SPA-специалистов (опубликованная смена). Те же часы, что в журнале SPA. Двойной щелчок — добавить или изменить; можно скопировать на период.'
-                : track === 'TRAINER'
-                  ? 'Дежурство: в эти часы клиенты могут записаться, и часы идут в ставку. Время до и после тренер открывает сам.'
-                  : 'Двойной щелчок по дню — добавить или изменить. Можно скопировать смену на период или выбранные дни недели.'}
-          </p>
-        </div>
+        {hideTitle ? (
+          <div />
+        ) : (
+          <div>
+            <h1 className="text-2xl font-semibold text-white">График смен</h1>
+            <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
+              {mode === 'trainer'
+                ? 'Дежурство ставит администратор. Здесь его можно только смотреть. Время до или после дежурства открывается в Расписании: клиенты записываются, но ставка за эти часы не начисляется.'
+                : isSpaTrack
+                  ? 'Рабочие часы SPA-специалистов (опубликованная смена). Те же часы, что в журнале SPA. Двойной щелчок — добавить или изменить; можно скопировать на период.'
+                  : track === 'TRAINER'
+                    ? 'Дежурство: в эти часы клиенты могут записаться, и часы идут в ставку. Время до и после тренер открывает сам.'
+                    : 'Двойной щелчок по дню — добавить или изменить. Можно скопировать смену на период или выбранные дни недели.'}
+            </p>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <button type="button" className="btn-secondary px-3 py-1.5" onClick={prevMonth}>
             ←
@@ -672,8 +683,11 @@ export function StaffRosterCalendar({ mode, showMotivation }: Props) {
                   <tr key={s.userId} className="border-t border-white/5">
                     <td className="py-2 pr-3 text-white">{s.userName}</td>
                     <td className="py-2 pr-3 text-slate-300">{s.shiftCount}</td>
-                    <td className="py-2 pr-3 text-slate-300">
-                      {(s.totalMinutes / 60).toFixed(1)}
+                    <td className="py-2 pr-3 font-medium tabular-nums text-white">
+                      <AnimatedNumber
+                        value={s.totalMinutes / 60}
+                        decimals={1}
+                      />
                     </td>
                     <td className="py-2 pr-3 text-slate-300">
                       {money(s.hourlyRateMinor, s.currency)}/ч

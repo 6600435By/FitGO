@@ -5,7 +5,13 @@ import type {
   TrainerShiftDto,
 } from '@fitgo/shared-types';
 import { clientIssueLabel } from '@fitgo/shared-types';
-import { useEffect, useMemo, useState } from 'react';
+import {
+  AnimatedNumber,
+  PageHeader,
+  SegmentedControl,
+} from '@fitgo/forma-ui';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useFeatures } from '@/components/features-provider';
 import {
   PtTimesheetStatsPanel,
   usePtTimesheetTab,
@@ -13,6 +19,7 @@ import {
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { recordJournalSubmitDay } from '@/lib/trainer-motivation';
 
 /** Journal lines / late-add — hidden until the flow is finished. */
 const PT_JOURNAL_UI_ENABLED = false;
@@ -26,6 +33,8 @@ function money(minor: number, currency: string) {
 }
 
 export default function TrainerPtTimesheetPage() {
+  const { isEnabled } = useFeatures();
+  const forma = isEnabled('trainer_ui_v2');
   const today = useMemo(() => isoDate(new Date()), []);
   const { tab, setTab } = usePtTimesheetTab();
   const [statsMounted, setStatsMounted] = useState(false);
@@ -74,6 +83,7 @@ export default function TrainerPtTimesheetPage() {
     try {
       const s = await api.trainerPtSubmitDay(token, date);
       setSheet(s);
+      recordJournalSubmitDay(date);
       setMessage('Табель отправлен админу');
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
@@ -101,43 +111,70 @@ export default function TrainerPtTimesheetPage() {
     }
   };
 
-  return (
-    <div className="mx-auto max-w-3xl space-y-5 pb-8">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold text-white">Табель ПТ</h1>
-        <p className="text-sm text-slate-400">
-          {shown === 'journal'
-            ? PT_JOURNAL_UI_ENABLED
-              ? 'Дневной журнал. Без телефона клиента записать нельзя. Late-add и ошибочный телефон — исключения.'
-              : 'Дневные итоги смены. Журнал клиентов временно скрыт — доработаем позже.'
-            : 'Статистика проведённых ПТ за период: микс оплат, клиенты, мотивация и смены.'}
-        </p>
-      </header>
+  const hours = sheet ? sheet.shiftMinutes / 60 : 0;
 
-      <div className="flex gap-1 rounded-xl border border-slate-800 p-1">
-        <button
-          type="button"
-          className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
+  return (
+    <div className="mx-auto max-w-3xl space-y-5 pb-8 desktop:max-w-5xl">
+      {forma ? (
+        <PageHeader
+          title="Табель ПТ"
+          subtitle={
             shown === 'journal'
-              ? 'bg-fitgo-600 text-white'
-              : 'text-slate-400 hover:text-white'
-          }`}
-          onClick={() => setTab('journal')}
-        >
-          День
-        </button>
-        <button
-          type="button"
-          className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
-            shown === 'stats'
-              ? 'bg-fitgo-600 text-white'
-              : 'text-slate-400 hover:text-white'
-          }`}
-          onClick={() => setTab('stats')}
-        >
-          Статистика
-        </button>
-      </div>
+              ? PT_JOURNAL_UI_ENABLED
+                ? 'Дневной журнал. Без телефона клиента записать нельзя.'
+                : 'Дневные итоги смены. Журнал клиентов временно скрыт.'
+              : 'Статистика ПТ: микс оплат, клиенты, мотивация и смены.'
+          }
+        />
+      ) : (
+        <header className="space-y-1">
+          <h1 className="text-2xl font-semibold text-white">Табель ПТ</h1>
+          <p className="text-sm text-slate-400">
+            {shown === 'journal'
+              ? PT_JOURNAL_UI_ENABLED
+                ? 'Дневной журнал. Без телефона клиента записать нельзя. Late-add и ошибочный телефон — исключения.'
+                : 'Дневные итоги смены. Журнал клиентов временно скрыт — доработаем позже.'
+              : 'Статистика проведённых ПТ за период: микс оплат, клиенты, мотивация и смены.'}
+          </p>
+        </header>
+      )}
+
+      {forma ? (
+        <SegmentedControl
+          value={shown}
+          onChange={(v) => setTab(v as 'journal' | 'stats')}
+          options={[
+            { value: 'journal', label: 'День' },
+            { value: 'stats', label: 'Статистика' },
+          ]}
+          layoutId="pt-timesheet-tab"
+        />
+      ) : (
+        <div className="flex gap-1 rounded-xl border border-slate-800 p-1">
+          <button
+            type="button"
+            className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
+              shown === 'journal'
+                ? 'bg-fitgo-600 text-white'
+                : 'text-slate-400 hover:text-white'
+            }`}
+            onClick={() => setTab('journal')}
+          >
+            День
+          </button>
+          <button
+            type="button"
+            className={`flex-1 rounded-lg px-3 py-1.5 text-sm ${
+              shown === 'stats'
+                ? 'bg-fitgo-600 text-white'
+                : 'text-slate-400 hover:text-white'
+            }`}
+            onClick={() => setTab('stats')}
+          >
+            Статистика
+          </button>
+        </div>
+      )}
 
       {statsMounted && (
         <div className={tab === 'stats' ? undefined : 'hidden'}>
@@ -195,23 +232,64 @@ export default function TrainerPtTimesheetPage() {
           {sheet && (
             <>
               <section className="grid grid-cols-2 gap-2 md:grid-cols-4">
-                <Stat
-                  label="Часы смены"
-                  value={`${(sheet.shiftMinutes / 60).toFixed(1)} ч`}
-                />
-                <Stat
-                  label="Оплата смены"
-                  value={money(sheet.shiftPayMinor, sheet.currency)}
-                />
-                <Stat
-                  label="Мотивация"
-                  value={money(sheet.sessionMotivationMinor, sheet.currency)}
-                />
-                <Stat
-                  label="Итого"
-                  value={money(sheet.totalMinor, sheet.currency)}
-                  emphasize
-                />
+                {forma ? (
+                  <>
+                    <Stat
+                      label="Часы смены"
+                      value={
+                        <span className="inline-flex items-baseline gap-1">
+                          <AnimatedNumber value={hours} decimals={1} />
+                          <span className="text-sm font-medium text-zinc-500">
+                            ч
+                          </span>
+                        </span>
+                      }
+                      forma
+                    />
+                    <Stat
+                      label="Оплата смены"
+                      value={money(sheet.shiftPayMinor, sheet.currency)}
+                      forma
+                    />
+                    <Stat
+                      label="Мотивация"
+                      value={money(
+                        sheet.sessionMotivationMinor,
+                        sheet.currency,
+                      )}
+                      forma
+                    />
+                    <Stat
+                      label="Итого"
+                      value={money(sheet.totalMinor, sheet.currency)}
+                      emphasize
+                      forma
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Stat
+                      label="Часы смены"
+                      value={`${hours.toFixed(1)} ч`}
+                    />
+                    <Stat
+                      label="Оплата смены"
+                      value={money(sheet.shiftPayMinor, sheet.currency)}
+                    />
+                    <Stat
+                      label="Мотивация"
+                      value={money(
+                        sheet.sessionMotivationMinor,
+                        sheet.currency,
+                      )}
+                    />
+                    <Stat
+                      label="Итого"
+                      value={money(sheet.totalMinor, sheet.currency)}
+                      emphasize
+                    />
+                  </>
+                )}
               </section>
               <p className="text-xs text-slate-500">
                 Статус: {sheet.status}
@@ -433,23 +511,33 @@ function Stat({
   label,
   value,
   emphasize,
+  forma,
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
   emphasize?: boolean;
+  forma?: boolean;
 }) {
   return (
     <div
       className={`rounded-2xl border p-3 ${
         emphasize
-          ? 'border-fitgo-500/40 bg-fitgo-500/10'
-          : 'border-slate-800 bg-slate-950/50'
+          ? forma
+            ? 'border-forma-500/40 bg-forma-500/10'
+            : 'border-fitgo-500/40 bg-fitgo-500/10'
+          : forma
+            ? 'border-white/[0.08] bg-ink-elevated/90'
+            : 'border-slate-800 bg-slate-950/50'
       }`}
     >
       <p className="text-[10px] uppercase text-slate-500">{label}</p>
       <p
         className={`mt-1 font-semibold tabular-nums ${
-          emphasize ? 'text-fitgo-300' : 'text-white'
+          emphasize
+            ? forma
+              ? 'text-forma-400'
+              : 'text-fitgo-300'
+            : 'text-white'
         }`}
       >
         {value}

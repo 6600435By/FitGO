@@ -1,8 +1,10 @@
 'use client';
 
+import { PageHeader, Skeleton } from '@fitgo/forma-ui';
 import { Suspense, useCallback, useMemo } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
+import { useFeatures } from '@/components/features-provider';
 import { ManagerOriginInbox } from '@/components/manager-rework/manager-origin-inbox';
 import { api } from '@/lib/api';
 import { getUser } from '@/lib/auth';
@@ -10,6 +12,8 @@ import { createTrainerBookingControlApi } from '@/lib/trainer-booking-control-ap
 import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 
 function TrainerMySessionsInner() {
+  const { isEnabled } = useFeatures();
+  const forma = isEnabled('trainer_ui_v2');
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -76,48 +80,59 @@ function TrainerMySessionsInner() {
     [pathname, router, searchParams],
   );
 
+  const title = groupCabinet ? 'Контроль' : 'Мои занятия';
+  const subtitle = groupCabinet
+    ? 'Карточки с фильтрами. Комментарий и состав — до и во время занятия; подтвердить — после. Явку в 1С ставит администратор.'
+    : 'Комментарий и галочки — до и во время занятия. «Подтвердить» — после окончания. Явку в 1С ставит администратор.';
+
   return (
-    <div>
+    <div className={forma ? 'mx-auto max-w-[1440px] space-y-3' : undefined}>
+      {forma ? <PageHeader title={title} subtitle={subtitle} /> : null}
       <ManagerOriginInbox
         list={listManagerTasks}
         complete={completeManagerTask}
         onOpenSession={openManagerSession}
       />
-      <BookingControlPanel
-        api={panelApi}
-        title={groupCabinet ? 'Контроль записей' : 'Мои занятия'}
-        subtitle={
-          groupCabinet
-            ? 'Комментарий и состав можно внести до и во время занятия. Подтвердить — после окончания. Явку в 1С ставит администратор.'
-            : 'Комментарий и галочки — до и во время занятия. «Подтвердить» — после окончания. Явку в 1С ставит администратор.'
-        }
-        canTrainerSeen
-        canApproveGroup
-        approvalActor="performer"
-        canViewHallPhotos
-        fixedKind={fixedKind}
-        trainerKindFilter={allowKindFilter}
-        approvalSegments={groupCabinet}
-        initialFrom={initialFrom}
-        initialTo={initialTo}
-        initialNeedsReview={initialNeedsReview}
-        initialPayment={initialPayment}
-        initialSessionKey={initialSessionKey}
-        initialClient={initialClient}
-        initialClientId={initialClientId}
-        initialKind={initialKind}
-        initialStatus={initialStatus}
-        initialConducted={initialConducted}
-        initialHall={initialHall}
-        initialReformer={initialReformer}
-      />
+      <div className={forma ? 'trainer-forma-control' : undefined}>
+        <BookingControlPanel
+          api={panelApi}
+          title={forma ? '' : title}
+          subtitle={forma ? undefined : subtitle}
+          canTrainerSeen
+          canApproveGroup
+          approvalActor="performer"
+          canViewHallPhotos
+          fixedKind={fixedKind}
+          trainerKindFilter={allowKindFilter}
+          approvalSegments={groupCabinet}
+          initialFrom={initialFrom}
+          initialTo={initialTo}
+          initialNeedsReview={initialNeedsReview}
+          initialPayment={initialPayment}
+          initialSessionKey={initialSessionKey}
+          initialClient={initialClient}
+          initialClientId={initialClientId}
+          initialKind={initialKind}
+          initialStatus={initialStatus}
+          initialConducted={initialConducted}
+          initialHall={initialHall}
+          initialReformer={initialReformer}
+        />
+      </div>
     </div>
   );
 }
 
 export default function TrainerMySessionsPage() {
   return (
-    <Suspense fallback={<p className="text-sm text-slate-400">Загрузка…</p>}>
+    <Suspense
+      fallback={
+        <div className="space-y-3">
+          <Skeleton className="h-8 w-48" />
+          <Skeleton className="h-64 w-full rounded-3xl" />
+        </div>
+      }
+    >
       <TrainerMySessionsInner />
     </Suspense>
   );

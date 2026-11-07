@@ -2576,6 +2576,7 @@ export function BookingControlPanel({
     <div className={detailOnly ? '' : 'space-y-3'}>
       {!detailOnly && (
       <>
+      {title ? (
       <div>
         <h1 className="text-xl font-semibold">{title}</h1>
         {subtitle ? (
@@ -2584,6 +2585,7 @@ export function BookingControlPanel({
           </p>
         ) : null}
       </div>
+      ) : null}
 
       {conductedMode ? (
         <div className="flex flex-wrap items-center gap-2">

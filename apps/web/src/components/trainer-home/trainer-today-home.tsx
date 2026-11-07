@@ -26,9 +26,15 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { MotivationCard } from '@/components/trainer-motivation/motivation-card';
+import { useLadderConfetti } from '@/components/trainer-motivation/use-ladder-confetti';
 import { StaffTasksInbox } from '@/components/staff-tasks-inbox';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
+import {
+  buildMotivationRecords,
+  loadJournalWeekStreak,
+} from '@/lib/trainer-motivation';
 import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 import { cn, formatDateTime } from '@/lib/utils';
 
@@ -596,10 +602,21 @@ export function TrainerTodayHome({
   );
   const controlBase = '/trainer/my-sessions';
 
+  const a = home?.monthAnalytics;
+  useLadderConfetti(
+    user?.id,
+    a?.ladder
+      ? { percent: a.ladder.percent, volumeCount: a.ladder.volumeCount }
+      : null,
+  );
+  const motivation = useMemo(
+    () => buildMotivationRecords(a, loadJournalWeekStreak()),
+    [a],
+  );
+
   if (error) return <p className="text-red-400">{error}</p>;
   if (!home) return <TodaySkeleton />;
 
-  const a = home.monthAnalytics;
   const showPtKpi = showPt && a && (a.pt.count > 0 || a.ladder != null);
   const showGpKpi =
     showGp &&
@@ -667,6 +684,8 @@ export function TrainerTodayHome({
           {showGpKpi ? <GpKpi a={a} /> : null}
         </div>
       ) : null}
+
+      {motivation ? <MotivationCard records={motivation} /> : null}
     </div>
   );
 }

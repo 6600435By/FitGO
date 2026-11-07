@@ -5,6 +5,7 @@ import type {
   PayrollSelfOverview,
   WorkUnit,
 } from '@fitgo/shared-types';
+import { AnimatedNumber, PageHeader } from '@fitgo/forma-ui';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -144,6 +145,8 @@ function withQuery(
 type Props = {
   /** Role surface for copy and 1C refresh mode. */
   role: 'admin' | 'trainer' | 'specialist';
+  /** Forma Coach shell (trainer_ui_v2). */
+  formaSkin?: boolean;
 };
 
 type SelfViewMem = {
@@ -151,7 +154,7 @@ type SelfViewMem = {
   to: string;
 };
 
-export function SelfPayrollView({ role }: Props) {
+export function SelfPayrollView({ role, formaSkin = false }: Props) {
   const today = useMemo(() => new Date(), []);
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -448,17 +451,80 @@ export function SelfPayrollView({ role }: Props) {
     }
   };
 
+  const monthForecastMinor = useMemo(() => {
+    if (!summary || !formaSkin) return null;
+    const fromD = new Date(`${from}T12:00:00`);
+    const toD = new Date(`${to}T12:00:00`);
+    const days = Math.max(
+      1,
+      Math.round((toD.getTime() - fromD.getTime()) / 86400000) + 1,
+    );
+    const eom = new Date(fromD.getFullYear(), fromD.getMonth() + 1, 0).getDate();
+    if (days >= eom) return null;
+    return Math.round((summary.totalMinor / days) * eom);
+  }, [summary, formaSkin, from, to]);
+
+  const exportCsv = () => {
+    if (!summary?.workUnits?.length) return;
+    const rows = [
+      ['date', 'kind', 'title', 'client', 'earnMinor', 'trusted'].join(','),
+      ...summary.workUnits.map((u) =>
+        [
+          u.occurredAt?.slice(0, 10) ?? '',
+          u.kind,
+          JSON.stringify(u.title ?? ''),
+          JSON.stringify(u.clientName ?? ''),
+          String(u.earnMinor ?? 0),
+          u.payrollTrusted ? '1' : '0',
+        ].join(','),
+      ),
+    ];
+    const blob = new Blob([rows.join('\n')], {
+      type: 'text/csv;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `payroll-${from}_${to}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
-    <div className="mx-auto w-full max-w-lg space-y-3 pb-8 md:max-w-2xl">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-white">
-          {role === 'trainer' ? 'Моя ЗП' : 'Расчёт ЗП'}
-        </h1>
-        <p className="text-sm leading-relaxed text-slate-400">
-          Ваш расчёт за период по проверенным работам. Ставки настраивает
-          супер-админ.
-        </p>
-      </header>
+    <div
+      className={
+        formaSkin
+          ? 'mx-auto w-full max-w-lg space-y-3 pb-8 md:max-w-4xl desktop:max-w-5xl'
+          : 'mx-auto w-full max-w-lg space-y-3 pb-8 md:max-w-2xl'
+      }
+    >
+      {formaSkin ? (
+        <PageHeader
+          title={role === 'trainer' ? 'Моя ЗП' : 'Расчёт ЗП'}
+          subtitle="Проверенные работы · ставки настраивает супер-админ"
+          action={
+            summary?.workUnits?.length ? (
+              <button
+                type="button"
+                className="btn-secondary px-3 py-2 text-xs"
+                onClick={exportCsv}
+              >
+                CSV
+              </button>
+            ) : undefined
+          }
+        />
+      ) : (
+        <header className="space-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight text-white">
+            {role === 'trainer' ? 'Моя ЗП' : 'Расчёт ЗП'}
+          </h1>
+          <p className="text-sm leading-relaxed text-slate-400">
+            Ваш расчёт за период по проверенным работам. Ставки настраивает
+            супер-админ.
+          </p>
+        </header>
+      )}
 
       <section className="card space-y-3">
         {role === 'trainer' ? (
@@ -562,13 +628,45 @@ export function SelfPayrollView({ role }: Props) {
               <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
                 К выплате
               </p>
-              <p className="mt-1 text-3xl font-semibold tabular-nums text-white">
-                {money(summary.totalMinor, currency)}
-              </p>
+              {formaSkin ? (
+                <p className="mt-1 font-display text-4xl font-bold tabular-nums text-white">
+                  <AnimatedNumber value={summary.totalMinor / 100} decimals={2} />
+                  <span className="ml-2 text-lg font-medium text-zinc-400">
+                    {currency}
+                  </span>
+                </p>
+              ) : (
+                <p className="mt-1 text-3xl font-semibold tabular-nums text-white">
+                  {money(summary.totalMinor, currency)}
+                </p>
+              )}
               <p className="mt-1 text-sm text-slate-400">
                 {summary.performerName}
                 {summary.locked ? ' · период закрыт' : ''}
               </p>
+              {formaSkin && monthForecastMinor != null ? (
+                <p className="mt-2 text-sm text-zinc-400">
+                  Прогноз до конца месяца ≈{' '}
+                  <span className="font-medium text-forma-400">
+                    {money(monthForecastMinor, currency)}
+                  </span>
+                </p>
+              ) : null}
+              {formaSkin && data && data.unconfirmedCount > 0 ? (
+                <Link
+                  href={
+                    data.links.bookingControl
+                      ? `${data.links.bookingControl}${data.links.bookingControl.includes('?') ? '&' : '?'}needsReview=1`
+                      : '/trainer/my-sessions?needsReview=1'
+                  }
+                  className="mt-3 flex items-center justify-between rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100 transition hover:border-amber-500/50"
+                >
+                  <span>На проверке у админа</span>
+                  <span className="font-display text-lg font-bold tabular-nums">
+                    {data.unconfirmedCount}
+                  </span>
+                </Link>
+              ) : null}
             </div>
             <ul className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
               <li className="rounded-lg bg-slate-900/70 px-3 py-2">
