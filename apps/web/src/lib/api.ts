@@ -957,9 +957,22 @@ export const api = {
 
   trainerAssignPersonalBooking: (
     token: string,
-    clientId: string,
-    startAt: string,
-    opts?: { isComplimentary?: boolean; ptFlow?: 'CLUB' | 'PERSONAL' },
+    data:
+      | {
+          clientId: string;
+          startAt: string;
+          isComplimentary?: boolean;
+          ptFlow?: 'CLUB' | 'PERSONAL';
+        }
+      | {
+          phone: string;
+          firstName: string;
+          lastName: string;
+          startAt: string;
+          clientExternalId?: string;
+          isComplimentary?: boolean;
+          ptFlow?: 'CLUB' | 'PERSONAL';
+        },
   ) =>
     request<{
       id: string;
@@ -972,12 +985,7 @@ export const api = {
       '/trainer/personal-bookings',
       {
         method: 'POST',
-        body: JSON.stringify({
-          clientId,
-          startAt,
-          isComplimentary: opts?.isComplimentary,
-          ptFlow: opts?.ptFlow,
-        }),
+        body: JSON.stringify(data),
       },
       token,
     ),

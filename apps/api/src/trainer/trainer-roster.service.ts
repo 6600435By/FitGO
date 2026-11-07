@@ -15,10 +15,12 @@ import {
 import { MembershipStatus } from '@fitgo/shared-types';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
+import { ClientPhoneLookupService } from '../common/client-phone-lookup.service';
 import {
   normalizePhone,
   shadowEmailForPhone,
 } from '../common/phone.util';
+import type { JwtPayload } from '../auth/jwt.strategy';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -69,7 +71,117 @@ export class TrainerRosterService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly phoneLookup: ClientPhoneLookupService,
   ) {}
+
+  /** Confirm roster link for assign/timesheet without waiting for app accept. */
+  async upsertConfirmedManualLink(trainerId: string, clientId: string) {
+    await this.prisma.trainerClientLink.upsert({
+      where: {
+        trainerId_clientId: { trainerId, clientId },
+      },
+      create: {
+        trainerId,
+        clientId,
+        status: TrainerClientLinkStatus.CONFIRMED,
+        source: TrainerClientSource.MANUAL,
+        confirmedAt: new Date(),
+      },
+      update: {
+        status: TrainerClientLinkStatus.CONFIRMED,
+        confirmedAt: new Date(),
+      },
+    });
+  }
+
+  /**
+   * Resolve client for PT assign: existing clientId, or guest phone+FIO
+   * (lookup → link found / create offline with «нет в 1С»).
+   */
+  async resolveClientForAssign(
+    trainerId: string,
+    actor: JwtPayload,
+    input: {
+      clientId?: string | null;
+      phone?: string | null;
+      firstName?: string | null;
+      lastName?: string | null;
+      clientExternalId?: string | null;
+    },
+  ): Promise<string> {
+    const clientId = input.clientId?.trim();
+    if (clientId) {
+      await this.ensureConfirmedLink(trainerId, clientId);
+      return clientId;
+    }
+
+    const phoneRaw = input.phone?.trim() ?? '';
+    const phoneNormalized = normalizePhone(phoneRaw);
+    if (phoneNormalized.length < 9) {
+      throw new BadRequestException(
+        'Укажите клиента из базы или телефон с именем и фамилией',
+      );
+    }
+
+    let firstName = (input.firstName ?? '').trim();
+    let lastName = (input.lastName ?? '').trim();
+    let externalId = input.clientExternalId?.trim() || undefined;
+
+    const found = await this.phoneLookup.lookupByPhone(actor, phoneRaw);
+    if (found.clientId) {
+      await this.upsertConfirmedManualLink(trainerId, found.clientId);
+      if (found.externalId) {
+        const u = await this.prisma.user.findUnique({
+          where: { id: found.clientId },
+          select: { externalId: true },
+        });
+        if (u && !u.externalId) {
+          await this.prisma.user.update({
+            where: { id: found.clientId },
+            data: { externalId: found.externalId },
+          });
+        }
+      }
+      return found.clientId;
+    }
+
+    if (found.found) {
+      externalId = externalId || found.externalId;
+      if (!firstName && found.firstName) firstName = found.firstName.trim();
+      if (!lastName && found.lastName) lastName = found.lastName.trim();
+    }
+
+    if (!firstName || !lastName) {
+      throw new BadRequestException(
+        'Клиент не найден — введите имя и фамилию для записи гостя',
+      );
+    }
+
+    const created = await this.addOfflineClient(trainerId, {
+      firstName,
+      lastName,
+      phone: phoneRaw,
+      clientExternalId: externalId,
+      notes: externalId ? undefined : 'нет в 1С',
+    });
+
+    if ('id' in created && created.id) {
+      return created.id;
+    }
+
+    // Existing app user without usable link — link manually (same as timesheet).
+    const existing = await this.prisma.user.findFirst({
+      where: { phoneNormalized },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new BadRequestException(
+        'Не удалось создать клиента для записи',
+      );
+    }
+    await this.upsertConfirmedManualLink(trainerId, existing.id);
+    return existing.id;
+  }
 
   async getMessagableClientIds(trainerId: string): Promise<string[]> {
     const links = await this.prisma.trainerClientLink.findMany({

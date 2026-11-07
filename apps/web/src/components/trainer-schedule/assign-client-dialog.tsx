@@ -25,10 +25,11 @@ export function AssignClientDialog({
   const [clientId, setClientId] = useState(clients[0]?.id ?? '');
   const [nameQuery, setNameQuery] = useState('');
   const [phone, setPhone] = useState('+375');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [lookup, setLookup] = useState<TrainerClientLookupResult | null>(null);
   const [looking, setLooking] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [adding, setAdding] = useState(false);
   const [error, setError] = useState('');
   const [hint, setHint] = useState('');
   const [ptFlow, setPtFlow] = useState<'CLUB' | 'PERSONAL'>('CLUB');
@@ -47,9 +48,14 @@ export function AssignClientDialog({
     });
   }, [clients, nameQuery]);
 
+  const phoneDigits = phone.replace(/\D/g, '');
+  const phoneReady = phoneDigits.length >= 12;
+  const guestReady =
+    phoneReady && firstName.trim().length > 0 && lastName.trim().length > 0;
+  const canAssign = Boolean(clientId) || guestReady;
+
   useEffect(() => {
-    const digits = phone.replace(/\D/g, '');
-    if (digits.length < 12) {
+    if (!phoneReady) {
       setLookup(null);
       return;
     }
@@ -64,32 +70,51 @@ export function AssignClientDialog({
           if (res.clientId && clients.some((c) => c.id === res.clientId)) {
             setClientId(res.clientId);
             setHint('Клиент найден в вашей базе');
-          } else if (res.source === '1c' || res.source === 'fitgo') {
+          } else if (res.found && (res.source === '1c' || res.source === 'fitgo')) {
+            if (res.firstName) setFirstName(res.firstName);
+            if (res.lastName) setLastName(res.lastName);
             setHint(
               res.inRoster
                 ? 'Клиент в базе'
-                : `Найден: ${res.lastName ?? ''} ${res.firstName ?? ''}`.trim(),
+                : `Найден: ${res.lastName ?? ''} ${res.firstName ?? ''}`.trim() +
+                    (res.source === '1c' ? ' · 1С' : ''),
             );
+            // Guest path: clear roster selection so Записать uses phone+FIO.
+            if (!res.inRoster) setClientId('');
           } else if (res.found === false) {
-            setHint('Нет в 1С — сначала добавьте в «Клиенты»');
+            setHint('Нет в 1С — введите ФИО и нажмите «Записать»');
+            setClientId('');
           }
         })
         .catch(() => setLookup(null))
         .finally(() => setLooking(false));
     }, 400);
     return () => window.clearTimeout(t);
-  }, [phone, clients]);
+  }, [phone, phoneReady, clients]);
 
   const handleAssign = async () => {
     const token = getToken();
-    if (!token || !clientId) return;
+    if (!token || !canAssign) return;
 
     setSaving(true);
     setError('');
     try {
-      await api.trainerAssignPersonalBooking(token, clientId, startAt, {
-        ptFlow: canChooseFlow ? ptFlow : undefined,
-      });
+      if (clientId) {
+        await api.trainerAssignPersonalBooking(token, {
+          clientId,
+          startAt,
+          ptFlow: canChooseFlow ? ptFlow : undefined,
+        });
+      } else {
+        await api.trainerAssignPersonalBooking(token, {
+          phone,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          startAt,
+          clientExternalId: lookup?.externalId,
+          ptFlow: canChooseFlow ? ptFlow : undefined,
+        });
+      }
       onAssigned();
       onClose();
     } catch (err) {
@@ -99,41 +124,10 @@ export function AssignClientDialog({
     }
   };
 
-  const handleAddFromLookup = async () => {
-    const token = getToken();
-    if (!token || !lookup?.found) return;
-    if (!lookup.firstName || !lookup.lastName) {
-      setError('Нет ФИО — добавьте клиента вручную в разделе «Клиенты»');
-      return;
-    }
-    setAdding(true);
-    setError('');
-    try {
-      const result = await api.trainerAddOfflineClient(token, {
-        firstName: lookup.firstName,
-        lastName: lookup.lastName,
-        phone: lookup.phone,
-        clientExternalId: lookup.externalId,
-      });
-      if ('message' in result) {
-        setHint(result.message);
-      } else {
-        setClientId(result.id);
-        setHint('Добавлен в базу — можно назначить');
-        onAssigned();
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось добавить');
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  const canAddFromLookup =
-    lookup?.found &&
-    !lookup.inRoster &&
-    lookup.source !== 'roster' &&
-    Boolean(lookup.firstName && lookup.lastName);
+  const showGuestFields =
+    !clientId ||
+    lookup?.found === false ||
+    (lookup?.found === true && !lookup.inRoster && lookup.source !== 'roster');
 
   const body = (
     <>
@@ -162,27 +156,37 @@ export function AssignClientDialog({
         {looking && <p className="text-xs text-slate-400">Ищем…</p>}
         {hint && <p className="text-sm text-slate-300">{hint}</p>}
 
-        {canAddFromLookup && (
-          <button
-            type="button"
-            className="btn-secondary w-full text-sm"
-            disabled={adding}
-            onClick={handleAddFromLookup}
-          >
-            {adding ? 'Добавляем…' : 'Добавить найденного в базу'}
-          </button>
+        {showGuestFields && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <input
+              className="input"
+              placeholder="Имя"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+            />
+            <input
+              className="input"
+              placeholder="Фамилия"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+            />
+          </div>
         )}
 
         {filtered.length === 0 ? (
           <p className="text-sm text-amber-400">
-            Нет клиентов в базе. Добавьте через раздел «Клиенты» или по телефону выше.
+            Нет клиентов в базе — можно записать гостя по телефону и ФИО.
           </p>
         ) : (
           <select
             value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
+            onChange={(e) => {
+              setClientId(e.target.value);
+              setHint('');
+            }}
             className="input"
           >
+            <option value="">— Гость / не из списка —</option>
             {filtered.map((client) => (
               <option key={client.id} value={client.id}>
                 {client.firstName} {client.lastName}
@@ -217,10 +221,10 @@ export function AssignClientDialog({
           <button
             type="button"
             onClick={handleAssign}
-            disabled={saving || !clientId}
+            disabled={saving || !canAssign}
             className="btn-primary flex-1 disabled:opacity-50"
           >
-            {saving ? 'Сохранение...' : 'Назначить'}
+            {saving ? 'Сохранение...' : 'Записать'}
           </button>
         </div>
     </>
@@ -231,7 +235,7 @@ export function AssignClientDialog({
       <ResponsiveSheet
         open
         onOpenChange={(o) => !o && onClose()}
-        title="Назначить клиента"
+        title="Записать на ПТ"
       >
         <div className="space-y-4 pb-2">{body}</div>
       </ResponsiveSheet>
@@ -241,7 +245,7 @@ export function AssignClientDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
       <div className="card w-full max-w-md space-y-4">
-        <h3 className="text-lg font-semibold">Назначить клиента</h3>
+        <h3 className="text-lg font-semibold">Записать на ПТ</h3>
         {body}
       </div>
     </div>

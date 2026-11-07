@@ -45,7 +45,10 @@ export function AddTrainingDialog({
     setSaving(true);
     setError('');
     try {
-      await api.trainerAssignPersonalBooking(token, clientId, startAt.toISOString());
+      await api.trainerAssignPersonalBooking(token, {
+        clientId,
+        startAt: startAt.toISOString(),
+      });
       onAdded();
       onClose();
     } catch (err) {

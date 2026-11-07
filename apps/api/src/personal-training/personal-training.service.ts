@@ -856,19 +856,34 @@ export class PersonalTrainingService {
 
   async assignPersonalBooking(
     user: JwtPayload,
-    clientId: string,
-    startAt: string,
-    isComplimentary = false,
-    ptFlowRequest?: PtBookingFlowValue | null,
+    input: {
+      clientId?: string | null;
+      phone?: string | null;
+      firstName?: string | null;
+      lastName?: string | null;
+      clientExternalId?: string | null;
+      startAt: string;
+      isComplimentary?: boolean;
+      ptFlow?: PtBookingFlowValue | null;
+    },
   ) {
-    const start = new Date(startAt);
+    const start = new Date(input.startAt);
     if (Number.isNaN(start.getTime())) {
       throw new BadRequestException('Некорректная дата');
     }
 
     const end = new Date(start.getTime() + SESSION_DURATION_MIN * 60_000);
 
-    await this.roster.ensureConfirmedLink(user.sub, clientId);
+    const clientId = await this.roster.resolveClientForAssign(user.sub, user, {
+      clientId: input.clientId,
+      phone: input.phone,
+      firstName: input.firstName,
+      lastName: input.lastName,
+      clientExternalId: input.clientExternalId,
+    });
+    const isComplimentary = input.isComplimentary ?? false;
+    const ptFlowRequest = input.ptFlow;
+
     await this.ensureNoBookingConflict(user.sub, start, end);
 
     const trainerFlags = await this.prisma.user.findUnique({
@@ -2711,10 +2726,12 @@ export class PersonalTrainingService {
                 await this.ensureNoBookingConflict(user.sub, start, end);
                 const createdBooking = await this.assignPersonalBooking(
                   user,
-                  series.clientId,
-                  start.toISOString(),
-                  series.isComplimentary,
-                  series.ptFlow as PtBookingFlowValue | null,
+                  {
+                    clientId: series.clientId,
+                    startAt: start.toISOString(),
+                    isComplimentary: series.isComplimentary,
+                    ptFlow: series.ptFlow as PtBookingFlowValue | null,
+                  },
                 );
                 await this.prisma.personalTrainingBooking.update({
                   where: { id: createdBooking.id },

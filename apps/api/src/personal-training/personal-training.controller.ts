@@ -190,13 +190,16 @@ export class PersonalTrainingController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: AssignPersonalBookingDto,
   ) {
-    return this.personalTraining.assignPersonalBooking(
-      user,
-      dto.clientId,
-      dto.startAt,
-      dto.isComplimentary ?? false,
-      dto.ptFlow,
-    );
+    return this.personalTraining.assignPersonalBooking(user, {
+      clientId: dto.clientId,
+      phone: dto.phone,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      clientExternalId: dto.clientExternalId,
+      startAt: dto.startAt,
+      isComplimentary: dto.isComplimentary ?? false,
+      ptFlow: dto.ptFlow,
+    });
   }
 
   @Patch('trainer/personal-bookings/:bookingId')
