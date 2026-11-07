@@ -67,21 +67,12 @@ export default function LoginPage() {
             FITGO
           </p>
           <h1 className="mt-2 text-3xl font-bold">Вход в клуб</h1>
-          <p className="mt-2 text-slate-400">
-            Рабочий кабинет сотрудников. Клиентам —{' '}
-            <a
-              href="https://lk.ffs.by"
-              className="text-fitgo-400 underline-offset-2 hover:underline"
-            >
-              lk.ffs.by
-            </a>
-          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="card space-y-4">
           <div>
             <label className="mb-2 block text-sm text-slate-400" htmlFor="login">
-              Телефон или логин
+              Логин
             </label>
             <input
               id="login"
@@ -90,7 +81,7 @@ export default function LoginPage() {
               className="input"
               value={login}
               onChange={(e) => setLogin(e.target.value)}
-              placeholder="+375…"
+              placeholder="Логин"
               required
             />
           </div>
