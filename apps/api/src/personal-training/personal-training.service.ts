@@ -797,12 +797,21 @@ export class PersonalTrainingService {
 
     // After publish: materialize active series into the period (conflicts → warnings).
     const seriesResult = await this.generateSeriesForPeriod(user, start, end);
+    // Refresh summary so «занято» includes just-created series rows.
+    const summaryAfter =
+      seriesResult.created > 0
+        ? await this.getPublishSummary(
+            user,
+            start.toISOString(),
+            end.toISOString(),
+          )
+        : summary;
 
     return {
       publishedBlocks: drafts.length,
       periodStart: start.toISOString(),
       periodEnd: end.toISOString(),
-      summary,
+      summary: summaryAfter,
       seriesCreated: seriesResult.created,
       seriesConflicts: seriesResult.conflicts,
     };
@@ -1978,6 +1987,10 @@ export class PersonalTrainingService {
     return result;
   }
 
+  private formatTimeHm(date: Date): string {
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  }
+
   private startOfDay(date: Date): Date {
     const result = new Date(date);
     result.setHours(0, 0, 0, 0);
@@ -2096,9 +2109,24 @@ export class PersonalTrainingService {
     }>,
     allBlocks: Array<{ kind: AvailabilityBlockKind }>,
   ): Promise<SchedulePublishSummary> {
+    // Include series that would materialize on publish (not yet CONFIRMED rows).
+    const planned = await this.plannedSeriesOccupations(
+      trainerId,
+      rangeStart,
+      rangeEnd,
+    );
+    const occupiers = [
+      ...bookings,
+      ...planned.map((p) => ({
+        startAt: p.startAt,
+        endAt: p.endAt,
+        bufferBeforeMin: 0,
+        bufferAfterMin: 0,
+      })),
+    ];
     const windowCount = openBlocks.length;
     const occupiedByClients = openBlocks.filter((block) =>
-      bookings.some((b) => {
+      occupiers.some((b) => {
         const occ = occupiedRange(b);
         return rangesOverlap(occ.start, occ.end, block.startAt, block.endAt);
       }),
@@ -2121,6 +2149,88 @@ export class PersonalTrainingService {
       ).length,
       draftBlockCount,
     };
+  }
+
+  /**
+   * Dry-run of series materialization for publish summary.
+   * Skips cancelled slots (any status at that start) and conflicted times.
+   */
+  private async plannedSeriesOccupations(
+    trainerId: string,
+    periodStart: Date,
+    periodEnd: Date,
+  ): Promise<Array<{ startAt: Date; endAt: Date }>> {
+    const seriesList = await this.prisma.personalBookingSeries.findMany({
+      where: {
+        trainerId,
+        active: true,
+        fromDate: { lte: periodEnd },
+        OR: [{ toDate: null }, { toDate: { gte: periodStart } }],
+      },
+    });
+    if (seriesList.length === 0) return [];
+
+    const existing = await this.prisma.personalTrainingBooking.findMany({
+      where: {
+        trainerId,
+        seriesId: { in: seriesList.map((s) => s.id) },
+        startAt: { gte: periodStart, lt: periodEnd },
+      },
+      select: {
+        seriesId: true,
+        startAt: true,
+        status: true,
+      },
+    });
+    const existingKeys = new Set(
+      existing.map((b) => `${b.seriesId}|${b.startAt.getTime()}`),
+    );
+
+    const planned: Array<{ startAt: Date; endAt: Date }> = [];
+    for (const series of seriesList) {
+      const cursor = new Date(
+        Math.max(periodStart.getTime(), series.fromDate.getTime()),
+      );
+      cursor.setHours(0, 0, 0, 0);
+      const liveCount = await this.prisma.personalTrainingBooking.count({
+        where: {
+          seriesId: series.id,
+          status: { not: PersonalBookingStatus.CANCELLED },
+        },
+      });
+      let made = 0;
+
+      while (cursor <= periodEnd) {
+        if (series.toDate && cursor > series.toDate) break;
+        if (
+          series.occurrences != null &&
+          liveCount + made >= series.occurrences
+        ) {
+          break;
+        }
+        if (cursor.getDay() === series.dayOfWeek) {
+          const start = this.combineDateAndTime(cursor, series.startTime);
+          const end = new Date(
+            start.getTime() + series.durationMin * 60_000,
+          );
+          if (start >= periodStart && start < periodEnd) {
+            const key = `${series.id}|${start.getTime()}`;
+            // Any prior row (incl. CANCELLED) → do not plan again.
+            if (!existingKeys.has(key)) {
+              try {
+                await this.ensureNoBookingConflict(trainerId, start, end);
+                planned.push({ startAt: start, endAt: end });
+                made += 1;
+              } catch {
+                // Conflict — not an occupied series seat for summary.
+              }
+            }
+          }
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+    }
+    return planned;
   }
 
   private async cancelTrainerBooking(
@@ -2194,6 +2304,14 @@ export class PersonalTrainingService {
       },
     });
     await this.visitSync.clearPendingEventsForBookings(ids);
+
+    // «Все будущие» stops the series so the next publish does not recreate them.
+    if (opts.seriesScope === 'future' && booking.seriesId) {
+      await this.prisma.personalBookingSeries.update({
+        where: { id: booking.seriesId },
+        data: { active: false },
+      });
+    }
 
     const trainerName =
       `${booking.trainer.firstName} ${booking.trainer.lastName}`.trim();
@@ -2273,6 +2391,7 @@ export class PersonalTrainingService {
 
     const deltaMs = start.getTime() - booking.startAt.getTime();
     const updatedIds: string[] = [];
+    const clubId = requireClubId(user);
 
     for (const target of targets) {
       const newStart =
@@ -2300,7 +2419,6 @@ export class PersonalTrainingService {
       updatedIds.push(target.id);
 
       if (!withinBuffer) {
-        const clubId = requireClubId(user);
         const { cleared } =
           await this.sessionApproval.clearAdminAfterMaterialEdit(
             SessionApprovalKind.PT,
@@ -2308,16 +2426,12 @@ export class PersonalTrainingService {
             clubId,
             'Перенос записи',
           );
-        // Keep linked doc if still plausible; clear when date moved far.
-        const dayDelta = Math.abs(
-          (newStart.getTime() - target.startAt.getTime()) / 86_400_000,
-        );
-        if (dayDelta > PT_DOC_LOOKAHEAD_DAYS) {
-          await this.prisma.personalTrainingBooking.update({
-            where: { id: target.id },
-            data: { linkedDocExternalId: null },
-          });
-        }
+        // Outside buffer: drop link and re-match on the new date.
+        await this.prisma.personalTrainingBooking.update({
+          where: { id: target.id },
+          data: { linkedDocExternalId: null },
+        });
+        await this.tryAutoLinkPtDocument(target.id, clubId);
         if (cleared) {
           const trainerName =
             `${booking.trainer.lastName} ${booking.trainer.firstName}`.trim() ||
@@ -2335,6 +2449,22 @@ export class PersonalTrainingService {
           });
         }
       }
+    }
+
+    // Series template must follow «change time of all future» or the next
+    // publish recreates old-time slots.
+    if (
+      seriesScope === 'future' &&
+      booking.seriesId &&
+      start.getTime() !== booking.startAt.getTime()
+    ) {
+      await this.prisma.personalBookingSeries.update({
+        where: { id: booking.seriesId },
+        data: {
+          startTime: this.formatTimeHm(start),
+          dayOfWeek: start.getDay(),
+        },
+      });
     }
 
     if (
@@ -2568,12 +2698,13 @@ export class PersonalTrainingService {
             start.getTime() + series.durationMin * 60_000,
           );
           if (start >= periodStart && start < periodEnd) {
+            // Any prior row at this series start (incl. CANCELLED) — do not recreate.
             const already = await this.prisma.personalTrainingBooking.findFirst({
               where: {
                 seriesId: series.id,
                 startAt: start,
-                status: { not: PersonalBookingStatus.CANCELLED },
               },
+              select: { id: true, status: true },
             });
             if (!already) {
               try {

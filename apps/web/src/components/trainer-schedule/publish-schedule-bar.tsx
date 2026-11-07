@@ -46,14 +46,35 @@ export function PublishScheduleBar({
         result.seriesCreated != null && result.seriesCreated > 0
           ? ` · серийных записей: ${result.seriesCreated}`
           : '';
+      const conflicts = result.seriesConflicts ?? [];
       const conflictBit =
-        result.seriesConflicts && result.seriesConflicts.length > 0
-          ? ` · конфликтов: ${result.seriesConflicts.length}`
+        conflicts.length > 0
+          ? ` · конфликтов: ${conflicts.length}`
+          : '';
+      const conflictDates =
+        conflicts.length > 0
+          ? conflicts
+              .slice(0, 5)
+              .map((c) => {
+                const when = format(new Date(c.date), 'd MMM HH:mm', {
+                  locale: ru,
+                });
+                return `${when} — ${c.reason}`;
+              })
+              .join('; ') +
+            (conflicts.length > 5
+              ? ` …ещё ${conflicts.length - 5}`
+              : '')
           : '';
       setMessage(
-        s
-          ? `Опубликовано: окон ${s.windowCount}, занято ${s.occupiedByClients}, свободно ${s.freeForClients}${seriesBit}${conflictBit}`
-          : `Опубликовано слотов: ${result.publishedBlocks}${seriesBit}${conflictBit}`,
+        [
+          s
+            ? `Опубликовано: окон ${s.windowCount}, занято ${s.occupiedByClients}, свободно ${s.freeForClients}${seriesBit}${conflictBit}`
+            : `Опубликовано слотов: ${result.publishedBlocks}${seriesBit}${conflictBit}`,
+          conflictDates,
+        ]
+          .filter(Boolean)
+          .join('. '),
       );
       onPublished();
     } catch (err) {

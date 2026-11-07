@@ -79,7 +79,7 @@ export function BookingActionSheet({
                   setSeriesScope(e.target.checked ? 'future' : 'one')
                 }
               />
-              Все будущие в серии
+              Все будущие в серии (шаблон времени тоже)
             </label>
           ) : null}
           <Button
@@ -185,7 +185,7 @@ export function BookingActionSheet({
                   setSeriesScope(e.target.checked ? 'future' : 'one')
                 }
               />
-              Отменить все будущие
+              Отменить все будущие и остановить серию
             </label>
           ) : null}
           <div className="flex gap-2">
