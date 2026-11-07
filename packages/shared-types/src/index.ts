@@ -832,7 +832,9 @@ export type TrainerCalendarEventKind =
   | 'PERSONAL'
   | 'DUTY'
   | 'OPEN_SLOT'
-  | 'DRAFT_SLOT';
+  | 'DRAFT_SLOT'
+  | 'HOLD_SLOT'
+  | 'PERSONAL_BLOCK';
 
 export type TrainerPtControlStatus =
   | 'PENDING_PERFORMER'
@@ -840,6 +842,8 @@ export type TrainerPtControlStatus =
   | 'APPROVED'
   | 'NO_BASIS'
   | 'LINKED';
+
+export type AvailabilityBlockKind = 'OPEN' | 'HOLD_CLIENT' | 'PERSONAL_BLOCK';
 
 export interface TrainerCalendarEvent {
   id: string;
@@ -850,12 +854,18 @@ export interface TrainerCalendarEvent {
   clientId?: string;
   clientName?: string;
   bookingId?: string;
+  seriesId?: string;
   origin?: PersonalBookingOrigin;
   /** PT: CRM link / phone issue on the booking. */
   clientIssue?: import('./pt-timesheet').PtClientIssue;
   /** When trainer_pt_control: control / document status for FitGO PT. */
   ptControlStatus?: TrainerPtControlStatus;
   ptControlLabel?: string;
+  bufferBeforeMin?: number;
+  bufferAfterMin?: number;
+  blockId?: string;
+  holdExpiresAt?: string;
+  note?: string;
   available?: boolean;
   capacity?: number;
   booked?: number;
@@ -866,6 +876,11 @@ export interface TrainerAvailabilityBlock {
   startAt: string;
   endAt: string;
   status: 'DRAFT' | 'PUBLISHED';
+  kind?: AvailabilityBlockKind;
+  holdClientId?: string;
+  holdClientName?: string;
+  holdExpiresAt?: string;
+  note?: string;
 }
 
 export interface TrainerSchedulePublicationInfo {
@@ -874,10 +889,54 @@ export interface TrainerSchedulePublicationInfo {
   publishedAt: string;
 }
 
+export interface SchedulePublishSummary {
+  periodStart: string;
+  periodEnd: string;
+  windowCount: number;
+  occupiedByClients: number;
+  freeForClients: number;
+  holdCount: number;
+  blockCount: number;
+  draftBlockCount: number;
+}
+
+export interface PersonalBookingSeriesInput {
+  clientId: string;
+  dayOfWeek: number;
+  startTime: string;
+  durationMin?: number;
+  fromDate: string;
+  toDate?: string;
+  occurrences?: number;
+  ptFlow?: 'CLUB' | 'PERSONAL';
+  isComplimentary?: boolean;
+}
+
+export interface PersonalBookingSeriesView {
+  id: string;
+  clientId: string;
+  clientName: string;
+  dayOfWeek: number;
+  startTime: string;
+  durationMin: number;
+  fromDate: string;
+  toDate?: string;
+  occurrences?: number;
+  ptFlow?: 'CLUB' | 'PERSONAL';
+  isComplimentary: boolean;
+  active: boolean;
+}
+
+export interface SeriesGenerateResult {
+  created: number;
+  conflicts: Array<{ date: string; reason: string }>;
+}
+
 export interface TrainerCalendarResponse {
   events: TrainerCalendarEvent[];
   availabilityBlocks: TrainerAvailabilityBlock[];
   draftBlockCount: number;
+  publishSummary?: SchedulePublishSummary;
   lastPublication?: TrainerSchedulePublicationInfo;
 }
 

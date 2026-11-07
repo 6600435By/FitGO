@@ -1,5 +1,6 @@
 'use client';
 
+import type { GpScheduleEvent } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DateField } from '@/components/ui/date-field';
 import { api, type GroupClassSessionDto } from '@/lib/api';
@@ -8,6 +9,12 @@ import { formatDateTime } from '@/lib/utils';
 
 function isoDate(d: Date) {
   return d.toISOString().slice(0, 10);
+}
+
+function toDatetimeLocal(iso: string) {
+  const d = new Date(iso);
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
 }
 
 function bandClass(band: string) {
@@ -25,8 +32,10 @@ export default function TrainerGroupJournalPage() {
   });
   const [to, setTo] = useState(isoDate(today));
   const [sessions, setSessions] = useState<GroupClassSessionDto[]>([]);
+  const [todayClasses, setTodayClasses] = useState<GpScheduleEvent[]>([]);
   const [active, setActive] = useState<GroupClassSessionDto | null>(null);
   const [message, setMessage] = useState('');
+  const [selectedClassId, setSelectedClassId] = useState('');
   const [openForm, setOpenForm] = useState({
     appointmentId: '',
     title: '',
@@ -48,6 +57,42 @@ export default function TrainerGroupJournalPage() {
     load();
   }, [load]);
 
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    const day = isoDate(new Date());
+    api
+      .trainerGpSchedule(token, day, day)
+      .then((list) => {
+        setTodayClasses(list);
+        if (list[0] && !selectedClassId) {
+          setSelectedClassId(list[0].id);
+          setOpenForm({
+            appointmentId: list[0].onexExternalId || list[0].id,
+            title: list[0].title,
+            startAt: toDatetimeLocal(list[0].startAt),
+            endAt: toDatetimeLocal(list[0].endAt),
+            roomTitle: list[0].roomTitle ?? '',
+          });
+        }
+      })
+      .catch(() => setTodayClasses([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed once from today's GP
+  }, []);
+
+  const pickClass = (id: string) => {
+    setSelectedClassId(id);
+    const cls = todayClasses.find((c) => c.id === id);
+    if (!cls) return;
+    setOpenForm({
+      appointmentId: cls.onexExternalId || cls.id,
+      title: cls.title,
+      startAt: toDatetimeLocal(cls.startAt),
+      endAt: toDatetimeLocal(cls.endAt),
+      roomTitle: cls.roomTitle ?? '',
+    });
+  };
+
   const openExisting = async (id: string) => {
     const token = getToken();
     if (!token) return;
@@ -62,8 +107,8 @@ export default function TrainerGroupJournalPage() {
       const s = await api.trainerOpenGroupSession(token, {
         appointmentId: openForm.appointmentId.trim(),
         title: openForm.title.trim() || 'Групповое занятие',
-        startAt: openForm.startAt,
-        endAt: openForm.endAt,
+        startAt: new Date(openForm.startAt).toISOString(),
+        endAt: new Date(openForm.endAt).toISOString(),
         roomTitle: openForm.roomTitle.trim() || undefined,
       });
       setActive(s);
@@ -123,11 +168,29 @@ export default function TrainerGroupJournalPage() {
       </div>
 
       <div className="rounded border border-slate-800 p-3 space-y-2 text-sm">
-        <p className="font-medium">Открыть журнал по id занятия 1С</p>
+        <p className="font-medium">Открыть журнал по занятию</p>
+        {todayClasses.length > 0 ? (
+          <select
+            className="input w-full"
+            value={selectedClassId}
+            onChange={(e) => pickClass(e.target.value)}
+          >
+            {todayClasses.map((c) => (
+              <option key={c.id} value={c.id}>
+                {formatDateTime(c.startAt)} · {c.title}
+                {c.roomTitle ? ` · ${c.roomTitle}` : ''}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <p className="text-slate-500">
+            На сегодня занятий нет — можно ввести id вручную.
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
           <input
             className="input"
-            placeholder="appointmentId"
+            placeholder="appointmentId (если нет в списке)"
             value={openForm.appointmentId}
             onChange={(e) =>
               setOpenForm((f) => ({ ...f, appointmentId: e.target.value }))
@@ -165,7 +228,12 @@ export default function TrainerGroupJournalPage() {
               setOpenForm((f) => ({ ...f, roomTitle: e.target.value }))
             }
           />
-          <button type="button" className="btn-primary" onClick={createOpen}>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={createOpen}
+            disabled={!openForm.appointmentId || !openForm.startAt}
+          >
             Открыть
           </button>
         </div>

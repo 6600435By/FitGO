@@ -204,6 +204,13 @@ enum AvailabilityBlockStatus {
   PUBLISHED
 }
 
+/// OPEN = bookable window; HOLD_CLIENT = soft reserve; PERSONAL_BLOCK = closed time.
+enum AvailabilityBlockKind {
+  OPEN
+  HOLD_CLIENT
+  PERSONAL_BLOCK
+}
+
 enum PersonalBookingOrigin {
   CLIENT_BOOKED
   TRAINER_ASSIGNED
@@ -691,7 +698,10 @@ model User {
   wearableSyncs        WearableSync[]
   trainerWorkSlots     TrainerWorkSlot[]
   trainerAvailabilityBlocks TrainerAvailabilityBlock[]
+  heldAvailabilityBlocks    TrainerAvailabilityBlock[] @relation("AvailabilityHoldClient")
   trainerSchedulePublications TrainerSchedulePublication[]
+  trainerPersonalBookingSeries PersonalBookingSeries[] @relation("TrainerBookingSeries")
+  clientPersonalBookingSeries  PersonalBookingSeries[] @relation("ClientBookingSeries")
   trainerPersonalBookings PersonalTrainingBooking[] @relation("TrainerPersonalBookings")
   clientPersonalBookings  PersonalTrainingBooking[] @relation("ClientPersonalBookings")
   specialistWorkSlots             SpecialistWorkSlot[]
@@ -1113,18 +1123,53 @@ model TrainerWorkSlot {
 }
 
 model TrainerAvailabilityBlock {
-  id        String                  @id @default(cuid())
-  trainerId String
-  startAt   DateTime
-  endAt     DateTime
-  status    AvailabilityBlockStatus @default(DRAFT)
-  createdAt DateTime                @default(now())
-  updatedAt DateTime                @updatedAt
+  id            String                  @id @default(cuid())
+  trainerId     String
+  startAt       DateTime
+  endAt         DateTime
+  status        AvailabilityBlockStatus @default(DRAFT)
+  kind          AvailabilityBlockKind   @default(OPEN)
+  /// Soft reserve under a client (kind = HOLD_CLIENT).
+  holdClientId  String?
+  holdExpiresAt DateTime?
+  note          String?
+  /// Push warning sent ~1h before holdExpiresAt.
+  holdExpiryWarnedAt DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
 
-  trainer User @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+  trainer    User  @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+  holdClient User? @relation("AvailabilityHoldClient", fields: [holdClientId], references: [id], onDelete: SetNull)
 
   @@index([trainerId, startAt])
   @@index([trainerId, status, startAt])
+  @@index([kind, holdExpiresAt])
+  @@index([holdClientId])
+}
+
+/// Recurring PT template: generates PersonalTrainingBooking rows for a week/period.
+model PersonalBookingSeries {
+  id              String         @id @default(cuid())
+  trainerId       String
+  clientId        String
+  dayOfWeek       Int
+  startTime       String
+  durationMin     Int            @default(60)
+  fromDate        DateTime
+  toDate          DateTime?
+  occurrences     Int?
+  ptFlow          PtBookingFlow?
+  isComplimentary Boolean        @default(false)
+  active          Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  trainer  User                      @relation("TrainerBookingSeries", fields: [trainerId], references: [id], onDelete: Cascade)
+  client   User                      @relation("ClientBookingSeries", fields: [clientId], references: [id], onDelete: Cascade)
+  bookings PersonalTrainingBooking[]
+
+  @@index([trainerId, active])
+  @@index([clientId])
 }
 
 model TrainerSchedulePublication {
@@ -1192,12 +1237,20 @@ model PersonalTrainingBooking {
   ledgerPackageId    String?
   /// Set when PERSONAL session was debited from package or raised client debt.
   ledgerSettledAt    DateTime?
+  /// Hidden buffer minutes before/after session (Logic 6) — blocks client booking.
+  bufferBeforeMin    Int                   @default(0)
+  bufferAfterMin     Int                   @default(0)
+  seriesId           String?
+  cancelReason       String?
+  cancelledAt        DateTime?
+  cancelledById      String?
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
 
   trainer      User                          @relation("TrainerPersonalBookings", fields: [trainerId], references: [id], onDelete: Cascade)
   client       User                          @relation("ClientPersonalBookings", fields: [clientId], references: [id], onDelete: Cascade)
   ledgerPackage TrainerClientPackage?        @relation(fields: [ledgerPackageId], references: [id], onDelete: SetNull)
+  series       PersonalBookingSeries?        @relation(fields: [seriesId], references: [id], onDelete: SetNull)
   sessionGoals PersonalTrainingSessionGoal[]
   daySheetLines TrainerDaySheetLine[]
 
@@ -1213,6 +1266,7 @@ model PersonalTrainingBooking {
   @@index([docAutoLinkBlocked, linkedDocExternalId])
   @@index([ptFlow, trainerId])
   @@index([ledgerPackageId])
+  @@index([seriesId])
 }
 
 model PersonalTrainingSessionGoal {

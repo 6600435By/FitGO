@@ -24,6 +24,8 @@ import { UpdateSessionPlanDto } from './dto/update-session-plan.dto';
 import { SetAvailabilityBlocksDto } from './dto/set-availability-blocks.dto';
 import { PublishScheduleDto } from './dto/publish-schedule.dto';
 import { AssignPersonalBookingDto } from './dto/assign-personal-booking.dto';
+import { CreateAvailabilityHoldDto } from './dto/create-availability-hold.dto';
+import { CreateBookingSeriesDto } from './dto/create-booking-series.dto';
 import { UpdateTrainerBookingDto } from './dto/update-trainer-booking.dto';
 import { PersonalTrainingService } from './personal-training.service';
 
@@ -110,6 +112,75 @@ export class PersonalTrainingController {
       user,
       dto.periodStart,
       dto.periodEnd,
+    );
+  }
+
+  @Get('trainer/schedule/publish-summary')
+  @Roles(UserRole.TRAINER)
+  publishSummary(
+    @CurrentUser() user: JwtPayload,
+    @Query('periodStart') periodStart: string,
+    @Query('periodEnd') periodEnd: string,
+  ) {
+    return this.personalTraining.getPublishSummary(
+      user,
+      periodStart,
+      periodEnd,
+    );
+  }
+
+  @Post('trainer/schedule/holds')
+  @Roles(UserRole.TRAINER)
+  createHold(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateAvailabilityHoldDto,
+  ) {
+    return this.personalTraining.createAvailabilityHold(user, dto);
+  }
+
+  @Delete('trainer/schedule/holds/:blockId')
+  @Roles(UserRole.TRAINER)
+  deleteHold(
+    @CurrentUser() user: JwtPayload,
+    @Param('blockId') blockId: string,
+  ) {
+    return this.personalTraining.deleteAvailabilityHold(user, blockId);
+  }
+
+  @Get('trainer/booking-series')
+  @Roles(UserRole.TRAINER)
+  listSeries(@CurrentUser() user: JwtPayload) {
+    return this.personalTraining.listBookingSeries(user);
+  }
+
+  @Post('trainer/booking-series')
+  @Roles(UserRole.TRAINER)
+  createSeries(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateBookingSeriesDto,
+  ) {
+    return this.personalTraining.createBookingSeries(user, dto);
+  }
+
+  @Delete('trainer/booking-series/:seriesId')
+  @Roles(UserRole.TRAINER)
+  deactivateSeries(
+    @CurrentUser() user: JwtPayload,
+    @Param('seriesId') seriesId: string,
+  ) {
+    return this.personalTraining.deactivateBookingSeries(user, seriesId);
+  }
+
+  @Post('trainer/booking-series/generate')
+  @Roles(UserRole.TRAINER)
+  generateSeries(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: PublishScheduleDto,
+  ) {
+    return this.personalTraining.generateSeriesForPeriod(
+      user,
+      new Date(dto.periodStart),
+      new Date(dto.periodEnd),
     );
   }
 

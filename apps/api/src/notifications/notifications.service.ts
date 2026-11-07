@@ -759,6 +759,88 @@ export class NotificationsService implements OnModuleInit {
     );
   }
 
+  async notifySessionRescheduled(params: {
+    clientId: string;
+    trainerId: string;
+    trainerName: string;
+    oldStartAt: Date;
+    newStartAt: Date;
+  }) {
+    const oldWhen = this.formatCancellationWhen(params.oldStartAt);
+    const newWhen = this.formatCancellationWhen(params.newStartAt);
+    const body = `${params.trainerName} перенёс(ла) вашу тренировку${oldWhen ? ` с ${oldWhen}` : ''}${newWhen ? ` на ${newWhen}` : ''}.`;
+    await this.createNotification({
+      userId: params.clientId,
+      title: 'Тренировка перенесена',
+      body,
+      senderId: params.trainerId,
+      status: NotificationStatus.PENDING,
+      url: '/bookings',
+      tag: 'pt-reschedule',
+    });
+  }
+
+  async notifySessionCancelledByTrainer(params: {
+    clientId: string;
+    trainerId: string;
+    trainerName: string;
+    startAt: Date;
+    reason?: string;
+  }) {
+    const when = this.formatCancellationWhen(params.startAt);
+    const reason = params.reason?.trim()
+      ? ` Причина: ${params.reason.trim()}.`
+      : '';
+    const body = `${params.trainerName} отменил(а) вашу тренировку${when ? ` — ${when}` : ''}.${reason}`;
+    await this.createNotification({
+      userId: params.clientId,
+      title: 'Тренировка отменена',
+      body,
+      senderId: params.trainerId,
+      status: NotificationStatus.PENDING,
+      url: '/bookings',
+      tag: 'pt-cancel',
+    });
+  }
+
+  async notifyTrainerHoldExpiring(params: {
+    trainerId: string;
+    clientName: string;
+    expiresAt: Date;
+  }) {
+    const when = this.formatCancellationWhen(params.expiresAt);
+    await this.createNotification({
+      userId: params.trainerId,
+      title: 'Резерв скоро освободится',
+      body: `Резерв под ${params.clientName} истекает${when ? ` — ${when}` : ''}. Успейте подтвердить запись.`,
+      status: NotificationStatus.PENDING,
+      url: '/trainer/schedule',
+      tag: 'hold-expiring',
+    });
+  }
+
+  async notifyPtReminder(params: {
+    clientId: string;
+    trainerName: string;
+    startAt: Date;
+    hoursBefore: 24 | 2;
+  }) {
+    const when = this.formatCancellationWhen(params.startAt);
+    const title =
+      params.hoursBefore === 24
+        ? 'Напоминание: тренировка завтра'
+        : 'Напоминание: тренировка через 2 часа';
+    const body = `Персональная с ${params.trainerName}${when ? ` — ${when}` : ''}.`;
+    await this.createNotification({
+      userId: params.clientId,
+      title,
+      body,
+      status: NotificationStatus.PENDING,
+      url: '/bookings',
+      tag: `pt-reminder-${params.hoursBefore}h`,
+    });
+  }
+
   getMockClientData() {
     return MOCK_USERS;
   }

@@ -31,6 +31,17 @@ const STYLES: Record<
     dot: 'bg-amber-400',
     label: 'Черновик слота',
   },
+  HOLD_SLOT: {
+    block:
+      'border-l-4 border-yellow-400 bg-yellow-500/15 text-yellow-50 outline outline-1 outline-yellow-400/60',
+    dot: 'bg-yellow-400',
+    label: 'Резерв',
+  },
+  PERSONAL_BLOCK: {
+    block: 'border-l-4 border-slate-500 bg-slate-500/25 text-slate-100',
+    dot: 'bg-slate-400',
+    label: 'Блокировка',
+  },
 };
 
 export function eventBlockClass(kind: TrainerCalendarEventKind): string {
@@ -51,4 +62,6 @@ export const EVENT_KIND_LEGEND: TrainerCalendarEventKind[] = [
   'PERSONAL',
   'OPEN_SLOT',
   'DRAFT_SLOT',
+  'HOLD_SLOT',
+  'PERSONAL_BLOCK',
 ];

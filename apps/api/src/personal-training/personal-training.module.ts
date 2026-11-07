@@ -8,6 +8,8 @@ import { TrainerRosterModule } from '../trainer-roster/trainer-roster.module';
 import { TrainerLedgerModule } from '../trainer/trainer-ledger.module';
 import { PersonalTrainingController } from './personal-training.controller';
 import { PersonalTrainingService } from './personal-training.service';
+import { PtReminderSchedulerService } from './pt-reminder.scheduler';
+import { ScheduleHoldSchedulerService } from './schedule-hold.scheduler';
 
 @Module({
   imports: [
@@ -20,7 +22,11 @@ import { PersonalTrainingService } from './personal-training.service';
     TrainerLedgerModule,
   ],
   controllers: [PersonalTrainingController],
-  providers: [PersonalTrainingService],
+  providers: [
+    PersonalTrainingService,
+    ScheduleHoldSchedulerService,
+    PtReminderSchedulerService,
+  ],
   exports: [PersonalTrainingService],
 })
 export class PersonalTrainingModule {}

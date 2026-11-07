@@ -14,6 +14,7 @@ export type TrainerInsightKind =
   | 'pt_no_doc'
   | 'ledger_debt'
   | 'ledger_package_expiring'
+  | 'hold_expiring'
   | 'control_pending';
 
 export interface TrainerInsightAction {

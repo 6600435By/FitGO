@@ -1,6 +1,10 @@
 'use client';
 
-import type { TrainerAvailabilityBlock, TrainerCalendarEvent } from '@fitgo/shared-types';
+import type {
+  SchedulePublishSummary,
+  TrainerAvailabilityBlock,
+  TrainerCalendarEvent,
+} from '@fitgo/shared-types';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -13,6 +17,9 @@ export function useTrainerCalendar(date: Date, view: ScheduleView) {
     TrainerAvailabilityBlock[]
   >([]);
   const [draftBlockCount, setDraftBlockCount] = useState(0);
+  const [publishSummary, setPublishSummary] = useState<
+    SchedulePublishSummary | undefined
+  >();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [period, setPeriod] = useState(() => getCalendarPeriod(date, view));
@@ -35,6 +42,7 @@ export function useTrainerCalendar(date: Date, view: ScheduleView) {
       setEvents(data.events);
       setAvailabilityBlocks(data.availabilityBlocks);
       setDraftBlockCount(data.draftBlockCount);
+      setPublishSummary(data.publishSummary);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки');
     } finally {
@@ -50,6 +58,7 @@ export function useTrainerCalendar(date: Date, view: ScheduleView) {
     events,
     availabilityBlocks,
     draftBlockCount,
+    publishSummary,
     loading,
     error,
     period,

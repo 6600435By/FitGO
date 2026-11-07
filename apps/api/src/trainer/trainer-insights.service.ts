@@ -599,6 +599,41 @@ export class TrainerInsightsService {
       }
     }
 
+    const holds = await this.prisma.trainerAvailabilityBlock.findMany({
+      where: {
+        trainerId: user.sub,
+        kind: 'HOLD_CLIENT',
+        holdExpiresAt: {
+          gt: now,
+          lte: new Date(now.getTime() + 3 * 60 * 60 * 1000),
+        },
+      },
+      include: {
+        holdClient: { select: { id: true, firstName: true, lastName: true } },
+      },
+      take: 5,
+    });
+    for (const hold of holds) {
+      const name = hold.holdClient
+        ? `${hold.holdClient.firstName} ${hold.holdClient.lastName}`.trim()
+        : 'клиент';
+      const key = `hold_expiring:${hold.id}`;
+      if (dismissedKeys.has(key)) continue;
+      insights.push({
+        key,
+        kind: 'hold_expiring',
+        title: 'Резерв скоро освободится',
+        body: `${name}: успейте подтвердить запись`,
+        priority: 12,
+        clientId: hold.holdClientId ?? undefined,
+        clientName: name,
+        action: {
+          label: 'Расписание',
+          href: '/trainer/schedule',
+        },
+      });
+    }
+
     insights.sort((a, b) => a.priority - b.priority || a.title.localeCompare(b.title, 'ru'));
 
     return {

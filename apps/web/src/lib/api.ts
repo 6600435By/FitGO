@@ -865,8 +865,88 @@ export const api = {
     periodStart: string,
     periodEnd: string,
   ) =>
-    request<{ publishedBlocks: number; periodStart: string; periodEnd: string }>(
+    request<{
+      publishedBlocks: number;
+      periodStart: string;
+      periodEnd: string;
+      summary?: import('@fitgo/shared-types').SchedulePublishSummary;
+      seriesCreated?: number;
+      seriesConflicts?: Array<{ date: string; reason: string }>;
+    }>(
       '/trainer/schedule/publish',
+      {
+        method: 'POST',
+        body: JSON.stringify({ periodStart, periodEnd }),
+      },
+      token,
+    ),
+
+  trainerPublishSummary: (
+    token: string,
+    periodStart: string,
+    periodEnd: string,
+  ) =>
+    request<import('@fitgo/shared-types').SchedulePublishSummary>(
+      `/trainer/schedule/publish-summary?periodStart=${encodeURIComponent(periodStart)}&periodEnd=${encodeURIComponent(periodEnd)}`,
+      {},
+      token,
+    ),
+
+  trainerCreateScheduleHold: (
+    token: string,
+    data: {
+      startAt: string;
+      endAt: string;
+      kind: 'HOLD_CLIENT' | 'PERSONAL_BLOCK';
+      holdClientId?: string;
+      holdHours?: number;
+      note?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').TrainerAvailabilityBlock>(
+      '/trainer/schedule/holds',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerDeleteScheduleHold: (token: string, blockId: string) =>
+    request<{ success: boolean }>(
+      `/trainer/schedule/holds/${encodeURIComponent(blockId)}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  trainerBookingSeries: (token: string) =>
+    request<import('@fitgo/shared-types').PersonalBookingSeriesView[]>(
+      '/trainer/booking-series',
+      {},
+      token,
+    ),
+
+  trainerCreateBookingSeries: (
+    token: string,
+    data: import('@fitgo/shared-types').PersonalBookingSeriesInput,
+  ) =>
+    request<import('@fitgo/shared-types').PersonalBookingSeriesView>(
+      '/trainer/booking-series',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerDeactivateBookingSeries: (token: string, seriesId: string) =>
+    request<{ success: boolean }>(
+      `/trainer/booking-series/${encodeURIComponent(seriesId)}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
+  trainerGenerateBookingSeries: (
+    token: string,
+    periodStart: string,
+    periodEnd: string,
+  ) =>
+    request<import('@fitgo/shared-types').SeriesGenerateResult>(
+      '/trainer/booking-series/generate',
       {
         method: 'POST',
         body: JSON.stringify({ periodStart, periodEnd }),
@@ -989,7 +1069,15 @@ export const api = {
   trainerUpdatePersonalBooking: (
     token: string,
     bookingId: string,
-    data: { startAt?: string; action?: 'cancel' },
+    data: {
+      startAt?: string;
+      action?: 'cancel' | 'no_show';
+      cancelReason?: string;
+      debitPackage?: boolean;
+      seriesScope?: 'one' | 'future';
+      bufferBeforeMin?: number;
+      bufferAfterMin?: number;
+    },
   ) =>
     request(`/trainer/personal-bookings/${bookingId}`, {
       method: 'PATCH',

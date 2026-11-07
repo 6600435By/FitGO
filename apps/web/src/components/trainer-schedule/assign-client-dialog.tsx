@@ -1,7 +1,9 @@
 'use client';
 
 import type { TrainerClientLookupResult } from '@fitgo/shared-types';
+import { ResponsiveSheet } from '@fitgo/forma-ui';
 import { useEffect, useMemo, useState } from 'react';
+import { useFeatures } from '@/components/features-provider';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 
@@ -17,6 +19,8 @@ export function AssignClientDialog({
   onAssigned: () => void;
 }) {
   const me = getUser();
+  const { isEnabled } = useFeatures();
+  const forma = isEnabled('trainer_ui_v2');
   const canChooseFlow = Boolean(me?.trainerClub && me?.trainerStaff);
   const [clientId, setClientId] = useState(clients[0]?.id ?? '');
   const [nameQuery, setNameQuery] = useState('');
@@ -131,10 +135,8 @@ export function AssignClientDialog({
     lookup.source !== 'roster' &&
     Boolean(lookup.firstName && lookup.lastName);
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
-      <div className="card w-full max-w-md space-y-4">
-        <h3 className="text-lg font-semibold">Назначить клиента</h3>
+  const body = (
+    <>
         <p className="text-sm text-slate-400">
           {new Date(startAt).toLocaleString('ru-RU', {
             day: 'numeric',
@@ -221,6 +223,26 @@ export function AssignClientDialog({
             {saving ? 'Сохранение...' : 'Назначить'}
           </button>
         </div>
+    </>
+  );
+
+  if (forma) {
+    return (
+      <ResponsiveSheet
+        open
+        onOpenChange={(o) => !o && onClose()}
+        title="Назначить клиента"
+      >
+        <div className="space-y-4 pb-2">{body}</div>
+      </ResponsiveSheet>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center">
+      <div className="card w-full max-w-md space-y-4">
+        <h3 className="text-lg font-semibold">Назначить клиента</h3>
+        {body}
       </div>
     </div>
   );
