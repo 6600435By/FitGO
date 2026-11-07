@@ -18,8 +18,12 @@ export type TrainerCabinetMode = {
   isLegacy: boolean;
   /** Show GP schedule / journal surfaces. */
   showGp: boolean;
-  /** Show PT calendar / timesheet / CRM. */
+  /** Show PT calendar / CRM. */
   showPt: boolean;
+  /** «Табель ПТ» — только штатный ПТ (не «Тренер клуб»). */
+  showTimesheet: boolean;
+  /** «Контроль» в «Ещё» — только штатный ПТ (у чистого ГП контроль в доке). */
+  showPtControl: boolean;
   /** Payroll menu entry (club salary). */
   showPayroll: boolean;
   /** Personal ledger «Мои оплаты» for trainerClub. */
@@ -33,12 +37,15 @@ export function trainerCabinetMode(
 ): TrainerCabinetMode {
   const isGp = Boolean(flags?.groupPrograms);
   const isReformer = Boolean(flags?.trainerReformers);
+  const isStaffPt = Boolean(flags?.trainerStaff);
   const hasPt = Boolean(flags?.trainerStaff || flags?.trainerClub);
   const groupCabinet = isGp || isReformer;
   const isLegacy = !isGp && !isReformer && !hasPt;
   const showGp = groupCabinet || isLegacy;
   const showPt = hasPt || isLegacy;
-  const showPayroll = isGp || isReformer || Boolean(flags?.trainerStaff);
+  const showTimesheet = isStaffPt || isLegacy;
+  const showPtControl = isStaffPt || isLegacy;
+  const showPayroll = isGp || isReformer || isStaffPt;
   const showOwnLedger = Boolean(flags?.trainerClub);
   const groupOnlyMessaging = groupCabinet && !hasPt;
 
@@ -50,6 +57,8 @@ export function trainerCabinetMode(
     isLegacy,
     showGp,
     showPt,
+    showTimesheet,
+    showPtControl,
     showPayroll,
     showOwnLedger,
     groupOnlyMessaging,
@@ -71,17 +80,29 @@ export function trainerCrmOrControlHref(mode: TrainerCabinetMode): {
   return { href: '/trainer/my-sessions', label: 'Контроль' };
 }
 
-/** PT-only routes hidden in the pure group cabinet (GP / reformers). */
+/**
+ * PT-only routes: pure GP / reformers are redirected away.
+ * Journal and shifts stay available for group cabinets.
+ */
 export const TRAINER_PT_ONLY_PATHS = [
   '/trainer/schedule',
   '/trainer/clients',
   '/trainer/pt-timesheet',
-  '/trainer/shifts',
-  '/trainer/group-journal',
+] as const;
+
+/** Staff-PT timesheet — hidden for «Тренер клуб» without trainerStaff. */
+export const TRAINER_STAFF_TIMESHEET_PATHS = [
+  '/trainer/pt-timesheet',
 ] as const;
 
 export function isTrainerPtOnlyPath(pathname: string): boolean {
   return TRAINER_PT_ONLY_PATHS.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`),
+  );
+}
+
+export function isTrainerStaffTimesheetPath(pathname: string): boolean {
+  return TRAINER_STAFF_TIMESHEET_PATHS.some(
     (p) => pathname === p || pathname.startsWith(`${p}/`),
   );
 }

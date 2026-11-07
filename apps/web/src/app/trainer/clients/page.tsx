@@ -28,7 +28,7 @@ function rosterStatusLabel(client: TrainerClientSummary): string {
   if (client.rosterStatus === 'REJECTED') return 'Отклонён';
   if (client.rosterStatus === 'PENDING') return 'Ожидает ответа';
   if (!client.clientAccepted && client.hasApp) return 'Ожидает подтверждения';
-  if (!client.hasApp) return 'Офлайн';
+  if (!client.hasApp) return 'Нет приложения';
   return 'Подтверждён';
 }
 
@@ -112,6 +112,8 @@ export default function TrainerClientsPage() {
   const [notes, setNotes] = useState('');
   const [lookup, setLookup] = useState<TrainerClientLookupResult | null>(null);
   const [looking, setLooking] = useState(false);
+  const [inviteBusyId, setInviteBusyId] = useState<string | null>(null);
+  const [inviteHint, setInviteHint] = useState('');
 
   const loadClients = useCallback(() => {
     const token = getToken();
@@ -236,6 +238,21 @@ export default function TrainerClientsPage() {
       setFormError(err instanceof Error ? err.message : 'Ошибка');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const inviteFromCard = async (client: TrainerClientSummary) => {
+    const token = getToken();
+    if (!token || !client.phone) return;
+    setInviteBusyId(client.id);
+    setInviteHint('');
+    try {
+      const result = await api.trainerInviteClient(token, client.phone);
+      setInviteHint(result.message || 'Приглашение отправлено');
+    } catch (err) {
+      setInviteHint(err instanceof Error ? err.message : 'Не удалось пригласить');
+    } finally {
+      setInviteBusyId(null);
     }
   };
 
@@ -398,6 +415,10 @@ export default function TrainerClientsPage() {
         </form>
       </ResponsiveSheet>
 
+      {inviteHint ? (
+        <p className="text-sm text-fitgo-400">{inviteHint}</p>
+      ) : null}
+
       {filtered.length === 0 ? (
         <div className="card text-center text-slate-400">
           <p>
@@ -413,61 +434,77 @@ export default function TrainerClientsPage() {
               (client.cancelNoShowCount ?? 0) >= 2 ||
               matchesSegment(client, 'ghosting') ||
               matchesSegment(client, 'expiring');
+            const needsAppInvite = !client.hasApp && Boolean(client.phone);
             return (
-              <Link
-                key={client.id}
-                href={`/trainer/clients/${client.id}`}
-                className="card block"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="font-medium">
-                      {client.firstName} {client.lastName}
-                    </p>
-                    {client.phone && (
-                      <p className="text-sm text-slate-400">{client.phone}</p>
-                    )}
-                    {client.membershipName && (
-                      <p className="mt-1 text-sm text-slate-300">
-                        {client.membershipName}
-                        {client.sessionsRemaining != null
-                          ? ` · осталось ${client.sessionsRemaining}`
-                          : ''}
-                        {client.membershipValidUntil
-                          ? ` · до ${formatDate(client.membershipValidUntil)}`
-                          : ''}
+              <li key={client.id} className="card">
+                <Link href={`/trainer/clients/${client.id}`} className="block">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="font-medium">
+                        {client.firstName} {client.lastName}
                       </p>
-                    )}
-                    {(client.lastHallVisit || client.lastVisit) && (
-                      <p className="text-xs text-slate-500">
-                        Визит:{' '}
-                        {formatDate(
-                          client.lastHallVisit ?? client.lastVisit ?? '',
-                        )}
-                      </p>
-                    )}
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-xs ${rosterStatusColor(client)}`}
-                    >
-                      {rosterStatusLabel(client)}
-                    </span>
-                    {client.membershipStatus && (
+                      {client.phone && (
+                        <p className="text-sm text-slate-400">{client.phone}</p>
+                      )}
+                      {client.membershipName && (
+                        <p className="mt-1 text-sm text-slate-300">
+                          {client.membershipName}
+                          {client.sessionsRemaining != null
+                            ? ` · осталось ${client.sessionsRemaining}`
+                            : ''}
+                          {client.membershipValidUntil
+                            ? ` · до ${formatDate(client.membershipValidUntil)}`
+                            : ''}
+                        </p>
+                      )}
+                      {(client.lastHallVisit || client.lastVisit) && (
+                        <p className="text-xs text-slate-500">
+                          Визит:{' '}
+                          {formatDate(
+                            client.lastHallVisit ?? client.lastVisit ?? '',
+                          )}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
                       <span
-                        className={`rounded-full px-2 py-0.5 text-xs ${membershipStatusColor(client.membershipStatus)}`}
+                        className={`rounded-full px-2 py-0.5 text-xs ${rosterStatusColor(client)}`}
                       >
-                        {membershipStatusLabel(client.membershipStatus)}
+                        {rosterStatusLabel(client)}
                       </span>
-                    )}
-                    {risk && (
-                      <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs text-amber-200">
-                        Внимание
-                      </span>
-                    )}
+                      {client.membershipStatus && (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-xs ${membershipStatusColor(client.membershipStatus)}`}
+                        >
+                          {membershipStatusLabel(client.membershipStatus)}
+                        </span>
+                      )}
+                      {risk && (
+                        <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs text-amber-200">
+                          Внимание
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </Link>
+                </Link>
+                {needsAppInvite ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
+                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-200">
+                      Нет приложения
+                    </span>
+                    <button
+                      type="button"
+                      className="btn-secondary text-xs"
+                      disabled={inviteBusyId === client.id}
+                      onClick={() => void inviteFromCard(client)}
+                    >
+                      {inviteBusyId === client.id
+                        ? 'Отправка…'
+                        : 'Пригласить в FitGO'}
+                    </button>
+                  </div>
+                ) : null}
+              </li>
             );
           })}
         </ul>

@@ -1171,6 +1171,8 @@ export interface TrainerClientDetail {
   gender?: string | null;
   dateOfBirth?: string | null;
   crmStatus?: ClubCrmLinkStatus | null;
+  /** Client has an active FitGO app account (not SHADOW). */
+  hasApp?: boolean;
   membershipName?: string;
   membershipStatus?: MembershipStatus;
   membershipValidUntil?: string;

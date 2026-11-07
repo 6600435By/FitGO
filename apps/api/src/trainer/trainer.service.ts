@@ -4,7 +4,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { MembershipStatus, SessionType, normalizeWorkoutSheet, workoutSheetHasData, type ScheduleSlot, type Visit } from '@fitgo/shared-types';
-import { GroupClassBookingStatus, PersonalBookingStatus, Role, BodyLogSource } from '@prisma/client';
+import {
+  AccountStatus,
+  BodyLogSource,
+  GroupClassBookingStatus,
+  PersonalBookingStatus,
+  Role,
+} from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { ClientProfileService } from '../client/client-profile.service';
@@ -449,6 +455,7 @@ export class TrainerService {
       phone: client.phone ?? undefined,
       gender: client.gender ?? null,
       dateOfBirth: client.dateOfBirth?.toISOString().slice(0, 10) ?? null,
+      hasApp: client.accountStatus === AccountStatus.ACTIVE,
       crmStatus:
         membershipRow?.crmStatus ??
         (extId

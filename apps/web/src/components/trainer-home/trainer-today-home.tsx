@@ -538,36 +538,49 @@ function TodaySkeleton() {
   );
 }
 
+function moneyMinor(minor: number) {
+  return `${(minor / 100).toLocaleString('ru-RU', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })} BYN`;
+}
+
 export function TrainerTodayHome({
   scheduleHref,
 }: {
   scheduleHref?: string;
 }) {
   const user = getUser();
-  const { showPt, showGp } = trainerCabinetMode(user);
+  const { showPt, showGp, showOwnLedger } = trainerCabinetMode(user);
   const [home, setHome] = useState<FloorStaffHome | null>(null);
   const [insights, setInsights] = useState<TrainerInsightsResponse | null>(
     null,
   );
+  const [clubDebtMinor, setClubDebtMinor] = useState(0);
   const [showAllInsights, setShowAllInsights] = useState(false);
   const [error, setError] = useState('');
 
   const load = useCallback(() => {
     const token = getToken();
     if (!token) return;
+    const ledgerP = showOwnLedger
+      ? api.trainerLedgerOverview(token).catch(() => null)
+      : Promise.resolve(null);
     Promise.all([
       api.trainerGpHome(token),
       api.trainerInsights(token).catch(() => ({
         insights: [] as TrainerInsight[],
         generatedAt: new Date().toISOString(),
       })),
+      ledgerP,
     ])
-      .then(([h, i]) => {
+      .then(([h, i, ledger]) => {
         setHome(h);
         setInsights(i);
+        setClubDebtMinor(ledger?.clubDebtMinor ?? 0);
       })
       .catch((err: Error) => setError(err.message || 'Ошибка загрузки'));
-  }, []);
+  }, [showOwnLedger]);
 
   useEffect(() => {
     load();
@@ -647,6 +660,21 @@ export function TrainerTodayHome({
           })}
         </p>
       </div>
+
+      {showOwnLedger && clubDebtMinor > 0 ? (
+        <Link
+          href="/trainer/my-payments"
+          className="block rounded-3xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 transition hover:border-amber-400/50"
+        >
+          <p className="text-xs text-amber-200/80">Ваш долг перед клубом</p>
+          <p className="mt-0.5 font-display text-xl font-semibold tabular-nums text-amber-100">
+            {moneyMinor(clubDebtMinor)}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Из 1С · подробности в «Мои оплаты»
+          </p>
+        </Link>
+      ) : null}
 
       {/* Mobile: stacked. Desktop: bento 12-col — hero+timeline left, assistant right */}
       <div className="grid gap-4 desktop:grid-cols-12">

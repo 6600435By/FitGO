@@ -22,6 +22,7 @@ import { api, type AuthUser } from '@/lib/api';
 import { getToken, getUser, saveAuth } from '@/lib/auth';
 import {
   isTrainerPtOnlyPath,
+  isTrainerStaffTimesheetPath,
   trainerCabinetMode,
 } from '@/lib/trainer-cabinet';
 
@@ -117,14 +118,25 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
   }, [uiV2, onboarded, pathname, router]);
 
   const cabinet = useMemo(() => trainerCabinetMode(user), [user]);
-  const { groupCabinet, showGp, showPt, showPayroll } = cabinet;
+  const {
+    groupCabinet,
+    showGp,
+    showPt,
+    showTimesheet,
+    showPtControl,
+    showPayroll,
+  } = cabinet;
 
   useEffect(() => {
     if (!user) return;
     if (groupCabinet && !showPt && isTrainerPtOnlyPath(pathname)) {
       router.replace('/trainer');
+      return;
     }
-  }, [user, groupCabinet, showPt, pathname, router]);
+    if (!showTimesheet && isTrainerStaffTimesheetPath(pathname)) {
+      router.replace('/trainer');
+    }
+  }, [user, groupCabinet, showPt, showTimesheet, pathname, router]);
 
   const allNavItems = useMemo(() => {
     const items: NavItem[] = [];
@@ -142,13 +154,15 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
             label: 'Расписание ПТ',
             module: 'trainer_calendar',
           },
-          { href: '/trainer/pt-timesheet', label: 'Табель ПТ' },
           {
             href: '/trainer/clients',
             label: 'Клиенты',
             module: 'trainer_crm',
           },
         );
+      }
+      if (showTimesheet) {
+        items.push({ href: '/trainer/pt-timesheet', label: 'Табель ПТ' });
       }
       if (showPayroll) {
         items.push({ href: '/trainer/payroll', label: 'ЗП' });
@@ -172,14 +186,16 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
           module: 'trainer_calendar',
         });
       }
-      items.push({ href: '/trainer/shifts', label: 'Смены' });
-      if (showPt) {
-        items.push({ href: '/trainer/pt-timesheet', label: 'Табель ПТ' });
-      }
       if (showGp) {
+        items.push({ href: '/trainer/shifts', label: 'Смены' });
         items.push({ href: '/trainer/group-journal', label: 'Журнал групп' });
       }
-      items.push({ href: '/trainer/my-sessions', label: 'Контроль' });
+      if (showTimesheet) {
+        items.push({ href: '/trainer/pt-timesheet', label: 'Табель ПТ' });
+      }
+      if (showPtControl || (!showPt && showGp)) {
+        items.push({ href: '/trainer/my-sessions', label: 'Контроль' });
+      }
       if (showPt) {
         items.push({
           href: '/trainer/clients',
@@ -197,7 +213,15 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     }
 
     return items.filter((item) => !item.module || isEnabled(item.module));
-  }, [isEnabled, groupCabinet, showGp, showPt, showPayroll]);
+  }, [
+    isEnabled,
+    groupCabinet,
+    showGp,
+    showPt,
+    showTimesheet,
+    showPtControl,
+    showPayroll,
+  ]);
 
   const { primary, more } = useMemo(
     () => splitMobileNav(allNavItems),

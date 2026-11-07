@@ -81,6 +81,7 @@ export default function TrainerClientDetailPage() {
   const [weight, setWeight] = useState('');
   const [feedback, setFeedback] = useState('');
   const [error, setError] = useState('');
+  const [inviteBusy, setInviteBusy] = useState(false);
 
   const load = () => {
     const token = getToken();
@@ -171,6 +172,21 @@ export default function TrainerClientDetailPage() {
     );
   }
 
+  const inviteToApp = async () => {
+    const token = getToken();
+    if (!token || !client.phone) return;
+    setInviteBusy(true);
+    setFeedback('');
+    try {
+      const result = await api.trainerInviteClient(token, client.phone);
+      setFeedback(result.message || 'Приглашение отправлено');
+    } catch (err) {
+      setFeedback(err instanceof Error ? err.message : 'Не удалось пригласить');
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="card space-y-3">
@@ -199,6 +215,26 @@ export default function TrainerClientDetailPage() {
           </div>
         </div>
 
+        {client.hasApp === false ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs">
+              Нет приложения
+            </span>
+            <span className="flex-1 text-xs text-amber-100/80">
+              Гость без FitGO — пригласите, чтобы открыть чат и ЛК.
+            </span>
+            {client.phone ? (
+              <button
+                type="button"
+                className="btn-secondary text-xs"
+                disabled={inviteBusy}
+                onClick={() => void inviteToApp()}
+              >
+                {inviteBusy ? 'Отправка…' : 'Пригласить'}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {client.crmStatus === 'PENDING_CRM' && (
           <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
             Нет карточки 1С — заведите клиента и штрихкод в CRM по телефону

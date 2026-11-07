@@ -76,7 +76,7 @@ export function buildTrainerV2Nav(
 
   const more: TrainerNavItem[] = [];
 
-  if (mode.showPt) {
+  if (mode.showTimesheet) {
     more.push({
       href: '/trainer/pt-timesheet',
       label: 'Табель ПТ',
@@ -96,7 +96,7 @@ export function buildTrainerV2Nav(
       icon: Clock3,
     });
   }
-  if (mode.showPt && mode.showGp) {
+  if (mode.showPtControl) {
     more.push({
       href: '/trainer/my-sessions',
       label: 'Контроль',
