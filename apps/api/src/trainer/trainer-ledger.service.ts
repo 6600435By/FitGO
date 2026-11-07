@@ -21,6 +21,7 @@ import type {
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { PayrollService } from '../payroll/payroll.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { decidePersonalSessionSettle } from './personal-package-debit.rules';
 import { canChoosePtFlow } from './pt-flow.util';
 
 function clientName(u: { firstName: string; lastName: string }) {
@@ -516,16 +517,23 @@ export class TrainerLedgerService {
       },
     });
     if (!booking) return null;
-    if (booking.ledgerSettledAt) return booking;
-    if (booking.isComplimentary) {
+
+    const precheck = decidePersonalSessionSettle({
+      booking,
+      activePackage: null,
+      defaultSessionPriceMinor:
+        booking.trainer.staffProfile?.defaultSessionPriceMinor ?? null,
+    });
+    if (precheck.action === 'skip') {
+      return precheck.reason === 'already_settled' ? booking : null;
+    }
+    if (precheck.action === 'mark_complimentary') {
       await this.prisma.personalTrainingBooking.update({
         where: { id: bookingId },
         data: { ledgerSettledAt: new Date() },
       });
       return booking;
     }
-    if (booking.ptFlow !== 'PERSONAL') return null;
-    if (booking.status === PersonalBookingStatus.CANCELLED) return null;
 
     const active = await this.prisma.trainerClientPackage.findFirst({
       where: {
@@ -538,23 +546,47 @@ export class TrainerLedgerService {
       orderBy: [{ validUntil: 'asc' }, { soldAt: 'asc' }],
     });
 
-    if (active) {
-      const remaining = active.sessionsRemaining - 1;
+    const decision = decidePersonalSessionSettle({
+      booking,
+      activePackage: active
+        ? {
+            id: active.id,
+            sessionsRemaining: active.sessionsRemaining,
+            status: active.status,
+            validUntil: active.validUntil,
+          }
+        : null,
+      defaultSessionPriceMinor:
+        booking.trainer.staffProfile?.defaultSessionPriceMinor ?? null,
+    });
+
+    if (decision.action === 'skip') {
+      return decision.reason === 'already_settled' ? booking : null;
+    }
+
+    if (decision.action === 'mark_complimentary') {
+      await this.prisma.personalTrainingBooking.update({
+        where: { id: bookingId },
+        data: { ledgerSettledAt: new Date() },
+      });
+      return booking;
+    }
+
+    if (decision.action === 'debit_package') {
       await this.prisma.$transaction([
         this.prisma.trainerClientPackage.update({
-          where: { id: active.id },
+          where: { id: decision.packageId },
           data: {
-            sessionsRemaining: remaining,
-            status:
-              remaining <= 0
-                ? TrainerOwnPackageStatus.EXHAUSTED
-                : TrainerOwnPackageStatus.ACTIVE,
+            sessionsRemaining: decision.remaining,
+            status: decision.exhausted
+              ? TrainerOwnPackageStatus.EXHAUSTED
+              : TrainerOwnPackageStatus.ACTIVE,
           },
         }),
         this.prisma.personalTrainingBooking.update({
           where: { id: bookingId },
           data: {
-            ledgerPackageId: active.id,
+            ledgerPackageId: decision.packageId,
             ledgerSettledAt: new Date(),
             paymentStatus: 'PAID',
             payKind: 'BLOCK',
@@ -564,12 +596,8 @@ export class TrainerLedgerService {
       return booking;
     }
 
-    const price =
-      booking.priceMinor ??
-      booking.trainer.staffProfile?.defaultSessionPriceMinor ??
-      0;
-
-    if (price > 0) {
+    if (decision.action === 'raise_debt') {
+      const price = decision.priceMinor;
       await this.prisma.$transaction(async (tx) => {
         await tx.trainerClientBalance.upsert({
           where: {
@@ -595,13 +623,13 @@ export class TrainerLedgerService {
           },
         });
       });
-    } else {
-      await this.prisma.personalTrainingBooking.update({
-        where: { id: bookingId },
-        data: { ledgerSettledAt: new Date() },
-      });
+      return booking;
     }
 
+    await this.prisma.personalTrainingBooking.update({
+      where: { id: bookingId },
+      data: { ledgerSettledAt: new Date() },
+    });
     return booking;
   }
 

@@ -61,6 +61,7 @@ import {
   resolvePtFlow,
   type PtBookingFlowValue,
 } from '../trainer/pt-flow.util';
+import { shouldDebitPackageOnCancel } from '../trainer/personal-package-debit.rules';
 import { TrainerLedgerService } from '../trainer/trainer-ledger.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
 
@@ -2296,7 +2297,12 @@ export class PersonalTrainingService {
         ? ServiceUsageStatus.NO_SHOW
         : ServiceUsageStatus.CANCELLED;
 
-    if (opts.debitPackage && booking.ptFlow === 'PERSONAL') {
+    if (
+      shouldDebitPackageOnCancel({
+        debitPackage: opts.debitPackage,
+        ptFlow: booking.ptFlow,
+      })
+    ) {
       // Settle while still CONFIRMED — ledger skips CANCELLED rows.
       await this.ledger.settlePersonalSession(booking.id);
     }

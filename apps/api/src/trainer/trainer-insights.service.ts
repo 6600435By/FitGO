@@ -22,8 +22,19 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TrainerMonthAnalyticsService } from '../analytics/trainer-month-analytics.service';
 import { PT_CONTROL_LAUNCH_AT } from '../booking-control/pt-document-match';
 import { TrainerRosterService } from './trainer-roster.service';
+import {
+  MS_DAY,
+  daysUntilYmd,
+  hasWorkoutPlan,
+  isBirthdayThisWeek,
+  matchesClientGhosting,
+  matchesGoalDeadline,
+  matchesHoldSlotFreed,
+  matchesPackageExpiring,
+  matchesVisitFrequencyDrop,
+  parseGoalDeadlineYmd,
+} from './trainer-insights.rules';
 
-const MS_DAY = 24 * 60 * 60_000;
 const MS_HOUR = 60 * 60_000;
 
 function pad2(n: number) {
@@ -42,70 +53,8 @@ function dayBounds(day: string): { start: Date; end: Date } {
   };
 }
 
-function daysUntilYmd(ymd?: string | null, now = new Date()): number | null {
-  if (!ymd || ymd.length < 10) return null;
-  const t = Date.parse(`${ymd.slice(0, 10)}T12:00:00`);
-  if (Number.isNaN(t)) return null;
-  return Math.ceil((t - now.getTime()) / MS_DAY);
-}
-
-function isBirthdayThisWeek(dob: Date | null | undefined, now = new Date()): boolean {
-  if (!dob) return false;
-  const m = dob.getUTCMonth() + 1;
-  const d = dob.getUTCDate();
-  for (let i = 0; i < 7; i++) {
-    const day = new Date(now);
-    day.setHours(12, 0, 0, 0);
-    day.setDate(now.getDate() + i);
-    if (day.getMonth() + 1 === m && day.getDate() === d) return true;
-  }
-  return false;
-}
-
 function clientName(c: { firstName: string; lastName: string }) {
   return `${c.firstName} ${c.lastName}`.trim();
-}
-
-function hasWorkoutPlan(sheet: unknown): boolean {
-  if (!sheet || typeof sheet !== 'object') return false;
-  const s = sheet as {
-    strength?: { exercises?: unknown[] };
-    circuit?: { stations?: unknown[] };
-    cardio?: unknown;
-    exercises?: unknown[];
-  };
-  if (Array.isArray(s.strength?.exercises) && s.strength!.exercises!.length > 0)
-    return true;
-  if (Array.isArray(s.circuit?.stations) && s.circuit!.stations!.length > 0)
-    return true;
-  if (Array.isArray(s.exercises) && s.exercises.length > 0) return true;
-  if (s.cardio) return true;
-  return false;
-}
-
-/** Parse YYYY-MM-DD or DD.MM.YYYY / DD.MM.YY from free-text goal target. */
-function parseGoalDeadlineYmd(raw?: string | null): string | null {
-  if (!raw?.trim()) return null;
-  const s = raw.trim();
-  const iso = s.match(/(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  const ru = s.match(/(\d{1,2})\.(\d{1,2})\.(\d{2,4})/);
-  if (!ru) return null;
-  const d = Number(ru[1]);
-  const m = Number(ru[2]);
-  let y = Number(ru[3]);
-  if (y < 100) y += 2000;
-  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
-  return `${y}-${pad2(m)}-${pad2(d)}`;
-}
-
-function rangesOverlap(
-  aStart: Date,
-  aEnd: Date,
-  bStart: Date,
-  bEnd: Date,
-): boolean {
-  return aStart < bEnd && bStart < aEnd;
 }
 
 @Injectable()
@@ -155,10 +104,16 @@ export class TrainerInsightsService {
       if (c.rosterStatus === 'REJECTED') continue;
       const name = `${c.firstName} ${c.lastName}`.trim();
 
+      const daysLeft = daysUntilYmd(c.membershipValidUntil, now);
       const lowSessions =
         c.sessionsRemaining != null && c.sessionsRemaining <= 2;
-      const daysLeft = daysUntilYmd(c.membershipValidUntil, now);
-      if (lowSessions || (daysLeft != null && daysLeft >= 0 && daysLeft <= 7)) {
+      if (
+        matchesPackageExpiring({
+          sessionsRemaining: c.sessionsRemaining,
+          membershipValidUntil: c.membershipValidUntil,
+          now,
+        })
+      ) {
         const key = `package_expiring:${c.id}`;
         if (!dismissedKeys.has(key)) {
           insights.push({
@@ -182,14 +137,14 @@ export class TrainerInsightsService {
 
       const visitRef = c.lastHallVisit ?? c.lastVisit;
       const visitDays = daysUntilYmd(visitRef, now);
-      if (visitDays != null && visitDays <= -14) {
+      if (matchesClientGhosting({ lastVisitYmd: visitRef, now })) {
         const key = `client_ghosting:${c.id}`;
         if (!dismissedKeys.has(key)) {
           insights.push({
             key,
             kind: 'client_ghosting',
             title: 'Клиент пропадает',
-            body: `${name}: нет визита ${Math.abs(visitDays)} дн.`,
+            body: `${name}: нет визита ${Math.abs(visitDays ?? 0)} дн.`,
             priority: 20,
             clientId: c.id,
             clientName: name,
@@ -840,9 +795,9 @@ export class TrainerInsightsService {
       ]);
       const seenGoalClients = new Set<string>();
       for (const g of goals) {
+        if (!matchesGoalDeadline({ target: g.target, now })) continue;
         const ymd = parseGoalDeadlineYmd(g.target);
         const daysLeft = daysUntilYmd(ymd, now);
-        if (daysLeft == null || daysLeft < 0 || daysLeft > 14) continue;
         if (seenGoalClients.has(g.clientId)) continue;
         seenGoalClients.add(g.clientId);
         const name = clientName(g.client);
@@ -937,14 +892,18 @@ export class TrainerInsightsService {
         if (c.rosterStatus === 'REJECTED') continue;
         const prior = priorBy.get(c.id) ?? 0;
         const recent = recentBy.get(c.id) ?? 0;
-        if (prior < 2) continue;
-        // Expected in 14d ≈ prior/2 (prior covers 28d). Drop if ≤ half of expected.
-        const expected = prior / 2;
-        if (recent > expected * 0.5) continue;
-        // Ghosting (14+ days no visit) already covered separately.
         const visitRef = c.lastHallVisit ?? c.lastVisit;
-        const visitDays = daysUntilYmd(visitRef, now);
-        if (visitDays != null && visitDays <= -14) continue;
+        if (
+          !matchesVisitFrequencyDrop({
+            prior28dCount: prior,
+            recent14dCount: recent,
+            lastVisitYmd: visitRef,
+            now,
+          })
+        ) {
+          continue;
+        }
+        const expected = prior / 2;
         const name = `${c.firstName} ${c.lastName}`.trim();
         const key = `visit_frequency_drop:${c.id}`;
         if (dismissedKeys.has(key)) continue;
@@ -1095,7 +1054,14 @@ export class TrainerInsightsService {
       for (const hold of activeHolds) {
         if (!hold.holdClient) continue;
         const match = cancelled.find((c) =>
-          rangesOverlap(c.startAt, c.endAt, hold.startAt, hold.endAt),
+          matchesHoldSlotFreed({
+            cancelledStart: c.startAt,
+            cancelledEnd: c.endAt,
+            holdStart: hold.startAt,
+            holdEnd: hold.endAt,
+            holdExpiresAt: hold.holdExpiresAt,
+            now,
+          }),
         );
         if (!match) continue;
         const key = `hold_slot_freed:${hold.id}`;
