@@ -124,6 +124,7 @@ export class PersonalTrainingController {
       dto.clientId,
       dto.startAt,
       dto.isComplimentary ?? false,
+      dto.ptFlow,
     );
   }
 

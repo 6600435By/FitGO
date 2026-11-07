@@ -206,6 +206,39 @@ export default function TrainerClientDetailPage() {
               : ''}
           </p>
         )}
+        {client.ownLedger && (
+          <div className="rounded-xl border border-forma-500/20 bg-forma-500/5 px-3 py-2 text-sm">
+            <p className="font-medium text-forma-100">Личный учёт</p>
+            {client.ownLedger.activePackage ? (
+              <p className="mt-1 text-forma-200">
+                {client.ownLedger.activePackage.title}: осталось{' '}
+                {client.ownLedger.activePackage.sessionsRemaining} из{' '}
+                {client.ownLedger.activePackage.sessionsTotal}
+                {client.ownLedger.activePackage.validUntil
+                  ? ` · до ${formatDate(client.ownLedger.activePackage.validUntil)}`
+                  : ''}
+              </p>
+            ) : (
+              <p className="mt-1 text-forma-400">Нет активного пакета</p>
+            )}
+            {client.ownLedger.debtMinor > 0 && (
+              <p className="mt-1 text-amber-200">
+                Долг:{' '}
+                {(client.ownLedger.debtMinor / 100).toLocaleString('ru-RU', {
+                  minimumFractionDigits: 0,
+                  maximumFractionDigits: 2,
+                })}{' '}
+                BYN
+              </p>
+            )}
+            <Link
+              href="/trainer/my-payments"
+              className="mt-2 inline-block text-xs text-forma-400 underline"
+            >
+              Мои оплаты
+            </Link>
+          </div>
+        )}
         <p className="text-xs text-slate-500">
           {[
             client.lastVisit

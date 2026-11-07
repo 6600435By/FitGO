@@ -93,6 +93,7 @@ import { FitnessService } from '../fitness/fitness.service';
 import { matchOnexToScheduleSlots } from '../club-schedule/trainer-schedule.helpers';
 import { SessionApprovalService } from './session-approval.service';
 import { ManagerOriginTasksService } from '../admin-tasks/manager-origin-tasks.service';
+import { isPersonalPtBooking } from '../trainer/pt-flow.util';
 import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { allocateStaffLogin } from '../auth/staff-login';
@@ -158,6 +159,11 @@ type ListFilters = {
    * Admin / manager / super-admin lists omit this — solarium stays visible.
    */
   excludeKinds?: BookingControlKind[];
+  /**
+   * Hide FitGO PT with personal («Тренер клуб») ledger flow.
+   * Admin list: true. Super-admin / manager analytics: false (tag instead).
+   */
+  hidePersonalPt?: boolean;
 };
 
 @Injectable()
@@ -279,7 +285,20 @@ export class BookingControlService {
                 ? { id: { in: [] } }
                 : {}),
           },
-          include: { client: true, trainer: true },
+          include: {
+            client: true,
+            trainer: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                externalId: true,
+                employeeCode: true,
+                trainerClub: true,
+                trainerStaff: true,
+              },
+            },
+          },
         }),
         this.prisma.spaBooking.findMany({
           where: {
@@ -486,6 +505,14 @@ export class BookingControlService {
     if (!kindFilter || kindFilter === OnexClassKind.PT) {
       for (const b of allPt) {
         if (matchedPtIds.has(b.id)) continue;
+        const personal = isPersonalPtBooking(
+          { ptFlow: b.ptFlow },
+          {
+            trainerClub: b.trainer.trainerClub,
+            trainerStaff: b.trainer.trainerStaff,
+          },
+        );
+        if (personal && filters.hidePersonalPt) continue;
         if (
           this.onexExistsInMemory(
             onex,
@@ -519,9 +546,13 @@ export class BookingControlService {
           sessionKey,
           kind: 'PT',
           source: 'FITGO',
-          title: b.isComplimentary
-            ? 'Подарочная ПТ'
-            : 'Персональная тренировка',
+          title: personal
+            ? b.isComplimentary
+              ? 'Подарочная ПТ · Тренер клуб'
+              : 'Персональная · Тренер клуб'
+            : b.isComplimentary
+              ? 'Подарочная ПТ'
+              : 'Персональная тренировка',
           startAt: b.startAt.toISOString(),
           endAt: b.endAt.toISOString(),
           status,
@@ -534,12 +565,13 @@ export class BookingControlService {
           arrivedCount: counts.arrivedCount,
           noShowCount: counts.noShowCount,
           payment,
-          needsReview: openKeys.has(sessionKey),
+          needsReview: personal ? false : openKeys.has(sessionKey),
           fitgoBookingId: b.id,
           linkedDocExternalId: b.linkedDocExternalId ?? undefined,
           docAutoLinkBlocked: b.docAutoLinkBlocked,
           oneCLinked: Boolean(b.linkedDocExternalId || b.crmDocRef),
           number: b.crmDocRef ?? undefined,
+          trainerClubPersonal: personal || undefined,
         });
       }
     }

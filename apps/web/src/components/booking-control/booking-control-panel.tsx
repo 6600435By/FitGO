@@ -2076,6 +2076,8 @@ export function BookingControlPanel({
   const canConfirmSelected = (() => {
     if (!canApproveGroup || !api.approveGroup || !selected) return false;
     if (selected.kind === 'SPA' || selected.kind === 'PT') {
+      // «Тренер клуб» personal ledger — stats only, no control actions.
+      if (selected.trainerClubPersonal) return false;
       // FitGO PT/SPA (and 1C rows with fitgoBookingId) use SessionApproval.
       // Pure 1C PT without FitGO link has no phase — not confirmable here.
       const phase = selected.approvalPhase;

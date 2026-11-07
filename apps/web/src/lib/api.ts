@@ -876,6 +876,7 @@ export const api = {
     token: string,
     clientId: string,
     startAt: string,
+    opts?: { isComplimentary?: boolean; ptFlow?: 'CLUB' | 'PERSONAL' },
   ) =>
     request<{
       id: string;
@@ -883,12 +884,103 @@ export const api = {
       clientName: string;
       startAt: string;
       endAt: string;
+      ptFlow?: 'CLUB' | 'PERSONAL';
     }>(
       '/trainer/personal-bookings',
       {
         method: 'POST',
-        body: JSON.stringify({ clientId, startAt }),
+        body: JSON.stringify({
+          clientId,
+          startAt,
+          isComplimentary: opts?.isComplimentary,
+          ptFlow: opts?.ptFlow,
+        }),
       },
+      token,
+    ),
+
+  trainerLedgerOverview: (token: string) =>
+    request<import('@fitgo/shared-types').TrainerLedgerOverview>(
+      '/trainer/ledger/overview',
+      {},
+      token,
+    ),
+
+  trainerLedgerPackages: (token: string) =>
+    request<import('@fitgo/shared-types').TrainerOwnPackageTemplate[]>(
+      '/trainer/ledger/packages',
+      {},
+      token,
+    ),
+
+  trainerLedgerUpsertPackage: (
+    token: string,
+    data: {
+      id?: string;
+      title: string;
+      sessionsCount: number;
+      priceMinor: number;
+      validityDays?: number | null;
+      isActive?: boolean;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').TrainerOwnPackageTemplate>(
+      '/trainer/ledger/packages',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerLedgerSetSessionPrice: (token: string, priceMinor: number | null) =>
+    request<{ defaultSessionPriceMinor: number | null }>(
+      '/trainer/ledger/settings/session-price',
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ priceMinor }),
+      },
+      token,
+    ),
+
+  trainerLedgerSellPackage: (
+    token: string,
+    data: {
+      clientId: string;
+      templateId?: string;
+      title?: string;
+      sessionsCount?: number;
+      priceMinor?: number;
+      paidMinor?: number;
+      method?: 'CASH' | 'TRANSFER' | 'CARD';
+      comment?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').TrainerClientPackageView>(
+      '/trainer/ledger/sell',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerLedgerRecordPayment: (
+    token: string,
+    data: {
+      clientId: string;
+      amountMinor: number;
+      method: 'CASH' | 'TRANSFER' | 'CARD';
+      kind?: 'PACKAGE_SALE' | 'SESSION' | 'DEBT_PAYMENT' | 'OTHER';
+      comment?: string;
+      packageId?: string;
+      applyToDebt?: boolean;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').TrainerClientPaymentView>(
+      '/trainer/ledger/payments',
+      { method: 'POST', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerLedgerClient: (token: string, clientId: string) =>
+    request<import('@fitgo/shared-types').TrainerLedgerClientSnapshot>(
+      `/trainer/ledger/clients/${encodeURIComponent(clientId)}`,
+      {},
       token,
     ),
 

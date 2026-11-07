@@ -80,7 +80,7 @@ export class BookingControlController {
         query.sessionKey.trim(),
       );
     }
-    return this.list(requireClubId(user), query);
+    return this.list(requireClubId(user), query, { hidePersonalPt: false });
   }
 
   @Get('super-admin/booking-control/remark-assignees')
@@ -292,7 +292,7 @@ export class BookingControlController {
         query.sessionKey.trim(),
       );
     }
-    return this.list(requireClubId(user), query);
+    return this.list(requireClubId(user), query, { hidePersonalPt: true });
   }
 
   @Get('admin/booking-control/remark-assignees')
@@ -832,6 +832,7 @@ export class BookingControlController {
       _own?: boolean;
       excludeKinds?: Array<'SPA' | 'SOLARIUM' | 'GROUP' | 'PT'>;
     },
+    opts?: { hidePersonalPt?: boolean },
   ) {
     const from =
       query.from?.trim() ||
@@ -884,6 +885,7 @@ export class BookingControlController {
       missingJournal:
         query.missingJournal === '1' || query.missingJournal === 'true',
       excludeKinds: query.excludeKinds,
+      hidePersonalPt: opts?.hidePersonalPt,
     });
   }
 }

@@ -1130,6 +1130,18 @@ export interface TrainerClientDetail {
       latestLoggedAt?: string | null;
     };
   };
+  /** «Тренер клуб» personal ledger snapshot (only when trainer has trainerClub). */
+  ownLedger?: {
+    debtMinor: number;
+    activePackage?: {
+      id: string;
+      title: string;
+      sessionsRemaining: number;
+      sessionsTotal: number;
+      validUntil?: string | null;
+      status: string;
+    } | null;
+  };
   sessions: TrainerClientSession[];
   goals: Array<{ id: string; title: string; target?: string; progress?: string }>;
   notes: Array<{ id: string; content: string; createdAt: string }>;
@@ -1148,6 +1160,7 @@ export {
 } from './personal-training-goals';
 export * from './workout-sheet';
 export * from './block-session';
+export * from './trainer-ledger';
 
 export interface StaffMember {
   id: string;

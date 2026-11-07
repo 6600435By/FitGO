@@ -138,6 +138,11 @@ export interface BookingControlListItem {
    * When true, UI shows «нет в журнале» and «Добавить в журнал».
    */
   missingJournal?: boolean;
+  /**
+   * FitGO PT from «Тренер клуб» personal ledger (visible to manager/SA stats only).
+   * Admin list hides these; control actions must stay disabled.
+   */
+  trainerClubPersonal?: boolean;
 }
 
 /** Live settlement of SPA vs 1C (quota write-off or reception payment). */

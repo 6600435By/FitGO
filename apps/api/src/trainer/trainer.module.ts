@@ -10,6 +10,7 @@ import { TrainerRosterModule } from '../trainer-roster/trainer-roster.module';
 import { GpScheduleService } from './gp-schedule.service';
 import { TrainerClientLookupService } from './trainer-client-lookup.service';
 import { TrainerController } from './trainer.controller';
+import { TrainerLedgerModule } from './trainer-ledger.module';
 import { TrainerService } from './trainer.service';
 
 @Module({
@@ -22,8 +23,10 @@ import { TrainerService } from './trainer.service';
     ServiceUsageModule,
     ClubScheduleModule,
     FloorHomeModule,
+    TrainerLedgerModule,
   ],
   controllers: [TrainerController],
   providers: [TrainerService, GpScheduleService, TrainerClientLookupService],
+  exports: [TrainerLedgerModule],
 })
 export class TrainerModule {}

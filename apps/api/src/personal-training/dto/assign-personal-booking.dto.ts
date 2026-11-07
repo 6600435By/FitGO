@@ -1,4 +1,10 @@
-import { IsBoolean, IsISO8601, IsOptional, IsString } from 'class-validator';
+import {
+  IsBoolean,
+  IsIn,
+  IsISO8601,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 
 export class AssignPersonalBookingDto {
   @IsString()
@@ -11,4 +17,12 @@ export class AssignPersonalBookingDto {
   @IsOptional()
   @IsBoolean()
   isComplimentary?: boolean;
+
+  /**
+   * Dual trainerClub+trainerStaff only: CLUB = control/payroll, PERSONAL = Мои оплаты.
+   * Ignored when trainer has a single scheme.
+   */
+  @IsOptional()
+  @IsIn(['CLUB', 'PERSONAL'])
+  ptFlow?: 'CLUB' | 'PERSONAL';
 }

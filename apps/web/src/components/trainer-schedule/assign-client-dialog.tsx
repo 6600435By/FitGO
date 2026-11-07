@@ -3,7 +3,7 @@
 import type { TrainerClientLookupResult } from '@fitgo/shared-types';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
-import { getToken } from '@/lib/auth';
+import { getToken, getUser } from '@/lib/auth';
 
 export function AssignClientDialog({
   startAt,
@@ -16,6 +16,8 @@ export function AssignClientDialog({
   onClose: () => void;
   onAssigned: () => void;
 }) {
+  const me = getUser();
+  const canChooseFlow = Boolean(me?.trainerClub && me?.trainerStaff);
   const [clientId, setClientId] = useState(clients[0]?.id ?? '');
   const [nameQuery, setNameQuery] = useState('');
   const [phone, setPhone] = useState('+375');
@@ -25,6 +27,7 @@ export function AssignClientDialog({
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState('');
   const [hint, setHint] = useState('');
+  const [ptFlow, setPtFlow] = useState<'CLUB' | 'PERSONAL'>('CLUB');
 
   useEffect(() => {
     if (clients[0]) setClientId(clients[0].id);
@@ -80,7 +83,9 @@ export function AssignClientDialog({
     setSaving(true);
     setError('');
     try {
-      await api.trainerAssignPersonalBooking(token, clientId, startAt);
+      await api.trainerAssignPersonalBooking(token, clientId, startAt, {
+        ptFlow: canChooseFlow ? ptFlow : undefined,
+      });
       onAssigned();
       onClose();
     } catch (err) {
@@ -183,6 +188,22 @@ export function AssignClientDialog({
               </option>
             ))}
           </select>
+        )}
+
+        {canChooseFlow && (
+          <div className="space-y-1">
+            <p className="text-xs text-slate-400">Схема записи</p>
+            <select
+              className="input"
+              value={ptFlow}
+              onChange={(e) =>
+                setPtFlow(e.target.value as 'CLUB' | 'PERSONAL')
+              }
+            >
+              <option value="CLUB">Клубная (контроль и ЗП)</option>
+              <option value="PERSONAL">Личная (Мои оплаты)</option>
+            </select>
+          </div>
         )}
 
         {error && <p className="text-sm text-red-400">{error}</p>}

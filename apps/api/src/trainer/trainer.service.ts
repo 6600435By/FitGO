@@ -17,6 +17,7 @@ import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
+import { TrainerLedgerService } from './trainer-ledger.service';
 import { TrainerRosterService } from './trainer-roster.service';
 
 @Injectable()
@@ -31,6 +32,7 @@ export class TrainerService {
     private readonly clientProfile: ClientProfileService,
     private readonly serviceUsage: ServiceUsageService,
     private readonly formaCache: FormaScheduleCacheService,
+    private readonly ledger: TrainerLedgerService,
   ) {}
 
   /** Group classes from ClubScheduleSlot (filled by club-sync) — no live Forma. */
@@ -431,6 +433,14 @@ export class TrainerService {
     const visitFrequencyPerWeek =
       recentDone > 0 ? Math.round((recentDone / weeks) * 10) / 10 : 0;
 
+    const me = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { trainerClub: true },
+    });
+    const ownLedger = me?.trainerClub
+      ? await this.ledger.clientCardSnippet(user.sub, clientId)
+      : undefined;
+
     return {
       id: client.id,
       externalId: extId,
@@ -455,6 +465,7 @@ export class TrainerService {
       cancelNoShowCount: cancelNoShows,
       visitFrequencyPerWeek,
       questionnaire,
+      ownLedger,
       sessions,
       goals: goals.map((g) => ({
         id: g.id,

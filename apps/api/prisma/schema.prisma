@@ -759,6 +759,13 @@ model User {
   adminHomeLayout         AdminHomeLayout?
   appPresence             AppPresence?
   appPresenceDays         AppPresenceDay[]
+  trainerOwnPackages      TrainerOwnPackage[]
+  trainerClientPackages   TrainerClientPackage[] @relation("TrainerClientPackages")
+  clientTrainerPackages   TrainerClientPackage[] @relation("ClientTrainerPackages")
+  trainerClientPayments   TrainerClientPayment[] @relation("TrainerClientPayments")
+  clientTrainerPayments   TrainerClientPayment[] @relation("ClientTrainerPayments")
+  trainerClientBalances   TrainerClientBalance[] @relation("TrainerClientBalances")
+  clientTrainerBalances   TrainerClientBalance[] @relation("ClientTrainerBalances")
 
   @@unique([clubId, gamificationNickname])
   @@unique([clubId, employeeCode])
@@ -794,6 +801,8 @@ model StaffProfile {
   experienceYears Int?
   certificates    Json?
   onboardedAt     DateTime?
+  /// Default one-shot PT price for «Тренер клуб» ledger (minor units).
+  defaultSessionPriceMinor Int?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -1176,11 +1185,18 @@ model PersonalTrainingBooking {
   linkedDocExternalId String?              @unique
   /// Admin blocked auto-link (ambiguous or «нет основания»).
   docAutoLinkBlocked Boolean               @default(false)
+  /// CLUB = admin control + payroll; PERSONAL = «Тренер клуб» ledger (Мои оплаты).
+  ptFlow             PtBookingFlow?
+  /// Personal package consumed when this PERSONAL session was completed.
+  ledgerPackageId    String?
+  /// Set when PERSONAL session was debited from package or raised client debt.
+  ledgerSettledAt    DateTime?
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
 
   trainer      User                          @relation("TrainerPersonalBookings", fields: [trainerId], references: [id], onDelete: Cascade)
   client       User                          @relation("ClientPersonalBookings", fields: [clientId], references: [id], onDelete: Cascade)
+  ledgerPackage TrainerClientPackage?        @relation(fields: [ledgerPackageId], references: [id], onDelete: SetNull)
   sessionGoals PersonalTrainingSessionGoal[]
   daySheetLines TrainerDaySheetLine[]
 
@@ -1194,6 +1210,8 @@ model PersonalTrainingBooking {
   @@index([isLateAdd])
   @@index([status])
   @@index([docAutoLinkBlocked, linkedDocExternalId])
+  @@index([ptFlow, trainerId])
+  @@index([ledgerPackageId])
 }
 
 model PersonalTrainingSessionGoal {
@@ -3187,4 +3205,119 @@ model SmsMessageLog {
 
   @@index([phoneNormalized, createdAt])
   @@index([userId, createdAt])
+}
+
+/// CLUB = admin control + payroll; PERSONAL = trainer own ledger («Мои оплаты»).
+enum PtBookingFlow {
+  CLUB
+  PERSONAL
+}
+
+enum TrainerOwnPackageStatus {
+  ACTIVE
+  EXHAUSTED
+  EXPIRED
+  CANCELLED
+}
+
+enum TrainerPaymentMethod {
+  CASH
+  TRANSFER
+  CARD
+}
+
+enum TrainerPaymentKind {
+  PACKAGE_SALE
+  SESSION
+  DEBT_PAYMENT
+  OTHER
+}
+
+/// Package template sold by a «Тренер клуб» trainer.
+model TrainerOwnPackage {
+  id             String   @id @default(cuid())
+  trainerId      String
+  title          String
+  sessionsCount  Int
+  priceMinor     Int
+  /// Days from sale; null = no expiry.
+  validityDays   Int?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  trainer  User                   @relation(fields: [trainerId], references: [id], onDelete: Cascade)
+  soldRows TrainerClientPackage[]
+
+  @@index([trainerId, isActive])
+}
+
+/// Package instance sold to a client (personal ledger).
+model TrainerClientPackage {
+  id                String                  @id @default(cuid())
+  trainerId         String
+  clientId          String
+  templateId        String?
+  title             String
+  sessionsTotal     Int
+  sessionsRemaining Int
+  priceMinor        Int
+  paidMinor         Int                     @default(0)
+  validUntil        DateTime?
+  status            TrainerOwnPackageStatus @default(ACTIVE)
+  soldAt            DateTime                @default(now())
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  trainer   User                     @relation("TrainerClientPackages", fields: [trainerId], references: [id], onDelete: Cascade)
+  client    User                     @relation("ClientTrainerPackages", fields: [clientId], references: [id], onDelete: Cascade)
+  template  TrainerOwnPackage?       @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  payments  TrainerClientPayment[]
+  bookings  PersonalTrainingBooking[]
+
+  @@index([trainerId, clientId, status])
+  @@index([trainerId, status])
+  @@index([templateId])
+}
+
+/// Money received by «Тренер клуб» from a client.
+model TrainerClientPayment {
+  id         String               @id @default(cuid())
+  trainerId  String
+  clientId   String
+  amountMinor Int
+  method     TrainerPaymentMethod
+  kind       TrainerPaymentKind   @default(OTHER)
+  paidAt     DateTime             @default(now())
+  comment    String?
+  packageId  String?
+  bookingId  String?
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  trainer User                  @relation("TrainerClientPayments", fields: [trainerId], references: [id], onDelete: Cascade)
+  client  User                  @relation("ClientTrainerPayments", fields: [clientId], references: [id], onDelete: Cascade)
+  package TrainerClientPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+
+  @@index([trainerId, paidAt])
+  @@index([trainerId, clientId])
+  @@index([packageId])
+  @@index([bookingId])
+}
+
+/// Running debt: client owes trainer (one-shot sessions without package).
+model TrainerClientBalance {
+  id        String   @id @default(cuid())
+  trainerId String
+  clientId  String
+  /// Positive = client owes trainer (minor units).
+  debtMinor Int      @default(0)
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  trainer User @relation("TrainerClientBalances", fields: [trainerId], references: [id], onDelete: Cascade)
+  client  User @relation("ClientTrainerBalances", fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([trainerId, clientId])
+  @@index([trainerId, debtMinor])
 }

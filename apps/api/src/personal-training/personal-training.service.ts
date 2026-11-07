@@ -49,22 +49,13 @@ import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
+import {
+  isPersonalPtBooking,
+  resolvePtFlow,
+  type PtBookingFlowValue,
+} from '../trainer/pt-flow.util';
+import { TrainerLedgerService } from '../trainer/trainer-ledger.service';
 import { TrainerRosterService } from '../trainer/trainer-roster.service';
-
-/** Club-only trainers skip admin PT control (prep for «Тренер клуб»). */
-function isClubTrainerOnly(user: {
-  trainerClub?: boolean | null;
-  trainerStaff?: boolean | null;
-  groupPrograms?: boolean | null;
-  trainerReformers?: boolean | null;
-}): boolean {
-  return Boolean(
-    user.trainerClub &&
-      !user.trainerStaff &&
-      !user.groupPrograms &&
-      !user.trainerReformers,
-  );
-}
 
 const SESSION_DURATION_MIN = 60;
 
@@ -104,20 +95,25 @@ export class PersonalTrainingService {
     private readonly sessionApproval: SessionApprovalService,
     private readonly features: FeaturesService,
     private readonly fitness: FitnessService,
+    private readonly ledger: TrainerLedgerService,
   ) {}
 
-  private async shouldApplyPtControl(trainerId: string): Promise<boolean> {
+  private async shouldApplyPtControl(
+    trainerId: string,
+    ptFlow?: PtBookingFlowValue | string | null,
+  ): Promise<boolean> {
     if (!(await this.features.isEnabled('trainer_pt_control'))) return false;
+    if (ptFlow === 'PERSONAL') return false;
+    if (ptFlow === 'CLUB') return true;
     const trainer = await this.prisma.user.findUnique({
       where: { id: trainerId },
       select: {
         trainerClub: true,
         trainerStaff: true,
-        groupPrograms: true,
-        trainerReformers: true,
       },
     });
-    if (!trainer || isClubTrainerOnly(trainer)) return false;
+    if (!trainer) return false;
+    if (isPersonalPtBooking({ ptFlow: null }, trainer)) return false;
     return true;
   }
 
@@ -136,7 +132,8 @@ export class PersonalTrainingService {
     if (!booking) return null;
     if (booking.isComplimentary) return null;
     if (booking.linkedDocExternalId || booking.docAutoLinkBlocked) return null;
-    if (!(await this.shouldApplyPtControl(booking.trainerId))) return null;
+    if (!(await this.shouldApplyPtControl(booking.trainerId, booking.ptFlow)))
+      return null;
 
     const from = new Date(booking.startAt);
     from.setUTCDate(from.getUTCDate() - PT_DOC_LOOKBACK_DAYS);
@@ -676,6 +673,7 @@ export class PersonalTrainingService {
     clientId: string,
     startAt: string,
     isComplimentary = false,
+    ptFlowRequest?: PtBookingFlowValue | null,
   ) {
     const start = new Date(startAt);
     if (Number.isNaN(start.getTime())) {
@@ -686,6 +684,13 @@ export class PersonalTrainingService {
 
     await this.roster.ensureConfirmedLink(user.sub, clientId);
     await this.ensureNoBookingConflict(user.sub, start, end);
+
+    const trainerFlags = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { trainerClub: true, trainerStaff: true },
+    });
+    const ptFlow = resolvePtFlow(trainerFlags ?? {}, ptFlowRequest);
+    const personal = ptFlow === 'PERSONAL';
 
     const client = await this.prisma.user.findFirst({
       where: {
@@ -736,17 +741,20 @@ export class PersonalTrainingService {
         endAt: end,
         origin: PersonalBookingOrigin.TRAINER_ASSIGNED,
         isComplimentary,
+        ptFlow,
         controlLevel: control.controlLevel,
-        reviewFlag: control.reviewFlag || clientIssue !== 'NONE',
+        reviewFlag: personal
+          ? false
+          : control.reviewFlag || clientIssue !== 'NONE',
         paymentStatus: control.paymentStatus,
         usageStatus: control.usageStatus,
         presenceStatus: control.presenceStatus,
         performanceStatus: control.performanceStatus,
-        eligibleForMotivation: control.eligibleForMotivation,
+        eligibleForMotivation: personal ? false : control.eligibleForMotivation,
         bookedByUserId: control.bookedByUserId,
         clientIssue: clientIssue as never,
         payKind: isComplimentary ? 'GIFT' : 'UNKNOWN',
-        ...(clientIssue !== 'NONE'
+        ...(clientIssue !== 'NONE' && !personal
           ? { trustBand: 'AMBER' as never }
           : {}),
       },
@@ -768,7 +776,7 @@ export class PersonalTrainingService {
       });
     }
 
-    if (await this.shouldApplyPtControl(user.sub)) {
+    if (await this.shouldApplyPtControl(user.sub, ptFlow)) {
       const clubId = requireClubId(user);
       await this.sessionApproval.ensureApproval(
         SessionApprovalKind.PT,
@@ -786,6 +794,7 @@ export class PersonalTrainingService {
       endAt: booking.endAt.toISOString(),
       status: booking.status,
       origin: booking.origin,
+      ptFlow,
     };
   }
 
@@ -1470,13 +1479,23 @@ export class PersonalTrainingService {
         checkOut: booking.endAt.toISOString().slice(11, 16),
       });
 
-      if (await this.shouldApplyPtControl(booking.trainerId)) {
+      if (await this.shouldApplyPtControl(booking.trainerId, booking.ptFlow)) {
         await this.sessionApproval.confirmPerformer(
           user,
           SessionApprovalKind.PT,
           bookingId,
         );
         await this.tryAutoLinkPtDocument(bookingId, clubId);
+      } else if (
+        isPersonalPtBooking(
+          { ptFlow: booking.ptFlow },
+          {
+            trainerClub: booking.trainer.trainerClub,
+            trainerStaff: booking.trainer.trainerStaff,
+          },
+        )
+      ) {
+        await this.ledger.settlePersonalSession(bookingId);
       }
     }
 
