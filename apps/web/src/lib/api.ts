@@ -82,6 +82,7 @@ import {
   AdminPermission,
   AdminTaskStatus,
   type ProductModulesState,
+  type ProductModuleKey,
   type ProductModuleDefinition,
   type AdminHomeLayoutValue,
   type AdminHomePinId,
@@ -3505,7 +3506,20 @@ export const api = {
   superAdminModules: (token: string) =>
     request<{
       modules: ProductModulesState;
-      catalog: Array<ProductModuleDefinition & { enabled: boolean }>;
+      catalog: Array<
+        ProductModuleDefinition & { enabled: boolean; pilotable?: boolean }
+      >;
+      pilots?: Partial<
+        Record<
+          ProductModuleKey,
+          Array<{
+            id: string;
+            firstName: string;
+            lastName: string;
+            email: string;
+          }>
+        >
+      >;
       updatedAt?: string;
     }>('/super-admin/modules', {}, token),
 
@@ -3516,6 +3530,33 @@ export const api = {
     request<{ modules: ProductModulesState }>('/super-admin/modules', {
       method: 'PUT',
       body: JSON.stringify({ modules }),
+    }, token),
+
+  superAdminSetModulePilots: (
+    token: string,
+    key: ProductModuleKey,
+    userIds: string[],
+  ) =>
+    request<{
+      modules: ProductModulesState;
+      catalog: Array<
+        ProductModuleDefinition & { enabled: boolean; pilotable?: boolean }
+      >;
+      pilots?: Partial<
+        Record<
+          ProductModuleKey,
+          Array<{
+            id: string;
+            firstName: string;
+            lastName: string;
+            email: string;
+          }>
+        >
+      >;
+      updatedAt?: string;
+    }>('/super-admin/modules/pilots', {
+      method: 'PUT',
+      body: JSON.stringify({ key, userIds }),
     }, token),
 
   superAdminReviewQueue: (token: string) =>

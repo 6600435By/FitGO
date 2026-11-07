@@ -157,7 +157,15 @@ export interface ProductModuleDefinition {
   defaultEnabled: boolean;
   /** Client/trainer/admin path prefixes gated by this module */
   surfaces: string[];
+  /**
+   * When true and the module is globally OFF, listed user ids in
+   * AppFeatureFlags.pilots[key] still get the module via GET /features.
+   */
+  pilotable?: boolean;
 }
+
+/** Pilot allow-lists keyed by product module (user ids). */
+export type ModulePilotsState = Partial<Record<ProductModuleKey, string[]>>;
 
 export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
   {
@@ -290,9 +298,10 @@ export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
     key: 'trainer_ui_v2',
     label: 'Forma Coach (новый кабинет тренера)',
     description:
-      'Оболочка Forma, онбординг и новый UI /trainer. Откат на старый кабинет при выключении.',
+      'Оболочка Forma, онбординг и новый UI /trainer. Глобально OFF + список пилота в /super-admin/modules; откат — убрать тренера из пилота или выключить модуль.',
     defaultEnabled: false,
     surfaces: ['/trainer'],
+    pilotable: true,
   },
   {
     key: 'trainer_pt_control',

@@ -1,21 +1,25 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Role } from '@prisma/client';
+import { FeaturesService } from '../features/features.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrainerInsightsService } from './trainer-insights.service';
+
+const DIGEST_TITLE = 'Помощник на сегодня';
+const DIGEST_TAG = 'trainer-insights-digest';
 
 /** Morning «Помощник» digest at 08:00 Europe/Minsk. */
 @Injectable()
 export class TrainerInsightsSchedulerService implements OnModuleInit {
   private readonly logger = new Logger(TrainerInsightsSchedulerService.name);
-  private lastDigestKey = '';
 
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
     private readonly insights: TrainerInsightsService,
     private readonly notifications: NotificationsService,
+    private readonly features: FeaturesService,
   ) {}
 
   onModuleInit() {
@@ -40,19 +44,35 @@ export class TrainerInsightsSchedulerService implements OnModuleInit {
     };
   }
 
+  /** Start of club calendar day in UTC (Minsk has no DST). */
+  private startOfMinskDay(dayKey: string): Date {
+    return new Date(`${dayKey}T00:00:00+03:00`);
+  }
+
   async tick() {
     try {
       const { dayKey, hour } = this.minskParts();
       if (hour !== 8) return;
-      if (this.lastDigestKey === dayKey) return;
-      this.lastDigestKey = dayKey;
-      await this.sendMorningDigests();
+      await this.sendMorningDigests(dayKey);
     } catch (err) {
       this.logger.error('Trainer insights digest tick failed', err);
     }
   }
 
-  private async sendMorningDigests() {
+  private async alreadySentToday(userId: string, dayStart: Date) {
+    const existing = await this.prisma.notification.findFirst({
+      where: {
+        userId,
+        title: DIGEST_TITLE,
+        createdAt: { gte: dayStart },
+      },
+      select: { id: true },
+    });
+    return Boolean(existing);
+  }
+
+  private async sendMorningDigests(dayKey: string) {
+    const dayStart = this.startOfMinskDay(dayKey);
     const trainers = await this.prisma.user.findMany({
       where: {
         isActive: true,
@@ -73,7 +93,15 @@ export class TrainerInsightsSchedulerService implements OnModuleInit {
       take: 200,
     });
 
+    let sent = 0;
+    let skipped = 0;
+
     for (const t of trainers) {
+      if (!(await this.features.isEnabledForUser('trainer_ui_v2', t.id))) {
+        skipped += 1;
+        continue;
+      }
+
       const prefs = t.notificationPrefs;
       if (
         prefs &&
@@ -84,19 +112,26 @@ export class TrainerInsightsSchedulerService implements OnModuleInit {
         continue;
       }
 
+      if (await this.alreadySentToday(t.id, dayStart)) {
+        continue;
+      }
+
       const top = await this.insights.topInsightsForDigest(t.id, t.clubId);
       if (!top.length) continue;
 
       const body = top.map((i) => `• ${i.title}: ${i.body}`).join('\n');
       await this.notifications.sendDirectMessage(
         t.id,
-        'Помощник на сегодня',
+        DIGEST_TITLE,
         body.slice(0, 500),
         undefined,
-        { url: '/trainer', tag: 'trainer-insights-digest' },
+        { url: '/trainer', tag: DIGEST_TAG },
       );
+      sent += 1;
     }
 
-    this.logger.log(`Morning insights digest sent for ${trainers.length} trainers`);
+    this.logger.log(
+      `Morning insights digest: sent=${sent} skippedNoForma=${skipped} scanned=${trainers.length}`,
+    );
   }
 }

@@ -597,6 +597,9 @@ model ClubTheme {
 model AppFeatureFlags {
   id        String   @id @default("default")
   modules   Json
+  /// Per-module pilot user ids: { "trainer_ui_v2": ["userId", ...] }.
+  /// Kept outside modules so setModules cannot wipe the list.
+  pilots    Json     @default("{}")
   updatedAt DateTime @updatedAt
   updatedBy String?
 }

@@ -39,7 +39,10 @@ import { SuperAdminService } from './super-admin.service';
 import { FeaturesService } from '../features/features.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { requireClubId } from '../auth/require-club-id';
-import type { ProductModulesState } from '@fitgo/shared-types';
+import type {
+  ProductModuleKey,
+  ProductModulesState,
+} from '@fitgo/shared-types';
 
 @Controller('super-admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -268,6 +271,17 @@ export class SuperAdminController {
     return this.features.setModules(body.modules ?? {}, user.sub).then((modules) => ({
       modules,
     }));
+  }
+
+  @Put('modules/pilots')
+  @Roles(UserRole.SUPER_ADMIN)
+  setModulePilots(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { key: ProductModuleKey; userIds: string[] },
+  ) {
+    return this.features
+      .setPilot(body.key, body.userIds ?? [], user.sub)
+      .then(async () => this.features.getCatalog());
   }
 
   @Get('service-usage/review-queue')

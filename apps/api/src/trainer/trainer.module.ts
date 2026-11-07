@@ -3,6 +3,7 @@ import { AnalyticsModule } from '../analytics/analytics.module';
 import { ClientModule } from '../client/client.module';
 import { ClubScheduleModule } from '../club-schedule/club-schedule.module';
 import { EngagementModule } from '../engagement/engagement.module';
+import { FeaturesModule } from '../features/features.module';
 import { FitnessModule } from '../fitness/fitness.module';
 import { FloorHomeModule } from '../floor-home/floor-home.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -22,6 +23,7 @@ import { TrainerService } from './trainer.service';
     FitnessModule,
     NotificationsModule,
     EngagementModule,
+    FeaturesModule,
     TrainerRosterModule,
     ClientModule,
     ServiceUsageModule,
