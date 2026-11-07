@@ -7,21 +7,41 @@ import {
   normalizeWorkoutSheet,
 } from '@fitgo/shared-types';
 import { NotebookPen, Flag } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { SessionFinishSummary } from '@/components/personal-training/session-finish-summary';
 import { SessionNotesSheet } from '@/components/personal-training/session-notes-sheet';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import {
+  buildCircuitTimer,
+  CIRCUIT_SHEET_PRESET_ID,
+  type BuiltPreset,
+  type CircuitPhaseBinding,
+  type TimerEvent,
+  type TimerPersistedState,
+} from '@/lib/training-timer';
+import { applyCircuitTimerEvents } from './apply-circuit-timer-fact';
+
+export type LiveTimerFactHandler = (
+  events: TimerEvent[],
+  state: TimerPersistedState,
+) => void;
 
 export function LivePtSessionChrome({
   bookingId,
   clientId,
   elapsedMs,
+  applyPreset,
+  factHandlerRef,
   onFinished,
 }: {
   bookingId: string;
   clientId?: string;
   elapsedMs: number;
+  /** Seed / switch live timer from the sheet circuit. */
+  applyPreset?: (preset: BuiltPreset) => void;
+  /** Parent timer commits phase_end here so we write fact into the sheet. */
+  factHandlerRef?: MutableRefObject<LiveTimerFactHandler | null>;
   onFinished?: () => void;
 }) {
   const [notesOpen, setNotesOpen] = useState(false);
@@ -30,6 +50,11 @@ export function LivePtSessionChrome({
   const [homeworkDraft, setHomeworkDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [goals, setGoals] = useState<Array<{ title: string }>>([]);
+  const bindingsRef = useRef<CircuitPhaseBinding[]>([]);
+  const sheetRef = useRef(sheet);
+  sheetRef.current = sheet;
+  const seededCircuitRef = useRef(false);
+  const saveTimerRef = useRef<number | null>(null);
 
   const reload = useCallback(async () => {
     const token = getToken();
@@ -42,6 +67,59 @@ export function LivePtSessionChrome({
   useEffect(() => {
     reload().catch(() => undefined);
   }, [reload]);
+
+  useEffect(() => {
+    const circuit = sheet.circuit;
+    if (!circuit?.stations?.length) return;
+    const built = buildCircuitTimer(circuit);
+    if (built.phases.length === 0) return;
+    bindingsRef.current = built.bindings;
+    if (!applyPreset || seededCircuitRef.current) return;
+    seededCircuitRef.current = true;
+    applyPreset(built.preset);
+  }, [sheet.circuit, applyPreset]);
+
+  const persistSheet = useCallback(
+    async (next: WorkoutSheet) => {
+      const token = getToken();
+      if (!token) return;
+      await api.personalSessionUpdatePlan(token, bookingId, {
+        goals: goals.filter((g) => g.title.trim()),
+        workoutSheet: next,
+      });
+    },
+    [bookingId, goals],
+  );
+
+  const handleTimerEvents = useCallback(
+    (events: TimerEvent[], state: TimerPersistedState) => {
+      if (state.presetId !== CIRCUIT_SHEET_PRESET_ID) return;
+      if (!events.some((e) => e.kind === 'phase_end' || e.kind === 'complete')) {
+        return;
+      }
+      const next = applyCircuitTimerEvents(
+        sheetRef.current,
+        events,
+        state,
+        bindingsRef.current,
+      );
+      if (next === sheetRef.current) return;
+      setSheet(next);
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = window.setTimeout(() => {
+        persistSheet(next).catch(() => undefined);
+      }, 400);
+    },
+    [persistSheet],
+  );
+
+  useEffect(() => {
+    if (!factHandlerRef) return;
+    factHandlerRef.current = handleTimerEvents;
+    return () => {
+      factHandlerRef.current = null;
+    };
+  }, [factHandlerRef, handleTimerEvents]);
 
   const saveNotes = async () => {
     const token = getToken();

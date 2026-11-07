@@ -170,9 +170,15 @@ function advancePhase(
   now: number,
 ): { state: TimerPersistedState; events: TimerEvent[] } {
   const phase = state.phases[state.phaseIndex];
+  const endedElapsedMs = phaseElapsedAt(state, now);
   const events: TimerEvent[] = [];
   if (phase) {
-    events.push({ kind: 'phase_end', phaseIndex: state.phaseIndex, phase });
+    events.push({
+      kind: 'phase_end',
+      phaseIndex: state.phaseIndex,
+      phase,
+      elapsedMs: endedElapsedMs,
+    });
   }
   const nextIndex = state.phaseIndex + 1;
   if (nextIndex >= state.phases.length) {
@@ -182,13 +188,20 @@ function advancePhase(
         status: 'complete',
         phaseIndex: Math.max(0, state.phases.length - 1),
         phaseElapsedMs:
-          phase?.durationSec != null ? phase.durationSec * 1000 : phaseElapsedAt(state, now),
+          phase?.durationSec != null ? phase.durationSec * 1000 : endedElapsedMs,
         segmentStartedAt: null,
       }),
       events: [
         ...events,
         ...(phase
-          ? [{ kind: 'complete' as const, phaseIndex: state.phaseIndex, phase }]
+          ? [
+              {
+                kind: 'complete' as const,
+                phaseIndex: state.phaseIndex,
+                phase,
+                elapsedMs: endedElapsedMs,
+              },
+            ]
           : []),
       ],
     };
@@ -234,6 +247,46 @@ export function skipPhase(
       segmentStartedAt: now,
     }),
     events: advanced.events,
+  };
+}
+
+/** Go to previous phase (or restart current when already on the first). */
+export function previousPhase(
+  state: TimerPersistedState,
+  now = Date.now(),
+): { state: TimerPersistedState; events: TimerEvent[] } {
+  if (state.phases.length === 0) return { state, events: [] };
+
+  const targetIndex = state.phaseIndex > 0 ? state.phaseIndex - 1 : 0;
+  const phase = state.phases[targetIndex];
+  if (!phase) return { state, events: [] };
+
+  const running =
+    state.status === 'running' ||
+    state.status === 'complete' ||
+    state.status === 'paused';
+
+  const next = withUpdated({
+    ...state,
+    phaseIndex: targetIndex,
+    phaseElapsedMs: 0,
+    segmentStartedAt: running && state.status !== 'paused' ? now : null,
+    status:
+      state.status === 'complete'
+        ? 'running'
+        : state.status === 'idle'
+          ? 'idle'
+          : state.status === 'paused'
+            ? 'paused'
+            : 'running',
+  });
+
+  return {
+    state: next,
+    events:
+      targetIndex !== state.phaseIndex || state.phaseElapsedMs > 0
+        ? [{ kind: 'phase_start', phaseIndex: targetIndex, phase }]
+        : [],
   };
 }
 

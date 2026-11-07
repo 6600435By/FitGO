@@ -5,6 +5,7 @@ import { Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { api, type GroupClassSessionDto } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { clubDayIso } from '@/lib/club-day';
 import { cn } from '@/lib/utils';
 
 export function LiveGpRoster({
@@ -39,7 +40,7 @@ export function LiveGpRoster({
   const ensureJournal = useCallback(async () => {
     const token = getToken();
     if (!token) return null;
-    const day = new Date().toISOString().slice(0, 10);
+    const day = clubDayIso();
     const list = await api.trainerGroupSessions(token, day, day);
     const hit =
       list.find(

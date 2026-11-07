@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildPreset,
   formatTimerMs,
@@ -23,6 +23,8 @@ import {
   useTrainingTimer,
   type BuiltPreset,
   type SoundPackId,
+  type TimerEvent,
+  type TimerPersistedState,
   type TimerPhase,
   type TimerSessionMeta,
 } from '@/lib/training-timer';
@@ -31,7 +33,10 @@ import { getToken } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { LiveGpRoster } from './live-gp-roster';
 import { LivePresetPicker } from './live-preset-picker';
-import { LivePtSessionChrome } from './live-pt-session-chrome';
+import {
+  LivePtSessionChrome,
+  type LiveTimerFactHandler,
+} from './live-pt-session-chrome';
 
 const ACCENT: Record<ReturnType<typeof phaseAccent>, string> = {
   work: '#ffd000',
@@ -91,12 +96,30 @@ export function LiveTimerScreen({
 }) {
   const reduceMotion = useReducedMotion();
   const initial = useMemo(() => buildPreset({ id: 'tabata' }), []);
-  const timer = useTrainingTimer({ meta, initialPreset: initial, mirrorOnly });
+  const factHandlerRef = useRef<LiveTimerFactHandler | null>(null);
+  const onEvents = useCallback((events: TimerEvent[], state: TimerPersistedState) => {
+    factHandlerRef.current?.(events, state);
+  }, []);
+  const timer = useTrainingTimer({
+    meta,
+    initialPreset: initial,
+    mirrorOnly,
+    onEvents: mirrorOnly ? undefined : onEvents,
+  });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [personal, setPersonal] = useState<
     Array<{ id: string; name: string; phases: BuiltPreset['phases'] }>
   >([]);
   const [prefsOpen, setPrefsOpen] = useState(false);
+
+  const seedCircuitFromSheet = useCallback(
+    (preset: BuiltPreset) => {
+      if (timer.state.status !== 'idle') return;
+      if (timer.state.presetId !== 'tabata') return;
+      timer.applyPreset(preset);
+    },
+    [timer.applyPreset, timer.state.presetId, timer.state.status],
+  );
 
   useEffect(() => {
     if (mirrorOnly) return;
@@ -135,7 +158,7 @@ export function LiveTimerScreen({
         timer.skip();
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
-        timer.reset();
+        timer.prev();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -345,6 +368,8 @@ export function LiveTimerScreen({
           bookingId={meta.bookingId}
           clientId={meta.clientId}
           elapsedMs={timer.snapshot.totalElapsedMs}
+          applyPreset={seedCircuitFromSheet}
+          factHandlerRef={factHandlerRef}
         />
       ) : null}
 
@@ -562,7 +587,8 @@ export function LiveTimerScreen({
         </footer>
       ) : (
         <p className="px-4 pb-6 text-center text-xs text-zinc-600">
-          Управление с основного окна · пробел — пауза · стрелки — фаза / сброс
+          Управление с основного окна · пробел — пауза · стрелки — фаза вперёд /
+          назад
         </p>
       )}
 

@@ -2190,7 +2190,6 @@ export function saveBlockSummary(
   return {
     ...withProgress,
     sessionSummaryNote: sessionSummaryNote || undefined,
-    notes: sessionSummaryNote || undefined,
   };
 }
 
@@ -2211,7 +2210,6 @@ export function reopenWorkoutSection(
   return {
     ...next,
     sessionSummaryNote: sessionSummaryNote || undefined,
-    notes: sessionSummaryNote || undefined,
   };
 }
 
@@ -2258,7 +2256,6 @@ export function completeWorkoutSession(sheet: WorkoutSheet): WorkoutSheet {
     sessionCompleted: true,
     sessionCompletedAt: now,
     sessionSummaryNote: sessionSummaryNote || undefined,
-    notes: sessionSummaryNote || sheet.notes,
   };
 }
 

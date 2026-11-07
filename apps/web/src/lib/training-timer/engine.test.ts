@@ -9,10 +9,11 @@ import {
   formatTimerMs,
   getSnapshot,
   pauseTimer,
+  previousPhase,
   skipPhase,
   startTimer,
 } from './engine';
-import { buildPreset } from './presets';
+import { buildCircuitTimer, buildPreset } from './presets';
 
 describe('training-timer engine', () => {
   it('builds tabata 20/10 × 8 with prep', () => {
@@ -90,6 +91,39 @@ describe('training-timer engine', () => {
     ({ state } = skipPhase(state, 1500));
     assert.equal(state.phaseIndex, 1);
     assert.equal(state.phases[1]?.kind, 'rest');
+  });
+
+  it('previousPhase goes back', () => {
+    const preset = buildPreset({
+      id: 'intervals',
+      params: { workSec: 40, restSec: 20, rounds: 2, prepSec: 0 },
+    });
+    let state = createIdleState(preset.phases, {
+      presetId: preset.id,
+      presetName: preset.name,
+    });
+    ({ state } = startTimer(state, 1000));
+    ({ state } = skipPhase(state, 1500));
+    ({ state } = previousPhase(state, 2000));
+    assert.equal(state.phaseIndex, 0);
+    assert.equal(state.phaseElapsedMs, 0);
+    assert.equal(state.phases[0]?.kind, 'work');
+  });
+
+  it('builds circuit phases with matching bindings', () => {
+    const { phases, bindings, preset } = buildCircuitTimer({
+      stations: [
+        { name: 'A', workSec: 30, restSec: 10 },
+        { name: 'B', workSec: 40 },
+      ],
+      rounds: 2,
+      restBetweenRoundsSec: 20,
+      roundLogs: [],
+    });
+    assert.equal(preset.id, 'circuit-sheet');
+    assert.equal(phases.length, bindings.length);
+    assert.ok(phases.some((p) => p.kind === 'work' && p.label === 'A'));
+    assert.ok(bindings.some((b) => b.role === 'roundRest' && b.round === 1));
   });
 
   it('formats mm:ss', () => {

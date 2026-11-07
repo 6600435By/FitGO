@@ -205,20 +205,38 @@ export const BUILTIN_PRESET_CARDS: Array<{
   },
 ];
 
+/** Maps a phase built from the sheet circuit back to round / station. */
+export type CircuitPhaseBinding =
+  | { role: 'prep'; round: number; stationIndex: number }
+  | { role: 'work'; round: number; stationIndex: number }
+  | { role: 'stationRest'; round: number; stationIndex: number }
+  | { role: 'roundRest'; round: number };
+
+export const CIRCUIT_SHEET_PRESET_ID = 'circuit-sheet';
+
 /** Build phases from a circuit block on the workout sheet. */
 export function phasesFromCircuit(
   circuit: CircuitWorkout,
   countdownEnabled = true,
 ): TimerPhase[] {
+  return buildCircuitTimer(circuit, countdownEnabled).phases;
+}
+
+export function buildCircuitTimer(
+  circuit: CircuitWorkout,
+  countdownEnabled = true,
+): { phases: TimerPhase[]; bindings: CircuitPhaseBinding[]; preset: BuiltPreset } {
   const phases: TimerPhase[] = [];
+  const bindings: CircuitPhaseBinding[] = [];
   const stationCount = circuit.stations.length;
-  const rounds = circuit.rounds;
+  const rounds = Math.max(1, circuit.rounds || 1);
 
   for (let r = 0; r < rounds; r++) {
     for (let s = 0; s < stationCount; s++) {
       const station = circuit.stations[s];
-      const name = station.name?.trim() || `Станция ${s + 1}`;
-      const workSec = station.workSec ?? 45;
+      const name = station?.name?.trim() || `Станция ${s + 1}`;
+      const workSec = station?.workSec ?? 45;
+      const round = r + 1;
 
       if (countdownEnabled) {
         phases.push({
@@ -226,6 +244,7 @@ export function phasesFromCircuit(
           durationSec: 3,
           label: 'Приготовьтесь',
         });
+        bindings.push({ role: 'prep', round, stationIndex: s });
       }
 
       phases.push({
@@ -233,16 +252,18 @@ export function phasesFromCircuit(
         durationSec: workSec,
         label: name,
       });
+      bindings.push({ role: 'work', round, stationIndex: s });
 
       const isLastStation = s === stationCount - 1;
       if (!isLastStation) {
-        const rest = station.restSec ?? circuit.transitionSec ?? 15;
+        const rest = station?.restSec ?? circuit.transitionSec ?? 15;
         if (rest > 0) {
           phases.push({
             kind: 'rest',
             durationSec: rest,
             label: 'Отдых станции',
           });
+          bindings.push({ role: 'stationRest', round, stationIndex: s });
         }
       }
     }
@@ -254,8 +275,18 @@ export function phasesFromCircuit(
           durationSec: roundRest,
           label: `Отдых круга ${r + 1}`,
         });
+        bindings.push({ role: 'roundRest', round: r + 1 });
       }
     }
   }
-  return phases;
+
+  return {
+    phases,
+    bindings,
+    preset: {
+      id: CIRCUIT_SHEET_PRESET_ID,
+      name: 'Круговая с листа',
+      phases,
+    },
+  };
 }

@@ -7,6 +7,7 @@ import {
   createIdleState,
   getSnapshot,
   pauseTimer,
+  previousPhase,
   resetTimer,
   skipPhase,
   startTimer,
@@ -25,6 +26,7 @@ import { handleTimerSoundEvents, unlockAudio } from './sound';
 import type {
   BuiltPreset,
   SoundPackId,
+  TimerEvent,
   TimerPersistedState,
   TimerSessionMeta,
   TimerSnapshot,
@@ -58,8 +60,12 @@ export function useTrainingTimer(opts: {
   initialPreset: BuiltPreset;
   /** When true, this window only mirrors state (hall display). */
   mirrorOnly?: boolean;
+  /** Fired after local control / tick emits timer events (not remote mirror). */
+  onEvents?: (events: TimerEvent[], state: TimerPersistedState) => void;
 }) {
-  const { meta, initialPreset, mirrorOnly = false } = opts;
+  const { meta, initialPreset, mirrorOnly = false, onEvents } = opts;
+  const onEventsRef = useRef(onEvents);
+  onEventsRef.current = onEvents;
   const [state, setState] = useState<TimerPersistedState>(() =>
     idleWithPrefs(initialPreset.phases, {
       presetId: initialPreset.id,
@@ -109,6 +115,7 @@ export function useTrainingTimer(opts: {
           setFlash(true);
           window.setTimeout(() => setFlash(false), 280);
         }
+        onEventsRef.current?.(events, next);
       }
     },
     [mirrorOnly],
@@ -259,6 +266,12 @@ export function useTrainingTimer(opts: {
     commit(next, events);
   }, [commit, mirrorOnly]);
 
+  const prev = useCallback(() => {
+    if (mirrorOnly) return;
+    const { state: next, events } = previousPhase(stateRef.current);
+    commit(next, events);
+  }, [commit, mirrorOnly]);
+
   const reset = useCallback(() => {
     if (mirrorOnly) return;
     commit(resetTimer(stateRef.current));
@@ -332,6 +345,7 @@ export function useTrainingTimer(opts: {
     toggle,
     pause,
     skip,
+    prev,
     reset,
     amrapPlus,
     bumpRest,

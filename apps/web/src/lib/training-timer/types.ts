@@ -70,6 +70,8 @@ export interface TimerEvent {
   phase: TimerPhase;
   /** For countdown_tick: 3, 2, 1. */
   countdown?: number;
+  /** Elapsed in the ending phase (phase_end / complete), ms. */
+  elapsedMs?: number;
 }
 
 export interface TimerSnapshot {
