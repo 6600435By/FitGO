@@ -22,6 +22,7 @@ export function TrainerCalendar({
   onNavigate,
   onViewChange,
   onSelectEvent,
+  onMoveBooking,
 }: {
   events: TrainerCalendarEvent[];
   filter: ScheduleTypeFilter;
@@ -31,6 +32,7 @@ export function TrainerCalendar({
   onNavigate: (date: Date) => void;
   onViewChange: (view: ScheduleView) => void;
   onSelectEvent?: (event: TrainerCalendarEvent) => void;
+  onMoveBooking?: (event: TrainerCalendarEvent, newStartAt: string) => void;
 }) {
   const router = useRouter();
 
@@ -85,6 +87,7 @@ export function TrainerCalendar({
             events={visibleEvents}
             availabilityBlocks={availabilityBlocks}
             onSelectEvent={handleSelectEvent}
+            onMoveBooking={onMoveBooking}
           />
         )}
         {view === 'month' && (

@@ -295,7 +295,7 @@ export default function TrainerMessagesPage() {
           </Chip>
         ))}
       </div>
-      <div className="min-h-[50vh] desktop:grid desktop:grid-cols-1 desktop:gap-4">
+      <div className="min-h-[50vh] desktop:min-h-[min(42rem,calc(100dvh-12rem))]">
         {content}
       </div>
     </div>

@@ -141,6 +141,25 @@ export function TrainerSchedulePage() {
     reload();
   };
 
+  const handleMoveBooking = async (
+    event: TrainerCalendarEvent,
+    newStartAt: string,
+  ) => {
+    const token = getToken();
+    if (!token || !event.bookingId) return;
+    try {
+      await api.trainerUpdatePersonalBooking(token, event.bookingId, {
+        startAt: newStartAt,
+        seriesScope: 'one',
+      });
+      await reload();
+    } catch (err) {
+      window.alert(
+        err instanceof Error ? err.message : 'Не удалось перенести запись',
+      );
+    }
+  };
+
   const handleSelectEvent = (event: TrainerCalendarEvent) => {
     if (
       (event.kind === 'OPEN_SLOT' || event.kind === 'DRAFT_SLOT') &&
@@ -311,6 +330,7 @@ export function TrainerSchedulePage() {
             onNavigate={setDate}
             onViewChange={setView}
             onSelectEvent={handleSelectEvent}
+            onMoveBooking={forma ? handleMoveBooking : undefined}
           />
         </>
       )}

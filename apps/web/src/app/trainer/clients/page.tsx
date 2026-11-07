@@ -8,9 +8,11 @@ import {
 import { Chip, ResponsiveSheet } from '@fitgo/forma-ui';
 import Link from 'next/link';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { ClientDesktopCard } from '@/components/trainer-clients/client-desktop-card';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import {
+  cn,
   formatDate,
   membershipStatusColor,
   membershipStatusLabel,
@@ -114,6 +116,7 @@ export default function TrainerClientsPage() {
   const [looking, setLooking] = useState(false);
   const [inviteBusyId, setInviteBusyId] = useState<string | null>(null);
   const [inviteHint, setInviteHint] = useState('');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const loadClients = useCallback(() => {
     const token = getToken();
@@ -162,6 +165,11 @@ export default function TrainerClientsPage() {
       return hay.includes(q);
     });
   }, [clients, query, segment]);
+
+  const selectedClient = useMemo(
+    () => filtered.find((c) => c.id === selectedId) ?? null,
+    [filtered, selectedId],
+  );
 
   const segmentCounts = useMemo(() => {
     const counts: Record<Segment, number> = {
@@ -419,96 +427,144 @@ export default function TrainerClientsPage() {
         <p className="text-sm text-fitgo-400">{inviteHint}</p>
       ) : null}
 
-      {filtered.length === 0 ? (
-        <div className="card text-center text-slate-400">
-          <p>
-            {clients.length === 0
-              ? 'Пока нет клиентов в вашей базе'
-              : 'Нет клиентов в этом сегменте'}
-          </p>
-        </div>
-      ) : (
-        <ul className="space-y-3">
-          {filtered.map((client) => {
-            const risk =
-              (client.cancelNoShowCount ?? 0) >= 2 ||
-              matchesSegment(client, 'ghosting') ||
-              matchesSegment(client, 'expiring');
-            const needsAppInvite = !client.hasApp && Boolean(client.phone);
-            return (
-              <li key={client.id} className="card">
-                <Link href={`/trainer/clients/${client.id}`} className="block">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="font-medium">
-                        {client.firstName} {client.lastName}
-                      </p>
-                      {client.phone && (
-                        <p className="text-sm text-slate-400">{client.phone}</p>
-                      )}
-                      {client.membershipName && (
-                        <p className="mt-1 text-sm text-slate-300">
-                          {client.membershipName}
-                          {client.sessionsRemaining != null
-                            ? ` · осталось ${client.sessionsRemaining}`
-                            : ''}
-                          {client.membershipValidUntil
-                            ? ` · до ${formatDate(client.membershipValidUntil)}`
-                            : ''}
-                        </p>
-                      )}
-                      {(client.lastHallVisit || client.lastVisit) && (
-                        <p className="text-xs text-slate-500">
-                          Визит:{' '}
-                          {formatDate(
-                            client.lastHallVisit ?? client.lastVisit ?? '',
-                          )}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs ${rosterStatusColor(client)}`}
-                      >
-                        {rosterStatusLabel(client)}
-                      </span>
-                      {client.membershipStatus && (
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-xs ${membershipStatusColor(client.membershipStatus)}`}
-                        >
-                          {membershipStatusLabel(client.membershipStatus)}
-                        </span>
-                      )}
-                      {risk && (
-                        <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs text-amber-200">
-                          Внимание
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </Link>
-                {needsAppInvite ? (
-                  <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
-                    <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-200">
-                      Нет приложения
-                    </span>
+      <div className="desktop:grid desktop:grid-cols-[minmax(0,1fr)_minmax(280px,380px)] desktop:items-start desktop:gap-4">
+        <div className="min-w-0">
+          {filtered.length === 0 ? (
+            <div className="card text-center text-slate-400">
+              <p>
+                {clients.length === 0
+                  ? 'Пока нет клиентов в вашей базе'
+                  : 'Нет клиентов в этом сегменте'}
+              </p>
+            </div>
+          ) : (
+            <ul className="space-y-3">
+              {filtered.map((client) => {
+                const risk =
+                  (client.cancelNoShowCount ?? 0) >= 2 ||
+                  matchesSegment(client, 'ghosting') ||
+                  matchesSegment(client, 'expiring');
+                const needsAppInvite = !client.hasApp && Boolean(client.phone);
+                const selected = selectedId === client.id;
+                return (
+                  <li
+                    key={client.id}
+                    className={cn(
+                      'card',
+                      selected && 'ring-1 ring-forma-500/40',
+                    )}
+                  >
+                    <Link
+                      href={`/trainer/clients/${client.id}`}
+                      className="block desktop:hidden"
+                    >
+                      <ClientListRow client={client} risk={risk} />
+                    </Link>
                     <button
                       type="button"
-                      className="btn-secondary text-xs"
-                      disabled={inviteBusyId === client.id}
-                      onClick={() => void inviteFromCard(client)}
+                      className="hidden w-full text-left desktop:block"
+                      onClick={() =>
+                        setSelectedId((prev) =>
+                          prev === client.id ? null : client.id,
+                        )
+                      }
                     >
-                      {inviteBusyId === client.id
-                        ? 'Отправка…'
-                        : 'Пригласить в FitGO'}
+                      <ClientListRow client={client} risk={risk} />
                     </button>
-                  </div>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                    {needsAppInvite ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
+                        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-200">
+                          Нет приложения
+                        </span>
+                        <button
+                          type="button"
+                          className="btn-secondary text-xs"
+                          disabled={inviteBusyId === client.id}
+                          onClick={() => void inviteFromCard(client)}
+                        >
+                          {inviteBusyId === client.id
+                            ? 'Отправка…'
+                            : 'Пригласить в FitGO'}
+                        </button>
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <div className="hidden desktop:block">
+          {selectedClient ? (
+            <ClientDesktopCard
+              summary={selectedClient}
+              onClose={() => setSelectedId(null)}
+            />
+          ) : (
+            <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center text-sm text-forma-400">
+              Выберите клиента в списке
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientListRow({
+  client,
+  risk,
+}: {
+  client: TrainerClientSummary;
+  risk: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-2">
+      <div>
+        <p className="font-medium">
+          {client.firstName} {client.lastName}
+        </p>
+        {client.phone && (
+          <p className="text-sm text-slate-400">{client.phone}</p>
+        )}
+        {client.membershipName && (
+          <p className="mt-1 text-sm text-slate-300">
+            {client.membershipName}
+            {client.sessionsRemaining != null
+              ? ` · осталось ${client.sessionsRemaining}`
+              : ''}
+            {client.membershipValidUntil
+              ? ` · до ${formatDate(client.membershipValidUntil)}`
+              : ''}
+          </p>
+        )}
+        {(client.lastHallVisit || client.lastVisit) && (
+          <p className="text-xs text-slate-500">
+            Визит:{' '}
+            {formatDate(client.lastHallVisit ?? client.lastVisit ?? '')}
+          </p>
+        )}
+      </div>
+      <div className="flex flex-col items-end gap-1">
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs ${rosterStatusColor(client)}`}
+        >
+          {rosterStatusLabel(client)}
+        </span>
+        {client.membershipStatus && (
+          <span
+            className={`rounded-full px-2 py-0.5 text-xs ${membershipStatusColor(client.membershipStatus)}`}
+          >
+            {membershipStatusLabel(client.membershipStatus)}
+          </span>
+        )}
+        {risk && (
+          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs text-amber-200">
+            Внимание
+          </span>
+        )}
+      </div>
     </div>
   );
 }

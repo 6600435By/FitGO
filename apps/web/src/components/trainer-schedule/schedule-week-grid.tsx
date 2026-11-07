@@ -1,7 +1,7 @@
 'use client';
 
 import type { TrainerAvailabilityBlock, TrainerCalendarEvent } from '@fitgo/shared-types';
-import { useMemo } from 'react';
+import { useMemo, useRef, type DragEvent } from 'react';
 import {
   eventBlockClass,
   eventDotClass,
@@ -15,12 +15,15 @@ import {
   getOverlapRegions,
   getWeekGridBounds,
   GRID_SLOT_MINUTES,
+  isoAtMinutes,
   minutesFromIso,
   minutesToTime,
   SLOT_HEIGHT_PX,
   topPxFromMinutes,
   weekDayKeys,
 } from './schedule-grid';
+
+const DRAG_MIME = 'application/x-fitgo-pt-booking';
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('ru-RU', {
@@ -29,18 +32,30 @@ function formatTime(iso: string): string {
   });
 }
 
+function canDragEvent(event: TrainerCalendarEvent): boolean {
+  return event.kind === 'PERSONAL' && Boolean(event.bookingId);
+}
+
 export function ScheduleWeekGrid({
   date,
   events,
   availabilityBlocks,
   onSelectEvent,
+  onMoveBooking,
 }: {
   date: Date;
   events: TrainerCalendarEvent[];
   availabilityBlocks: TrainerAvailabilityBlock[];
   onSelectEvent?: (event: TrainerCalendarEvent) => void;
+  onMoveBooking?: (event: TrainerCalendarEvent, newStartAt: string) => void;
 }) {
   const dayKeys = useMemo(() => weekDayKeys(date), [date]);
+  const draggedRef = useRef(false);
+  const eventsById = useMemo(() => {
+    const map = new Map<string, TrainerCalendarEvent>();
+    for (const e of events) map.set(e.id, e);
+    return map;
+  }, [events]);
 
   const bounds = useMemo(
     () => getWeekGridBounds(events, dayKeys, availabilityBlocks),
@@ -55,8 +70,42 @@ export function ScheduleWeekGrid({
   const gridHeight = timeLabels.length * SLOT_HEIGHT_PX;
   const todayKey = dateKey(new Date());
 
+  const dropOnDay = (dayStr: string, e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const raw =
+      e.dataTransfer.getData(DRAG_MIME) ||
+      e.dataTransfer.getData('text/plain');
+    if (!raw || !onMoveBooking) return;
+    let payload: { id: string };
+    try {
+      payload = JSON.parse(raw) as { id: string };
+    } catch {
+      return;
+    }
+    const event = eventsById.get(payload.id);
+    if (!event || !canDragEvent(event)) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const rawMin =
+      bounds.start +
+      Math.round(y / SLOT_HEIGHT_PX) * GRID_SLOT_MINUTES;
+    const snapped = Math.max(
+      bounds.start,
+      Math.min(bounds.end - GRID_SLOT_MINUTES, rawMin),
+    );
+    const nextStart = isoAtMinutes(dayStr, snapped);
+    if (nextStart === event.startAt) return;
+    onMoveBooking(event, nextStart);
+  };
+
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-700/80 bg-slate-900/40 shadow-lg [-webkit-overflow-scrolling:touch]">
+      {onMoveBooking ? (
+        <p className="hidden border-b border-slate-800 px-3 py-1.5 text-[11px] text-slate-500 desktop:block">
+          Перетащите ПТ на другой день или время (шаг 15 мин)
+        </p>
+      ) : null}
       <div className="flex min-w-max">
         <div className="admin-time-rail sticky left-0 z-20 w-14 shrink-0 border-r border-slate-700/80 bg-slate-900/95">
           <div className="h-[52px] border-b border-slate-700/80" />
@@ -118,6 +167,12 @@ export function ScheduleWeekGrid({
               <div
                 className="relative"
                 style={{ height: gridHeight }}
+                onDragOver={(e) => {
+                  if (!onMoveBooking) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={(e) => dropOnDay(dayStr, e)}
               >
                 {timeLabels.map((m) => (
                   <div
@@ -152,19 +207,44 @@ export function ScheduleWeekGrid({
                   );
                   if (!layout) return null;
                   const endMin = minutesFromIso(dayStr, event.endAt);
+                  const draggable = Boolean(onMoveBooking) && canDragEvent(event);
 
                   return (
                     <button
                       key={event.id}
                       type="button"
                       data-event-block
-                      onClick={(e) => {
-                        e.stopPropagation();
+                      draggable={draggable}
+                      onDragStart={(e) => {
+                        if (!draggable) return;
+                        draggedRef.current = false;
+                        const payload = JSON.stringify({ id: event.id });
+                        e.dataTransfer.setData(DRAG_MIME, payload);
+                        e.dataTransfer.setData('text/plain', payload);
+                        e.dataTransfer.effectAllowed = 'move';
+                        window.setTimeout(() => {
+                          draggedRef.current = true;
+                        }, 0);
+                      }}
+                      onDragEnd={() => {
+                        window.setTimeout(() => {
+                          draggedRef.current = false;
+                        }, 50);
+                      }}
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        if (draggedRef.current) return;
                         onSelectEvent?.(event);
                       }}
-                      className={`absolute left-0.5 right-0.5 z-10 overflow-hidden rounded px-0.5 py-0.5 text-left text-[9px] leading-tight shadow-sm hover:ring-1 hover:ring-slate-500 sm:text-[10px] ${eventBlockClass(event.kind)}`}
+                      className={`absolute left-0.5 right-0.5 z-10 overflow-hidden rounded px-0.5 py-0.5 text-left text-[9px] leading-tight shadow-sm hover:ring-1 hover:ring-slate-500 sm:text-[10px] ${eventBlockClass(event.kind)} ${
+                        draggable ? 'desktop:cursor-grab desktop:active:cursor-grabbing' : ''
+                      }`}
                       style={{ top: layout.top, height: layout.height }}
-                      title={event.title}
+                      title={
+                        draggable
+                          ? `${event.title} · перетащите на ПК`
+                          : event.title
+                      }
                     >
                       <div className="flex items-center gap-0.5">
                         <span

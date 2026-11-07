@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { syncAppBadgeFromUnread } from '@/lib/push';
-import { formatDateTime } from '@/lib/utils';
+import { cn, formatDateTime } from '@/lib/utils';
 
 type ChatRole = 'client' | 'trainer' | 'admin' | 'staff';
 
@@ -40,7 +40,8 @@ interface ChatInboxProps {
 const CHAT_SHELL =
   'flex min-h-0 flex-col overflow-hidden rounded-2xl bg-slate-900/50 ring-1 ring-slate-800 ' +
   'h-[calc(100dvh-var(--app-header-h,3.5rem)-11.5rem)] max-h-[36rem] ' +
-  'md:h-[calc(100dvh-var(--app-header-h,3.5rem)-5.5rem)] md:max-h-[42rem]';
+  'md:h-[calc(100dvh-var(--app-header-h,3.5rem)-5.5rem)] md:max-h-[42rem] ' +
+  'desktop:max-h-[min(42rem,calc(100dvh-var(--app-header-h,3.5rem)-4rem))]';
 
 function initials(title: string) {
   const parts = title.trim().split(/\s+/);
@@ -454,10 +455,25 @@ export function ChatInbox({
     );
   }
 
+  const splitDesktop = !directThread;
+
   return (
-    <div className={shellClass}>
-      {!activeId ? (
-        <>
+    <div
+      className={cn(shellClass, splitDesktop && 'desktop:flex-row desktop:items-stretch')}
+    >
+      <div
+        className={cn(
+          'flex min-h-0 flex-col',
+          splitDesktop
+            ? cn(
+                'w-full desktop:w-[min(100%,20rem)] desktop:shrink-0 desktop:border-r desktop:border-slate-800',
+                activeId && 'hidden desktop:flex',
+              )
+            : activeId
+              ? 'hidden'
+              : 'w-full',
+        )}
+      >
           <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
             <h3 className="font-semibold">Чаты</h3>
             {canStartNew ? (
@@ -678,7 +694,10 @@ export function ChatInbox({
                   key={conversation.id}
                   type="button"
                   onClick={() => openConversation(conversation.id)}
-                  className="flex w-full items-center gap-3 border-b border-slate-800/60 px-4 py-3 text-left transition hover:bg-slate-800/40 active:bg-slate-800/60"
+                  className={cn(
+                    'flex w-full items-center gap-3 border-b border-slate-800/60 px-4 py-3 text-left transition hover:bg-slate-800/40 active:bg-slate-800/60',
+                    conversation.id === activeId && 'bg-slate-800/50',
+                  )}
                 >
                   <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-fitgo-500/20 text-sm font-semibold text-fitgo-300">
                     {initials(conversation.title)}
@@ -709,16 +728,33 @@ export function ChatInbox({
               ))
             )}
           </div>
-        </>
-      ) : (
-        <>
+      </div>
+
+      <div
+        className={cn(
+          'flex min-h-0 min-w-0 flex-1 flex-col',
+          splitDesktop
+            ? activeId
+              ? 'flex'
+              : 'hidden desktop:flex'
+            : activeId
+              ? 'flex'
+              : 'hidden',
+        )}
+      >
+        {!activeId ? (
+          <div className="hidden flex-1 flex-col items-center justify-center px-6 text-center text-slate-400 desktop:flex">
+            <p className="text-sm">Выберите диалог слева</p>
+          </div>
+        ) : (
+          <>
           <div className="border-b border-slate-800">
             <div className="flex items-center gap-3 px-3 py-2">
               {!directThread && (
                 <button
                   type="button"
                   onClick={closeConversation}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-fitgo-400 transition hover:bg-slate-800"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-fitgo-400 transition hover:bg-slate-800 desktop:hidden"
                   aria-label="Назад к списку"
                 >
                   <ArrowLeft className="h-5 w-5" />
@@ -881,8 +917,9 @@ export function ChatInbox({
               </button>
             </div>
           </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

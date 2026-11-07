@@ -330,35 +330,43 @@ export function LiveTimerScreen({
         </div>
 
         {!mirrorOnly ? (
-          <aside className="hidden w-full max-w-md flex-col justify-center border-l border-white/5 px-6 py-8 lg:flex">
+          <aside className="hidden w-full max-w-sm flex-col justify-center border-l border-white/5 px-6 py-8 desktop:flex">
             <p className="text-xs uppercase tracking-wide text-zinc-500">
-              План и заметки
+              Подсказки
             </p>
             <p className="mt-2 font-display text-xl font-semibold text-white">
               {meta.title || 'Тренировка'}
             </p>
-            <p className="mt-2 text-sm text-zinc-500">
-              Заметки для клиента, личные и задание — кнопка «Заметка». Итог с
-              RPE — «Завершить».
-            </p>
-            <div className="mt-6 flex flex-col gap-2">
-              {meta.planHref ? (
+            <ul className="mt-4 space-y-2 text-sm text-zinc-400">
+              <li>
+                <kbd className="rounded bg-white/10 px-1.5 py-0.5 text-xs text-zinc-200">
+                  Пробел
+                </kbd>{' '}
+                — старт / пауза
+              </li>
+              <li>
+                <kbd className="rounded bg-white/10 px-1.5 py-0.5 text-xs text-zinc-200">
+                  ←
+                </kbd>{' '}
+                /{' '}
+                <kbd className="rounded bg-white/10 px-1.5 py-0.5 text-xs text-zinc-200">
+                  →
+                </kbd>{' '}
+                — фаза назад / вперёд
+              </li>
+              <li>Заметки, план и задание — кнопки внизу экрана</li>
+              <li>
                 <Link
-                  href={meta.planHref}
-                  className="rounded-2xl bg-forma-500 px-4 py-3 text-center text-sm font-semibold text-ink"
+                  href={hallHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-forma-400 underline-offset-2 hover:underline"
                 >
-                  Открыть план
-                </Link>
-              ) : null}
-              <Link
-                href={hallHref}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-2xl border border-white/10 px-4 py-3 text-center text-sm text-zinc-300"
-              >
-                Экран для зала
-              </Link>
-            </div>
+                  Экран для зала
+                </Link>{' '}
+                — зеркало таймера на второй монитор
+              </li>
+            </ul>
           </aside>
         ) : null}
       </div>

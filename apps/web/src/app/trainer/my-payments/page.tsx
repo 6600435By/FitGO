@@ -19,6 +19,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { downloadCsv, downloadExcel } from '@/lib/download-table';
 
 function money(minor: number) {
   return `${(minor / 100).toLocaleString('ru-RU', {
@@ -174,11 +175,62 @@ export default function TrainerMyPaymentsPage() {
     );
   }
 
+  const exportHeaders = [
+    'date',
+    'client',
+    'amountByn',
+    'method',
+    'kind',
+    'comment',
+  ];
+  const exportRows = data.recentPayments.map((p) => [
+    p.paidAt.slice(0, 10),
+    p.clientName,
+    p.amountMinor / 100,
+    methodRu(p.method),
+    p.kind,
+    p.comment ?? '',
+  ]);
+  const exportStamp = new Date().toISOString().slice(0, 10);
+
   return (
     <div className="space-y-4">
       <PageHeader
         title="Мои оплаты"
         subtitle="Пакеты, оплаты клиентов и заработок"
+        action={
+          data.recentPayments.length ? (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-secondary px-3 py-2 text-xs"
+                onClick={() =>
+                  downloadCsv(
+                    exportHeaders,
+                    exportRows,
+                    `moi-oplaty-${exportStamp}.csv`,
+                  )
+                }
+              >
+                CSV
+              </button>
+              <button
+                type="button"
+                className="btn-secondary px-3 py-2 text-xs"
+                onClick={() =>
+                  downloadExcel(
+                    exportHeaders,
+                    exportRows,
+                    `moi-oplaty-${exportStamp}`,
+                    'Оплаты',
+                  )
+                }
+              >
+                Excel
+              </button>
+            </div>
+          ) : undefined
+        }
       />
 
       {error && (

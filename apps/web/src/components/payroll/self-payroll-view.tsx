@@ -31,6 +31,7 @@ import {
   isIsoDay,
   setPayrollSummaryCache,
 } from '@/lib/view-memory';
+import { downloadCsv, downloadExcel } from '@/lib/download-table';
 import { formatDateTime } from '@/lib/utils';
 
 function createSpecialistBookingControlApi(): BookingControlApi {
@@ -464,30 +465,32 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
     return Math.round((summary.totalMinor / days) * eom);
   }, [summary, formaSkin, from, to]);
 
+  const exportHeaders = [
+    'date',
+    'kind',
+    'title',
+    'client',
+    'earnByn',
+    'trusted',
+  ];
+  const exportRows =
+    summary?.workUnits?.map((u) => [
+      u.occurredAt?.slice(0, 10) ?? '',
+      u.kind,
+      u.title ?? '',
+      u.clientName ?? '',
+      (u.earnMinor ?? 0) / 100,
+      u.payrollTrusted ? 1 : 0,
+    ]) ?? [];
+
   const exportCsv = () => {
-    if (!summary?.workUnits?.length) return;
-    const rows = [
-      ['date', 'kind', 'title', 'client', 'earnMinor', 'trusted'].join(','),
-      ...summary.workUnits.map((u) =>
-        [
-          u.occurredAt?.slice(0, 10) ?? '',
-          u.kind,
-          JSON.stringify(u.title ?? ''),
-          JSON.stringify(u.clientName ?? ''),
-          String(u.earnMinor ?? 0),
-          u.payrollTrusted ? '1' : '0',
-        ].join(','),
-      ),
-    ];
-    const blob = new Blob([rows.join('\n')], {
-      type: 'text/csv;charset=utf-8',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `payroll-${from}_${to}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (!exportRows.length) return;
+    downloadCsv(exportHeaders, exportRows, `payroll-${from}_${to}.csv`);
+  };
+
+  const exportExcel = () => {
+    if (!exportRows.length) return;
+    downloadExcel(exportHeaders, exportRows, `payroll-${from}_${to}`, 'ЗП');
   };
 
   return (
@@ -504,13 +507,22 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
           subtitle="Проверенные работы · ставки настраивает супер-админ"
           action={
             summary?.workUnits?.length ? (
-              <button
-                type="button"
-                className="btn-secondary px-3 py-2 text-xs"
-                onClick={exportCsv}
-              >
-                CSV
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-xs"
+                  onClick={exportCsv}
+                >
+                  CSV
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-xs"
+                  onClick={exportExcel}
+                >
+                  Excel
+                </button>
+              </div>
             ) : undefined
           }
         />
