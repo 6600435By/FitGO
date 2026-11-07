@@ -16,6 +16,10 @@ export type TrainerInsightKind =
   | 'ledger_package_expiring'
   | 'hold_expiring'
   | 'control_pending'
+  | 'goal_deadline'
+  | 'visit_frequency_drop'
+  | 'group_journal_open'
+  | 'hold_slot_freed'
   | 'homework_stalled'
   | 'homework_done_praise';
 
