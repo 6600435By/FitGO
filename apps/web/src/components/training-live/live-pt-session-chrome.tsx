@@ -48,6 +48,19 @@ export function LivePtSessionChrome({
   const [finishOpen, setFinishOpen] = useState(false);
   const [sheet, setSheet] = useState<WorkoutSheet>(createEmptyWorkoutSheet());
   const [homeworkDraft, setHomeworkDraft] = useState('');
+  const [homeworkItems, setHomeworkItems] = useState<
+    Array<{
+      kind?: string;
+      title: string;
+      target?: string;
+      timesRequired?: number;
+    }>
+  >([]);
+  const [activeHomeworkProgress, setActiveHomeworkProgress] = useState<{
+    done: number;
+    total: number;
+    summary?: string;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [goals, setGoals] = useState<Array<{ title: string }>>([]);
   const bindingsRef = useRef<CircuitPhaseBinding[]>([]);
@@ -62,7 +75,60 @@ export function LivePtSessionChrome({
     const detail = await api.personalSessionDetail(token, bookingId);
     setSheet(normalizeWorkoutSheet(detail.workoutSheet));
     setGoals(detail.goals.map((g) => ({ title: g.title })));
-  }, [bookingId]);
+    if (clientId) {
+      try {
+        const list = await api.trainerClientHomework(token, clientId);
+        const active = list.find((h) => h.status === 'ACTIVE');
+        setActiveHomeworkProgress(
+          active
+            ? {
+                done: active.progress.done,
+                total: active.progress.total,
+                summary: active.summary,
+              }
+            : null,
+        );
+      } catch {
+        setActiveHomeworkProgress(null);
+      }
+    }
+  }, [bookingId, clientId]);
+
+  const homeworkPayload = () => {
+    const summary = homeworkDraft.trim();
+    if (!summary && homeworkItems.length === 0) return null;
+    return {
+      summary: summary || undefined,
+      items:
+        homeworkItems.length > 0
+          ? homeworkItems.map((i) => ({
+              kind: i.kind,
+              title: i.title,
+              target: i.target,
+              timesRequired: i.timesRequired,
+            }))
+          : undefined,
+    };
+  };
+
+  const repeatPreviousHomework = async () => {
+    const token = getToken();
+    if (!token || !clientId) return;
+    const prev = await api.trainerPreviousHomework(token, clientId);
+    if (!prev) {
+      window.alert('Прошлого задания пока нет');
+      return;
+    }
+    setHomeworkDraft(prev.summary?.trim() || 'Прошлое задание');
+    setHomeworkItems(
+      prev.items.map((i) => ({
+        kind: i.kind,
+        title: i.title,
+        target: i.target ?? undefined,
+        timesRequired: i.timesRequired,
+      })),
+    );
+  };
 
   useEffect(() => {
     reload().catch(() => undefined);
@@ -130,11 +196,12 @@ export function LivePtSessionChrome({
         goals: goals.filter((g) => g.title.trim()),
         workoutSheet: sheet,
       });
-      if (homeworkDraft.trim() && clientId) {
+      const hw = homeworkPayload();
+      if (hw && clientId) {
         await api.trainerCreateHomework(token, {
           clientId,
           bookingId,
-          summary: homeworkDraft.trim(),
+          ...hw,
         });
       }
       setNotesOpen(false);
@@ -154,12 +221,12 @@ export function LivePtSessionChrome({
         workoutSheet: nextSheet,
       });
       setSheet(nextSheet);
-      const hasHw = Boolean(homeworkDraft.trim());
-      if (hasHw && clientId) {
+      const hw = homeworkPayload();
+      if (hw && clientId) {
         await api.trainerCreateHomework(token, {
           clientId,
           bookingId,
-          summary: homeworkDraft.trim(),
+          ...hw,
         });
       } else {
         await api.trainerNotifySessionNotes(token, bookingId, false);
@@ -199,11 +266,15 @@ export function LivePtSessionChrome({
         clientNotes={sheet.notes ?? ''}
         privateNotes={sheet.trainerPrivateNotes ?? ''}
         homeworkDraft={homeworkDraft}
+        homeworkItems={homeworkItems}
         onChangeClient={(notes) => setSheet((s) => ({ ...s, notes }))}
         onChangePrivate={(trainerPrivateNotes) =>
           setSheet((s) => ({ ...s, trainerPrivateNotes }))
         }
         onChangeHomework={setHomeworkDraft}
+        onChangeHomeworkItems={setHomeworkItems}
+        onRepeatPrevious={clientId ? repeatPreviousHomework : undefined}
+        activeHomeworkProgress={activeHomeworkProgress}
         busy={busy}
         onSave={saveNotes}
       />

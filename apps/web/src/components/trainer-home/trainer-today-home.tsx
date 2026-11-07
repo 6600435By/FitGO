@@ -288,9 +288,17 @@ function AssistantBlock({
                 body={insight.body}
                 actionLabel={insight.action?.label}
                 onAction={
-                  insight.action?.href
+                  insight.action?.href || insight.action?.messageTemplate
                     ? () => {
-                        window.location.href = insight.action!.href!;
+                        const tpl = insight.action?.messageTemplate;
+                        if (tpl && typeof navigator !== 'undefined') {
+                          void navigator.clipboard?.writeText(tpl).catch(
+                            () => undefined,
+                          );
+                        }
+                        if (insight.action?.href) {
+                          window.location.href = insight.action.href;
+                        }
                       }
                     : undefined
                 }

@@ -64,6 +64,39 @@ export function SessionPlanEditor({
   const [busy, setBusy] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [homeworkDraft, setHomeworkDraft] = useState('');
+  const [homeworkItems, setHomeworkItems] = useState<
+    Array<{
+      kind?: string;
+      title: string;
+      target?: string;
+      timesRequired?: number;
+    }>
+  >([]);
+  const [activeHomeworkProgress, setActiveHomeworkProgress] = useState<{
+    done: number;
+    total: number;
+    summary?: string;
+  } | null>(null);
+
+  const loadActiveHomework = async (clientId: string) => {
+    const token = getToken();
+    if (!token) return;
+    try {
+      const list = await api.trainerClientHomework(token, clientId);
+      const active = list.find((h) => h.status === 'ACTIVE');
+      setActiveHomeworkProgress(
+        active
+          ? {
+              done: active.progress.done,
+              total: active.progress.total,
+              summary: active.summary,
+            }
+          : null,
+      );
+    } catch {
+      setActiveHomeworkProgress(null);
+    }
+  };
 
   const load = async () => {
     const token = getToken();
@@ -79,6 +112,9 @@ export function SessionPlanEditor({
       })),
     );
     setDraftWorkoutSheet(normalizeWorkoutSheet(data.workoutSheet));
+    if (viewerRole === 'trainer') {
+      await loadActiveHomework(data.clientId);
+    }
   };
 
   useEffect(() => {
@@ -88,7 +124,7 @@ export function SessionPlanEditor({
       api.personalSessionDetail(token, bookingId),
       api.personalGoalTemplates(token),
     ])
-      .then(([data, tpls]) => {
+      .then(async ([data, tpls]) => {
         setSession(data);
         setTemplates(tpls);
         setDraftGoals(
@@ -100,6 +136,9 @@ export function SessionPlanEditor({
           })),
         );
         setDraftWorkoutSheet(normalizeWorkoutSheet(data.workoutSheet));
+        if (viewerRole === 'trainer') {
+          await loadActiveHomework(data.clientId);
+        }
       })
       .catch((err) => setError(err.message));
   }, [bookingId]);
@@ -581,6 +620,7 @@ export function SessionPlanEditor({
           clientNotes={draftWorkoutSheet.notes ?? ''}
           privateNotes={draftWorkoutSheet.trainerPrivateNotes ?? ''}
           homeworkDraft={homeworkDraft}
+          homeworkItems={homeworkItems}
           onChangeClient={(notes) => {
             setDraftWorkoutSheet((s) => ({ ...s, notes }));
             setEditing(true);
@@ -590,19 +630,54 @@ export function SessionPlanEditor({
             setEditing(true);
           }}
           onChangeHomework={setHomeworkDraft}
+          onChangeHomeworkItems={setHomeworkItems}
+          activeHomeworkProgress={activeHomeworkProgress}
+          onRepeatPrevious={async () => {
+            const token = getToken();
+            if (!token) return;
+            const prev = await api.trainerPreviousHomework(
+              token,
+              session.clientId,
+            );
+            if (!prev) {
+              window.alert('Прошлого задания пока нет');
+              return;
+            }
+            setHomeworkDraft(prev.summary?.trim() || 'Прошлое задание');
+            setHomeworkItems(
+              prev.items.map((i) => ({
+                kind: i.kind,
+                title: i.title,
+                target: i.target ?? undefined,
+                timesRequired: i.timesRequired,
+              })),
+            );
+          }}
           busy={busy}
           onSave={async () => {
             await savePlan();
-            if (homeworkDraft.trim()) {
+            const hasHw =
+              Boolean(homeworkDraft.trim()) || homeworkItems.length > 0;
+            if (hasHw) {
               const token = getToken();
               if (token) {
                 try {
                   await api.trainerCreateHomework(token, {
                     clientId: session.clientId,
                     bookingId,
-                    summary: homeworkDraft.trim(),
+                    summary: homeworkDraft.trim() || undefined,
+                    items:
+                      homeworkItems.length > 0
+                        ? homeworkItems.map((i) => ({
+                            kind: i.kind,
+                            title: i.title,
+                            target: i.target,
+                            timesRequired: i.timesRequired,
+                          }))
+                        : undefined,
                   });
                   setMessage('Заметки и задание сохранены');
+                  await loadActiveHomework(session.clientId);
                 } catch {
                   setMessage('Заметки сохранены; задание — позже');
                 }

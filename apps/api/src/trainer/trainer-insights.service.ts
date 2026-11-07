@@ -635,6 +635,86 @@ export class TrainerInsightsService {
       });
     }
 
+    // Homework: stalled (no checks) and completed (praise).
+    if (clientIds.length) {
+      const homeworkRows = await this.prisma.clientHomework.findMany({
+        where: {
+          trainerId: user.sub,
+          clientId: { in: clientIds },
+          OR: [
+            {
+              status: 'ACTIVE',
+              createdAt: { lte: new Date(now.getTime() - 2 * MS_DAY) },
+            },
+            {
+              status: 'DONE',
+              completedAt: { gte: new Date(now.getTime() - 3 * MS_DAY) },
+            },
+          ],
+        },
+        include: {
+          client: { select: { id: true, firstName: true, lastName: true } },
+          items: { include: { checks: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 40,
+      });
+
+      const seenStalled = new Set<string>();
+      const seenPraise = new Set<string>();
+      for (const hw of homeworkRows) {
+        const name = clientName(hw.client);
+        const firstName = hw.client.firstName || name;
+        const total = hw.items.length;
+        const done = hw.items.filter(
+          (item) =>
+            item.checks.filter((c) => c.done).length >= item.timesRequired,
+        ).length;
+
+        if (hw.status === 'ACTIVE' && total > 0 && done === 0) {
+          if (seenStalled.has(hw.clientId)) continue;
+          seenStalled.add(hw.clientId);
+          const key = `homework_stalled:${hw.id}`;
+          if (dismissedKeys.has(key)) continue;
+          insights.push({
+            key,
+            kind: 'homework_stalled',
+            title: 'Клиент не выполняет задание',
+            body: `${name}: 0 из ${total} · без отметок`,
+            priority: 24,
+            clientId: hw.clientId,
+            clientName: name,
+            action: {
+              label: 'Написать',
+              href: `/trainer/clients/${hw.clientId}`,
+              messageTemplate: `${firstName}, как задание между тренировками — нужна помощь или упростим план?`,
+            },
+          });
+        }
+
+        if (hw.status === 'DONE' && total > 0 && done >= total) {
+          if (seenPraise.has(hw.clientId)) continue;
+          seenPraise.add(hw.clientId);
+          const key = `homework_done_praise:${hw.id}`;
+          if (dismissedKeys.has(key)) continue;
+          insights.push({
+            key,
+            kind: 'homework_done_praise',
+            title: 'Клиент выполнил задание',
+            body: `${name}: ${done} из ${total} — похвалите`,
+            priority: 26,
+            clientId: hw.clientId,
+            clientName: name,
+            action: {
+              label: 'Похвалить',
+              href: `/trainer/clients/${hw.clientId}`,
+              messageTemplate: `${firstName}, отлично закрыл(а) задание — видно прогресс, так держать!`,
+            },
+          });
+        }
+      }
+    }
+
     insights.sort((a, b) => a.priority - b.priority || a.title.localeCompare(b.title, 'ru'));
 
     return {

@@ -23,6 +23,7 @@ import {
   sessionStatusColor,
   sessionStatusLabel,
 } from '@/lib/utils';
+import { ClientHomeworkCard } from '@/components/client/client-homework-card';
 import { WorkoutSheetEditor } from './workout-sheet-editor';
 
 type DraftGoal = {
@@ -245,6 +246,8 @@ export function SessionPlanEditor({
           </p>
         )}
       </div>
+
+      {isClient ? <ClientHomeworkCard /> : null}
 
       {message && (
         <p className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-400">

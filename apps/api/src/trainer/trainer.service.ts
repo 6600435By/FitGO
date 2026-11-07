@@ -923,15 +923,25 @@ export class TrainerService {
 
   async getPreviousHomework(user: JwtPayload, clientId: string) {
     await this.roster.ensureRosterAccess(user.sub, clientId);
-    const row = await this.prisma.clientHomework.findFirst({
-      where: {
-        trainerId: user.sub,
-        clientId,
-        status: { in: ['DONE', 'CANCELLED', 'ACTIVE'] },
-      },
-      orderBy: { createdAt: 'desc' },
-      include: { items: { orderBy: { sortOrder: 'asc' } } },
-    });
+    const include = {
+      items: { orderBy: { sortOrder: 'asc' as const } },
+    };
+    // Prefer finished / cancelled as «прошлое»; fallback to current ACTIVE.
+    const row =
+      (await this.prisma.clientHomework.findFirst({
+        where: {
+          trainerId: user.sub,
+          clientId,
+          status: { in: ['DONE', 'CANCELLED'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        include,
+      })) ??
+      (await this.prisma.clientHomework.findFirst({
+        where: { trainerId: user.sub, clientId, status: 'ACTIVE' },
+        orderBy: { createdAt: 'desc' },
+        include,
+      }));
     if (!row) return null;
     return {
       id: row.id,

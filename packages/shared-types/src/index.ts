@@ -1221,6 +1221,7 @@ export {
 } from './personal-training-goals';
 export * from './workout-sheet';
 export * from './workout-sheet-templates';
+export * from './homework-templates';
 export * from './block-session';
 export * from './trainer-ledger';
 export * from './trainer-insights';
