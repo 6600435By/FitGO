@@ -15,6 +15,7 @@ import { ClubMembershipService } from '../common/club-membership.service';
 import { FeaturesService } from '../features/features.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrainerMonthAnalyticsService } from '../analytics/trainer-month-analytics.service';
+import { PT_CONTROL_LAUNCH_AT } from '../booking-control/pt-document-match';
 import { TrainerRosterService } from './trainer-roster.service';
 
 const MS_DAY = 24 * 60 * 60_000;
@@ -500,7 +501,7 @@ export class TrainerInsightsService {
           trainerId: user.sub,
           status: { not: PersonalBookingStatus.CANCELLED },
           startAt: { lt: cutoff },
-          createdAt: { gte: new Date('2026-01-01') },
+          createdAt: { gte: PT_CONTROL_LAUNCH_AT },
           linkedDocExternalId: null,
           docAutoLinkBlocked: false,
           ptFlow: { not: 'PERSONAL' },

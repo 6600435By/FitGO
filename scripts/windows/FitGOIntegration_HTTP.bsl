@@ -12,7 +12,7 @@
 //   POST /v1/spa/service-sale            → обработчик SpaSalePOST
 //   POST /v1/spa/cleanup-broken-visits   → обработчик CleanupBrokenSpaVisitsPOST
 //   GET  /v1/specialist-service-debts    → обработчик SpecialistServiceDebtsGET
-//   GET  /v1/pt-session-payment         → PtSessionPaymentGET (?clientPhone|clientExternalId&occurredAt&trainerExternalId)
+//   GET  /v1/pt-session-payment         → PtSessionPaymentGET (?phone|externalId&occurredAt&trainerExternalId; aliases clientPhone|clientExternalId)
 //   GET  /v1/visits                       → VisitsGET (?externalId|phone | club from/to/page)
 //   GET  /v1/card
 //   GET  /v1/group-session-roster         → GroupSessionRosterGET (?appointmentId=)
@@ -980,7 +980,13 @@
 
 Функция РазрешитьКонтрагента(Запрос)
     ВнешнийИд = Запрос.ПараметрыЗапроса.Получить("externalId");
+    Если НЕ ЗначениеЗаполнено(ВнешнийИд) Тогда
+        ВнешнийИд = Запрос.ПараметрыЗапроса.Получить("clientExternalId");
+    КонецЕсли;
     Телефон = Запрос.ПараметрыЗапроса.Получить("phone");
+    Если НЕ ЗначениеЗаполнено(Телефон) Тогда
+        Телефон = Запрос.ПараметрыЗапроса.Получить("clientPhone");
+    КонецЕсли;
 
     Если ЗначениеЗаполнено(ВнешнийИд) Тогда
         Возврат FitGOIntegrationКлиенты.НайтиКонтрагентаПоВнешнемуИд(ВнешнийИд);

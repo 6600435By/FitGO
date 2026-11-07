@@ -34,6 +34,7 @@ import {
   type TrainerGroupId,
   inferPaymentFromBasis,
   fitgoSessionKey,
+  isSessionPayrollEligible,
   onexSessionKey,
   paymentCountsForMoney,
   paymentCountsForVolume,
@@ -89,7 +90,14 @@ import { AdminSalesService } from '../admin-sales/admin-sales.service';
 import { ClubRevenueService } from '../admin-sales/club-revenue.service';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import { BookingControlService } from '../booking-control/booking-control.service';
+import {
+  expandTakenPtDocIds,
+  isPtControlEraBooking,
+  ptDocIdAliases,
+} from '../booking-control/pt-document-match';
+import { FeaturesService } from '../features/features.service';
 import { FitnessService } from '../fitness/fitness.service';
+import { isPersonalPtBooking } from '../trainer/pt-flow.util';
 import { normalizePhone } from '../common/phone.util';
 import { isCollectibleClientDebt } from '../admin-sales/club-revenue-debt';
 import {
@@ -422,6 +430,7 @@ export class PayrollService {
     private readonly bookingControl: BookingControlService,
     private readonly fitness: FitnessService,
     private readonly config: ConfigService,
+    private readonly features: FeaturesService,
   ) {}
 
   async listWorkUnits(
@@ -910,6 +919,106 @@ export class PayrollService {
       }
     }
 
+    // ── FitGO PT under trainer_pt_control (confirmed + linked doc → payroll) ─
+    const ptControlOn = await this.features.isEnabled('trainer_pt_control');
+    /** Control-era FitGO booking ids — Onex/sale must not also pay these. */
+    const fitgoPtControlIds = new Set<string>();
+    /** Linked 1C doc aliases already paid via FitGO booking. */
+    const fitgoLinkedPtDocIds = new Set<string>();
+    /** day|client already covered by a FitGO PT payroll unit. */
+    const fitgoPtPaidDayClient = new Set<string>();
+
+    if (ptControlOn && performer) {
+      const fitgoPts = await this.prisma.personalTrainingBooking.findMany({
+        where: {
+          trainerId: performerId,
+          startAt: { gte: fromD, lte: toD },
+          status: {
+            in: [
+              PersonalBookingStatus.CONFIRMED,
+              PersonalBookingStatus.COMPLETED,
+            ],
+          },
+          isComplimentary: false,
+        },
+        include: { client: true },
+      });
+      const controlBookings = fitgoPts.filter(
+        (b) =>
+          isPtControlEraBooking(b.createdAt) &&
+          !isPersonalPtBooking(
+            { ptFlow: b.ptFlow },
+            {
+              trainerClub: performer.trainerClub,
+              trainerStaff: performer.trainerStaff,
+            },
+          ),
+      );
+      for (const b of controlBookings) fitgoPtControlIds.add(b.id);
+
+      if (controlBookings.length > 0) {
+        const approvals = await this.prisma.sessionApproval.findMany({
+          where: {
+            clubId,
+            kind: 'PT',
+            bookingId: { in: controlBookings.map((b) => b.id) },
+          },
+        });
+        const approvalByBooking = new Map(
+          approvals.map((a) => [a.bookingId, a] as const),
+        );
+        const linkedIds = controlBookings
+          .map((b) => b.linkedDocExternalId)
+          .filter((id): id is string => Boolean(id));
+        const salesForAliases =
+          linkedIds.length === 0
+            ? []
+            : await this.prisma.trainerPtSale.findMany({
+                where: {
+                  clubId,
+                  isActive: true,
+                  OR: linkedIds.flatMap((id) => [
+                    { externalId: id },
+                    { docRef: id },
+                  ]),
+                },
+                select: { externalId: true, docRef: true },
+              });
+        const linkedExpanded = expandTakenPtDocIds(linkedIds, salesForAliases);
+        for (const id of linkedExpanded) fitgoLinkedPtDocIds.add(id);
+
+        for (const b of controlBookings) {
+          const approval = approvalByBooking.get(b.id);
+          const eligible = approval
+            ? isSessionPayrollEligible(approval)
+            : false;
+          if (!eligible || !b.linkedDocExternalId) continue;
+          const clientName =
+            `${b.client.lastName} ${b.client.firstName}`.trim();
+          const day = b.startAt.toISOString().slice(0, 10);
+          const dayClient = `${day}|${clientName.toLowerCase()}`;
+          fitgoPtPaidDayClient.add(dayClient);
+          const sk = fitgoSessionKey('PT', b.id);
+          remarkKeys.push(sk);
+          units.push({
+            id: b.id,
+            kind: 'PT',
+            performerId,
+            title: 'Персональная тренировка',
+            occurredAt: b.startAt.toISOString(),
+            quantity: 1,
+            priceMinor: b.priceMinor ?? undefined,
+            trustBand: 'GREEN',
+            trustResolution: 'NONE',
+            payrollTrusted: true,
+            clientName,
+            sessionKey: sk,
+            saleExternalId: b.linkedDocExternalId,
+          });
+        }
+      }
+    }
+
     // ── PT from 1C class docs (block/package → unitPriceMinor = blockPrice/N) ─
     // SOLARIUM never enters trainer payroll (admin % of paid solarium sales only).
     const onexPt = await this.prisma.onexClassSession.findMany({
@@ -959,16 +1068,45 @@ export class PayrollService {
         ? 'PARTNER'
         : inferPaymentFromBasis(primary?.paymentBasis);
       const paySource = (primary?.paySource ?? '').toUpperCase();
-      const matched = await this.prisma.personalTrainingBooking.findFirst({
+      let matched = await this.prisma.personalTrainingBooking.findFirst({
         where: {
           trainerId: performerId,
           OR: [
             { crmDocRef: o.externalId },
             ...(o.number ? [{ crmDocRef: o.number }] : []),
+            ...(o.externalId
+              ? [{ linkedDocExternalId: o.externalId }]
+              : []),
+            ...(o.number ? [{ linkedDocExternalId: o.number }] : []),
           ],
         },
         include: { client: true },
       });
+      if (!matched && ptControlOn && fitgoPtControlIds.size > 0) {
+        const windowMs = 3 * 60_000;
+        const byTime = await this.prisma.personalTrainingBooking.findFirst({
+          where: {
+            trainerId: performerId,
+            id: { in: [...fitgoPtControlIds] },
+            startAt: {
+              gte: new Date(o.startAt.getTime() - windowMs),
+              lte: new Date(o.startAt.getTime() + windowMs),
+            },
+            status: {
+              in: [
+                PersonalBookingStatus.CONFIRMED,
+                PersonalBookingStatus.COMPLETED,
+              ],
+            },
+          },
+          include: { client: true },
+        });
+        if (byTime) matched = byTime;
+      }
+      // trainer_pt_control owns this session — paid via FitGO unit above (or waiting).
+      if (ptControlOn && matched && fitgoPtControlIds.has(matched.id)) {
+        continue;
+      }
       const isGift =
         !bioimpedanceEarly &&
         (payment === 'GIFT' ||
@@ -1183,6 +1321,14 @@ export class PayrollService {
       const day = (sale.occurredAt || '').slice(0, 10);
       const clientKey = `${day}|${(sale.clientName ?? '').trim().toLowerCase()}`;
       if (coveredSaleDays.has(clientKey)) continue;
+      if (ptControlOn) {
+        if (fitgoPtPaidDayClient.has(clientKey)) continue;
+        const aliases = ptDocIdAliases({
+          externalId: sale.externalId,
+          docRef: sale.docRef,
+        });
+        if (aliases.some((a) => fitgoLinkedPtDocIds.has(a))) continue;
+      }
       const docKey =
         trainerPtSaleDocKey(sale) ||
         sale.externalId ||

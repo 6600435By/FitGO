@@ -3942,6 +3942,28 @@ export const api = {
       token,
     ),
 
+  bookingControlPtLinkDoc: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    body: { bookingId: string; docExternalId: string },
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/pt-link-doc`,
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  bookingControlPtNoBasis: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    bookingId: string,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlDetail>(
+      `/${base}/booking-control/pt-no-basis`,
+      { method: 'POST', body: JSON.stringify({ bookingId }) },
+      token,
+    ),
+
   bookingControlSpaAdoptJournal: (
     token: string,
     base: 'super-admin' | 'admin' | 'specialist',

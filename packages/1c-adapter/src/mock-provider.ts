@@ -329,10 +329,19 @@ export class Mock1CProvider implements IFitnessClubProvider {
     trainerExternalId?: string;
     occurredAt: string;
   }): Promise<{
-    paymentStatus: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
+    paymentStatus?: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
     payKind?: 'GIFT' | 'BLOCK' | 'PAID' | 'UNKNOWN';
     priceMinor?: number;
     docRef?: string;
+    externalId?: string;
+    candidates?: Array<{
+      externalId?: string;
+      docRef?: string;
+      clientName?: string;
+      amount?: number;
+      occurredAt?: string;
+      employeeCode?: string;
+    }>;
   } | null> {
     void input.trainerExternalId;
     if (!input.clientExternalId && !input.clientPhone) return null;
@@ -341,11 +350,13 @@ export class Mock1CProvider implements IFitnessClubProvider {
       '',
     );
     const even = last.length > 0 && Number(last[last.length - 1]) % 2 === 0;
+    const day = input.occurredAt.slice(0, 10);
     return {
       paymentStatus: even ? 'PAID' : 'DEBT',
       payKind: even ? 'PAID' : 'UNKNOWN',
       priceMinor: 5000,
-      docRef: even ? `MOCK-PT-${input.occurredAt.slice(0, 10)}` : undefined,
+      docRef: even ? `MOCK-PT-${day}` : undefined,
+      externalId: even ? `mock-uuid#1` : undefined,
     };
   }
 

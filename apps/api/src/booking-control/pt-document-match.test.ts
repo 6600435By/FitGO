@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  canonicalPtDocId,
+  expandTakenPtDocIds,
   filterPtSaleCandidates,
   matchPtDocument,
   namesMatch,
+  ptDocIdAliases,
+  saleTakenByOther,
 } from './pt-document-match';
 
 describe('pt-document-match', () => {
@@ -23,6 +27,7 @@ describe('pt-document-match', () => {
     employeeCode: 'T42',
     employeeName: 'Петров П.',
     amount: 50,
+    docRef: '0000123#1',
   };
 
   it('namesMatch tolerates short forms', () => {
@@ -61,5 +66,27 @@ describe('pt-document-match', () => {
       new Set(),
     );
     assert.equal(r.kind, 'none');
+  });
+
+  it('canonicalPtDocId prefers externalId over docRef', () => {
+    assert.equal(canonicalPtDocId(sale), 'sale-1');
+    assert.equal(
+      canonicalPtDocId({ docRef: '0000123#1' }),
+      '0000123#1',
+    );
+  });
+
+  it('expandTakenPtDocIds blocks both aliases of one sale', () => {
+    const taken = expandTakenPtDocIds(['0000123#1'], [sale]);
+    assert.equal(taken.has('0000123#1'), true);
+    assert.equal(taken.has('sale-1'), true);
+    assert.equal(saleTakenByOther(sale, taken), true);
+    const hits = filterPtSaleCandidates(booking, [sale], taken);
+    assert.equal(hits.length, 0);
+  });
+
+  it('ptDocIdAliases lists both forms once', () => {
+    assert.deepEqual(ptDocIdAliases(sale), ['sale-1', '0000123#1']);
+    assert.deepEqual(ptDocIdAliases({ externalId: 'x', docRef: 'x' }), ['x']);
   });
 });

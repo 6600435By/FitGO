@@ -32,22 +32,42 @@
 
 Сверка оплаты одной ПТ для контроля записей (`trainer_pt_control`).
 
-Query: `occurredAt` (ISO), плюс `clientPhone` или `clientExternalId`; опционально `trainerExternalId`.
+Query: `occurredAt` (ISO), плюс `phone` или `externalId` (алиасы Nest: `clientPhone` / `clientExternalId`); опционально `trainerExternalId`.
 
-Ответ `data`:
+`РазрешитьКонтрагента` читает `externalId`/`phone` и те же алиасы.
+
+Ответ `data` при ровно одном кандидате:
 
 ```json
 {
   "paymentStatus": "PAID",
   "payKind": "PAID",
   "priceMinor": 5000,
+  "externalId": "uuid#1",
   "docRef": "0000123#1"
 }
 ```
 
-или `null`, если однозначного документа нет. Кандидаты — те же разовые ПТ, что `/trainer-pt-sales` (±7…+14 дней).
+При нескольких продажах в окне ±7…+14 дней:
 
-В конфигураторе: шаблон `/v1/pt-session-payment`, GET → `PtSessionPaymentGET`.  
+```json
+{
+  "candidates": [
+    {
+      "externalId": "uuid#1",
+      "docRef": "0000123#1",
+      "clientName": "Иванов",
+      "amount": 50,
+      "occurredAt": "2026-11-06",
+      "employeeCode": "T42"
+    }
+  ]
+}
+```
+
+или `null`, если кандидатов нет. Источник — те же разовые ПТ, что `/trainer-pt-sales`.
+
+В конфигураторе: шаблон `/v1/pt-session-payment`, GET → `PtSessionPaymentGET`.
 BSL: [FitGOIntegration_HTTP.bsl](../scripts/windows/FitGOIntegration_HTTP.bsl), [FitGOIntegration_Клиенты.bsl](../scripts/windows/FitGOIntegration_Клиенты.bsl) (`ОплатаПтСессииJSON`).
 
 Рядом уже есть `GET /trainer-pt-sales` — выгрузка продаж ПТ с исполнителем (номер, клиент, тренер, дата, `paymentStatus`).

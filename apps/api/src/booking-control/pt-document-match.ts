@@ -6,6 +6,60 @@
 export const PT_DOC_LOOKBACK_DAYS = 7;
 export const PT_DOC_LOOKAHEAD_DAYS = 14;
 
+/**
+ * FitGO PT control / payroll path applies to bookings created on or after this date
+ * when `trainer_pt_control` is on. Older rows stay on the Onex / sale stream.
+ */
+export const PT_CONTROL_LAUNCH_AT = new Date('2026-01-01T00:00:00.000Z');
+
+/** Canonical link key for a sale: prefer UUID#line (`externalId`), else `docRef`. */
+export function canonicalPtDocId(sale: {
+  externalId?: string | null;
+  docRef?: string | null;
+}): string | null {
+  const ext = sale.externalId?.trim();
+  if (ext) return ext;
+  const ref = sale.docRef?.trim();
+  return ref || null;
+}
+
+/** All string forms that mean the same 1C sale line (unique index must treat as one). */
+export function ptDocIdAliases(sale: {
+  externalId?: string | null;
+  docRef?: string | null;
+}): string[] {
+  const out: string[] = [];
+  const ext = sale.externalId?.trim();
+  const ref = sale.docRef?.trim();
+  if (ext) out.push(ext);
+  if (ref && ref !== ext) out.push(ref);
+  return out;
+}
+
+/**
+ * Expand taken `linkedDocExternalId` values with known sale aliases so
+ * `docRef` and `externalId` of the same line cannot double-link.
+ */
+export function expandTakenPtDocIds(
+  takenIds: Iterable<string>,
+  sales: Array<{ externalId?: string | null; docRef?: string | null }>,
+): Set<string> {
+  const taken = new Set(
+    [...takenIds].map((id) => id.trim()).filter(Boolean),
+  );
+  for (const sale of sales) {
+    const aliases = ptDocIdAliases(sale);
+    if (aliases.some((a) => taken.has(a))) {
+      for (const a of aliases) taken.add(a);
+    }
+  }
+  return taken;
+}
+
+export function isPtControlEraBooking(createdAt: Date): boolean {
+  return createdAt.getTime() >= PT_CONTROL_LAUNCH_AT.getTime();
+}
+
 export type PtSaleCandidate = {
   externalId: string;
   occurredAt: Date;
@@ -78,12 +132,13 @@ function codesMatch(a?: string | null, b?: string | null): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
-/** Sale already linked to another FitGO PT booking. */
+/** Sale already linked to another FitGO PT booking (any alias). */
 export function saleTakenByOther(
-  saleExternalId: string,
+  sale: { externalId?: string | null; docRef?: string | null } | string,
   takenIds: ReadonlySet<string>,
 ): boolean {
-  return takenIds.has(saleExternalId);
+  if (typeof sale === 'string') return takenIds.has(sale.trim());
+  return ptDocIdAliases(sale).some((id) => takenIds.has(id));
 }
 
 export function filterPtSaleCandidates(
@@ -95,8 +150,8 @@ export function filterPtSaleCandidates(
   if (booking.linkedDocExternalId?.trim()) return [];
 
   return sales.filter((sale) => {
-    if (!sale.externalId?.trim()) return false;
-    if (saleTakenByOther(sale.externalId, takenDocIds)) return false;
+    if (!canonicalPtDocId(sale)) return false;
+    if (saleTakenByOther(sale, takenDocIds)) return false;
     if (!withinWindow(sale.occurredAt, booking.startAt)) return false;
 
     const clientOk =

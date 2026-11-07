@@ -148,6 +148,19 @@ export function createBookingControlApi(
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlSpaUnlink(token, base, bookingId);
     },
+    linkPtDocument: async (bookingId, docExternalId) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlPtLinkDoc(token, base, {
+        bookingId,
+        docExternalId,
+      });
+    },
+    markPtNoBasis: async (bookingId) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlPtNoBasis(token, base, bookingId);
+    },
     payrollHoldPreview: async (sessionKey) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');

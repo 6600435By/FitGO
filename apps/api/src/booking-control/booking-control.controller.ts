@@ -558,6 +558,28 @@ export class BookingControlController {
     return this.bookingControl.unlinkSpaDocument(user, body.bookingId ?? '');
   }
 
+  @Post('super-admin/booking-control/pt-link-doc')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  linkPtDocSuper(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { bookingId?: string; docExternalId?: string },
+  ) {
+    return this.bookingControl.linkPtDocument(
+      user,
+      body.bookingId ?? '',
+      body.docExternalId ?? '',
+    );
+  }
+
+  @Post('super-admin/booking-control/pt-no-basis')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  markPtNoBasisSuper(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { bookingId?: string },
+  ) {
+    return this.bookingControl.markPtNoBasis(user, body.bookingId ?? '');
+  }
+
   @Post('super-admin/booking-control/spa-adopt-journal')
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adoptSpaJournalSuper(

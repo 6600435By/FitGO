@@ -403,22 +403,49 @@ export class FitgoHttpProvider {
     trainerExternalId?: string;
     occurredAt: string;
   }): Promise<{
-    paymentStatus: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
+    paymentStatus?: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
     payKind?: 'GIFT' | 'BLOCK' | 'PAID' | 'UNKNOWN';
     priceMinor?: number;
     docRef?: string;
+    /** UUID#line from trainer-pt-sales when BSL returns it. */
+    externalId?: string;
+    /** Several sales in the ±7…+14 day window — admin must choose. */
+    candidates?: Array<{
+      externalId?: string;
+      docRef?: string;
+      clientName?: string;
+      amount?: number;
+      occurredAt?: string;
+      employeeCode?: string;
+    }>;
   } | null> {
     const q = new URLSearchParams({ occurredAt: input.occurredAt });
-    if (input.clientExternalId) q.set('clientExternalId', input.clientExternalId);
-    if (input.clientPhone) q.set('clientPhone', input.clientPhone);
+    // BSL `РазрешитьКонтрагента` reads `externalId` / `phone` (not Nest camelCase).
+    if (input.clientExternalId) {
+      q.set('externalId', input.clientExternalId);
+      q.set('clientExternalId', input.clientExternalId);
+    }
+    if (input.clientPhone) {
+      q.set('phone', input.clientPhone);
+      q.set('clientPhone', input.clientPhone);
+    }
     if (input.trainerExternalId)
       q.set('trainerExternalId', input.trainerExternalId);
     try {
       const data = await this.request<{
-        paymentStatus: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
+        paymentStatus?: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
         payKind?: 'GIFT' | 'BLOCK' | 'PAID' | 'UNKNOWN';
         priceMinor?: number;
         docRef?: string;
+        externalId?: string;
+        candidates?: Array<{
+          externalId?: string;
+          docRef?: string;
+          clientName?: string;
+          amount?: number;
+          occurredAt?: string;
+          employeeCode?: string;
+        }>;
       } | null>(`/pt-session-payment?${q.toString()}`, { timeoutMs: 30_000 });
       return data ?? null;
     } catch {

@@ -69,11 +69,21 @@ import {
   type GroupApprovalPhase,
   type GroupClassApprovalInfo,
   type SessionApprovalPhase,
+  type PtLinkHint,
   type SpaLinkHint,
   type SpaSettlementInfo,
   type SpecialistServiceDebt,
   UserRole,
 } from '@fitgo/shared-types';
+import {
+  canonicalPtDocId,
+  expandTakenPtDocIds,
+  matchPtDocument,
+  PT_DOC_LOOKAHEAD_DAYS,
+  PT_DOC_LOOKBACK_DAYS,
+  rankPtSaleCandidates,
+  type PtSaleCandidate,
+} from './pt-document-match';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import {
   isLikelyTrainingProductName,
@@ -1487,6 +1497,17 @@ export class BookingControlService {
         sessionApprovalBookingId: b.id,
         sessionApprovalKind: SessionApprovalKind.PT,
       });
+      const personal = isPersonalPtBooking(
+        { ptFlow: b.ptFlow },
+        {
+          trainerClub: b.trainer.trainerClub,
+          trainerStaff: b.trainer.trainerStaff,
+        },
+      );
+      const ptLinkHint = personal
+        ? undefined
+        : await this.buildPtLinkHint(clubId, b);
+
       return {
         sessionKey,
         kind: 'PT',
@@ -1520,8 +1541,14 @@ export class BookingControlService {
         remarksHistory: mappedRemarks,
         fitgoBookedAt: b.createdAt.toISOString(),
         crmDocRef: b.crmDocRef ?? undefined,
+        linkedDocExternalId: b.linkedDocExternalId ?? undefined,
+        docAutoLinkBlocked: b.docAutoLinkBlocked,
+        oneCLinked: Boolean(b.linkedDocExternalId || b.crmDocRef),
+        number: b.crmDocRef ?? undefined,
         priceMinor: b.priceMinor ?? undefined,
         history,
+        ptLinkHint,
+        trainerClubPersonal: personal || undefined,
       };
     }
 
@@ -7580,6 +7607,150 @@ export class BookingControlService {
     return dayBookings.find((b) => b.id === pairs[0]!.bookingId) ?? null;
   }
 
+  /**
+   * Soft-match TrainerPtSale rows for a FitGO PT booking (admin hint).
+   * Mirrors SPA `spaLinkHint` — never auto-writes from detail.
+   */
+  private async buildPtLinkHint(
+    clubId: string,
+    booking: {
+      id: string;
+      startAt: Date;
+      isComplimentary: boolean;
+      linkedDocExternalId: string | null;
+      crmDocRef: string | null;
+      docAutoLinkBlocked: boolean;
+      client: {
+        externalId: string | null;
+        firstName: string;
+        lastName: string;
+      };
+      trainer: {
+        employeeCode: string | null;
+        externalId: string | null;
+        firstName: string;
+        lastName: string;
+      };
+    },
+  ): Promise<PtLinkHint | undefined> {
+    if (booking.isComplimentary) return undefined;
+
+    if (booking.docAutoLinkBlocked) {
+      return {
+        kind: 'BLOCKED',
+        message: 'Нет основания в 1С (автопривязка отключена)',
+        candidates: [],
+      };
+    }
+
+    if (booking.linkedDocExternalId) {
+      return {
+        kind: 'LINKED',
+        message: `Документ привязан: ${booking.crmDocRef || booking.linkedDocExternalId}`,
+        candidates: [],
+      };
+    }
+
+    const from = new Date(booking.startAt);
+    from.setUTCDate(from.getUTCDate() - PT_DOC_LOOKBACK_DAYS);
+    const to = new Date(booking.startAt);
+    to.setUTCDate(to.getUTCDate() + PT_DOC_LOOKAHEAD_DAYS);
+
+    const [sales, taken] = await Promise.all([
+      this.prisma.trainerPtSale.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          occurredAt: { gte: from, lte: to },
+        },
+      }),
+      this.prisma.personalTrainingBooking.findMany({
+        where: { linkedDocExternalId: { not: null } },
+        select: { linkedDocExternalId: true },
+      }),
+    ]);
+
+    const candidates: PtSaleCandidate[] = sales.map((s) => ({
+      externalId: s.externalId,
+      occurredAt: s.occurredAt,
+      clientName: s.clientName,
+      employeeCode: s.employeeCode,
+      employeeName: s.employeeName,
+      docRef: s.docRef,
+      paymentStatus: s.paymentStatus,
+      amount: s.amount,
+      serviceName: s.serviceName,
+    }));
+
+    const takenIds = expandTakenPtDocIds(
+      taken
+        .map((t) => t.linkedDocExternalId)
+        .filter((id): id is string => Boolean(id)),
+      candidates,
+    );
+
+    const match = matchPtDocument(
+      {
+        id: booking.id,
+        startAt: booking.startAt,
+        clientExternalId: booking.client.externalId,
+        clientName:
+          `${booking.client.lastName} ${booking.client.firstName}`.trim(),
+        trainerEmployeeCode: booking.trainer.employeeCode,
+        trainerExternalId: booking.trainer.externalId,
+        trainerName:
+          `${booking.trainer.lastName} ${booking.trainer.firstName}`.trim(),
+        linkedDocExternalId: booking.linkedDocExternalId,
+        crmDocRef: booking.crmDocRef,
+        isComplimentary: booking.isComplimentary,
+      },
+      candidates,
+      takenIds,
+    );
+
+    const toUi = (sale: PtSaleCandidate) => {
+      const id = canonicalPtDocId(sale)!;
+      const amountMajor =
+        sale.amount != null && Number.isFinite(Number(sale.amount))
+          ? Number(sale.amount)
+          : undefined;
+      const labelParts = [
+        sale.serviceName?.trim() || 'ПТ',
+        sale.docRef && sale.docRef !== id ? `док. ${sale.docRef}` : null,
+        amountMajor != null ? `${amountMajor.toFixed(2)} BYN` : null,
+      ].filter(Boolean);
+      return {
+        externalId: id,
+        label: labelParts.join(' · '),
+        docRef: sale.docRef ?? undefined,
+        occurredAt: sale.occurredAt.toISOString(),
+        amountMajor,
+        employeeName: sale.employeeName ?? undefined,
+      };
+    };
+
+    if (match.kind === 'auto') {
+      return {
+        kind: 'SUGGESTED',
+        message: 'Найден один документ 1С — подтвердите привязку',
+        candidates: [toUi(match.sale)],
+      };
+    }
+    if (match.kind === 'ambiguous') {
+      const ranked = rankPtSaleCandidates(booking.startAt, match.sales);
+      return {
+        kind: 'AMBIGUOUS',
+        message: 'Несколько документов 1С — выберите основание',
+        candidates: ranked.map(toUi),
+      };
+    }
+    return {
+      kind: 'NONE',
+      message: 'Документ 1С не найден в окне ±7…+14 дней',
+      candidates: [],
+    };
+  }
+
   /** Admin: link FitGO PT booking to a TrainerPtSale / doc external id. */
   async linkPtDocument(
     user: JwtPayload,
@@ -7591,11 +7762,26 @@ export class BookingControlService {
       where: { id: bookingId, trainer: { clubId } },
     });
     if (!booking) throw new NotFoundException('Запись ПТ не найдена');
-    const docId = docExternalId.trim();
-    if (!docId) throw new BadRequestException('Укажите документ');
+    const rawId = docExternalId.trim();
+    if (!rawId) throw new BadRequestException('Укажите документ');
+
+    const sale =
+      (await this.prisma.trainerPtSale.findFirst({
+        where: { clubId, externalId: rawId, isActive: true },
+      })) ??
+      (await this.prisma.trainerPtSale.findFirst({
+        where: { clubId, docRef: rawId, isActive: true },
+      }));
+    const docId = sale ? canonicalPtDocId(sale) ?? rawId : rawId;
+
+    const aliasIds = sale
+      ? [sale.externalId, sale.docRef].filter(
+          (v): v is string => Boolean(v?.trim()),
+        )
+      : [docId];
     const taken = await this.prisma.personalTrainingBooking.findFirst({
       where: {
-        linkedDocExternalId: docId,
+        linkedDocExternalId: { in: aliasIds },
         id: { not: bookingId },
       },
       select: { id: true },
@@ -7605,10 +7791,8 @@ export class BookingControlService {
         'Этот документ уже привязан к другой записи ПТ',
       );
     }
-    const sale = await this.prisma.trainerPtSale.findFirst({
-      where: { clubId, externalId: docId, isActive: true },
-    });
-    return this.prisma.personalTrainingBooking.update({
+
+    await this.prisma.personalTrainingBooking.update({
       where: { id: bookingId },
       data: {
         linkedDocExternalId: docId,
@@ -7621,6 +7805,7 @@ export class BookingControlService {
         ...(sale?.paymentStatus !== 'DEBT' ? { paidAt: new Date() } : {}),
       },
     });
+    return this.detail(clubId, fitgoSessionKey('PT', bookingId));
   }
 
   /** Admin: mark FitGO PT as having no 1C basis (blocks auto-link). */
@@ -7630,12 +7815,13 @@ export class BookingControlService {
       where: { id: bookingId, trainer: { clubId } },
     });
     if (!booking) throw new NotFoundException('Запись ПТ не найдена');
-    return this.prisma.personalTrainingBooking.update({
+    await this.prisma.personalTrainingBooking.update({
       where: { id: bookingId },
       data: {
         docAutoLinkBlocked: true,
         linkedDocExternalId: null,
       },
     });
+    return this.detail(clubId, fitgoSessionKey('PT', bookingId));
   }
 }

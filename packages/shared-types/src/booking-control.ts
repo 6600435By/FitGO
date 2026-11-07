@@ -211,6 +211,30 @@ export interface SpaLinkHint {
   candidates: SpaLinkCandidate[];
 }
 
+/** FitGO PT ↔ 1C sale / write-off link for admin control (`trainer_pt_control`). */
+export type PtLinkHintKind =
+  | 'SUGGESTED'
+  | 'AMBIGUOUS'
+  | 'NONE'
+  | 'LINKED'
+  | 'BLOCKED';
+
+export interface PtLinkCandidate {
+  /** Canonical id to POST as `docExternalId` (prefer UUID#line). */
+  externalId: string;
+  label: string;
+  docRef?: string;
+  occurredAt?: string;
+  amountMajor?: number;
+  employeeName?: string;
+}
+
+export interface PtLinkHint {
+  kind: PtLinkHintKind;
+  message: string;
+  candidates: PtLinkCandidate[];
+}
+
 /**
  * Pull the package title from 1C paymentBasis
  * (e.g. `Членство "Курс массажа 5 (удален)" 72102 от 03.10.2025`).
@@ -345,6 +369,8 @@ export interface BookingControlDetail extends BookingControlListItem {
   spaSettlement?: SpaSettlementInfo;
   /** Admin-only: soft match to a sale/visit that needs a click. */
   spaLinkHint?: SpaLinkHint;
+  /** Admin-only: FitGO PT document candidates / link status. */
+  ptLinkHint?: PtLinkHint;
   /** When FitGO service title differs from the linked 1C visit title. */
   oneCTitle?: string;
   /** FitGO SpaService id — for nomenclature editor. */

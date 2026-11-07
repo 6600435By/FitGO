@@ -39,6 +39,8 @@ import {
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import {
+  canonicalPtDocId,
+  expandTakenPtDocIds,
   matchPtDocument,
   PT_DOC_LOOKAHEAD_DAYS,
   PT_DOC_LOOKBACK_DAYS,
@@ -183,12 +185,6 @@ export class PersonalTrainingService {
         select: { linkedDocExternalId: true },
       }),
     ]);
-    const takenIds = new Set(
-      taken
-        .map((t) => t.linkedDocExternalId)
-        .filter((id): id is string => Boolean(id)),
-    );
-
     const candidates: PtSaleCandidate[] = sales.map((s) => ({
       externalId: s.externalId,
       occurredAt: s.occurredAt,
@@ -200,6 +196,13 @@ export class PersonalTrainingService {
       amount: s.amount,
       serviceName: s.serviceName,
     }));
+
+    const takenIds = expandTakenPtDocIds(
+      taken
+        .map((t) => t.linkedDocExternalId)
+        .filter((id): id is string => Boolean(id)),
+      candidates,
+    );
 
     const match = matchPtDocument(
       {
@@ -221,12 +224,14 @@ export class PersonalTrainingService {
     );
 
     if (match.kind === 'auto') {
+      const docId = canonicalPtDocId(match.sale);
+      if (!docId) return null;
       try {
         return await this.prisma.personalTrainingBooking.update({
           where: { id: bookingId },
           data: {
-            linkedDocExternalId: match.sale.externalId,
-            crmDocRef: match.sale.docRef ?? match.sale.externalId,
+            linkedDocExternalId: docId,
+            crmDocRef: match.sale.docRef ?? docId,
             paymentStatus:
               match.sale.paymentStatus === 'DEBT' ? 'DEBT' : 'PAID',
             ...(match.sale.paymentStatus !== 'DEBT'
@@ -240,22 +245,52 @@ export class PersonalTrainingService {
       }
     }
 
+    // Several sales → leave for admin (ptLinkHint on detail). Do not auto-pick.
+    if (match.kind === 'ambiguous') return null;
+
     if (match.kind === 'none') {
       const provider = this.fitness.getProvider();
       const live = await provider.getPtSessionPayment?.({
         clientExternalId: booking.client.externalId ?? undefined,
         clientPhone: booking.client.phone ?? undefined,
-        trainerExternalId: booking.trainer.externalId ?? undefined,
+        trainerExternalId:
+          booking.trainer.externalId ??
+          booking.trainer.employeeCode ??
+          undefined,
         occurredAt: booking.startAt.toISOString(),
       });
-      const docId = live?.docRef?.trim();
+      // Ambiguous live probe — admin chooses; never store a guess.
+      if (live?.candidates && live.candidates.length > 1) return null;
+
+      // Prefer UUID#line; resolve docRef → TrainerPtSale.externalId when possible.
+      let docId =
+        canonicalPtDocId({
+          externalId: live?.externalId,
+          docRef: live?.docRef,
+        }) ?? null;
+      if (docId && live?.docRef && docId === live.docRef.trim()) {
+        const byRef = candidates.find(
+          (c) => c.docRef?.trim() === live.docRef?.trim(),
+        );
+        if (byRef) docId = canonicalPtDocId(byRef) ?? docId;
+        else {
+          const saleRow = await this.prisma.trainerPtSale.findFirst({
+            where: {
+              clubId,
+              isActive: true,
+              OR: [{ docRef: live.docRef }, { externalId: live.docRef }],
+            },
+          });
+          if (saleRow) docId = canonicalPtDocId(saleRow) ?? docId;
+        }
+      }
       if (docId && !takenIds.has(docId)) {
         try {
           return await this.prisma.personalTrainingBooking.update({
             where: { id: bookingId },
             data: {
               linkedDocExternalId: docId,
-              crmDocRef: docId,
+              crmDocRef: live?.docRef?.trim() || docId,
               paymentStatus: (live?.paymentStatus as never) ?? undefined,
               ...(live?.payKind ? { payKind: live.payKind as never } : {}),
               ...(live?.priceMinor != null

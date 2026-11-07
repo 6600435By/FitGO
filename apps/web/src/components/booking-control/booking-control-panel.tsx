@@ -258,6 +258,13 @@ export type BookingControlApi = {
   ) => Promise<BookingControlDetail>;
   /** Admin: clear linked sale / soft crmDocRef. */
   unlinkSpaDocument?: (bookingId: string) => Promise<BookingControlDetail>;
+  /** Admin: link FitGO PT booking to a TrainerPtSale / doc id. */
+  linkPtDocument?: (
+    bookingId: string,
+    docExternalId: string,
+  ) => Promise<BookingControlDetail>;
+  /** Admin: mark FitGO PT as no 1C basis (blocks auto-link). */
+  markPtNoBasis?: (bookingId: string) => Promise<BookingControlDetail>;
   /** Payroll line under «На проверке» (held from motivation). */
   payrollHoldPreview?: (sessionKey: string) => Promise<{
     line: string;
@@ -1562,6 +1569,41 @@ export function BookingControlPanel({
       );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Не удалось отвязать');
+    } finally {
+      setLinkDocBusy(false);
+    }
+  };
+
+  const linkSelectedPtDoc = async (docExternalId: string) => {
+    if (!selected?.fitgoBookingId || !api.linkPtDocument) return;
+    setLinkDocBusy(true);
+    setMessage('');
+    try {
+      const d = await api.linkPtDocument(
+        selected.fitgoBookingId,
+        docExternalId,
+      );
+      setSelected(d);
+      load();
+      setMessage('Документ 1С привязан');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось привязать');
+    } finally {
+      setLinkDocBusy(false);
+    }
+  };
+
+  const markSelectedPtNoBasis = async () => {
+    if (!selected?.fitgoBookingId || !api.markPtNoBasis) return;
+    setLinkDocBusy(true);
+    setMessage('');
+    try {
+      const d = await api.markPtNoBasis(selected.fitgoBookingId);
+      setSelected(d);
+      load();
+      setMessage('Отмечено: нет основания в 1С');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось отметить');
     } finally {
       setLinkDocBusy(false);
     }
@@ -3810,6 +3852,82 @@ export function BookingControlPanel({
                       : ''}
                   </p>
                 ) : null}
+                {(() => {
+                  const ptHint = selected.ptLinkHint;
+                  if (
+                    selected.kind !== 'PT' ||
+                    selected.source !== 'FITGO' ||
+                    selected.trainerClubPersonal ||
+                    !ptHint ||
+                    !(api.linkPtDocument || api.markPtNoBasis)
+                  ) {
+                    return null;
+                  }
+                  return (
+                  <div className="space-y-2 rounded-xl border border-slate-700 bg-slate-900/60 p-3 text-sm">
+                    <p
+                      className={
+                        ptHint.kind === 'LINKED'
+                          ? 'text-emerald-200'
+                          : ptHint.kind === 'BLOCKED'
+                            ? 'text-amber-200'
+                            : 'text-slate-200'
+                      }
+                    >
+                      {ptHint.message}
+                    </p>
+                    {ptHint.candidates.length > 0 ? (
+                      <ul className="space-y-1.5">
+                        {ptHint.candidates.map((c) => (
+                          <li
+                            key={c.externalId}
+                            className="flex flex-wrap items-center gap-2 text-xs text-slate-400"
+                          >
+                            <span className="min-w-0 flex-1 truncate">
+                              {c.occurredAt
+                                ? `${formatDateTime(c.occurredAt)} · `
+                                : ''}
+                              {c.label}
+                              {c.employeeName
+                                ? ` · ${c.employeeName}`
+                                : ''}
+                            </span>
+                            {api.linkPtDocument &&
+                            selected.fitgoBookingId &&
+                            ptHint.kind !== 'LINKED' ? (
+                              <button
+                                type="button"
+                                className="btn-primary px-2 py-0.5 text-[11px]"
+                                disabled={linkDocBusy}
+                                onClick={() =>
+                                  void linkSelectedPtDoc(c.externalId)
+                                }
+                              >
+                                {ptHint.kind === 'SUGGESTED'
+                                  ? 'Подтвердить'
+                                  : 'Выбрать'}
+                              </button>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {api.markPtNoBasis &&
+                    selected.fitgoBookingId &&
+                    ptHint.kind !== 'LINKED' &&
+                    ptHint.kind !== 'BLOCKED' ? (
+                      <button
+                        type="button"
+                        className="text-xs text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline"
+                        disabled={linkDocBusy}
+                        onClick={() => void markSelectedPtNoBasis()}
+                      >
+                        Нет основания в 1С
+                      </button>
+                    ) : null}
+                  </div>
+                  );
+                })()}
                 {selected.kind === 'SPA' &&
                 showSpaLinkHints &&
                 selected.spaLinkHint &&

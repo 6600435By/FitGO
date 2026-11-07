@@ -185,10 +185,20 @@ export interface IFitnessClubProvider {
     trainerExternalId?: string;
     occurredAt: string;
   }): Promise<{
-    paymentStatus: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
+    /** Present for a single match; omitted when only `candidates` is returned. */
+    paymentStatus?: 'PAID' | 'DEBT' | 'PENDING_PAYMENT' | 'N_A';
     payKind?: 'GIFT' | 'BLOCK' | 'PAID' | 'UNKNOWN';
     priceMinor?: number;
     docRef?: string;
+    externalId?: string;
+    candidates?: Array<{
+      externalId?: string;
+      docRef?: string;
+      clientName?: string;
+      amount?: number;
+      occurredAt?: string;
+      employeeCode?: string;
+    }>;
   } | null>;
   /**
    * Group class roster from 1C for journal baseline (FULL).

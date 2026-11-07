@@ -298,7 +298,7 @@ export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
     key: 'trainer_pt_control',
     label: 'Контроль ПТ тренера (основание 1С)',
     description:
-      'Запись ПТ штатного тренера → SessionApproval, автопривязка документа 1С, ЗП только после подтверждения админа. Не трогает поток Onex.',
+      'Запись ПТ штатного тренера → SessionApproval, автопривязка документа 1С, ЗП только после подтверждения админа и привязки документа. Записи с 2026-01-01: без двойной выплаты с Onex/продажей.',
     defaultEnabled: false,
     surfaces: ['/trainer/schedule', '/admin/booking-control'],
   },
