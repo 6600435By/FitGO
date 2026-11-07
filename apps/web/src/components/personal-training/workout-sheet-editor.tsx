@@ -12,8 +12,10 @@ import {
   STRENGTH_DEFAULT_SET_FIELDS,
   WARMUP_DEFAULT_FIELDS,
   WORKOUT_SECTION_LABELS,
+  WORKOUT_SHEET_TEMPLATES,
   WORKOUT_WEEKDAY_LABELS,
   ageFromDateOfBirth,
+  applyWorkoutSheetTemplate,
   compileSessionSummary,
   completeWorkoutSection,
   completeWorkoutSession,
@@ -37,6 +39,7 @@ import {
   updateSectionSummaryNote,
 } from '@fitgo/shared-types';
 import type { PrepSectionId, WorkoutSectionId } from '@fitgo/shared-types';
+import { ResponsiveSheet } from '@fitgo/forma-ui';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -93,7 +96,6 @@ interface WorkoutSheetEditorProps {
   canEdit: boolean;
   isTrainer: boolean;
   onChange: (sheet: WorkoutSheet) => void;
-  onResetTemplate?: () => void;
   onCopyPrevious?: () => void;
 }
 
@@ -147,7 +149,6 @@ export function WorkoutSheetEditor({
   canEdit,
   isTrainer,
   onChange,
-  onResetTemplate,
   onCopyPrevious,
 }: WorkoutSheetEditorProps) {
   const readOnly = !canEdit || !isTrainer;
@@ -189,6 +190,7 @@ export function WorkoutSheetEditor({
 
   const [circuitHistory, setCircuitHistory] = useState<CircuitHistoryPoint[]>([]);
   const [copyBusy, setCopyBusy] = useState(false);
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [prepSessionVariant, setPrepSessionVariant] =
     useState<PrepSectionId | null>(null);
 
@@ -304,6 +306,16 @@ export function WorkoutSheetEditor({
     }
   };
 
+  const handleApplyTemplate = (templateId: string) => {
+    const next = applyWorkoutSheetTemplate(sheet, templateId);
+    onChange(
+      getWorkoutBlocks(next).includes('circuit')
+        ? ensureCircuitRoundLogs(next)
+        : next,
+    );
+    setTemplatePickerOpen(false);
+  };
+
   const updateCircuit = (patch: Partial<NonNullable<WorkoutSheet['circuit']>>) => {
     const circuit = { ...(sheet.circuit ?? createDefaultCircuit()), ...patch };
     onChange(ensureCircuitRoundLogs({ ...sheet, circuit }));
@@ -325,10 +337,10 @@ export function WorkoutSheetEditor({
                 {copyBusy ? 'Загрузка…' : 'Повторить прошлую'}
               </button>
             )}
-            {isTrainer && canEdit && onResetTemplate && (
+            {isTrainer && canEdit && (
               <button
                 type="button"
-                onClick={onResetTemplate}
+                onClick={() => setTemplatePickerOpen(true)}
                 className="text-xs text-amber-400 hover:text-amber-300"
               >
                 Шаблон
@@ -812,6 +824,30 @@ export function WorkoutSheetEditor({
           onChange={onChange}
         />
       )}
+
+      <ResponsiveSheet
+        open={templatePickerOpen}
+        onOpenChange={setTemplatePickerOpen}
+        title="Шаблон листа"
+        description="Подставит план в лист. Возраст и ЧСС клиента сохранятся. Факт прошлой сессии не копируется."
+        desktop="dialog"
+      >
+        <div className="space-y-2 pb-4">
+          {WORKOUT_SHEET_TEMPLATES.map((tpl) => (
+            <button
+              key={tpl.id}
+              type="button"
+              onClick={() => handleApplyTemplate(tpl.id)}
+              className="flex w-full flex-col items-start gap-0.5 rounded-2xl border border-white/10 bg-ink-raised px-4 py-3 text-left transition hover:border-forma-400/40"
+            >
+              <span className="text-sm font-medium text-zinc-100">
+                {tpl.title}
+              </span>
+              <span className="text-xs text-zinc-500">{tpl.description}</span>
+            </button>
+          ))}
+        </div>
+      </ResponsiveSheet>
     </div>
   );
 }

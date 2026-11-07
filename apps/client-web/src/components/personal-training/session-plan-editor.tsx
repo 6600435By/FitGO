@@ -318,14 +318,6 @@ export function SessionPlanEditor({
               setDraftWorkoutSheet(sheet);
               if (isTrainer) setEditing(true);
             }}
-            onResetTemplate={
-              isTrainer && session.canEdit
-                ? () => {
-                    setDraftWorkoutSheet(createEmptyWorkoutSheet());
-                    setEditing(true);
-                  }
-                : undefined
-            }
           />
 
           {isTrainer && session.canEdit && (
