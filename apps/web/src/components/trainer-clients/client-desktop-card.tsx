@@ -5,10 +5,8 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import {
-  formatDate,
-  membershipStatusLabel,
-} from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { ClientRightsBlocks } from '@/components/trainer-clients/client-rights-blocks';
 
 export function ClientDesktopCard({
   summary,
@@ -71,46 +69,7 @@ export function ClientDesktopCard({
 
       {client ? (
         <div className="space-y-3 text-sm">
-          {client.membershipName ? (
-            <p className="text-forma-200">
-              {client.membershipName}
-              {client.membershipStatus
-                ? ` · ${membershipStatusLabel(client.membershipStatus)}`
-                : ''}
-              {client.sessionsRemaining != null
-                ? ` · осталось ${client.sessionsRemaining}`
-                : ''}
-              {client.membershipValidUntil
-                ? ` · до ${formatDate(client.membershipValidUntil)}`
-                : ''}
-            </p>
-          ) : (
-            <p className="text-forma-400">Абонемент не указан</p>
-          )}
-
-          {client.ownLedger ? (
-            <div className="rounded-xl border border-forma-500/20 bg-forma-500/5 px-3 py-2">
-              <p className="font-medium text-forma-100">Личный учёт</p>
-              {client.ownLedger.activePackage ? (
-                <p className="mt-1 text-forma-200">
-                  {client.ownLedger.activePackage.title}: ещё{' '}
-                  {client.ownLedger.activePackage.sessionsRemaining}
-                </p>
-              ) : (
-                <p className="mt-1 text-forma-400">Нет активного пакета</p>
-              )}
-              {client.ownLedger.debtMinor > 0 ? (
-                <p className="mt-1 text-amber-200">
-                  Долг:{' '}
-                  {(client.ownLedger.debtMinor / 100).toLocaleString('ru-RU', {
-                    minimumFractionDigits: 0,
-                    maximumFractionDigits: 2,
-                  })}{' '}
-                  BYN
-                </p>
-              ) : null}
-            </div>
-          ) : null}
+          <ClientRightsBlocks client={client} compact />
 
           <p className="text-xs text-forma-500">
             {[

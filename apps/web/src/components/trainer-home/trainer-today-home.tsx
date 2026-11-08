@@ -424,7 +424,7 @@ function PtKpi({
         </div>
       </div>
       {!hideLadder && a.ladder ? (
-        <div className="mt-4">
+        <div className="mt-4 space-y-2">
           <KpiRing
             value={ladderValue}
             max={ladderMax}
@@ -435,6 +435,21 @@ function PtKpi({
                 : `до следующей ступени ${a.ladder.remaining} тренировок`
             }
           />
+          <p className="text-[11px] leading-snug text-zinc-500">
+            Календарный месяц · в объёме {a.ladder.volumeCount} доверенных ПТ
+            (ЗП)
+            {a.ladder.isTop
+              ? ` · ступень ${a.ladder.percent}% · верхняя`
+              : ` · ступень ${a.ladder.percent}% · цель ${a.ladder.nextMinSessions} · ещё ${a.ladder.remaining}`}
+            . Первая ступень с порога 0 занятий (часто 50%); «0 · 50% · ещё
+            101» — по формуле тиров, не ошибка счётчика.
+          </p>
+          {a.syncedAt ? (
+            <p className="text-[11px] text-zinc-600">
+              Синхронизация контроля / 1С: {formatDateTime(a.syncedAt)} — не
+              путать с локальным учётом пакетов.
+            </p>
+          ) : null}
         </div>
       ) : null}
       {a.giftConversion && a.giftConversion.giftedClients > 0 ? (

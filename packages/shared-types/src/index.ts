@@ -1195,6 +1195,13 @@ export interface TrainerClientDetail {
   membershipStatus?: MembershipStatus;
   membershipValidUntil?: string;
   sessionsRemaining?: number;
+  /** ClubMembershipSnapshot.syncedAt — 1C cache, not local ledger. */
+  membershipSyncedAt?: string | null;
+  /**
+   * Client face-account debt to the club from 1C snapshot (major units).
+   * null = snapshot/field unknown — do not invent a sum.
+   */
+  clubDebtAmount?: number | null;
   lastVisit?: string;
   lastHallVisit?: string;
   cancelNoShowCount?: number;
@@ -1216,6 +1223,8 @@ export interface TrainerClientDetail {
     sessionPriceMinor?: number | null;
     defaultSessionPriceMinor?: number | null;
     effectiveSessionPriceMinor?: number | null;
+    /** Max of balance/package updatedAt — local FitGO ledger, not 1C sync. */
+    localUpdatedAt?: string | null;
     activePackage?: {
       id: string;
       title: string;

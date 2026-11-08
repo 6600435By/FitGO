@@ -134,6 +134,14 @@ assert.equal(isReformerPersonalTitle('Stretch реформер'), false);
 
 // --- ladder ---
 {
+  /** 0 sessions → first tier (minSessions 0 → 50%) · remaining to 101. */
+  const zero = resolveLadderProgress(0, DEFAULT_PT_TIERS);
+  assert.equal(zero.percent, 50);
+  assert.equal(zero.remaining, 101);
+  assert.equal(zero.nextMinSessions, 101);
+  assert.equal(zero.isTop, false);
+  assert.equal(zero.volumeCount, 0);
+
   const mid = resolveLadderProgress(100, DEFAULT_PT_TIERS);
   assert.equal(mid.percent, 50);
   assert.equal(mid.remaining, 1);

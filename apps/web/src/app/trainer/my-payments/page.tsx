@@ -1,6 +1,7 @@
 'use client';
 
 import type {
+  TrainerClientSummary,
   TrainerLedgerOverview,
   TrainerOwnPackageTemplate,
   TrainerPaymentMethod,
@@ -15,8 +16,7 @@ import {
   SegmentedControl,
 } from '@fitgo/forma-ui';
 import { Wallet } from 'lucide-react';
-import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { downloadCsv, downloadExcel } from '@/lib/download-table';
@@ -53,7 +53,9 @@ export default function TrainerMyPaymentsPage() {
   const [payMethod, setPayMethod] = useState<TrainerPaymentMethod>('CASH');
 
   const [sellClientId, setSellClientId] = useState('');
+  const [sellClientQ, setSellClientQ] = useState('');
   const [sellTemplateId, setSellTemplateId] = useState('');
+  const [roster, setRoster] = useState<TrainerClientSummary[]>([]);
 
   const load = useCallback(() => {
     const token = getToken();
@@ -79,6 +81,27 @@ export default function TrainerMyPaymentsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+    api
+      .trainerClients(token)
+      .then(setRoster)
+      .catch(() => setRoster([]));
+  }, []);
+
+  const sellClientOptions = useMemo(() => {
+    const needle = sellClientQ.trim().toLowerCase();
+    const list = !needle
+      ? roster
+      : roster.filter((c) =>
+          `${c.firstName} ${c.lastName} ${c.phone ?? ''}`
+            .toLowerCase()
+            .includes(needle),
+        );
+    return list.slice(0, 80);
+  }, [roster, sellClientQ]);
 
   const saveTemplate = async () => {
     const token = getToken();
@@ -326,10 +349,28 @@ export default function TrainerMyPaymentsPage() {
             <p className="text-sm font-medium text-forma-100">Продать пакет</p>
             <input
               className="input"
-              placeholder="ID клиента (из карточки)"
+              placeholder="Поиск клиента…"
+              value={sellClientQ}
+              onChange={(e) => setSellClientQ(e.target.value)}
+            />
+            <select
+              className="input"
               value={sellClientId}
               onChange={(e) => setSellClientId(e.target.value)}
-            />
+            >
+              <option value="">Клиент из базы</option>
+              {sellClientOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.firstName} {c.lastName}
+                  {c.phone ? ` · ${c.phone}` : ''}
+                </option>
+              ))}
+            </select>
+            {roster.length === 0 ? (
+              <p className="text-xs text-forma-400">
+                Нет клиентов в базе — добавьте в разделе «Клиенты».
+              </p>
+            ) : null}
             <select
               className="input"
               value={sellTemplateId}
@@ -352,11 +393,7 @@ export default function TrainerMyPaymentsPage() {
               Продать
             </button>
             <p className="text-xs text-forma-400">
-              ID клиента — в URL карточки{' '}
-              <Link href="/trainer/clients" className="underline">
-                Клиенты
-              </Link>
-              .
+              Выберите клиента из доступных — без ручного ID из URL.
             </p>
           </BentoCard>
         </div>

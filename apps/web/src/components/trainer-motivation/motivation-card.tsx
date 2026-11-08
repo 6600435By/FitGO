@@ -47,10 +47,10 @@ export function MotivationCard({ records }: { records: MotivationRecords }) {
       label: 'Лестница ПТ',
       value: `${records.ladderPercent}%`,
       hint: records.ladderIsTop
-        ? 'верхняя ступень'
+        ? 'верхняя ступень · календарный месяц'
         : records.ladderRemaining != null
-          ? `ещё ${records.ladderRemaining} до следующей`
-          : undefined,
+          ? `календарный месяц · ещё ${records.ladderRemaining} до следующей (порог 0 = первая ступень)`
+          : 'календарный месяц · доверенные ПТ ЗП',
     });
   }
 

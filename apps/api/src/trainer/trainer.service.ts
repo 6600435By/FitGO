@@ -344,6 +344,10 @@ export class TrainerService {
     let membershipValidUntil: string | undefined;
     let sessionsRemaining: number | undefined;
     let lastHallVisit: string | undefined;
+    let membershipSyncedAt: string | null = null;
+    /** null = no snapshot / unknown; do not invent 0 as a known debt. */
+    let clubDebtAmount: number | null = null;
+    let hadMembershipSnapshot = false;
 
     if (clubId && extId) {
       const snap = await this.prisma.clubMembershipSnapshot.findUnique({
@@ -355,6 +359,12 @@ export class TrainerService {
         },
       });
       if (snap) {
+        hadMembershipSnapshot = true;
+        membershipSyncedAt = snap.syncedAt.toISOString();
+        clubDebtAmount =
+          typeof snap.debtAmount === 'number' && Number.isFinite(snap.debtAmount)
+            ? snap.debtAmount
+            : null;
         membershipName = snap.packageName ?? membershipName;
         membershipStatus =
           (snap.status
@@ -394,6 +404,13 @@ export class TrainerService {
       membershipValidUntil =
         membershipValidUntil ??
         (membership as { validUntil?: string } | null)?.validUntil;
+      if (
+        !hadMembershipSnapshot &&
+        membership &&
+        typeof (membership as { debtAmount?: number }).debtAmount === 'number'
+      ) {
+        clubDebtAmount = (membership as { debtAmount: number }).debtAmount;
+      }
     }
 
     const since90 = new Date(Date.now() - 90 * 24 * 60 * 60_000);
@@ -467,6 +484,8 @@ export class TrainerService {
       membershipStatus,
       membershipValidUntil,
       sessionsRemaining,
+      membershipSyncedAt,
+      clubDebtAmount,
       lastVisit,
       lastHallVisit,
       cancelNoShowCount: cancelNoShows,

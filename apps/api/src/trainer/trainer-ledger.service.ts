@@ -719,12 +719,20 @@ export class TrainerLedgerService {
     ]);
     const defaultSessionPriceMinor = profile?.defaultSessionPriceMinor ?? null;
     const sessionPriceMinor = balance?.sessionPriceMinor ?? null;
+    const stamps = [balance?.updatedAt, pkg?.updatedAt].filter(
+      (d): d is Date => d instanceof Date,
+    );
+    const localUpdatedAt =
+      stamps.length > 0
+        ? new Date(Math.max(...stamps.map((d) => d.getTime()))).toISOString()
+        : null;
     return {
       debtMinor: balance?.debtMinor ?? 0,
       sessionPriceMinor,
       defaultSessionPriceMinor,
       effectiveSessionPriceMinor:
         sessionPriceMinor ?? defaultSessionPriceMinor,
+      localUpdatedAt,
       activePackage: pkg
         ? {
             id: pkg.id,
