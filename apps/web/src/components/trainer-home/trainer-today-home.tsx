@@ -7,6 +7,7 @@ import type {
   TrainerInsightsResponse,
   TrainerMonthAnalytics,
 } from '@fitgo/shared-types';
+import { TRAINER_CONTROL_SCOPES } from '@fitgo/shared-types';
 import {
   BentoCard,
   Countdown,
@@ -198,9 +199,13 @@ function HeroNext({
             {next.subtitle ? ` · ${next.subtitle}` : ''}
           </p>
         </div>
-        {(next.status === 'UPCOMING' || next.status === 'IN_PROGRESS') && (
-          <Countdown to={next.startAt} />
-        )}
+        {next.status === 'UPCOMING' ? (
+          <Countdown to={next.startAt} whenElapsed={null} />
+        ) : next.stateLabel ? (
+          <span className="max-w-[14rem] text-right font-display text-sm font-semibold text-forma-400">
+            {next.stateLabel}
+          </span>
+        ) : null}
       </div>
       {next.booked != null && next.capacity != null && next.capacity > 0 ? (
         <div className="mt-4 max-w-xs">
@@ -374,7 +379,7 @@ function DayTimeline({
                     {s.booked != null && s.capacity != null
                       ? ` · ${s.booked}/${s.capacity}`
                       : ''}
-                    {s.status === 'IN_PROGRESS' ? ' · сейчас' : ''}
+                    {s.stateLabel ? ` · ${s.stateLabel}` : ''}
                   </>
                 }
                 tone={sessionTone(s)}
@@ -489,6 +494,15 @@ function TasksBlock({
   const controlTo = todayIso();
   const controlPendingQs = `from=${encodeURIComponent(controlFrom)}&to=${encodeURIComponent(controlTo)}&needsReview=1`;
   const pending = data.control.pendingMe;
+  const scopeLabel =
+    data.control.scopeLabel ?? TRAINER_CONTROL_SCOPES.pendingMe.scopeRu;
+  const todayNeedsConfirm = data.today.sessions.some((s) => s.needsConfirm);
+  const emptyCopy =
+    pending > 0
+      ? 'Ждут вашей отметки'
+      : todayNeedsConfirm
+        ? 'Есть слот без подтверждённого результата — откройте журнал'
+        : TRAINER_CONTROL_SCOPES.pendingMe.emptyRu;
 
   return (
     <div className="space-y-3">
@@ -499,7 +513,7 @@ function TasksBlock({
             href={`${controlBase}?${controlPendingQs}`}
             className={cn(
               'block rounded-3xl border p-4 transition',
-              pending > 0
+              pending > 0 || todayNeedsConfirm
                 ? 'border-amber-500/40 bg-amber-500/5 hover:border-amber-500/60'
                 : 'border-white/[0.08] bg-ink-elevated/90 hover:border-forma-500/30',
             )}
@@ -508,20 +522,21 @@ function TasksBlock({
               <ClipboardCheck
                 className={cn(
                   'mt-0.5 h-5 w-5 shrink-0',
-                  pending > 0 ? 'text-amber-400' : 'text-forma-400',
+                  pending > 0 || todayNeedsConfirm
+                    ? 'text-amber-400'
+                    : 'text-forma-400',
                 )}
               />
               <div>
                 <p className="text-xs uppercase tracking-wide text-zinc-500">
-                  Закрыть сейчас
+                  {TRAINER_CONTROL_SCOPES.pendingMe.titleRu}
                 </p>
                 <p className="font-display text-2xl font-bold tabular-nums text-white">
                   {pending}
                 </p>
-                <p className="mt-0.5 text-xs text-zinc-500">
-                  {pending > 0
-                    ? 'Ждут вашей отметки'
-                    : 'Всё закрыто с вашей стороны'}
+                <p className="mt-0.5 text-xs text-zinc-500">{emptyCopy}</p>
+                <p className="mt-1 text-[11px] leading-snug text-zinc-600">
+                  {scopeLabel}
                 </p>
               </div>
             </div>
@@ -707,7 +722,7 @@ export function TrainerTodayHome({
             {moneyMinor(clubDebtMinor)}
           </p>
           <p className="mt-1 text-xs text-zinc-500">
-            Из 1С · подробности в «Мои оплаты»
+            Из 1С · подробности в «Расчёты»
           </p>
         </Link>
       ) : null}

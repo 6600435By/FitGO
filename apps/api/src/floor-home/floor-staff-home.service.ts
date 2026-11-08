@@ -16,7 +16,15 @@ import type {
   FloorStaffHomeSession,
   FloorStaffMonthMetric,
 } from '@fitgo/shared-types';
-import { isReformerHallSession } from '@fitgo/shared-types';
+import {
+  clubDayBounds,
+  clubDayKey,
+  isReformerHallSession,
+  sameDayPreviousMonthWindow,
+  sessionClockPhase,
+  sessionStateExplainRu,
+  TRAINER_CONTROL_SCOPES,
+} from '@fitgo/shared-types';
 import {
   isGymFloorSessionTitle,
   isSolariumSessionTitle,
@@ -25,38 +33,57 @@ import { TrainerMonthAnalyticsService } from '../analytics/trainer-month-analyti
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { PrismaService } from '../prisma/prisma.service';
-import { sameDayPreviousMonthWindow } from '@fitgo/shared-types';
 
 function pad2(n: number) {
   return String(n).padStart(2, '0');
 }
 
-function localDateKey(d = new Date()): string {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-
+/** Month bounds in Europe/Minsk (club calendar), not server local TZ. */
 function monthBounds(ref: Date): { from: string; to: string; start: Date; end: Date } {
-  const y = ref.getFullYear();
-  const m = ref.getMonth();
-  const start = new Date(y, m, 1, 0, 0, 0, 0);
-  const end = new Date(y, m + 1, 0, 23, 59, 59, 999);
-  return {
-    from: localDateKey(start),
-    to: localDateKey(end),
-    start,
-    end,
-  };
+  const today = clubDayKey(ref);
+  const [y, m] = today.split('-').map(Number);
+  const from = `${y}-${pad2(m)}-01`;
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const to = `${y}-${pad2(m)}-${pad2(lastDay)}`;
+  const { start } = clubDayBounds(from);
+  const { end } = clubDayBounds(to);
+  return { from, to, start, end };
 }
 
 function previousMonth(ref: Date): Date {
-  return new Date(ref.getFullYear(), ref.getMonth() - 1, 15);
+  const { year, month } = (() => {
+    const [y, m] = clubDayKey(ref).split('-').map(Number);
+    return { year: y, month: m };
+  })();
+  const prev = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+  return new Date(`${prev.year}-${pad2(prev.month)}-15T12:00:00+03:00`);
 }
 
 function dayBounds(day: string): { start: Date; end: Date } {
-  const [y, m, d] = day.split('-').map(Number);
+  return clubDayBounds(day);
+}
+
+function annotateSession(
+  s: Omit<FloorStaffHomeSession, 'needsConfirm' | 'stateLabel'> & {
+    needsConfirm?: boolean;
+  },
+  now: Date,
+): FloorStaffHomeSession {
+  const cancelled = s.status === 'CANCELLED';
+  const clock = sessionClockPhase({
+    startAt: s.startAt,
+    endAt: s.endAt,
+    cancelled,
+    nowMs: now.getTime(),
+  });
+  const needsConfirm = Boolean(s.needsConfirm) && !cancelled;
   return {
-    start: new Date(y, m - 1, d, 0, 0, 0, 0),
-    end: new Date(y, m - 1, d, 23, 59, 59, 999),
+    ...s,
+    needsConfirm,
+    stateLabel: sessionStateExplainRu({
+      clock,
+      needsConfirm,
+    }),
   };
 }
 
@@ -71,10 +98,15 @@ function sessionStatus(
   cancelled: boolean,
   now: Date,
 ): FloorStaffHomeSession['status'] {
-  if (cancelled) return 'CANCELLED';
-  const end = endAt ?? new Date(startAt.getTime() + 60 * 60_000);
-  if (now < startAt) return 'UPCOMING';
-  if (now <= end) return 'IN_PROGRESS';
+  const clock = sessionClockPhase({
+    startAt,
+    endAt,
+    cancelled,
+    nowMs: now.getTime(),
+  });
+  if (clock === 'CANCELLED') return 'CANCELLED';
+  if (clock === 'UPCOMING') return 'UPCOMING';
+  if (clock === 'IN_PROGRESS') return 'IN_PROGRESS';
   return 'DONE';
 }
 
@@ -97,7 +129,7 @@ export class FloorStaffHomeService {
   async getSpecialistHome(user: JwtPayload): Promise<FloorStaffHome> {
     const clubId = requireClubId(user);
     const now = new Date();
-    const today = localDateKey(now);
+    const today = clubDayKey(now);
     const { start: dayStart, end: dayEnd } = dayBounds(today);
     const cur = monthBounds(now);
     // Same day-of-month window as trainer home (fair MoM while month is open).
@@ -188,19 +220,34 @@ export class FloorStaffHomeService {
         }),
       ]);
 
+    const approvalByBookingEarly = new Map(
+      approvals.map((a) => [a.bookingId, a]),
+    );
     const sessions: FloorStaffHomeSession[] = todayBookings.map((b) => {
       const clientName = b.client
         ? `${b.client.firstName} ${b.client.lastName}`.trim()
         : b.guestName || 'Гость';
-      return {
-        id: b.id,
-        sessionKey: `fitgo:SPA:${b.id}`,
-        title: b.service.name,
-        startAt: b.startAt.toISOString(),
-        endAt: b.endAt.toISOString(),
-        subtitle: clientName,
-        status: sessionStatus(b.startAt, b.endAt, false, now),
-      };
+      const row = approvalByBookingEarly.get(b.id);
+      const ended = b.endAt.getTime() <= now.getTime();
+      const needsConfirm =
+        ended &&
+        !row?.overrideApprovedAt &&
+        !row?.adminApprovedAt &&
+        !row?.performerConfirmedAt;
+      return annotateSession(
+        {
+          id: b.id,
+          sessionKey: `fitgo:SPA:${b.id}`,
+          title: b.service.name,
+          startAt: b.startAt.toISOString(),
+          endAt: b.endAt.toISOString(),
+          subtitle: clientName,
+          kind: 'SPA',
+          status: sessionStatus(b.startAt, b.endAt, false, now),
+          needsConfirm,
+        },
+        now,
+      );
     });
 
     const next =
@@ -225,9 +272,7 @@ export class FloorStaffHomeService {
       take: 200,
     });
 
-    const approvalByBooking = new Map(
-      approvals.map((a) => [a.bookingId, a]),
-    );
+    const approvalByBooking = approvalByBookingEarly;
 
     const pendingMeItems: FloorStaffControlItem[] = [];
     let pendingAdmin = 0;
@@ -255,7 +300,7 @@ export class FloorStaffHomeService {
       periodEnd: Date,
     ) => {
       const servicesTotal = list.length;
-      const days = new Set(list.map((b) => localDateKey(b.startAt)));
+      const days = new Set(list.map((b) => clubDayKey(b.startAt)));
       const avgPerWorkDay =
         days.size > 0
           ? Math.round((servicesTotal / days.size) * 10) / 10
@@ -378,6 +423,7 @@ export class FloorStaffHomeService {
         pendingMe: pendingMeItems.length,
         pendingAdmin,
         queue: pendingMeItems.slice(0, 3),
+        scopeLabel: TRAINER_CONTROL_SCOPES.pendingMe.scopeRu,
       },
       month: {
         from: cur.from,
@@ -424,7 +470,7 @@ export class FloorStaffHomeService {
   async getGpTrainerHome(user: JwtPayload): Promise<FloorStaffHome> {
     const clubId = requireClubId(user);
     const now = new Date();
-    const today = localDateKey(now);
+    const today = clubDayKey(now);
     const { start: dayStart, end: dayEnd } = dayBounds(today);
     const cur = monthBounds(now);
     const prev = monthBounds(previousMonth(now));
@@ -563,7 +609,7 @@ export class FloorStaffHomeService {
 
     const cap = new Map(slots.map((s) => [s.externalId, s.capacity]));
 
-    const onexToday: FloorStaffHomeSession[] = todaySessions.map((s) => ({
+    const onexTodayRaw = todaySessions.map((s) => ({
       id: s.id,
       sessionKey: `1c:${s.externalId}`,
       title: s.title,
@@ -572,7 +618,7 @@ export class FloorStaffHomeService {
       subtitle: s.roomTitle ?? undefined,
       booked: s.bookedCount,
       capacity: s.capacity ?? cap.get(s.externalId) ?? undefined,
-      kind: s.kind === OnexClassKind.PT ? 'PT' : 'GROUP',
+      kind: (s.kind === OnexClassKind.PT ? 'PT' : 'GROUP') as 'PT' | 'GROUP',
       status: sessionStatus(
         s.startAt,
         s.endAt,
@@ -581,7 +627,7 @@ export class FloorStaffHomeService {
       ),
     }));
 
-    const fitgoToday: FloorStaffHomeSession[] = todayFitgoPt.map((b) => {
+    const fitgoTodayRaw = todayFitgoPt.map((b) => {
       const clientName = b.client
         ? `${b.client.firstName} ${b.client.lastName}`.trim()
         : undefined;
@@ -611,21 +657,13 @@ export class FloorStaffHomeService {
         .filter((s) => s.kind === OnexClassKind.PT)
         .map((s) => s.externalId),
     );
-    const fitgoTodayDedup = fitgoToday.filter((s) => {
+    const fitgoTodayDedup = fitgoTodayRaw.filter((s) => {
       const booking = todayFitgoPt.find((b) => b.id === s.id);
       const ref = booking?.crmDocRef?.trim();
       if (!ref) return true;
       const bare = ref.startsWith('1c:') ? ref.slice(3) : ref;
       return !onexExtToday.has(bare) && !onexExtToday.has(ref);
     });
-
-    const sessions = [...onexToday, ...fitgoTodayDedup].sort((a, b) =>
-      a.startAt.localeCompare(b.startAt),
-    );
-
-    const next =
-      sessions.find((s) => s.status === 'IN_PROGRESS' || s.status === 'UPCOMING') ??
-      null;
 
     // Control queue — only GROUP uses groupClassApproval (trainer → admin).
     // 1C PT (incl. gift) must not appear here: no trainer-confirm action, and
@@ -723,6 +761,28 @@ export class FloorStaffHomeService {
       pendingMeItems.sort((a, b) => a.startAt.localeCompare(b.startAt));
     }
 
+    const pendingMeKeys = new Set(
+      pendingMeItems.map((i) => i.sessionKey),
+    );
+    const sessions = [...onexTodayRaw, ...fitgoTodayDedup]
+      .sort((a, b) => a.startAt.localeCompare(b.startAt))
+      .map((s) =>
+        annotateSession(
+          {
+            ...s,
+            needsConfirm: pendingMeKeys.has(s.sessionKey),
+          },
+          now,
+        ),
+      );
+
+    const next =
+      sessions.find(
+        (s) => s.status === 'IN_PROGRESS' || s.status === 'UPCOMING',
+      ) ??
+      sessions.find((s) => s.needsConfirm) ??
+      null;
+
     const gpOnly = <T extends { kind: OnexClassKind }>(list: T[]) =>
       list.filter((s) => s.kind === OnexClassKind.GROUP);
 
@@ -791,6 +851,7 @@ export class FloorStaffHomeService {
         pendingMe: pendingMeItems.length,
         pendingAdmin,
         queue: pendingMeItems.slice(0, 3),
+        scopeLabel: TRAINER_CONTROL_SCOPES.pendingMe.scopeRu,
       },
       conducted: {
         from: monthAnalytics.from,
@@ -847,7 +908,12 @@ export class FloorStaffHomeService {
       role: 'GROUP_TRAINER',
       staffName,
       today: { date: today, count: 0, next: null, sessions: [] },
-      control: { pendingMe: 0, pendingAdmin: 0, queue: [] },
+      control: {
+        pendingMe: 0,
+        pendingAdmin: 0,
+        queue: [],
+        scopeLabel: TRAINER_CONTROL_SCOPES.pendingMe.scopeRu,
+      },
       conducted: { from: cur.from, to: today, group: 0, pt: 0 },
       month: {
         from: cur.from,

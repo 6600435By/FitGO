@@ -3395,6 +3395,8 @@ model TrainerClientBalance {
   clientId  String
   /// Positive = client owes trainer (minor units).
   debtMinor Int      @default(0)
+  /// One-shot PT price override for this client; null → StaffProfile.defaultSessionPriceMinor.
+  sessionPriceMinor Int?
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
 

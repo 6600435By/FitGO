@@ -137,7 +137,7 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
       router.replace('/trainer');
       return;
     }
-    // Pure «Тренер клуб»: no booking-control surface.
+    // Journal only when cabinet mode allows it (staff PT, club PT, GP, legacy).
     if (
       !showPtControl &&
       !showGp &&

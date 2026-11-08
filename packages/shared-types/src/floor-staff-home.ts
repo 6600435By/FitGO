@@ -20,6 +20,13 @@ export interface FloorStaffHomeSession {
   /** GROUP / PT when both appear on the trainer home list. */
   kind?: 'GROUP' | 'PT' | 'SPA';
   status: 'UPCOMING' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED';
+  /**
+   * Trainer’s own confirm still owed after slot end.
+   * Clock status alone never sets this — see trainer-session-state.
+   */
+  needsConfirm?: boolean;
+  /** One-line explain (clock + result), same wording as journal/schedule. */
+  stateLabel?: string;
 }
 
 /** Conducted session counts for the current month (through today). */
@@ -44,6 +51,11 @@ export interface FloorStaffControlQueue {
   pendingAdmin: number;
   /** Oldest items waiting for me (max 3). */
   queue: FloorStaffControlItem[];
+  /**
+   * Scope caption for the Today counter — intentionally narrower than
+   * journal «На контроле» (see TRAINER_CONTROL_SCOPES.pendingMe).
+   */
+  scopeLabel?: string;
 }
 
 export interface FloorStaffMonthMetric {

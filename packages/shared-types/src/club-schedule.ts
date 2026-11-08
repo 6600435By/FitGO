@@ -83,10 +83,16 @@ export function sessionApprovalPhase(input: {
 }
 
 export function sessionApprovalLabelRu(
-  phase: SessionApprovalPhase | undefined,
+  phase: SessionApprovalPhase | GroupApprovalPhase | undefined,
+  kind?: ClubScheduleEventType | 'GROUP' | 'PT' | 'SPA',
 ): string | undefined {
-  if (phase === 'PENDING_PERFORMER') return 'Ждёт исполнителя';
+  if (phase === 'PENDING_PERFORMER') {
+    if (kind === 'PT') return 'Ждёт тренера';
+    if (kind === 'SPA') return 'Ждёт специалиста';
+    return 'Ждёт исполнителя';
+  }
   if (phase === 'PENDING_ADMIN') return 'Ждёт администратора';
+  if (phase === 'PENDING_TRAINER') return 'Ждёт тренера';
   return undefined;
 }
 

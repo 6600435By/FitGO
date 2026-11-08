@@ -264,6 +264,46 @@ export class TrainerLedgerService {
     return { defaultSessionPriceMinor: priceMinor };
   }
 
+  /**
+   * Per-client one-shot PT price. null clears override → trainer default applies.
+   */
+  async setClientSessionPrice(
+    user: JwtPayload,
+    clientId: string,
+    priceMinor: number | null,
+  ) {
+    const trainer = await this.requireClubTrainer(user);
+    await this.assertRosterClient(trainer.id, clientId);
+    if (priceMinor != null && priceMinor < 0) {
+      throw new BadRequestException('Цена не может быть отрицательной');
+    }
+    const profile = await this.prisma.staffProfile.findUnique({
+      where: { userId: trainer.id },
+      select: { defaultSessionPriceMinor: true },
+    });
+    const row = await this.prisma.trainerClientBalance.upsert({
+      where: {
+        trainerId_clientId: { trainerId: trainer.id, clientId },
+      },
+      create: {
+        trainerId: trainer.id,
+        clientId,
+        debtMinor: 0,
+        sessionPriceMinor: priceMinor,
+      },
+      update: { sessionPriceMinor: priceMinor },
+    });
+    const defaultSessionPriceMinor = profile?.defaultSessionPriceMinor ?? null;
+    const effectiveSessionPriceMinor =
+      row.sessionPriceMinor ?? defaultSessionPriceMinor;
+    return {
+      clientId,
+      sessionPriceMinor: row.sessionPriceMinor,
+      defaultSessionPriceMinor,
+      effectiveSessionPriceMinor,
+    };
+  }
+
   async sellPackage(
     user: JwtPayload,
     data: {
@@ -488,10 +528,21 @@ export class TrainerLedgerService {
         (p) => p.status === 'ACTIVE' && p.sessionsRemaining > 0,
       ) ?? null;
 
+    const profile = await this.prisma.staffProfile.findUnique({
+      where: { userId: trainer.id },
+      select: { defaultSessionPriceMinor: true },
+    });
+    const defaultSessionPriceMinor = profile?.defaultSessionPriceMinor ?? null;
+    const sessionPriceMinor = balance?.sessionPriceMinor ?? null;
+
     return {
       clientId,
       clientName: clientName(client),
       debtMinor: balance?.debtMinor ?? 0,
+      sessionPriceMinor,
+      defaultSessionPriceMinor,
+      effectiveSessionPriceMinor:
+        sessionPriceMinor ?? defaultSessionPriceMinor,
       activePackage,
       packages: mappedPkgs,
       payments: payments.map((p) => this.mapPayment(p)),
@@ -518,11 +569,24 @@ export class TrainerLedgerService {
     });
     if (!booking) return null;
 
+    const clientBalance = await this.prisma.trainerClientBalance.findUnique({
+      where: {
+        trainerId_clientId: {
+          trainerId: booking.trainerId,
+          clientId: booking.clientId,
+        },
+      },
+      select: { sessionPriceMinor: true },
+    });
+    const clientSessionPriceMinor = clientBalance?.sessionPriceMinor ?? null;
+    const defaultSessionPriceMinor =
+      booking.trainer.staffProfile?.defaultSessionPriceMinor ?? null;
+
     const precheck = decidePersonalSessionSettle({
       booking,
       activePackage: null,
-      defaultSessionPriceMinor:
-        booking.trainer.staffProfile?.defaultSessionPriceMinor ?? null,
+      defaultSessionPriceMinor,
+      clientSessionPriceMinor,
     });
     if (precheck.action === 'skip') {
       return precheck.reason === 'already_settled' ? booking : null;
@@ -556,8 +620,8 @@ export class TrainerLedgerService {
             validUntil: active.validUntil,
           }
         : null,
-      defaultSessionPriceMinor:
-        booking.trainer.staffProfile?.defaultSessionPriceMinor ?? null,
+      defaultSessionPriceMinor,
+      clientSessionPriceMinor,
     });
 
     if (decision.action === 'skip') {
@@ -635,7 +699,7 @@ export class TrainerLedgerService {
 
   /** Lightweight snapshot for CRM client card (no payments history). */
   async clientCardSnippet(trainerId: string, clientId: string) {
-    const [balance, pkg] = await Promise.all([
+    const [balance, pkg, profile] = await Promise.all([
       this.prisma.trainerClientBalance.findUnique({
         where: { trainerId_clientId: { trainerId, clientId } },
       }),
@@ -648,9 +712,19 @@ export class TrainerLedgerService {
         },
         orderBy: { soldAt: 'desc' },
       }),
+      this.prisma.staffProfile.findUnique({
+        where: { userId: trainerId },
+        select: { defaultSessionPriceMinor: true },
+      }),
     ]);
+    const defaultSessionPriceMinor = profile?.defaultSessionPriceMinor ?? null;
+    const sessionPriceMinor = balance?.sessionPriceMinor ?? null;
     return {
       debtMinor: balance?.debtMinor ?? 0,
+      sessionPriceMinor,
+      defaultSessionPriceMinor,
+      effectiveSessionPriceMinor:
+        sessionPriceMinor ?? defaultSessionPriceMinor,
       activePackage: pkg
         ? {
             id: pkg.id,

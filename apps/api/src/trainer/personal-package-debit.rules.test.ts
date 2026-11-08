@@ -130,6 +130,21 @@ assert.deepEqual(
   assert.deepEqual(d, { action: 'raise_debt', priceMinor: 4500 });
 }
 
+{
+  const d = decidePersonalSessionSettle({
+    booking: {
+      ptFlow: 'PERSONAL',
+      status: 'COMPLETED',
+      priceMinor: null,
+    },
+    activePackage: null,
+    defaultSessionPriceMinor: 4500,
+    clientSessionPriceMinor: 6000,
+    now,
+  });
+  assert.deepEqual(d, { action: 'raise_debt', priceMinor: 6000 });
+}
+
 assert.deepEqual(
   decidePersonalSessionSettle({
     booking: {

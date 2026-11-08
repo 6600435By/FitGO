@@ -2,6 +2,7 @@
 
 import type { TrainerCalendarEvent } from '@fitgo/shared-types';
 import { Button, ResponsiveSheet, SegmentedControl } from '@fitgo/forma-ui';
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -145,6 +146,16 @@ export function BookingActionSheet({
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
             Клиент
           </p>
+          {event.clientId ? (
+            <Link
+              href={`/trainer/clients/${encodeURIComponent(event.clientId)}?from=schedule&date=${encodeURIComponent(event.startAt.slice(0, 10))}`}
+              className="inline-block text-sm text-forma-400 underline"
+              onClick={onClose}
+            >
+              Открыть карточку
+              {event.clientName ? ` · ${event.clientName}` : ''}
+            </Link>
+          ) : null}
           <input
             className="input w-full"
             placeholder="Поиск клиента…"

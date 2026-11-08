@@ -12,6 +12,7 @@ import {
   NotebookPen,
   Clock3,
   BookOpen,
+  Scale,
 } from 'lucide-react';
 import {
   trainerCabinetMode,
@@ -34,6 +35,14 @@ export type TrainerNavItem = {
   badgeKey?: 'messages' | 'timesheet';
 };
 
+/** Dynamic «Ещё» subtitle from items actually shown. */
+export function trainerMoreSubtitle(items: TrainerNavItem[]): string {
+  if (items.length === 0) return 'Дополнительные разделы';
+  const labels = items.map((i) => i.label);
+  if (labels.length <= 3) return labels.join(', ');
+  return `${labels.slice(0, 3).join(', ')} и ещё`;
+}
+
 export function buildTrainerV2Nav(
   flags: TrainerCabinetFlags | null | undefined,
   isEnabled: (key: string) => boolean,
@@ -47,34 +56,69 @@ export function buildTrainerV2Nav(
   const scheduleHref = trainerScheduleHref(mode);
   const crm = trainerCrmOrControlHref(mode);
 
-  const dock: TrainerNavItem[] = [
-    { href: '/trainer', label: 'Сегодня', icon: Home, exact: true },
-    {
-      href: scheduleHref,
-      label: 'Расписание',
-      icon: CalendarDays,
-      module: mode.showPt ? 'trainer_calendar' : undefined,
-    },
-    {
-      href: '#quick',
-      label: 'Действия',
-      icon: Plus,
-      center: true,
-    },
-    {
-      href: crm.href,
-      label: crm.label,
-      icon: crm.href.includes('clients') ? Users : ClipboardCheck,
-      module: crm.href.includes('clients') ? 'trainer_crm' : undefined,
-    },
-    {
-      href: '/trainer/more',
-      label: 'Ещё',
-      icon: LayoutGrid,
-    },
-  ];
+  const dock: TrainerNavItem[] = mode.clubPtDock
+    ? [
+        { href: '/trainer', label: 'Сегодня', icon: Home, exact: true },
+        {
+          href: scheduleHref,
+          label: 'Расписание',
+          icon: CalendarDays,
+          module: 'trainer_calendar',
+        },
+        {
+          href: '/trainer/clients',
+          label: 'Клиенты',
+          icon: Users,
+          module: 'trainer_crm',
+        },
+        {
+          href: '/trainer/my-payments',
+          label: 'Расчёты',
+          icon: Scale,
+        },
+        {
+          href: '/trainer/more',
+          label: 'Ещё',
+          icon: LayoutGrid,
+        },
+      ]
+    : [
+        { href: '/trainer', label: 'Сегодня', icon: Home, exact: true },
+        {
+          href: scheduleHref,
+          label: 'Расписание',
+          icon: CalendarDays,
+          module: mode.showPt ? 'trainer_calendar' : undefined,
+        },
+        {
+          href: '#quick',
+          label: 'Действия',
+          icon: Plus,
+          center: true,
+        },
+        {
+          href: crm.href,
+          label: crm.label,
+          icon: crm.href.includes('clients') ? Users : ClipboardCheck,
+          module: crm.href.includes('clients') ? 'trainer_crm' : undefined,
+        },
+        {
+          href: '/trainer/more',
+          label: 'Ещё',
+          icon: LayoutGrid,
+        },
+      ];
 
   const more: TrainerNavItem[] = [];
+
+  if (mode.clubPtDock) {
+    more.push({
+      href: '#quick',
+      label: 'Быстрые действия',
+      icon: Plus,
+      center: true,
+    });
+  }
 
   if (mode.showTimesheet) {
     more.push({
@@ -99,7 +143,7 @@ export function buildTrainerV2Nav(
   if (mode.showPtControl) {
     more.push({
       href: '/trainer/my-sessions',
-      label: 'Контроль',
+      label: 'Журнал',
       icon: ClipboardCheck,
     });
   }
@@ -110,11 +154,12 @@ export function buildTrainerV2Nav(
       icon: Wallet,
     });
   }
-  if (mode.showOwnLedger) {
+  // Club dock already has «Расчёты»; other cabinets keep it in More.
+  if (mode.showOwnLedger && !mode.clubPtDock) {
     more.push({
       href: '/trainer/my-payments',
-      label: 'Мои оплаты',
-      icon: Wallet,
+      label: 'Расчёты',
+      icon: Scale,
     });
   }
   more.push({
@@ -159,6 +204,12 @@ export function navItemActive(pathname: string, item: TrainerNavItem): boolean {
       pathname.startsWith('/trainer/schedule') ||
       pathname.startsWith('/trainer/gp-schedule')
     );
+  }
+  if (item.href === '/trainer/my-payments') {
+    return pathname.startsWith('/trainer/my-payments');
+  }
+  if (item.href === '/trainer/my-sessions') {
+    return pathname.startsWith('/trainer/my-sessions');
   }
   return false;
 }

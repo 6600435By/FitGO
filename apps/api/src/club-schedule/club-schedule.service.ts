@@ -565,7 +565,7 @@ export class ClubScheduleService {
         capacity: Math.max(r.capacity ?? 0, r.bookedCount, 1),
         attended: r.attendedCount ?? 0,
         approvalPhase: phase,
-        approvalLabel: sessionApprovalLabelRu(phase),
+        approvalLabel: sessionApprovalLabelRu(phase, 'PT'),
         payrollLocked: r.payrollLocked ?? false,
       };
     });
@@ -620,9 +620,10 @@ export class ClubScheduleService {
         sessionKey: `fitgo:PT:${b.id}`,
         booked: 1,
         capacity: 1,
-        attended: status === 'done' ? 1 : 0,
+        // Clock «done» ≠ attendance. Only an explicit COMPLETED booking counts.
+        attended: b.status === PersonalBookingStatus.COMPLETED ? 1 : 0,
         approvalPhase: phase,
-        approvalLabel: sessionApprovalLabelRu(phase),
+        approvalLabel: sessionApprovalLabelRu(phase, 'PT'),
         payrollLocked: false,
       };
     });
@@ -677,9 +678,9 @@ export class ClubScheduleService {
         sessionKey: `fitgo:SPA:${b.id}`,
         booked: 1,
         capacity: 1,
-        attended: status === 'done' ? 1 : 0,
+        attended: b.status === SpaBookingStatus.COMPLETED ? 1 : 0,
         approvalPhase: phase,
-        approvalLabel: sessionApprovalLabelRu(phase),
+        approvalLabel: sessionApprovalLabelRu(phase, 'SPA'),
         payrollLocked: false,
       };
     });

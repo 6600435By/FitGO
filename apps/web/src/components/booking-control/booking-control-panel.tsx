@@ -4,6 +4,7 @@ import {
   bookingControlIssueReasons,
   bookingControlMatchesSelectedReasons,
   bookingControlQueueSegment,
+  bookingControlRowStateLabelRu,
   humanDocumentNumber,
   paymentLabelRu,
   payTagLabelRu,
@@ -2661,6 +2662,11 @@ export function BookingControlPanel({
                 <span className="mt-0.5 block text-xs opacity-90">
                   {pendingCount}
                 </span>
+                {trainerKindFilter ? (
+                  <span className="mt-0.5 block text-[10px] font-normal leading-snug opacity-70">
+                    Шире «Закрыть сейчас»: оплата и админ тоже
+                  </span>
+                ) : null}
               </button>
               <button
                 type="button"
@@ -3077,7 +3083,7 @@ export function BookingControlPanel({
                 <span
                   className={`shrink-0 text-[11px] ${HINT_TEXT_COLOR[approvalHintTone(item.approvalLabel)]}`}
                 >
-                  {item.approvalLabel}
+                  {bookingControlRowStateLabelRu(item, nowMs)}
                 </span>
               </li>
             ))}
@@ -3253,13 +3259,15 @@ export function BookingControlPanel({
                             проверка
                           </span>
                         ) : null}
-                        {item.approvalLabel ? (
+                        {item.approvalLabel ||
+                        item.approvalPhase ||
+                        item.status === 'COMPLETED' ? (
                           <span
                             className={hintBadgeClass(
                               approvalHintTone(item.approvalLabel),
                             )}
                           >
-                            {item.approvalLabel}
+                            {bookingControlRowStateLabelRu(item, nowMs)}
                           </span>
                         ) : null}
                         {item.missingJournal && api.adoptSpaToJournal ? (
@@ -3352,14 +3360,16 @@ export function BookingControlPanel({
                             проверка
                           </span>
                         ) : null}
-                        {item.approvalLabel ? (
+                        {item.approvalLabel ||
+                        item.approvalPhase ||
+                        item.status === 'COMPLETED' ? (
                           <span
                             className={hintBadgeClass(
                               approvalHintTone(item.approvalLabel),
                               true,
                             )}
                           >
-                            {item.approvalLabel}
+                            {bookingControlRowStateLabelRu(item, nowMs)}
                           </span>
                         ) : null}
                         {item.missingJournal && api.adoptSpaToJournal ? (
@@ -4456,12 +4466,13 @@ export function BookingControlPanel({
                           </div>
                         );
                       }
-                      const ptLabel =
-                        selected.approvalLabel ||
-                        (selected.approvalPhase === 'PENDING_ADMIN'
-                          ? 'Ждёт администратора'
-                          : 'Ждёт вашей отметки');
-                      const ptTone = approvalHintTone(ptLabel);
+                      const ptLabel = bookingControlRowStateLabelRu(
+                        selected,
+                        nowMs,
+                      );
+                      const ptTone = approvalHintTone(
+                        selected.approvalLabel || ptLabel,
+                      );
                       return (
                         <div className={`space-y-2 ${HINT_PANEL_COLOR[ptTone]}`}>
                           <p className={HINT_TEXT_COLOR[ptTone]}>{ptLabel}</p>

@@ -701,6 +701,7 @@ export * from './pricing-analytics';
 export * from './visit-mix';
 export * from './membership-included';
 export * from './floor-staff-home';
+export * from './trainer-session-state';
 export * from './trainer-month-analytics';
 export * from './discrepancies';
 export * from './admin-home-layout';
@@ -1211,6 +1212,10 @@ export interface TrainerClientDetail {
   /** «Тренер клуб» personal ledger snapshot (only when trainer has trainerClub). */
   ownLedger?: {
     debtMinor: number;
+    /** Per-client one-shot price; null → default from settings. */
+    sessionPriceMinor?: number | null;
+    defaultSessionPriceMinor?: number | null;
+    effectiveSessionPriceMinor?: number | null;
     activePackage?: {
       id: string;
       title: string;

@@ -17,10 +17,17 @@ export function Countdown({
   to,
   className,
   compact,
+  /**
+   * When the target instant has passed. Default «Сейчас» is only for
+   * live/upcoming countdowns — trainers should pass an explain label so
+   * elapsed time is not mistaken for a confirmed visit.
+   */
+  whenElapsed = 'Сейчас',
 }: {
   to: string | Date;
   className?: string;
   compact?: boolean;
+  whenElapsed?: string | null;
 }) {
   const target = typeof to === 'string' ? new Date(to) : to;
   const [now, setNow] = useState(() => new Date());
@@ -32,9 +39,15 @@ export function Countdown({
 
   const { days, hours, minutes, seconds, ms } = partsUntil(target, now);
   if (ms <= 0) {
+    if (!whenElapsed) return null;
     return (
-      <span className={cn('font-display text-sm font-semibold text-forma-400', className)}>
-        Сейчас
+      <span
+        className={cn(
+          'font-display text-sm font-semibold text-forma-400',
+          className,
+        )}
+      >
+        {whenElapsed}
       </span>
     );
   }
@@ -48,7 +61,12 @@ export function Countdown({
       );
     }
     return (
-      <span className={cn('font-display tabular-nums text-sm text-forma-400', className)}>
+      <span
+        className={cn(
+          'font-display tabular-nums text-sm text-forma-400',
+          className,
+        )}
+      >
         {String(hours).padStart(2, '0')}:{String(minutes).padStart(2, '0')}:
         {String(seconds).padStart(2, '0')}
       </span>
@@ -74,7 +92,9 @@ export function Countdown({
             <span className="font-display text-lg font-bold tabular-nums text-white">
               {String(unit!.value).padStart(2, '0')}
             </span>
-            <span className="text-[10px] uppercase text-zinc-500">{unit!.label}</span>
+            <span className="text-[10px] uppercase text-zinc-500">
+              {unit!.label}
+            </span>
           </div>
         ))}
     </div>

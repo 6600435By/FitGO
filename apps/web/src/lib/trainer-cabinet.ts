@@ -22,12 +22,17 @@ export type TrainerCabinetMode = {
   showPt: boolean;
   /** «Табель ПТ» — только штатный ПТ (не «Тренер клуб»). */
   showTimesheet: boolean;
-  /** «Контроль» в «Ещё» — только штатный ПТ (у чистого ГП контроль в доке). */
+  /** Журнал / контроль записей (штатный ПТ, legacy, или «Тренер клуб»). */
   showPtControl: boolean;
   /** Payroll menu entry (club salary). */
   showPayroll: boolean;
-  /** Personal ledger «Мои оплаты» for trainerClub. */
+  /** Personal ledger «Расчёты» for trainerClub. */
   showOwnLedger: boolean;
+  /**
+   * Compact dock for pure «Тренер клуб»:
+   * Сегодня / Расписание / Клиенты / Расчёты / Ещё (no center «+»).
+   */
+  clubPtDock: boolean;
   /** Messages like pure GP (no client chat). */
   groupOnlyMessaging: boolean;
 };
@@ -44,9 +49,11 @@ export function trainerCabinetMode(
   const showGp = groupCabinet || isLegacy;
   const showPt = hasPt || isLegacy;
   const showTimesheet = isStaffPt || isLegacy;
-  const showPtControl = isStaffPt || isLegacy;
+  // Journal is already available in API for trainerClub; UI used to hide it.
+  const showPtControl = isStaffPt || isLegacy || Boolean(flags?.trainerClub);
   const showPayroll = isGp || isReformer || isStaffPt;
   const showOwnLedger = Boolean(flags?.trainerClub);
+  const clubPtDock = showOwnLedger && showPt && !showGp && !isStaffPt;
   const groupOnlyMessaging = groupCabinet && !hasPt;
 
   return {
@@ -61,6 +68,7 @@ export function trainerCabinetMode(
     showPtControl,
     showPayroll,
     showOwnLedger,
+    clubPtDock,
     groupOnlyMessaging,
   };
 }

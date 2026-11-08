@@ -6,6 +6,7 @@ import type {
   FloorStaffMonthMetric,
   TrainerMonthAnalytics,
 } from '@fitgo/shared-types';
+import { TRAINER_CONTROL_SCOPES } from '@fitgo/shared-types';
 import {
   CalendarCheck,
   ClipboardCheck,
@@ -475,6 +476,13 @@ export function FloorStaffHomePage({
       : controlBase;
 
   const pending = data.control.pendingMe;
+  const todayNeedsConfirm = data.today.sessions.some((s) => s.needsConfirm);
+  const pendingEmptyCopy =
+    pending > 0
+      ? 'Ждут вашей отметки →'
+      : todayNeedsConfirm
+        ? 'Есть слот без подтверждённого результата — откройте журнал'
+        : TRAINER_CONTROL_SCOPES.pendingMe.emptyRu;
 
   return (
     <div className="mx-auto max-w-6xl space-y-4">
@@ -620,7 +628,7 @@ export function FloorStaffHomePage({
             href={reviewHref}
             className={cn(
               'card !p-3.5 block transition sm:!p-4',
-              pending > 0
+              pending > 0 || todayNeedsConfirm
                 ? 'border-amber-500/40 bg-amber-500/5 hover:border-amber-500/60'
                 : 'hover:border-fitgo-500/40',
             )}
@@ -629,16 +637,22 @@ export function FloorStaffHomePage({
               <ClipboardCheck
                 className={cn(
                   'mt-0.5 h-5 w-5 shrink-0',
-                  pending > 0 ? 'text-amber-400' : 'text-fitgo-400',
+                  pending > 0 || todayNeedsConfirm
+                    ? 'text-amber-400'
+                    : 'text-fitgo-400',
                 )}
               />
               <div className="min-w-0 flex-1">
-                <p className="stat-label">Контроль записей</p>
+                <p className="stat-label">
+                  {TRAINER_CONTROL_SCOPES.pendingMe.titleRu}
+                </p>
                 <p className="stat-value text-3xl leading-none">{pending}</p>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  {pending > 0
-                    ? 'Ждут вашей отметки →'
-                    : 'Всё закрыто с вашей стороны'}
+                  {pendingEmptyCopy}
+                </p>
+                <p className="mt-1 text-[11px] leading-snug text-slate-600">
+                  {data.control.scopeLabel ??
+                    TRAINER_CONTROL_SCOPES.pendingMe.scopeRu}
                 </p>
                 {data.control.pendingAdmin > 0 ? (
                   <p className="mt-1 text-[11px] text-slate-500">

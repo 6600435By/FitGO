@@ -105,6 +105,7 @@ describe('bookingControlQueueSegment', () => {
     const item = row({
       sessionKey: 'f',
       startAt: '2026-10-30T10:00:00.000Z',
+      endAt: '2026-10-30T11:00:00.000Z',
       status: 'SCHEDULED',
       approvalPhase: 'PENDING_TRAINER',
       payment: 'PAID',
@@ -117,10 +118,24 @@ describe('bookingControlQueueSegment', () => {
     const item = row({
       sessionKey: 'u',
       startAt: '2026-10-30T10:00:00.000Z',
+      endAt: '2026-10-30T11:00:00.000Z',
       status: 'SCHEDULED',
       payment: 'DEBT',
     });
     assert.equal(bookingControlQueueSegment(item, NOW), 'pending');
+  });
+
+  it('started but not ended: approval-wait alone is not pending yet', () => {
+    const item = row({
+      sessionKey: 'live',
+      startAt: '2026-10-29T11:00:00.000Z',
+      endAt: '2026-10-29T13:00:00.000Z',
+      status: 'SCHEDULED',
+      approvalPhase: 'PENDING_PERFORMER',
+      payment: 'PAID',
+    });
+    assert.equal(bookingControlHasControlWork(item, NOW), false);
+    assert.equal(bookingControlQueueSegment(item, NOW), 'done');
   });
 
   it('past pending approval is pending', () => {
@@ -128,6 +143,8 @@ describe('bookingControlQueueSegment', () => {
       bookingControlQueueSegment(
         row({
           sessionKey: 'p',
+          startAt: '2026-10-28T10:00:00.000Z',
+          endAt: '2026-10-28T11:00:00.000Z',
           approvalPhase: 'PENDING_ADMIN',
           payment: 'PAID',
         }),

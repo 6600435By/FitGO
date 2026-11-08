@@ -9,8 +9,9 @@ import {
   SeatsMeter,
   SkeletonCard,
 } from '@fitgo/forma-ui';
-import { addDays, format } from 'date-fns';
-import { useEffect, useMemo, useState } from 'react';
+import { addDays, format, parseISO } from 'date-fns';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFeatures } from '@/components/features-provider';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -72,9 +73,50 @@ export function TrainerSchedulePage() {
   const forma = isEnabled('trainer_ui_v2');
   const me = getUser();
   const freeSchedule = Boolean(me?.trainerClub && !me?.trainerStaff);
-  const [date, setDate] = useState(defaultCalendarDate);
-  const [view, setView] = useState<ScheduleView>(() =>
-    typeof window !== 'undefined' && window.innerWidth < 640 ? 'day' : 'week',
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [date, setDate] = useState(() => {
+    const raw = searchParams.get('date');
+    if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return parseISO(`${raw}T12:00:00`);
+    }
+    return defaultCalendarDate();
+  });
+  const [view, setView] = useState<ScheduleView>(() => {
+    const v = searchParams.get('view');
+    if (v === 'day' || v === 'week') return v;
+    return typeof window !== 'undefined' && window.innerWidth < 640
+      ? 'day'
+      : 'week';
+  });
+
+  const syncUrl = useCallback(
+    (nextDate: Date, nextView: ScheduleView) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('date', format(nextDate, 'yyyy-MM-dd'));
+      params.set('view', nextView);
+      const clientId = searchParams.get('clientId');
+      if (clientId) params.set('clientId', clientId);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
+  const updateDate = useCallback(
+    (next: Date) => {
+      setDate(next);
+      syncUrl(next, view);
+    },
+    [syncUrl, view],
+  );
+
+  const updateView = useCallback(
+    (next: ScheduleView) => {
+      setView(next);
+      syncUrl(date, next);
+    },
+    [date, syncUrl],
   );
   const [filter, setFilter] = useState<ScheduleTypeFilter>('all');
   const [showWorkSchedule, setShowWorkSchedule] = useState(false);
@@ -263,7 +305,7 @@ export function TrainerSchedulePage() {
           <DateStrip
             days={dateStripDays}
             value={format(date, 'yyyy-MM-dd')}
-            onChange={(key) => setDate(new Date(`${key}T12:00:00`))}
+            onChange={(key) => updateDate(new Date(`${key}T12:00:00`))}
           />
           <div className="flex flex-wrap items-center justify-between gap-3">
             <SegmentedControl<ScheduleTypeFilter>
@@ -279,7 +321,7 @@ export function TrainerSchedulePage() {
             <SegmentedControl<ScheduleView>
               layoutId="sched-view"
               value={view}
-              onChange={setView}
+              onChange={updateView}
               options={[
                 { value: 'day', label: 'День' },
                 { value: 'week', label: 'Неделя' },
@@ -293,10 +335,10 @@ export function TrainerSchedulePage() {
           <ScheduleToolbar
             date={date}
             view={view}
-            onDateChange={setDate}
-            onViewChange={setView}
-            onPrev={() => setDate((d) => shiftDateByView(d, view, -1))}
-            onNext={() => setDate((d) => shiftDateByView(d, view, 1))}
+            onDateChange={updateDate}
+            onViewChange={updateView}
+            onPrev={() => updateDate(shiftDateByView(date, view, -1))}
+            onNext={() => updateDate(shiftDateByView(date, view, 1))}
           />
           <ScheduleTypeFilterBar value={filter} onChange={setFilter} />
         </>

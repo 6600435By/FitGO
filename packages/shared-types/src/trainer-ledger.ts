@@ -68,6 +68,11 @@ export interface TrainerLedgerClientSnapshot {
   clientId: string;
   clientName: string;
   debtMinor: number;
+  /** Client override; null → use trainer default. */
+  sessionPriceMinor?: number | null;
+  defaultSessionPriceMinor?: number | null;
+  /** sessionPriceMinor ?? defaultSessionPriceMinor */
+  effectiveSessionPriceMinor?: number | null;
   activePackage?: TrainerClientPackageView | null;
   packages: TrainerClientPackageView[];
   payments: TrainerClientPaymentView[];

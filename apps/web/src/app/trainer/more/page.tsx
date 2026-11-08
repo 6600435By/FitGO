@@ -3,7 +3,12 @@
 import { ListGroup, ListRow, PageHeader, Skeleton } from '@fitgo/forma-ui';
 import { useEffect, useMemo, useState } from 'react';
 import { useFeatures } from '@/components/features-provider';
-import { buildTrainerV2Nav } from '@/components/trainer-shell/trainer-nav';
+import { QuickActionsSheet } from '@/components/trainer-shell/quick-actions-sheet';
+import { NoteMeasurementSheet } from '@/components/trainer-shell/note-measurement-sheet';
+import {
+  buildTrainerV2Nav,
+  trainerMoreSubtitle,
+} from '@/components/trainer-shell/trainer-nav';
 import { api, type AuthUser } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 
@@ -12,6 +17,8 @@ export default function TrainerMorePage() {
   const [user, setUser] = useState<AuthUser | null>(() => getUser());
   const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
 
   useEffect(() => {
     const token = getToken();
@@ -36,7 +43,7 @@ export default function TrainerMorePage() {
     };
   }, [isEnabled]);
 
-  const { more } = useMemo(
+  const { mode, more } = useMemo(
     () => buildTrainerV2Nav(user, (k) => isEnabled(k as never)),
     [user, isEnabled],
   );
@@ -52,15 +59,23 @@ export default function TrainerMorePage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Ещё"
-        subtitle="Табель, смены, оплаты, сообщения и профиль"
-      />
+      <PageHeader title="Ещё" subtitle={trainerMoreSubtitle(more)} />
       <ListGroup>
         {more.map((item) => {
           const Icon = item.icon;
           const badge =
             item.badgeKey === 'messages' && unread > 0 ? unread : undefined;
+          if (item.center || item.href === '#quick') {
+            return (
+              <ListRow
+                key="quick"
+                title={item.label}
+                leading={<Icon className="h-5 w-5 text-zinc-400" />}
+                chevron
+                onClick={() => setQuickOpen(true)}
+              />
+            );
+          }
           return (
             <ListRow
               key={item.href}
@@ -79,6 +94,13 @@ export default function TrainerMorePage() {
           );
         })}
       </ListGroup>
+      <QuickActionsSheet
+        open={quickOpen}
+        onOpenChange={setQuickOpen}
+        mode={mode}
+        onNoteMeasurement={() => setNoteOpen(true)}
+      />
+      <NoteMeasurementSheet open={noteOpen} onOpenChange={setNoteOpen} />
     </div>
   );
 }

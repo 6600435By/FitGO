@@ -13,6 +13,11 @@ import {
 import { ru } from 'date-fns/locale';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { ClubScheduleEvent } from '@fitgo/shared-types';
+import {
+  sessionClockPhase,
+  sessionResultPendingFromPhase,
+  sessionStateExplainRu,
+} from '@fitgo/shared-types';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
@@ -51,6 +56,20 @@ function isPendingConfirmation(ev: ClubScheduleEvent): boolean {
   }
   // Without sessionKey the card cannot be opened/confirmed — not a real queue item.
   return Boolean(ev.sessionKey);
+}
+
+/** Same explain line as Today / journal — clock ≠ attendance / pay / payroll. */
+function scheduleEventStateLabel(ev: ClubScheduleEvent): string {
+  const clock = sessionClockPhase({
+    startAt: ev.startAt,
+    endAt: ev.endAt,
+    cancelled: ev.status === 'cancelled',
+  });
+  const result = sessionResultPendingFromPhase(ev.approvalPhase);
+  if (clock === 'ELAPSED' || result !== 'none') {
+    return sessionStateExplainRu({ clock, result });
+  }
+  return ev.approvalLabel || ev.status;
 }
 
 function normalizeTypes(raw: string | null): string {
@@ -112,7 +131,7 @@ function EventCard({
             {ev.booked != null
               ? `записано ${ev.booked}${ev.capacity ? `/${ev.capacity}` : ''} · `
               : ''}
-            {ev.approvalLabel || ev.status}
+            {scheduleEventStateLabel(ev)}
             {ev.payrollLocked ? ' · ЗП закрыт' : ''}
             {clickable ? ' · открыть →' : ''}
           </p>

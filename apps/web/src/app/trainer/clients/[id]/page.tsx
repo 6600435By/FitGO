@@ -22,7 +22,7 @@ import {
 } from '@fitgo/shared-types';
 import { MiniBars, SegmentedControl, Sparkline } from '@fitgo/forma-ui';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -67,6 +67,29 @@ function messageTemplates(client: TrainerClientDetail) {
 
 export default function TrainerClientDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const returnDate = searchParams.get('date');
+  const returnFrom = searchParams.get('from');
+  const backHref = useMemo(() => {
+    if (returnFrom === 'schedule' || returnDate) {
+      const q = new URLSearchParams();
+      if (returnDate) q.set('date', returnDate);
+      if (id) q.set('clientId', id);
+      const qs = q.toString();
+      return `/trainer/schedule${qs ? `?${qs}` : ''}`;
+    }
+    if (returnFrom === 'journal') {
+      const q = new URLSearchParams();
+      if (returnDate) {
+        q.set('from', returnDate);
+        q.set('to', returnDate);
+      }
+      if (id) q.set('clientId', id);
+      const qs = q.toString();
+      return `/trainer/my-sessions${qs ? `?${qs}` : ''}`;
+    }
+    return '/trainer/clients';
+  }, [returnDate, returnFrom, id]);
   const [client, setClient] = useState<TrainerClientDetail | null>(null);
   const [progress, setProgress] = useState<TrainerClientProgress | null>(null);
   const [homework, setHomework] = useState<{
@@ -82,13 +105,21 @@ export default function TrainerClientDetailPage() {
   const [feedback, setFeedback] = useState('');
   const [error, setError] = useState('');
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [sessionPriceInput, setSessionPriceInput] = useState('');
+  const [priceBusy, setPriceBusy] = useState(false);
 
   const load = () => {
     const token = getToken();
     if (!token || !id) return;
     api
       .trainerClient(token, id)
-      .then(setClient)
+      .then((c) => {
+        setClient(c);
+        const override = c.ownLedger?.sessionPriceMinor;
+        setSessionPriceInput(
+          override != null ? String(override / 100) : '',
+        );
+      })
       .catch((err) => setError(err.message));
     api
       .trainerClientHomework(token, id)
@@ -190,6 +221,13 @@ export default function TrainerClientDetailPage() {
   return (
     <div className="space-y-4">
       <div className="card space-y-3">
+        <Link
+          href={backHref}
+          className="inline-block text-xs text-forma-400 underline"
+        >
+          ← Назад
+          {returnDate ? ` · ${returnDate}` : ''}
+        </Link>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold">
@@ -201,7 +239,9 @@ export default function TrainerClientDetailPage() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Link
-              href={`/trainer/schedule?clientId=${id}`}
+              href={`/trainer/schedule?clientId=${encodeURIComponent(id)}${
+                returnDate ? `&date=${encodeURIComponent(returnDate)}` : ''
+              }`}
               className="btn-secondary text-sm"
             >
               Записать
@@ -279,11 +319,140 @@ export default function TrainerClientDetailPage() {
                 BYN
               </p>
             )}
+            <div className="mt-3 space-y-1.5 border-t border-white/10 pt-2">
+              <p className="text-xs text-forma-400">
+                Цена разовой тренировки
+                {client.ownLedger.defaultSessionPriceMinor != null
+                  ? ` · по умолчанию ${(
+                      client.ownLedger.defaultSessionPriceMinor / 100
+                    ).toLocaleString('ru-RU', {
+                      minimumFractionDigits: 0,
+                      maximumFractionDigits: 2,
+                    })} BYN`
+                  : ' · в настройках «Расчёты» не задана'}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  className="input w-28"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  placeholder="Как в настройках"
+                  value={sessionPriceInput}
+                  onChange={(e) => setSessionPriceInput(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary px-3 py-2 text-xs"
+                  disabled={priceBusy}
+                  onClick={async () => {
+                    const token = getToken();
+                    if (!token || !id) return;
+                    setPriceBusy(true);
+                    setError('');
+                    try {
+                      const raw = sessionPriceInput.trim();
+                      const priceMinor =
+                        raw === ''
+                          ? null
+                          : Math.round((Number(raw) || 0) * 100);
+                      const res = await api.trainerLedgerSetClientSessionPrice(
+                        token,
+                        id,
+                        priceMinor,
+                      );
+                      setClient((prev) =>
+                        prev?.ownLedger
+                          ? {
+                              ...prev,
+                              ownLedger: {
+                                ...prev.ownLedger,
+                                sessionPriceMinor: res.sessionPriceMinor,
+                                defaultSessionPriceMinor:
+                                  res.defaultSessionPriceMinor,
+                                effectiveSessionPriceMinor:
+                                  res.effectiveSessionPriceMinor,
+                              },
+                            }
+                          : prev,
+                      );
+                      setSessionPriceInput(
+                        res.sessionPriceMinor != null
+                          ? String(res.sessionPriceMinor / 100)
+                          : '',
+                      );
+                      setFeedback(
+                        res.sessionPriceMinor == null
+                          ? 'Цена сброшена к настройкам'
+                          : 'Индивидуальная цена сохранена',
+                      );
+                    } catch (err) {
+                      setError(
+                        err instanceof Error
+                          ? err.message
+                          : 'Не удалось сохранить цену',
+                      );
+                    } finally {
+                      setPriceBusy(false);
+                    }
+                  }}
+                >
+                  {priceBusy ? '…' : 'Сохранить'}
+                </button>
+                {client.ownLedger.sessionPriceMinor != null ? (
+                  <button
+                    type="button"
+                    className="text-xs text-forma-400 underline"
+                    disabled={priceBusy}
+                    onClick={async () => {
+                      const token = getToken();
+                      if (!token || !id) return;
+                      setPriceBusy(true);
+                      try {
+                        const res =
+                          await api.trainerLedgerSetClientSessionPrice(
+                            token,
+                            id,
+                            null,
+                          );
+                        setClient((prev) =>
+                          prev?.ownLedger
+                            ? {
+                                ...prev,
+                                ownLedger: {
+                                  ...prev.ownLedger,
+                                  sessionPriceMinor: null,
+                                  defaultSessionPriceMinor:
+                                    res.defaultSessionPriceMinor,
+                                  effectiveSessionPriceMinor:
+                                    res.effectiveSessionPriceMinor,
+                                },
+                              }
+                            : prev,
+                        );
+                        setSessionPriceInput('');
+                        setFeedback('Цена сброшена к настройкам');
+                      } catch (err) {
+                        setError(
+                          err instanceof Error
+                            ? err.message
+                            : 'Не удалось сбросить',
+                        );
+                      } finally {
+                        setPriceBusy(false);
+                      }
+                    }}
+                  >
+                    Как в настройках
+                  </button>
+                ) : null}
+              </div>
+            </div>
             <Link
               href="/trainer/my-payments"
               className="mt-2 inline-block text-xs text-forma-400 underline"
             >
-              Мои оплаты
+              Расчёты
             </Link>
           </div>
         )}

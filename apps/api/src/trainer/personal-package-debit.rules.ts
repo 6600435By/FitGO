@@ -57,6 +57,27 @@ export function afterPackageDebit(sessionsRemaining: number): {
   };
 }
 
+/**
+ * Effective one-shot price: booking override → client override → trainer default.
+ * Wall-clock / schedule never sets this.
+ */
+export function resolvePersonalSessionPriceMinor(input: {
+  bookingPriceMinor?: number | null;
+  clientSessionPriceMinor?: number | null;
+  defaultSessionPriceMinor?: number | null;
+}): number {
+  if (input.bookingPriceMinor != null && input.bookingPriceMinor >= 0) {
+    return input.bookingPriceMinor;
+  }
+  if (
+    input.clientSessionPriceMinor != null &&
+    input.clientSessionPriceMinor >= 0
+  ) {
+    return input.clientSessionPriceMinor;
+  }
+  return input.defaultSessionPriceMinor ?? 0;
+}
+
 export function decidePersonalSessionSettle(input: {
   booking: {
     ledgerSettledAt?: Date | null;
@@ -67,6 +88,8 @@ export function decidePersonalSessionSettle(input: {
   } | null;
   activePackage?: ActivePackageCandidate | null;
   defaultSessionPriceMinor?: number | null;
+  /** Per-client override from TrainerClientBalance.sessionPriceMinor. */
+  clientSessionPriceMinor?: number | null;
   now?: Date;
 }): PersonalSettleDecision {
   const b = input.booking;
@@ -89,7 +112,11 @@ export function decidePersonalSessionSettle(input: {
     };
   }
 
-  const price = b.priceMinor ?? input.defaultSessionPriceMinor ?? 0;
+  const price = resolvePersonalSessionPriceMinor({
+    bookingPriceMinor: b.priceMinor,
+    clientSessionPriceMinor: input.clientSessionPriceMinor,
+    defaultSessionPriceMinor: input.defaultSessionPriceMinor,
+  });
   if (price > 0) return { action: 'raise_debt', priceMinor: price };
   return { action: 'mark_settled_zero' };
 }

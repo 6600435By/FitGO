@@ -983,6 +983,25 @@ export class PersonalTrainingService {
           ? 'CRM_UNMATCHED'
           : 'NONE';
 
+    let priceMinor: number | undefined;
+    if (personal && !isComplimentary) {
+      const [bal, profile] = await Promise.all([
+        this.prisma.trainerClientBalance.findUnique({
+          where: {
+            trainerId_clientId: { trainerId: user.sub, clientId },
+          },
+          select: { sessionPriceMinor: true },
+        }),
+        this.prisma.staffProfile.findUnique({
+          where: { userId: user.sub },
+          select: { defaultSessionPriceMinor: true },
+        }),
+      ]);
+      const resolved =
+        bal?.sessionPriceMinor ?? profile?.defaultSessionPriceMinor ?? null;
+      if (resolved != null && resolved > 0) priceMinor = resolved;
+    }
+
     const booking = await this.prisma.personalTrainingBooking.create({
       data: {
         trainerId: user.sub,
@@ -1004,6 +1023,7 @@ export class PersonalTrainingService {
         bookedByUserId: control.bookedByUserId,
         clientIssue: clientIssue as never,
         payKind: isComplimentary ? 'GIFT' : 'UNKNOWN',
+        ...(priceMinor != null ? { priceMinor } : {}),
         ...(clientIssue !== 'NONE' && !personal
           ? { trustBand: 'AMBER' as never }
           : {}),

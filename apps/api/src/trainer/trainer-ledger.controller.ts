@@ -45,6 +45,19 @@ export class TrainerLedgerController {
     return this.ledger.setDefaultSessionPrice(user, dto.priceMinor ?? null);
   }
 
+  @Patch('clients/:clientId/session-price')
+  setClientSessionPrice(
+    @CurrentUser() user: JwtPayload,
+    @Param('clientId') clientId: string,
+    @Body() dto: SetDefaultSessionPriceDto,
+  ) {
+    return this.ledger.setClientSessionPrice(
+      user,
+      clientId,
+      dto.priceMinor ?? null,
+    );
+  }
+
   @Post('sell')
   sellPackage(@CurrentUser() user: JwtPayload, @Body() dto: SellPackageDto) {
     return this.ledger.sellPackage(user, dto);

@@ -1055,6 +1055,25 @@ export const api = {
       token,
     ),
 
+  trainerLedgerSetClientSessionPrice: (
+    token: string,
+    clientId: string,
+    priceMinor: number | null,
+  ) =>
+    request<{
+      clientId: string;
+      sessionPriceMinor: number | null;
+      defaultSessionPriceMinor: number | null;
+      effectiveSessionPriceMinor: number | null;
+    }>(
+      `/trainer/ledger/clients/${encodeURIComponent(clientId)}/session-price`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ priceMinor }),
+      },
+      token,
+    ),
+
   trainerLedgerSellPackage: (
     token: string,
     data: {

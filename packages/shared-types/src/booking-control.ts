@@ -1,5 +1,11 @@
 /** «Контроль записей» — unified register of 1C class docs + unmatched FitGO bookings. */
 
+import {
+  sessionClockPhase,
+  sessionResultPendingFromPhase,
+  sessionStateExplainRu,
+} from './trainer-session-state';
+
 export type BookingControlKind = 'GROUP' | 'PT' | 'SPA' | 'SOLARIUM';
 
 export type BookingControlStatus =
@@ -623,7 +629,8 @@ export type BookingControlQueueSegment = 'pending' | 'done' | 'upcoming';
 
 /**
  * Why a row is still in «На контроле» (chips).
- * Approval-wait without these is pending only after startAt.
+ * Approval-wait without these is pending only after the slot end
+ * (see {@link bookingControlApprovalDue} / trainer-session-state).
  */
 export type BookingControlIssueReason =
   | 'review'
@@ -634,6 +641,11 @@ export type BookingControlIssueReason =
 const BOOKING_CONTROL_PENDING_PHASES = new Set([
   'PENDING_TRAINER',
   'PENDING_ADMIN',
+  'PENDING_PERFORMER',
+]);
+
+const BOOKING_CONTROL_TRAINER_OWN_PHASES = new Set([
+  'PENDING_TRAINER',
   'PENDING_PERFORMER',
 ]);
 
@@ -676,9 +688,40 @@ function bookingControlApprovalPending(
   return Boolean(phase && BOOKING_CONTROL_PENDING_PHASES.has(phase));
 }
 
+/** Slot end (or start) — when approval-wait becomes due. */
+export function bookingControlApprovalDueMs(
+  item: Pick<BookingControlListItem, 'startAt'> & { endAt?: string },
+): number {
+  if (item.endAt) {
+    const end = Date.parse(item.endAt);
+    if (!Number.isNaN(end)) return end;
+  }
+  return Date.parse(item.startAt);
+}
+
+/**
+ * Trainer’s own confirm still owed (Today «Закрыть сейчас»).
+ * Narrower than «На контроле»: no unpaid / admin-wait / remarks.
+ */
+export function bookingControlTrainerOwnConfirmPending(
+  item: Pick<
+    BookingControlListItem,
+    'status' | 'approvalPhase' | 'startAt'
+  > & { endAt?: string },
+  nowMs: number,
+): boolean {
+  if (item.status === 'CANCELLED') return false;
+  if (bookingControlApprovalDueMs(item) > nowMs) return false;
+  return Boolean(
+    item.approvalPhase &&
+      BOOKING_CONTROL_TRAINER_OWN_PHASES.has(item.approvalPhase),
+  );
+}
+
 /**
  * Row still needs floor/admin work (queue «На контроле»).
- * Future approval-wait alone does not count; structural issues do.
+ * Structural issues count anytime; approval-wait only after slot end.
+ * Broader than Today «Закрыть сейчас» — see TRAINER_CONTROL_SCOPES.
  */
 export function bookingControlHasControlWork(
   item: Pick<
@@ -691,11 +734,11 @@ export function bookingControlHasControlWork(
     | 'missingJournal'
     | 'approvalPhase'
     | 'startAt'
-  >,
+  > & { endAt?: string },
   nowMs: number,
 ): boolean {
   if (bookingControlIssueReasons(item).length > 0) return true;
-  if (new Date(item.startAt).getTime() > nowMs) return false;
+  if (bookingControlApprovalDueMs(item) > nowMs) return false;
   return bookingControlApprovalPending(item.approvalPhase);
 }
 
@@ -714,13 +757,37 @@ export function bookingControlQueueSegment(
     | 'missingJournal'
     | 'approvalPhase'
     | 'startAt'
-  >,
+  > & { endAt?: string },
   nowMs: number,
 ): BookingControlQueueSegment | null {
   if (item.status === 'CANCELLED') return null;
   if (bookingControlHasControlWork(item, nowMs)) return 'pending';
   if (new Date(item.startAt).getTime() > nowMs) return 'upcoming';
   return 'done';
+}
+
+/**
+ * Same explain line as Today / schedule / history for a journal row.
+ * Prefers clock+result wording over short approval chips when time has elapsed.
+ */
+export function bookingControlRowStateLabelRu(
+  item: Pick<
+    BookingControlListItem,
+    'status' | 'startAt' | 'approvalPhase' | 'approvalLabel'
+  > & { endAt?: string },
+  nowMs: number = Date.now(),
+): string {
+  const clock = sessionClockPhase({
+    startAt: item.startAt,
+    endAt: item.endAt,
+    cancelled: item.status === 'CANCELLED',
+    nowMs,
+  });
+  const result = sessionResultPendingFromPhase(item.approvalPhase);
+  if (clock === 'ELAPSED' || clock === 'CANCELLED' || result !== 'none') {
+    return sessionStateExplainRu({ clock, result });
+  }
+  return item.approvalLabel || sessionStateExplainRu({ clock, result });
 }
 
 /** Reason chips: empty selection = all; otherwise OR of selected reasons. */

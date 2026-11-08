@@ -169,7 +169,7 @@ export default function TrainerMyPaymentsPage() {
   if (!data) {
     return (
       <div className="space-y-4">
-        <PageHeader title="Мои оплаты" subtitle="Личный учёт" />
+        <PageHeader title="Расчёты" subtitle="Личный учёт с клиентами" />
         <div className="h-24 animate-pulse rounded-2xl bg-forma-800/40" />
       </div>
     );
@@ -196,8 +196,8 @@ export default function TrainerMyPaymentsPage() {
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Мои оплаты"
-        subtitle="Пакеты, оплаты клиентов и заработок"
+        title="Расчёты"
+        subtitle="Пакеты и оплаты клиентов, должники, долг перед клубом"
         action={
           data.recentPayments.length ? (
             <div className="flex flex-wrap gap-2">

@@ -207,7 +207,7 @@ export function AssignClientDialog({
               }
             >
               <option value="CLUB">Клубная (контроль и ЗП)</option>
-              <option value="PERSONAL">Личная (Мои оплаты)</option>
+              <option value="PERSONAL">Личная (Расчёты)</option>
             </select>
           </div>
         )}
