@@ -522,7 +522,8 @@ export class BookingControlService {
             trainerStaff: b.trainer.trainerStaff,
           },
         );
-        if (personal && filters.hidePersonalPt) continue;
+        // Gift PT from club trainers stays in admin control even on PERSONAL flow.
+        if (personal && filters.hidePersonalPt && !b.isComplimentary) continue;
         if (
           this.onexExistsInMemory(
             onex,

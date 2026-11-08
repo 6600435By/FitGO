@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-const KEY = 'fitgo.trainer.liveMode.v1';
+/** v2: default work mode is timer (basic live timer must be visible). */
+const KEY = 'fitgo.trainer.liveMode.v2';
 
 export type LiveWorkMode = 'free' | 'timer';
 
@@ -12,7 +13,7 @@ export type LiveModePrefs = {
 };
 
 const DEFAULTS: LiveModePrefs = {
-  mode: 'free',
+  mode: 'timer',
   autoRest: true,
 };
 

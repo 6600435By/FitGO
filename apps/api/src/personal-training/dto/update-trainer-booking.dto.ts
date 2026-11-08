@@ -15,6 +15,14 @@ export class UpdateTrainerBookingDto {
   startAt?: string;
 
   @IsOptional()
+  @IsString()
+  clientId?: string;
+
+  @IsOptional()
+  @IsIn(['CONFIRMED', 'COMPLETED', 'CANCELLED'])
+  status?: 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
+
+  @IsOptional()
   @IsIn(['cancel', 'no_show'])
   action?: 'cancel' | 'no_show';
 

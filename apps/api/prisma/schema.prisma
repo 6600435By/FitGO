@@ -840,6 +840,8 @@ model StaffProfile {
   onboardedAt     DateTime?
   /// Default one-shot PT price for «Тренер клуб» ledger (minor units).
   defaultSessionPriceMinor Int?
+  /// When true, clients can see this trainer in self-booking lists.
+  acceptsClientBookings Boolean @default(false)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

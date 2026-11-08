@@ -1,7 +1,10 @@
 'use client';
 
-import type { TrainerAvailabilityBlock, TrainerCalendarEvent } from '@fitgo/shared-types';
-import { useMemo, useRef, type DragEvent } from 'react';
+import type {
+  TrainerAvailabilityBlock,
+  TrainerCalendarEvent,
+} from '@fitgo/shared-types';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   eventBlockClass,
   eventDotClass,
@@ -23,8 +26,6 @@ import {
   weekDayKeys,
 } from './schedule-grid';
 
-const DRAG_MIME = 'application/x-fitgo-pt-booking';
-
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('ru-RU', {
     hour: '2-digit',
@@ -35,6 +36,22 @@ function formatTime(iso: string): string {
 function canDragEvent(event: TrainerCalendarEvent): boolean {
   return event.kind === 'PERSONAL' && Boolean(event.bookingId);
 }
+
+function durationMin(event: TrainerCalendarEvent): number {
+  const ms = new Date(event.endAt).getTime() - new Date(event.startAt).getTime();
+  return Math.max(GRID_SLOT_MINUTES, Math.round(ms / 60000));
+}
+
+type DragPreview = {
+  eventId: string;
+  dayKey: string;
+  startMin: number;
+  durationMin: number;
+  valid: boolean;
+  label: string;
+};
+
+const LONG_PRESS_MS = 280;
 
 export function ScheduleWeekGrid({
   date,
@@ -50,7 +67,21 @@ export function ScheduleWeekGrid({
   onMoveBooking?: (event: TrainerCalendarEvent, newStartAt: string) => void;
 }) {
   const dayKeys = useMemo(() => weekDayKeys(date), [date]);
-  const draggedRef = useRef(false);
+  const [preview, setPreview] = useState<DragPreview | null>(null);
+  const previewRef = useRef<DragPreview | null>(null);
+  const dragEventRef = useRef<TrainerCalendarEvent | null>(null);
+  const pendingRef = useRef<{
+    event: TrainerCalendarEvent;
+    pointerId: number;
+    x: number;
+    y: number;
+    timer: number | null;
+  } | null>(null);
+  const movedRef = useRef(false);
+  const colEls = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  previewRef.current = preview;
+
   const eventsById = useMemo(() => {
     const map = new Map<string, TrainerCalendarEvent>();
     for (const e of events) map.set(e.id, e);
@@ -70,41 +101,170 @@ export function ScheduleWeekGrid({
   const gridHeight = timeLabels.length * SLOT_HEIGHT_PX;
   const todayKey = dateKey(new Date());
 
-  const dropOnDay = (dayStr: string, e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const raw =
-      e.dataTransfer.getData(DRAG_MIME) ||
-      e.dataTransfer.getData('text/plain');
-    if (!raw || !onMoveBooking) return;
-    let payload: { id: string };
-    try {
-      payload = JSON.parse(raw) as { id: string };
-    } catch {
-      return;
-    }
-    const event = eventsById.get(payload.id);
-    if (!event || !canDragEvent(event)) return;
-
-    const rect = e.currentTarget.getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    const rawMin =
-      bounds.start +
-      Math.round(y / SLOT_HEIGHT_PX) * GRID_SLOT_MINUTES;
-    const snapped = Math.max(
-      bounds.start,
-      Math.min(bounds.end - GRID_SLOT_MINUTES, rawMin),
-    );
-    const nextStart = isoAtMinutes(dayStr, snapped);
-    if (nextStart === event.startAt) return;
-    onMoveBooking(event, nextStart);
+  const evaluateDrop = (
+    event: TrainerCalendarEvent,
+    dayStr: string,
+    startMin: number,
+  ): { valid: boolean; label: string } => {
+    const dur = durationMin(event);
+    const endMin = startMin + dur;
+    const conflict = events.some((other) => {
+      if (other.id === event.id) return false;
+      if (other.kind !== 'PERSONAL' && other.kind !== 'GROUP') return false;
+      const otherStart = minutesFromIso(dayStr, other.startAt);
+      const otherEnd = minutesFromIso(dayStr, other.endAt);
+      if (otherStart == null || otherEnd == null) return false;
+      return startMin < otherEnd && endMin > otherStart;
+    });
+    const dayLabel = new Date(`${dayStr}T12:00:00`).toLocaleDateString('ru-RU', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    });
+    return {
+      valid: !conflict,
+      label: `${dayLabel} · ${minutesToTime(startMin)}${conflict ? ' · занято' : ''}`,
+    };
   };
 
+  const resolveFromPoint = (clientX: number, clientY: number) => {
+    for (const dayStr of dayKeys) {
+      const el = colEls.current.get(dayStr);
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (clientX < rect.left || clientX > rect.right) continue;
+      if (clientY < rect.top || clientY > rect.bottom) continue;
+      const y = clientY - rect.top;
+      const rawMin =
+        bounds.start + Math.round(y / SLOT_HEIGHT_PX) * GRID_SLOT_MINUTES;
+      const snapped = Math.max(
+        bounds.start,
+        Math.min(bounds.end - GRID_SLOT_MINUTES, rawMin),
+      );
+      return { dayStr, startMin: snapped };
+    }
+    return null;
+  };
+
+  const clearPending = () => {
+    const p = pendingRef.current;
+    if (p?.timer != null) window.clearTimeout(p.timer);
+    pendingRef.current = null;
+  };
+
+  const beginDrag = (event: TrainerCalendarEvent) => {
+    if (!onMoveBooking || !canDragEvent(event)) return;
+    dragEventRef.current = event;
+    movedRef.current = true;
+    const startMin = minutesFromIso(dateKey(new Date(event.startAt)), event.startAt);
+    const day = dateKey(new Date(event.startAt));
+    const dur = durationMin(event);
+    const evaled = evaluateDrop(event, day, startMin ?? bounds.start);
+    const next: DragPreview = {
+      eventId: event.id,
+      dayKey: day,
+      startMin: startMin ?? bounds.start,
+      durationMin: dur,
+      valid: evaled.valid,
+      label: evaled.label,
+    };
+    setPreview(next);
+  };
+
+  useEffect(() => {
+    if (!onMoveBooking) return;
+
+    const onMove = (e: PointerEvent) => {
+      const pending = pendingRef.current;
+      if (pending && !dragEventRef.current) {
+        const dx = e.clientX - pending.x;
+        const dy = e.clientY - pending.y;
+        if (Math.hypot(dx, dy) > 12) {
+          clearPending();
+        }
+        return;
+      }
+      const event = dragEventRef.current;
+      if (!event) return;
+      e.preventDefault();
+      const hit = resolveFromPoint(e.clientX, e.clientY);
+      if (!hit) return;
+      const evaled = evaluateDrop(event, hit.dayStr, hit.startMin);
+      setPreview({
+        eventId: event.id,
+        dayKey: hit.dayStr,
+        startMin: hit.startMin,
+        durationMin: durationMin(event),
+        valid: evaled.valid,
+        label: evaled.label,
+      });
+    };
+
+    const onUp = (e: PointerEvent) => {
+      clearPending();
+      const event = dragEventRef.current;
+      const current = previewRef.current;
+      dragEventRef.current = null;
+      if (!event || !current) {
+        setPreview(null);
+        window.setTimeout(() => {
+          movedRef.current = false;
+        }, 40);
+        return;
+      }
+      e.preventDefault();
+      setPreview(null);
+      if (current.valid) {
+        const nextStart = isoAtMinutes(current.dayKey, current.startMin);
+        if (nextStart !== event.startAt) {
+          onMoveBooking(event, nextStart);
+        }
+      }
+      window.setTimeout(() => {
+        movedRef.current = false;
+      }, 40);
+    };
+
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [onMoveBooking, dayKeys, bounds, events]);
+
+  useEffect(() => {
+    if (!preview) return;
+    const prev = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'grabbing';
+    return () => {
+      document.body.style.userSelect = prev;
+      document.body.style.cursor = '';
+    };
+  }, [preview]);
+
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-700/80 bg-slate-900/40 shadow-lg [-webkit-overflow-scrolling:touch]">
+    <div className="relative overflow-x-auto rounded-xl border border-slate-700/80 bg-slate-900/40 shadow-lg [-webkit-overflow-scrolling:touch]">
       {onMoveBooking ? (
-        <p className="hidden border-b border-slate-800 px-3 py-1.5 text-[11px] text-slate-500 desktop:block">
-          Перетащите ПТ на другой день или время (шаг 15 мин)
+        <p className="border-b border-slate-800 px-3 py-1.5 text-[11px] text-slate-500">
+          Удерживайте запись и перетащите на день или время (шаг 15 мин)
         </p>
+      ) : null}
+      {preview ? (
+        <div className="pointer-events-none sticky top-0 z-30 flex justify-center px-2 py-1">
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-semibold shadow-lg ${
+              preview.valid
+                ? 'bg-emerald-500 text-ink'
+                : 'bg-red-500 text-white'
+            }`}
+          >
+            {preview.label}
+          </span>
+        </div>
       ) : null}
       <div className="flex min-w-max">
         <div className="admin-time-rail sticky left-0 z-20 w-14 shrink-0 border-r border-slate-700/80 bg-slate-900/95">
@@ -136,13 +296,18 @@ export function ScheduleWeekGrid({
           const hasDuty = dayEvents.some((e) => e.kind === 'DUTY');
           const hasWork =
             hasDuty || getDayWorkBounds(dayStr, availabilityBlocks) !== null;
+          const isDropDay = preview?.dayKey === dayStr;
+          const dropOk = Boolean(isDropDay && preview?.valid);
+          const dropBad = Boolean(isDropDay && preview && !preview.valid);
 
           return (
             <div
               key={dayStr}
               className={`w-24 shrink-0 border-r border-slate-700/80 last:border-r-0 sm:w-28 md:w-32 ${
                 isToday ? 'bg-fitgo-500/5' : isWeekend ? 'bg-slate-950/50' : ''
-              } ${!hasWork ? 'opacity-60' : ''}`}
+              } ${!hasWork ? 'opacity-60' : ''} ${
+                dropOk ? 'bg-emerald-500/10' : dropBad ? 'bg-red-500/10' : ''
+              }`}
             >
               <div
                 className={`h-[52px] border-b border-slate-700/80 px-1 py-1.5 text-center ${
@@ -165,14 +330,12 @@ export function ScheduleWeekGrid({
               </div>
 
               <div
-                className="relative"
-                style={{ height: gridHeight }}
-                onDragOver={(e) => {
-                  if (!onMoveBooking) return;
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'move';
+                ref={(el) => {
+                  if (el) colEls.current.set(dayStr, el);
+                  else colEls.current.delete(dayStr);
                 }}
-                onDrop={(e) => dropOnDay(dayStr, e)}
+                className="relative touch-none"
+                style={{ height: gridHeight }}
               >
                 {timeLabels.map((m) => (
                   <div
@@ -198,6 +361,22 @@ export function ScheduleWeekGrid({
                   />
                 ))}
 
+                {isDropDay && preview ? (
+                  <div
+                    className={`pointer-events-none absolute left-0.5 right-0.5 z-[15] rounded border border-dashed ${
+                      preview.valid
+                        ? 'border-emerald-400 bg-emerald-500/25'
+                        : 'border-red-400 bg-red-500/25'
+                    }`}
+                    style={{
+                      top: topPxFromMinutes(preview.startMin, bounds.start),
+                      height:
+                        (preview.durationMin / GRID_SLOT_MINUTES) *
+                        SLOT_HEIGHT_PX,
+                    }}
+                  />
+                ) : null}
+
                 {dayEvents.map((event) => {
                   const layout = getEventLayout(
                     dayStr,
@@ -207,42 +386,48 @@ export function ScheduleWeekGrid({
                   );
                   if (!layout) return null;
                   const endMin = minutesFromIso(dayStr, event.endAt);
-                  const draggable = Boolean(onMoveBooking) && canDragEvent(event);
+                  const draggable =
+                    Boolean(onMoveBooking) && canDragEvent(event);
+                  const dragging = preview?.eventId === event.id;
 
                   return (
                     <button
                       key={event.id}
                       type="button"
                       data-event-block
-                      draggable={draggable}
-                      onDragStart={(e) => {
+                      onPointerDown={(ev) => {
                         if (!draggable) return;
-                        draggedRef.current = false;
-                        const payload = JSON.stringify({ id: event.id });
-                        e.dataTransfer.setData(DRAG_MIME, payload);
-                        e.dataTransfer.setData('text/plain', payload);
-                        e.dataTransfer.effectAllowed = 'move';
-                        window.setTimeout(() => {
-                          draggedRef.current = true;
-                        }, 0);
-                      }}
-                      onDragEnd={() => {
-                        window.setTimeout(() => {
-                          draggedRef.current = false;
-                        }, 50);
+                        if (ev.button !== 0) return;
+                        ev.currentTarget.setPointerCapture(ev.pointerId);
+                        clearPending();
+                        const isTouch = ev.pointerType === 'touch';
+                        pendingRef.current = {
+                          event,
+                          pointerId: ev.pointerId,
+                          x: ev.clientX,
+                          y: ev.clientY,
+                          timer: isTouch
+                            ? window.setTimeout(() => {
+                                beginDrag(event);
+                              }, LONG_PRESS_MS)
+                            : null,
+                        };
+                        if (!isTouch) {
+                          beginDrag(event);
+                        }
                       }}
                       onClick={(ev) => {
                         ev.stopPropagation();
-                        if (draggedRef.current) return;
+                        if (movedRef.current) return;
                         onSelectEvent?.(event);
                       }}
                       className={`absolute left-0.5 right-0.5 z-10 overflow-hidden rounded px-0.5 py-0.5 text-left text-[9px] leading-tight shadow-sm hover:ring-1 hover:ring-slate-500 sm:text-[10px] ${eventBlockClass(event.kind)} ${
-                        draggable ? 'desktop:cursor-grab desktop:active:cursor-grabbing' : ''
-                      }`}
+                        draggable ? 'cursor-grab active:cursor-grabbing' : ''
+                      } ${dragging ? 'opacity-40' : ''}`}
                       style={{ top: layout.top, height: layout.height }}
                       title={
                         draggable
-                          ? `${event.title} · перетащите на ПК`
+                          ? `${event.title} · удерживайте и перетащите`
                           : event.title
                       }
                     >

@@ -19,7 +19,10 @@ import { AssignClientDialog } from './assign-client-dialog';
 import { BookingActionSheet } from './booking-action-sheet';
 import { defaultCalendarDate } from './calendar-period';
 import { type ScheduleTypeFilter } from './calendar-utils';
-import { PublishScheduleBar } from './publish-schedule-bar';
+import {
+  DraftSlotSheet,
+  PublishScheduleBar,
+} from './publish-schedule-bar';
 import { ReserveSheet } from './reserve-sheet';
 import { SeriesSheet } from './series-sheet';
 import { dateKey } from './schedule-grid';
@@ -85,6 +88,7 @@ export function TrainerSchedulePage() {
   const [selectedEvent, setSelectedEvent] = useState<TrainerCalendarEvent | null>(
     null,
   );
+  const [draftSlot, setDraftSlot] = useState<TrainerCalendarEvent | null>(null);
 
   const {
     events,
@@ -163,10 +167,11 @@ export function TrainerSchedulePage() {
   };
 
   const handleSelectEvent = (event: TrainerCalendarEvent) => {
-    if (
-      (event.kind === 'OPEN_SLOT' || event.kind === 'DRAFT_SLOT') &&
-      forma
-    ) {
+    if (event.kind === 'DRAFT_SLOT' && forma) {
+      setDraftSlot(event);
+      return;
+    }
+    if (event.kind === 'OPEN_SLOT' && forma) {
       setAssignAt(event.startAt);
       return;
     }
@@ -184,7 +189,7 @@ export function TrainerSchedulePage() {
   };
 
   return (
-    <div className={forma ? 'space-y-4 pb-28 lg:pb-8' : 'space-y-4 pb-8'}>
+    <div className={forma ? 'space-y-4 pb-8' : 'space-y-4 pb-8'}>
       {forma ? (
         <div className="space-y-3">
           <PageHeader title="Расписание" />
@@ -217,6 +222,14 @@ export function TrainerSchedulePage() {
               График
             </Button>
           </div>
+          <PublishScheduleBar
+            draftBlockCount={draftBlockCount}
+            periodStart={period.periodStart}
+            periodEnd={period.periodEnd}
+            selectedDate={date}
+            summary={publishSummary}
+            onPublished={reload}
+          />
         </div>
       ) : (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -337,13 +350,29 @@ export function TrainerSchedulePage() {
         </>
       )}
 
-      <PublishScheduleBar
-        draftBlockCount={draftBlockCount}
-        periodStart={period.periodStart}
-        periodEnd={period.periodEnd}
-        summary={publishSummary}
-        onPublished={reload}
-      />
+      {!forma ? (
+        <PublishScheduleBar
+          draftBlockCount={draftBlockCount}
+          periodStart={period.periodStart}
+          periodEnd={period.periodEnd}
+          selectedDate={date}
+          summary={publishSummary}
+          onPublished={reload}
+        />
+      ) : null}
+
+      {draftSlot && forma ? (
+        <DraftSlotSheet
+          blockId={draftSlot.blockId || draftSlot.id}
+          startAt={draftSlot.startAt}
+          onClose={() => setDraftSlot(null)}
+          onPublished={reload}
+          onAssign={() => {
+            setAssignAt(draftSlot.startAt);
+            setDraftSlot(null);
+          }}
+        />
+      ) : null}
 
       {showWorkSchedule ? (
         <WorkScheduleSheet
@@ -396,6 +425,7 @@ export function TrainerSchedulePage() {
       {selectedEvent && forma && selectedEvent.kind === 'PERSONAL' ? (
         <BookingActionSheet
           event={selectedEvent}
+          clients={clients}
           onClose={() => setSelectedEvent(null)}
           onChanged={reload}
         />

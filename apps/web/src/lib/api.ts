@@ -155,6 +155,8 @@ export type StaffProfileDto = {
   experienceYears?: number | null;
   certificates?: unknown;
   onboardedAt?: string | null;
+  /** Clients can see trainer in self-booking list. */
+  acceptsClientBookings?: boolean;
 };
 
 export interface RegisterResponse {
@@ -865,6 +867,7 @@ export const api = {
     token: string,
     periodStart: string,
     periodEnd: string,
+    blockIds?: string[],
   ) =>
     request<{
       publishedBlocks: number;
@@ -877,7 +880,11 @@ export const api = {
       '/trainer/schedule/publish',
       {
         method: 'POST',
-        body: JSON.stringify({ periodStart, periodEnd }),
+        body: JSON.stringify({
+          periodStart,
+          periodEnd,
+          ...(blockIds?.length ? { blockIds } : {}),
+        }),
       },
       token,
     ),
@@ -1097,6 +1104,8 @@ export const api = {
     bookingId: string,
     data: {
       startAt?: string;
+      clientId?: string;
+      status?: 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
       action?: 'cancel' | 'no_show';
       cancelReason?: string;
       debitPackage?: boolean;
@@ -1110,7 +1119,7 @@ export const api = {
       body: JSON.stringify(data),
     }, token),
 
-  /** Hard-delete PERSONAL ledger booking («Тренер клуб»). */
+  /** Hard-delete personal ledger PT without 1C / gift («Тренер клуб»). */
   trainerDeletePersonalBooking: (token: string, bookingId: string) =>
     request<{ success: boolean }>(
       `/trainer/personal-bookings/${encodeURIComponent(bookingId)}`,
@@ -5730,6 +5739,7 @@ export const api = {
       experienceYears?: number | null;
       certificates?: unknown;
       onboardedAt?: string | null | true;
+      acceptsClientBookings?: boolean;
     },
   ) =>
     request<StaffProfileDto>(

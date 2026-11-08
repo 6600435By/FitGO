@@ -112,6 +112,7 @@ export class PersonalTrainingController {
       user,
       dto.periodStart,
       dto.periodEnd,
+      dto.blockIds,
     );
   }
 
@@ -209,11 +210,17 @@ export class PersonalTrainingController {
     @Param('bookingId') bookingId: string,
     @Body() dto: UpdateTrainerBookingDto,
   ) {
-    return this.personalTraining.updateTrainerPersonalBooking(
-      user,
-      bookingId,
-      dto,
-    );
+    return this.personalTraining.updateTrainerPersonalBooking(user, bookingId, {
+      startAt: dto.startAt,
+      clientId: dto.clientId,
+      status: dto.status,
+      action: dto.action,
+      cancelReason: dto.cancelReason,
+      debitPackage: dto.debitPackage,
+      seriesScope: dto.seriesScope,
+      bufferBeforeMin: dto.bufferBeforeMin,
+      bufferAfterMin: dto.bufferAfterMin,
+    });
   }
 
   @Delete('trainer/personal-bookings/:bookingId')

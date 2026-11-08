@@ -31,6 +31,7 @@ import {
   navItemActive,
   type TrainerNavItem,
 } from './trainer-nav';
+import { NoteMeasurementSheet } from './note-measurement-sheet';
 import { QuickActionsSheet } from './quick-actions-sheet';
 import { TrainerPwaInstallTip } from './pwa-install-tip';
 
@@ -60,6 +61,7 @@ export function TrainerShell({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => getUser());
   const [unread, setUnread] = useState(0);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
 
   const immersive =
@@ -425,7 +427,9 @@ export function TrainerShell({ children }: { children: ReactNode }) {
         open={quickOpen}
         onOpenChange={setQuickOpen}
         mode={mode}
+        onNoteMeasurement={() => setNoteOpen(true)}
       />
+      <NoteMeasurementSheet open={noteOpen} onOpenChange={setNoteOpen} />
       <CommandSheet
         open={cmdOpen}
         onOpenChange={setCmdOpen}

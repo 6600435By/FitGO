@@ -380,6 +380,7 @@ export function SessionPlanEditor({
             canEdit={session.canEdit}
             isTrainer={isTrainer}
             hideLegacyTimer={formaLive}
+            forma={formaLive}
             onChange={(sheet) => {
               setDraftWorkoutSheet(sheet);
               if (isTrainer) setEditing(true);

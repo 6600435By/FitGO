@@ -505,6 +505,9 @@ export class PersonalTrainingService {
           booking.ptFlow === 'PERSONAL' || booking.ptFlow === 'CLUB'
             ? booking.ptFlow
             : undefined,
+        isComplimentary: booking.isComplimentary || undefined,
+        linkedDocExternalId: booking.linkedDocExternalId ?? undefined,
+        bookingStatus: booking.status,
         bufferBeforeMin: booking.bufferBeforeMin || undefined,
         bufferAfterMin: booking.bufferAfterMin || undefined,
         clientIssue:
@@ -744,17 +747,27 @@ export class PersonalTrainingService {
     user: JwtPayload,
     periodStart: string,
     periodEnd: string,
+    blockIds?: string[] | null,
   ) {
     const start = this.startOfDay(new Date(periodStart));
     const end = this.endOfDay(new Date(periodEnd));
+    const ids = (blockIds ?? []).map((id) => id.trim()).filter(Boolean);
 
-    const draftWhere = {
-      trainerId: user.sub,
-      status: AvailabilityBlockStatus.DRAFT,
-      kind: AvailabilityBlockKind.OPEN,
-      startAt: { lt: end },
-      endAt: { gt: start },
-    };
+    const draftWhere =
+      ids.length > 0
+        ? {
+            id: { in: ids },
+            trainerId: user.sub,
+            status: AvailabilityBlockStatus.DRAFT,
+            kind: AvailabilityBlockKind.OPEN,
+          }
+        : {
+            trainerId: user.sub,
+            status: AvailabilityBlockStatus.DRAFT,
+            kind: AvailabilityBlockKind.OPEN,
+            startAt: { lt: end },
+            endAt: { gt: start },
+          };
 
     const drafts = await this.prisma.trainerAvailabilityBlock.findMany({
       where: draftWhere,
@@ -763,28 +776,48 @@ export class PersonalTrainingService {
     if (drafts.length === 0) {
       throw new BadRequestException('Нет черновых слотов для публикации');
     }
+    if (ids.length > 0 && drafts.length !== ids.length) {
+      throw new BadRequestException(
+        'Часть слотов не найдена или уже опубликована',
+      );
+    }
 
     await this.assertExtraBesideDuty(user.sub, drafts);
+
+    const rangeStart =
+      ids.length > 0
+        ? drafts.reduce(
+            (min, d) => (d.startAt < min ? d.startAt : min),
+            drafts[0].startAt,
+          )
+        : start;
+    const rangeEnd =
+      ids.length > 0
+        ? drafts.reduce(
+            (max, d) => (d.endAt > max ? d.endAt : max),
+            drafts[0].endAt,
+          )
+        : end;
 
     const bookings = await this.prisma.personalTrainingBooking.findMany({
       where: {
         trainerId: user.sub,
         status: PersonalBookingStatus.CONFIRMED,
-        startAt: { lt: end },
-        endAt: { gt: start },
+        startAt: { lt: rangeEnd },
+        endAt: { gt: rangeStart },
       },
     });
     const allBlocks = await this.prisma.trainerAvailabilityBlock.findMany({
       where: {
         trainerId: user.sub,
-        startAt: { lt: end },
-        endAt: { gt: start },
+        startAt: { lt: rangeEnd },
+        endAt: { gt: rangeStart },
       },
     });
     const summary = await this.buildPublishSummary(
       user.sub,
-      start,
-      end,
+      rangeStart,
+      rangeEnd,
       [...drafts, ...allBlocks.filter((b) => b.kind === AvailabilityBlockKind.OPEN)],
       bookings,
       allBlocks,
@@ -798,28 +831,35 @@ export class PersonalTrainingService {
       this.prisma.trainerSchedulePublication.create({
         data: {
           trainerId: user.sub,
-          periodStart: start,
-          periodEnd: end,
+          periodStart: this.startOfDay(rangeStart),
+          periodEnd: this.endOfDay(rangeEnd),
         },
       }),
     ]);
 
-    // After publish: materialize active series into the period (conflicts → warnings).
-    const seriesResult = await this.generateSeriesForPeriod(user, start, end);
+    const pubStart = this.startOfDay(rangeStart);
+    const pubEnd = this.endOfDay(rangeEnd);
+
+    // After publish: materialize active series into the published range.
+    const seriesResult = await this.generateSeriesForPeriod(
+      user,
+      pubStart,
+      pubEnd,
+    );
     // Refresh summary so «занято» includes just-created series rows.
     const summaryAfter =
       seriesResult.created > 0
         ? await this.getPublishSummary(
             user,
-            start.toISOString(),
-            end.toISOString(),
+            pubStart.toISOString(),
+            pubEnd.toISOString(),
           )
         : summary;
 
     return {
       publishedBlocks: drafts.length,
-      periodStart: start.toISOString(),
-      periodEnd: end.toISOString(),
+      periodStart: pubStart.toISOString(),
+      periodEnd: pubEnd.toISOString(),
       summary: summaryAfter,
       seriesCreated: seriesResult.created,
       seriesConflicts: seriesResult.conflicts,
@@ -986,7 +1026,11 @@ export class PersonalTrainingService {
       });
     }
 
-    if (await this.shouldApplyPtControl(user.sub, ptFlow)) {
+    // Gift / membership complimentary always goes to admin control.
+    if (
+      isComplimentary ||
+      (await this.shouldApplyPtControl(user.sub, ptFlow))
+    ) {
       const clubId = requireClubId(user);
       await this.sessionApproval.ensureApproval(
         SessionApprovalKind.PT,
@@ -1013,6 +1057,8 @@ export class PersonalTrainingService {
     bookingId: string,
     data: {
       startAt?: string;
+      clientId?: string;
+      status?: 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
       action?: 'cancel' | 'no_show';
       cancelReason?: string;
       debitPackage?: boolean;
@@ -1025,7 +1071,6 @@ export class PersonalTrainingService {
       where: {
         id: bookingId,
         trainerId: user.sub,
-        status: PersonalBookingStatus.CONFIRMED,
       },
       include: {
         client: true,
@@ -1035,6 +1080,73 @@ export class PersonalTrainingService {
 
     if (!booking) {
       throw new NotFoundException('Запись не найдена');
+    }
+
+    if (data.clientId && data.clientId !== booking.clientId) {
+      await this.roster.ensureConfirmedLink(user.sub, data.clientId);
+      const updated = await this.prisma.personalTrainingBooking.update({
+        where: { id: bookingId },
+        data: { clientId: data.clientId },
+        include: { client: true },
+      });
+      return {
+        id: updated.id,
+        clientId: updated.clientId,
+        clientName: `${updated.client.firstName} ${updated.client.lastName}`.trim(),
+        startAt: updated.startAt.toISOString(),
+        endAt: updated.endAt.toISOString(),
+        status: updated.status,
+      };
+    }
+
+    if (data.status && data.status !== booking.status) {
+      if (
+        data.status === 'CANCELLED' &&
+        booking.status === PersonalBookingStatus.CONFIRMED
+      ) {
+        return this.cancelTrainerBooking(user, booking, {
+          action: 'cancel',
+          cancelReason: data.cancelReason,
+          debitPackage: data.debitPackage,
+          seriesScope: data.seriesScope ?? 'one',
+        });
+      }
+      if (
+        data.status === 'COMPLETED' ||
+        data.status === 'CONFIRMED'
+      ) {
+        const updated = await this.prisma.personalTrainingBooking.update({
+          where: { id: bookingId },
+          data: {
+            status:
+              data.status === 'COMPLETED'
+                ? PersonalBookingStatus.COMPLETED
+                : PersonalBookingStatus.CONFIRMED,
+            ...(data.status === 'COMPLETED'
+              ? { trainerCompletedAt: new Date() }
+              : {
+                  trainerCompletedAt: null,
+                  cancelledAt: null,
+                  cancelReason: null,
+                }),
+          },
+          include: { client: true },
+        });
+        return {
+          id: updated.id,
+          clientId: updated.clientId,
+          clientName: `${updated.client.firstName} ${updated.client.lastName}`.trim(),
+          startAt: updated.startAt.toISOString(),
+          endAt: updated.endAt.toISOString(),
+          status: updated.status,
+        };
+      }
+    }
+
+    if (booking.status !== PersonalBookingStatus.CONFIRMED) {
+      throw new BadRequestException(
+        'Перенос и буфер доступны только для запланированных записей',
+      );
     }
 
     if (
@@ -1155,6 +1267,7 @@ export class PersonalTrainingService {
         );
         const profile = trainer.staffProfile;
         const showPublic = !profile?.hiddenByAdminAt;
+        const acceptsBookings = Boolean(profile?.acceptsClientBookings);
         const photoV = profile?.photoUpdatedAt?.getTime();
         const price = priceByTrainer.get(trainer.id);
         return {
@@ -1162,6 +1275,7 @@ export class PersonalTrainingService {
           firstName: trainer.firstName,
           lastName: trainer.lastName,
           hasSchedule: slots.length > 0,
+          acceptsClientBookings: acceptsBookings,
           sessionPriceMinor: price?.minor ?? null,
           currency: price?.currency ?? 'BYN',
           bio: showPublic ? (profile?.bio ?? '') : '',
@@ -1177,7 +1291,7 @@ export class PersonalTrainingService {
       }),
     );
 
-    return results.filter((t) => t.hasSchedule);
+    return results.filter((t) => t.hasSchedule && t.acceptsClientBookings);
   }
 
   async getTrainerAvailableSlots(
@@ -1859,8 +1973,8 @@ export class PersonalTrainingService {
   }
 
   /**
-   * Hard-delete a PERSONAL ledger booking owned by a club trainer.
-   * Restores package session / reverses raised debt when the booking was settled.
+   * Hard-delete a personal ledger PT (no 1C / no gift) owned by «Тренер клуб».
+   * Restores personal-ledger package / debt when the booking was settled.
    */
   async deleteTrainerPersonalBooking(user: JwtPayload, bookingId: string) {
     const booking = await this.prisma.personalTrainingBooking.findFirst({
@@ -1882,9 +1996,18 @@ export class PersonalTrainingService {
         'Удаление доступно только тренерам клуба',
       );
     }
-    if (!isPersonalPtBooking(booking, booking.trainer)) {
+    if (booking.isComplimentary) {
       throw new ForbiddenException(
-        'Нельзя удалить запись под контролем клуба / 1С',
+        'Подарочную ПТ нельзя удалить — только отменить. Она на контроле у админа',
+      );
+    }
+    if (
+      booking.ptFlow === 'CLUB' ||
+      Boolean(booking.linkedDocExternalId) ||
+      !isPersonalPtBooking(booking, booking.trainer)
+    ) {
+      throw new ForbiddenException(
+        'Запись с оплатой / списанием через 1С удалить нельзя — измените статус',
       );
     }
 

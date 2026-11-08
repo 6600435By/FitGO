@@ -85,6 +85,8 @@ export function TrainerProfileForma() {
     loadTrainerTimerPrefs(),
   );
   const [pushStatus, setPushStatus] = useState<string>('');
+  const [acceptsBookings, setAcceptsBookings] = useState(false);
+  const [acceptsBusy, setAcceptsBusy] = useState(false);
 
   const load = useCallback(async () => {
     const token = getToken();
@@ -104,6 +106,7 @@ export function TrainerProfileForma() {
       setProfile(p);
       setBio(p.bio ?? '');
       setSpecs(p.specializations ?? []);
+      setAcceptsBookings(Boolean(p.acceptsClientBookings));
       setYears(
         typeof p.experienceYears === 'number' ? String(p.experienceYears) : '',
       );
@@ -265,6 +268,45 @@ export function TrainerProfileForma() {
             </p>
           </div>
         </div>
+        <label className="mt-4 flex items-start gap-3 rounded-2xl border border-white/10 bg-white/5 px-3 py-3">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={acceptsBookings}
+            disabled={acceptsBusy}
+            onChange={(e) => {
+              const next = e.target.checked;
+              setAcceptsBookings(next);
+              const token = getToken();
+              if (!token) return;
+              setAcceptsBusy(true);
+              void api
+                .staffProfileUpdate(token, { acceptsClientBookings: next })
+                .then((p) => {
+                  setProfile(p);
+                  setOk(
+                    next
+                      ? 'Клиенты могут записываться к вам'
+                      : 'Запись клиентами выключена',
+                  );
+                })
+                .catch((err: Error) => {
+                  setAcceptsBookings(!next);
+                  setError(err.message || 'Не удалось сохранить');
+                })
+                .finally(() => setAcceptsBusy(false));
+            }}
+          />
+          <span>
+            <span className="block text-sm font-medium text-white">
+              Клиенты могут записываться
+            </span>
+            <span className="mt-0.5 block text-xs text-zinc-500">
+              Пока выключено — вас нет в списке записи клиента. Включайте, когда
+              опубликовали окна в расписании.
+            </span>
+          </span>
+        </label>
       </BentoCard>
 
       {debtMinor > 0 ? (

@@ -80,6 +80,7 @@ export class StaffProfileService {
         experienceYears: number | null;
         certificates: unknown;
         onboardedAt: Date | null;
+        acceptsClientBookings?: boolean;
       } | null;
     },
     opts?: { forClient?: boolean },
@@ -118,6 +119,9 @@ export class StaffProfileService {
       experienceYears: showPublic ? (p?.experienceYears ?? null) : null,
       certificates: showPublic ? (p?.certificates ?? null) : null,
       onboardedAt: forClient ? null : (p?.onboardedAt?.toISOString() ?? null),
+      acceptsClientBookings: forClient
+        ? undefined
+        : Boolean(p?.acceptsClientBookings),
     };
   }
 
@@ -138,10 +142,15 @@ export class StaffProfileService {
       experienceYears?: number | null;
       certificates?: unknown;
       onboardedAt?: string | null | true;
+      acceptsClientBookings?: boolean;
     },
   ) {
     const user = await this.ensureStaffUser(userId);
     const data: Prisma.StaffProfileUpdateInput = {};
+
+    if (typeof body.acceptsClientBookings === 'boolean') {
+      data.acceptsClientBookings = body.acceptsClientBookings;
+    }
 
     if (typeof body.bio === 'string') {
       const trimmed = body.bio.trim();
@@ -212,6 +221,10 @@ export class StaffProfileService {
             ? (data.certificates as Prisma.InputJsonValue)
             : undefined,
       onboardedAt: data.onboardedAt instanceof Date ? data.onboardedAt : null,
+      acceptsClientBookings:
+        typeof data.acceptsClientBookings === 'boolean'
+          ? data.acceptsClientBookings
+          : false,
     };
 
     await this.prisma.staffProfile.upsert({

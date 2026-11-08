@@ -867,6 +867,12 @@ export interface TrainerCalendarEvent {
   origin?: PersonalBookingOrigin;
   /** PERSONAL = «Тренер клуб» ledger; CLUB = staff / 1C control. */
   ptFlow?: 'CLUB' | 'PERSONAL';
+  /** Gift / membership complimentary PT. */
+  isComplimentary?: boolean;
+  /** Linked 1C payment document id when present. */
+  linkedDocExternalId?: string | null;
+  /** Booking lifecycle status. */
+  bookingStatus?: string;
   /** PT: CRM link / phone issue on the booking. */
   clientIssue?: import('./pt-timesheet').PtClientIssue;
   /** When trainer_pt_control: control / document status for FitGO PT. */

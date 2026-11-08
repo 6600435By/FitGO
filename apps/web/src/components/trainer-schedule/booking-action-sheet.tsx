@@ -1,35 +1,54 @@
 'use client';
 
 import type { TrainerCalendarEvent } from '@fitgo/shared-types';
-import { Button, ResponsiveSheet } from '@fitgo/forma-ui';
-import { useState } from 'react';
+import { Button, ResponsiveSheet, SegmentedControl } from '@fitgo/forma-ui';
+import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 
 const BUFFER_OPTS = [0, 15, 30, 60] as const;
 
+type StatusOpt = 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
+
 export function BookingActionSheet({
   event,
+  clients = [],
   onClose,
   onChanged,
 }: {
   event: TrainerCalendarEvent;
+  clients?: Array<{ id: string; firstName: string; lastName: string }>;
   onClose: () => void;
   onChanged: () => void;
 }) {
   const me = getUser();
-  const isPersonal = Boolean(me?.trainerClub);
+  const isPersonalLedger =
+    event.ptFlow === 'PERSONAL' ||
+    (!event.ptFlow && Boolean(me?.trainerClub) && !me?.trainerStaff);
+  const controlledByAdmin =
+    Boolean(event.isComplimentary) ||
+    event.ptFlow === 'CLUB' ||
+    Boolean(event.linkedDocExternalId) ||
+    !isPersonalLedger;
+  /** Hard-delete only personal club ledger without gift / 1C doc. */
   const canHardDelete =
     Boolean(me?.trainerClub) &&
     event.kind === 'PERSONAL' &&
     Boolean(event.bookingId) &&
-    (event.ptFlow === 'PERSONAL' ||
-      (!event.ptFlow && Boolean(me?.trainerClub) && !me?.trainerStaff));
+    !controlledByAdmin;
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [reason, setReason] = useState('');
   const [debitPackage, setDebitPackage] = useState(false);
   const [seriesScope, setSeriesScope] = useState<'one' | 'future'>('one');
+  const [clientId, setClientId] = useState(event.clientId ?? '');
+  const [clientQ, setClientQ] = useState('');
+  const [status, setStatus] = useState<StatusOpt>(() => {
+    const s = event.bookingStatus;
+    if (s === 'COMPLETED' || s === 'CANCELLED' || s === 'CONFIRMED') return s;
+    return 'CONFIRMED';
+  });
   const [moveAt, setMoveAt] = useState(() => {
     const d = new Date(event.startAt);
     const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
@@ -37,6 +56,16 @@ export function BookingActionSheet({
   });
   const [bufferBefore, setBufferBefore] = useState(event.bufferBeforeMin ?? 0);
   const [bufferAfter, setBufferAfter] = useState(event.bufferAfterMin ?? 0);
+
+  const filteredClients = useMemo(() => {
+    const needle = clientQ.trim().toLowerCase();
+    if (!needle) return clients.slice(0, 40);
+    return clients
+      .filter((c) =>
+        `${c.firstName} ${c.lastName}`.toLowerCase().includes(needle),
+      )
+      .slice(0, 40);
+  }, [clients, clientQ]);
 
   const run = async (fn: () => Promise<unknown>) => {
     const token = getToken();
@@ -57,8 +86,13 @@ export function BookingActionSheet({
   return (
     <ResponsiveSheet open onOpenChange={(o) => !o && onClose()} title={event.title}>
       <div className="space-y-4 pb-2">
-        {event.ptControlLabel && event.ptFlow !== 'PERSONAL' ? (
+        {event.ptControlLabel ? (
           <p className="text-sm text-zinc-400">{event.ptControlLabel}</p>
+        ) : null}
+        {event.isComplimentary ? (
+          <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            Подарочная ПТ — на контроле у админа. Удаление недоступно.
+          </p>
         ) : null}
         {event.clientIssue && event.clientIssue !== 'NONE' ? (
           <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
@@ -68,7 +102,91 @@ export function BookingActionSheet({
 
         <div className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-            Перенос
+            Статус
+          </p>
+          <SegmentedControl<StatusOpt>
+            size="sm"
+            layoutId="booking-status"
+            className="w-full"
+            value={status}
+            onChange={setStatus}
+            options={[
+              { value: 'CONFIRMED', label: 'План' },
+              { value: 'COMPLETED', label: 'Выполнено' },
+              { value: 'CANCELLED', label: 'Отмена' },
+            ]}
+          />
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            disabled={busy || status === (event.bookingStatus as StatusOpt)}
+            onClick={() =>
+              run(() =>
+                api.trainerUpdatePersonalBooking(getToken()!, event.bookingId!, {
+                  status,
+                  cancelReason:
+                    status === 'CANCELLED'
+                      ? reason || 'Отменено тренером'
+                      : undefined,
+                  debitPackage:
+                    status === 'CANCELLED' && isPersonalLedger
+                      ? debitPackage
+                      : undefined,
+                }),
+              )
+            }
+          >
+            Сохранить статус
+          </Button>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+            Клиент
+          </p>
+          <input
+            className="input w-full"
+            placeholder="Поиск клиента…"
+            value={clientQ}
+            onChange={(e) => setClientQ(e.target.value)}
+          />
+          <div className="max-h-32 space-y-1 overflow-y-auto">
+            {filteredClients.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                className={`flex w-full rounded-xl border px-3 py-2 text-left text-sm ${
+                  clientId === c.id
+                    ? 'border-forma-500/50 bg-forma-500/10 text-white'
+                    : 'border-white/10 text-zinc-300'
+                }`}
+                onClick={() => setClientId(c.id)}
+              >
+                {c.firstName} {c.lastName}
+              </button>
+            ))}
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            disabled={busy || !clientId || clientId === event.clientId}
+            onClick={() =>
+              run(() =>
+                api.trainerUpdatePersonalBooking(getToken()!, event.bookingId!, {
+                  clientId,
+                }),
+              )
+            }
+          >
+            Сменить клиента
+          </Button>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+            Дата и время
           </p>
           <input
             type="datetime-local"
@@ -102,7 +220,7 @@ export function BookingActionSheet({
               )
             }
           >
-            Перенести
+            Сохранить время
           </Button>
         </div>
 
@@ -164,7 +282,7 @@ export function BookingActionSheet({
 
         <div className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-            Отмена
+            Быстрая отмена
           </p>
           <input
             className="input w-full"
@@ -172,7 +290,7 @@ export function BookingActionSheet({
             value={reason}
             onChange={(e) => setReason(e.target.value)}
           />
-          {isPersonal ? (
+          {isPersonalLedger ? (
             <label className="flex items-center gap-2 text-sm text-zinc-300">
               <input
                 type="checkbox"
@@ -180,18 +298,6 @@ export function BookingActionSheet({
                 onChange={(e) => setDebitPackage(e.target.checked)}
               />
               Списать с личного пакета
-            </label>
-          ) : null}
-          {event.seriesId ? (
-            <label className="flex items-center gap-2 text-sm text-zinc-300">
-              <input
-                type="checkbox"
-                checked={seriesScope === 'future'}
-                onChange={(e) =>
-                  setSeriesScope(e.target.checked ? 'future' : 'one')
-                }
-              />
-              Отменить все будущие и остановить серию
             </label>
           ) : null}
           <div className="flex gap-2">
@@ -208,7 +314,7 @@ export function BookingActionSheet({
                     {
                       action: 'cancel',
                       cancelReason: reason || undefined,
-                      debitPackage: isPersonal ? debitPackage : undefined,
+                      debitPackage: isPersonalLedger ? debitPackage : undefined,
                       seriesScope,
                     },
                   ),
@@ -230,7 +336,7 @@ export function BookingActionSheet({
                     {
                       action: 'no_show',
                       cancelReason: reason || 'Неявка',
-                      debitPackage: isPersonal ? debitPackage : undefined,
+                      debitPackage: isPersonalLedger ? debitPackage : undefined,
                     },
                   ),
                 )
@@ -247,8 +353,8 @@ export function BookingActionSheet({
               Удаление
             </p>
             <p className="text-xs text-zinc-500">
-              Запись исчезнет без следа. Если занятие уже списано с пакета —
-              занятие вернётся клиенту.
+              Только личная запись без документа 1С и без подарка. Списание с
+              пакета вернётся клиенту.
             </p>
             <Button
               type="button"
@@ -274,6 +380,11 @@ export function BookingActionSheet({
               Удалить запись
             </Button>
           </div>
+        ) : controlledByAdmin ? (
+          <p className="text-xs text-zinc-500">
+            Эту запись нельзя удалить — списание или оплата через 1С / подарок.
+            Меняйте статус.
+          </p>
         ) : null}
 
         {error ? <p className="text-sm text-red-400">{error}</p> : null}

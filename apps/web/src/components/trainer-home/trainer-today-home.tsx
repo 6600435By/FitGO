@@ -387,7 +387,14 @@ function DayTimeline({
   );
 }
 
-function PtKpi({ a }: { a: TrainerMonthAnalytics }) {
+function PtKpi({
+  a,
+  hideLadder = false,
+}: {
+  a: TrainerMonthAnalytics;
+  /** Pure «Тренер клуб» — no club ladder / payroll steps. */
+  hideLadder?: boolean;
+}) {
   const ladderMax = a.ladder?.nextMinSessions ?? a.ladder?.volumeCount ?? 1;
   const ladderValue = a.ladder?.volumeCount ?? 0;
   return (
@@ -411,7 +418,7 @@ function PtKpi({ a }: { a: TrainerMonthAnalytics }) {
           />
         </div>
       </div>
-      {a.ladder ? (
+      {!hideLadder && a.ladder ? (
         <div className="mt-4">
           <KpiRing
             value={ladderValue}
@@ -645,7 +652,7 @@ export function TrainerTodayHome({
   const a = home?.monthAnalytics;
   useLadderConfetti(
     user?.id,
-    a?.ladder
+    !isPureClub && a?.ladder
       ? { percent: a.ladder.percent, volumeCount: a.ladder.volumeCount }
       : null,
   );
@@ -737,7 +744,7 @@ export function TrainerTodayHome({
             showPtKpi && showGpKpi ? 'desktop:grid-cols-2' : 'grid-cols-1',
           )}
         >
-          {showPtKpi ? <PtKpi a={a} /> : null}
+          {showPtKpi ? <PtKpi a={a} hideLadder={isPureClub} /> : null}
           {showGpKpi ? <GpKpi a={a} /> : null}
         </div>
       ) : null}

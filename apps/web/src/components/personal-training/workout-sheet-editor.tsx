@@ -43,6 +43,7 @@ import { ResponsiveSheet } from '@fitgo/forma-ui';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
+import { cn } from '@/lib/utils';
 import { CircuitDynamics } from './circuit-dynamics';
 import { CircuitBlockEditor } from './circuit-block-editor';
 import { CardioBlockEditor } from './cardio-block-editor';
@@ -99,6 +100,8 @@ interface WorkoutSheetEditorProps {
   onCopyPrevious?: () => void;
   /** Forma Coach: hide legacy guided session + timer dock (use /trainer/live instead). */
   hideLegacyTimer?: boolean;
+  /** Forma Coach shell tokens (graphite + yellow). */
+  forma?: boolean;
 }
 
 function weekdayIndex(isoDate: string): number {
@@ -153,8 +156,22 @@ export function WorkoutSheetEditor({
   onChange,
   onCopyPrevious,
   hideLegacyTimer = false,
+  forma = false,
 }: WorkoutSheetEditorProps) {
   const readOnly = !canEdit || !isTrainer;
+  const labelCls = forma ? 'text-xs uppercase text-zinc-500' : 'text-xs uppercase text-slate-500';
+  const linkCls = forma
+    ? 'text-xs text-forma-400 hover:text-forma-300'
+    : 'text-xs text-fitgo-400 hover:text-fitgo-300';
+  const chipOn = forma
+    ? 'bg-forma-500 text-ink'
+    : 'bg-fitgo-500 text-white';
+  const chipOff = forma
+    ? 'bg-white/5 text-zinc-500'
+    : 'bg-slate-800 text-slate-500';
+  const chipBtnOff = forma
+    ? 'bg-white/5 text-zinc-400 hover:bg-white/10'
+    : 'bg-slate-800 text-slate-400 hover:bg-slate-700';
   const activeWeekday = weekdayIndex(sessionDate);
   const activeBlocks = getWorkoutBlocks(sheet);
   const prepSections = getPrepSections(sheet);
@@ -326,16 +343,31 @@ export function WorkoutSheetEditor({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
+      <div
+        className={cn(
+          'p-4',
+          forma
+            ? 'rounded-3xl border border-white/10 bg-ink-elevated'
+            : 'rounded-2xl border border-slate-700 bg-slate-900/40',
+        )}
+      >
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h3 className="text-lg font-semibold tracking-wide">ПРОГРАММА ТРЕНИРОВОК</h3>
+          <h3
+            className={cn(
+              forma
+                ? 'font-display text-lg font-semibold text-white'
+                : 'text-lg font-semibold tracking-wide',
+            )}
+          >
+            {forma ? 'Программа тренировок' : 'ПРОГРАММА ТРЕНИРОВОК'}
+          </h3>
           <div className="flex flex-wrap gap-2">
             {isTrainer && canEdit && (
               <button
                 type="button"
                 disabled={copyBusy}
                 onClick={handleCopyPrevious}
-                className="text-xs text-fitgo-400 hover:text-fitgo-300 disabled:opacity-50"
+                className={cn(linkCls, 'disabled:opacity-50')}
               >
                 {copyBusy ? 'Загрузка…' : 'Повторить прошлую'}
               </button>
@@ -344,7 +376,11 @@ export function WorkoutSheetEditor({
               <button
                 type="button"
                 onClick={() => setTemplatePickerOpen(true)}
-                className="text-xs text-amber-400 hover:text-amber-300"
+                className={
+                  forma
+                    ? 'text-xs text-forma-400 hover:text-forma-300'
+                    : 'text-xs text-amber-400 hover:text-amber-300'
+                }
               >
                 Шаблон
               </button>
@@ -354,7 +390,7 @@ export function WorkoutSheetEditor({
 
         <div className="mb-4 grid gap-3 sm:grid-cols-2">
           <div>
-            <p className="mb-1 text-xs uppercase text-slate-500">Дата</p>
+            <p className={cn('mb-1', labelCls)}>Дата</p>
             <p className="font-medium">
               {new Date(sessionDate).toLocaleDateString('ru-RU', {
                 day: 'numeric',
@@ -364,11 +400,11 @@ export function WorkoutSheetEditor({
             </p>
           </div>
           <div>
-            <p className="mb-1 text-xs uppercase text-slate-500">Клиент</p>
+            <p className={cn('mb-1', labelCls)}>Клиент</p>
             <p className="font-medium">{clientName}</p>
           </div>
           <div>
-            <p className="mb-1 text-xs uppercase text-slate-500">Возраст</p>
+            <p className={cn('mb-1', labelCls)}>Возраст</p>
             <div className="flex items-center gap-2">
               <NumberInput
                 value={sheet.clientAge}
@@ -383,7 +419,7 @@ export function WorkoutSheetEditor({
                 <button
                   type="button"
                   onClick={applySuggestedAge}
-                  className="text-xs text-fitgo-400"
+                  className={linkCls}
                 >
                   Из профиля ({suggestedAge})
                 </button>
@@ -391,7 +427,7 @@ export function WorkoutSheetEditor({
             </div>
           </div>
           <div>
-            <p className="mb-1 text-xs uppercase text-slate-500">ЧСС в покое</p>
+            <p className={cn('mb-1', labelCls)}>ЧСС в покое</p>
             <div className="flex items-center gap-2">
               <NumberInput
                 value={sheet.restingHr}
@@ -408,27 +444,31 @@ export function WorkoutSheetEditor({
                   <button
                     type="button"
                     onClick={applySuggestedRestingHr}
-                    className="text-xs text-fitgo-400"
+                    className={linkCls}
                   >
                     Из анкеты ({clientRestingHr})
                   </button>
                 )}
             </div>
-            <p className="mt-1 text-[10px] leading-snug text-slate-600">
+            <p
+              className={cn(
+                'mt-1 text-[10px] leading-snug',
+                forma ? 'text-zinc-600' : 'text-slate-600',
+              )}
+            >
               Пульс в покое. Норма 50–80 уд/мин
             </p>
           </div>
           <div className="sm:col-span-2">
-            <p className="mb-2 text-xs uppercase text-slate-500">День недели</p>
+            <p className={cn('mb-2', labelCls)}>День недели</p>
             <div className="flex flex-wrap gap-1">
               {WORKOUT_WEEKDAY_LABELS.map((label, index) => (
                 <span
                   key={label}
-                  className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                    index === activeWeekday
-                      ? 'bg-fitgo-500 text-white'
-                      : 'bg-slate-800 text-slate-500'
-                  }`}
+                  className={cn(
+                    'rounded-full px-2.5 py-1 text-xs font-medium',
+                    index === activeWeekday ? chipOn : chipOff,
+                  )}
                 >
                   {label}
                 </span>
@@ -440,7 +480,7 @@ export function WorkoutSheetEditor({
         {!readOnly && (
           <div className="mb-2">
             <div className="mb-2 flex items-center gap-1.5">
-              <p className="text-xs uppercase text-slate-500">Блоки тренировки</p>
+              <p className={labelCls}>Блоки тренировки</p>
               <TrainerTip tipId="blocks" />
             </div>
             <div className="flex flex-wrap gap-2">
@@ -451,11 +491,10 @@ export function WorkoutSheetEditor({
                     key={block}
                     type="button"
                     onClick={() => toggleSessionBlock(block)}
-                    className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                      enabled
-                        ? 'bg-fitgo-500 text-white'
-                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                    }`}
+                    className={cn(
+                      'rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                      enabled ? chipOn : chipBtnOff,
+                    )}
                   >
                     {enabled ? '✓ ' : ''}
                     {sessionBlockLabel(block)}
@@ -463,15 +502,15 @@ export function WorkoutSheetEditor({
                 );
               })}
             </div>
-            <p className="mt-2 text-xs text-slate-500">
+            <p className={cn('mt-2 text-xs', forma ? 'text-zinc-500' : 'text-slate-500')}>
               Снимите галочку, чтобы убрать блок из тренировки
             </p>
           </div>
         )}
         {readOnly && (
-          <p className="mb-4 text-sm text-slate-400">
+          <p className={cn('mb-4 text-sm', forma ? 'text-zinc-400' : 'text-slate-400')}>
             Блоки:{' '}
-            <span className="text-slate-200">
+            <span className={forma ? 'text-zinc-200' : 'text-slate-200'}>
               {SESSION_BLOCK_ORDER.filter(isSessionBlockEnabled)
                 .map(sessionBlockLabel)
                 .join(' · ')}

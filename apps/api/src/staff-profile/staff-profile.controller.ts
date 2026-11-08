@@ -89,6 +89,7 @@ export class StaffProfileController {
       experienceYears?: number | null;
       certificates?: unknown;
       onboardedAt?: string | null | true;
+      acceptsClientBookings?: boolean;
     },
   ) {
     return this.profiles.updateMine(user.sub, body ?? {});

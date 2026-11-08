@@ -17,10 +17,12 @@ export function QuickActionsSheet({
   open,
   onOpenChange,
   mode,
+  onNoteMeasurement,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: TrainerCabinetMode;
+  onNoteMeasurement?: () => void;
 }) {
   const router = useRouter();
 
@@ -74,10 +76,13 @@ export function QuickActionsSheet({
         ) : null}
         <ListRow
           title="Заметка или замер"
-          subtitle="К ближайшей тренировке"
+          subtitle="К клиенту · опционально к тренировке"
           leading={<NotebookPen className="h-5 w-5 text-zinc-400" />}
           chevron
-          onClick={() => go('/trainer')}
+          onClick={() => {
+            onOpenChange(false);
+            onNoteMeasurement?.();
+          }}
         />
         <ListRow
           title="Сообщение клиенту"
