@@ -16,6 +16,33 @@ function formatDuration(ms: number): string {
   return s > 0 ? `${m} мин ${s} с` : `${m} мин`;
 }
 
+function sheetCapturedHr(sheet: WorkoutSheet): boolean {
+  if (sheet.maxHr != null) return true;
+  const prep = [
+    ...(sheet.warmupActivities ?? []),
+    ...(sheet.cooldownActivities ?? []),
+  ];
+  if (prep.some((r) => r.hr?.trim() || r.actualHr?.trim())) return true;
+  if (
+    (sheet.cardioExercises ?? []).some(
+      (r) => r.hr?.trim() || r.actualHr?.trim(),
+    )
+  ) {
+    return true;
+  }
+  if (
+    sheet.circuit?.roundLogs?.some(
+      (log) =>
+        log.avgHr != null ||
+        log.maxHr != null ||
+        log.stations.some((s) => s.actualHr),
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function SessionFinishSummary({
   open,
   onOpenChange,
@@ -25,6 +52,8 @@ export function SessionFinishSummary({
   privateNotes,
   homeworkDraft,
   onChangeRpe,
+  onChangeMaxHr,
+  suggestedMaxHr,
   onSend,
   busy,
 }: {
@@ -36,11 +65,15 @@ export function SessionFinishSummary({
   privateNotes: string;
   homeworkDraft: string;
   onChangeRpe: (rpe: number) => void;
+  onChangeMaxHr?: (maxHr: number | undefined) => void;
+  suggestedMaxHr?: number;
   onSend: () => void | Promise<void>;
   busy?: boolean;
 }) {
   const [rpe, setRpe] = useState(sheet.sessionRpe ?? 6);
+  const [maxHr, setMaxHr] = useState(sheet.maxHr);
   const blocks = useMemo(() => getWorkoutBlocks(sheet), [sheet]);
+  const showMaxHr = sheetCapturedHr(sheet) || maxHr != null;
 
   return (
     <ResponsiveSheet
@@ -95,6 +128,39 @@ export function SessionFinishSummary({
             <span>очень тяжело</span>
           </div>
         </div>
+
+        {showMaxHr ? (
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-sm font-medium text-zinc-200">Макс. ЧСС</p>
+              {suggestedMaxHr != null && maxHr !== suggestedMaxHr ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMaxHr(suggestedMaxHr);
+                    onChangeMaxHr?.(suggestedMaxHr);
+                  }}
+                  className="text-xs text-forma-400 hover:text-forma-300"
+                >
+                  ≈ {suggestedMaxHr}
+                </button>
+              ) : null}
+            </div>
+            <input
+              type="number"
+              min={40}
+              max={230}
+              className="input w-full text-sm"
+              placeholder="уд/мин"
+              value={maxHr ?? ''}
+              onChange={(e) => {
+                const v = e.target.value ? Number(e.target.value) : undefined;
+                setMaxHr(v);
+                onChangeMaxHr?.(v);
+              }}
+            />
+          </div>
+        ) : null}
 
         <div className="space-y-2 text-sm">
           <div className="rounded-2xl border border-white/10 px-3 py-2">

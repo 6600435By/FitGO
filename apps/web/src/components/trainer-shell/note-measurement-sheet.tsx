@@ -96,6 +96,11 @@ export function NoteMeasurementSheet({
     );
   }, [clients, q]);
 
+  const selectedClient = useMemo(
+    () => clients.find((c) => c.id === clientId) ?? null,
+    [clients, clientId],
+  );
+
   const save = async () => {
     const token = getToken();
     if (!token || !clientId) {
@@ -193,23 +198,44 @@ export function NoteMeasurementSheet({
             placeholder="Поиск…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            autoComplete="off"
+            enterKeyHint="search"
           />
-          <div className="max-h-36 space-y-1 overflow-y-auto">
-            {filtered.map((c) => (
+          {selectedClient ? (
+            <div className="flex items-center justify-between gap-2 rounded-2xl border border-white/10 bg-ink-raised/60 px-3 py-2">
+              <p className="text-sm text-white">
+                {selectedClient.firstName} {selectedClient.lastName}
+              </p>
               <button
-                key={c.id}
                 type="button"
-                className={`flex w-full rounded-2xl border px-3 py-2 text-left text-sm ${
-                  clientId === c.id
-                    ? 'border-forma-500/50 bg-forma-500/10 text-white'
-                    : 'border-white/10 text-zinc-300'
-                }`}
-                onClick={() => setClientId(c.id)}
+                className="shrink-0 text-xs text-zinc-400 hover:text-white"
+                onClick={() => setClientId('')}
               >
-                {c.firstName} {c.lastName}
+                Сменить
               </button>
-            ))}
-          </div>
+            </div>
+          ) : null}
+          {(!clientId || q.trim()) && (
+            <div className="max-h-36 space-y-1 overflow-y-auto overscroll-contain">
+              {filtered.slice(0, 12).map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`flex w-full rounded-2xl border px-3 py-2 text-left text-sm ${
+                    clientId === c.id
+                      ? 'border-forma-500/50 bg-forma-500/10 text-white'
+                      : 'border-white/10 text-zinc-300'
+                  }`}
+                  onClick={() => {
+                    setClientId(c.id);
+                    setQ('');
+                  }}
+                >
+                  {c.firstName} {c.lastName}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {clientId && sessions.length > 0 ? (

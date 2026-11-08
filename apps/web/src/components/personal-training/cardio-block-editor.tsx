@@ -16,6 +16,8 @@ interface CardioBlockEditorProps {
   readOnly: boolean;
   onChange: (exercises: CardioExerciseRow[]) => void;
   onFieldsChange: (fields: CardioFieldId[]) => void;
+  forma?: boolean;
+  fieldsOpen?: boolean;
 }
 
 export function CardioBlockEditor({
@@ -24,6 +26,8 @@ export function CardioBlockEditor({
   readOnly,
   onChange,
   onFieldsChange,
+  forma = false,
+  fieldsOpen = false,
 }: CardioBlockEditorProps) {
   const updateRow = (rowIndex: number, patch: Partial<CardioExerciseRow>) => {
     onChange(
@@ -62,11 +66,23 @@ export function CardioBlockEditor({
     return <p className="text-sm text-slate-500">—</p>;
   }
 
+  const showFieldChips = !readOnly && (!forma || fieldsOpen);
+
   return (
     <div className="space-y-3">
-      {!readOnly && (
-        <div>
-          <p className="mb-2 text-xs text-slate-500">Поля для записи</p>
+      {showFieldChips && (
+        <div
+          className={
+            forma
+              ? 'rounded-2xl border border-white/10 bg-ink/40 p-3'
+              : undefined
+          }
+        >
+          <p
+            className={`mb-2 text-xs ${forma ? 'text-zinc-500' : 'text-slate-500'}`}
+          >
+            Поля для записи
+          </p>
           <div className="flex flex-wrap gap-1.5">
             {CARDIO_FIELD_IDS.map((field) => {
               const enabled = activeFields.includes(field);
@@ -77,8 +93,12 @@ export function CardioBlockEditor({
                   onClick={() => toggleField(field)}
                   className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
                     enabled
-                      ? 'bg-fitgo-500 text-white'
-                      : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                      ? forma
+                        ? 'bg-forma-500 text-ink'
+                        : 'bg-fitgo-500 text-white'
+                      : forma
+                        ? 'bg-white/5 text-zinc-400 hover:bg-white/10'
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                   }`}
                 >
                   {enabled ? '✓ ' : ''}
@@ -91,7 +111,7 @@ export function CardioBlockEditor({
       )}
 
       {readOnly && (
-        <p className="text-xs text-slate-500">
+        <p className={`text-xs ${forma ? 'text-zinc-500' : 'text-slate-500'}`}>
           {activeFields.map((f) => CARDIO_FIELD_LABELS[f]).join(' · ')}
         </p>
       )}

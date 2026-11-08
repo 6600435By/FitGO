@@ -55,13 +55,6 @@ const SOUND_PACKS: Array<{ id: SoundPackId; label: string }> = [
   { id: 'whistle', label: 'Свисток' },
 ];
 
-function money(minor: number, currency = 'BYN') {
-  return `${(minor / 100).toLocaleString('ru-RU', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  })} ${currency}`;
-}
-
 export function TrainerProfileForma() {
   const router = useRouter();
   const user = getUser();
@@ -76,8 +69,6 @@ export function TrainerProfileForma() {
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [debtMinor, setDebtMinor] = useState(0);
-  const [debtCurrency, setDebtCurrency] = useState('BYN');
   const [motivation, setMotivation] = useState(
     buildMotivationRecords(null, loadJournalWeekStreak()),
   );
@@ -93,15 +84,9 @@ export function TrainerProfileForma() {
     if (!token) return;
     setError(null);
     try {
-      const [p, home, payroll] = await Promise.all([
+      const [p, home] = await Promise.all([
         api.staffProfileMine(token),
         api.trainerGpHome(token).catch(() => null),
-        (() => {
-          const d = new Date();
-          const from = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-          const to = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-          return api.selfPayrollOverview(token, { from, to }).catch(() => null);
-        })(),
       ]);
       setProfile(p);
       setBio(p.bio ?? '');
@@ -110,10 +95,6 @@ export function TrainerProfileForma() {
       setYears(
         typeof p.experienceYears === 'number' ? String(p.experienceYears) : '',
       );
-      if (payroll?.staffDebt) {
-        setDebtMinor(payroll.staffDebt.amountMinor ?? 0);
-        setDebtCurrency(payroll.staffDebt.currency ?? 'BYN');
-      }
       setMotivation(
         buildMotivationRecords(
           home?.monthAnalytics ?? null,
@@ -308,17 +289,6 @@ export function TrainerProfileForma() {
           </span>
         </label>
       </BentoCard>
-
-      {debtMinor > 0 ? (
-        <BentoCard title="Долг перед клубом">
-          <p className="font-display text-3xl font-bold tabular-nums text-amber-300">
-            {money(debtMinor, debtCurrency)}
-          </p>
-          <p className="mt-1 text-xs text-zinc-500">
-            Услуги клуба на вашем клиентском счёте. Видно только вам.
-          </p>
-        </BentoCard>
-      ) : null}
 
       {isPureClub ? (
         <>

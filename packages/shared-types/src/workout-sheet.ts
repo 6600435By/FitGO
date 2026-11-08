@@ -365,11 +365,10 @@ export const STRENGTH_SET_FIELD_LABELS: Record<StrengthSetFieldId, string> = {
   tempo: 'темп',
 };
 
+/** Минимум на карточке: кг + повт. RPE / отдых / темп — через меню полей. */
 export const STRENGTH_DEFAULT_SET_FIELDS: StrengthSetFieldId[] = [
   'weight',
   'reps',
-  'rpe',
-  'restSec',
 ];
 
 export const MOBILITY_MAX_ROWS = 12;
@@ -489,6 +488,63 @@ export const WORKOUT_SECTION_LABELS: Record<WorkoutSectionId, string> = {
   mobility: 'Биомеханика',
   cooldown: 'Заминка',
 };
+
+/** Формат занятия Forma: пресет включённых blocks / prepSections. */
+export type WorkoutSessionFormatId =
+  | 'notes'
+  | 'strength'
+  | 'cardio'
+  | 'circuit'
+  | 'recovery'
+  | 'custom';
+
+export interface WorkoutSessionFormatDef {
+  id: WorkoutSessionFormatId;
+  label: string;
+  description: string;
+}
+
+export const WORKOUT_SESSION_FORMATS: WorkoutSessionFormatDef[] = [
+  {
+    id: 'notes',
+    label: 'Заметка',
+    description: 'Без блоков — часы, заметка и RPE в конце',
+  },
+  {
+    id: 'strength',
+    label: 'Сила',
+    description: 'Разминка → силовая → заминка',
+  },
+  {
+    id: 'cardio',
+    label: 'Кардио',
+    description: 'Один кардио-блок',
+  },
+  {
+    id: 'circuit',
+    label: 'Круговая',
+    description: 'Станции и круги',
+  },
+  {
+    id: 'recovery',
+    label: 'Восстановление',
+    description: 'Разминка и биомеханика',
+  },
+  {
+    id: 'custom',
+    label: 'Своя',
+    description: 'Свой набор блоков',
+  },
+];
+
+const SESSION_SECTION_ORDER: WorkoutSectionId[] = [
+  'warmup',
+  'strength',
+  'cardio',
+  'circuit',
+  'mobility',
+  'cooldown',
+];
 
 export interface WorkoutBlockProgress {
   /** Блок отмечен завершённым, открыт ввод итога */
@@ -1975,7 +2031,7 @@ export function normalizeWorkoutSheet(raw: unknown): WorkoutSheet {
   return {
     blocks,
     prepSections,
-    mainBlock: blocks[0],
+    mainBlock: blocks[0] ?? undefined,
     clientAge:
       typeof data.clientAge === 'number' && data.clientAge > 0
         ? data.clientAge
@@ -2109,15 +2165,6 @@ function normalizeBlockProgress(
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
-
-const SESSION_SECTION_ORDER: WorkoutSectionId[] = [
-  'warmup',
-  'strength',
-  'cardio',
-  'circuit',
-  'mobility',
-  'cooldown',
-];
 
 export function compileSessionSummary(sheet: WorkoutSheet): string {
   const blocks = getWorkoutBlocks(sheet);
@@ -2407,6 +2454,8 @@ export function normalizeWorkoutBlocks(
     b === 'strength' || b === 'cardio' || b === 'circuit' || b === 'mobility';
 
   if (Array.isArray(data.blocks)) {
+    /** Явный [] — формат «Заметка», без основных блоков. */
+    if (data.blocks.length === 0) return [];
     const unique: WorkoutMainBlock[] = [];
     for (const block of data.blocks) {
       if (valid(block) && !unique.includes(block)) unique.push(block);
@@ -2485,13 +2534,17 @@ export function toggleWorkoutBlock(
   let blocks: WorkoutMainBlock[];
 
   if (enabled) {
+    /** Пустой набор допустим (формат «Заметка»). */
     blocks = current.filter((b) => b !== block);
-    if (blocks.length === 0) blocks = ['strength'];
   } else {
     blocks = [...current, block];
   }
 
-  let next: WorkoutSheet = { ...sheet, blocks, mainBlock: blocks[0] };
+  let next: WorkoutSheet = {
+    ...sheet,
+    blocks,
+    mainBlock: blocks[0],
+  };
   if (block === 'circuit' && !enabled && !next.circuit) {
     next = { ...next, circuit: createDefaultCircuit() };
   }
@@ -2589,4 +2642,226 @@ export function resizeCircuitStations(
   }));
 
   return { ...circuit, stations, roundLogs };
+}
+
+/** Порядок включённых секций листа (prep + main). */
+export function getSessionSectionIds(sheet: WorkoutSheet): WorkoutSectionId[] {
+  const prep = getPrepSections(sheet);
+  const blocks = getWorkoutBlocks(sheet);
+  return SESSION_SECTION_ORDER.filter((id) => {
+    if (id === 'warmup' || id === 'cooldown') return prep.includes(id);
+    return blocks.includes(id);
+  });
+}
+
+export function getSectionDurationMin(
+  sheet: WorkoutSheet,
+  sectionId: WorkoutSectionId,
+): number | undefined {
+  switch (sectionId) {
+    case 'warmup':
+      return sheet.warmupDurationMin;
+    case 'strength':
+      return sheet.strengthDurationMin;
+    case 'cardio':
+      return sheet.cardioTotalMin;
+    case 'mobility':
+      return sheet.mobilityDurationMin;
+    case 'cooldown':
+      return sheet.cooldownDurationMin;
+    case 'circuit': {
+      const c = sheet.circuit;
+      if (!c) return undefined;
+      const stationWork = c.stations.reduce(
+        (sum, s) => sum + (s.workSec ?? 0) + (s.restSec ?? 0),
+        0,
+      );
+      const perRound = stationWork + (c.restBetweenRoundsSec ?? 0);
+      const totalSec = perRound * c.rounds;
+      return totalSec > 0 ? Math.round(totalSec / 60) : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** Короткая фраза для строки ленты («Жим 3×8 · 60 кг» / «пусто»). */
+export function getSectionTimelineSummary(
+  sheet: WorkoutSheet,
+  sectionId: WorkoutSectionId,
+): string {
+  switch (sectionId) {
+    case 'warmup': {
+      const rows = (sheet.warmupActivities ?? []).filter((r) =>
+        prepRowHasData(r, sheet.warmupFields ?? WARMUP_DEFAULT_FIELDS),
+      );
+      if (rows.length === 0) return 'пусто';
+      const first = rows[0]!.type?.trim() || 'Движение';
+      return rows.length === 1 ? first : `${first} · ещё ${rows.length - 1}`;
+    }
+    case 'cooldown': {
+      const rows = (sheet.cooldownActivities ?? []).filter((r) =>
+        prepRowHasData(r, sheet.cooldownFields ?? COOLDOWN_DEFAULT_FIELDS),
+      );
+      if (rows.length === 0) return 'пусто';
+      const first = rows[0]!.type?.trim() || 'Движение';
+      return rows.length === 1 ? first : `${first} · ещё ${rows.length - 1}`;
+    }
+    case 'strength': {
+      const exercises = (sheet.strengthExercises ?? []).filter(
+        (ex) => ex.name?.trim() || ex.sets.some(strengthSetHasData),
+      );
+      if (exercises.length === 0) return 'пусто';
+      const first = exercises[0]!;
+      const name = first.name?.trim() || 'Упражнение';
+      const sets = first.sets.filter(strengthSetHasData);
+      const setCount = sets.length || first.sets.length;
+      const sample = sets[0] ?? first.sets[0];
+      const reps = sample?.reps?.trim();
+      const weight = sample?.weight?.trim();
+      let head = name;
+      if (reps) head = `${name} ${setCount}×${reps}`;
+      if (weight) head += ` · ${weight} кг`;
+      else if (sample?.load?.trim() && !reps) head += ` · ${sample.load}`;
+      return exercises.length === 1
+        ? head
+        : `${head} · ещё ${exercises.length - 1}`;
+    }
+    case 'cardio': {
+      const rows = (sheet.cardioExercises ?? []).filter((r) =>
+        cardioRowHasData(r, sheet.cardioFields ?? CARDIO_DEFAULT_FIELDS),
+      );
+      if (rows.length === 0) return 'пусто';
+      const first = rows[0]!;
+      const name = first.modality?.trim() || 'Кардио';
+      const dur = first.duration?.trim();
+      return dur ? `${name} · ${dur}` : name;
+    }
+    case 'mobility': {
+      const rows = (sheet.mobilityExercises ?? []).filter((r) =>
+        mobilityRowHasData(r, sheet.mobilityFields ?? MOBILITY_DEFAULT_FIELDS),
+      );
+      if (rows.length === 0) return 'пусто';
+      const first = rows[0]!;
+      const name = first.name?.trim() || first.focusArea?.trim() || 'Упражнение';
+      return rows.length === 1 ? name : `${name} · ещё ${rows.length - 1}`;
+    }
+    case 'circuit': {
+      const c = sheet.circuit;
+      if (!c || c.stations.every((s) => !s.name?.trim())) return 'пусто';
+      const named = c.stations.filter((s) => s.name?.trim()).length;
+      return `${c.rounds} круг. · ${named || c.stations.length} станций`;
+    }
+    default:
+      return 'пусто';
+  }
+}
+
+function sameSectionSet(
+  a: WorkoutSectionId[],
+  b: WorkoutSectionId[],
+): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((id, i) => id === b[i]);
+}
+
+export function detectWorkoutSessionFormat(
+  sheet: WorkoutSheet,
+): WorkoutSessionFormatId {
+  const sections = getSessionSectionIds(sheet);
+  if (sections.length === 0) return 'notes';
+  if (sameSectionSet(sections, ['warmup', 'strength', 'cooldown'])) {
+    return 'strength';
+  }
+  if (sameSectionSet(sections, ['cardio'])) return 'cardio';
+  if (sameSectionSet(sections, ['circuit'])) return 'circuit';
+  if (sameSectionSet(sections, ['warmup', 'mobility'])) return 'recovery';
+  return 'custom';
+}
+
+export function applyWorkoutSessionFormat(
+  sheet: WorkoutSheet,
+  format: WorkoutSessionFormatId,
+): WorkoutSheet {
+  if (format === 'custom') return sheet;
+
+  let next: WorkoutSheet = { ...sheet };
+
+  switch (format) {
+    case 'notes':
+      next = { ...next, blocks: [], prepSections: [], mainBlock: undefined };
+      break;
+    case 'strength':
+      next = {
+        ...next,
+        blocks: ['strength'],
+        prepSections: ['warmup', 'cooldown'],
+        mainBlock: 'strength',
+        strengthExercises: next.strengthExercises?.length
+          ? next.strengthExercises
+          : [createEmptyStrengthExercise()],
+        strengthSetFields:
+          next.strengthSetFields ?? [...STRENGTH_DEFAULT_SET_FIELDS],
+        warmupActivities: next.warmupActivities?.length
+          ? next.warmupActivities
+          : [createEmptyPrepRow()],
+        cooldownActivities: next.cooldownActivities?.length
+          ? next.cooldownActivities
+          : [createEmptyPrepRow()],
+      };
+      break;
+    case 'cardio':
+      next = {
+        ...next,
+        blocks: ['cardio'],
+        prepSections: [],
+        mainBlock: 'cardio',
+        cardioExercises: next.cardioExercises?.length
+          ? next.cardioExercises
+          : [createEmptyCardioRow()],
+        cardioFields: next.cardioFields ?? [...CARDIO_DEFAULT_FIELDS],
+      };
+      break;
+    case 'circuit':
+      next = {
+        ...next,
+        blocks: ['circuit'],
+        prepSections: [],
+        mainBlock: 'circuit',
+        circuit: next.circuit ?? createDefaultCircuit(),
+      };
+      next = ensureCircuitRoundLogs(next);
+      break;
+    case 'recovery':
+      next = {
+        ...next,
+        blocks: ['mobility'],
+        prepSections: ['warmup'],
+        mainBlock: 'mobility',
+        mobilityExercises: next.mobilityExercises?.length
+          ? next.mobilityExercises
+          : [createEmptyMobilityExercise()],
+        mobilityFields: next.mobilityFields ?? [...MOBILITY_DEFAULT_FIELDS],
+        warmupActivities: next.warmupActivities?.length
+          ? next.warmupActivities
+          : [createEmptyPrepRow()],
+      };
+      break;
+  }
+
+  return next;
+}
+
+/** Новый подход с копией кг/повт/отдыха предыдущего. */
+export function createStrengthSetFromPrevious(
+  previous?: StrengthSetEntry,
+): StrengthSetEntry {
+  if (!previous) return createEmptyStrengthSet();
+  return syncStrengthSetLoad({
+    load: '',
+    weight: previous.weight ?? '',
+    reps: previous.reps ?? '',
+    restSec: previous.restSec,
+    tempo: previous.tempo,
+  });
 }

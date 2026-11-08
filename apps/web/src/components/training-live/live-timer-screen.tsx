@@ -22,17 +22,17 @@ import {
   BasicTimerPanel,
   startRestPreset,
 } from './basic-timer-panel';
-import {
-  hasLiveStrengthExercises,
-  LiveExerciseCard,
-} from './live-exercise-card';
+import { LiveBlockCard } from './live-block-card';
 import { LiveGpRoster } from './live-gp-roster';
 import {
   LivePtSessionChrome,
   useLivePtSheet,
 } from './live-pt-session-chrome';
+import { LiveSessionSteps } from './live-session-steps';
 import { useLiveMode, type LiveWorkMode } from './use-live-mode';
 import { useSessionClock } from './use-session-clock';
+import type { WorkoutSectionId } from '@fitgo/shared-types';
+import { getSessionSectionIds } from '@fitgo/shared-types';
 
 function sessionStorageKey(meta: TimerSessionMeta): string {
   if (meta.kind === 'pt' && meta.bookingId) return `pt:${meta.bookingId}`;
@@ -66,11 +66,27 @@ export function LiveTimerScreen({
   const [menuOpen, setMenuOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [finishOpen, setFinishOpen] = useState(false);
+  const [activeSection, setActiveSection] = useState<WorkoutSectionId | null>(
+    null,
+  );
 
   const showTimerUi =
     mirrorOnly || liveMode.mode === 'timer' || oneshotOpen;
-  const hasExercises =
-    meta.kind === 'pt' && hasLiveStrengthExercises(ptSheet.sheet);
+  const sectionIds = useMemo(
+    () =>
+      meta.kind === 'pt' ? getSessionSectionIds(ptSheet.sheet) : [],
+    [meta.kind, ptSheet.sheet],
+  );
+  const resolvedSection =
+    activeSection && sectionIds.includes(activeSection)
+      ? activeSection
+      : sectionIds.find(
+          (id) => !ptSheet.sheet.blockProgress?.[id]?.summarySaved,
+        ) ??
+        sectionIds[0] ??
+        null;
+  const hasBlocks = meta.kind === 'pt' && sectionIds.length > 0;
+  const hasContent = hasBlocks && resolvedSection != null;
 
   useEffect(() => {
     if (mirrorOnly) return;
@@ -229,25 +245,45 @@ export function LiveTimerScreen({
         </div>
       ) : null}
 
+      {hasBlocks && resolvedSection ? (
+        <div className="px-4 pb-2">
+          <LiveSessionSteps
+            sheet={ptSheet.sheet}
+            activeId={resolvedSection}
+            onSelect={setActiveSection}
+          />
+        </div>
+      ) : null}
+
       <div
         className={cn(
           'flex flex-1 flex-col gap-4 px-4 pb-4',
-          liveMode.mode === 'timer' && hasExercises
+          liveMode.mode === 'timer' && hasContent
             ? 'lg:flex-row lg:items-start lg:gap-8 lg:px-8'
             : '',
         )}
       >
-        {hasExercises ? (
+        {hasContent && resolvedSection ? (
           <div
             className={cn(
               'flex-1',
               liveMode.mode === 'timer' ? 'lg:max-w-md' : 'mx-auto w-full',
             )}
           >
-            <LiveExerciseCard
+            <LiveBlockCard
               sheet={ptSheet.sheet}
+              sectionId={resolvedSection}
               onChangeSheet={ptSheet.setSheet}
               onSetCompleted={onSetCompleted}
+              onAdvance={() => {
+                const ids = getSessionSectionIds(ptSheet.sheet);
+                const idx = ids.indexOf(resolvedSection);
+                const next =
+                  ids.slice(idx + 1).find(
+                    (id) => !ptSheet.sheet.blockProgress?.[id]?.summarySaved,
+                  ) ?? null;
+                if (next) setActiveSection(next);
+              }}
             />
           </div>
         ) : null}
@@ -256,18 +292,18 @@ export function LiveTimerScreen({
           <div
             className={cn(
               'flex flex-1 flex-col items-center justify-center',
-              hasExercises ? 'lg:pt-2' : 'min-h-[50dvh]',
+              hasContent ? 'lg:pt-2' : 'min-h-[50dvh]',
             )}
           >
             <BasicTimerPanel
               timer={timerControls}
-              compact={hasExercises}
-              showAutoRest={hasExercises}
+              compact={hasContent}
+              showAutoRest={hasContent}
               autoRest={liveMode.autoRest}
               onAutoRestChange={liveMode.setAutoRest}
             />
           </div>
-        ) : !hasExercises ? (
+        ) : !hasContent ? (
           <div className="flex flex-1 flex-col items-center justify-center px-4 text-center">
             <p className="font-display text-2xl font-semibold text-white">
               Тренировка идёт
@@ -276,8 +312,8 @@ export function LiveTimerScreen({
               {formatTimerMs(clock.elapsedMs, true)}
             </p>
             <p className="mt-3 max-w-xs text-sm text-zinc-500">
-              Свободный режим — отмечайте подходы и ведите занятие без таймера.
-              Таймер можно открыть кнопкой внизу или переключателем сверху.
+              Свободный режим — заметка и RPE в конце. Таймер можно открыть
+              кнопкой внизу или переключателем сверху.
             </p>
             {!clock.isRunning ? (
               <button

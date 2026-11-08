@@ -52,6 +52,7 @@ import { PrepBlockEditor } from './prep-block-editor';
 import { PrepBlockSession } from './prep-block-session';
 import { StrengthBlockEditor } from './strength-block-editor';
 import { SectionTitle, TrainerTip } from './trainer-tip';
+import { WorkoutFormaSheetBody } from './workout-forma-sheet-body';
 import { WorkoutSectionCard } from './workout-section-card';
 import { WorkoutSessionController } from './workout-session-controller';
 import { WorkoutSessionSummaryPanel } from './workout-session-summary';
@@ -477,7 +478,7 @@ export function WorkoutSheetEditor({
           </div>
         </div>
 
-        {!readOnly && (
+        {!forma && !readOnly && (
           <div className="mb-2">
             <div className="mb-2 flex items-center gap-1.5">
               <p className={labelCls}>Блоки тренировки</p>
@@ -502,15 +503,15 @@ export function WorkoutSheetEditor({
                 );
               })}
             </div>
-            <p className={cn('mt-2 text-xs', forma ? 'text-zinc-500' : 'text-slate-500')}>
+            <p className={cn('mt-2 text-xs', 'text-slate-500')}>
               Снимите галочку, чтобы убрать блок из тренировки
             </p>
           </div>
         )}
-        {readOnly && (
-          <p className={cn('mb-4 text-sm', forma ? 'text-zinc-400' : 'text-slate-400')}>
+        {!forma && readOnly && (
+          <p className={cn('mb-4 text-sm', 'text-slate-400')}>
             Блоки:{' '}
-            <span className={forma ? 'text-zinc-200' : 'text-slate-200'}>
+            <span className="text-slate-200">
               {SESSION_BLOCK_ORDER.filter(isSessionBlockEnabled)
                 .map(sessionBlockLabel)
                 .join(' · ')}
@@ -518,7 +519,7 @@ export function WorkoutSheetEditor({
           </p>
         )}
 
-        {!hideLegacyTimer ? (
+        {!forma && !hideLegacyTimer ? (
           <>
             <WorkoutSessionController
               sheet={sheet}
@@ -540,7 +541,18 @@ export function WorkoutSheetEditor({
 
       </div>
 
-      {hasWarmup && (
+      {forma ? (
+        <WorkoutFormaSheetBody
+          sheet={sheet}
+          readOnly={readOnly}
+          isTrainer={isTrainer}
+          circuitHistory={circuitHistory}
+          currentCircuitPoint={currentCircuitPoint}
+          onChange={onChange}
+        />
+      ) : null}
+
+      {!forma && hasWarmup && (
         <WorkoutSectionCard
           {...sectionCardProps('warmup')}
           tipId="warmup"
@@ -577,7 +589,7 @@ export function WorkoutSheetEditor({
         </WorkoutSectionCard>
       )}
 
-      {hasStrength && (
+      {!forma && hasStrength && (
         <WorkoutSectionCard
           {...sectionCardProps('strength')}
           tipId="strength"
@@ -604,7 +616,7 @@ export function WorkoutSheetEditor({
         </WorkoutSectionCard>
       )}
 
-      {activeBlocks.includes('cardio') && (
+      {!forma && activeBlocks.includes('cardio') && (
         <WorkoutSectionCard
           {...sectionCardProps('cardio')}
           tipId="cardio"
@@ -631,7 +643,7 @@ export function WorkoutSheetEditor({
         </WorkoutSectionCard>
       )}
 
-      {hasCircuit && sheet.circuit && (
+      {!forma && hasCircuit && sheet.circuit && (
         <WorkoutSectionCard {...sectionCardProps('circuit')} tipId="circuit">
           <CircuitBlockEditor
             circuit={sheet.circuit}
@@ -650,7 +662,7 @@ export function WorkoutSheetEditor({
         </WorkoutSectionCard>
       )}
 
-      {hasMobility && (
+      {!forma && hasMobility && (
         <WorkoutSectionCard
           {...sectionCardProps('mobility')}
           tipId="mobility"
@@ -677,7 +689,7 @@ export function WorkoutSheetEditor({
         </WorkoutSectionCard>
       )}
 
-      {hasCooldown && (
+      {!forma && hasCooldown && (
         <WorkoutSectionCard
           {...sectionCardProps('cooldown')}
           tipId="cooldown"
@@ -714,6 +726,7 @@ export function WorkoutSheetEditor({
         </WorkoutSectionCard>
       )}
 
+      {!forma && (
       <div className="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
         <div className="mb-3">
           <SectionTitle tipId="session-vitals">ПОКАЗАТЕЛИ СЕССИИ</SectionTitle>
@@ -826,8 +839,9 @@ export function WorkoutSheetEditor({
           )}
         </div>
       </div>
+      )}
 
-      {isTrainer && (
+      {!forma && isTrainer && (
         <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
           <div className="mb-2 flex items-center gap-2">
             <Lock className="h-4 w-4 text-amber-400" />
@@ -852,7 +866,7 @@ export function WorkoutSheetEditor({
         </div>
       )}
 
-      {prepSessionVariant && (
+      {!forma && prepSessionVariant && (
         <PrepBlockSession
           variant={prepSessionVariant}
           activities={

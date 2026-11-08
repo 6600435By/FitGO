@@ -41,7 +41,7 @@ export function PersonalGoalsCard({
     return (
       <BentoCard title="Мои цели">
         <p className="text-sm text-zinc-400">
-          Общая мотивация клуба вам не нужна — поставьте себе личные цели.
+          Поставьте себе личные цели
         </p>
         {onEdit ? (
           <button

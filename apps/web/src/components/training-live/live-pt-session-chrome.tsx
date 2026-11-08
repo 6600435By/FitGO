@@ -245,6 +245,7 @@ export function LivePtSessionChrome({
         privateNotes={sheet.trainerPrivateNotes ?? ''}
         homeworkDraft={homeworkDraft}
         onChangeRpe={(sessionRpe) => setSheet((s) => ({ ...s, sessionRpe }))}
+        onChangeMaxHr={(maxHr) => setSheet((s) => ({ ...s, maxHr }))}
         onSend={sendAndComplete}
         busy={busy}
       />

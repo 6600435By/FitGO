@@ -2,8 +2,9 @@
 
 import type { WorkoutBlockProgress, WorkoutSectionId } from '@fitgo/shared-types';
 import { WORKOUT_SECTION_LABELS } from '@fitgo/shared-types';
-import { Check, ChevronDown, ChevronUp, Pencil, Play } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Pencil, Play, Settings2 } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { cn } from '@/lib/utils';
 import type { WorkoutTipId } from './workout-trainer-tips';
 import { SectionTitle } from './trainer-tip';
 
@@ -24,6 +25,12 @@ interface WorkoutSectionCardProps {
   onSummaryNoteChange: (note: string) => void;
   /** Запуск блочной сессии с таймером */
   onStartSession?: () => void;
+  /** Forma Coach: токены + «Готово» без кнопок таймера */
+  forma?: boolean;
+  /** Forma: показать меню полей */
+  onOpenFields?: () => void;
+  /** Forma: сразу закрыть блок без экрана итога */
+  onDone?: () => void;
   children: ReactNode;
 }
 
@@ -43,6 +50,9 @@ export function WorkoutSectionCard({
   onReopen,
   onSummaryNoteChange,
   onStartSession,
+  forma = false,
+  onOpenFields,
+  onDone,
   children,
 }: WorkoutSectionCardProps) {
   const label = title ?? WORKOUT_SECTION_LABELS[sectionId];
@@ -51,6 +61,97 @@ export function WorkoutSectionCard({
   const summaryNote = progress?.summaryNote ?? '';
   const fullyCollapsed = summarySaved && collapsed;
   const showContent = !completed || (summarySaved && !collapsed);
+
+  if (forma) {
+    return (
+      <div
+        id={`workout-section-${sectionId}`}
+        className={cn(
+          'rounded-2xl border transition-colors',
+          summarySaved
+            ? 'border-emerald-500/30 bg-emerald-500/5'
+            : 'border-white/10 bg-ink-raised/50',
+        )}
+      >
+        <div className="flex items-center justify-between gap-2 p-4">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {summarySaved ? (
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">
+                <Check className="h-3.5 w-3.5" />
+              </span>
+            ) : null}
+            <h4 className="font-display text-base font-semibold text-white">
+              {label}
+            </h4>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {!completed && headerExtra}
+            {!readOnly && onOpenFields ? (
+              <button
+                type="button"
+                onClick={onOpenFields}
+                className="rounded-xl border border-white/10 p-2 text-zinc-400 hover:border-white/20 hover:text-zinc-200"
+                aria-label="Поля блока"
+              >
+                <Settings2 className="h-4 w-4" />
+              </button>
+            ) : null}
+            {summarySaved ? (
+              <button
+                type="button"
+                onClick={onToggleCollapse}
+                className="rounded-xl p-1.5 text-zinc-500 hover:bg-white/5"
+                aria-label={fullyCollapsed ? 'Развернуть блок' : 'Свернуть блок'}
+              >
+                {fullyCollapsed ? (
+                  <ChevronDown className="h-5 w-5" />
+                ) : (
+                  <ChevronUp className="h-5 w-5" />
+                )}
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        {showContent && !summarizing ? (
+          <div className="border-t border-white/5 px-4 pb-4 pt-3">
+            {children}
+
+            {summarySaved ? (
+              <div className="mt-4 space-y-3 rounded-2xl border border-white/5 bg-ink/40 p-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                  Итог по блоку
+                </p>
+                <p className="whitespace-pre-wrap text-sm text-zinc-300">
+                  {summaryNote.trim() || '—'}
+                </p>
+                {isTrainer && !readOnly ? (
+                  <button
+                    type="button"
+                    onClick={onReopen}
+                    className="btn-secondary flex w-full items-center justify-center gap-1 text-sm"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Редактировать блок
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {!completed && isTrainer && !readOnly ? (
+              <button
+                type="button"
+                onClick={onDone ?? onComplete}
+                className="btn-primary mt-4 w-full text-sm"
+              >
+                Готово
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div
