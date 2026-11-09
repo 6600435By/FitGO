@@ -41,8 +41,16 @@ function pad2(n: number) {
   return String(n).padStart(2, '0');
 }
 
+/** Soft in-process TTL so gp-home + insights share one month compute per open. */
+const FOR_TRAINER_TTL_MS = 45_000;
+
 @Injectable()
 export class TrainerMonthAnalyticsService {
+  private readonly forTrainerCache = new Map<
+    string,
+    { expiresAt: number; value: Promise<TrainerMonthAnalytics> }
+  >();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly bookingControl: BookingControlService,
@@ -54,6 +62,29 @@ export class TrainerMonthAnalyticsService {
    * (no live 1C) so card counts match deep-links.
    */
   async forTrainer(
+    clubId: string,
+    trainerId: string,
+    from: string,
+    to: string,
+    opts?: { showReformer?: boolean },
+  ): Promise<TrainerMonthAnalytics> {
+    const cacheKey = `${clubId}|${trainerId}|${from}|${to}|${opts?.showReformer ? 1 : 0}`;
+    const hit = this.forTrainerCache.get(cacheKey);
+    if (hit && hit.expiresAt > Date.now()) {
+      return hit.value;
+    }
+    const value = this.computeForTrainer(clubId, trainerId, from, to, opts);
+    this.forTrainerCache.set(cacheKey, {
+      expiresAt: Date.now() + FOR_TRAINER_TTL_MS,
+      value,
+    });
+    void value.catch(() => {
+      this.forTrainerCache.delete(cacheKey);
+    });
+    return value;
+  }
+
+  private async computeForTrainer(
     clubId: string,
     trainerId: string,
     from: string,

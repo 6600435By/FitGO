@@ -3647,6 +3647,7 @@ export const api = {
       clientId?: string;
       notIn1c?: boolean;
       missingJournal?: boolean;
+      signal?: AbortSignal;
     },
   ) => {
     const q = new URLSearchParams({ from: params.from, to: params.to });
@@ -3666,7 +3667,7 @@ export const api = {
     if (params.missingJournal) q.set('missingJournal', '1');
     return request<import('@fitgo/shared-types').BookingControlListItem[]>(
       `/${base}/booking-control?${q}`,
-      {},
+      params.signal ? { signal: params.signal } : {},
       token,
     );
   },

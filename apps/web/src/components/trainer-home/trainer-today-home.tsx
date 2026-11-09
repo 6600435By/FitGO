@@ -38,6 +38,11 @@ import { StaffTasksInbox } from '@/components/staff-tasks-inbox';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import {
+  trainerCacheGet,
+  trainerCacheSet,
+  trainerGpHomeCacheKey,
+} from '@/lib/trainer-fetch-cache';
+import {
   buildMotivationRecords,
   loadJournalWeekStreak,
 } from '@/lib/trainer-motivation';
@@ -262,11 +267,13 @@ function HeroNext({
 
 function AssistantBlock({
   insights,
+  loading,
   showAll,
   onToggleAll,
   onDismiss,
 }: {
   insights: TrainerInsight[];
+  loading: boolean;
   showAll: boolean;
   onToggleAll: () => void;
   onDismiss: (key: string) => void;
@@ -277,7 +284,7 @@ function AssistantBlock({
     <BentoCard
       title="Помощник"
       action={
-        insights.length > 3 ? (
+        !loading && insights.length > 3 ? (
           <button
             type="button"
             onClick={onToggleAll}
@@ -288,7 +295,12 @@ function AssistantBlock({
         ) : null
       }
     >
-      {visible.length === 0 ? (
+      {loading ? (
+        <div className="space-y-3">
+          <Skeleton className="h-20 w-full rounded-2xl" />
+          <Skeleton className="h-20 w-full rounded-2xl" />
+        </div>
+      ) : visible.length === 0 ? (
         <div className="flex items-start gap-3 rounded-2xl border border-white/[0.06] bg-ink-raised/50 px-3 py-3">
           <Sparkles className="mt-0.5 h-4 w-4 text-forma-400" />
           <p className="text-sm text-zinc-400">
@@ -608,33 +620,57 @@ export function TrainerTodayHome({
   const showControlLinks = showPtControl || showGp;
   const isPureClub = Boolean(user?.trainerClub) && !user?.trainerStaff && !showGp;
   const personalGoals = usePersonalGoals(isPureClub);
-  const [home, setHome] = useState<FloorStaffHome | null>(null);
+  const [home, setHome] = useState<FloorStaffHome | null>(() => {
+    const uid = getUser()?.id;
+    if (!uid) return null;
+    return trainerCacheGet<FloorStaffHome>(trainerGpHomeCacheKey(uid));
+  });
   const [insights, setInsights] = useState<TrainerInsightsResponse | null>(
     null,
   );
+  const [insightsLoading, setInsightsLoading] = useState(true);
   const [showAllInsights, setShowAllInsights] = useState(false);
   const [error, setError] = useState('');
 
-  const load = useCallback(() => {
+  const loadHome = useCallback(() => {
+    const token = getToken();
+    const uid = getUser()?.id;
+    if (!token || !uid) return;
+    const cacheKey = trainerGpHomeCacheKey(uid);
+    api
+      .trainerGpHome(token)
+      .then((h) => {
+        setHome(h);
+        setError('');
+        trainerCacheSet(cacheKey, h);
+      })
+      .catch((err: Error) => {
+        if (!trainerCacheGet(cacheKey)) {
+          setError(err.message || 'Ошибка загрузки');
+        }
+      });
+  }, []);
+
+  const loadInsights = useCallback(() => {
     const token = getToken();
     if (!token) return;
-    Promise.all([
-      api.trainerGpHome(token),
-      api.trainerInsights(token).catch(() => ({
+    setInsightsLoading(true);
+    api
+      .trainerInsights(token)
+      .catch(() => ({
         insights: [] as TrainerInsight[],
         generatedAt: new Date().toISOString(),
-      })),
-    ])
-      .then(([h, i]) => {
-        setHome(h);
+      }))
+      .then((i) => {
         setInsights(i);
       })
-      .catch((err: Error) => setError(err.message || 'Ошибка загрузки'));
+      .finally(() => setInsightsLoading(false));
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    loadHome();
+    loadInsights();
+  }, [loadHome, loadInsights]);
 
   const dismissInsight = useCallback(
     async (key: string) => {
@@ -651,10 +687,10 @@ export function TrainerTodayHome({
       try {
         await api.trainerDismissInsight(token, { key, days: 3 });
       } catch {
-        load();
+        loadInsights();
       }
     },
-    [load],
+    [loadInsights],
   );
 
   const scheduleBase = useMemo(
@@ -730,6 +766,7 @@ export function TrainerTodayHome({
         <div className="space-y-4 desktop:col-span-5">
           <AssistantBlock
             insights={insights?.insights ?? []}
+            loading={insightsLoading}
             showAll={showAllInsights}
             onToggleAll={() => setShowAllInsights((v) => !v)}
             onDismiss={dismissInsight}

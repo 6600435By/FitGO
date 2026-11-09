@@ -26,6 +26,7 @@ import {
 } from '@/components/manager-rework/manager-rework-sheet';
 import { DateField } from '@/components/ui/date-field';
 import { getUser } from '@/lib/auth';
+import { peekTrainerBookingListCache } from '@/lib/trainer-booking-control-api';
 import {
   resolveViewFilters,
   usePersistViewMemory,
@@ -33,6 +34,22 @@ import {
 import { isIsoDay } from '@/lib/view-memory';
 import { ApiError } from '@/lib/api';
 import { formatDateTime, formatVisitClock } from '@/lib/utils';
+
+function patchListItemFromDetail(
+  items: BookingControlListItem[],
+  detail: BookingControlDetail,
+): BookingControlListItem[] {
+  return items.map((row) => {
+    if (row.sessionKey !== detail.sessionKey) return row;
+    return {
+      ...row,
+      status: detail.status ?? row.status,
+      approvalPhase: detail.approvalPhase ?? row.approvalPhase,
+      approvalLabel: detail.approvalLabel ?? row.approvalLabel,
+      needsReview: detail.needsReview ?? row.needsReview,
+    };
+  });
+}
 
 type BookingViewMem = {
   from: string;
@@ -112,24 +129,27 @@ export type BookingControlPerformerOption = {
   name: string;
 };
 
+export type BookingControlListParams = {
+  from: string;
+  to: string;
+  kind?: string;
+  status?: string;
+  needsReview?: boolean;
+  payment?: string;
+  performerId?: string;
+  payTag?: string;
+  flag?: string;
+  hall?: string;
+  reformer?: string;
+  client?: string;
+  clientId?: string;
+  notIn1c?: boolean;
+  missingJournal?: boolean;
+  signal?: AbortSignal;
+};
+
 export type BookingControlApi = {
-  list: (params: {
-    from: string;
-    to: string;
-    kind?: string;
-    status?: string;
-    needsReview?: boolean;
-    payment?: string;
-    performerId?: string;
-    payTag?: string;
-    flag?: string;
-    hall?: string;
-    reformer?: string;
-    client?: string;
-    clientId?: string;
-    notIn1c?: boolean;
-    missingJournal?: boolean;
-  }) => Promise<BookingControlListItem[]>;
+  list: (params: BookingControlListParams) => Promise<BookingControlListItem[]>;
   detail: (sessionKey: string) => Promise<BookingControlDetail>;
   openRemark: (
     sessionKey: string,
@@ -929,8 +949,29 @@ export function BookingControlPanel({
       return q;
     },
   });
-  const [items, setItems] = useState<BookingControlListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<BookingControlListItem[]>(() => {
+    if (detailOnly) return [];
+    const from0 = initialFrom?.trim() || monthStartIso();
+    const to0 = initialTo?.trim() || todayIso();
+    return peekTrainerBookingListCache(from0, to0) ?? [];
+  });
+  const [loading, setLoading] = useState(() => {
+    if (detailOnly) return false;
+    const from0 = initialFrom?.trim() || monthStartIso();
+    const to0 = initialTo?.trim() || todayIso();
+    return !(peekTrainerBookingListCache(from0, to0)?.length);
+  });
+  const [listError, setListError] = useState('');
+  const listAbortRef = useRef<AbortController | null>(null);
+  const itemsLenRef = useRef(
+    detailOnly
+      ? 0
+      : (peekTrainerBookingListCache(
+          initialFrom?.trim() || monthStartIso(),
+          initialTo?.trim() || todayIso(),
+        )?.length ?? 0),
+  );
+  const listPeriodRef = useRef('');
   const [attendanceBusyId, setAttendanceBusyId] = useState<string | null>(null);
   const [approveBusy, setApproveBusy] = useState(false);
   const [bulkRole, setBulkRole] = useState<'trainer' | 'admin'>('admin');
@@ -1091,7 +1132,20 @@ export function BookingControlPanel({
       setLoading(false);
       return Promise.resolve();
     }
-    setLoading(true);
+    listAbortRef.current?.abort();
+    const ac = new AbortController();
+    listAbortRef.current = ac;
+    const periodKey = `${from}|${to}|${fixedKind ?? kind}|${payTag}|${flag}|${hallFilter}|${reformerFilter}`;
+    if (listPeriodRef.current && listPeriodRef.current !== periodKey) {
+      // Date/filter change — don't keep rows from another period.
+      itemsLenRef.current = 0;
+      setItems([]);
+      setLoading(true);
+    } else if (itemsLenRef.current === 0) {
+      setLoading(true);
+    }
+    listPeriodRef.current = periodKey;
+    setListError('');
     setMessage('');
     setMessageLink(null);
     return api
@@ -1105,12 +1159,24 @@ export function BookingControlPanel({
         ...(flag ? { flag } : {}),
         ...(hallFilter ? { hall: hallFilter } : {}),
         ...(reformerFilter ? { reformer: reformerFilter } : {}),
+        signal: ac.signal,
       })
-      .then(setItems)
-      .catch((e) =>
-        setMessage(e instanceof Error ? e.message : 'Ошибка загрузки'),
-      )
-      .finally(() => setLoading(false));
+      .then((rows) => {
+        if (ac.signal.aborted) return;
+        itemsLenRef.current = rows.length;
+        setItems(rows);
+        setListError('');
+      })
+      .catch((e) => {
+        if (ac.signal.aborted || (e instanceof Error && e.name === 'AbortError'))
+          return;
+        const msg = e instanceof Error ? e.message : 'Ошибка загрузки';
+        setListError(msg);
+        setMessage(msg);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setLoading(false);
+      });
   }, [
     api,
     from,
@@ -2064,6 +2130,7 @@ export function BookingControlPanel({
         comment.trim() || undefined,
       );
       setSelected(updated);
+      setItems((prev) => patchListItemFromDetail(prev, updated));
       setComment('');
       const phase =
         updated.groupApproval?.phase ?? updated.approvalPhase;
@@ -2074,7 +2141,7 @@ export function BookingControlPanel({
             ? 'Подтверждено. Ждёт администратора.'
             : 'Подтверждено тренером — ждёт администратора',
       );
-      load();
+      void load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка подтверждения');
     } finally {
@@ -2097,13 +2164,14 @@ export function BookingControlPanel({
         comment.trim() || undefined,
       );
       setSelected(updated);
+      setItems((prev) => patchListItemFromDetail(prev, updated));
       setComment('');
       setMessage(
         mode === 'rereview'
           ? 'Отправлено на повторную проверку администратору'
           : 'Изменения сохранены — админ увидит новую версию',
       );
-      load();
+      void load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка сохранения');
     } finally {
@@ -3159,18 +3227,23 @@ export function BookingControlPanel({
         </p>
       ) : null}
 
-      {loading ? (
+      {loading && items.length === 0 ? (
         <p className="text-slate-400">Загрузка…</p>
-      ) : visible.length === 0 ? (
+      ) : listError && items.length === 0 ? (
+        <p className="text-rose-400">{listError}</p>
+      ) : !loading && !listError && visible.length === 0 ? (
         <p className="text-slate-400">
-          {showQueue && queue === 'pending'
-            ? 'На контроле за период пусто'
-            : showQueue && queue === 'done'
-              ? 'Прошедших контроль за период нет'
-              : showQueue && queue === 'upcoming'
-                ? 'В периоде нет записей, которые ещё не начались'
-                : 'Нет записей за период'}
-          {showQueue &&
+          {items.length > 0
+            ? 'Нет записей по выбранным фильтрам'
+            : showQueue && queue === 'pending'
+              ? 'На контроле за период пусто'
+              : showQueue && queue === 'done'
+                ? 'Прошедших контроль за период нет'
+                : showQueue && queue === 'upcoming'
+                  ? 'В периоде нет записей, которые ещё не начались'
+                  : 'Нет записей за период'}
+          {items.length === 0 &&
+          showQueue &&
           queue === 'pending' &&
           from === to &&
           pendingCount === 0

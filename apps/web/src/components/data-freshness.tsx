@@ -212,17 +212,33 @@ export function DataFreshness({
         : 'text-red-700';
 
   const cd = cooldownLeft(status?.cooldownUntil ?? null);
-  const dataLabel = status?.dataAsOf
-    ? `Данные на ${status.dataAsOf}`
-    : 'Данные ещё не загружены из 1С';
+  const statusPending = status === null && !err;
+  const dataLabel = statusPending
+    ? 'Проверяем данные…'
+    : status?.dataAsOf
+      ? `Данные на ${status.dataAsOf}`
+      : 'Данные ещё не загружены из 1С';
   const hint =
     'Занятия: сегодня ±1 и дни с открытыми записями в ЛК (до 21 дня). Продажи/архив — ночью 03–04.';
+  const labelColor = statusPending
+    ? 'text-[var(--fg-muted)]'
+    : freshnessColor;
 
-  // Trainer / specialist / tech: date only.
+  // Trainer / specialist / tech: date + sync error (no refresh).
   if (!canRefresh && !isOps) {
     return (
       <div className={`card !px-2 !py-1 text-xs leading-tight ${className}`}>
-        <span className={`font-medium ${freshnessColor}`}>{dataLabel}</span>
+        <span className={`font-medium ${labelColor}`}>{dataLabel}</span>
+        {status?.sourceLabel ? (
+          <span className="ml-1 text-[var(--fg-muted)]">
+            · {status.sourceLabel}
+          </span>
+        ) : null}
+        {status?.lastError ? (
+          <p className="mt-0.5 break-words text-[11px] text-red-600">
+            {formatSyncError(status.lastError)}
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -234,7 +250,7 @@ export function DataFreshness({
         className={`card !px-2 !py-1 text-xs leading-tight ${className}`}
       >
         <div className="flex items-center gap-2">
-          <span className={`min-w-0 font-medium ${freshnessColor}`}>
+          <span className={`min-w-0 font-medium ${labelColor}`}>
             {dataLabel}
           </span>
           {status?.running ? (
@@ -263,7 +279,7 @@ export function DataFreshness({
   return (
     <div className={`card !px-2 !py-1.5 text-xs leading-tight ${className}`}>
       <div className="flex items-center gap-x-2 gap-y-0.5">
-        <span className={`min-w-0 font-medium ${freshnessColor}`}>
+        <span className={`min-w-0 font-medium ${labelColor}`}>
           {dataLabel}
         </span>
         {status?.sourceLabel ? (
