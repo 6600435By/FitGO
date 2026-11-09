@@ -3197,11 +3197,16 @@ export function BookingControlPanel({
                   {formatDateTime(item.startAt)} · {item.title}
                   {item.performerName ? ` · ${item.performerName}` : ''}
                 </button>
-                <span
-                  className={`shrink-0 text-[11px] ${HINT_TEXT_COLOR[approvalHintTone(item.approvalLabel)]}`}
-                >
-                  {bookingControlRowStateLabelRu(item, nowMs)}
-                </span>
+                {(() => {
+                  const stateLabel = bookingControlRowStateLabelRu(item, nowMs);
+                  return stateLabel ? (
+                    <span
+                      className={`shrink-0 text-[11px] ${HINT_TEXT_COLOR[approvalHintTone(item.approvalLabel)]}`}
+                    >
+                      {stateLabel}
+                    </span>
+                  ) : null;
+                })()}
               </li>
             ))}
           </ul>
@@ -3305,6 +3310,7 @@ export function BookingControlPanel({
             {visible.map((item) => {
               const a = attendanceOf(item);
               const pay = paymentCell(item);
+              const stateLabel = bookingControlRowStateLabelRu(item, nowMs);
               return (
                 <li key={item.sessionKey}>
                   <div
@@ -3345,7 +3351,7 @@ export function BookingControlPanel({
                     </p>
                     {pay !== '—' ||
                     item.needsReview ||
-                    item.approvalLabel ||
+                    stateLabel ||
                     item.source === 'SALE' ||
                     item.source === 'FITGO' ||
                     item.missingJournal ? (
@@ -3381,15 +3387,13 @@ export function BookingControlPanel({
                             проверка
                           </span>
                         ) : null}
-                        {item.approvalLabel ||
-                        item.approvalPhase ||
-                        item.status === 'COMPLETED' ? (
+                        {stateLabel ? (
                           <span
                             className={hintBadgeClass(
                               approvalHintTone(item.approvalLabel),
                             )}
                           >
-                            {bookingControlRowStateLabelRu(item, nowMs)}
+                            {stateLabel}
                           </span>
                         ) : null}
                         {item.missingJournal && api.adoptSpaToJournal ? (
@@ -3456,6 +3460,7 @@ export function BookingControlPanel({
                 {visible.map((item) => {
                   const a = attendanceOf(item);
                   const pay = paymentCell(item);
+                  const stateLabel = bookingControlRowStateLabelRu(item, nowMs);
                   const title = [
                     item.title,
                     item.clientName && item.kind !== 'GROUP'
@@ -3506,16 +3511,14 @@ export function BookingControlPanel({
                             проверка
                           </span>
                         ) : null}
-                        {item.approvalLabel ||
-                        item.approvalPhase ||
-                        item.status === 'COMPLETED' ? (
+                        {stateLabel ? (
                           <span
                             className={hintBadgeClass(
                               approvalHintTone(item.approvalLabel),
                               true,
                             )}
                           >
-                            {bookingControlRowStateLabelRu(item, nowMs)}
+                            {stateLabel}
                           </span>
                         ) : null}
                         {item.missingJournal && api.adoptSpaToJournal ? (
@@ -4658,7 +4661,9 @@ export function BookingControlPanel({
                       );
                       return (
                         <div className={`space-y-2 ${HINT_PANEL_COLOR[ptTone]}`}>
-                          <p className={HINT_TEXT_COLOR[ptTone]}>{ptLabel}</p>
+                          {ptLabel ? (
+                            <p className={HINT_TEXT_COLOR[ptTone]}>{ptLabel}</p>
+                          ) : null}
                           {selected.returnComment ? (
                             <p className="text-rose-300 text-xs">
                               {selected.returnComment}

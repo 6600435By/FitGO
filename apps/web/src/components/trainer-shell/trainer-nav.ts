@@ -63,6 +63,7 @@ export function buildTrainerV2Nav(
     center: true,
   };
 
+  // Club dock: Сегодня / Расписание / + / Расчёты / Ещё (Клиенты → «Ещё»).
   const dock: TrainerNavItem[] = mode.clubPtDock
     ? [
         { href: '/trainer', label: 'Сегодня', icon: Home, exact: true },
@@ -73,12 +74,6 @@ export function buildTrainerV2Nav(
           module: 'trainer_calendar',
         },
         quickAction,
-        {
-          href: '/trainer/clients',
-          label: 'Клиенты',
-          icon: Users,
-          // Always visible for «Тренер клуб» dock — CRM flag must not hide the tab.
-        },
         {
           href: '/trainer/my-payments',
           label: 'Расчёты',
@@ -113,6 +108,15 @@ export function buildTrainerV2Nav(
       ];
 
   const more: TrainerNavItem[] = [];
+
+  // «Тренер клуб»: Клиенты live under More so the phone dock stays 5 equal slots.
+  if (mode.clubPtDock) {
+    more.push({
+      href: '/trainer/clients',
+      label: 'Клиенты',
+      icon: Users,
+    });
+  }
 
   if (mode.showTimesheet) {
     more.push({

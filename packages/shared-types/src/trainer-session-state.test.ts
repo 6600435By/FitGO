@@ -104,15 +104,16 @@ describe('sessionClockPhase — time ≠ result', () => {
       clock: 'ELAPSED',
       result: 'trainer',
     });
-    assert.equal(label, 'Время прошло, результат не подтверждён');
+    assert.equal(label, 'Результат не подтверждён');
     assert.equal(label.includes('Сейчас'), false);
+    assert.equal(label.includes('Время прошло'), false);
     assert.ok(SESSION_CLOCK_NOW_IS_NOT_CONFIRM.length > 0);
   });
 
   it('admin wait after elapsed', () => {
     assert.equal(
       sessionStateExplainRu({ clock: 'ELAPSED', result: 'admin' }),
-      'Время прошло · ждёт администратора',
+      'Ждёт администратора',
     );
   });
 });
@@ -150,7 +151,7 @@ describe('counter scopes — Today vs journal', () => {
     assert.equal(bookingControlTrainerOwnConfirmPending(item, NOW), true);
     assert.equal(
       bookingControlRowStateLabelRu(item, NOW),
-      'Время прошло, результат не подтверждён',
+      'Результат не подтверждён',
     );
   });
 
@@ -210,7 +211,7 @@ describe('counter scopes — Today vs journal', () => {
     assert.equal(bookingControlTrainerOwnConfirmPending(item, NOW), false);
     assert.equal(
       bookingControlRowStateLabelRu(item, NOW),
-      'Время прошло · ждёт администратора',
+      'Ждёт администратора',
     );
   });
 

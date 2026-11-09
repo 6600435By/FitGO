@@ -30,7 +30,7 @@ export type TrainerCabinetMode = {
   showOwnLedger: boolean;
   /**
    * Compact dock for pure «Тренер клуб»:
-   * Сегодня / Расписание / Клиенты / Расчёты / Ещё (no center «+»).
+   * Сегодня / Расписание / + / Расчёты / Ещё (Клиенты в «Ещё»).
    */
   clubPtDock: boolean;
   /** Messages like pure GP (no client chat). */

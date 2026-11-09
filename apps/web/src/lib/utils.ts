@@ -44,7 +44,7 @@ export function sessionStatusLabel(
   const labels = {
     SCHEDULED: 'Запланирована',
     /** Elapsed slot without confirmed result — not «Сейчас» / not attendance. */
-    AWAITING_CONFIRMATION: 'Время прошло, результат не подтверждён',
+    AWAITING_CONFIRMATION: 'Результат не подтверждён',
     COMPLETED: 'Проведена',
     CANCELLED: 'Отменена',
   };

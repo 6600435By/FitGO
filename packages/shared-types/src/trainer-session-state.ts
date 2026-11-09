@@ -174,15 +174,15 @@ export function sessionStateExplainRu(input: {
   if (input.clock === 'IN_PROGRESS') {
     return result === 'trainer' ? 'Идёт · отметка после окончания' : 'Идёт';
   }
-  // ELAPSED
+  // ELAPSED — wall clock is already obvious from the row time; omit «Время прошло».
   if (result === 'trainer') {
-    return 'Время прошло, результат не подтверждён';
+    return 'Результат не подтверждён';
   }
   if (result === 'admin') {
-    return 'Время прошло · ждёт администратора';
+    return 'Ждёт администратора';
   }
   if (result === 'approved') return 'Результат подтверждён';
-  return 'Время прошло';
+  return '';
 }
 
 /** Short label while counting down to start — not a conduct confirmation. */
