@@ -66,8 +66,13 @@ export class TrainerController {
   }
 
   @Get('gp-home')
-  getGpHome(@CurrentUser() user: JwtPayload) {
-    return this.floorHome.getGpTrainerHome(user);
+  getGpHome(
+    @CurrentUser() user: JwtPayload,
+    @Query('lite') lite?: string,
+  ) {
+    const isLite =
+      lite === '1' || lite === 'true' || lite === 'yes';
+    return this.floorHome.getGpTrainerHome(user, { lite: isLite });
   }
 
   @Get('dashboard')

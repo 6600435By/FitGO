@@ -1929,8 +1929,12 @@ export const api = {
   trainerDashboard: (token: string) =>
     request<TrainerDashboard>('/trainer/dashboard', {}, token),
 
-  trainerGpHome: (token: string) =>
-    request<FloorStaffHome>('/trainer/gp-home', {}, token),
+  trainerGpHome: (token: string, opts?: { lite?: boolean }) =>
+    request<FloorStaffHome>(
+      opts?.lite ? '/trainer/gp-home?lite=1' : '/trainer/gp-home',
+      {},
+      token,
+    ),
 
   trainerInsights: (token: string) =>
     request<TrainerInsightsResponse>('/trainer/insights', {}, token),

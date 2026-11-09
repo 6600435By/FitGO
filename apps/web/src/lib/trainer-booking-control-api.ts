@@ -6,7 +6,16 @@ import {
   trainerCacheGet,
   trainerCacheInvalidate,
   trainerCacheSet,
+  trainerGpHomeCacheKey,
 } from '@/lib/trainer-fetch-cache';
+
+function invalidateTrainerHomeCaches() {
+  const uid = getUser()?.id;
+  if (!uid) return;
+  trainerCacheInvalidate(trainerGpHomeCacheKey(uid, 'lite'));
+  trainerCacheInvalidate(trainerGpHomeCacheKey(uid, 'full'));
+  trainerCacheInvalidate(`bc-list:${uid}:`);
+}
 
 function listExtra(params: {
   kind?: string;
@@ -86,8 +95,7 @@ export function createTrainerBookingControlApi(): BookingControlApi {
         sessionKey,
         comment,
       );
-      const uid = getUser()?.id;
-      if (uid) trainerCacheInvalidate(`bc-list:${uid}:`);
+      invalidateTrainerHomeCaches();
       return updated;
     },
     reviseSession: async (sessionKey, mode, comment) => {
@@ -100,8 +108,7 @@ export function createTrainerBookingControlApi(): BookingControlApi {
         mode,
         comment,
       );
-      const uid = getUser()?.id;
-      if (uid) trainerCacheInvalidate(`bc-list:${uid}:`);
+      invalidateTrainerHomeCaches();
       return updated;
     },
     listHallSnapshots: async (sessionKey) => {
@@ -126,8 +133,7 @@ export function trainerDeletePtBookingFromControl(bookingId: string) {
   const token = getToken();
   if (!token) return Promise.reject(new Error('Нет сессии'));
   return api.trainerDeletePersonalBooking(token, bookingId).then(() => {
-    const uid = getUser()?.id;
-    if (uid) trainerCacheInvalidate(`bc-list:${uid}:`);
+    invalidateTrainerHomeCaches();
   });
 }
 
@@ -135,11 +141,52 @@ export function trainerDeletePtBookingFromControl(bookingId: string) {
 export function peekTrainerBookingListCache(
   from: string,
   to: string,
-  extra = '',
+  extraOrKind:
+    | string
+    | {
+        kind?: string;
+        payTag?: string;
+        flag?: string;
+        hall?: string;
+        reformer?: string;
+      } = { kind: 'ALL' },
 ) {
   const uid = getUser()?.id;
   if (!uid) return null;
+  const extra =
+    typeof extraOrKind === 'string'
+      ? extraOrKind || listExtra({ kind: 'ALL' })
+      : listExtra({ kind: 'ALL', ...extraOrKind });
   return trainerCacheGet<
     import('@fitgo/shared-types').BookingControlListItem[]
   >(trainerBookingListCacheKey(uid, from, to, extra));
+}
+
+/** Warm keys used by journal soft-paint (month + pending lookback). */
+export function prefetchTrainerJournalLists(opts?: {
+  kind?: string;
+  lookbackDays?: number;
+}) {
+  const token = getToken();
+  const uid = getUser()?.id;
+  if (!token || !uid) return;
+  const kind = opts?.kind ?? 'ALL';
+  const to = new Date().toISOString().slice(0, 10);
+  const monthFrom = `${to.slice(0, 8)}01`;
+  const lookback = opts?.lookbackDays ?? 45;
+  const fromLookback = new Date(Date.now() - lookback * 86400000)
+    .toISOString()
+    .slice(0, 10);
+  const extra = listExtra({ kind });
+  for (const [from, rangeTo] of [
+    [monthFrom, to],
+    [fromLookback, to],
+  ] as const) {
+    const cacheKey = trainerBookingListCacheKey(uid, from, rangeTo, extra);
+    if (trainerCacheGet(cacheKey)) continue;
+    void api
+      .bookingControlList(token, 'trainer', { from, to: rangeTo, kind })
+      .then((rows) => trainerCacheSet(cacheKey, rows))
+      .catch(() => undefined);
+  }
 }

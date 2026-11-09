@@ -38,6 +38,9 @@ function pad2(n: number) {
   return String(n).padStart(2, '0');
 }
 
+/** Soft TTL for trainer Today (lite/full). Month analytics has its own ~45s cache. */
+const GP_HOME_CACHE_TTL_MS = 20_000;
+
 /** Month bounds in Europe/Minsk (club calendar), not server local TZ. */
 function monthBounds(ref: Date): { from: string; to: string; start: Date; end: Date } {
   const today = clubDayKey(ref);
@@ -121,6 +124,11 @@ function metric(
 
 @Injectable()
 export class FloorStaffHomeService {
+  private readonly gpHomeCache = new Map<
+    string,
+    { value: FloorStaffHome; expiresAt: number }
+  >();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly trainerMonth: TrainerMonthAnalyticsService,
@@ -467,7 +475,36 @@ export class FloorStaffHomeService {
     };
   }
 
-  async getGpTrainerHome(user: JwtPayload): Promise<FloorStaffHome> {
+  /**
+   * Trainer Today home.
+   * `lite: true` — today sessions + control queue only (fast first paint).
+   * Full payload adds month analytics / KPI (booking-control aligned, cached ~45s).
+   */
+  async getGpTrainerHome(
+    user: JwtPayload,
+    opts?: { lite?: boolean },
+  ): Promise<FloorStaffHome> {
+    const lite = Boolean(opts?.lite);
+    const clubId = requireClubId(user);
+    const cacheKey = `gp-home:${lite ? 'lite' : 'full'}:${user.sub}:${clubId}`;
+    const cached = this.gpHomeCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+
+    const value = await this.computeGpTrainerHome(user, { lite });
+    this.gpHomeCache.set(cacheKey, {
+      value,
+      expiresAt: Date.now() + GP_HOME_CACHE_TTL_MS,
+    });
+    return value;
+  }
+
+  private async computeGpTrainerHome(
+    user: JwtPayload,
+    opts: { lite: boolean },
+  ): Promise<FloorStaffHome> {
+    const { lite } = opts;
     const clubId = requireClubId(user);
     const now = new Date();
     const today = clubDayKey(now);
@@ -555,123 +592,7 @@ export class FloorStaffHomeService {
 
     const monthThroughToday = { gte: cur.start, lte: dayEnd };
     const hasOnex = performerCodes.length > 0;
-    const needsGroupMonth = hasOnex && (isGp || isReformer);
-
-    const [todayRaw, curRaw, slots, todayFitgoPt] = await Promise.all([
-      hasOnex
-        ? this.prisma.onexClassSession.findMany({
-            where: {
-              ...performerWhere,
-              startAt: { gte: dayStart, lte: dayEnd },
-            },
-            orderBy: { startAt: 'asc' },
-          })
-        : Promise.resolve([]),
-      needsGroupMonth
-        ? this.prisma.onexClassSession.findMany({
-            where: {
-              ...performerWhere,
-              startAt: monthThroughToday,
-            },
-            select: {
-              kind: true,
-              externalId: true,
-              status: true,
-              title: true,
-              roomTitle: true,
-              attendedCount: true,
-              bookedCount: true,
-              capacity: true,
-              members: {
-                select: { attendance: true, cancelled: true },
-              },
-            },
-          })
-        : Promise.resolve([]),
-      hasOnex
-        ? this.prisma.clubScheduleSlot.findMany({
-            where: {
-              clubId,
-              startAt: { gte: dayStart, lte: dayEnd },
-            },
-            select: { externalId: true, capacity: true },
-          })
-        : Promise.resolve([]),
-      hasPt
-        ? this.prisma.personalTrainingBooking.findMany({
-            where: {
-              trainerId: user.sub,
-              status: { not: PersonalBookingStatus.CANCELLED },
-              startAt: { gte: dayStart, lte: dayEnd },
-            },
-            include: {
-              client: { select: { firstName: true, lastName: true } },
-            },
-            orderBy: { startAt: 'asc' },
-          })
-        : Promise.resolve([]),
-    ]);
-
-    const todaySessions = todayRaw.filter(keepSession);
-    const curSessions = curRaw.filter(keepSession);
-
-    const cap = new Map(slots.map((s) => [s.externalId, s.capacity]));
-
-    const onexTodayRaw = todaySessions.map((s) => ({
-      id: s.id,
-      sessionKey: `1c:${s.externalId}`,
-      title: s.title,
-      startAt: s.startAt.toISOString(),
-      endAt: s.endAt?.toISOString(),
-      subtitle: s.roomTitle ?? undefined,
-      booked: s.bookedCount,
-      capacity: s.capacity ?? cap.get(s.externalId) ?? undefined,
-      kind: (s.kind === OnexClassKind.PT ? 'PT' : 'GROUP') as 'PT' | 'GROUP',
-      status: sessionStatus(
-        s.startAt,
-        s.endAt,
-        s.status === OnexClassStatus.CANCELLED,
-        now,
-      ),
-    }));
-
-    const fitgoTodayRaw = todayFitgoPt.map((b) => {
-      const clientName = b.client
-        ? `${b.client.firstName} ${b.client.lastName}`.trim()
-        : undefined;
-      return {
-        id: b.id,
-        sessionKey: `fitgo:PT:${b.id}`,
-        title: b.isComplimentary
-          ? 'Подарочная ПТ'
-          : 'Персональная тренировка',
-        startAt: b.startAt.toISOString(),
-        endAt: b.endAt.toISOString(),
-        subtitle: clientName,
-        clientId: b.clientId,
-        kind: 'PT' as const,
-        status: sessionStatus(
-          b.startAt,
-          b.endAt,
-          b.status === PersonalBookingStatus.CANCELLED,
-          now,
-        ),
-      };
-    });
-
-    // Prefer Onex row when the same PT is also in FitGO (crmDocRef link).
-    const onexExtToday = new Set(
-      todaySessions
-        .filter((s) => s.kind === OnexClassKind.PT)
-        .map((s) => s.externalId),
-    );
-    const fitgoTodayDedup = fitgoTodayRaw.filter((s) => {
-      const booking = todayFitgoPt.find((b) => b.id === s.id);
-      const ref = booking?.crmDocRef?.trim();
-      if (!ref) return true;
-      const bare = ref.startsWith('1c:') ? ref.slice(3) : ref;
-      return !onexExtToday.has(bare) && !onexExtToday.has(ref);
-    });
+    const needsGroupMonth = !lite && hasOnex && (isGp || isReformer);
 
     // Control queue — only GROUP uses groupClassApproval (trainer → admin).
     // 1C PT (incl. gift) must not appear here: no trainer-confirm action, and
@@ -792,13 +713,130 @@ export class FloorStaffHomeService {
       return { items, pendingAdmin };
     };
 
-    const [groupPending, ptPending, monthAnalytics] = await Promise.all([
-      loadPastGroups(),
-      loadPastPt(),
-      this.trainerMonth.forTrainer(clubId, user.sub, cur.from, today, {
-        showReformer: isReformer,
-      }),
-    ]);
+    // One wave: today + control (+ optional month raw / analytics).
+    const [todayRaw, curRaw, slots, todayFitgoPt, groupPending, ptPending, monthAnalytics] =
+      await Promise.all([
+        hasOnex
+          ? this.prisma.onexClassSession.findMany({
+              where: {
+                ...performerWhere,
+                startAt: { gte: dayStart, lte: dayEnd },
+              },
+              orderBy: { startAt: 'asc' },
+            })
+          : Promise.resolve([]),
+        needsGroupMonth
+          ? this.prisma.onexClassSession.findMany({
+              where: {
+                ...performerWhere,
+                startAt: monthThroughToday,
+              },
+              select: {
+                kind: true,
+                externalId: true,
+                status: true,
+                title: true,
+                roomTitle: true,
+                attendedCount: true,
+                bookedCount: true,
+                capacity: true,
+                members: {
+                  select: { attendance: true, cancelled: true },
+                },
+              },
+            })
+          : Promise.resolve([]),
+        hasOnex
+          ? this.prisma.clubScheduleSlot.findMany({
+              where: {
+                clubId,
+                startAt: { gte: dayStart, lte: dayEnd },
+              },
+              select: { externalId: true, capacity: true },
+            })
+          : Promise.resolve([]),
+        hasPt
+          ? this.prisma.personalTrainingBooking.findMany({
+              where: {
+                trainerId: user.sub,
+                status: { not: PersonalBookingStatus.CANCELLED },
+                startAt: { gte: dayStart, lte: dayEnd },
+              },
+              include: {
+                client: { select: { firstName: true, lastName: true } },
+              },
+              orderBy: { startAt: 'asc' },
+            })
+          : Promise.resolve([]),
+        loadPastGroups(),
+        loadPastPt(),
+        lite
+          ? Promise.resolve(null)
+          : this.trainerMonth.forTrainer(clubId, user.sub, cur.from, today, {
+              showReformer: isReformer,
+            }),
+      ]);
+
+    const todaySessions = todayRaw.filter(keepSession);
+    const curSessions = curRaw.filter(keepSession);
+
+    const cap = new Map(slots.map((s) => [s.externalId, s.capacity]));
+
+    const onexTodayRaw = todaySessions.map((s) => ({
+      id: s.id,
+      sessionKey: `1c:${s.externalId}`,
+      title: s.title,
+      startAt: s.startAt.toISOString(),
+      endAt: s.endAt?.toISOString(),
+      subtitle: s.roomTitle ?? undefined,
+      booked: s.bookedCount,
+      capacity: s.capacity ?? cap.get(s.externalId) ?? undefined,
+      kind: (s.kind === OnexClassKind.PT ? 'PT' : 'GROUP') as 'PT' | 'GROUP',
+      status: sessionStatus(
+        s.startAt,
+        s.endAt,
+        s.status === OnexClassStatus.CANCELLED,
+        now,
+      ),
+    }));
+
+    const fitgoTodayRaw = todayFitgoPt.map((b) => {
+      const clientName = b.client
+        ? `${b.client.firstName} ${b.client.lastName}`.trim()
+        : undefined;
+      return {
+        id: b.id,
+        sessionKey: `fitgo:PT:${b.id}`,
+        title: b.isComplimentary
+          ? 'Подарочная ПТ'
+          : 'Персональная тренировка',
+        startAt: b.startAt.toISOString(),
+        endAt: b.endAt.toISOString(),
+        subtitle: clientName,
+        clientId: b.clientId,
+        kind: 'PT' as const,
+        status: sessionStatus(
+          b.startAt,
+          b.endAt,
+          b.status === PersonalBookingStatus.CANCELLED,
+          now,
+        ),
+      };
+    });
+
+    // Prefer Onex row when the same PT is also in FitGO (crmDocRef link).
+    const onexExtToday = new Set(
+      todaySessions
+        .filter((s) => s.kind === OnexClassKind.PT)
+        .map((s) => s.externalId),
+    );
+    const fitgoTodayDedup = fitgoTodayRaw.filter((s) => {
+      const booking = todayFitgoPt.find((b) => b.id === s.id);
+      const ref = booking?.crmDocRef?.trim();
+      if (!ref) return true;
+      const bare = ref.startsWith('1c:') ? ref.slice(3) : ref;
+      return !onexExtToday.has(bare) && !onexExtToday.has(ref);
+    });
 
     const pendingMeItems = [
       ...groupPending.pendingMeItems,
@@ -827,6 +865,35 @@ export class FloorStaffHomeService {
       ) ??
       sessions.find((s) => s.needsConfirm) ??
       null;
+
+    const sameDayPrev = sameDayPreviousMonthWindow(cur.from, today);
+
+    if (lite || !monthAnalytics) {
+      return {
+        role: 'GROUP_TRAINER',
+        staffName,
+        today: {
+          date: today,
+          count: sessions.filter((s) => s.status !== 'CANCELLED').length,
+          next,
+          sessions,
+        },
+        control: {
+          pendingMe: pendingMeItems.length,
+          pendingAdmin,
+          queue: pendingMeItems.slice(0, 3),
+          scopeLabel: TRAINER_CONTROL_SCOPES.pendingMe.scopeRu,
+        },
+        conducted: { from: cur.from, to: today, group: 0, pt: 0 },
+        month: {
+          from: cur.from,
+          to: today,
+          previousFrom: sameDayPrev.previousFrom,
+          previousTo: sameDayPrev.previousTo,
+          metrics: [],
+        },
+      };
+    }
 
     const gpOnly = <T extends { kind: OnexClassKind }>(list: T[]) =>
       list.filter((s) => s.kind === OnexClassKind.GROUP);
@@ -874,7 +941,6 @@ export class FloorStaffHomeService {
     };
 
     const curGpStats = gpStats(gpOnly(curSessions));
-    const sameDayPrev = sameDayPreviousMonthWindow(cur.from, today);
 
     return {
       role: 'GROUP_TRAINER',

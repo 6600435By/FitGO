@@ -43,6 +43,7 @@ import {
   trainerGpHomeCacheKey,
   trainerInsightsCacheKey,
 } from '@/lib/trainer-fetch-cache';
+import { prefetchTrainerJournalLists } from '@/lib/trainer-booking-control-api';
 import {
   buildMotivationRecords,
   loadJournalWeekStreak,
@@ -620,11 +621,16 @@ export function TrainerTodayHome({
   /** Staff PT / GP see booking control; pure «Тренер клуб» does not. */
   const showControlLinks = showPtControl || showGp;
   const isPureClub = Boolean(user?.trainerClub) && !user?.trainerStaff && !showGp;
-  const personalGoals = usePersonalGoals(isPureClub);
+  /** Goals / KPI / assistant are secondary — don't block first paint. */
+  const [deferSecondary, setDeferSecondary] = useState(false);
+  const personalGoals = usePersonalGoals(isPureClub && deferSecondary);
   const [home, setHome] = useState<FloorStaffHome | null>(() => {
     const uid = getUser()?.id;
     if (!uid) return null;
-    return trainerCacheGet<FloorStaffHome>(trainerGpHomeCacheKey(uid));
+    return (
+      trainerCacheGet<FloorStaffHome>(trainerGpHomeCacheKey(uid, 'full')) ??
+      trainerCacheGet<FloorStaffHome>(trainerGpHomeCacheKey(uid, 'lite'))
+    );
   });
   const [insights, setInsights] = useState<TrainerInsightsResponse | null>(
     () => {
@@ -643,22 +649,51 @@ export function TrainerTodayHome({
   const [showAllInsights, setShowAllInsights] = useState(false);
   const [error, setError] = useState('');
 
-  const loadHome = useCallback(() => {
+  const loadLiteHome = useCallback(() => {
+    const token = getToken();
+    const uid = getUser()?.id;
+    if (!token || !uid) return Promise.resolve();
+    const liteKey = trainerGpHomeCacheKey(uid, 'lite');
+    return api
+      .trainerGpHome(token, { lite: true })
+      .then((h) => {
+        setHome((prev) => {
+          // Don't clobber a fuller payload already on screen.
+          if (prev?.monthAnalytics) return prev;
+          return h;
+        });
+        setError('');
+        trainerCacheSet(liteKey, h);
+      })
+      .catch((err: Error) => {
+        if (
+          !trainerCacheGet(liteKey) &&
+          !trainerCacheGet(trainerGpHomeCacheKey(uid, 'full'))
+        ) {
+          setError(err.message || 'Ошибка загрузки');
+        }
+      });
+  }, []);
+
+  const loadFullHome = useCallback(() => {
     const token = getToken();
     const uid = getUser()?.id;
     if (!token || !uid) return;
-    const cacheKey = trainerGpHomeCacheKey(uid);
+    const fullKey = trainerGpHomeCacheKey(uid, 'full');
     api
       .trainerGpHome(token)
       .then((h) => {
         setHome(h);
         setError('');
-        trainerCacheSet(cacheKey, h);
+        trainerCacheSet(fullKey, h);
+        trainerCacheSet(trainerGpHomeCacheKey(uid, 'lite'), {
+          ...h,
+          monthAnalytics: undefined,
+          month: { ...h.month, metrics: [], footnote: undefined },
+        });
       })
-      .catch((err: Error) => {
-        if (!trainerCacheGet(cacheKey)) {
-          setError(err.message || 'Ошибка загрузки');
-        }
+      .catch(() => {
+        /* lite already painted; KPI stays empty */
       });
   }, []);
 
@@ -683,9 +718,24 @@ export function TrainerTodayHome({
   }, []);
 
   useEffect(() => {
-    loadHome();
-    loadInsights();
-  }, [loadHome, loadInsights]);
+    let cancelled = false;
+    void (async () => {
+      await loadLiteHome();
+      if (cancelled) return;
+      setDeferSecondary(true);
+      // Secondary wave: analytics + assistant (+ journal prefetch) in parallel.
+      loadFullHome();
+      loadInsights();
+      if (showControlLinks) {
+        prefetchTrainerJournalLists({
+          lookbackDays: CONTROL_PENDING_LOOKBACK_DAYS,
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadLiteHome, loadFullHome, loadInsights, showControlLinks]);
 
   const dismissInsight = useCallback(
     async (key: string) => {

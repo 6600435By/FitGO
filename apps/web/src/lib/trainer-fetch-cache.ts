@@ -36,8 +36,11 @@ export function trainerCacheInvalidate(prefixOrKey: string): void {
   }
 }
 
-export function trainerGpHomeCacheKey(userId: string): string {
-  return `gp-home:${userId}`;
+export function trainerGpHomeCacheKey(
+  userId: string,
+  kind: 'lite' | 'full' = 'full',
+): string {
+  return `gp-home:${kind}:${userId}`;
 }
 
 export function trainerInsightsCacheKey(userId: string): string {
