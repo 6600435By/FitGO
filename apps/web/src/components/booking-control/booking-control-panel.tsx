@@ -1156,8 +1156,8 @@ export function BookingControlPanel({
         from,
         to,
         kind: fixedKind ?? kind,
-        // Queue / reasons / performer / client filter on the client so
-        // segment counters stay stable for the period + kind.
+        // Queue / reasons / performer / client filter on the client;
+        // segment counters recalculate from those client filters.
         ...(payTag ? { payTag } : {}),
         ...(flag ? { flag } : {}),
         ...(hallFilter ? { hall: hallFilter } : {}),
@@ -1288,47 +1288,11 @@ export function BookingControlPanel({
     return rows;
   }, [items, trainerKindFilter, conductedMode, sourceFilter]);
 
-  const pendingCount = useMemo(
-    () =>
-      scopedItems.filter(
-        (i) => bookingControlQueueSegment(i, nowMs) === 'pending',
-      ).length,
-    [scopedItems, nowMs],
-  );
-
-  const doneCount = useMemo(
-    () =>
-      scopedItems.filter(
-        (i) => bookingControlQueueSegment(i, nowMs) === 'done',
-      ).length,
-    [scopedItems, nowMs],
-  );
-
-  const upcomingCount = useMemo(
-    () =>
-      scopedItems.filter(
-        (i) => bookingControlQueueSegment(i, nowMs) === 'upcoming',
-      ).length,
-    [scopedItems, nowMs],
-  );
-
-  const reasonCounts = useMemo(() => {
-    const counts: Record<BookingControlIssueReason, number> = {
-      review: 0,
-      unpaid: 0,
-      not1c: 0,
-      journal: 0,
-    };
-    for (const i of scopedItems) {
-      if (bookingControlQueueSegment(i, nowMs) !== 'pending') continue;
-      for (const r of bookingControlIssueReasons(i)) {
-        counts[r] += 1;
-      }
-    }
-    return counts;
-  }, [scopedItems, nowMs]);
-
-  const visible = useMemo(() => {
+  /**
+   * Client filters except queue chips — used for «На контроле / Прошли
+   * контроль» counts so they track period + kind + performer/client/etc.
+   */
+  const filteredForCounts = useMemo(() => {
     let rows = scopedItems;
 
     if (status && status !== 'ALL') {
@@ -1378,6 +1342,60 @@ export function BookingControlPanel({
       );
     }
 
+    return rows;
+  }, [
+    scopedItems,
+    performerId,
+    performerOptions,
+    status,
+    payment,
+    clientFilter,
+    clientIdFilter,
+  ]);
+
+  const pendingCount = useMemo(
+    () =>
+      filteredForCounts.filter(
+        (i) => bookingControlQueueSegment(i, nowMs) === 'pending',
+      ).length,
+    [filteredForCounts, nowMs],
+  );
+
+  const doneCount = useMemo(
+    () =>
+      filteredForCounts.filter(
+        (i) => bookingControlQueueSegment(i, nowMs) === 'done',
+      ).length,
+    [filteredForCounts, nowMs],
+  );
+
+  const upcomingCount = useMemo(
+    () =>
+      filteredForCounts.filter(
+        (i) => bookingControlQueueSegment(i, nowMs) === 'upcoming',
+      ).length,
+    [filteredForCounts, nowMs],
+  );
+
+  const reasonCounts = useMemo(() => {
+    const counts: Record<BookingControlIssueReason, number> = {
+      review: 0,
+      unpaid: 0,
+      not1c: 0,
+      journal: 0,
+    };
+    for (const i of filteredForCounts) {
+      if (bookingControlQueueSegment(i, nowMs) !== 'pending') continue;
+      for (const r of bookingControlIssueReasons(i)) {
+        counts[r] += 1;
+      }
+    }
+    return counts;
+  }, [filteredForCounts, nowMs]);
+
+  const visible = useMemo(() => {
+    let rows = filteredForCounts;
+
     if (showQueue) {
       // Status «Отменено» bypasses queue so cancelled rows stay reachable.
       if (status !== 'CANCELLED') {
@@ -1393,18 +1411,26 @@ export function BookingControlPanel({
     }
     return rows;
   }, [
-    scopedItems,
-    performerId,
-    performerOptions,
+    filteredForCounts,
     showQueue,
     queue,
     reasons,
     status,
-    payment,
-    clientFilter,
-    clientIdFilter,
     nowMs,
   ]);
+
+  const attendanceTotals = useMemo(() => {
+    let booked = 0;
+    let arrived = 0;
+    let noShow = 0;
+    for (const item of visible) {
+      const a = attendanceOf(item);
+      booked += a.booked;
+      arrived += a.arrived;
+      noShow += a.noShow;
+    }
+    return { booked, arrived, noShow };
+  }, [visible]);
 
   const journalAdoptCount = useMemo(
     () =>
@@ -3387,6 +3413,30 @@ export function BookingControlPanel({
                 </li>
               );
             })}
+            {visible.length > 0 ? (
+              <li className="card border-slate-700/80 bg-slate-900/80 px-3 py-2.5 text-sm">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                  Итого
+                </p>
+                <p className="mt-1 tabular-nums text-slate-200">
+                  записано {attendanceTotals.booked}
+                  {' · '}
+                  <span className="text-emerald-300">
+                    прибыло {attendanceTotals.arrived}
+                  </span>
+                  {' · '}
+                  <span
+                    className={
+                      attendanceTotals.noShow > 0
+                        ? 'text-amber-300'
+                        : 'text-slate-500'
+                    }
+                  >
+                    не прибыло {attendanceTotals.noShow}
+                  </span>
+                </p>
+              </li>
+            ) : null}
           </ul>
           <AdminStickyTable className="hidden md:block" tableClassName="w-full">
               <thead className="bg-slate-900/80 text-xs font-medium text-slate-400">
@@ -3520,6 +3570,43 @@ export function BookingControlPanel({
                   );
                 })}
               </tbody>
+              {visible.length > 0 ? (
+                <tfoot>
+                  <tr className="border-t-2 border-slate-600 bg-slate-900/90 text-sm font-medium">
+                    <td
+                      colSpan={4}
+                      className="px-3 py-2.5 text-slate-300"
+                    >
+                      Итого
+                      <span className="ml-2 text-xs font-normal text-slate-500">
+                        ({visible.length}{' '}
+                        {visible.length === 1
+                          ? 'запись'
+                          : visible.length < 5
+                            ? 'записи'
+                            : 'записей'}
+                        )
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-100">
+                      {attendanceTotals.booked}
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums text-emerald-300">
+                      {attendanceTotals.arrived}
+                    </td>
+                    <td
+                      className={
+                        attendanceTotals.noShow > 0
+                          ? 'px-3 py-2.5 text-right tabular-nums text-amber-300'
+                          : 'px-3 py-2.5 text-right tabular-nums text-slate-500'
+                      }
+                    >
+                      {attendanceTotals.noShow}
+                    </td>
+                    <td colSpan={2} className="px-3 py-2.5" />
+                  </tr>
+                </tfoot>
+              ) : null}
           </AdminStickyTable>
         </>
       )}
