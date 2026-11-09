@@ -26,13 +26,11 @@ import {
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { SessionApprovalService } from '../booking-control/session-approval.service';
-import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FormaScheduleCacheService } from './forma-schedule-cache.service';
 import {
   clampScheduleRange,
   inferSlotStatus,
-  localDayKey,
   mapOnexToClubStatus,
   matchOnexToScheduleSlots,
   slotOverlapsDayRange,
@@ -45,7 +43,6 @@ export class ClubScheduleService {
     private readonly prisma: PrismaService,
     private readonly formaCache: FormaScheduleCacheService,
     private readonly sessionApproval: SessionApprovalService,
-    private readonly classSessions: ClassSessionsSyncService,
   ) {}
 
   async list(clubId: string, query: ClubScheduleQuery): Promise<ClubScheduleEvent[]> {
@@ -134,7 +131,6 @@ export class ClubScheduleService {
       }
     >,
   ): Promise<ClubScheduleEvent[]> {
-    const today = localDayKey();
     const allSlots = await this.formaCache.getClubSchedule(clubId, fromDay, toDay);
     let slots = allSlots.filter((slot) =>
       slotOverlapsDayRange(
@@ -147,8 +143,9 @@ export class ClubScheduleService {
       ),
     );
 
-    // Enrich + fill gaps from synced 1C Onex sessions (past / if Forma empty).
-    let onexInRange = await this.prisma.onexClassSession.findMany({
+    // Enrich + fill gaps from synced Onex sessions (club-sync / AUTO TODAY).
+    // Do NOT live-pull getClassSessions here — week views × N trainers stormed 1C.
+    const onexInRange = await this.prisma.onexClassSession.findMany({
       where: {
         clubId,
         kind: 'GROUP',
@@ -156,28 +153,6 @@ export class ClubScheduleService {
         startAt: { gte: rangeStart, lt: rangeEnd },
       },
     });
-
-    // Future days: if nothing in Forma cache and Onex yet — pull 1C once for the day.
-    if (
-      slots.length === 0 &&
-      onexInRange.length === 0 &&
-      toDay >= today
-    ) {
-      const syncFrom = fromDay < today ? today : fromDay;
-      try {
-        await this.classSessions.syncRange(clubId, syncFrom, toDay);
-        onexInRange = await this.prisma.onexClassSession.findMany({
-          where: {
-            clubId,
-            kind: 'GROUP',
-            isActive: true,
-            startAt: { gte: rangeStart, lt: rangeEnd },
-          },
-        });
-      } catch {
-        // leave empty — UI shows «Нет событий»
-      }
-    }
 
     const link = matchOnexToScheduleSlots(
       slots.map((slot) => ({

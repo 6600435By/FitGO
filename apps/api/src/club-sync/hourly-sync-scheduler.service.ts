@@ -10,13 +10,14 @@ import { isMoscowDaytimeAutoSyncWindow } from './moscow-time';
 
 const TICK_MS = 60 * 1000;
 /** Min gap after any LIGHT MANUAL/AUTO start before the next AUTO LIGHT. */
-const HOURLY_GAP_MS = 60 * 60 * 1000;
+const HOURLY_GAP_MS = 2 * 60 * 60 * 1000;
 
 /**
  * Daytime auto LIGHT sync (08:00–23:00 Moscow). Same profile as the
  * «Обновить из 1С» button. Anchor = startedAt of the last LIGHT MANUAL/AUTO
  * (any status, including RUNNING) so failures do not hammer 1C every minute.
- * Manual press shifts the next auto by +1h. Nightly FULL is untouched.
+ * Manual press shifts the next auto by +2h. Nightly FULL is untouched.
+ * 2h gap cuts rphost daytime load vs trainers/staff already reading Postgres.
  */
 @Injectable()
 export class HourlySyncScheduler implements OnModuleInit {

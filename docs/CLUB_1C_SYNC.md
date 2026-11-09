@@ -10,16 +10,18 @@ Staff screens read **only FitGO Postgres**. Live 1C reads happen in:
 
 ## Profiles
 
-| | Manual LIGHT (кнопка) | AUTO TODAY (trainer screens) | Nightly FULL (03:00–04:00 MSK) |
-|--|------------------------|--------------------------------|--------------------------------|
-| Sales / revenue | yesterday–today, no change-log | **skipped** | incremental window + `scope=changes` |
-| Classes / visits | today ±1 day | **today only** | provider default (wider) |
-| Schedule slots | today + 2 days | **today only** | today + 14 days |
-| PT sales | today ±1 day | **skipped** | 14 days |
-| Specialist debts / memberships | **skipped** | **skipped** | full (rate-limited membership walk) |
-| Run budget | 3 min → PARTIAL | 60 s → PARTIAL | 40 min → PARTIAL |
-| Cooldown | 10 min (manual) | 10 min from any finished TODAY (SUCCESS/PARTIAL/FAILED); +15 min backoff after failure | once per night |
-| Analytics HTTP timeout | 90 s per `/sales` call | n/a | same |
+| | Manual LIGHT (кнопка) | AUTO LIGHT (daytime) | AUTO TODAY (trainer screens) | Nightly FULL (03:00–04:00 MSK) |
+|--|------------------------|----------------------|--------------------------------|--------------------------------|
+| Sales / revenue | yesterday–today, no change-log | same as LIGHT | **skipped** | incremental window + `scope=changes` |
+| Classes / visits | today ±1 day | same as LIGHT | **today only** | provider default (wider) |
+| Schedule slots | today + 2 days | same as LIGHT | **today only** | today + 14 days |
+| PT sales | today ±1 day | same as LIGHT | **skipped** | 14 days |
+| Specialist debts / memberships | **skipped** | **skipped** | **skipped** | full (rate-limited membership walk) |
+| Run budget | 3 min → PARTIAL | 3 min → PARTIAL | 60 s → PARTIAL | 40 min → PARTIAL |
+| Cooldown | 10 min (manual) | **2 h** after last LIGHT start | once/day; skip if LIGHT/FULL already OK today; +25 min after FAILED/PARTIAL | once per night |
+| Analytics HTTP timeout | 90 s per `/sales` call | same | n/a | same |
+
+Staff schedule / trainer GP calendar reads **Postgres only** (no live `getClassSessions` on page open). Trainer client card uses `ClubMembershipSnapshot` only (no live `getMembership`).
 
 Old-date edits (класс 25.09, оплата за июнь) → night FULL or admin date-range backfill, not the button.
 
@@ -62,9 +64,11 @@ Analytics «Персонал» and payroll club summary must **not** call live 1
 - Staff department tabs → filter client-side; one `GET …/staff` per period
 - Manager block → `GET …/staff/manager-efficiency` only for ALL / MANAGER
 - Integration HTTP gate: max 3 concurrent; Analytics: max 2; identical GETs single-flight
-- Trainer roster / admin at-risk → `ClubMembershipSnapshot` + visits in Postgres
+- Trainer roster / admin at-risk / trainer client card → `ClubMembershipSnapshot` + visits in Postgres
 - Booking-control list → PT sales from `TrainerPtSale` only; live 1C on «Обновить из 1С»
+- Club / trainer schedule list → `ClubScheduleSlot` + `OnexClassSession` only (club-sync fills them)
 - Chat / sync-status polls pause while the browser tab is hidden
+- Daytime AUTO LIGHT every **2 hours** (08:00–23:00 MSK), not every hour
 
 `DATABASE_URL` should include `connection_limit=10` on the shared Windows box (see `fitgo-api.env.example`).
 

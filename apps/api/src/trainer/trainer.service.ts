@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { MembershipStatus, SessionType, normalizeWorkoutSheet, workoutSheetHasData, type ScheduleSlot, type Visit } from '@fitgo/shared-types';
+import { MembershipStatus, SessionType, normalizeWorkoutSheet, workoutSheetHasData, type ScheduleSlot } from '@fitgo/shared-types';
 import {
   AccountStatus,
   BodyLogSource,
@@ -19,7 +19,6 @@ import { FormaScheduleCacheService } from '../club-schedule/forma-schedule-cache
 import { staffOwnsScheduleSlot } from '../club-schedule/trainer-schedule.helpers';
 import { addMoscowDays, moscowDayKey } from '../club-sync/moscow-time';
 import { VisitSyncService } from '../engagement/visit-sync.service';
-import { FitnessService } from '../fitness/fitness.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
@@ -29,7 +28,6 @@ import { TrainerRosterService } from './trainer-roster.service';
 @Injectable()
 export class TrainerService {
   constructor(
-    private readonly fitness: FitnessService,
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly visitSync: VisitSyncService,
@@ -109,106 +107,6 @@ export class TrainerService {
     return slots
       .filter((s) => new Date(s.endAt).getTime() > now)
       .sort((a, b) => a.startAt.localeCompare(b.startAt));
-  }
-
-  private formatVisitTime(date: Date): string {
-    return date.toISOString().slice(11, 16);
-  }
-
-  private async getAppSessionVisits(
-    clientId: string,
-    clubName: string,
-  ): Promise<Visit[]> {
-    const now = new Date();
-
-    const [groupBookings, personalBookings] = await Promise.all([
-      this.prisma.groupClassBooking.findMany({
-        where: {
-          clientId,
-          status: { not: GroupClassBookingStatus.CANCELLED },
-          endAt: { lt: now },
-        },
-        orderBy: { startAt: 'desc' },
-      }),
-      this.prisma.personalTrainingBooking.findMany({
-        where: {
-          clientId,
-          status: { not: PersonalBookingStatus.CANCELLED },
-          endAt: { lt: now },
-        },
-        include: { trainer: true },
-        orderBy: { startAt: 'desc' },
-      }),
-    ]);
-
-    const groupVisits: Visit[] = groupBookings.map((booking) => ({
-      id: `group-${booking.id}`,
-      date: booking.startAt.toISOString().slice(0, 10),
-      checkIn: this.formatVisitTime(booking.startAt),
-      checkOut: this.formatVisitTime(booking.endAt),
-      clubName,
-      title: booking.title,
-      sessionType: SessionType.GROUP,
-      source: 'fitgo',
-    }));
-
-    const personalVisits: Visit[] = personalBookings.map((booking) => ({
-      id: `personal-${booking.id}`,
-      date: booking.startAt.toISOString().slice(0, 10),
-      checkIn: this.formatVisitTime(booking.startAt),
-      checkOut: this.formatVisitTime(booking.endAt),
-      clubName,
-      title: `Персональная · ${booking.trainer.firstName} ${booking.trainer.lastName}`.trim(),
-      sessionType: SessionType.PERSONAL,
-      source: 'fitgo',
-    }));
-
-    return [...groupVisits, ...personalVisits];
-  }
-
-  private mergeVisits(externalVisits: Visit[], appVisits: Visit[]): Visit[] {
-    return [...externalVisits, ...appVisits].sort((a, b) => {
-      const dateCompare = b.date.localeCompare(a.date);
-      if (dateCompare !== 0) return dateCompare;
-      return (b.checkIn ?? '').localeCompare(a.checkIn ?? '');
-    });
-  }
-
-  private async getClientVisitHistory(
-    clientId: string,
-    externalId: string | null | undefined,
-    clubId: string,
-    clubName: string,
-  ): Promise<Visit[]> {
-    // One sync into FitGO cache (14d + cooldown); do NOT call getVisits again.
-    if (externalId) {
-      await this.visitSync.syncUserVisits(clientId, clubId, externalId);
-    }
-
-    const clubVisits = await this.visitSync.getVisitsForUser(clientId);
-    const syncedVisits: Visit[] = clubVisits.map((v) => ({
-      id: v.id,
-      date: v.visitDate.slice(0, 10),
-      checkIn: this.formatVisitTime(v.visitedAt),
-      clubName,
-      title: v.source === 'ONEC_SYNC' ? 'Визит в клуб' : 'Check-in / запись',
-      source: v.source === 'ONEC_SYNC' ? '1c' : 'fitgo',
-    }));
-
-    const appVisits = await this.getAppSessionVisits(clientId, clubName);
-    const combined = [...syncedVisits, ...appVisits];
-
-    const byDateTitle = new Set<string>();
-    const merged: Visit[] = [];
-
-    for (const v of this.mergeVisits(combined, [])) {
-      const key = `${v.date}|${v.title ?? ''}|${v.checkIn ?? ''}`;
-      if (byDateTitle.has(key)) continue;
-      byDateTitle.add(key);
-      merged.push(v);
-    }
-
-    return merged;
   }
 
   private async getTrainerClientSessions(trainerId: string, clientId: string) {
@@ -329,7 +227,7 @@ export class TrainerService {
     });
     if (!client) throw new NotFoundException('Клиент не найден');
 
-    const provider = this.fitness.getProvider();
+    // Membership from ClubMembershipSnapshot only (nightly FULL) — no live getMembership.
     let membershipName: string | undefined;
     let membershipStatus: MembershipStatus | undefined;
 
@@ -351,7 +249,6 @@ export class TrainerService {
     let membershipSyncedAt: string | null = null;
     /** null = no snapshot / unknown; do not invent 0 as a known debt. */
     let clubDebtAmount: number | null = null;
-    let hadMembershipSnapshot = false;
 
     if (clubId && extId) {
       const snap = await this.prisma.clubMembershipSnapshot.findUnique({
@@ -363,7 +260,6 @@ export class TrainerService {
         },
       });
       if (snap) {
-        hadMembershipSnapshot = true;
         membershipSyncedAt = snap.syncedAt.toISOString();
         clubDebtAmount =
           typeof snap.debtAmount === 'number' && Number.isFinite(snap.debtAmount)
@@ -398,22 +294,6 @@ export class TrainerService {
       });
       if (hall?.visitDate) {
         lastHallVisit = String(hall.visitDate).slice(0, 10);
-      }
-    }
-
-    if ((!membershipName || !membershipStatus) && extId) {
-      const membership = await provider.getMembership(extId);
-      membershipName = membershipName ?? membership?.name;
-      membershipStatus = membershipStatus ?? membership?.status;
-      membershipValidUntil =
-        membershipValidUntil ??
-        (membership as { validUntil?: string } | null)?.validUntil;
-      if (
-        !hadMembershipSnapshot &&
-        membership &&
-        typeof (membership as { debtAmount?: number }).debtAmount === 'number'
-      ) {
-        clubDebtAmount = (membership as { debtAmount: number }).debtAmount;
       }
     }
 

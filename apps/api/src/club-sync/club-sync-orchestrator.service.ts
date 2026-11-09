@@ -233,6 +233,26 @@ export class ClubSyncOrchestrator {
       return;
     }
 
+    // LIGHT/FULL already covered today — skip extra TODAY (trainers open schedule
+    // after hourly; afternoon freshness stays on the next LIGHT).
+    const lastBroad = await this.prisma.clubSyncRun.findFirst({
+      where: {
+        clubId,
+        profile: { in: [ClubSyncProfile.LIGHT, ClubSyncProfile.FULL] },
+        status: {
+          in: [ClubSyncRunStatus.SUCCESS, ClubSyncRunStatus.PARTIAL],
+        },
+        finishedAt: { not: null },
+      },
+      orderBy: { finishedAt: 'desc' },
+    });
+    if (
+      lastBroad?.finishedAt &&
+      moscowDayKey(lastBroad.finishedAt) === today
+    ) {
+      return;
+    }
+
     // Fast path: recent FAILED/PARTIAL — do not reclaim on every screen open.
     const lastAny = await this.prisma.clubSyncRun.findFirst({
       where: {
