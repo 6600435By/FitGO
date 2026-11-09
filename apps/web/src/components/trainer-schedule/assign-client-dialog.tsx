@@ -3,7 +3,7 @@
 import type { TrainerClientLookupResult } from '@fitgo/shared-types';
 import { ResponsiveSheet } from '@fitgo/forma-ui';
 import { useEffect, useMemo, useState } from 'react';
-import { useFeatures } from '@/components/features-provider';
+import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 
@@ -19,8 +19,7 @@ export function AssignClientDialog({
   onAssigned: () => void;
 }) {
   const me = getUser();
-  const { isEnabled } = useFeatures();
-  const forma = isEnabled('trainer_ui_v2');
+  const forma = useTrainerUiV2();
   const canChooseFlow = Boolean(me?.trainerClub && me?.trainerStaff);
   const [clientId, setClientId] = useState(clients[0]?.id ?? '');
   const [nameQuery, setNameQuery] = useState('');

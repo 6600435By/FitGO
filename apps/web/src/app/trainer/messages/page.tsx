@@ -14,8 +14,8 @@ import {
 } from 'lucide-react';
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { useFeatures } from '@/components/features-provider';
 import { ChatInbox } from '@/components/chat/chat-inbox';
+import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { api, type NotificationItem } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { trainerCabinetMode } from '@/lib/trainer-cabinet';
@@ -73,8 +73,7 @@ function LegacyChannelTab({
 }
 
 export default function TrainerMessagesPage() {
-  const { isEnabled } = useFeatures();
-  const forma = isEnabled('trainer_ui_v2');
+  const forma = useTrainerUiV2();
   const searchParams = useSearchParams();
   const initialClientId = searchParams.get('clientId') ?? undefined;
   const user = getUser();

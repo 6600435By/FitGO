@@ -17,6 +17,28 @@ import {
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
+const FEATURES_CACHE_KEY = 'fitgo.productModules.v1';
+
+function readCachedModules(): ProductModulesState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(FEATURES_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ProductModulesState>;
+    return { ...DEFAULT_PRODUCT_MODULES, ...parsed };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedModules(modules: ProductModulesState) {
+  try {
+    sessionStorage.setItem(FEATURES_CACHE_KEY, JSON.stringify(modules));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 const FeaturesContext = createContext<{
   modules: ProductModulesState;
   loading: boolean;
@@ -34,8 +56,10 @@ export function useFeatures() {
 }
 
 export function FeaturesProvider({ children }: { children: ReactNode }) {
-  const [modules, setModules] = useState<ProductModulesState>(DEFAULT_PRODUCT_MODULES);
-  const [loading, setLoading] = useState(true);
+  const [modules, setModules] = useState<ProductModulesState>(
+    () => readCachedModules() ?? DEFAULT_PRODUCT_MODULES,
+  );
+  const [loading, setLoading] = useState(() => readCachedModules() == null);
 
   const refresh = useCallback(() => {
     const token = getToken();
@@ -46,32 +70,57 @@ export function FeaturesProvider({ children }: { children: ReactNode }) {
     }
     api
       .features(token)
-      .then((res) => setModules({ ...DEFAULT_PRODUCT_MODULES, ...res.modules }))
-      .catch(() => setModules(DEFAULT_PRODUCT_MODULES))
+      .then((res) => {
+        const next = { ...DEFAULT_PRODUCT_MODULES, ...res.modules };
+        setModules(next);
+        writeCachedModules(next);
+      })
+      .catch(() => {
+        // Keep last known modules (cache / prior fetch) — never flash defaults mid-session.
+      })
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
     let lastToken = getToken();
     refresh();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        const next = getToken();
+        if (next !== lastToken) {
+          lastToken = next;
+          refresh();
+        }
+      }
+    };
     const id = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
       const next = getToken();
       if (next !== lastToken) {
         lastToken = next;
         refresh();
       }
-    }, 1500);
-    return () => window.clearInterval(id);
+    }, 4000);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [refresh]);
+
+  const isEnabled = useCallback(
+    (key: ProductModuleKey) => modules[key] !== false,
+    [modules],
+  );
 
   const value = useMemo(
     () => ({
       modules,
       loading,
-      isEnabled: (key: ProductModuleKey) => modules[key] !== false,
+      isEnabled,
       refresh,
     }),
-    [modules, loading, refresh],
+    [modules, loading, isEnabled, refresh],
   );
 
   return (

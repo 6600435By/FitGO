@@ -43,15 +43,18 @@ import { TrainerPwaInstallTip } from './pwa-install-tip';
 
 type Breakpoint = 'phone' | 'tablet' | 'desktop';
 
+function readBreakpoint(): Breakpoint {
+  if (typeof window === 'undefined') return 'phone';
+  const w = window.innerWidth;
+  if (w >= 1280) return 'desktop';
+  if (w >= 768) return 'tablet';
+  return 'phone';
+}
+
 function useBreakpoint(): Breakpoint {
-  const [bp, setBp] = useState<Breakpoint>('phone');
+  const [bp, setBp] = useState<Breakpoint>(readBreakpoint);
   useEffect(() => {
-    const sync = () => {
-      const w = window.innerWidth;
-      if (w >= 1280) setBp('desktop');
-      else if (w >= 768) setBp('tablet');
-      else setBp('phone');
-    };
+    const sync = () => setBp(readBreakpoint());
     sync();
     window.addEventListener('resize', sync);
     return () => window.removeEventListener('resize', sync);

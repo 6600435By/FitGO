@@ -11,7 +11,7 @@ import { ru } from 'date-fns/locale';
 import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import { useFeatures } from '@/components/features-provider';
+import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { buildPublishPreview } from './publish-preview';
 
 type PublishScope = 'day' | 'week' | 'block';
@@ -44,8 +44,7 @@ export function PublishScheduleBar({
   events: TrainerCalendarEvent[];
   onPublished: () => void;
 }) {
-  const { isEnabled } = useFeatures();
-  const forma = isEnabled('trainer_ui_v2');
+  const forma = useTrainerUiV2();
   const [open, setOpen] = useState(false);
   const [previewScope, setPreviewScope] = useState<'day' | 'week'>('day');
   const [publishing, setPublishing] = useState(false);

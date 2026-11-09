@@ -1,12 +1,12 @@
 'use client';
 
-import { useFeatures } from '@/components/features-provider';
 import { StaffProfilePage } from '@/components/staff-profile/staff-profile-page';
 import { TrainerProfileForma } from '@/components/trainer-profile/trainer-profile-forma';
+import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 
 export default function TrainerProfilePage() {
-  const { isEnabled } = useFeatures();
-  if (isEnabled('trainer_ui_v2')) {
+  const forma = useTrainerUiV2();
+  if (forma) {
     return <TrainerProfileForma />;
   }
   return <StaffProfilePage title="Мой профиль" />;

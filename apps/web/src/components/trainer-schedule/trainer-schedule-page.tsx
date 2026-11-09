@@ -12,7 +12,7 @@ import {
 import { addDays, format, parseISO } from 'date-fns';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useFeatures } from '@/components/features-provider';
+import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { AddTrainingDialog } from './add-training-dialog';
@@ -69,8 +69,7 @@ function LegacyEventDialog({
 }
 
 export function TrainerSchedulePage() {
-  const { isEnabled } = useFeatures();
-  const forma = isEnabled('trainer_ui_v2');
+  const forma = useTrainerUiV2();
   const me = getUser();
   const freeSchedule = Boolean(me?.trainerClub && !me?.trainerStaff);
   const router = useRouter();

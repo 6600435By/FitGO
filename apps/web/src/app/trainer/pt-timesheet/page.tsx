@@ -11,11 +11,11 @@ import {
   SegmentedControl,
 } from '@fitgo/forma-ui';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useFeatures } from '@/components/features-provider';
 import {
   PtTimesheetStatsPanel,
   usePtTimesheetTab,
 } from '@/components/pt-timesheet/pt-timesheet-stats-panel';
+import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -33,8 +33,7 @@ function money(minor: number, currency: string) {
 }
 
 export default function TrainerPtTimesheetPage() {
-  const { isEnabled } = useFeatures();
-  const forma = isEnabled('trainer_ui_v2');
+  const forma = useTrainerUiV2();
   const today = useMemo(() => isoDate(new Date()), []);
   const { tab, setTab } = usePtTimesheetTab();
   const [statsMounted, setStatsMounted] = useState(false);

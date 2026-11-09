@@ -2,12 +2,11 @@
 
 import { Skeleton } from '@fitgo/forma-ui';
 import { Suspense } from 'react';
-import { useFeatures } from '@/components/features-provider';
 import { SelfPayrollView } from '@/components/payroll/self-payroll-view';
+import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 
 export default function TrainerPayrollPage() {
-  const { isEnabled } = useFeatures();
-  const forma = isEnabled('trainer_ui_v2');
+  const forma = useTrainerUiV2();
   return (
     <Suspense
       fallback={

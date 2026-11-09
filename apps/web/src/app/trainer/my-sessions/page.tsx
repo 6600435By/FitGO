@@ -4,8 +4,8 @@ import { PageHeader, Skeleton } from '@fitgo/forma-ui';
 import { Suspense, useCallback, useMemo } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
-import { useFeatures } from '@/components/features-provider';
 import { ManagerOriginInbox } from '@/components/manager-rework/manager-origin-inbox';
+import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { api } from '@/lib/api';
 import { getUser } from '@/lib/auth';
 import {
@@ -15,8 +15,7 @@ import {
 import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 
 function TrainerMySessionsInner() {
-  const { isEnabled } = useFeatures();
-  const forma = isEnabled('trainer_ui_v2');
+  const forma = useTrainerUiV2();
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();

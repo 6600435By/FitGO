@@ -9,7 +9,10 @@ import { cn } from './cn';
 export type ResponsiveSheetVariant = 'auto' | 'sheet' | 'dialog' | 'side';
 
 function useIsDesktop(minWidth = 768) {
-  const [desktop, setDesktop] = useState(false);
+  const [desktop, setDesktop] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia(`(min-width: ${minWidth}px)`).matches;
+  });
   useEffect(() => {
     const mq = window.matchMedia(`(min-width: ${minWidth}px)`);
     const sync = () => setDesktop(mq.matches);
@@ -84,6 +87,9 @@ function useKeepFocusedFieldVisible(
  *
  * Mobile keyboard: repositionInputs=false + visualViewport max-height so
  * fields stay in the sheet instead of jumping off-screen.
+ *
+ * Desktop/secondary display: dialog is constrained to the visible padded
+ * viewport so the sticky close control never sits above the window.
  */
 export function ResponsiveSheet({
   open,
@@ -138,7 +144,7 @@ export function ResponsiveSheet({
       <Drawer.Root
         open={open}
         onOpenChange={onOpenChange}
-        shouldScaleBackground
+        shouldScaleBackground={false}
         repositionInputs={false}
       >
         <Drawer.Portal>
@@ -180,7 +186,15 @@ export function ResponsiveSheet({
   const side = mode === 'side';
 
   return (
-    <div className="fixed inset-0 z-50 flex" role="presentation">
+    <div
+      className={cn(
+        'fixed inset-0 z-50 flex',
+        side
+          ? 'justify-end'
+          : 'items-center justify-center p-4 pt-[max(1rem,env(safe-area-inset-top,0px))] pb-[max(1rem,env(safe-area-inset-bottom,0px))]',
+      )}
+      role="presentation"
+    >
       <button
         type="button"
         className="absolute inset-0 bg-black/70 backdrop-blur-[2px]"
@@ -192,18 +206,20 @@ export function ResponsiveSheet({
         aria-modal="true"
         aria-labelledby={title ? 'forma-sheet-title' : undefined}
         className={cn(
-          'forma-theme relative z-10 flex max-h-[min(92dvh,880px)] flex-col border border-white/10 bg-ink-elevated text-zinc-100 shadow-forma-card outline-none',
+          'forma-theme relative z-10 flex flex-col overflow-hidden border border-white/10 bg-ink-elevated text-zinc-100 shadow-forma-card outline-none',
           side
             ? 'ml-auto h-full max-h-none w-full max-w-md rounded-none border-y-0 border-r-0 sm:rounded-l-[1.5rem]'
-            : 'm-auto w-full max-w-lg rounded-[1.5rem]',
+            : 'max-h-full w-full max-w-lg rounded-[1.5rem]',
           className,
         )}
       >
-        <SheetHeader
-          title={title}
-          description={description}
-          onClose={() => onOpenChange(false)}
-        />
+        <div className="sticky top-0 z-20 shrink-0 bg-ink-elevated">
+          <SheetHeader
+            title={title}
+            description={description}
+            onClose={() => onOpenChange(false)}
+          />
+        </div>
         <div
           ref={scrollRef}
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-5 pt-2"
@@ -274,8 +290,12 @@ function CloseBtn({ onClose }: { onClose: () => void }) {
   return (
     <button
       type="button"
-      onClick={onClose}
-      className="shrink-0 rounded-xl border border-white/10 p-2 text-zinc-400 touch-manipulation hover:bg-white/[0.06] hover:text-white"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }}
+      className="relative z-30 shrink-0 rounded-xl border border-white/10 p-2.5 text-zinc-400 touch-manipulation hover:bg-white/[0.06] hover:text-white"
       aria-label="Закрыть"
     >
       <X className="h-4 w-4" />

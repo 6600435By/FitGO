@@ -18,6 +18,7 @@ import { StaffMessagesBadge } from '@/components/staff/staff-messages-badge';
 import { StaffTopNavLinks } from '@/components/staff/staff-top-nav';
 import { StaffTasksInbox } from '@/components/staff-tasks-inbox';
 import { TrainerShell } from '@/components/trainer-shell/trainer-shell';
+import { TrainerUiV2Provider } from '@/components/trainer-shell/trainer-ui-v2';
 import { api, type AuthUser } from '@/lib/api';
 import { getToken, getUser, saveAuth } from '@/lib/auth';
 import {
@@ -245,10 +246,26 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     [allNavItems],
   );
 
+  // While features resolve: never mount legacy AppShell (pilot flash). Cache in
+  // FeaturesProvider usually makes uiV2 correct on first paint.
+  if (featuresLoading && !uiV2) {
+    return (
+      <AuthGuard allowedRoles={[UserRole.TRAINER]}>
+        <div
+          className="forma-theme min-h-dvh bg-ink"
+          aria-busy="true"
+          aria-label="Загрузка"
+        />
+      </AuthGuard>
+    );
+  }
+
   if (uiV2) {
     return (
       <AuthGuard allowedRoles={[UserRole.TRAINER]}>
-        <TrainerShell>{children}</TrainerShell>
+        <TrainerUiV2Provider value>
+          <TrainerShell>{children}</TrainerShell>
+        </TrainerUiV2Provider>
       </AuthGuard>
     );
   }

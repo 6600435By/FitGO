@@ -18,7 +18,7 @@ import {
 import { SegmentedControl } from '@fitgo/forma-ui';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { useFeatures } from '@/components/features-provider';
+import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import {
@@ -74,8 +74,7 @@ export function SessionPlanEditor({
   backLabel,
   viewerRole,
 }: SessionPlanEditorProps) {
-  const { isEnabled } = useFeatures();
-  const formaLive = isEnabled('trainer_ui_v2');
+  const formaLive = useTrainerUiV2();
   const [session, setSession] = useState<PersonalTrainingSessionDetail | null>(
     null,
   );
