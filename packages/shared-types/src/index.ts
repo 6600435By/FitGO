@@ -819,6 +819,14 @@ export interface PersonalTrainingSessionDetail {
   clientDateOfBirth?: string;
   /** Из анкеты клиента (будет заполняться позже) */
   clientRestingHr?: number;
+  /** CLUB → контроль админа; PERSONAL → пакет/долг тренера. */
+  ptFlow?: 'CLUB' | 'PERSONAL' | null;
+  /** True when trainer_pt_control applies to this booking. */
+  ptControlApplies?: boolean;
+  approvalPhase?: import('./club-schedule').SessionApprovalPhase;
+  linkedDocExternalId?: string;
+  ledgerSettledAt?: string;
+  paymentStatus?: string | null;
 }
 
 export interface TrainerClientSession {

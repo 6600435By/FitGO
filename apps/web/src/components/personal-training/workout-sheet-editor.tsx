@@ -814,28 +814,40 @@ export function WorkoutSheetEditor({
           )}
 
           {isTrainer && !readOnly && !sheet.sessionCompleted && (
-            <button
-              type="button"
-              onClick={handleCompleteSession}
-              className="btn-primary mt-3 w-full"
-            >
-              Завершить занятие
-            </button>
+            <div className="mt-3 space-y-1.5">
+              <button
+                type="button"
+                onClick={handleCompleteSession}
+                className="btn-primary w-full"
+              >
+                Завершить занятие
+              </button>
+              <p className="text-[11px] leading-snug text-slate-500">
+                Собирает итог в черновике листа. Посещение, оплату и проведение
+                не отмечает — сначала «Сохранить лист», затем «Подтвердить».
+              </p>
+            </div>
           )}
 
           {isTrainer && !readOnly && sheet.sessionCompleted && (
-            <button
-              type="button"
-              onClick={() =>
-                update({
-                  sessionCompleted: undefined,
-                  sessionCompletedAt: undefined,
-                })
-              }
-              className="btn-secondary mt-3 w-full text-sm"
-            >
-              Редактировать итог
-            </button>
+            <div className="mt-3 space-y-1.5">
+              <button
+                type="button"
+                onClick={() =>
+                  update({
+                    sessionCompleted: undefined,
+                    sessionCompletedAt: undefined,
+                  })
+                }
+                className="btn-secondary w-full text-sm"
+              >
+                Редактировать итог
+              </button>
+              <p className="text-[11px] leading-snug text-slate-500">
+                Итог пока только в черновике — сохраните лист, чтобы зафиксировать
+                на сервере.
+              </p>
+            </div>
           )}
         </div>
       </div>

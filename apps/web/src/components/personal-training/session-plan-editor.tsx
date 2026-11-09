@@ -16,7 +16,7 @@ import {
 } from '@fitgo/shared-types';
 import { SegmentedControl } from '@fitgo/forma-ui';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useFeatures } from '@/components/features-provider';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
@@ -25,6 +25,10 @@ import {
   sessionStatusColor,
   sessionStatusLabel,
 } from '@/lib/utils';
+import {
+  SessionControlFollowUp,
+  SessionLifecycleStrip,
+} from './session-lifecycle-panel';
 import { SessionNotesSheet } from './session-notes-sheet';
 import { WorkoutSheetEditor } from './workout-sheet-editor';
 
@@ -34,6 +38,23 @@ type DraftGoal = {
   notes?: string;
   tasks: Array<{ id?: string; title: string }>;
 };
+
+function planFingerprint(
+  goals: DraftGoal[],
+  sheet: WorkoutSheet,
+): string {
+  return JSON.stringify({
+    goals: goals.map((g) => ({
+      id: g.id,
+      title: g.title.trim(),
+      notes: (g.notes ?? '').trim(),
+      tasks: g.tasks
+        .map((t) => ({ id: t.id, title: t.title.trim() }))
+        .filter((t) => t.title),
+    })),
+    sheet: ensureCircuitRoundLogs(normalizeWorkoutSheet(sheet)),
+  });
+}
 
 interface SessionPlanEditorProps {
   bookingId: string;
@@ -80,6 +101,22 @@ export function SessionPlanEditor({
     total: number;
     summary?: string;
   } | null>(null);
+  const [savedFingerprint, setSavedFingerprint] = useState('');
+
+  const applySession = (data: PersonalTrainingSessionDetail) => {
+    const goals = data.goals.map((g) => ({
+      id: g.id,
+      title: g.title,
+      notes: g.notes,
+      tasks: g.tasks.map((t) => ({ id: t.id, title: t.title })),
+    }));
+    const sheet = normalizeWorkoutSheet(data.workoutSheet);
+    setSession(data);
+    setDraftGoals(goals);
+    setDraftWorkoutSheet(sheet);
+    setSavedFingerprint(planFingerprint(goals, sheet));
+    setEditing(false);
+  };
 
   const loadActiveHomework = async (clientId: string) => {
     const token = getToken();
@@ -105,16 +142,7 @@ export function SessionPlanEditor({
     const token = getToken();
     if (!token) return;
     const data = await api.personalSessionDetail(token, bookingId);
-    setSession(data);
-    setDraftGoals(
-      data.goals.map((g) => ({
-        id: g.id,
-        title: g.title,
-        notes: g.notes,
-        tasks: g.tasks.map((t) => ({ id: t.id, title: t.title })),
-      })),
-    );
-    setDraftWorkoutSheet(normalizeWorkoutSheet(data.workoutSheet));
+    applySession(data);
     if (viewerRole === 'trainer') {
       await loadActiveHomework(data.clientId);
     }
@@ -128,17 +156,8 @@ export function SessionPlanEditor({
       api.personalGoalTemplates(token),
     ])
       .then(async ([data, tpls]) => {
-        setSession(data);
+        applySession(data);
         setTemplates(tpls);
-        setDraftGoals(
-          data.goals.map((g) => ({
-            id: g.id,
-            title: g.title,
-            notes: g.notes,
-            tasks: g.tasks.map((t) => ({ id: t.id, title: t.title })),
-          })),
-        );
-        setDraftWorkoutSheet(normalizeWorkoutSheet(data.workoutSheet));
         if (viewerRole === 'trainer') {
           await loadActiveHomework(data.clientId);
         }
@@ -151,15 +170,16 @@ export function SessionPlanEditor({
     if (!token) return;
     setBusy(true);
     setMessage('');
+    setError('');
     try {
       const data = await api.personalSessionUpdatePlan(token, bookingId, {
         goals: draftGoals.filter((g) => g.title.trim()),
         workoutSheet: ensureCircuitRoundLogs(draftWorkoutSheet),
       });
-      setSession(data);
-      setDraftWorkoutSheet(normalizeWorkoutSheet(data.workoutSheet));
-      setEditing(false);
-      setMessage('План тренировки сохранён');
+      applySession(data);
+      setMessage(
+        'Лист сохранён на сервере. Посещение и оплату это не отмечает.',
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка сохранения');
     } finally {
@@ -215,16 +235,39 @@ export function SessionPlanEditor({
     }
   };
 
-  const completeSession = async () => {
+  const dirty = useMemo(() => {
+    if (!savedFingerprint) return false;
+    return (
+      planFingerprint(draftGoals, draftWorkoutSheet) !== savedFingerprint
+    );
+  }, [draftGoals, draftWorkoutSheet, savedFingerprint]);
+
+  const completeSession = async (opts?: { retry?: boolean }) => {
     const token = getToken();
     if (!token) return;
+    if (!opts?.retry && dirty) {
+      setError(
+        'Сначала сохраните лист — подтверждение не записывает черновик',
+      );
+      return;
+    }
     setBusy(true);
+    setError('');
+    setMessage('');
     try {
       const data = await api.personalSessionComplete(token, bookingId);
-      setSession(data);
-      setMessage('Тренировка завершена');
+      applySession(data);
+      setMessage(
+        opts?.retry
+          ? 'Повтор выполнен: второе списание не создаётся'
+          : 'Проведение подтверждено',
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка');
+      setError(
+        err instanceof Error
+          ? `${err.message}. Результат листа сохранён — можно повторить подтверждение.`
+          : 'Ошибка подтверждения. Можно повторить без потери листа.',
+      );
     } finally {
       setBusy(false);
     }
@@ -235,6 +278,13 @@ export function SessionPlanEditor({
   const counterpartName = isClient
     ? session?.trainerName
     : session?.clientName;
+
+  const showRetryComplete =
+    isTrainer &&
+    Boolean(session?.trainerCompletedAt) &&
+    session?.status === 'COMPLETED' &&
+    ((session.ptFlow === 'PERSONAL' && !session.ledgerSettledAt) ||
+      (Boolean(session?.ptControlApplies) && !session.linkedDocExternalId));
 
   if (error && !session) {
     return <p className="text-red-400">{error}</p>;
@@ -310,20 +360,22 @@ export function SessionPlanEditor({
           </div>
         ) : null}
 
-        {session.status === 'COMPLETED' && (
-          <p className="mt-3 text-sm text-slate-400">
-            {session.clientCompletedAt && 'Клиент подтвердил завершение · '}
-            {session.trainerCompletedAt && 'Тренер подтвердил завершение'}
-            {!session.clientCompletedAt && !session.trainerCompletedAt &&
-              'Тренировка завершена'}
-          </p>
-        )}
-        {session.status === 'AWAITING_CONFIRMATION' && (
+        {session.status === 'AWAITING_CONFIRMATION' && !session.trainerCompletedAt && (
           <p className="mt-3 text-sm text-amber-400/90">
-            Время тренировки прошло — подтвердите завершение (достаточно одной
-            стороны).
+            Время тренировки прошло — подтвердите завершение после сохранения
+            листа.
           </p>
         )}
+
+        {isTrainer ? (
+          <div className="mt-3">
+            <SessionLifecycleStrip
+              session={session}
+              dirty={dirty}
+              draftCompleted={Boolean(draftWorkoutSheet.sessionCompleted)}
+            />
+          </div>
+        ) : null}
       </div>
 
       {message && (
@@ -388,13 +440,19 @@ export function SessionPlanEditor({
           />
 
           {isTrainer && session.canEdit && (
-            <button
-              disabled={busy}
-              onClick={savePlan}
-              className="btn-primary w-full disabled:opacity-50"
-            >
-              {busy ? 'Сохранение…' : 'Сохранить лист'}
-            </button>
+            <div className="space-y-1.5">
+              <button
+                disabled={busy || !dirty}
+                onClick={() => void savePlan()}
+                className="btn-primary w-full disabled:opacity-50"
+              >
+                {busy && dirty ? 'Сохранение…' : 'Сохранить лист'}
+              </button>
+              <p className="text-[11px] leading-snug text-slate-500">
+                Фиксирует план и факт листа на сервере. Посещение в 1С и оплату
+                не отмечает.
+              </p>
+            </div>
           )}
         </div>
       ) : (
@@ -609,14 +667,49 @@ export function SessionPlanEditor({
       )}
 
       {session.canComplete && (
-        <button
-          disabled={busy}
-          onClick={completeSession}
-          className="btn-primary w-full disabled:opacity-50"
-        >
-          Подтвердить завершение тренировки
-        </button>
+        <div className="space-y-1.5">
+          <button
+            disabled={busy || (isTrainer && dirty)}
+            onClick={() => void completeSession()}
+            className="btn-primary w-full disabled:opacity-50"
+          >
+            Подтвердить завершение тренировки
+          </button>
+          <p className="text-[11px] leading-snug text-slate-500">
+            {dirty
+              ? 'Сначала сохраните лист — подтверждение не записывает черновик.'
+              : session.ptControlApplies
+                ? 'Отмечает проведение и передаёт запись администратору. Посещение в 1С не ставит.'
+                : session.ptFlow === 'PERSONAL'
+                  ? 'Отмечает проведение и один раз списывает пакет или фиксирует долг.'
+                  : 'Отмечает проведение тренировки.'}
+          </p>
+        </div>
       )}
+
+      {showRetryComplete ? (
+        <div className="space-y-1.5">
+          <button
+            disabled={busy}
+            onClick={() => void completeSession({ retry: true })}
+            className="btn-secondary w-full disabled:opacity-50"
+          >
+            Повторить подтверждение
+          </button>
+          <p className="text-[11px] leading-snug text-slate-500">
+            Доделывает незавершённый шаг. Повторный клик не создаёт второе
+            списание или начисление.
+          </p>
+        </div>
+      ) : null}
+
+      {isTrainer ? (
+        <SessionControlFollowUp
+          bookingId={bookingId}
+          session={session}
+          onSessionRefresh={load}
+        />
+      ) : null}
 
       {isTrainer ? (
         <SessionNotesSheet

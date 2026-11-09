@@ -62,16 +62,37 @@ assert.equal(
   decidePersonalSessionSettle({ booking: null }).action,
   'skip',
 );
-assert.equal(
-  decidePersonalSessionSettle({
+{
+  // Retry after successful settle (or after partial failure once ledgerSettledAt is set):
+  // second completeSession must not debit package / raise debt again.
+  const first = decidePersonalSessionSettle({
+    booking: { ptFlow: 'PERSONAL', status: 'COMPLETED' },
+    activePackage: {
+      id: 'pkg1',
+      sessionsRemaining: 2,
+      status: 'ACTIVE',
+      validUntil: null,
+    },
+    now,
+  });
+  assert.equal(first.action, 'debit_package');
+  const retry = decidePersonalSessionSettle({
     booking: {
       ledgerSettledAt: now,
       ptFlow: 'PERSONAL',
       status: 'COMPLETED',
     },
-  }).action,
-  'skip',
-);
+    activePackage: {
+      id: 'pkg1',
+      sessionsRemaining: 1,
+      status: 'ACTIVE',
+      validUntil: null,
+    },
+    now,
+  });
+  assert.equal(retry.action, 'skip');
+  if (retry.action === 'skip') assert.equal(retry.reason, 'already_settled');
+}
 assert.deepEqual(
   decidePersonalSessionSettle({
     booking: {

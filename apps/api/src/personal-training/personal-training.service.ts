@@ -1569,7 +1569,24 @@ export class PersonalTrainingService {
     bookingId: string,
   ): Promise<PersonalTrainingSessionDetail> {
     const booking = await this.getAccessibleBooking(user, bookingId);
-    return this.mapSessionDetail(booking, user.sub);
+    const ptControlApplies = await this.shouldApplyPtControl(
+      booking.trainerId,
+      booking.ptFlow,
+    );
+    const approval = ptControlApplies
+      ? await this.prisma.sessionApproval.findUnique({
+          where: {
+            kind_bookingId: {
+              kind: SessionApprovalKind.PT,
+              bookingId: booking.id,
+            },
+          },
+        })
+      : null;
+    return this.mapSessionDetail(booking, user.sub, {
+      ptControlApplies,
+      approval,
+    });
   }
 
   async getPreviousWorkoutSheet(
@@ -1804,66 +1821,77 @@ export class PersonalTrainingService {
     const trainerCompletedAt =
       booking.trainerCompletedAt ?? (isTrainer ? now : null);
 
-    if (
+    const alreadyDoneByUser =
       booking.status === PersonalBookingStatus.COMPLETED &&
-      ((isClient && booking.clientCompletedAt) ||
-        (isTrainer && booking.trainerCompletedAt))
-    ) {
-      return this.getSessionDetail(user, bookingId);
+      ((isClient && Boolean(booking.clientCompletedAt)) ||
+        (isTrainer && Boolean(booking.trainerCompletedAt)));
+
+    if (!alreadyDoneByUser) {
+      await this.prisma.personalTrainingBooking.update({
+        where: { id: bookingId },
+        data: {
+          ...(clientCompletedAt ? { clientCompletedAt } : {}),
+          ...(trainerCompletedAt ? { trainerCompletedAt } : {}),
+          status:
+            clientCompletedAt || trainerCompletedAt
+              ? PersonalBookingStatus.COMPLETED
+              : PersonalBookingStatus.CONFIRMED,
+        },
+      });
     }
 
-    await this.prisma.personalTrainingBooking.update({
-      where: { id: bookingId },
-      data: {
-        ...(clientCompletedAt ? { clientCompletedAt } : {}),
-        ...(trainerCompletedAt ? { trainerCompletedAt } : {}),
-        status:
-          clientCompletedAt || trainerCompletedAt
-            ? PersonalBookingStatus.COMPLETED
-            : PersonalBookingStatus.CONFIRMED,
-      },
-    });
-
-    if (trainerCompletedAt) {
-      await this.serviceUsage.markPerformerConfirmed(bookingId, 'PT');
-      const clubId =
-        booking.client.clubId ??
-        booking.trainer.clubId ??
-        requireClubId(user);
-      const title =
-        `Персональная · ${booking.trainer.firstName} ${booking.trainer.lastName}`.trim();
-      await this.visitSync.recordTrainerConfirm({
-        userId: booking.clientId,
-        clubId,
-        bookingId: booking.id,
-        kind: 'PT',
-        occurredAt: booking.startAt,
-        title,
-        checkIn: booking.startAt.toISOString().slice(11, 16),
-        checkOut: booking.endAt.toISOString().slice(11, 16),
-      });
-
-      if (await this.shouldApplyPtControl(booking.trainerId, booking.ptFlow)) {
-        await this.sessionApproval.confirmPerformer(
-          user,
-          SessionApprovalKind.PT,
-          bookingId,
-        );
-        await this.tryAutoLinkPtDocument(bookingId, clubId);
-      } else if (
-        isPersonalPtBooking(
-          { ptFlow: booking.ptFlow },
-          {
-            trainerClub: booking.trainer.trainerClub,
-            trainerStaff: booking.trainer.trainerStaff,
-          },
-        )
-      ) {
-        await this.ledger.settlePersonalSession(bookingId);
-      }
+    // Idempotent: trainer retry after a partial failure finishes settle/link without a second debit.
+    if (isTrainer && trainerCompletedAt) {
+      await this.applyTrainerCompletionEffects(user, booking);
     }
 
     return this.getSessionDetail(user, bookingId);
+  }
+
+  /** Side-effects after trainer confirm — safe to call again on retry. */
+  private async applyTrainerCompletionEffects(
+    user: JwtPayload,
+    booking: Awaited<
+      ReturnType<PersonalTrainingService['getAccessibleBooking']>
+    >,
+  ) {
+    const bookingId = booking.id;
+    await this.serviceUsage.markPerformerConfirmed(bookingId, 'PT');
+    const clubId =
+      booking.client.clubId ??
+      booking.trainer.clubId ??
+      requireClubId(user);
+    const title =
+      `Персональная · ${booking.trainer.firstName} ${booking.trainer.lastName}`.trim();
+    await this.visitSync.recordTrainerConfirm({
+      userId: booking.clientId,
+      clubId,
+      bookingId: booking.id,
+      kind: 'PT',
+      occurredAt: booking.startAt,
+      title,
+      checkIn: booking.startAt.toISOString().slice(11, 16),
+      checkOut: booking.endAt.toISOString().slice(11, 16),
+    });
+
+    if (await this.shouldApplyPtControl(booking.trainerId, booking.ptFlow)) {
+      await this.sessionApproval.confirmPerformer(
+        user,
+        SessionApprovalKind.PT,
+        bookingId,
+      );
+      await this.tryAutoLinkPtDocument(bookingId, clubId);
+    } else if (
+      isPersonalPtBooking(
+        { ptFlow: booking.ptFlow },
+        {
+          trainerClub: booking.trainer.trainerClub,
+          trainerStaff: booking.trainer.trainerStaff,
+        },
+      )
+    ) {
+      await this.ledger.settlePersonalSession(bookingId);
+    }
   }
 
   mapSessionStatus(booking: {
@@ -1886,6 +1914,14 @@ export class PersonalTrainingService {
       ReturnType<PersonalTrainingService['getAccessibleBooking']>
     >,
     viewerId: string,
+    opts?: {
+      ptControlApplies?: boolean;
+      approval?: {
+        performerConfirmedAt?: Date | null;
+        adminApprovedAt?: Date | null;
+        overrideApprovedAt?: Date | null;
+      } | null;
+    },
   ): PersonalTrainingSessionDetail {
     const now = Date.now();
     const status = this.mapSessionStatus(booking);
@@ -1897,6 +1933,13 @@ export class PersonalTrainingService {
       : !!booking.trainerCompletedAt;
 
     const normalizedSheet = normalizeWorkoutSheet(booking.workoutSheet);
+    const ptFlow =
+      booking.ptFlow === 'CLUB' || booking.ptFlow === 'PERSONAL'
+        ? booking.ptFlow
+        : null;
+    const approvalPhase = opts?.approval
+      ? this.sessionApproval.phase(opts.approval)
+      : undefined;
 
     return {
       id: booking.id,
@@ -1923,6 +1966,12 @@ export class PersonalTrainingService {
         booking.status !== PersonalBookingStatus.CANCELLED &&
         booking.startAt.getTime() <= now &&
         !userAlreadyCompleted,
+      ptFlow,
+      ptControlApplies: opts?.ptControlApplies ?? false,
+      approvalPhase,
+      linkedDocExternalId: booking.linkedDocExternalId ?? undefined,
+      ledgerSettledAt: booking.ledgerSettledAt?.toISOString(),
+      paymentStatus: booking.paymentStatus ?? null,
       goals: (booking.sessionGoals ?? []).map((goal) => ({
         id: goal.id,
         title: goal.title,
