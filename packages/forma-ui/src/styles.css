@@ -102,6 +102,89 @@
   color: #71717a;
 }
 
+/* Native time: match Forma .input height (3rem), not admin h-11. */
+.forma-theme input.input[type='time']::-webkit-datetime-edit,
+.forma-theme input.date-field[type='time']::-webkit-datetime-edit {
+  line-height: 3rem;
+}
+
+/*
+ * Legacy FitGO teal accents → Forma yellow inside trainer v2 shell.
+ * Keeps shared components (DateField trigger, “today”, chips) on-brand
+ * without rewriting every admin-shared utility class.
+ */
+.forma-theme .text-fitgo-200,
+.forma-theme .text-fitgo-300,
+.forma-theme .text-fitgo-400 {
+  color: var(--forma-accent) !important;
+}
+
+.forma-theme .bg-fitgo-500 {
+  background-color: var(--forma-accent) !important;
+  color: var(--forma-accent-fg) !important;
+}
+
+.forma-theme .bg-fitgo-400,
+.forma-theme .bg-fitgo-600 {
+  background-color: #ffe033 !important;
+  color: var(--forma-accent-fg) !important;
+}
+
+.forma-theme .bg-fitgo-500\/5 {
+  background-color: rgba(255, 208, 0, 0.05) !important;
+}
+
+.forma-theme .bg-fitgo-500\/8 {
+  background-color: rgba(255, 208, 0, 0.08) !important;
+}
+
+.forma-theme .bg-fitgo-500\/10 {
+  background-color: rgba(255, 208, 0, 0.1) !important;
+}
+
+.forma-theme .bg-fitgo-500\/15 {
+  background-color: rgba(255, 208, 0, 0.15) !important;
+}
+
+.forma-theme .bg-fitgo-500\/20 {
+  background-color: rgba(255, 208, 0, 0.2) !important;
+}
+
+.forma-theme .bg-fitgo-500\/25 {
+  background-color: rgba(255, 208, 0, 0.25) !important;
+}
+
+.forma-theme .bg-fitgo-500\/30 {
+  background-color: rgba(255, 208, 0, 0.3) !important;
+}
+
+.forma-theme .border-fitgo-500,
+.forma-theme .border-fitgo-500\/40,
+.forma-theme .border-fitgo-500\/50 {
+  border-color: rgba(255, 208, 0, 0.5) !important;
+}
+
+.forma-theme .ring-fitgo-400\/40,
+.forma-theme .ring-fitgo-400\/70,
+.forma-theme .ring-fitgo-500,
+.forma-theme .ring-fitgo-500\/40,
+.forma-theme .ring-fitgo-500\/50 {
+  --tw-ring-color: rgba(255, 208, 0, 0.55) !important;
+}
+
+.forma-theme .hover\:text-fitgo-300:hover,
+.forma-theme .hover\:text-fitgo-400:hover {
+  color: var(--forma-accent) !important;
+}
+
+.forma-theme .hover\:border-fitgo-500\/50:hover {
+  border-color: rgba(255, 208, 0, 0.5) !important;
+}
+
+.forma-theme .shadow-fitgo-500\/30 {
+  --tw-shadow-color: rgba(255, 208, 0, 0.3) !important;
+}
+
 /* Trainer control: wider filters + card density under Forma Coach */
 .forma-theme .trainer-forma-control {
   max-width: 100%;

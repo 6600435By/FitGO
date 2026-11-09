@@ -2,6 +2,7 @@
 
 import type { TrainerWorkSlotInput } from '@fitgo/shared-types';
 import { useEffect, useState } from 'react';
+import { TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -70,7 +71,7 @@ export function WorkScheduleTemplateEditor({
       </p>
 
       {message && (
-        <p className="rounded-xl bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-400">
+        <p className="rounded-xl bg-forma-500/10 px-3 py-2 text-sm text-forma-400">
           {message}
         </p>
       )}
@@ -82,7 +83,7 @@ export function WorkScheduleTemplateEditor({
             onChange={(e) =>
               updateSlot(index, 'dayOfWeek', Number(e.target.value))
             }
-            className="rounded-lg bg-slate-800 px-3 py-2"
+            className="input"
           >
             {DAY_LABELS.map((label, day) => (
               <option key={day} value={day}>
@@ -90,17 +91,15 @@ export function WorkScheduleTemplateEditor({
               </option>
             ))}
           </select>
-          <input
-            type="time"
+          <TimeField
+            compact
             value={slot.startTime}
-            onChange={(e) => updateSlot(index, 'startTime', e.target.value)}
-            className="rounded-lg bg-slate-800 px-3 py-2"
+            onChange={(v) => updateSlot(index, 'startTime', v)}
           />
-          <input
-            type="time"
+          <TimeField
+            compact
             value={slot.endTime}
-            onChange={(e) => updateSlot(index, 'endTime', e.target.value)}
-            className="rounded-lg bg-slate-800 px-3 py-2"
+            onChange={(v) => updateSlot(index, 'endTime', v)}
           />
           <button
             type="button"

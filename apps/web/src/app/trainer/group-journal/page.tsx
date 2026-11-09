@@ -159,7 +159,7 @@ export default function TrainerGroupJournalPage() {
       </p>
       {message && <p className="text-sm text-amber-300">{message}</p>}
 
-      <div className="flex flex-wrap items-end gap-2">
+      <div className="flex flex-wrap items-end gap-3">
         <DateField label="С" value={from} onChange={setFrom} />
         <DateField label="По" value={to} onChange={setTo} />
         <button type="button" className="btn-secondary" onClick={load}>

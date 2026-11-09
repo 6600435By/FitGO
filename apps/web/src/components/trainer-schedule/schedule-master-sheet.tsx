@@ -5,7 +5,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { X } from 'lucide-react';
 import { useState } from 'react';
-import { DateField } from '@/components/ui/date-field';
+import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { WorkScheduleTemplateEditor } from './work-schedule-template-editor';
@@ -132,7 +132,9 @@ export function ScheduleMasterSheet({
           type="button"
           onClick={() => setTab('blocks')}
           className={`rounded-lg px-3 py-1.5 text-sm ${
-            tab === 'blocks' ? 'bg-fitgo-500 text-white' : 'bg-slate-800 text-slate-300'
+            tab === 'blocks'
+              ? 'bg-forma-500 text-ink'
+              : 'bg-slate-800 text-slate-300'
           }`}
         >
           Слоты периода
@@ -141,7 +143,9 @@ export function ScheduleMasterSheet({
           type="button"
           onClick={() => setTab('template')}
           className={`rounded-lg px-3 py-1.5 text-sm ${
-            tab === 'template' ? 'bg-fitgo-500 text-white' : 'bg-slate-800 text-slate-300'
+            tab === 'template'
+              ? 'bg-forma-500 text-ink'
+              : 'bg-slate-800 text-slate-300'
           }`}
         >
           Шаблон недели
@@ -150,7 +154,7 @@ export function ScheduleMasterSheet({
 
       <div className="flex-1 overflow-y-auto p-4">
         {message && (
-          <p className="mb-4 rounded-xl bg-fitgo-500/10 px-3 py-2 text-sm text-fitgo-400">
+          <p className="mb-4 rounded-xl bg-forma-500/10 px-3 py-2 text-sm text-forma-400">
             {message}
           </p>
         )}
@@ -175,19 +179,9 @@ export function ScheduleMasterSheet({
                 value={newDate}
                 onChange={setNewDate}
               />
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="time"
-                  value={newStart}
-                  onChange={(e) => setNewStart(e.target.value)}
-                  className="input"
-                />
-                <input
-                  type="time"
-                  value={newEnd}
-                  onChange={(e) => setNewEnd(e.target.value)}
-                  className="input"
-                />
+              <div className="grid grid-cols-2 items-start gap-3">
+                <TimeField label="С" value={newStart} onChange={setNewStart} />
+                <TimeField label="По" value={newEnd} onChange={setNewEnd} />
               </div>
               <button type="button" onClick={handleAddBlock} className="btn-primary w-full">
                 Добавить слот

@@ -2,6 +2,7 @@
 
 import { Button, ResponsiveSheet } from '@fitgo/forma-ui';
 import { useState } from 'react';
+import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 
@@ -104,35 +105,26 @@ export function SeriesSheet({
           ))}
         </div>
 
-        <label className="block text-sm text-zinc-400">
-          Время
-          <input
-            type="time"
-            className="input mt-1 w-full"
-            value={startTime}
-            onChange={(e) => setStartTime(e.target.value)}
-          />
-        </label>
+        <TimeField label="Время" value={startTime} onChange={setStartTime} />
 
-        <div className="grid grid-cols-2 gap-2">
-          <label className="block text-sm text-zinc-400">
-            С даты
-            <input
-              type="date"
-              className="input mt-1 w-full"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-            />
-          </label>
-          <label className="block text-sm text-zinc-400">
-            По дату (или пусто)
-            <input
-              type="date"
-              className="input mt-1 w-full"
+        <div className="grid grid-cols-2 items-start gap-3">
+          <DateField label="С даты" value={fromDate} onChange={setFromDate} />
+          <div className="space-y-1">
+            <DateField
+              label="По дату (или пусто)"
               value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
+              onChange={setToDate}
             />
-          </label>
+            {toDate ? (
+              <button
+                type="button"
+                className="text-xs text-zinc-500 hover:text-zinc-300"
+                onClick={() => setToDate('')}
+              >
+                Очистить конечную дату
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {!toDate ? (

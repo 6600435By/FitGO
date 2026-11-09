@@ -75,6 +75,15 @@ export type TimeFieldProps = {
   compact?: boolean;
 };
 
+/** Shared caption so DateField + TimeField sit on one baseline in grids. */
+function FieldCaption({ children }: { children: string }) {
+  return (
+    <span className="mb-1.5 block h-4 text-sm leading-4 text-slate-400">
+      {children}
+    </span>
+  );
+}
+
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) =>
   String(i).padStart(2, '0'),
 );
@@ -110,16 +119,12 @@ export function TimeField({
     ? 'input !px-1 !py-1 text-xs tabular-nums'
     : 'input';
   return (
-    <label className={`block space-y-1 text-sm ${className ?? ''}`}>
-      {label ? (
-        <span className="block h-4 text-[11px] text-slate-500">{label}</span>
-      ) : null}
-      <div
-        className={`grid grid-cols-2 ${compact ? 'gap-1' : 'gap-1.5'}`}
-      >
+    <div className={`relative text-sm ${className ?? ''}`}>
+      {label ? <FieldCaption>{label}</FieldCaption> : null}
+      <div className={`grid grid-cols-2 ${compact ? 'gap-1' : 'gap-1.5'}`}>
         <select
           className={selectClass}
-          aria-label="Часы"
+          aria-label={label ? `${label}: часы` : 'Часы'}
           disabled={disabled}
           value={hour}
           onChange={(e) => onChange(`${e.target.value}:${minute}`)}
@@ -132,7 +137,7 @@ export function TimeField({
         </select>
         <select
           className={selectClass}
-          aria-label="Минуты"
+          aria-label={label ? `${label}: минуты` : 'Минуты'}
           disabled={disabled}
           value={minute}
           onChange={(e) => onChange(`${hour}:${e.target.value}`)}
@@ -144,7 +149,7 @@ export function TimeField({
           ))}
         </select>
       </div>
-    </label>
+    </div>
   );
 }
 
@@ -187,6 +192,8 @@ export function DateField({
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(
     null,
   );
+  /** Portal leaves `.forma-theme`; detect from trigger so accents stay yellow. */
+  const [formaAccent, setFormaAccent] = useState(false);
   const selected = value ? parseISO(value) : new Date();
   const [cursor, setCursor] = useState(() =>
     defaultCursor(value, initialYear, initialMonth),
@@ -224,10 +231,15 @@ export function DateField({
   }, [open, value, initialYear, initialMonth]);
 
   useLayoutEffect(() => {
+    setFormaAccent(Boolean(rootRef.current?.closest('.forma-theme')));
+  }, []);
+
+  useLayoutEffect(() => {
     if (!open) {
       setCoords(null);
       return;
     }
+    setFormaAccent(Boolean(rootRef.current?.closest('.forma-theme')));
     place();
   }, [open, place]);
 
@@ -280,6 +292,16 @@ export function DateField({
     setOpen(false);
   };
 
+  const selectedDayClass = formaAccent
+    ? 'bg-forma-500 font-semibold text-ink shadow-md shadow-forma-500/30'
+    : 'bg-fitgo-500 font-semibold text-white shadow-md shadow-fitgo-500/30';
+  const todayRingClass = formaAccent
+    ? 'ring-1 ring-forma-400/70 hover:bg-slate-800'
+    : 'ring-1 ring-fitgo-400/70 hover:bg-slate-800';
+  const accentText = formaAccent ? 'text-forma-400' : 'text-fitgo-400';
+  const accentTextSoft = formaAccent ? 'text-forma-300' : 'text-fitgo-300';
+  const openRingClass = formaAccent ? 'ring-2 ring-forma-500' : 'ring-2 ring-fitgo-500';
+
   const panel =
     open && coords && typeof document !== 'undefined'
       ? createPortal(
@@ -287,7 +309,10 @@ export function DateField({
             ref={panelRef}
             role="dialog"
             aria-label={label ? `Календарь: ${label}` : 'Календарь'}
-            className="fixed z-[80] w-[17.5rem] rounded-2xl border border-slate-700 bg-slate-900 p-3 shadow-2xl shadow-black/50"
+            className={[
+              'fixed z-[80] w-[17.5rem] rounded-2xl border border-slate-700 bg-slate-900 p-3 shadow-2xl shadow-black/50',
+              formaAccent ? 'forma-theme border-white/10 bg-ink-elevated' : '',
+            ].join(' ')}
             style={{ top: coords.top, left: coords.left }}
           >
             <div className="mb-2 flex items-center justify-between gap-1.5">
@@ -368,9 +393,9 @@ export function DateField({
                           ? 'text-slate-100'
                           : 'text-slate-600',
                       selectedDay
-                        ? 'bg-fitgo-500 font-semibold text-white shadow-md shadow-fitgo-500/30'
+                        ? selectedDayClass
                         : allowed && today
-                          ? 'ring-1 ring-fitgo-400/70 hover:bg-slate-800'
+                          ? todayRingClass
                           : allowed
                             ? 'hover:bg-slate-800'
                             : '',
@@ -378,7 +403,12 @@ export function DateField({
                   >
                     {format(day, 'd')}
                     {selectedDay ? (
-                      <span className="absolute inset-x-1 bottom-0.5 mx-auto h-0.5 rounded-full bg-white/80" />
+                      <span
+                        className={[
+                          'absolute inset-x-1 bottom-0.5 mx-auto h-0.5 rounded-full',
+                          formaAccent ? 'bg-ink/70' : 'bg-white/80',
+                        ].join(' ')}
+                      />
                     ) : null}
                   </button>
                 );
@@ -388,13 +418,13 @@ export function DateField({
             <div className="mt-2 flex items-center justify-between border-t border-slate-800 pt-2 text-[11px] text-slate-500">
               <span>
                 Выбрано:{' '}
-                <span className="font-medium text-fitgo-300">{display}</span>
+                <span className={`font-medium ${accentTextSoft}`}>{display}</span>
               </span>
               <button
                 type="button"
                 className={
                   todayAllowed
-                    ? 'text-fitgo-400 hover:underline'
+                    ? `${accentText} hover:underline`
                     : 'cursor-not-allowed text-slate-600'
                 }
                 disabled={!todayAllowed}
@@ -410,9 +440,7 @@ export function DateField({
 
   return (
     <div ref={rootRef} className={`relative text-sm ${className ?? ''}`}>
-      {label ? (
-        <span className="mb-1 block h-4 text-slate-400">{label}</span>
-      ) : null}
+      {label ? <FieldCaption>{label}</FieldCaption> : null}
       <button
         ref={triggerRef}
         type="button"
@@ -425,13 +453,16 @@ export function DateField({
           if (!disabled) setOpen((v) => !v);
         }}
         className={`input flex items-center justify-between gap-2 text-left tabular-nums disabled:cursor-not-allowed disabled:opacity-50 ${
-          open ? 'ring-2 ring-fitgo-500' : ''
+          open ? openRingClass : ''
         } ${inputClassName ?? ''}`}
       >
         <span className={value ? 'text-slate-100' : 'text-slate-500'}>
           {display}
         </span>
-        <CalendarDays className="h-4 w-4 shrink-0 text-fitgo-400" aria-hidden />
+        <CalendarDays
+          className={`h-4 w-4 shrink-0 ${accentText}`}
+          aria-hidden
+        />
       </button>
       {required ? (
         <input

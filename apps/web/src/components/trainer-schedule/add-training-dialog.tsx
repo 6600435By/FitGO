@@ -3,7 +3,7 @@
 import { ResponsiveSheet } from '@fitgo/forma-ui';
 import { useEffect, useState } from 'react';
 import { useFeatures } from '@/components/features-provider';
-import { DateField } from '@/components/ui/date-field';
+import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
@@ -71,7 +71,9 @@ export function AddTrainingDialog({
       ) : (
         <>
           <div>
-            <label className="mb-2 block text-sm text-slate-400">Клиент</label>
+            <label className="mb-1.5 block h-4 text-sm leading-4 text-slate-400">
+              Клиент
+            </label>
             <select
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
@@ -84,17 +86,9 @@ export function AddTrainingDialog({
               ))}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 items-start gap-3">
             <DateField label="Дата" value={date} onChange={setDate} />
-            <div>
-              <label className="mb-2 block text-sm text-slate-400">Время</label>
-              <input
-                type="time"
-                value={time}
-                onChange={(e) => setTime(e.target.value)}
-                className="input"
-              />
-            </div>
+            <TimeField label="Время" value={time} onChange={setTime} />
           </div>
         </>
       )}

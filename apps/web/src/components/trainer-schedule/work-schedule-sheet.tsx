@@ -5,7 +5,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { DateField } from '@/components/ui/date-field';
+import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { dateKey } from './schedule-grid';
@@ -207,25 +207,9 @@ export function WorkScheduleSheet({
 
           {freeSchedule ? (
             <>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="block text-xs text-zinc-400">
-                  С
-                  <input
-                    type="time"
-                    value={fromTime}
-                    onChange={(e) => setFromTime(e.target.value)}
-                    className="input mt-1"
-                  />
-                </label>
-                <label className="block text-xs text-zinc-400">
-                  По
-                  <input
-                    type="time"
-                    value={toTime}
-                    onChange={(e) => setToTime(e.target.value)}
-                    className="input mt-1"
-                  />
-                </label>
+              <div className="grid grid-cols-2 items-start gap-3">
+                <TimeField label="С" value={fromTime} onChange={setFromTime} />
+                <TimeField label="По" value={toTime} onChange={setToTime} />
               </div>
               <button
                 type="button"
@@ -276,15 +260,11 @@ export function WorkScheduleSheet({
                   После
                 </button>
               </div>
-              <label className="block text-xs text-zinc-400">
-                {side === 'before' ? 'Начать приём с' : 'Принимать до'}
-                <input
-                  type="time"
-                  value={edgeTime}
-                  onChange={(e) => setEdgeTime(e.target.value)}
-                  className="input mt-1"
-                />
-              </label>
+              <TimeField
+                label={side === 'before' ? 'Начать приём с' : 'Принимать до'}
+                value={edgeTime}
+                onChange={setEdgeTime}
+              />
               {duty && (
                 <p className="text-xs text-zinc-500">
                   {side === 'before'
