@@ -211,6 +211,7 @@ export function WorkoutSheetEditor({
 
   const [circuitHistory, setCircuitHistory] = useState<CircuitHistoryPoint[]>([]);
   const [copyBusy, setCopyBusy] = useState(false);
+  const [copyMessage, setCopyMessage] = useState('');
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [prepSessionVariant, setPrepSessionVariant] =
     useState<PrepSectionId | null>(null);
@@ -227,6 +228,16 @@ export function WorkoutSheetEditor({
     () => estimatedMaxHr(sheet.clientAge ?? suggestedAge),
     [sheet.clientAge, suggestedAge],
   );
+
+  /** Profile age is enough — do not force manual re-entry on every session. */
+  const ageFromProfile = suggestedAge != null;
+
+  useEffect(() => {
+    if (readOnly || suggestedAge == null || sheet.clientAge != null) return;
+    onChange({ ...sheet, clientAge: suggestedAge });
+    // Once when profile age is known and sheet age is still empty
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestedAge, readOnly]);
 
   useEffect(() => {
     if (readOnly || clientRestingHr == null || sheet.restingHr != null) return;
@@ -297,10 +308,6 @@ export function WorkoutSheetEditor({
     toggleBlock(id);
   };
 
-  const applySuggestedAge = () => {
-    if (suggestedAge) update({ clientAge: suggestedAge });
-  };
-
   const applySuggestedRestingHr = () => {
     if (clientRestingHr != null) update({ restingHr: clientRestingHr });
   };
@@ -313,15 +320,35 @@ export function WorkoutSheetEditor({
     const token = getToken();
     if (!token) return;
     setCopyBusy(true);
+    setCopyMessage('');
     try {
-      const { sheet: prev } = await api.personalSessionPreviousSheet(token, bookingId);
-      if (prev) {
-        const next =
-          getWorkoutBlocks(prev).includes('circuit')
-            ? ensureCircuitRoundLogs({ ...prev, circuit: prev.circuit ? { ...prev.circuit, roundLogs: [] } : createDefaultCircuit() })
-            : prev;
-        onChange(next);
+      const { sheet: prev } = await api.personalSessionPreviousSheet(
+        token,
+        bookingId,
+      );
+      if (!prev) {
+        setCopyMessage('Прошлого листа нет — заполните программу вручную или выберите шаблон.');
+        return;
       }
+      // Keep current client age / HR; copy is a draft and does not confirm the session.
+      const merged: WorkoutSheet = {
+        ...prev,
+        clientAge: sheet.clientAge,
+        restingHr: sheet.restingHr,
+        maxHr: sheet.maxHr,
+      };
+      const next = getWorkoutBlocks(merged).includes('circuit')
+        ? ensureCircuitRoundLogs({
+            ...merged,
+            circuit: merged.circuit
+              ? { ...merged.circuit, roundLogs: [] }
+              : createDefaultCircuit(),
+          })
+        : merged;
+      onChange(next);
+      setCopyMessage(
+        'Прошлый план подставлен в черновик. Проверьте и сохраните — занятие этим не подтверждается.',
+      );
     } finally {
       setCopyBusy(false);
     }
@@ -367,7 +394,7 @@ export function WorkoutSheetEditor({
               <button
                 type="button"
                 disabled={copyBusy}
-                onClick={handleCopyPrevious}
+                onClick={() => void handleCopyPrevious()}
                 className={cn(linkCls, 'disabled:opacity-50')}
               >
                 {copyBusy ? 'Загрузка…' : 'Повторить прошлую'}
@@ -388,6 +415,16 @@ export function WorkoutSheetEditor({
             )}
           </div>
         </div>
+        {copyMessage ? (
+          <p
+            className={cn(
+              'mb-3 text-[11px] leading-snug',
+              forma ? 'text-zinc-500' : 'text-slate-500',
+            )}
+          >
+            {copyMessage}
+          </p>
+        ) : null}
 
         <div className="mb-4 grid gap-3 sm:grid-cols-2">
           <div>
@@ -404,29 +441,45 @@ export function WorkoutSheetEditor({
             <p className={cn('mb-1', labelCls)}>Клиент</p>
             <p className="font-medium">{clientName}</p>
           </div>
-          <div>
-            <p className={cn('mb-1', labelCls)}>Возраст</p>
-            <div className="flex items-center gap-2">
-              <NumberInput
-                value={sheet.clientAge}
-                onChange={(v) => update({ clientAge: v })}
-                readOnly={readOnly}
-                placeholder="лет"
-                className="max-w-[100px]"
-                min={1}
-                max={120}
-              />
-              {!readOnly && suggestedAge && sheet.clientAge !== suggestedAge && (
-                <button
-                  type="button"
-                  onClick={applySuggestedAge}
-                  className={linkCls}
+          {ageFromProfile ? (
+            <div>
+              <p className={cn('mb-1', labelCls)}>Возраст</p>
+              <p className="font-medium">
+                {sheet.clientAge ?? suggestedAge} лет
+                <span
+                  className={cn(
+                    'ml-2 text-xs font-normal',
+                    forma ? 'text-zinc-500' : 'text-slate-500',
+                  )}
                 >
-                  Из профиля ({suggestedAge})
-                </button>
-              )}
+                  из профиля
+                </span>
+              </p>
             </div>
-          </div>
+          ) : (
+            <div>
+              <p className={cn('mb-1', labelCls)}>Возраст</p>
+              <div className="flex items-center gap-2">
+                <NumberInput
+                  value={sheet.clientAge}
+                  onChange={(v) => update({ clientAge: v })}
+                  readOnly={readOnly}
+                  placeholder="лет"
+                  className="max-w-[100px]"
+                  min={1}
+                  max={120}
+                />
+              </div>
+              <p
+                className={cn(
+                  'mt-1 text-[10px] leading-snug',
+                  forma ? 'text-zinc-600' : 'text-slate-600',
+                )}
+              >
+                Необязательно — в профиле нет даты рождения
+              </p>
+            </div>
+          )}
           <div>
             <p className={cn('mb-1', labelCls)}>ЧСС в покое</p>
             <div className="flex items-center gap-2">
@@ -457,7 +510,7 @@ export function WorkoutSheetEditor({
                 forma ? 'text-zinc-600' : 'text-slate-600',
               )}
             >
-              Пульс в покое. Норма 50–80 уд/мин
+              Пульс в покое для этого занятия. Норма 50–80 уд/мин
             </p>
           </div>
           <div className="sm:col-span-2">
@@ -901,7 +954,7 @@ export function WorkoutSheetEditor({
         open={templatePickerOpen}
         onOpenChange={setTemplatePickerOpen}
         title="Шаблон листа"
-        description="Подставит план в лист. Возраст и ЧСС клиента сохранятся. Факт прошлой сессии не копируется."
+        description="Подставит план в лист. Возраст и ЧСС клиента сохранятся. Черновик — занятие этим не подтверждается."
         desktop="dialog"
       >
         <div className="space-y-2 pb-4">

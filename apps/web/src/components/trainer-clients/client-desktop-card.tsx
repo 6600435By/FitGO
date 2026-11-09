@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import { formatDate } from '@/lib/utils';
+import { formatDate, formatDateTime } from '@/lib/utils';
 import { ClientRightsBlocks } from '@/components/trainer-clients/client-rights-blocks';
 
 export function ClientDesktopCard({
@@ -41,6 +41,22 @@ export function ClientDesktopCard({
 
   const client = detail;
   const name = `${summary.firstName} ${summary.lastName}`.trim();
+  const nowMs = Date.now();
+  const previousResult = client?.sessions.find(
+    (s) => s.status === 'COMPLETED' && s.hasWorkoutSheet,
+  );
+  const nextStep = client
+    ? [...client.sessions]
+        .filter(
+          (s) =>
+            s.status === 'SCHEDULED' &&
+            new Date(s.startAt).getTime() >= nowMs,
+        )
+        .sort(
+          (a, b) =>
+            new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
+        )[0]
+    : undefined;
 
   return (
     <aside className="sticky top-4 space-y-4 rounded-2xl border border-white/10 bg-ink-elevated/80 p-4">
@@ -70,6 +86,29 @@ export function ClientDesktopCard({
       {client ? (
         <div className="space-y-3 text-sm">
           <ClientRightsBlocks client={client} compact />
+
+          <div className="space-y-1 text-xs">
+            {previousResult ? (
+              <Link
+                href={`/trainer/sessions/${previousResult.id}?clientId=${summary.id}`}
+                className="block text-forma-400 hover:text-forma-300"
+              >
+                Прошлый результат · {formatDateTime(previousResult.startAt)}
+              </Link>
+            ) : (
+              <p className="text-forma-500">Прошлого результата с листом нет</p>
+            )}
+            {nextStep ? (
+              <Link
+                href={`/trainer/sessions/${nextStep.id}?clientId=${summary.id}`}
+                className="block text-forma-400 hover:text-forma-300"
+              >
+                Следующий шаг · {formatDateTime(nextStep.startAt)}
+              </Link>
+            ) : (
+              <p className="text-forma-500">Следующее занятие не назначено</p>
+            )}
+          </div>
 
           <p className="text-xs text-forma-500">
             {[

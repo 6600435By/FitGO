@@ -97,7 +97,16 @@ export default function TrainerClientDetailPage() {
     status: string;
     summary?: string;
   } | null>(null);
-  const [tab, setTab] = useState<Tab>('overview');
+  const tabParam = searchParams.get('tab');
+  const initialTab: Tab =
+    tabParam === 'sessions' ||
+    tabParam === 'progress' ||
+    tabParam === 'notes' ||
+    tabParam === 'anketa' ||
+    tabParam === 'overview'
+      ? tabParam
+      : 'overview';
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [note, setNote] = useState('');
   const [goalTitle, setGoalTitle] = useState('');
   const [goalTarget, setGoalTarget] = useState('');
@@ -107,6 +116,18 @@ export default function TrainerClientDetailPage() {
   const [inviteBusy, setInviteBusy] = useState(false);
   const [sessionPriceInput, setSessionPriceInput] = useState('');
   const [priceBusy, setPriceBusy] = useState(false);
+
+  useEffect(() => {
+    if (
+      tabParam === 'sessions' ||
+      tabParam === 'progress' ||
+      tabParam === 'notes' ||
+      tabParam === 'anketa' ||
+      tabParam === 'overview'
+    ) {
+      setTab(tabParam);
+    }
+  }, [tabParam]);
 
   const load = () => {
     const token = getToken();
@@ -202,6 +223,20 @@ export default function TrainerClientDetailPage() {
       </div>
     );
   }
+
+  const nowMs = Date.now();
+  const previousResult = client.sessions.find(
+    (s) => s.status === 'COMPLETED' && s.hasWorkoutSheet,
+  );
+  const nextStep = [...client.sessions]
+    .filter(
+      (s) =>
+        s.status === 'SCHEDULED' && new Date(s.startAt).getTime() >= nowMs,
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
+    )[0];
 
   const inviteToApp = async () => {
     const token = getToken();
@@ -426,6 +461,29 @@ export default function TrainerClientDetailPage() {
             ) : undefined
           }
         />
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm">
+          {previousResult ? (
+            <Link
+              href={`/trainer/sessions/${previousResult.id}?clientId=${id}`}
+              className="text-fitgo-400 hover:text-fitgo-300"
+            >
+              Прошлый результат · {formatDateTime(previousResult.startAt)}
+            </Link>
+          ) : (
+            <span className="text-slate-500">Прошлого результата с листом нет</span>
+          )}
+          <span className="text-slate-600">·</span>
+          {nextStep ? (
+            <Link
+              href={`/trainer/sessions/${nextStep.id}?clientId=${id}`}
+              className="text-fitgo-400 hover:text-fitgo-300"
+            >
+              Следующий шаг · {formatDateTime(nextStep.startAt)}
+            </Link>
+          ) : (
+            <span className="text-slate-500">Следующее занятие не назначено</span>
+          )}
+        </div>
         <p className="text-xs text-slate-500">
           {[
             client.lastVisit

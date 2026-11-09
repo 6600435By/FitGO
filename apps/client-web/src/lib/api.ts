@@ -807,11 +807,12 @@ export const api = {
     ),
 
   personalSessionPreviousSheet: (token: string, bookingId: string) =>
-    request<{ sheet: import('@fitgo/shared-types').WorkoutSheet | null; date?: string }>(
-      `/personal-bookings/${bookingId}/previous-sheet`,
-      {},
-      token,
-    ),
+    request<{
+      sheet: import('@fitgo/shared-types').WorkoutSheet | null;
+      date?: string;
+      bookingId?: string;
+      summary?: string;
+    }>(`/personal-bookings/${bookingId}/previous-sheet`, {}, token),
 
   personalSessionCircuitHistory: (token: string, bookingId: string) =>
     request<import('@fitgo/shared-types').CircuitHistoryPoint[]>(

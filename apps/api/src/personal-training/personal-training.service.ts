@@ -1592,7 +1592,12 @@ export class PersonalTrainingService {
   async getPreviousWorkoutSheet(
     user: JwtPayload,
     bookingId: string,
-  ): Promise<{ sheet: WorkoutSheet | null; date?: string }> {
+  ): Promise<{
+    sheet: WorkoutSheet | null;
+    date?: string;
+    bookingId?: string;
+    summary?: string;
+  }> {
     const booking = await this.getAccessibleBooking(user, bookingId);
     const previous = await this.prisma.personalTrainingBooking.findMany({
       where: {
@@ -1607,9 +1612,16 @@ export class PersonalTrainingService {
     if (!withSheet?.workoutSheet) {
       return { sheet: null };
     }
+    const normalized = normalizeWorkoutSheet(withSheet.workoutSheet);
+    const isClient = booking.clientId === user.sub;
+    const sheet = isClient
+      ? workoutSheetForClient(normalized)
+      : normalized;
     return {
-      sheet: normalizeWorkoutSheet(withSheet.workoutSheet),
+      sheet,
       date: withSheet.startAt.toISOString(),
+      bookingId: withSheet.id,
+      summary: sheet.sessionSummaryNote?.trim() || undefined,
     };
   }
 

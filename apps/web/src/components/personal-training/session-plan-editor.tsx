@@ -7,6 +7,7 @@ import type {
   WorkoutSheet,
 } from '@fitgo/shared-types';
 import {
+  ageFromDateOfBirth,
   createEmptyWorkoutSheet,
   createDefaultCircuit,
   ensureCircuitRoundLogs,
@@ -25,6 +26,10 @@ import {
   sessionStatusColor,
   sessionStatusLabel,
 } from '@/lib/utils';
+import {
+  SessionContextStrip,
+  type PreviousSessionMeta,
+} from './session-context-strip';
 import {
   SessionControlFollowUp,
   SessionLifecycleStrip,
@@ -102,6 +107,9 @@ export function SessionPlanEditor({
     summary?: string;
   } | null>(null);
   const [savedFingerprint, setSavedFingerprint] = useState('');
+  const [previousMeta, setPreviousMeta] = useState<PreviousSessionMeta>({
+    loaded: false,
+  });
 
   const applySession = (data: PersonalTrainingSessionDetail) => {
     const goals = data.goals.map((g) => ({
@@ -138,19 +146,42 @@ export function SessionPlanEditor({
     }
   };
 
+  const loadPreviousMeta = async () => {
+    const token = getToken();
+    if (!token) {
+      setPreviousMeta({ loaded: true });
+      return;
+    }
+    try {
+      const prev = await api.personalSessionPreviousSheet(token, bookingId);
+      setPreviousMeta({
+        loaded: true,
+        bookingId: prev.bookingId,
+        date: prev.date,
+        summary: prev.summary,
+      });
+    } catch {
+      setPreviousMeta({ loaded: true });
+    }
+  };
+
   const load = async () => {
     const token = getToken();
     if (!token) return;
     const data = await api.personalSessionDetail(token, bookingId);
     applySession(data);
     if (viewerRole === 'trainer') {
-      await loadActiveHomework(data.clientId);
+      await Promise.all([
+        loadActiveHomework(data.clientId),
+        loadPreviousMeta(),
+      ]);
     }
   };
 
   useEffect(() => {
     const token = getToken();
     if (!token) return;
+    setPreviousMeta({ loaded: false });
     Promise.all([
       api.personalSessionDetail(token, bookingId),
       api.personalGoalTemplates(token),
@@ -159,7 +190,10 @@ export function SessionPlanEditor({
         applySession(data);
         setTemplates(tpls);
         if (viewerRole === 'trainer') {
-          await loadActiveHomework(data.clientId);
+          await Promise.all([
+            loadActiveHomework(data.clientId),
+            loadPreviousMeta(),
+          ]);
         }
       })
       .catch((err) => setError(err.message));
@@ -309,6 +343,13 @@ export function SessionPlanEditor({
     draftGoals.find((g) => g.title.trim())?.title ||
     session.goals.find((g) => g.title.trim())?.title;
 
+  const profileAge = session.clientDateOfBirth
+    ? ageFromDateOfBirth(
+        session.clientDateOfBirth,
+        new Date(session.startAt),
+      )
+    : undefined;
+
   const liveHref =
     isTrainer && session.clientId
       ? `/trainer/live/pt/${encodeURIComponent(bookingId)}?title=${encodeURIComponent(session.clientName || 'ПТ')}&clientId=${encodeURIComponent(session.clientId)}`
@@ -388,6 +429,16 @@ export function SessionPlanEditor({
           {error}
         </p>
       )}
+
+      {isTrainer ? (
+        <SessionContextStrip
+          session={session}
+          profileAge={profileAge}
+          previous={previousMeta}
+          primaryGoal={primaryGoal}
+          onOpenGoals={() => setActiveTab('goals')}
+        />
+      ) : null}
 
       <SegmentedControl
         options={[

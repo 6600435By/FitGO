@@ -29,48 +29,40 @@ export function SessionLifecycleStrip({
   const clubControl = Boolean(session.ptControlApplies);
 
   let title = 'Подготовка';
-  let body = 'Лист можно менять. Посещение в 1С, оплату и зарплату кнопки листа не трогают.';
+  let body = 'Можно править лист.';
 
   if (!confirmed && dirty) {
-    title = 'Есть несохранённые правки';
-    body =
-      draftCompleted
-        ? 'Итог собран в черновике. Нажмите «Сохранить лист», затем «Подтвердить завершение».'
-        : 'Сохраните лист, прежде чем подтверждать проведение.';
+    title = 'Не сохранено';
+    body = 'Сохраните лист перед подтверждением.';
   } else if (!confirmed && draftCompleted) {
-    title = 'Предварительный итог';
+    title = 'Готово к подтверждению';
     body = clubControl
-      ? 'Лист готов. Подтверждение отметит проведение и отправит запись администратору. Посещение в 1С и оплату эта кнопка не ставит; ЗП — после ответа администратора и документа.'
+      ? 'Подтверждение отправит запись администратору.'
       : personal
-        ? 'Лист готов. Подтверждение отметит проведение и один раз спишет пакет или зафиксирует долг. Посещение в 1С клубной кнопкой не ставится.'
-        : 'Лист готов. Подтверждение отметит проведение. Сохранение плана само по себе посещение и оплату не отмечает.';
+        ? 'Подтверждение спишет пакет или зафиксирует долг.'
+        : 'Можно подтвердить проведение.';
   } else if (!confirmed) {
-    title = 'Подготовка / проведение';
-    body =
-      'Завершите блоки и сохраните лист. «Сохранить лист» фиксирует план и факт на сервере без посещения и оплаты.';
+    title = 'Подготовка';
+    body = 'Заполните и сохраните лист.';
   } else {
     title = 'Проведение подтверждено';
-    const parts: string[] = ['Тренер подтвердил завершение.'];
     if (clubControl) {
       if (session.approvalPhase === 'PENDING_ADMIN') {
-        parts.push('Ждём проверку администратора.');
+        body = 'Ждём администратора.';
+      } else if (session.linkedDocExternalId) {
+        body = 'Документ привязан.';
       } else if (session.approvalPhase === 'APPROVED') {
-        parts.push('Администратор подтвердил.');
-      }
-      if (session.linkedDocExternalId) {
-        parts.push('Документ продажи привязан.');
+        body = 'Администратор подтвердил.';
       } else {
-        parts.push('Документ в 1С ещё не привязан или ждёт администратора.');
+        body = 'Ждём документ.';
       }
-      parts.push('Открытое замечание снимает занятие с ЗП до ответа администратора.');
     } else if (personal) {
-      parts.push(
-        session.ledgerSettledAt
-          ? 'Списание пакета или долг зафиксированы.'
-          : 'Списание ещё не зафиксировано — можно повторить подтверждение без второго списания.',
-      );
+      body = session.ledgerSettledAt
+        ? 'Списание зафиксировано.'
+        : 'Списание не завершено — можно повторить.';
+    } else {
+      body = '';
     }
-    body = parts.join(' ');
   }
 
   return (
@@ -78,12 +70,8 @@ export function SessionLifecycleStrip({
       <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
         {title}
       </p>
-      <p className="mt-1 text-sm leading-snug text-slate-300">{body}</p>
-      {session.paymentStatus ? (
-        <p className="mt-1 text-[11px] text-slate-500">
-          Оплата в карточке: {session.paymentStatus}
-          {session.ledgerSettledAt ? ' · ledger зафиксирован' : ''}
-        </p>
+      {body ? (
+        <p className="mt-1 text-sm leading-snug text-slate-300">{body}</p>
       ) : null}
     </div>
   );
