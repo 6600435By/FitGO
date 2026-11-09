@@ -6,8 +6,14 @@ import type {
 } from '@fitgo/shared-types';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  eventBlockClass,
-  eventDotClass,
+  DAY_OFF_WITH_BOOKING_POLICY,
+  eventRelationNote,
+  eventStateCaption,
+  isCancelledCalendarEvent,
+} from './event-captions';
+import {
+  calendarEventBlockClass,
+  calendarEventDotClass,
 } from './event-kind-styles';
 import {
   dateKey,
@@ -34,7 +40,11 @@ function formatTime(iso: string): string {
 }
 
 function canDragEvent(event: TrainerCalendarEvent): boolean {
-  return event.kind === 'PERSONAL' && Boolean(event.bookingId);
+  return (
+    event.kind === 'PERSONAL' &&
+    Boolean(event.bookingId) &&
+    event.bookingStatus !== 'CANCELLED'
+  );
 }
 
 function durationMin(event: TrainerCalendarEvent): number {
@@ -296,6 +306,12 @@ export function ScheduleWeekGrid({
           const hasDuty = dayEvents.some((e) => e.kind === 'DUTY');
           const hasWork =
             hasDuty || getDayWorkBounds(dayStr, availabilityBlocks) !== null;
+          const hasLiveBooking = dayEvents.some(
+            (e) =>
+              (e.kind === 'PERSONAL' || e.kind === 'GROUP') &&
+              !isCancelledCalendarEvent(e),
+          );
+          const dayOffWithBooking = !hasWork && hasLiveBooking;
           const isDropDay = preview?.dayKey === dayStr;
           const dropOk = Boolean(isDropDay && preview?.valid);
           const dropBad = Boolean(isDropDay && preview && !preview.valid);
@@ -305,9 +321,12 @@ export function ScheduleWeekGrid({
               key={dayStr}
               className={`w-24 shrink-0 border-r border-slate-700/80 last:border-r-0 sm:w-28 md:w-32 ${
                 isToday ? 'bg-fitgo-500/5' : isWeekend ? 'bg-slate-950/50' : ''
-              } ${!hasWork ? 'opacity-60' : ''} ${
+              } ${!hasWork && !dayOffWithBooking ? 'opacity-60' : ''} ${
+                dayOffWithBooking ? 'bg-violet-500/5' : ''
+              } ${
                 dropOk ? 'bg-emerald-500/10' : dropBad ? 'bg-red-500/10' : ''
               }`}
+              title={dayOffWithBooking ? DAY_OFF_WITH_BOOKING_POLICY : undefined}
             >
               <div
                 className={`h-[52px] border-b border-slate-700/80 px-1 py-1.5 text-center ${
@@ -324,9 +343,11 @@ export function ScheduleWeekGrid({
                 >
                   {dayDate.getDate()}
                 </p>
-                {!hasWork && (
-                  <p className="text-[9px] text-slate-500">выходной</p>
-                )}
+                {!hasWork && dayOffWithBooking ? (
+                  <p className="text-[9px] text-violet-300">вне смены</p>
+                ) : !hasWork ? (
+                  <p className="text-[9px] text-slate-500">нет смены</p>
+                ) : null}
               </div>
 
               <div
@@ -390,6 +411,9 @@ export function ScheduleWeekGrid({
                     Boolean(onMoveBooking) && canDragEvent(event);
                   const dragging = preview?.eventId === event.id;
 
+                  const caption = eventStateCaption(event);
+                  const note = eventRelationNote(event);
+
                   return (
                     <button
                       key={event.id}
@@ -421,35 +445,39 @@ export function ScheduleWeekGrid({
                         if (movedRef.current) return;
                         onSelectEvent?.(event);
                       }}
-                      className={`absolute left-0.5 right-0.5 z-10 overflow-hidden rounded px-0.5 py-0.5 text-left text-[9px] leading-tight shadow-sm hover:ring-1 hover:ring-slate-500 sm:text-[10px] ${eventBlockClass(event.kind)} ${
+                      className={`absolute left-0.5 right-0.5 z-10 overflow-hidden rounded px-0.5 py-0.5 text-left text-[9px] leading-tight shadow-sm hover:ring-1 hover:ring-slate-500 sm:text-[10px] ${calendarEventBlockClass(event)} ${
                         draggable ? 'cursor-grab active:cursor-grabbing' : ''
                       } ${dragging ? 'opacity-40' : ''}`}
                       style={{ top: layout.top, height: layout.height }}
                       title={
                         draggable
-                          ? `${event.title} · удерживайте и перетащите`
-                          : event.title
+                          ? `${event.title} · ${caption} · удерживайте и перетащите`
+                          : `${event.title} · ${caption}`
                       }
                     >
                       <div className="flex items-center gap-0.5">
                         <span
-                          className={`h-1 w-1 shrink-0 rounded-full ${eventDotClass(event.kind)}`}
+                          className={`h-1 w-1 shrink-0 rounded-full ${calendarEventDotClass(event)}`}
                         />
                         <span className="truncate font-semibold">
                           {formatTime(event.startAt)}
                         </span>
                       </div>
-                      {layout.height >= 36 && (
+                      <span className="block truncate opacity-90">{caption}</span>
+                      {layout.height >= 40 && (
                         <span className="block truncate">{event.title}</span>
                       )}
-                      {layout.height >= 48 &&
+                      {layout.height >= 52 && note ? (
+                        <span className="block truncate opacity-70">{note}</span>
+                      ) : null}
+                      {layout.height >= 56 &&
                       event.clientIssue &&
                       event.clientIssue !== 'NONE' ? (
                         <span className="block truncate text-amber-300/90">
                           Нет в 1С
                         </span>
                       ) : null}
-                      {layout.height >= 52 && endMin !== null && (
+                      {layout.height >= 64 && endMin !== null && (
                         <span className="block truncate opacity-70">
                           до {minutesToTime(endMin)}
                         </span>

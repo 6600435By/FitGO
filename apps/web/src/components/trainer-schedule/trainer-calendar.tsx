@@ -4,7 +4,7 @@ import type { TrainerAvailabilityBlock, TrainerCalendarEvent } from '@fitgo/shar
 import { useRouter } from 'next/navigation';
 import { useMemo } from 'react';
 import {
-  eventKindMatchesFilter,
+  eventVisibleInCalendar,
   type ScheduleTypeFilter,
 } from './calendar-utils';
 import { ScheduleDayGrid } from './schedule-day-grid';
@@ -16,6 +16,7 @@ import { ScheduleWeekGrid } from './schedule-week-grid';
 export function TrainerCalendar({
   events,
   filter,
+  showCancelled,
   view,
   date,
   availabilityBlocks,
@@ -26,6 +27,7 @@ export function TrainerCalendar({
 }: {
   events: TrainerCalendarEvent[];
   filter: ScheduleTypeFilter;
+  showCancelled: boolean;
   view: ScheduleView;
   date: Date;
   availabilityBlocks: TrainerAvailabilityBlock[];
@@ -38,18 +40,18 @@ export function TrainerCalendar({
 
   const visibleEvents = useMemo(
     () =>
-      events.filter((event) => {
-        if (event.kind === 'DRAFT_SLOT') return false;
-        return eventKindMatchesFilter(event.kind, filter);
-      }),
-    [events, filter],
+      events.filter((event) =>
+        eventVisibleInCalendar(event, filter, showCancelled),
+      ),
+    [events, filter, showCancelled],
   );
 
   const handleSelectEvent = (event: TrainerCalendarEvent) => {
     if (
       event.kind === 'PERSONAL' &&
       event.bookingId &&
-      event.clientId
+      event.clientId &&
+      event.bookingStatus !== 'CANCELLED'
     ) {
       router.push(
         `/trainer/sessions/${event.bookingId}?clientId=${event.clientId}`,
@@ -62,7 +64,8 @@ export function TrainerCalendar({
   return (
     <div className="space-y-3">
       <p className="hidden text-xs text-slate-500 md:block">
-        Клик по персональной тренировке — открыть сессию. В сетке показаны только часы из опубликованного графика.
+        Клик по персональной тренировке — открыть сессию. Черновик и свободное
+        окно подписаны текстом; отмены — по фильтру «Отмены».
       </p>
 
       <div className="md:hidden">

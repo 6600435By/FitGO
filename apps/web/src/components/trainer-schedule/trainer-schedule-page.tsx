@@ -119,6 +119,7 @@ export function TrainerSchedulePage() {
     [date, syncUrl],
   );
   const [filter, setFilter] = useState<ScheduleTypeFilter>('all');
+  const [showCancelled, setShowCancelled] = useState(false);
   const [showWorkSchedule, setShowWorkSchedule] = useState(false);
   const [showAddTraining, setShowAddTraining] = useState(false);
   const [assignAt, setAssignAt] = useState<string | null>(null);
@@ -270,6 +271,8 @@ export function TrainerSchedulePage() {
             periodEnd={period.periodEnd}
             selectedDate={date}
             summary={publishSummary}
+            availabilityBlocks={availabilityBlocks}
+            events={events}
             onPublished={reload}
           />
         </div>
@@ -329,6 +332,15 @@ export function TrainerSchedulePage() {
               ]}
             />
           </div>
+          <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              className="rounded border-white/20 bg-ink-elevated"
+              checked={showCancelled}
+              onChange={(e) => setShowCancelled(e.target.checked)}
+            />
+            Отмены
+          </label>
         </>
       ) : (
         <>
@@ -340,7 +352,18 @@ export function TrainerSchedulePage() {
             onPrev={() => updateDate(shiftDateByView(date, view, -1))}
             onNext={() => updateDate(shiftDateByView(date, view, 1))}
           />
-          <ScheduleTypeFilterBar value={filter} onChange={setFilter} />
+          <div className="flex flex-wrap items-center gap-3">
+            <ScheduleTypeFilterBar value={filter} onChange={setFilter} />
+            <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-slate-400">
+              <input
+                type="checkbox"
+                className="rounded border-slate-600 bg-slate-900"
+                checked={showCancelled}
+                onChange={(e) => setShowCancelled(e.target.checked)}
+              />
+              Отмены
+            </label>
+          </div>
         </>
       )}
 
@@ -381,6 +404,7 @@ export function TrainerSchedulePage() {
           <TrainerCalendar
             events={events}
             filter={filter}
+            showCancelled={showCancelled}
             view={view}
             date={date}
             availabilityBlocks={availabilityBlocks}
@@ -399,6 +423,8 @@ export function TrainerSchedulePage() {
           periodEnd={period.periodEnd}
           selectedDate={date}
           summary={publishSummary}
+          availabilityBlocks={availabilityBlocks}
+          events={events}
           onPublished={reload}
         />
       ) : null}

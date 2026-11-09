@@ -389,6 +389,7 @@ export class PersonalTrainingService {
             in: [
               PersonalBookingStatus.CONFIRMED,
               PersonalBookingStatus.COMPLETED,
+              PersonalBookingStatus.CANCELLED,
             ],
           },
           startAt: { lt: rangeEnd },
@@ -412,6 +413,11 @@ export class PersonalTrainingService {
       }),
     ]);
 
+    /** Live rows occupy windows; cancelled stay visible but free the slot. */
+    const liveBookings = bookings.filter(
+      (b) => b.status !== PersonalBookingStatus.CANCELLED,
+    );
+
     const approvalByBooking = new Map<
       string,
       {
@@ -420,11 +426,11 @@ export class PersonalTrainingService {
         overrideApprovedAt: Date | null;
       }
     >();
-    if (ptControlOn && bookings.length) {
+    if (ptControlOn && liveBookings.length) {
       const approvals = await this.prisma.sessionApproval.findMany({
         where: {
           kind: SessionApprovalKind.PT,
-          bookingId: { in: bookings.map((b) => b.id) },
+          bookingId: { in: liveBookings.map((b) => b.id) },
         },
       });
       for (const a of approvals) {
@@ -457,10 +463,23 @@ export class PersonalTrainingService {
       });
     }
 
+    const dayHasAdminShift = (dayStart: Date, dayEnd: Date) => {
+      const hasDuty = duties.some((d) => d.startAt < dayEnd && d.endAt > dayStart);
+      if (hasDuty) return true;
+      return blocks.some(
+        (b) =>
+          b.kind === AvailabilityBlockKind.OPEN &&
+          b.status === AvailabilityBlockStatus.PUBLISHED &&
+          b.startAt < dayEnd &&
+          b.endAt > dayStart,
+      );
+    };
+
     for (const booking of bookings) {
       let ptControlStatus: TrainerCalendarEvent['ptControlStatus'];
       let ptControlLabel: string | undefined;
-      if (ptControlOn) {
+      const isCancelled = booking.status === PersonalBookingStatus.CANCELLED;
+      if (ptControlOn && !isCancelled) {
         if (booking.docAutoLinkBlocked) {
           ptControlStatus = 'NO_BASIS';
           ptControlLabel = 'Нет основания в 1С';
@@ -490,14 +509,21 @@ export class PersonalTrainingService {
           }
         }
       }
+      const dayStart = this.startOfDay(booking.startAt);
+      const dayEnd = this.endOfDay(booking.startAt);
+      const outsideShift = !dayHasAdminShift(dayStart, dayEnd);
+      const clientLabel =
+        `${booking.client.firstName} ${booking.client.lastName}`.trim();
       events.push({
         id: `personal-${booking.id}`,
         kind: 'PERSONAL',
-        title: `Персональная · ${booking.client.firstName} ${booking.client.lastName}`.trim(),
+        title: isCancelled
+          ? `Отмена · ${clientLabel}`
+          : `Персональная · ${clientLabel}`,
         startAt: booking.startAt.toISOString(),
         endAt: booking.endAt.toISOString(),
         clientId: booking.clientId,
-        clientName: `${booking.client.firstName} ${booking.client.lastName}`.trim(),
+        clientName: clientLabel,
         bookingId: booking.id,
         seriesId: booking.seriesId ?? undefined,
         origin: booking.origin,
@@ -508,6 +534,8 @@ export class PersonalTrainingService {
         isComplimentary: booking.isComplimentary || undefined,
         linkedDocExternalId: booking.linkedDocExternalId ?? undefined,
         bookingStatus: booking.status,
+        cancelReason: booking.cancelReason?.trim() || undefined,
+        outsideShift: outsideShift || undefined,
         bufferBeforeMin: booking.bufferBeforeMin || undefined,
         bufferAfterMin: booking.bufferAfterMin || undefined,
         clientIssue:
@@ -529,7 +557,7 @@ export class PersonalTrainingService {
     );
 
     for (const block of openBlocks) {
-      const overlapsBooking = bookings.some((b) => {
+      const overlapsBooking = liveBookings.some((b) => {
         const occ = occupiedRange(b);
         return rangesOverlap(occ.start, occ.end, block.startAt, block.endAt);
       });
@@ -543,8 +571,8 @@ export class PersonalTrainingService {
             : 'DRAFT_SLOT',
         title:
           block.status === AvailabilityBlockStatus.PUBLISHED
-            ? 'Запись вне дежурства'
-            : 'Черновик · вне дежурства',
+            ? 'Свободно'
+            : 'Черновик',
         startAt: block.startAt.toISOString(),
         endAt: block.endAt.toISOString(),
         blockId: block.id,
@@ -588,7 +616,7 @@ export class PersonalTrainingService {
       rangeStart,
       rangeEnd,
       openBlocks,
-      bookings,
+      liveBookings,
       blocks,
     );
 
@@ -2479,6 +2507,10 @@ export class PersonalTrainingService {
         (b) => b.kind === AvailabilityBlockKind.PERSONAL_BLOCK,
       ).length,
       draftBlockCount,
+      pendingSeriesSlots: planned.map((p) => ({
+        startAt: p.startAt.toISOString(),
+        endAt: p.endAt.toISOString(),
+      })),
     };
   }
 

@@ -3,9 +3,14 @@
 import type { TrainerAvailabilityBlock, TrainerCalendarEvent } from '@fitgo/shared-types';
 import { useMemo } from 'react';
 import {
-  eventBlockClass,
-  eventDotClass,
-  eventKindLabel,
+  DAY_OFF_WITH_BOOKING_POLICY,
+  eventRelationNote,
+  eventStateCaption,
+  isCancelledCalendarEvent,
+} from './event-captions';
+import {
+  calendarEventBlockClass,
+  calendarEventDotClass,
 } from './event-kind-styles';
 import {
   dateKey,
@@ -58,6 +63,12 @@ export function ScheduleDayGrid({
   const hasDuty = dayEvents.some((e) => e.kind === 'DUTY');
   const hasWorkSchedule =
     hasDuty || getDayWorkBounds(dateStr, availabilityBlocks) !== null;
+  const hasLiveBooking = dayEvents.some(
+    (e) =>
+      (e.kind === 'PERSONAL' || e.kind === 'GROUP') &&
+      !isCancelledCalendarEvent(e),
+  );
+  const dayOffWithBooking = !hasWorkSchedule && hasLiveBooking;
 
   const timeLabels = useMemo(
     () => generateTimeLabels(bounds.start, bounds.end),
@@ -75,7 +86,7 @@ export function ScheduleDayGrid({
       <div className="rounded-xl border border-slate-700/80 bg-slate-900/40 px-4 py-12 text-center">
         <p className="text-slate-400">На этот день график не задан</p>
         <p className="mt-2 text-sm text-slate-500">
-          Откройте «График работы», чтобы указать часы приёма
+          Смену ставит администратор. Тренер может добавить ПТ в любое время.
         </p>
       </div>
     );
@@ -83,6 +94,11 @@ export function ScheduleDayGrid({
 
   return (
     <div className="overflow-x-auto rounded-xl border border-slate-700/80 bg-slate-900/40 shadow-lg">
+      {dayOffWithBooking ? (
+        <p className="border-b border-violet-500/25 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">
+          {DAY_OFF_WITH_BOOKING_POLICY}
+        </p>
+      ) : null}
       <div className="flex min-w-[280px]">
         <div className="admin-time-rail sticky left-0 z-20 w-14 shrink-0 border-r border-slate-700/80 bg-slate-900/95">
           <div className="h-[52px] border-b border-slate-700/80" />
@@ -105,19 +121,22 @@ export function ScheduleDayGrid({
         <div className="min-w-0 flex-1">
           <div className="h-[52px] border-b border-slate-700/80 px-3 py-2 text-center">
             <p className="truncate text-sm font-semibold text-slate-100">
-              {date.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'short' })}
+              {date.toLocaleDateString('ru-RU', {
+                weekday: 'long',
+                day: 'numeric',
+                month: 'short',
+              })}
             </p>
-            {hasWorkSchedule && (
+            {hasWorkSchedule ? (
               <p className="text-[10px] text-emerald-400">
                 {minutesToTime(bounds.start)} – {minutesToTime(bounds.end)}
               </p>
-            )}
+            ) : dayOffWithBooking ? (
+              <p className="text-[10px] text-violet-300">нет смены · запись разрешена</p>
+            ) : null}
           </div>
 
-          <div
-            className="relative"
-            style={{ height: gridHeight }}
-          >
+          <div className="relative" style={{ height: gridHeight }}>
             {timeLabels.map((m) => (
               <div
                 key={m}
@@ -136,18 +155,25 @@ export function ScheduleDayGrid({
                 style={{
                   top: topPxFromMinutes(region.start, bounds.start),
                   height:
-                    ((region.end - region.start) / GRID_SLOT_MINUTES) * SLOT_HEIGHT_PX,
+                    ((region.end - region.start) / GRID_SLOT_MINUTES) *
+                    SLOT_HEIGHT_PX,
                 }}
                 title="Пересечение по времени"
               />
             ))}
 
             {dayEvents.map((event) => {
-              const layout = getEventLayout(dateStr, bounds, event.startAt, event.endAt);
+              const layout = getEventLayout(
+                dateStr,
+                bounds,
+                event.startAt,
+                event.endAt,
+              );
               if (!layout) return null;
 
               const endMin = minutesFromIso(dateStr, event.endAt);
-              const showKind = layout.height >= 44;
+              const caption = eventStateCaption(event);
+              const note = eventRelationNote(event);
 
               return (
                 <button
@@ -158,13 +184,13 @@ export function ScheduleDayGrid({
                     e.stopPropagation();
                     onSelectEvent?.(event);
                   }}
-                  className={`absolute left-1 right-1 z-10 overflow-hidden rounded px-1.5 py-1 text-left text-[10px] leading-tight shadow-sm transition hover:ring-1 hover:ring-slate-500 ${eventBlockClass(event.kind)}`}
+                  className={`absolute left-1 right-1 z-10 overflow-hidden rounded px-1.5 py-1 text-left text-[10px] leading-tight shadow-sm transition hover:ring-1 hover:ring-slate-500 ${calendarEventBlockClass(event)}`}
                   style={{ top: layout.top, height: layout.height }}
-                  title={event.title}
+                  title={`${event.title} · ${caption}`}
                 >
                   <div className="flex items-center gap-1">
                     <span
-                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${eventDotClass(event.kind)}`}
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${calendarEventDotClass(event)}`}
                     />
                     <span className="font-semibold">
                       {formatTime(event.startAt)}
@@ -172,6 +198,10 @@ export function ScheduleDayGrid({
                     </span>
                   </div>
                   <span className="block truncate font-medium">{event.title}</span>
+                  <span className="block truncate opacity-90">{caption}</span>
+                  {note ? (
+                    <span className="block truncate opacity-70">{note}</span>
+                  ) : null}
                   {event.clientIssue && event.clientIssue !== 'NONE' ? (
                     <span className="block truncate text-amber-300/90">
                       Нет в 1С — ждёт привязки
@@ -182,11 +212,6 @@ export function ScheduleDayGrid({
                       {event.ptControlLabel}
                     </span>
                   ) : null}
-                  {showKind && (
-                    <span className="block truncate opacity-75">
-                      {eventKindLabel(event.kind)}
-                    </span>
-                  )}
                 </button>
               );
             })}

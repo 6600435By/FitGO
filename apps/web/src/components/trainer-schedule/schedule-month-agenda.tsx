@@ -13,9 +13,14 @@ import {
 import { ru } from 'date-fns/locale';
 import { useMemo } from 'react';
 import {
-  eventBlockClass,
-  eventDotClass,
-  eventKindLabel,
+  DAY_OFF_WITH_BOOKING_POLICY,
+  eventRelationNote,
+  eventStateCaption,
+  isCancelledCalendarEvent,
+} from './event-captions';
+import {
+  calendarEventBlockClass,
+  calendarEventDotClass,
 } from './event-kind-styles';
 import { dateKey, getDayWorkBounds } from './schedule-grid';
 
@@ -106,7 +111,10 @@ export function ScheduleMonthAgenda({
           <span className="h-3 w-3 rounded bg-fitgo-500/8" /> Низкая
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="h-3 w-3 rounded bg-slate-950/70" /> Выходной
+          <span className="h-3 w-3 rounded bg-slate-950/70" /> Нет смены
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded bg-violet-500/25" /> Вне смены · разрешено
         </span>
       </div>
 
@@ -127,7 +135,9 @@ export function ScheduleMonthAgenda({
               const key = dateKey(day);
               const dayEvents = eventsByDay.get(key) ?? [];
               const busyCount = dayEvents.filter(
-                (e) => e.kind === 'PERSONAL' || e.kind === 'GROUP',
+                (e) =>
+                  (e.kind === 'PERSONAL' || e.kind === 'GROUP') &&
+                  !isCancelledCalendarEvent(e),
               ).length;
               const inMonth = isSameMonth(day, date);
               const isToday = isSameDay(day, today);
@@ -135,6 +145,7 @@ export function ScheduleMonthAgenda({
               const hasDuty = dayEvents.some((e) => e.kind === 'DUTY');
               const hasWork =
                 hasDuty || getDayWorkBounds(key, availabilityBlocks) !== null;
+              const dayOffWithBooking = !hasWork && busyCount > 0;
               const level = loadLevel(busyCount);
 
               return (
@@ -142,11 +153,14 @@ export function ScheduleMonthAgenda({
                   key={key}
                   type="button"
                   onClick={() => onSelectDay?.(day)}
-                  className={`min-h-[72px] border-r border-slate-800/40 p-1 text-left last:border-r-0 sm:min-h-[88px] ${loadBg(
-                    level,
-                    isWeekend,
-                    hasWork,
-                  )} ${!inMonth ? 'opacity-40' : ''} ${
+                  title={
+                    dayOffWithBooking ? DAY_OFF_WITH_BOOKING_POLICY : undefined
+                  }
+                  className={`min-h-[72px] border-r border-slate-800/40 p-1 text-left last:border-r-0 sm:min-h-[88px] ${
+                    dayOffWithBooking
+                      ? 'bg-violet-500/15'
+                      : loadBg(level, isWeekend, hasWork)
+                  } ${!inMonth ? 'opacity-40' : ''} ${
                     isToday ? 'ring-1 ring-inset ring-fitgo-500/50' : ''
                   } hover:brightness-110`}
                 >
@@ -166,28 +180,37 @@ export function ScheduleMonthAgenda({
                       </span>
                     )}
                   </div>
-                  {!hasWork && inMonth && !isWeekend && (
-                    <p className="mt-0.5 text-[9px] text-slate-500">нет графика</p>
-                  )}
+                  {!hasWork && inMonth && dayOffWithBooking ? (
+                    <p className="mt-0.5 text-[9px] text-violet-300">
+                      вне смены · разрешено
+                    </p>
+                  ) : !hasWork && inMonth ? (
+                    <p className="mt-0.5 text-[9px] text-slate-500">нет смены</p>
+                  ) : null}
                   <div className="mt-0.5 space-y-0.5">
-                    {dayEvents.slice(0, 2).map((ev) => (
-                      <div
-                        key={ev.id}
-                        className={`truncate rounded px-0.5 text-[9px] leading-tight sm:text-[10px] ${eventBlockClass(ev.kind)}`}
-                        title={ev.title}
-                      >
-                        <span
-                          className={`mr-0.5 inline-block h-1 w-1 rounded-full ${eventDotClass(ev.kind)}`}
-                        />
-                        {new Date(ev.startAt).toLocaleTimeString('ru-RU', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}{' '}
-                        {ev.title}
-                      </div>
-                    ))}
+                    {dayEvents.slice(0, 2).map((ev) => {
+                      const caption = eventStateCaption(ev);
+                      return (
+                        <div
+                          key={ev.id}
+                          className={`truncate rounded px-0.5 text-[9px] leading-tight sm:text-[10px] ${calendarEventBlockClass(ev)}`}
+                          title={`${ev.title} · ${caption}`}
+                        >
+                          <span
+                            className={`mr-0.5 inline-block h-1 w-1 rounded-full ${calendarEventDotClass(ev)}`}
+                          />
+                          {new Date(ev.startAt).toLocaleTimeString('ru-RU', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}{' '}
+                          {caption}
+                        </div>
+                      );
+                    })}
                     {dayEvents.length > 2 && (
-                      <p className="text-[9px] text-slate-500">+{dayEvents.length - 2}</p>
+                      <p className="text-[9px] text-slate-500">
+                        +{dayEvents.length - 2}
+                      </p>
                     )}
                   </div>
                 </button>
@@ -210,16 +233,23 @@ export function ScheduleMonthAgenda({
                   <button
                     type="button"
                     onClick={() => onSelectEvent?.(event)}
-                    className={`card w-full text-left ${eventBlockClass(event.kind)} border-l-4`}
+                    className={`card w-full text-left ${calendarEventBlockClass(event)} border-l-4`}
                   >
                     <p className="text-sm font-medium">{event.title}</p>
                     <p className="mt-0.5 text-xs text-slate-400">
-                      {format(new Date(event.startAt), 'd MMM, HH:mm', { locale: ru })}
+                      {format(new Date(event.startAt), 'd MMM, HH:mm', {
+                        locale: ru,
+                      })}
                       {' — '}
                       {format(new Date(event.endAt), 'HH:mm', { locale: ru })}
                       {' · '}
-                      {eventKindLabel(event.kind)}
+                      {eventStateCaption(event)}
                     </p>
+                    {eventRelationNote(event) ? (
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {eventRelationNote(event)}
+                      </p>
+                    ) : null}
                   </button>
                 </li>
               ))}

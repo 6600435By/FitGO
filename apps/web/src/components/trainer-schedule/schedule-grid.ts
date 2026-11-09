@@ -174,12 +174,20 @@ export type MinuteInterval = { start: number; end: number };
 
 export function getOverlapRegions(
   dateStr: string,
-  events: { startAt: string; endAt: string }[],
+  events: Array<{
+    startAt: string;
+    endAt: string;
+    bookingStatus?: string;
+    kind?: string;
+  }>,
 ): MinuteInterval[] {
   type Ev = { t: number; delta: number };
   const points: Ev[] = [];
 
   for (const event of events) {
+    // Cancelled bookings do not count as a double with a live plan / slot.
+    if (event.bookingStatus === 'CANCELLED') continue;
+    if (event.kind === 'DUTY') continue;
     const start = minutesFromIso(dateStr, event.startAt);
     const end = minutesFromIso(dateStr, event.endAt);
     if (start === null || end === null || end <= start) continue;

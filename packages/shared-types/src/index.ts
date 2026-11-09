@@ -837,6 +837,8 @@ export interface TrainerClientSession {
   awaitingConfirmation: boolean;
   goalsCount: number;
   hasWorkoutSheet: boolean;
+  /** Present when status is CANCELLED and a reason was stored. */
+  cancelReason?: string;
 }
 
 export interface TrainerWorkSlotInput {
@@ -882,6 +884,13 @@ export interface TrainerCalendarEvent {
   linkedDocExternalId?: string | null;
   /** Booking lifecycle status. */
   bookingStatus?: string;
+  /** Cancel reason when bookingStatus is CANCELLED. */
+  cancelReason?: string;
+  /**
+   * Personal booking on a day without admin duty and without published
+   * open hours — trainer may still add PT anytime.
+   */
+  outsideShift?: boolean;
   /** PT: CRM link / phone issue on the booking. */
   clientIssue?: import('./pt-timesheet').PtClientIssue;
   /** When trainer_pt_control: control / document status for FitGO PT. */
@@ -924,6 +933,8 @@ export interface SchedulePublishSummary {
   holdCount: number;
   blockCount: number;
   draftBlockCount: number;
+  /** Series slots that would appear on publish (no prior row, incl. cancelled). */
+  pendingSeriesSlots?: Array<{ startAt: string; endAt: string }>;
 }
 
 export interface PersonalBookingSeriesInput {

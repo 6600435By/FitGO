@@ -481,7 +481,14 @@ export default function TrainerClientDetailPage() {
               Следующий шаг · {formatDateTime(nextStep.startAt)}
             </Link>
           ) : (
-            <span className="text-slate-500">Следующее занятие не назначено</span>
+            <Link
+              href={`/trainer/schedule?clientId=${encodeURIComponent(id)}${
+                returnDate ? `&date=${encodeURIComponent(returnDate)}` : ''
+              }`}
+              className="text-fitgo-400 hover:text-fitgo-300"
+            >
+              Записать на следующее занятие
+            </Link>
           )}
         </div>
         <p className="text-xs text-slate-500">
@@ -632,6 +639,9 @@ export default function TrainerClientDetailPage() {
                           Тренировочный лист заполнен
                         </p>
                       )}
+                      {s.status === 'CANCELLED' && s.cancelReason ? (
+                        <p className="text-xs text-rose-300/90">{s.cancelReason}</p>
+                      ) : null}
                     </div>
                     <span
                       className={`shrink-0 rounded-full px-2 py-1 text-xs ${sessionStatusColor(s.status)}`}

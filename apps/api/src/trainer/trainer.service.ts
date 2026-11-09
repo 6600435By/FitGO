@@ -246,6 +246,10 @@ export class TrainerService {
         hasWorkoutSheet: workoutSheetHasData(
           normalizeWorkoutSheet(booking.workoutSheet),
         ),
+        cancelReason:
+          status === 'CANCELLED' && booking.cancelReason?.trim()
+            ? booking.cancelReason.trim()
+            : undefined,
       };
     });
   }
