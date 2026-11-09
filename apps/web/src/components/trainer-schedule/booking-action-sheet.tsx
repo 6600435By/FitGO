@@ -154,12 +154,21 @@ export function BookingActionSheet({
     event.ptFlow === 'CLUB' ||
     Boolean(event.linkedDocExternalId) ||
     !isPersonalLedger;
-  /** Hard-delete only personal club ledger without gift / 1C doc. */
+  const ended =
+    Boolean(event.endAt) && new Date(event.endAt).getTime() <= Date.now();
+  const clientMissed =
+    event.bookingStatus === 'CANCELLED' ||
+    (ended && event.origin === 'CLIENT_BOOKED');
+  /** Hard-delete: own create, or client booking after no-show/cancel; no 1C doc. */
   const canHardDelete =
     Boolean(me?.trainerClub) &&
     event.kind === 'PERSONAL' &&
     Boolean(event.bookingId) &&
-    !controlledByAdmin;
+    !event.isComplimentary &&
+    !event.linkedDocExternalId &&
+    (event.origin === 'TRAINER_ASSIGNED' ||
+      (event.origin === 'CLIENT_BOOKED' && clientMissed) ||
+      (!event.origin && isPersonalLedger && !controlledByAdmin));
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -542,8 +551,8 @@ export function BookingActionSheet({
               Удаление
             </p>
             <p className="text-xs text-zinc-500">
-              Только личная запись без документа 1С и без подарка. Списание с
-              пакета вернётся клиенту.
+              Свои записи или запись клиента после неявки/отмены. Без документа
+              1С и без подарка. Списание с пакета вернётся клиенту.
             </p>
             <Button
               type="button"

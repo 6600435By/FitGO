@@ -23,7 +23,10 @@ import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { createBookingControlApi } from '@/lib/booking-control-api';
-import { createTrainerBookingControlApi } from '@/lib/trainer-booking-control-api';
+import {
+  createTrainerBookingControlApi,
+  trainerDeletePtBookingFromControl,
+} from '@/lib/trainer-booking-control-api';
 import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 import { cn } from '@/lib/utils';
 
@@ -590,6 +593,9 @@ export function ClubSchedulePage({
                   if (!token) throw new Error('Нет сессии');
                   await api.adminCancelSpaBooking(token, bookingId);
                 }
+          }
+          deletePtBooking={
+            isTrainer ? trainerDeletePtBookingFromControl : undefined
           }
           onDetailClose={() => {
             setOpenSession(null);

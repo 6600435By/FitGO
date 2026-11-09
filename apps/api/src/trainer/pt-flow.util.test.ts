@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import {
   canChoosePtFlow,
+  canClubTrainerDeletePtBooking,
   isPersonalPtBooking,
   resolvePtFlow,
 } from './pt-flow.util';
@@ -34,6 +35,43 @@ assert.equal(
     { ptFlow: null },
     { trainerClub: true, trainerStaff: true },
   ),
+  false,
+);
+
+assert.equal(
+  canClubTrainerDeletePtBooking({
+    trainerId: 't1',
+    trainerClub: true,
+    origin: 'TRAINER_ASSIGNED',
+  }),
+  true,
+);
+assert.equal(
+  canClubTrainerDeletePtBooking({
+    trainerId: 't1',
+    trainerClub: true,
+    origin: 'CLIENT_BOOKED',
+    status: 'CONFIRMED',
+    endAt: new Date(Date.now() + 3600_000),
+  }),
+  false,
+);
+assert.equal(
+  canClubTrainerDeletePtBooking({
+    trainerId: 't1',
+    trainerClub: true,
+    origin: 'CLIENT_BOOKED',
+    usageStatus: 'NO_SHOW',
+  }),
+  true,
+);
+assert.equal(
+  canClubTrainerDeletePtBooking({
+    trainerId: 't1',
+    trainerClub: true,
+    origin: 'TRAINER_ASSIGNED',
+    linkedDocExternalId: 'doc-1',
+  }),
   false,
 );
 

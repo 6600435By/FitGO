@@ -554,41 +554,49 @@ export class FloorStaffHomeService {
     };
 
     const monthThroughToday = { gte: cur.start, lte: dayEnd };
+    const hasOnex = performerCodes.length > 0;
+    const needsGroupMonth = hasOnex && (isGp || isReformer);
 
     const [todayRaw, curRaw, slots, todayFitgoPt] = await Promise.all([
-      this.prisma.onexClassSession.findMany({
-        where: {
-          ...performerWhere,
-          startAt: { gte: dayStart, lte: dayEnd },
-        },
-        orderBy: { startAt: 'asc' },
-      }),
-      this.prisma.onexClassSession.findMany({
-        where: {
-          ...performerWhere,
-          startAt: monthThroughToday,
-        },
-        select: {
-          kind: true,
-          externalId: true,
-          status: true,
-          title: true,
-          roomTitle: true,
-          attendedCount: true,
-          bookedCount: true,
-          capacity: true,
-          members: {
-            select: { attendance: true, cancelled: true },
-          },
-        },
-      }),
-      this.prisma.clubScheduleSlot.findMany({
-        where: {
-          clubId,
-          startAt: { gte: dayStart, lte: dayEnd },
-        },
-        select: { externalId: true, capacity: true },
-      }),
+      hasOnex
+        ? this.prisma.onexClassSession.findMany({
+            where: {
+              ...performerWhere,
+              startAt: { gte: dayStart, lte: dayEnd },
+            },
+            orderBy: { startAt: 'asc' },
+          })
+        : Promise.resolve([]),
+      needsGroupMonth
+        ? this.prisma.onexClassSession.findMany({
+            where: {
+              ...performerWhere,
+              startAt: monthThroughToday,
+            },
+            select: {
+              kind: true,
+              externalId: true,
+              status: true,
+              title: true,
+              roomTitle: true,
+              attendedCount: true,
+              bookedCount: true,
+              capacity: true,
+              members: {
+                select: { attendance: true, cancelled: true },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      hasOnex
+        ? this.prisma.clubScheduleSlot.findMany({
+            where: {
+              clubId,
+              startAt: { gte: dayStart, lte: dayEnd },
+            },
+            select: { externalId: true, capacity: true },
+          })
+        : Promise.resolve([]),
       hasPt
         ? this.prisma.personalTrainingBooking.findMany({
             where: {
@@ -669,67 +677,88 @@ export class FloorStaffHomeService {
     // 1C PT (incl. gift) must not appear here: no trainer-confirm action, and
     // wrongly counting them made home show «9» while the card had nothing to tap.
     const pendingLookback = new Date(now.getTime() - 45 * 86400_000);
-    const pastGroupRaw = await this.prisma.onexClassSession.findMany({
-      where: {
-        ...performerWhere,
-        kind: OnexClassKind.GROUP,
-        status: { not: OnexClassStatus.CANCELLED },
-        startAt: {
-          gte: pendingLookback,
-          lte: now,
-        },
-      },
-      orderBy: { startAt: 'asc' },
-      take: 200,
-    });
-    const pastGroups = pastGroupRaw.filter(keepSession);
 
-    const sessionKeys = pastGroups.map((s) => `1c:${s.externalId}`);
-    const approvals = sessionKeys.length
-      ? await this.prisma.groupClassApproval.findMany({
-          where: { clubId, sessionKey: { in: sessionKeys } },
-        })
-      : [];
-    const approvalMap = new Map(approvals.map((a) => [a.sessionKey, a]));
+    type PastPtRow = {
+      id: string;
+      startAt: Date;
+      client: { firstName: string; lastName: string } | null;
+    };
 
-    const pendingMeItems: FloorStaffControlItem[] = [];
-    let pendingAdmin = 0;
-    for (const s of pastGroups) {
-      if (s.status === OnexClassStatus.SCHEDULED && s.endAt && s.endAt > now) {
-        continue;
+    const loadPastGroups = async () => {
+      if (!hasOnex || (!isGp && !isReformer)) {
+        return {
+          pendingMeItems: [] as FloorStaffControlItem[],
+          pendingAdmin: 0,
+        };
       }
-      const key = `1c:${s.externalId}`;
-      const a = approvalMap.get(key);
-      if (a?.overrideApprovedAt || a?.adminApprovedAt) continue;
-      if (a?.trainerApprovedAt) {
-        pendingAdmin++;
-        continue;
-      }
-      pendingMeItems.push({
-        sessionKey: key,
-        title: s.title,
-        startAt: s.startAt.toISOString(),
-        subtitle: s.roomTitle ?? undefined,
-      });
-    }
-
-    // FitGO PT — SessionApproval (performer → admin). Skip gifts: no trainer
-    // mark required (same sticky «Подарочная ПТ» that clogged the old queue).
-    if (hasPt) {
-      const pastPt = await this.prisma.personalTrainingBooking.findMany({
+      const pastGroupRaw = await this.prisma.onexClassSession.findMany({
         where: {
-          trainerId: user.sub,
-          isComplimentary: false,
-          status: { not: PersonalBookingStatus.CANCELLED },
-          startAt: { gte: pendingLookback, lte: now },
-          endAt: { lte: now },
-        },
-        include: {
-          client: { select: { firstName: true, lastName: true } },
+          ...performerWhere,
+          kind: OnexClassKind.GROUP,
+          status: { not: OnexClassStatus.CANCELLED },
+          startAt: {
+            gte: pendingLookback,
+            lte: now,
+          },
         },
         orderBy: { startAt: 'asc' },
         take: 200,
       });
+      const pastGroups = pastGroupRaw.filter(keepSession);
+      const sessionKeys = pastGroups.map((s) => `1c:${s.externalId}`);
+      const approvals = sessionKeys.length
+        ? await this.prisma.groupClassApproval.findMany({
+            where: { clubId, sessionKey: { in: sessionKeys } },
+          })
+        : [];
+      const approvalMap = new Map(approvals.map((a) => [a.sessionKey, a]));
+      const pendingMeItems: FloorStaffControlItem[] = [];
+      let pendingAdmin = 0;
+      for (const s of pastGroups) {
+        if (
+          s.status === OnexClassStatus.SCHEDULED &&
+          s.endAt &&
+          s.endAt > now
+        ) {
+          continue;
+        }
+        const key = `1c:${s.externalId}`;
+        const a = approvalMap.get(key);
+        if (a?.overrideApprovedAt || a?.adminApprovedAt) continue;
+        if (a?.trainerApprovedAt) {
+          pendingAdmin++;
+          continue;
+        }
+        pendingMeItems.push({
+          sessionKey: key,
+          title: s.title,
+          startAt: s.startAt.toISOString(),
+          subtitle: s.roomTitle ?? undefined,
+        });
+      }
+      return { pendingMeItems, pendingAdmin };
+    };
+
+    const loadPastPt = async (): Promise<{
+      items: FloorStaffControlItem[];
+      pendingAdmin: number;
+    }> => {
+      if (!hasPt) return { items: [], pendingAdmin: 0 };
+      const pastPt: PastPtRow[] =
+        await this.prisma.personalTrainingBooking.findMany({
+          where: {
+            trainerId: user.sub,
+            isComplimentary: false,
+            status: { not: PersonalBookingStatus.CANCELLED },
+            startAt: { gte: pendingLookback, lte: now },
+            endAt: { lte: now },
+          },
+          include: {
+            client: { select: { firstName: true, lastName: true } },
+          },
+          orderBy: { startAt: 'asc' },
+          take: 200,
+        });
       const ptIds = pastPt.map((b) => b.id);
       const ptApprovals = ptIds.length
         ? await this.prisma.sessionApproval.findMany({
@@ -741,6 +770,8 @@ export class FloorStaffHomeService {
           })
         : [];
       const ptApprovalById = new Map(ptApprovals.map((a) => [a.bookingId, a]));
+      const items: FloorStaffControlItem[] = [];
+      let pendingAdmin = 0;
       for (const b of pastPt) {
         const row = ptApprovalById.get(b.id);
         if (row?.overrideApprovedAt || row?.adminApprovedAt) continue;
@@ -751,15 +782,29 @@ export class FloorStaffHomeService {
         const clientName = b.client
           ? `${b.client.firstName} ${b.client.lastName}`.trim()
           : undefined;
-        pendingMeItems.push({
+        items.push({
           sessionKey: `fitgo:PT:${b.id}`,
           title: 'Персональная тренировка',
           startAt: b.startAt.toISOString(),
           subtitle: clientName,
         });
       }
-      pendingMeItems.sort((a, b) => a.startAt.localeCompare(b.startAt));
-    }
+      return { items, pendingAdmin };
+    };
+
+    const [groupPending, ptPending, monthAnalytics] = await Promise.all([
+      loadPastGroups(),
+      loadPastPt(),
+      this.trainerMonth.forTrainer(clubId, user.sub, cur.from, today, {
+        showReformer: isReformer,
+      }),
+    ]);
+
+    const pendingMeItems = [
+      ...groupPending.pendingMeItems,
+      ...ptPending.items,
+    ].sort((a, b) => a.startAt.localeCompare(b.startAt));
+    const pendingAdmin = groupPending.pendingAdmin + ptPending.pendingAdmin;
 
     const pendingMeKeys = new Set(
       pendingMeItems.map((i) => i.sessionKey),
@@ -829,13 +874,6 @@ export class FloorStaffHomeService {
     };
 
     const curGpStats = gpStats(gpOnly(curSessions));
-    const monthAnalytics = await this.trainerMonth.forTrainer(
-      clubId,
-      user.sub,
-      cur.from,
-      today,
-      { showReformer: isReformer },
-    );
     const sameDayPrev = sameDayPreviousMonthWindow(cur.from, today);
 
     return {

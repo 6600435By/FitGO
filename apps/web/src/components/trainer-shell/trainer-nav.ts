@@ -69,7 +69,7 @@ export function buildTrainerV2Nav(
           href: '/trainer/clients',
           label: 'Клиенты',
           icon: Users,
-          module: 'trainer_crm',
+          // Always visible for «Тренер клуб» dock — CRM flag must not hide the tab.
         },
         {
           href: '/trainer/my-payments',
@@ -100,7 +100,7 @@ export function buildTrainerV2Nav(
           href: crm.href,
           label: crm.label,
           icon: crm.href.includes('clients') ? Users : ClipboardCheck,
-          module: crm.href.includes('clients') ? 'trainer_crm' : undefined,
+          // Clients tab stays for PT cabinets even if trainer_crm module is off.
         },
         {
           href: '/trainer/more',

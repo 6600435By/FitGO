@@ -8,7 +8,7 @@ import {
   type CommandItem,
   cn,
 } from '@fitgo/forma-ui';
-import { Bell, MessageSquare, Search } from 'lucide-react';
+import { ArrowLeft, Bell, MessageSquare, Search } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
@@ -26,6 +26,12 @@ import { useFeatures } from '@/components/features-provider';
 import { PushBridge } from '@/components/push-bridge';
 import { api, type AuthUser } from '@/lib/api';
 import { getToken, getUser, saveAuth } from '@/lib/auth';
+import {
+  locationKey,
+  navStackDepth,
+  popNavLocation,
+  recordNavLocation,
+} from '@/lib/nav-history';
 import {
   buildTrainerV2Nav,
   navItemActive,
@@ -63,6 +69,7 @@ export function TrainerShell({ children }: { children: ReactNode }) {
   const [quickOpen, setQuickOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
+  const [canGoBack, setCanGoBack] = useState(false);
 
   const immersive =
     pathname.startsWith('/trainer/live') ||
@@ -72,6 +79,56 @@ export function TrainerShell({ children }: { children: ReactNode }) {
     () => buildTrainerV2Nav(user, (k) => isEnabled(k as never)),
     [user, isEnabled],
   );
+
+  useEffect(() => {
+    if (immersive) return;
+    const sync = () => {
+      const key = locationKey(
+        window.location.pathname,
+        window.location.search,
+      );
+      recordNavLocation(key);
+      setCanGoBack(navStackDepth() > 1);
+    };
+    sync();
+
+    window.addEventListener('popstate', sync);
+    const hist = window.history;
+    const origPush = hist.pushState.bind(hist);
+    const origReplace = hist.replaceState.bind(hist);
+    hist.pushState = (...args: Parameters<History['pushState']>) => {
+      origPush(...args);
+      sync();
+    };
+    hist.replaceState = (...args: Parameters<History['replaceState']>) => {
+      origReplace(...args);
+      sync();
+    };
+    return () => {
+      window.removeEventListener('popstate', sync);
+      hist.pushState = origPush;
+      hist.replaceState = origReplace;
+    };
+  }, [immersive]);
+
+  useEffect(() => {
+    if (immersive || typeof window === 'undefined') return;
+    const key = locationKey(pathname, window.location.search);
+    recordNavLocation(key);
+    setCanGoBack(navStackDepth() > 1);
+  }, [pathname, immersive]);
+
+  const goBack = useCallback(() => {
+    const prev = popNavLocation();
+    setCanGoBack(navStackDepth() > 1);
+    if (prev) {
+      router.replace(prev);
+      return;
+    }
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      router.back();
+    }
+  }, [router]);
 
   useEffect(() => {
     const token = getToken();
@@ -274,6 +331,16 @@ export function TrainerShell({ children }: { children: ReactNode }) {
             )}
           >
             <div className="flex h-14 items-center gap-2">
+              {canGoBack ? (
+                <button
+                  type="button"
+                  onClick={goBack}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-white/10 text-zinc-200 touch-manipulation hover:bg-white/[0.06] hover:text-white"
+                  aria-label="Назад"
+                >
+                  <ArrowLeft className="h-5 w-5" />
+                </button>
+              ) : null}
               {navMode === 'dock' ? (
                 <Link href="/trainer" className="min-w-0 touch-manipulation">
                   <FormaWordmark size="sm" variant="coach" />

@@ -40,6 +40,10 @@ export function trainerGpHomeCacheKey(userId: string): string {
   return `gp-home:${userId}`;
 }
 
+export function trainerInsightsCacheKey(userId: string): string {
+  return `insights:${userId}`;
+}
+
 export function trainerBookingListCacheKey(
   userId: string,
   from: string,

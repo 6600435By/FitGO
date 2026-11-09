@@ -149,6 +149,11 @@ export interface BookingControlListItem {
    * Admin list hides these; control actions must stay disabled.
    */
   trainerClubPersonal?: boolean;
+  /**
+   * «Тренер клуб» may hard-delete this FitGO PT (own create or client no-show/cancel,
+   * no live 1C document).
+   */
+  canTrainerDelete?: boolean;
 }
 
 /** Live settlement of SPA vs 1C (quota write-off or reception payment). */

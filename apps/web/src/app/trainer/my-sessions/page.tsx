@@ -8,7 +8,10 @@ import { useFeatures } from '@/components/features-provider';
 import { ManagerOriginInbox } from '@/components/manager-rework/manager-origin-inbox';
 import { api } from '@/lib/api';
 import { getUser } from '@/lib/auth';
-import { createTrainerBookingControlApi } from '@/lib/trainer-booking-control-api';
+import {
+  createTrainerBookingControlApi,
+  trainerDeletePtBookingFromControl,
+} from '@/lib/trainer-booking-control-api';
 import { trainerCabinetMode } from '@/lib/trainer-cabinet';
 
 function TrainerMySessionsInner() {
@@ -117,6 +120,7 @@ function TrainerMySessionsInner() {
           initialConducted={initialConducted}
           initialHall={initialHall}
           initialReformer={initialReformer}
+          deletePtBooking={trainerDeletePtBookingFromControl}
         />
       </div>
     </div>

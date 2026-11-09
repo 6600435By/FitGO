@@ -44,27 +44,6 @@ function labelList<T extends string>(
   return values.map((v) => labels[v] ?? v).join(', ');
 }
 
-function messageTemplates(client: TrainerClientDetail) {
-  const name = client.firstName;
-  return [
-    {
-      id: 'renew',
-      label: 'Продление',
-      text: `${name}, пакет скоро закончится — давайте продлим, чтобы не терять ритм тренировок.`,
-    },
-    {
-      id: 'missed',
-      label: 'Давно не видел',
-      text: `${name}, давно не виделись в зале — как самочувствие? Готов подобрать удобное время.`,
-    },
-    {
-      id: 'bday',
-      label: 'День рождения',
-      text: `${name}, с днём рождения! Пусть этот год будет сильным — жду на тренировке.`,
-    },
-  ] as const;
-}
-
 export default function TrainerClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const searchParams = useSearchParams();
@@ -165,11 +144,6 @@ export default function TrainerClientDetailPage() {
       .catch(() => setProgress(null));
   }, [tab, id]);
 
-  const templates = useMemo(
-    () => (client ? messageTemplates(client) : []),
-    [client],
-  );
-
   const addNote = async () => {
     const token = getToken();
     if (!token || !note.trim()) return;
@@ -201,17 +175,6 @@ export default function TrainerClientDetailPage() {
     setWeight('');
     setFeedback('Замер сохранён');
     load();
-  };
-
-  const sendTemplate = async (text: string) => {
-    const token = getToken();
-    if (!token) return;
-    try {
-      await api.trainerSendMessage(token, id, text);
-      setFeedback('Сообщение отправлено');
-    } catch (err) {
-      setFeedback(err instanceof Error ? err.message : 'Не удалось отправить');
-    }
   };
 
   if (error) return <p className="text-red-400">{error}</p>;
@@ -542,22 +505,6 @@ export default function TrainerClientDetailPage() {
               </div>
             </div>
           ) : null}
-
-          <div className="card space-y-2">
-            <h3 className="font-semibold">Шаблоны сообщений</h3>
-            <div className="flex flex-wrap gap-2">
-              {templates.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className="btn-secondary text-sm"
-                  onClick={() => sendTemplate(t.text)}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </div>
 
           <div className="card">
             <h3 className="mb-3 font-semibold">Цели тренера</h3>

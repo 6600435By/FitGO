@@ -59,6 +59,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import {
+  canClubTrainerDeletePtBooking,
   isPersonalPtBooking,
   resolvePtFlow,
   type PtBookingFlowValue,
@@ -2082,8 +2083,11 @@ export class PersonalTrainingService {
   }
 
   /**
-   * Hard-delete a personal ledger PT (no 1C / no gift) owned by «Тренер клуб».
+   * Hard-delete a FitGO PT owned by «Тренер клуб» (no live 1C doc / no gift).
+   * Allowed when the trainer created the booking, or the client booked but
+   * cancelled / no-showed / never arrived after the slot ended.
    * Restores personal-ledger package / debt when the booking was settled.
+   * Removes the row so the client calendar no longer shows it.
    */
   async deleteTrainerPersonalBooking(user: JwtPayload, bookingId: string) {
     const booking = await this.prisma.personalTrainingBooking.findFirst({
@@ -2110,13 +2114,39 @@ export class PersonalTrainingService {
         'Подарочную ПТ нельзя удалить — только отменить. Она на контроле у админа',
       );
     }
+    if (booking.linkedDocExternalId?.trim() || booking.crmDocRef?.trim()) {
+      throw new ForbiddenException(
+        'Запись есть в 1С — удалите/отмените документ в 1С или попросите администратора',
+      );
+    }
+    const attended =
+      booking.usageStatus === ServiceUsageStatus.ATTENDED ||
+      booking.usageStatus === ServiceUsageStatus.CONSUMED ||
+      Boolean(booking.ledgerSettledAt) ||
+      booking.paymentStatus === 'PAID';
+    const clientMissed =
+      booking.usageStatus === ServiceUsageStatus.NO_SHOW ||
+      booking.usageStatus === ServiceUsageStatus.CANCELLED ||
+      booking.status === PersonalBookingStatus.CANCELLED ||
+      (booking.endAt.getTime() <= Date.now() && !attended);
     if (
-      booking.ptFlow === 'CLUB' ||
-      Boolean(booking.linkedDocExternalId) ||
-      !isPersonalPtBooking(booking, booking.trainer)
+      !canClubTrainerDeletePtBooking({
+        trainerId: user.sub,
+        trainerClub: booking.trainer.trainerClub,
+        isComplimentary: booking.isComplimentary,
+        origin: booking.origin,
+        bookedByUserId: booking.bookedByUserId,
+        status: booking.status,
+        usageStatus: booking.usageStatus,
+        endAt: booking.endAt,
+        arrivedCount: attended ? 1 : 0,
+        noShowCount: clientMissed ? 1 : 0,
+        linkedDocExternalId:
+          booking.linkedDocExternalId ?? booking.crmDocRef ?? null,
+      })
     ) {
       throw new ForbiddenException(
-        'Запись с оплатой / списанием через 1С удалить нельзя — измените статус',
+        'Удалить можно свои записи или записи клиента при неявке / отмене',
       );
     }
 

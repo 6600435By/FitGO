@@ -20,7 +20,10 @@ import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import { createBookingControlApi } from '@/lib/booking-control-api';
-import { createTrainerBookingControlApi } from '@/lib/trainer-booking-control-api';
+import {
+  createTrainerBookingControlApi,
+  trainerDeletePtBookingFromControl,
+} from '@/lib/trainer-booking-control-api';
 import {
   resolveViewFilters,
   usePersistViewMemory,
@@ -1197,6 +1200,9 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
           initialSessionKey={peekSession.sessionKey}
           initialFrom={peekSession.from}
           initialTo={peekSession.to}
+          deletePtBooking={
+            role === 'trainer' ? trainerDeletePtBookingFromControl : undefined
+          }
           onDetailClose={() => {
             setPeekSession(null);
             void load();

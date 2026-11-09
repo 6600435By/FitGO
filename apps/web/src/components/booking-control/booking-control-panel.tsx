@@ -383,6 +383,8 @@ type Props = {
   onDetailClose?: () => void;
   /** Cancel FitGO SPA booking that is not locked in 1C. */
   cancelSpaBooking?: (bookingId: string) => Promise<void>;
+  /** Hard-delete FitGO PT («Тренер клуб») when detail.canTrainerDelete. */
+  deletePtBooking?: (bookingId: string) => Promise<void>;
   /**
    * GP trainer: «На контроле» / «Прошли контроль» segments.
    * Past sessions only; default period last 14 days.
@@ -664,6 +666,7 @@ export function BookingControlPanel({
   embedCloseLabel,
   onDetailClose,
   cancelSpaBooking,
+  deletePtBooking,
   approvalSegments: _approvalSegments = false,
   showOpsHints = false,
   spaBookingEditHref,
@@ -1943,6 +1946,26 @@ export function BookingControlPanel({
       load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Не удалось отменить');
+    }
+  };
+
+  const deleteSelectedPt = async () => {
+    if (!selected?.fitgoBookingId || !deletePtBooking) return;
+    if (
+      !window.confirm(
+        'Удалить запись полностью? Она исчезнет у клиента. Это нельзя отменить.',
+      )
+    ) {
+      return;
+    }
+    setMessage('');
+    try {
+      await deletePtBooking(selected.fitgoBookingId);
+      setMessage('Запись удалена');
+      closeDetail();
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось удалить');
     }
   };
 
@@ -4847,6 +4870,18 @@ export function BookingControlPanel({
                     onClick={() => void cancelSelectedSpa()}
                   >
                     Удалить запись (нет живого документа в 1С)
+                  </button>
+                ) : null}
+                {selected.kind === 'PT' &&
+                selected.canTrainerDelete &&
+                selected.fitgoBookingId &&
+                deletePtBooking ? (
+                  <button
+                    type="button"
+                    className="btn-secondary w-full text-sm text-rose-300"
+                    onClick={() => void deleteSelectedPt()}
+                  >
+                    Удалить запись
                   </button>
                 ) : null}
                 {selected.kind !== 'GROUP' &&

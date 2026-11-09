@@ -103,7 +103,10 @@ import { FitnessService } from '../fitness/fitness.service';
 import { matchOnexToScheduleSlots } from '../club-schedule/trainer-schedule.helpers';
 import { SessionApprovalService } from './session-approval.service';
 import { ManagerOriginTasksService } from '../admin-tasks/manager-origin-tasks.service';
-import { isPersonalPtBooking } from '../trainer/pt-flow.util';
+import {
+  canClubTrainerDeletePtBooking,
+  isPersonalPtBooking,
+} from '../trainer/pt-flow.util';
 import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { allocateStaffLogin } from '../auth/staff-login';
@@ -1492,6 +1495,7 @@ export class BookingControlService {
         source: 'FITGO',
         createdAt: b.createdAt,
         bookedByUserId: b.bookedByUserId,
+        origin: b.origin,
         performerName,
         fitgoBookingId: b.id,
         kind: 'PT',
@@ -1508,6 +1512,19 @@ export class BookingControlService {
       const ptLinkHint = personal
         ? undefined
         : await this.buildPtLinkHint(clubId, b);
+      const canTrainerDelete = canClubTrainerDeletePtBooking({
+        trainerId: b.trainerId,
+        trainerClub: b.trainer.trainerClub,
+        isComplimentary: b.isComplimentary,
+        origin: b.origin,
+        bookedByUserId: b.bookedByUserId,
+        status: b.status,
+        usageStatus: b.usageStatus,
+        endAt: b.endAt,
+        arrivedCount: counts.arrivedCount,
+        noShowCount: counts.noShowCount,
+        linkedDocExternalId: b.linkedDocExternalId ?? b.crmDocRef,
+      });
 
       return {
         sessionKey,
@@ -1550,6 +1567,7 @@ export class BookingControlService {
         history,
         ptLinkHint,
         trainerClubPersonal: personal || undefined,
+        canTrainerDelete: canTrainerDelete || undefined,
       };
     }
 

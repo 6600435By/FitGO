@@ -121,6 +121,16 @@ export function createTrainerBookingControlApi(): BookingControlApi {
   };
 }
 
+/** Wire PT hard-delete for BookingControlPanel («Тренер клуб»). */
+export function trainerDeletePtBookingFromControl(bookingId: string) {
+  const token = getToken();
+  if (!token) return Promise.reject(new Error('Нет сессии'));
+  return api.trainerDeletePersonalBooking(token, bookingId).then(() => {
+    const uid = getUser()?.id;
+    if (uid) trainerCacheInvalidate(`bc-list:${uid}:`);
+  });
+}
+
 /** Prefetch helper: cached list for instant paint on /trainer/my-sessions. */
 export function peekTrainerBookingListCache(
   from: string,

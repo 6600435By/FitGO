@@ -41,6 +41,7 @@ import {
   trainerCacheGet,
   trainerCacheSet,
   trainerGpHomeCacheKey,
+  trainerInsightsCacheKey,
 } from '@/lib/trainer-fetch-cache';
 import {
   buildMotivationRecords,
@@ -626,9 +627,19 @@ export function TrainerTodayHome({
     return trainerCacheGet<FloorStaffHome>(trainerGpHomeCacheKey(uid));
   });
   const [insights, setInsights] = useState<TrainerInsightsResponse | null>(
-    null,
+    () => {
+      const uid = getUser()?.id;
+      if (!uid) return null;
+      return trainerCacheGet<TrainerInsightsResponse>(
+        trainerInsightsCacheKey(uid),
+      );
+    },
   );
-  const [insightsLoading, setInsightsLoading] = useState(true);
+  const [insightsLoading, setInsightsLoading] = useState(() => {
+    const uid = getUser()?.id;
+    if (!uid) return true;
+    return !trainerCacheGet(trainerInsightsCacheKey(uid));
+  });
   const [showAllInsights, setShowAllInsights] = useState(false);
   const [error, setError] = useState('');
 
@@ -653,8 +664,11 @@ export function TrainerTodayHome({
 
   const loadInsights = useCallback(() => {
     const token = getToken();
-    if (!token) return;
-    setInsightsLoading(true);
+    const uid = getUser()?.id;
+    if (!token || !uid) return;
+    const cacheKey = trainerInsightsCacheKey(uid);
+    const soft = trainerCacheGet<TrainerInsightsResponse>(cacheKey);
+    if (!soft) setInsightsLoading(true);
     api
       .trainerInsights(token)
       .catch(() => ({
@@ -663,6 +677,7 @@ export function TrainerTodayHome({
       }))
       .then((i) => {
         setInsights(i);
+        trainerCacheSet(cacheKey, i);
       })
       .finally(() => setInsightsLoading(false));
   }, []);

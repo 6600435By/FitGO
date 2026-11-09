@@ -176,7 +176,6 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
           {
             href: '/trainer/clients',
             label: 'Клиенты',
-            module: 'trainer_crm',
           },
         );
       }
@@ -219,7 +218,6 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
         items.push({
           href: '/trainer/clients',
           label: 'Клиенты',
-          module: 'trainer_crm',
         });
       }
       if (showPayroll) {
