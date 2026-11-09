@@ -478,41 +478,71 @@ export default function TrainerMyPaymentsPage() {
       {tab === 'packages' && (
         <div className="space-y-3">
           <BentoCard className="space-y-3 p-4">
-            <p className="text-sm font-medium text-forma-100">Новый шаблон</p>
-            <input
-              className="input"
-              placeholder="Название"
-              value={tplTitle}
-              onChange={(e) => setTplTitle(e.target.value)}
-            />
-            <div className="flex flex-wrap gap-2">
-              <input
-                className="input max-w-[6rem]"
-                placeholder="Трен."
-                value={tplSessions}
-                onChange={(e) => setTplSessions(e.target.value)}
-              />
-              <input
-                className="input max-w-[7rem]"
-                placeholder="Цена BYN"
-                value={tplPrice}
-                onChange={(e) => setTplPrice(e.target.value)}
-              />
-              <input
-                className="input max-w-[7rem]"
-                placeholder="Дней"
-                value={tplDays}
-                onChange={(e) => setTplDays(e.target.value)}
-              />
-              <button
-                type="button"
-                className="btn-primary text-sm"
-                disabled={busy || !tplTitle.trim()}
-                onClick={() => void saveTemplate()}
-              >
-                Добавить
-              </button>
+            <div>
+              <p className="text-sm font-medium text-forma-100">Новый шаблон</p>
+              <p className="mt-1 text-xs text-forma-400">
+                Шаблон — что вы продаёте клиенту: сколько тренировок, за какую
+                сумму и на сколько дней действует пакет.
+              </p>
             </div>
+            <label className="block space-y-1">
+              <span className="text-xs text-forma-400">Название</span>
+              <input
+                className="input"
+                placeholder="Например: Пакет 10 ПТ"
+                value={tplTitle}
+                onChange={(e) => setTplTitle(e.target.value)}
+              />
+            </label>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <label className="block space-y-1">
+                <span className="text-xs text-forma-400">Число тренировок</span>
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  placeholder="10"
+                  value={tplSessions}
+                  onChange={(e) => setTplSessions(e.target.value)}
+                />
+                <span className="text-[11px] text-forma-500">
+                  Сколько занятий в пакете
+                </span>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs text-forma-400">Цена пакета, BYN</span>
+                <input
+                  className="input"
+                  inputMode="decimal"
+                  placeholder="300"
+                  value={tplPrice}
+                  onChange={(e) => setTplPrice(e.target.value)}
+                />
+                <span className="text-[11px] text-forma-500">
+                  Полная сумма за весь пакет
+                </span>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-xs text-forma-400">Срок, дней</span>
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  placeholder="90"
+                  value={tplDays}
+                  onChange={(e) => setTplDays(e.target.value)}
+                />
+                <span className="text-[11px] text-forma-500">
+                  Срок действия с даты продажи; пусто — без срока
+                </span>
+              </label>
+            </div>
+            <button
+              type="button"
+              className="btn-primary text-sm"
+              disabled={busy || !tplTitle.trim()}
+              onClick={() => void saveTemplate()}
+            >
+              Добавить
+            </button>
           </BentoCard>
 
           {data.templates.length === 0 ? (
