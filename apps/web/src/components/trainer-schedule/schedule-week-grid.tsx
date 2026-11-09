@@ -61,7 +61,19 @@ type DragPreview = {
   label: string;
 };
 
-const LONG_PRESS_MS = 280;
+/** Mouse / trackpad / pen: drag after this move; touch: same, or long-press. */
+const DRAG_THRESHOLD_PX = 6;
+const LONG_PRESS_MS = 320;
+
+function formatMoveConfirmWhen(iso: string): string {
+  return new Date(iso).toLocaleString('ru-RU', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 export function ScheduleWeekGrid({
   date,
@@ -87,7 +99,8 @@ export function ScheduleWeekGrid({
     y: number;
     timer: number | null;
   } | null>(null);
-  const movedRef = useRef(false);
+  /** True only after an actual drag started — suppresses the following click. */
+  const suppressClickRef = useRef(false);
   const colEls = useRef<Map<string, HTMLDivElement>>(new Map());
 
   previewRef.current = preview;
@@ -164,8 +177,10 @@ export function ScheduleWeekGrid({
 
   const beginDrag = (event: TrainerCalendarEvent) => {
     if (!onMoveBooking || !canDragEvent(event)) return;
+    if (dragEventRef.current?.id === event.id) return;
+    clearPending();
     dragEventRef.current = event;
-    movedRef.current = true;
+    suppressClickRef.current = true;
     const startMin = minutesFromIso(dateKey(new Date(event.startAt)), event.startAt);
     const day = dateKey(new Date(event.startAt));
     const dur = durationMin(event);
@@ -187,16 +202,16 @@ export function ScheduleWeekGrid({
     const onMove = (e: PointerEvent) => {
       const pending = pendingRef.current;
       if (pending && !dragEventRef.current) {
+        if (pending.pointerId !== e.pointerId) return;
         const dx = e.clientX - pending.x;
         const dy = e.clientY - pending.y;
-        if (Math.hypot(dx, dy) > 12) {
-          clearPending();
-        }
-        return;
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+        beginDrag(pending.event);
+        // Fall through and place preview under the pointer.
       }
       const event = dragEventRef.current;
       if (!event) return;
-      e.preventDefault();
+      if (e.cancelable) e.preventDefault();
       const hit = resolveFromPoint(e.clientX, e.clientY);
       if (!hit) return;
       const evaled = evaluateDrop(event, hit.dayStr, hit.startMin);
@@ -211,27 +226,39 @@ export function ScheduleWeekGrid({
     };
 
     const onUp = (e: PointerEvent) => {
+      const pending = pendingRef.current;
+      if (pending && pending.pointerId !== e.pointerId && !dragEventRef.current) {
+        return;
+      }
       clearPending();
       const event = dragEventRef.current;
       const current = previewRef.current;
       dragEventRef.current = null;
       if (!event || !current) {
         setPreview(null);
+        // Short click / tap: leave suppressClick false so onClick opens the sheet.
         window.setTimeout(() => {
-          movedRef.current = false;
+          suppressClickRef.current = false;
         }, 40);
         return;
       }
-      e.preventDefault();
+      if (e.cancelable) e.preventDefault();
       setPreview(null);
       if (current.valid) {
         const nextStart = isoAtMinutes(current.dayKey, current.startMin);
         if (nextStart !== event.startAt) {
-          onMoveBooking(event, nextStart);
+          const when = formatMoveConfirmWhen(nextStart);
+          const title = event.title?.trim() || 'тренировку';
+          const ok = window.confirm(
+            `Перенести «${title}» на ${when}?`,
+          );
+          if (ok) {
+            onMoveBooking(event, nextStart);
+          }
         }
       }
       window.setTimeout(() => {
-        movedRef.current = false;
+        suppressClickRef.current = false;
       }, 40);
     };
 
@@ -260,7 +287,8 @@ export function ScheduleWeekGrid({
     <div className="relative overflow-x-auto rounded-xl border border-slate-700/80 bg-slate-900/40 shadow-lg [-webkit-overflow-scrolling:touch]">
       {onMoveBooking ? (
         <p className="border-b border-slate-800 px-3 py-1.5 text-[11px] text-slate-500">
-          Удерживайте запись и перетащите на день или время (шаг 15 мин)
+          Клик — открыть, перетаскивание — перенести (сдвиг или удержание; шаг
+          15 мин; перед сохранением спросим подтверждение)
         </p>
       ) : null}
       {preview ? (
@@ -422,27 +450,32 @@ export function ScheduleWeekGrid({
                       onPointerDown={(ev) => {
                         if (!draggable) return;
                         if (ev.button !== 0) return;
-                        ev.currentTarget.setPointerCapture(ev.pointerId);
+                        ev.stopPropagation();
+                        // Do not begin drag here — wait for threshold or hold
+                        // so a short click can open the workout sheet.
+                        suppressClickRef.current = false;
                         clearPending();
-                        const isTouch = ev.pointerType === 'touch';
+                        try {
+                          ev.currentTarget.setPointerCapture(ev.pointerId);
+                        } catch {
+                          /* ignore */
+                        }
                         pendingRef.current = {
                           event,
                           pointerId: ev.pointerId,
                           x: ev.clientX,
                           y: ev.clientY,
-                          timer: isTouch
-                            ? window.setTimeout(() => {
-                                beginDrag(event);
-                              }, LONG_PRESS_MS)
-                            : null,
+                          timer: window.setTimeout(() => {
+                            const still =
+                              pendingRef.current?.pointerId === ev.pointerId &&
+                              pendingRef.current.event.id === event.id;
+                            if (still) beginDrag(event);
+                          }, LONG_PRESS_MS),
                         };
-                        if (!isTouch) {
-                          beginDrag(event);
-                        }
                       }}
                       onClick={(ev) => {
                         ev.stopPropagation();
-                        if (movedRef.current) return;
+                        if (suppressClickRef.current) return;
                         onSelectEvent?.(event);
                       }}
                       className={`absolute left-0.5 right-0.5 z-10 overflow-hidden rounded px-0.5 py-0.5 text-left text-[9px] leading-tight shadow-sm hover:ring-1 hover:ring-slate-500 sm:text-[10px] ${calendarEventBlockClass(event)} ${
@@ -451,7 +484,7 @@ export function ScheduleWeekGrid({
                       style={{ top: layout.top, height: layout.height }}
                       title={
                         draggable
-                          ? `${event.title} · ${caption} · удерживайте и перетащите`
+                          ? `${event.title} · ${caption} · клик — открыть, перетаскивание — перенести`
                           : `${event.title} · ${caption}`
                       }
                     >
