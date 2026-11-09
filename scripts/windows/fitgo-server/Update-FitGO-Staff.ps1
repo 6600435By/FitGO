@@ -9,8 +9,6 @@ if (-not $FitGoRoot) {
   $FitGoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 }
 
-. (Join-Path $PSScriptRoot 'Deploy-AppMaintenance.ps1')
-
 function Resolve-GitExe {
   $cmd = Get-Command git -ErrorAction SilentlyContinue
   if ($cmd) { return $cmd.Source }
@@ -22,9 +20,8 @@ function Resolve-GitExe {
   return $null
 }
 
-Deploy-AppMaintenancePage -RepoRoot $FitGoRoot
-Stop-Service FitGO-Web -ErrorAction SilentlyContinue
-
+# Pull BEFORE dot-sourcing Deploy-AppMaintenance.ps1 so a broken server copy
+# cannot block getting the fix from git.
 Push-Location $FitGoRoot
 try {
   if (-not $SkipPull -and (Test-Path (Join-Path $FitGoRoot '.git'))) {
@@ -34,6 +31,17 @@ try {
       if ($LASTEXITCODE -ne 0) { throw "git pull failed" }
     }
   }
+} finally {
+  Pop-Location
+}
+
+. (Join-Path $PSScriptRoot 'Deploy-AppMaintenance.ps1')
+
+Deploy-AppMaintenancePage -RepoRoot $FitGoRoot
+Stop-Service FitGO-Web -ErrorAction SilentlyContinue
+
+Push-Location $FitGoRoot
+try {
   pnpm install
   pnpm --filter @fitgo/shared-types build
   pnpm --filter @fitgo/web build
