@@ -26,6 +26,10 @@ import {
   isTrainerStaffTimesheetPath,
   trainerCabinetMode,
 } from '@/lib/trainer-cabinet';
+import {
+  readTrainerOnboardedMark,
+  subscribeTrainerOnboarded,
+} from '@/lib/trainer-onboarding';
 
 type NavItem = {
   href: string;
@@ -72,9 +76,12 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(() => getUser());
-  const [onboarded, setOnboarded] = useState<boolean | null>(null);
+  const [onboarded, setOnboarded] = useState<boolean | null>(() =>
+    readTrainerOnboardedMark() ? true : null,
+  );
 
   const uiV2 = isEnabled('trainer_ui_v2');
+  const onWelcome = pathname.startsWith('/trainer/welcome');
 
   useEffect(() => {
     const token = getToken();
@@ -93,8 +100,14 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useEffect(() => subscribeTrainerOnboarded(() => setOnboarded(true)), []);
+
   useEffect(() => {
     if (!uiV2 || featuresLoading) return;
+    if (readTrainerOnboardedMark()) {
+      setOnboarded(true);
+      return;
+    }
     const token = getToken();
     if (!token) return;
     let cancelled = false;
@@ -102,6 +115,10 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
       .staffProfileMine(token)
       .then((p) => {
         if (cancelled) return;
+        if (readTrainerOnboardedMark()) {
+          setOnboarded(true);
+          return;
+        }
         setOnboarded(Boolean(p.onboardedAt));
       })
       .catch(() => {
@@ -114,9 +131,14 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!uiV2 || onboarded !== false) return;
-    if (pathname.startsWith('/trainer/welcome')) return;
+    if (onWelcome) return;
+    // finish() marks locally before navigate; never bounce after that.
+    if (readTrainerOnboardedMark()) {
+      setOnboarded(true);
+      return;
+    }
     router.replace('/trainer/welcome');
-  }, [uiV2, onboarded, pathname, router]);
+  }, [uiV2, onboarded, onWelcome, router]);
 
   const cabinet = useMemo(() => trainerCabinetMode(user), [user]);
   const {
@@ -261,10 +283,22 @@ export default function TrainerLayout({ children }: { children: ReactNode }) {
   }
 
   if (uiV2) {
+    // Avoid flashing the home shell while we still owe the welcome wizard.
+    const gateWelcome = onboarded === false && !onWelcome;
     return (
       <AuthGuard allowedRoles={[UserRole.TRAINER]}>
         <TrainerUiV2Provider value>
-          <TrainerShell>{children}</TrainerShell>
+          <TrainerShell>
+            {gateWelcome ? (
+              <div
+                className="forma-theme min-h-dvh bg-ink"
+                aria-busy="true"
+                aria-label="Загрузка"
+              />
+            ) : (
+              children
+            )}
+          </TrainerShell>
         </TrainerUiV2Provider>
       </AuthGuard>
     );

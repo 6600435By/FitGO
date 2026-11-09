@@ -17,6 +17,7 @@ import { WorkScheduleTemplateEditor } from '@/components/trainer-schedule/work-s
 import { api, type StaffProfileDto } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { trainerCabinetMode } from '@/lib/trainer-cabinet';
+import { markTrainerOnboarded } from '@/lib/trainer-onboarding';
 
 const SPECIALIZATIONS = [
   'Силовые',
@@ -72,6 +73,7 @@ export default function TrainerWelcomePage() {
           );
         }
         if (p.onboardedAt) {
+          markTrainerOnboarded();
           router.replace('/trainer');
         }
       })
@@ -159,6 +161,8 @@ export default function TrainerWelcomePage() {
     setError('');
     try {
       await api.staffProfileUpdate(token, { onboardedAt: true });
+      // Layout caches onboarded=false; mark before navigate or it redirects back here.
+      markTrainerOnboarded();
       try {
         confetti({
           particleCount: 90,
