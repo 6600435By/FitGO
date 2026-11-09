@@ -443,23 +443,25 @@ export function TrainerShell({ children }: { children: ReactNode }) {
             <div className="relative flex items-stretch justify-between gap-1 rounded-[1.75rem] border border-white/10 bg-ink-elevated/95 px-2 py-1.5 shadow-dock backdrop-blur-xl">
               {dock.map((item) => {
                 const active = navItemActive(pathname, item);
-                const Icon = item.icon;
                 if (item.center) {
                   return (
                     <button
                       key={item.href}
                       type="button"
                       onClick={openQuick}
-                      className="relative flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-2xl px-1 py-1.5 text-center text-forma-400 touch-manipulation transition"
+                      className="relative flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-2xl px-1 py-1.5 text-center touch-manipulation transition active:scale-[0.97]"
                       aria-label={item.label}
                     >
-                      <Icon className="h-5 w-5" strokeWidth={2.25} />
-                      <span className="text-[10px] font-medium leading-tight">
+                      <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-forma-500 text-ink shadow-forma-glow">
+                        <span className="text-xl font-semibold leading-none">+</span>
+                      </span>
+                      <span className="text-[10px] font-medium leading-tight text-forma-400">
                         {item.label}
                       </span>
                     </button>
                   );
                 }
+                const Icon = item.icon;
                 return (
                   <Link
                     key={item.href}

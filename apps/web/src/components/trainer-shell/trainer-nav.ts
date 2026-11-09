@@ -28,7 +28,7 @@ export type TrainerNavItem = {
   icon: LucideIcon;
   exact?: boolean;
   module?: 'trainer_calendar' | 'trainer_crm' | 'messaging';
-  /** Dock center raised button */
+  /** Dock center quick-actions (+) button */
   center?: boolean;
   /** Shown in desktop sidebar «Ещё» expanded, not in phone dock */
   moreOnly?: boolean;
@@ -56,6 +56,13 @@ export function buildTrainerV2Nav(
   const scheduleHref = trainerScheduleHref(mode);
   const crm = trainerCrmOrControlHref(mode);
 
+  const quickAction: TrainerNavItem = {
+    href: '#quick',
+    label: 'Действия',
+    icon: Plus,
+    center: true,
+  };
+
   const dock: TrainerNavItem[] = mode.clubPtDock
     ? [
         { href: '/trainer', label: 'Сегодня', icon: Home, exact: true },
@@ -65,6 +72,7 @@ export function buildTrainerV2Nav(
           icon: CalendarDays,
           module: 'trainer_calendar',
         },
+        quickAction,
         {
           href: '/trainer/clients',
           label: 'Клиенты',
@@ -90,12 +98,7 @@ export function buildTrainerV2Nav(
           icon: CalendarDays,
           module: mode.showPt ? 'trainer_calendar' : undefined,
         },
-        {
-          href: '#quick',
-          label: 'Действия',
-          icon: Plus,
-          center: true,
-        },
+        quickAction,
         {
           href: crm.href,
           label: crm.label,
@@ -110,15 +113,6 @@ export function buildTrainerV2Nav(
       ];
 
   const more: TrainerNavItem[] = [];
-
-  if (mode.clubPtDock) {
-    more.push({
-      href: '#quick',
-      label: 'Быстрые действия',
-      icon: Plus,
-      center: true,
-    });
-  }
 
   if (mode.showTimesheet) {
     more.push({
