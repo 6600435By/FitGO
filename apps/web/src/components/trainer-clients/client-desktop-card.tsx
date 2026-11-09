@@ -106,7 +106,12 @@ export function ClientDesktopCard({
                 Следующий шаг · {formatDateTime(nextStep.startAt)}
               </Link>
             ) : (
-              <p className="text-forma-500">Следующее занятие не назначено</p>
+              <Link
+                href={`/trainer/schedule?clientId=${summary.id}`}
+                className="block text-forma-400 hover:text-forma-300"
+              >
+                Записать на следующее занятие
+              </Link>
             )}
           </div>
 

@@ -3,42 +3,18 @@
 import type { TrainerClientDetail } from '@fitgo/shared-types';
 import { MembershipStatus } from '@fitgo/shared-types';
 import type { ReactNode } from 'react';
-import {
-  formatDate,
-  formatDateTime,
-  membershipStatusLabel,
-} from '@/lib/utils';
+import { formatDate, membershipStatusLabel } from '@/lib/utils';
 
-function moneyMajor(amount: number) {
-  return `${amount.toLocaleString('ru-RU', {
+function moneyMinor(minor: number) {
+  return `${(minor / 100).toLocaleString('ru-RU', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   })} BYN`;
 }
 
-function moneyMinor(minor: number) {
-  return moneyMajor(minor / 100);
-}
-
-function statusHint(status?: MembershipStatus) {
-  if (!status) return null;
-  if (status === MembershipStatus.ACTIVE) {
-    return 'Активен — членство действует по снимку 1С.';
-  }
-  if (status === MembershipStatus.EXPIRED) {
-    return 'Внимание — срок абонемента истёк.';
-  }
-  if (status === MembershipStatus.FROZEN) {
-    return 'Внимание — абонемент заморожен.';
-  }
-  if (status === MembershipStatus.PENDING) {
-    return 'Внимание — абонемент ещё не активирован.';
-  }
-  return null;
-}
-
 /**
- * Separate club membership vs personal PT package — never merge remainders/dates.
+ * Club membership vs personal PT package — trainer-facing, without club
+ * back-office noise (1C service remainder, club face-account debt, sync time).
  */
 export function ClientRightsBlocks({
   client,
@@ -52,15 +28,11 @@ export function ClientRightsBlocks({
 }) {
   const crmLinked = client.crmStatus === 'LINKED';
   const crmPending = client.crmStatus === 'PENDING_CRM';
-  const clubDebtKnown = client.clubDebtAmount != null;
-  const clubDebtPositive =
-    clubDebtKnown && (client.clubDebtAmount as number) > 0;
-  const attentionMembership =
+  const membershipProblem =
     client.membershipStatus === MembershipStatus.EXPIRED ||
     client.membershipStatus === MembershipStatus.FROZEN ||
-    client.membershipStatus === MembershipStatus.PENDING ||
-    clubDebtPositive ||
-    crmPending;
+    client.membershipStatus === MembershipStatus.PENDING;
+  const attentionMembership = membershipProblem || crmPending;
 
   const ledger = client.ownLedger;
   const hasPackage = Boolean(ledger?.activePackage);
@@ -68,6 +40,7 @@ export function ClientRightsBlocks({
     ledger?.effectiveSessionPriceMinor != null &&
     ledger.effectiveSessionPriceMinor > 0;
   const priceAttention = Boolean(ledger) && !hasPackage && !priceKnown;
+  const trainerDebtMinor = ledger?.debtMinor ?? 0;
 
   return (
     <div className={compact ? 'space-y-3' : 'space-y-3'}>
@@ -80,18 +53,12 @@ export function ClientRightsBlocks({
             </span>
           ) : null}
           {crmLinked ? (
-            <span
-              className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-200"
-              title="Клиент связан с карточкой 1С"
-            >
+            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-200">
               Подтверждён
             </span>
           ) : null}
           {attentionMembership ? (
-            <span
-              className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-200"
-              title="Нужна проверка CRM, статуса или долга клубу"
-            >
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-200">
               Внимание
             </span>
           ) : null}
@@ -101,50 +68,26 @@ export function ClientRightsBlocks({
         ) : (
           <p className="mt-1 text-forma-400">Нет данных абонемента</p>
         )}
-        <ul className="mt-1 space-y-0.5 text-xs text-forma-400">
-          {client.membershipValidUntil ? (
-            <li>Срок до {formatDate(client.membershipValidUntil)}</li>
-          ) : null}
-          {client.sessionsRemaining != null ? (
-            <li>Остаток услуг 1С: {client.sessionsRemaining}</li>
-          ) : (
-            <li>Остаток услуг 1С: нет данных</li>
-          )}
-          {clubDebtKnown ? (
-            <li>
-              Долг перед клубом:{' '}
-              {(client.clubDebtAmount as number) > 0
-                ? moneyMajor(client.clubDebtAmount as number)
-                : 'нет'}
-            </li>
-          ) : (
-            <li>Долг перед клубом: нет данных</li>
-          )}
-          <li>
-            Синхронизация 1С:{' '}
-            {client.membershipSyncedAt
-              ? formatDateTime(client.membershipSyncedAt)
-              : 'нет снимка'}
-          </li>
-        </ul>
-        {statusHint(client.membershipStatus) ? (
-          <p className="mt-1.5 text-[11px] text-forma-500">
-            {statusHint(client.membershipStatus)}
-          </p>
-        ) : null}
-        {crmLinked ? (
-          <p className="text-[11px] text-forma-500">
-            Подтверждён — клиент связан с карточкой 1С.
+        {client.membershipValidUntil ? (
+          <p className="mt-1 text-xs text-forma-400">
+            Срок до {formatDate(client.membershipValidUntil)}
           </p>
         ) : null}
         {crmPending ? (
-          <p className="text-[11px] text-amber-200/80">
-            Внимание — нет карточки 1С, заведите клиента в CRM.
+          <p className="mt-1.5 text-[11px] text-amber-200/80">
+            Нет карточки 1С — заведите клиента в CRM.
           </p>
         ) : null}
-        <p className="mt-1 text-[11px] text-forma-500">
-          Не смешивается с личным пакетом ПТ: сроки и остатки считаются отдельно.
-        </p>
+        {client.membershipStatus === MembershipStatus.EXPIRED ? (
+          <p className="mt-1.5 text-[11px] text-amber-200/80">
+            Срок абонемента истёк.
+          </p>
+        ) : null}
+        {client.membershipStatus === MembershipStatus.FROZEN ? (
+          <p className="mt-1.5 text-[11px] text-amber-200/80">
+            Абонемент заморожен.
+          </p>
+        ) : null}
       </div>
 
       {ledger ? (
@@ -177,10 +120,9 @@ export function ClientRightsBlocks({
             <p className="mt-1 text-forma-400">Нет активного пакета</p>
           )}
           <ul className="mt-1 space-y-0.5 text-xs text-forma-400">
-            <li>
-              Долг клиенту тренеру:{' '}
-              {ledger.debtMinor > 0 ? moneyMinor(ledger.debtMinor) : 'нет'}
-            </li>
+            {trainerDebtMinor > 0 ? (
+              <li>Долг за тренировки: {moneyMinor(trainerDebtMinor)}</li>
+            ) : null}
             <li>
               Цена разовой:{' '}
               {priceKnown
@@ -189,29 +131,12 @@ export function ClientRightsBlocks({
                       ? ' · индивидуальная'
                       : ' · из настроек «Расчёты»'
                   }`
-                : 'не задана — сумму не выдумываем'}
-            </li>
-            <li>
-              Локально обновлено:{' '}
-              {ledger.localUpdatedAt
-                ? formatDateTime(ledger.localUpdatedAt)
-                : 'записей ещё не было'}
+                : 'не задана'}
             </li>
           </ul>
-          {hasPackage ? (
-            <p className="mt-1.5 text-[11px] text-forma-500">
-              Активен — после PERSONAL-занятия спишется 1 тренировка с этого
-              пакета.
-            </p>
-          ) : (
-            <p className="mt-1.5 text-[11px] text-forma-500">
-              Без пакета после PERSONAL-занятия появится долг тренеру только если
-              известна цена.
-            </p>
-          )}
           {priceAttention ? (
-            <p className="text-[11px] text-amber-200/80">
-              Внимание — нет пакета и нет цены: долг с суммой не создастся.
+            <p className="mt-1.5 text-[11px] text-amber-200/80">
+              Нет пакета и цены — долг с суммой не создастся.
             </p>
           ) : null}
           {priceEditor}
