@@ -34,6 +34,9 @@ import { useSessionClock } from './use-session-clock';
 import type { WorkoutSectionId } from '@fitgo/shared-types';
 import { getSessionSectionIds } from '@fitgo/shared-types';
 
+/** Accidental start can be undone without touching the booking in DB. */
+const CANCEL_START_WINDOW_MS = 2 * 60 * 1000;
+
 function sessionStorageKey(meta: TimerSessionMeta): string {
   if (meta.kind === 'pt' && meta.bookingId) return `pt:${meta.bookingId}`;
   if (meta.kind === 'gp' && meta.sessionKey) return `gp:${meta.sessionKey}`;
@@ -153,6 +156,17 @@ export function LiveTimerScreen({
     clock.elapsedMs,
     timer.snapshot.totalElapsedMs,
   );
+  const canCancelStart =
+    !mirrorOnly &&
+    ((clock.isRunning && clock.elapsedMs < CANCEL_START_WINDOW_MS) ||
+      (timer.state.status === 'running' &&
+        timer.snapshot.totalElapsedMs < CANCEL_START_WINDOW_MS));
+
+  const cancelAccidentalStart = () => {
+    clock.clear();
+    timer.reset();
+    timer.endAndClear();
+  };
 
   if (mirrorOnly) {
     return (
@@ -352,6 +366,15 @@ export function LiveTimerScreen({
       ) : null}
 
       <footer className="space-y-3 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
+        {canCancelStart ? (
+          <button
+            type="button"
+            onClick={cancelAccidentalStart}
+            className="mx-auto block w-full max-w-sm rounded-2xl border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-sm font-medium text-rose-300"
+          >
+            Отменить начало
+          </button>
+        ) : null}
         <div className="flex flex-wrap items-center justify-center gap-2">
           {liveMode.mode === 'free' ? (
             <button

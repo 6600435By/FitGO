@@ -1009,6 +1009,10 @@ export function BookingControlPanel({
   >([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, string>>({});
   const [photosError, setPhotosError] = useState('');
+  /** Destructive delete confirm in detail sheet (PT hard-delete / SPA cancel). */
+  const [deleteConfirmKind, setDeleteConfirmKind] = useState<
+    null | 'pt' | 'spa'
+  >(null);
   const [localSeen, setLocalSeen] = useState<Set<string>>(new Set());
   const [seenSaveError, setSeenSaveError] = useState('');
   const [seenSaving, setSeenSaving] = useState(false);
@@ -1840,6 +1844,7 @@ export function BookingControlPanel({
     closePhotos();
     setHistoryOpen(false);
     setApprovalNotesOpen(false);
+    setDeleteConfirmKind(null);
     setDetailError('');
     setSeenSaveError('');
     setLinkPhone('');
@@ -1963,8 +1968,8 @@ export function BookingControlPanel({
 
   const cancelSelectedSpa = async () => {
     if (!selected?.fitgoBookingId || !cancelSpaBooking) return;
-    if (!window.confirm('Удалить (отменить) эту SPA-запись в FitGO?')) return;
     setMessage('');
+    setDeleteConfirmKind(null);
     try {
       await cancelSpaBooking(selected.fitgoBookingId);
       setMessage('Запись отменена');
@@ -1977,14 +1982,8 @@ export function BookingControlPanel({
 
   const deleteSelectedPt = async () => {
     if (!selected?.fitgoBookingId || !deletePtBooking) return;
-    if (
-      !window.confirm(
-        'Удалить запись полностью? Она исчезнет у клиента. Это нельзя отменить.',
-      )
-    ) {
-      return;
-    }
     setMessage('');
+    setDeleteConfirmKind(null);
     try {
       await deletePtBooking(selected.fitgoBookingId);
       setMessage('Запись удалена');
@@ -4955,27 +4954,6 @@ export function BookingControlPanel({
                     </button>
                   </div>
                 )}
-                {spaEditableInApp && cancelSpaBooking ? (
-                  <button
-                    type="button"
-                    className="btn-secondary w-full text-sm text-rose-300"
-                    onClick={() => void cancelSelectedSpa()}
-                  >
-                    Удалить запись (нет живого документа в 1С)
-                  </button>
-                ) : null}
-                {selected.kind === 'PT' &&
-                selected.canTrainerDelete &&
-                selected.fitgoBookingId &&
-                deletePtBooking ? (
-                  <button
-                    type="button"
-                    className="btn-secondary w-full text-sm text-rose-300"
-                    onClick={() => void deleteSelectedPt()}
-                  >
-                    Удалить запись
-                  </button>
-                ) : null}
                 {selected.kind !== 'GROUP' &&
                   canResolve &&
                   selected.remark?.status === 'OPEN' &&
@@ -5089,6 +5067,81 @@ export function BookingControlPanel({
                     ) : null}
                   </div>
                 )}
+                {(spaEditableInApp && cancelSpaBooking) ||
+                (selected.kind === 'PT' &&
+                  selected.canTrainerDelete &&
+                  selected.fitgoBookingId &&
+                  deletePtBooking) ? (
+                  <div className="space-y-2 border-t border-slate-800 pt-4">
+                    {deleteConfirmKind ? (
+                      <div className="space-y-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3">
+                        <p className="text-sm font-medium text-rose-100">
+                          Удалить эту запись?
+                        </p>
+                        <dl className="space-y-1 text-sm text-slate-300">
+                          <div className="flex justify-between gap-3">
+                            <dt className="text-slate-500">Тип</dt>
+                            <dd>{kindRu(selected.kind)}</dd>
+                          </div>
+                          <div className="flex justify-between gap-3">
+                            <dt className="text-slate-500">Дата и время</dt>
+                            <dd className="text-right">
+                              {formatDateTime(selected.startAt)}
+                              {selected.endAt
+                                ? ` – ${formatVisitClock(selected.endAt) ?? ''}`
+                                : ''}
+                            </dd>
+                          </div>
+                          {selected.clientName || selected.title ? (
+                            <div className="flex justify-between gap-3">
+                              <dt className="text-slate-500">Клиент / занятие</dt>
+                              <dd className="truncate text-right">
+                                {selected.clientName || selected.title}
+                              </dd>
+                            </div>
+                          ) : null}
+                        </dl>
+                        <p className="text-xs text-slate-400">
+                          {deleteConfirmKind === 'pt'
+                            ? 'Запись исчезнет у клиента. Это нельзя отменить.'
+                            : 'SPA-запись будет отменена в FitGO.'}
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="btn-secondary flex-1 text-sm"
+                            onClick={() => setDeleteConfirmKind(null)}
+                          >
+                            Отмена
+                          </button>
+                          <button
+                            type="button"
+                            className="flex-1 rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-500"
+                            onClick={() =>
+                              void (deleteConfirmKind === 'pt'
+                                ? deleteSelectedPt()
+                                : cancelSelectedSpa())
+                            }
+                          >
+                            Удалить
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className="w-full py-2 text-center text-sm font-medium text-rose-400 hover:text-rose-300"
+                        onClick={() =>
+                          setDeleteConfirmKind(
+                            selected.kind === 'PT' ? 'pt' : 'spa',
+                          )
+                        }
+                      >
+                        Удалить запись
+                      </button>
+                    )}
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
