@@ -68,6 +68,10 @@ import {
 } from '@fitgo/shared-types';
 import type { TrustBand as SharedTrustBand } from '@fitgo/shared-types';
 import {
+  isSpaVipMembershipQuota,
+  resolveSpaSessionEarnMinor,
+} from './spa-membership-quota';
+import {
   GroupClassSessionStatus,
   MotivationRateKind,
   MotivationRateType,
@@ -572,7 +576,6 @@ export class PayrollService {
         sessionTitle: o.title,
         packageQty: primary?.packageQty,
       });
-      const isMembershipQuota = writeOffOrigin === 'MEMBERSHIP';
       const isServiceBlock = writeOffOrigin === 'BLOCK';
       let unitFromPackage = resolvePackageUnitPriceMinor({
         unitPriceMinor: primary?.unitPriceMinor,
@@ -650,14 +653,16 @@ export class PayrollService {
       const isPackage =
         (primary?.paySource ?? '').toUpperCase() === 'PACKAGE' ||
         payment === 'QUOTA';
-      // VIP-included quota only → spaQuotaRates (price 0). Massage/PT blocks keep
-      // unit price for spaSoldPercent × unit — never the membership fixed rate.
-      if (
-        payment === 'QUOTA' &&
-        isMembershipQuota &&
-        !bioimpedance &&
-        !(priceMinor != null && priceMinor > 0)
-      ) {
+      // VIP-included → spaQuotaRates. Ignore catalog unitPrice from 1C (else %).
+      const isMembershipQuota = isSpaVipMembershipQuota({
+        writeOffOrigin,
+        sessionTitle: o.title,
+        payment,
+        paySource: primary?.paySource,
+        isServiceBlock,
+        bioimpedance,
+      });
+      if (isMembershipQuota) {
         priceMinor = 0;
       }
       const packageTitleSuffix = isMembershipQuota
@@ -687,8 +692,7 @@ export class PayrollService {
         serviceExternalId,
         partnerSource: partner,
         isSpaAllSportsBioimpedance: bioimpedance,
-        spaMembershipQuota:
-          !bioimpedance && isPackage ? isMembershipQuota : undefined,
+        spaMembershipQuota: isMembershipQuota || undefined,
         spaBlockPriceSource,
         sessionId: o.id,
         sessionKey: key,
@@ -1187,7 +1191,6 @@ export class PayrollService {
           (!isGift && isSpaLikeSessionTitle(o.title)));
       const bioimpedance = asSpa && bioimpedanceEarly;
       const writeOffOrigin = writeOffOriginEarly;
-      const isMembershipQuota = writeOffOrigin === 'MEMBERSHIP';
       const isServiceBlock = writeOffOrigin === 'BLOCK';
       let spaPriceMinor = priceMinor;
       let spaBlockPriceSource: WorkUnit['spaBlockPriceSource'];
@@ -1229,14 +1232,18 @@ export class PayrollService {
           }
         }
       }
-      // VIP-included only → spaQuotaRates. Massage blocks keep unit for %.
-      if (
+      // VIP-included → spaQuotaRates. Ignore catalog unitPrice from 1C (else %).
+      const isMembershipQuota =
         asSpa &&
-        payment === 'QUOTA' &&
-        isMembershipQuota &&
-        !bioimpedance &&
-        !(spaPriceMinor != null && spaPriceMinor > 0)
-      ) {
+        isSpaVipMembershipQuota({
+          writeOffOrigin,
+          sessionTitle: o.title,
+          payment,
+          paySource: primary?.paySource,
+          isServiceBlock,
+          bioimpedance: Boolean(bioimpedance),
+        });
+      if (isMembershipQuota) {
         spaPriceMinor = 0;
       }
       const packageTitleSuffix = isMembershipQuota
@@ -1282,8 +1289,7 @@ export class PayrollService {
         isPtAllSports: asSpa ? false : isPtAllSports,
         isReformerPersonal: asSpa ? false : isReformerPersonal,
         isSpaAllSportsBioimpedance: bioimpedance || undefined,
-        spaMembershipQuota:
-          asSpa && !bioimpedance && isPackage ? isMembershipQuota : undefined,
+        spaMembershipQuota: asSpa ? isMembershipQuota || undefined : undefined,
         spaBlockPriceSource: asSpa ? spaBlockPriceSource : undefined,
         saleExternalId: packSaleExt || undefined,
         saleOccurredAt:
@@ -4799,27 +4805,16 @@ export class PayrollService {
             }
             continue;
           }
-          const price = u.priceMinor ?? 0;
-          if (price > 0 && slice.spaSoldPercent) {
-            u.ratePercent = slice.spaSoldPercent;
-            u.earnMinor = Math.round((price * slice.spaSoldPercent) / 100);
-          } else if (
-            price === 0 &&
-            u.spaMembershipQuota === true &&
-            slice.spaQuotaRates?.length
-          ) {
-            const title = u.title.toLowerCase();
-            const match = slice.spaQuotaRates.find((r) => {
-              if (r.serviceKey === 'BODY_COMPOSITION')
-                return /состав|анализ|inbody|compos|биоимпеданс|bio.?imped/i.test(
-                  title,
-                );
-              if (r.serviceKey === 'CLASSIC_MASSAGE')
-                return /массаж|massage|класс/i.test(title);
-              return r.serviceKey === u.serviceId;
-            });
-            if (match && match.rateMinor > 0) u.earnMinor = match.rateMinor;
-          }
+          const spaEarn = resolveSpaSessionEarnMinor({
+            spaMembershipQuota: u.spaMembershipQuota,
+            priceMinor: u.priceMinor,
+            title: u.title,
+            serviceId: u.serviceId,
+            spaSoldPercent: slice.spaSoldPercent,
+            spaQuotaRates: slice.spaQuotaRates,
+          });
+          if (spaEarn.ratePercent != null) u.ratePercent = spaEarn.ratePercent;
+          if (spaEarn.earnMinor != null) u.earnMinor = spaEarn.earnMinor;
         }
       }
 
@@ -5030,26 +5025,15 @@ export class PayrollService {
           if (workUnitIsSpaPartnerBio(u) && slice.spaPartnerRateMinor) {
             total += slice.spaPartnerRateMinor;
           } else if (!workUnitIsSpaPartnerBio(u)) {
-            const price = u.priceMinor ?? 0;
-            if (price > 0 && slice.spaSoldPercent) {
-              total += Math.round((price * slice.spaSoldPercent) / 100);
-            } else if (
-              price === 0 &&
-              u.spaMembershipQuota === true &&
-              slice.spaQuotaRates?.length
-            ) {
-              const title = u.title.toLowerCase();
-              const match = slice.spaQuotaRates.find((r) => {
-                if (r.serviceKey === 'BODY_COMPOSITION')
-                  return /состав|анализ|inbody|compos|биоимпеданс|bio.?imped/i.test(
-                    title,
-                  );
-                if (r.serviceKey === 'CLASSIC_MASSAGE')
-                  return /массаж|massage|класси/i.test(title);
-                return r.serviceKey === u.serviceId;
-              });
-              if (match) total += match.rateMinor;
-            }
+            const spaEarn = resolveSpaSessionEarnMinor({
+              spaMembershipQuota: u.spaMembershipQuota,
+              priceMinor: u.priceMinor,
+              title: u.title,
+              serviceId: u.serviceId,
+              spaSoldPercent: slice.spaSoldPercent,
+              spaQuotaRates: slice.spaQuotaRates,
+            });
+            if (spaEarn.earnMinor != null) total += spaEarn.earnMinor;
           }
         }
 
@@ -5197,27 +5181,16 @@ export class PayrollService {
               u.earnMinor = slice.spaPartnerRateMinor;
             }
           } else {
-            const price = u.priceMinor ?? 0;
-            if (price > 0 && slice.spaSoldPercent) {
-              u.ratePercent = slice.spaSoldPercent;
-              u.earnMinor = Math.round((price * slice.spaSoldPercent) / 100);
-            } else if (
-              price === 0 &&
-              u.spaMembershipQuota === true &&
-              slice.spaQuotaRates?.length
-            ) {
-              const title = u.title.toLowerCase();
-              const match = slice.spaQuotaRates.find((r) => {
-                if (r.serviceKey === 'BODY_COMPOSITION')
-                  return /состав|анализ|inbody|compos|биоимпеданс|bio.?imped/i.test(
-                    title,
-                  );
-                if (r.serviceKey === 'CLASSIC_MASSAGE')
-                  return /массаж|massage|класси/i.test(title);
-                return r.serviceKey === u.serviceId;
-              });
-              if (match && match.rateMinor > 0) u.earnMinor = match.rateMinor;
-            }
+            const spaEarn = resolveSpaSessionEarnMinor({
+              spaMembershipQuota: u.spaMembershipQuota,
+              priceMinor: u.priceMinor,
+              title: u.title,
+              serviceId: u.serviceId,
+              spaSoldPercent: slice.spaSoldPercent,
+              spaQuotaRates: slice.spaQuotaRates,
+            });
+            if (spaEarn.ratePercent != null) u.ratePercent = spaEarn.ratePercent;
+            if (spaEarn.earnMinor != null) u.earnMinor = spaEarn.earnMinor;
           }
         }
         if (
@@ -5362,26 +5335,15 @@ export class PayrollService {
             if (slice.spaPartnerRateMinor) total += slice.spaPartnerRateMinor;
             continue;
           }
-          const price = u.priceMinor ?? 0;
-          if (price > 0 && slice.spaSoldPercent) {
-            total += Math.round((price * slice.spaSoldPercent) / 100);
-          } else if (
-            price === 0 &&
-            u.spaMembershipQuota === true &&
-            slice.spaQuotaRates?.length
-          ) {
-            const title = u.title.toLowerCase();
-            const match = slice.spaQuotaRates.find((r) => {
-              if (r.serviceKey === 'BODY_COMPOSITION')
-                return /состав|анализ|inbody|compos|биоимпеданс|bio.?imped/i.test(
-                  title,
-                );
-              if (r.serviceKey === 'CLASSIC_MASSAGE')
-                return /массаж|massage|класси/i.test(title);
-              return r.serviceKey === u.serviceId;
-            });
-            if (match) total += match.rateMinor;
-          }
+          const spaEarn = resolveSpaSessionEarnMinor({
+            spaMembershipQuota: u.spaMembershipQuota,
+            priceMinor: u.priceMinor,
+            title: u.title,
+            serviceId: u.serviceId,
+            spaSoldPercent: slice.spaSoldPercent,
+            spaQuotaRates: slice.spaQuotaRates,
+          });
+          if (spaEarn.earnMinor != null) total += spaEarn.earnMinor;
         }
       }
 
