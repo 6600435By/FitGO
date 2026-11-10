@@ -685,6 +685,7 @@ export function StaffPayProfileEditor({
             onChange={(next) => writeSlice('PT', next)}
             showShift
             showAdvance={false}
+            showAllSports={false}
           />
         </div>
       ) : null}
@@ -734,6 +735,31 @@ export function StaffPayProfileEditor({
               } else if (ptNext && profile.track === 'PT') {
                 setProfile(ptNext);
               }
+            }}
+          />
+        </div>
+      ) : null}
+
+      {stacked && trainerGroups?.staff ? (
+        <div className="space-y-3 rounded-xl border border-slate-800 p-3">
+          <p className="text-sm font-medium text-white">
+            Занятие с тренером ALL SPORTS
+          </p>
+          <p className="text-xs leading-relaxed text-slate-500">
+            Ставка за каждое занятие «Занятие с тренером ALL SPORTS», проданное
+            в 1С с привязанным исполнителем. Только для ПТ (штат) — в ступени %
+            не входит.
+          </p>
+          <MoneyField
+            label="Ставка за занятие ALL SPORTS, BYN"
+            value={formatMinor(readSlice('PT').ptAllSportsRateMinor)}
+            onChange={(v) => {
+              const minor = parseMoneyToMinor(v);
+              writeSlice('PT', {
+                ...readSlice('PT'),
+                ptAllSportsRateMinor: minor,
+                track: 'PT',
+              });
             }}
           />
         </div>
@@ -1118,8 +1144,8 @@ export function StaffPayProfileEditor({
             }
           />
           <p className="text-xs leading-relaxed text-slate-500">
-            Фикс за проведённое и оплаченное занятие с номенклатурой ALL SPORTS.
-            В ступени % не входит.
+            Фикс за занятие с номенклатурой ALL SPORTS, проданное в 1С с
+            исполнителем. В ступени % не входит.
           </p>
           <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
             <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
@@ -1234,12 +1260,15 @@ function PtPercentFields({
   onChange,
   showShift,
   showAdvance = showShift,
+  /** Staff stacked editor has a dedicated ALL SPORTS card — hide the duplicate. */
+  showAllSports = true,
 }: {
   profile: StaffPayTrackSlice;
   onChange: (next: StaffPayTrackSlice) => void;
   showShift: boolean;
   /** When false, advance is edited in the shared trainer block. */
   showAdvance?: boolean;
+  showAllSports?: boolean;
 }) {
   return (
     <div className="space-y-3">
@@ -1273,17 +1302,24 @@ function PtPercentFields({
           onChange({ ...profile, ptSessionPriceMinor: parseMoneyToMinor(v) })
         }
       />
-      <MoneyField
-        label="Занятие с тренером ALL SPORTS, BYN"
-        value={formatMinor(profile.ptAllSportsRateMinor)}
-        onChange={(v) =>
-          onChange({ ...profile, ptAllSportsRateMinor: parseMoneyToMinor(v) })
-        }
-      />
-      <p className="text-xs leading-relaxed text-slate-500">
-        Фикс за проведённое и оплаченное занятие с номенклатурой ALL SPORTS. В
-        ступени % не входит.
-      </p>
+      {showAllSports ? (
+        <>
+          <MoneyField
+            label="Занятие с тренером ALL SPORTS, BYN"
+            value={formatMinor(profile.ptAllSportsRateMinor)}
+            onChange={(v) =>
+              onChange({
+                ...profile,
+                ptAllSportsRateMinor: parseMoneyToMinor(v),
+              })
+            }
+          />
+          <p className="text-xs leading-relaxed text-slate-500">
+            Фикс за занятие с номенклатурой ALL SPORTS, проданное в 1С с
+            исполнителем. В ступени % не входит.
+          </p>
+        </>
+      ) : null}
       <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
         <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
           Ступени %

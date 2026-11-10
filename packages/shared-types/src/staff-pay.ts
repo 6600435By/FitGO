@@ -229,7 +229,8 @@ export interface StaffPayProfile {
   /** PT: session catalog price (minor) when booking has no CRM price. */
   ptSessionPriceMinor?: number;
   /**
-   * PT / CLUB: fixed rate per conducted paid «Занятие с тренером ALL SPORTS» (minor).
+   * PT / CLUB: fixed rate per «Занятие с тренером ALL SPORTS» sold in 1C with
+   * Исполнитель (minor). Also applies to matching conducted write-offs.
    * Does not enter PT % ladder.
    */
   ptAllSportsRateMinor?: number;

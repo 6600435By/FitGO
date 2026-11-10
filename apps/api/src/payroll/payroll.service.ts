@@ -1314,16 +1314,40 @@ export class PayrollService {
 
     // ── One-time PT from 1C sale lines (Исполнитель + сумма) × PT% ───────────
     // Match by employeeCode (1C) — User.externalId is often empty for trainers.
+    // «Занятие с тренером ALL SPORTS»: fixed ptAllSportsRateMinor (not PT%),
+    // when sold in 1C with Исполнитель — even if amount is 0 (partner).
     const ptSaleUnitKeys = new Map<string, string>();
     const seenPtSaleUnits = new Set<string>();
+    // Only units that already earn the ALL SPORTS fix (trusted, not gift).
+    const coveredAllSportsKeys = new Set(
+      units
+        .filter(
+          (u) =>
+            u.kind === 'PT' &&
+            u.isPtAllSports &&
+            u.payrollTrusted &&
+            !u.isComplimentary,
+        )
+        .map((u) => {
+          const day = clubDayIso(u.occurredAt);
+          const client = (u.clientName ?? '').trim().toLowerCase();
+          return `${day}|${client}`;
+        }),
+    );
     for (const sale of trainerPtSales) {
       if (!saleMatchesTrainer(sale, performerCodes, performerName)) continue;
       if (sale.paymentStatus !== 'PAID') continue;
       const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
-      if (amountMinor <= 0) continue;
+      const isPtAllSports = isPtAllSportsSession({
+        title: sale.serviceName,
+        serviceName: sale.serviceName,
+      });
+      // Ordinary one-shots need money; ALL SPORTS pays the profile fix even at 0 BYN.
+      if (!isPtAllSports && amountMinor <= 0) continue;
       const day = sale.occurredAt ? clubDayIso(sale.occurredAt) : '';
       const clientKey = `${day}|${(sale.clientName ?? '').trim().toLowerCase()}`;
       if (coveredSaleDays.has(clientKey)) continue;
+      if (isPtAllSports && coveredAllSportsKeys.has(clientKey)) continue;
       if (ptControlOn) {
         if (fitgoPtPaidDayClient.has(clientKey)) continue;
         const aliases = ptDocIdAliases({
@@ -1341,14 +1365,9 @@ export class PayrollService {
       seenPtSaleUnits.add(unitId);
       const sk = saleSessionKey('PT', docKey);
       remarkKeys.push(sk);
-      const isPtAllSports = isPtAllSportsSession({
-        title: sale.serviceName,
-        serviceName: sale.serviceName,
-      });
-      // Sale of ALL SPORTS / multi-visit packs (N ПТ, реформер N, …) is not paid
-      // here — only conducted write-offs (pack amount / N). Still track remarks.
-      if (isPtAllSports) continue;
-      if (isMultiVisitPackSale(sale.serviceName, sale.quantity)) continue;
+      // Multi-visit packs (N ПТ, реформер N, …) — only conducted write-offs.
+      if (!isPtAllSports && isMultiVisitPackSale(sale.serviceName, sale.quantity))
+        continue;
       // Massage / SPA one-shots are paid via SPA scheme, not PT%.
       if (isSpaLikeSessionTitle(sale.serviceName)) continue;
       const isReformerPersonal = isReformerPersonalNomenclature(
@@ -1370,13 +1389,14 @@ export class PayrollService {
         trustResolution: 'NONE',
         payrollTrusted: true,
         clientName: sale.clientName,
-        isPtAllSports: false,
-        isReformerPersonal,
+        isPtAllSports,
+        isReformerPersonal: isPtAllSports ? false : isReformerPersonal,
         sessionKey: sk,
         saleExternalId:
           (sale.externalId || sale.docRef || docKey || '').trim() || undefined,
       });
       ptSaleUnitKeys.set(unitId, sk);
+      if (isPtAllSports) coveredAllSportsKeys.add(clientKey);
     }
 
     // ── GROUP from journal + Onex fallback (dedupe) ─────────────────────────
