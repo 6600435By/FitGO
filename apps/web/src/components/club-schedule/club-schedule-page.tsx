@@ -8,7 +8,6 @@ import {
   startOfWeek,
   endOfWeek,
   eachDayOfInterval,
-  isSameDay,
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -19,6 +18,7 @@ import {
   sessionStateExplainRu,
 } from '@fitgo/shared-types';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
+import { ClubScheduleWeekGrid } from '@/components/club-schedule/club-schedule-week-grid';
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -316,7 +316,7 @@ export function ClubSchedulePage({
 
   const scrollToDay = (key: string) => {
     const el = daySectionRefs.current[key];
-    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
   };
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
@@ -517,49 +517,22 @@ export function ClubSchedulePage({
           </ul>
         </>
       ) : (
-        <div className="space-y-4">
-          {week.days.map((d) => {
-            const key = format(d, 'yyyy-MM-dd');
-            const dayEvents = eventsByDay.get(key) ?? [];
-            const isToday = isSameDay(d, new Date());
-            return (
-              <section
-                key={key}
-                ref={(el) => {
-                  daySectionRefs.current[key] = el;
-                }}
-                className="scroll-mt-20"
-              >
-                <h2
-                  className={cn(
-                    'mb-2 text-sm font-medium',
-                    isToday ? 'text-fitgo-300' : 'text-slate-300',
-                  )}
-                >
-                  {format(d, 'EEEEEE, d MMM', { locale: ru })}
-                  <span className="ml-2 text-slate-500">
-                    · {dayEvents.length}
-                  </span>
-                </h2>
-                {dayEvents.length === 0 ? (
-                  <p className="px-1 text-xs text-slate-600">нет занятий</p>
-                ) : (
-                  <ul className="space-y-2">
-                    {dayEvents.map((ev) => (
-                      <li key={`${ev.type}-${ev.id}`}>
-                        <EventCard
-                          ev={ev}
-                          isTrainer={isTrainer}
-                          onOpen={openEvent}
-                        />
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-            );
-          })}
-        </div>
+        !loading && (
+          <ClubScheduleWeekGrid
+            days={week.days}
+            eventsByDay={eventsByDay}
+            anchorDay={day}
+            todayStr={todayStr}
+            isTrainer={isTrainer}
+            onSelectDay={(key) => {
+              setDay(key);
+              writeUrl(key, types, view);
+              scrollToDay(key);
+            }}
+            onOpenEvent={openEvent}
+            dayColumnRefs={daySectionRefs}
+          />
+        )
       )}
 
       {openSession ? (
