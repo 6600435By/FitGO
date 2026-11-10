@@ -377,10 +377,13 @@ export async function overlayPtSaleDebtFromRevenue<T extends TrainerPtSaleRow>(
   return applyUnpaidDebtStatusToPtSales(sales, keys);
 }
 
+/** Days after period end to still treat card/cash as settlement of a DEBT sale. */
+const PAID_OVERLAY_LOOKAHEAD_DAYS = 120;
+
 /**
  * Upgrade DEBT → PAID when ClubRevenue has card/cash/cashless/ЛС for the same
  * sale document (preferredSaleBasisId) or same day+client+trainer.
- * Payment on a later day still marks the original sale PAID.
+ * Payment on a later day (incl. split 25+25 next month) still marks the sale PAID.
  */
 export async function overlayPtSalePaidFromRevenue<T extends TrainerPtSaleRow>(
   prisma: PrismaService,
@@ -394,13 +397,16 @@ export async function overlayPtSalePaidFromRevenue<T extends TrainerPtSaleRow>(
     return sales;
   }
 
+  const payTo = new Date(toD);
+  payTo.setDate(payTo.getDate() + PAID_OVERLAY_LOOKAHEAD_DAYS);
+
   const entries = await prisma.clubRevenueEntry.findMany({
     where: {
       clubId,
       isActive: true,
       OR: [
         { occurredAt: { gte: fromD, lte: toD } },
-        { paidAt: { gte: fromD, lte: toD } },
+        { paidAt: { gte: fromD, lte: payTo } },
       ],
     },
     select: {
@@ -424,6 +430,8 @@ export async function overlayPtSalePaidFromRevenue<T extends TrainerPtSaleRow>(
   });
 
   const paidKeys = new Set<string>();
+  /** Sum of card/cash/… by sale UUID — split pays (25+25) must cover the sale. */
+  const paidByBasis = new Map<string, number>();
   for (const e of entries) {
     const product = e.productName ?? '';
     const isPt =
@@ -433,8 +441,28 @@ export async function overlayPtSalePaidFromRevenue<T extends TrainerPtSaleRow>(
     if (!clubRevenueHasPaidMoney(e)) continue;
     const when = e.paidAt ?? e.occurredAt;
     const day = when.toISOString().slice(0, 10);
+    const inPeriod = when >= fromD && when <= toD;
     const client = (e.clientName ?? '').trim().toLowerCase();
-    if (!day || !client) continue;
+    const basis = preferredSaleBasisId({
+      externalId: e.externalId,
+      documentId: e.documentId,
+    });
+    const payAmt =
+      Number(e.paidAmount) ||
+      Number(e.personalAccount) ||
+      (Number(e.cash) || 0) +
+        (Number(e.card) || 0) +
+        (Number(e.cashless) || 0) ||
+      0;
+    if (basis && DOC_UUID_RE.test(basis)) {
+      const b = basis.toLowerCase();
+      paidKeys.add(`doc:${b}`);
+      paidByBasis.set(b, Math.round(((paidByBasis.get(b) ?? 0) + payAmt) * 100) / 100);
+    }
+    const registrar = e.documentId?.trim();
+    if (registrar) paidKeys.add(`doc:${registrar.toLowerCase()}`);
+    // Same-day loose keys only inside the report window (not lookahead noise).
+    if (!inPeriod || !day || !client) continue;
     const perfCode = e.performerExternalId?.trim();
     const perfName = e.performerName?.trim();
     const empCode = e.employeeExternalId?.trim();
@@ -447,13 +475,6 @@ export async function overlayPtSalePaidFromRevenue<T extends TrainerPtSaleRow>(
     if (trainerName) {
       paidKeys.add(`${day}|${client}|n:${trainerName.toLowerCase()}`);
     }
-    const basis = preferredSaleBasisId({
-      externalId: e.externalId,
-      documentId: e.documentId,
-    });
-    if (basis) paidKeys.add(`doc:${basis.toLowerCase()}`);
-    const registrar = e.documentId?.trim();
-    if (registrar) paidKeys.add(`doc:${registrar.toLowerCase()}`);
   }
   if (paidKeys.size === 0) return sales;
 
@@ -479,6 +500,12 @@ export async function overlayPtSalePaidFromRevenue<T extends TrainerPtSaleRow>(
       (extRoot && paidKeys.has(`doc:${extRoot}`)) ||
       (mappedUuid && paidKeys.has(`doc:${mappedUuid}`));
     if (!hit) return s;
+    // Split card pays: require covered amount when we know both sides.
+    if (mappedUuid && paidByBasis.has(mappedUuid)) {
+      const covered = paidByBasis.get(mappedUuid) ?? 0;
+      const due = Number(s.amount) || 0;
+      if (due > 0.01 && covered + 0.01 < due) return s;
+    }
     return { ...s, paymentStatus: 'PAID' };
   });
 }
@@ -488,17 +515,25 @@ function markPaid(row: TrainerPtSaleRow): TrainerPtSaleRow {
   return { ...row, paymentStatus: 'PAID' };
 }
 
-/**
- * Cross-day identity for cash settlement → original sale.
- * Prefer saleDocumentId; else client|trainer|service (legacy rows without UUID).
- */
-function saleIdentityKeys(r: TrainerPtSaleRow): string[] {
-  const keys: string[] = [];
+/** Sale document UUID when present (authoritative cross-day identity). */
+function rowSaleUuid(r: TrainerPtSaleRow): string | undefined {
   const uuid =
     (r.saleDocumentId ?? '').trim().toLowerCase() ||
     saleDocumentIdFromPtExternalId(r.externalId) ||
     saleDocumentIdFromPtExternalId(r.docRef);
-  if (uuid) keys.push(`uuid:${uuid}`);
+  return uuid || undefined;
+}
+
+/**
+ * Cross-day identity for cash settlement → original sale.
+ * UUID is authoritative: never fall back to client|trainer|service when a
+ * document UUID is present (same client can have many «Занятие 50р» sales).
+ * Legacy rows without UUID keep svc keys for one-shot payment matching.
+ */
+function saleIdentityKeys(r: TrainerPtSaleRow): string[] {
+  const uuid = rowSaleUuid(r);
+  if (uuid) return [`uuid:${uuid}`];
+  const keys: string[] = [];
   const client = (r.clientName ?? '').trim().toLowerCase();
   const svc = normServiceKey(r.serviceName);
   if (!client || !svc) return keys;
@@ -557,9 +592,19 @@ export function mergeTrainerPtSaleRows(
   };
 
   const findIdentityMatch = (r: TrainerPtSaleRow): number | undefined => {
-    for (const ik of saleIdentityKeys(r)) {
+    const keys = saleIdentityKeys(r);
+    // Prefer UUID hits.
+    for (const ik of keys.filter((k) => k.startsWith('uuid:'))) {
       const hit = (identityIndex.get(ik) ?? []).find((i) => !consumed.has(i));
       if (hit != null) return hit;
+    }
+    // Legacy svc: only when this row has no UUID, and only if a single
+    // unmatched sale shares client+trainer+service (avoids swallowing the
+    // rest of the client's same-priced PT sales — Новик / Доминецкая).
+    if (rowSaleUuid(r)) return undefined;
+    for (const ik of keys.filter((k) => k.startsWith('svc:'))) {
+      const open = (identityIndex.get(ik) ?? []).filter((i) => !consumed.has(i));
+      if (open.length === 1) return open[0];
     }
     return undefined;
   };
@@ -581,9 +626,14 @@ export function mergeTrainerPtSaleRows(
     }
 
     // Cross-day: cash settlement of an existing sale → PAID only, keep sale date/amount.
+    // Split pays (25+25 card on one sale UUID) all attach to the same row —
+    // do not consume UUID matches (legacy svc still consumes one-to-one).
     const identityIdx = findIdentityMatch(r);
     if (identityIdx != null) {
-      consumed.add(identityIdx);
+      const matchedByUuid = saleIdentityKeys(r).some((k) =>
+        k.startsWith('uuid:'),
+      );
+      if (!matchedByUuid) consumed.add(identityIdx);
       out[identityIdx] = markPaid(out[identityIdx]!);
       continue;
     }
@@ -640,7 +690,7 @@ export async function loadTrainerPtSalesFromRevenue(
   const lookbackFrom = new Date(fromD);
   lookbackFrom.setDate(lookbackFrom.getDate() - SALE_MATCH_LOOKBACK_DAYS);
 
-  const [entries, knownSales] = await Promise.all([
+  const [entries, knownSales, lookbackDocs] = await Promise.all([
     prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
@@ -667,22 +717,63 @@ export async function loadTrainerPtSalesFromRevenue(
         employeeName: true,
       },
     }),
+    // Prior PT sale/debt stubs (lookback) — late split card pays must not
+    // become a second visit in the payment month (Новик 02.10 → 25+25 02.11).
+    prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        occurredAt: { gte: lookbackFrom, lte: toD },
+        OR: [
+          { operationType: { in: ['unpaid', 'debt_writeoff'] } },
+          {
+            AND: [
+              { operationType: { notIn: ['payment', 'refund'] } },
+              {
+                OR: [
+                  { saleType: 'training' },
+                  { productName: { contains: 'Занятие с тренером' } },
+                  { productName: { contains: 'занятие с тренером' } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      select: {
+        documentId: true,
+        externalId: true,
+        productName: true,
+        saleType: true,
+        operationType: true,
+      },
+    }),
   ]);
 
+  // Only UUID suppresses a cash visit. client|trainer|service is too broad:
+  // one cached sale (Новик 19.10) must not drop other sales' card payments
+  // (14.10 / 26.10) for the same «Занятие с тренером 50р.».
   const knownUuids = new Set<string>();
-  const knownSvcKeys = new Set<string>();
   for (const s of knownSales) {
     const uuid =
       (s.saleDocumentId ?? '').trim().toLowerCase() ||
       saleDocumentIdFromPtExternalId(s.externalId);
     if (uuid) knownUuids.add(uuid);
-    const client = (s.clientName ?? '').trim().toLowerCase();
-    const svc = normServiceKey(s.serviceName);
-    if (!client || !svc) continue;
-    const code = (s.employeeCode ?? '').trim().replace(/^0+/, '');
-    const name = (s.employeeName ?? '').trim().toLowerCase();
-    if (code) knownSvcKeys.add(`${client}|c:${code}|${svc}`);
-    if (name) knownSvcKeys.add(`${client}|n:${name}|${svc}`);
+  }
+  for (const d of lookbackDocs) {
+    if (isClubRevenueCashSettlement(d)) continue;
+    const product = d.productName ?? '';
+    const isPt =
+      (d.saleType ?? '').toLowerCase() === 'training' ||
+      isLikelyTrainingProductName(product);
+    if (!isPt) continue;
+    const basis = preferredSaleBasisId({
+      externalId: d.externalId,
+      documentId: d.documentId,
+    });
+    if (basis && DOC_UUID_RE.test(basis)) knownUuids.add(basis.toLowerCase());
+    const doc = (d.documentId ?? '').trim().toLowerCase();
+    if (doc && DOC_UUID_RE.test(doc)) knownUuids.add(doc);
   }
 
   type Agg = {
@@ -696,6 +787,7 @@ export async function loadTrainerPtSalesFromRevenue(
     employeeName?: string;
     docRef: string;
     fromCashPayment: boolean;
+    paymentStatus: 'PAID' | 'DEBT';
   };
   const byKey = new Map<string, Agg>();
   for (const e of entries) {
@@ -714,12 +806,19 @@ export async function loadTrainerPtSalesFromRevenue(
       (Number(e.personalAccount) || 0) > 0.01 ||
       (Number(e.cash) || 0) + (Number(e.card) || 0) + (Number(e.cashless) || 0) >
         0.01;
-    if (!paid) continue;
-    const rawAmount =
-      Number(e.paidAmount) ||
-      Number(e.personalAccount) ||
-      Number(e.amount) ||
-      0;
+    const op = (e.operationType ?? '').toLowerCase();
+    // Unpaid PT sale with Исполнитель (Новик 02.10) — visit on sale date, DEBT.
+    const unpaidPt =
+      !paid &&
+      (op === 'unpaid' || op === 'debt_writeoff') &&
+      !!(e.performerExternalId?.trim() || e.performerName?.trim());
+    if (!paid && !unpaidPt) continue;
+    const rawAmount = paid
+      ? Number(e.paidAmount) ||
+        Number(e.personalAccount) ||
+        Number(e.amount) ||
+        0
+      : Number(e.saleAmount) || Number(e.amount) || 0;
     if (rawAmount <= 0) continue;
     const perfCode = e.performerExternalId?.trim();
     const perfName = e.performerName?.trim();
@@ -758,21 +857,10 @@ export async function loadTrainerPtSalesFromRevenue(
         // Settlement of a cached TrainerPtSale — PAID via overlay, not a visit.
         continue;
       }
-      const client = (e.clientName ?? '').trim().toLowerCase();
-      const svc = normServiceKey(serviceName);
-      const code = (trainerCode ?? '').trim().replace(/^0+/, '');
-      const name = (trainerName ?? '').trim().toLowerCase();
-      if (
-        client &&
-        svc &&
-        ((code && knownSvcKeys.has(`${client}|c:${code}|${svc}`)) ||
-          (name && knownSvcKeys.has(`${client}|n:${name}|${svc}`)))
-      ) {
-        continue;
-      }
     }
 
-    const when = e.paidAt ?? e.occurredAt;
+    // Prefer sale/debt document date over later cash settlement date.
+    const when = fromCash ? (e.paidAt ?? e.occurredAt) : e.occurredAt;
     const productKey = (
       e.productExternalId?.trim() ||
       serviceName ||
@@ -785,6 +873,7 @@ export async function loadTrainerPtSalesFromRevenue(
     const groupKey = `${basis}|${productKey}|${trainerKey}`;
     const whenIso = when.toISOString();
     const saleDocumentId = DOC_UUID_RE.test(basis) ? basis.toLowerCase() : undefined;
+    const paymentStatus: 'PAID' | 'DEBT' = paid ? 'PAID' : 'DEBT';
     const prev = byKey.get(groupKey);
     if (!prev) {
       byKey.set(groupKey, {
@@ -798,19 +887,28 @@ export async function loadTrainerPtSalesFromRevenue(
         employeeName: trainerName || undefined,
         docRef: basis,
         fromCashPayment: fromCash,
+        paymentStatus,
       });
     } else {
-      // Same sale UUID chunks: keep max amount, do not sum payment+sale.
-      if (amount > prev.amount) prev.amount = amount;
+      // Same sale UUID: do not sum a sale/debt stub with its cash settlement.
+      // Two partial card payments of the same debt (25+25) must add up.
+      if (fromCash && prev.fromCashPayment) {
+        prev.amount = Math.round((prev.amount + amount) * 100) / 100;
+      } else if (amount > prev.amount) {
+        prev.amount = amount;
+      }
       if (whenIso < prev.occurredAt) prev.occurredAt = whenIso;
       if (!prev.clientName && e.clientName) {
         prev.clientName = e.clientName;
       }
       if (!prev.serviceName && serviceName) prev.serviceName = serviceName;
       if (fromCash) prev.fromCashPayment = true;
+      if (paymentStatus === 'PAID') prev.paymentStatus = 'PAID';
       if (!prev.saleDocumentId && saleDocumentId) {
         prev.saleDocumentId = saleDocumentId;
       }
+      // Prefer non-cash externalId (sale / debt stub) when available.
+      if (!fromCash && e.externalId) prev.externalId = e.externalId;
     }
   }
   return [...byKey.values()].map((a) => ({
@@ -823,7 +921,7 @@ export async function loadTrainerPtSalesFromRevenue(
     employeeCode: a.employeeCode,
     employeeName: a.employeeName,
     docRef: a.docRef,
-    paymentStatus: 'PAID' as const,
+    paymentStatus: a.paymentStatus,
     fromCashPayment: a.fromCashPayment || undefined,
   }));
 }

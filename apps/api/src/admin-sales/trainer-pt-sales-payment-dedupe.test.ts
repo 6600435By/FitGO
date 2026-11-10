@@ -195,6 +195,148 @@ function pt(
   assert.equal(merged[0]!.paymentStatus, 'PAID');
 }
 
+// Новик / Доминецкая: one cached sale must not swallow other sales' card pays.
+// 19.10 sale in TrainerPtSale + 14.10 / 26.10 cash (different sale UUIDs) → 3 visits.
+{
+  const sale19 = '06e34a3c-3cc2-4c34-bfce-7defcb1c3ff7';
+  const pay14 = '66b01412-f0fb-4513-b7a3-bc05c59042c5';
+  const pay26 = '346d86cd-c07b-479b-9d8c-f97c825f4db5';
+  const merged = mergeTrainerPtSaleRows(
+    [
+      pt({
+        occurredAt: '2026-10-19T09:52:55.000Z',
+        clientName: 'Новик Анна Николаевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        employeeCode: '156',
+        employeeName: 'Доминецкая Ирина Александровна',
+        externalId: '00000032088#1',
+        docRef: '00000032088#1',
+        saleDocumentId: sale19,
+        paymentStatus: 'PAID',
+      }),
+    ],
+    [
+      pt({
+        occurredAt: '2026-10-14T10:55:08.000Z',
+        clientName: 'Новик Анна Николаевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        employeeCode: '156',
+        employeeName: 'Доминецкая Ирина Александровна',
+        saleDocumentId: pay14,
+        docRef: pay14,
+        paymentStatus: 'PAID',
+        fromCashPayment: true,
+      }),
+      pt({
+        occurredAt: '2026-10-19T09:53:08.000Z',
+        clientName: 'Новик Анна Николаевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        employeeCode: '156',
+        employeeName: 'Доминецкая Ирина Александровна',
+        saleDocumentId: sale19,
+        docRef: sale19,
+        paymentStatus: 'PAID',
+        fromCashPayment: true,
+      }),
+      pt({
+        occurredAt: '2026-10-26T13:49:42.000Z',
+        clientName: 'Новик Анна Николаевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        employeeCode: '156',
+        employeeName: 'Доминецкая Ирина Александровна',
+        saleDocumentId: pay26,
+        docRef: pay26,
+        paymentStatus: 'PAID',
+        fromCashPayment: true,
+      }),
+    ],
+  );
+  assert.equal(merged.length, 3);
+  const days = merged.map((r) => r.occurredAt.slice(0, 10)).sort();
+  assert.deepEqual(days, ['2026-10-14', '2026-10-19', '2026-10-26']);
+  assert.ok(merged.every((r) => r.paymentStatus === 'PAID'));
+  assert.ok(merged.every((r) => r.amount === 50));
+}
+
+// Cash with sale UUID must not attach to a different same-service sale via svc key.
+{
+  const merged = mergeTrainerPtSaleRows(
+    [
+      pt({
+        occurredAt: '2026-10-19T10:00:00.000Z',
+        externalId: '32088#1',
+        docRef: '32088#1',
+        // No saleDocumentId — legacy Integration number#line only.
+        paymentStatus: 'PAID',
+      }),
+    ],
+    [
+      pt({
+        occurredAt: '2026-10-14T10:00:00.000Z',
+        saleDocumentId: '66b01412-f0fb-4513-b7a3-bc05c59042c5',
+        paymentStatus: 'PAID',
+        fromCashPayment: true,
+      }),
+    ],
+  );
+  assert.equal(merged.length, 2);
+}
+
+// Split card pay 25+25 (same sale UUID, two registrars) → one PAID visit, amount 50.
+// Sale 30171 / Новик: две оплаты картой 02.11 на одну продажу 02.10.
+{
+  const saleUuid = '4d9deae0-f4d4-4d3c-93f1-e693125d1c11';
+  const merged = mergeTrainerPtSaleRows(
+    [
+      pt({
+        occurredAt: '2026-10-02T19:00:02.000Z',
+        clientName: 'Новик Анна Николаевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        employeeCode: '156',
+        employeeName: 'Доминецкая Ирина Александровна',
+        saleDocumentId: saleUuid,
+        docRef: saleUuid,
+        paymentStatus: 'DEBT',
+      }),
+    ],
+    [
+      pt({
+        occurredAt: '2026-11-02T20:03:28.000Z',
+        clientName: 'Новик Анна Николаевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 25,
+        employeeCode: '156',
+        employeeName: 'Доминецкая Ирина Александровна',
+        saleDocumentId: saleUuid,
+        docRef: saleUuid,
+        paymentStatus: 'PAID',
+        fromCashPayment: true,
+      }),
+      pt({
+        occurredAt: '2026-11-02T22:19:02.000Z',
+        clientName: 'Новик Анна Николаевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 25,
+        employeeCode: '156',
+        employeeName: 'Доминецкая Ирина Александровна',
+        saleDocumentId: saleUuid,
+        docRef: saleUuid,
+        paymentStatus: 'PAID',
+        fromCashPayment: true,
+      }),
+    ],
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]!.occurredAt.slice(0, 10), '2026-10-02');
+  assert.equal(merged[0]!.paymentStatus, 'PAID');
+  assert.equal(merged[0]!.amount, 50);
+}
+
 // Do not sum payment amount onto sale amount.
 {
   const uuid = '11111111-1111-1111-1111-111111111111';
