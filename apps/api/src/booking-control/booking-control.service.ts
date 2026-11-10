@@ -49,6 +49,7 @@ import {
   sessionApprovalLabelRu,
   sessionApprovalPhase,
   humanDocumentNumber,
+  isMultiVisitPackSale,
   isSpaAllSportsBioimpedance,
   isSpaLikeSessionTitle,
   isMembershipIncludedSpaTitle,
@@ -86,9 +87,6 @@ import {
 } from './pt-document-match';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import {
-  isLikelyTrainingProductName,
-} from '../admin-sales/admin-sales-segments';
-import {
   isExcludedFromPtBookingControl,
   isGymFloorSessionTitle,
   isHiddenFromTrainerBookingControl,
@@ -96,6 +94,8 @@ import {
   loadTrainerPtSalesFromRevenue,
   mergeTrainerPtSaleRows,
   overlayPtSaleDebtFromRevenue,
+  overlayPtSalePaidFromRevenue,
+  saleDocumentIdFromPtExternalId,
   type TrainerPtSaleRow,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { sessionMatchesFlag } from '../discrepancies/discrepancies-predicates';
@@ -467,6 +467,11 @@ export class BookingControlService {
       this.indexTrainerPtSales(ptSales);
       for (const sale of ptSales) {
         if (isExcludedFromPtBookingControl(sale.serviceName)) {
+          continue;
+        }
+        // Pack sales («5 ПТ», «реформер 8») are not PT appointments — ЗП
+        // pays on conducted write-offs only; keep them out of the register.
+        if (isMultiVisitPackSale(sale.serviceName)) {
           continue;
         }
         if (
@@ -1752,6 +1757,9 @@ export class BookingControlService {
         const now = new Date();
         for (const row of reconciled) {
           // Prefer sale-line key (docRef); client UUID in externalId collapses rows.
+          // Keep Integration UUID in saleDocumentId before the docRef swap.
+          const saleDocumentId =
+            saleDocumentIdFromPtExternalId(row.externalId) ?? null;
           const externalId = row.docRef || row.externalId;
           if (!externalId) continue;
           const occurredAt = new Date(row.occurredAt);
@@ -1761,6 +1769,7 @@ export class BookingControlService {
             create: {
               clubId,
               externalId,
+              saleDocumentId,
               clientName: row.clientName ?? null,
               serviceName: row.serviceName ?? null,
               occurredAt,
@@ -1775,6 +1784,7 @@ export class BookingControlService {
               syncedAt: now,
             },
             update: {
+              saleDocumentId,
               clientName: row.clientName ?? null,
               serviceName: row.serviceName ?? null,
               occurredAt,
@@ -1791,12 +1801,19 @@ export class BookingControlService {
           });
           ptUpserted += 1;
         }
+        // Cache only one-shot PT sales for the register; pack SKUs stay in DB
+        // for unit-price recovery but are not appointments.
+        const forControl = reconciled.filter(
+          (r) =>
+            !isExcludedFromPtBookingControl(r.serviceName) &&
+            !isMultiVisitPackSale(r.serviceName),
+        );
         const cacheKey = `${clubId}|${from}|${to}`;
         this.ptSalesCache.set(cacheKey, {
           at: Date.now(),
-          rows: reconciled,
+          rows: forControl,
         });
-        this.indexTrainerPtSales(reconciled);
+        this.indexTrainerPtSales(forControl);
       }
     } catch (e) {
       ptError = e instanceof Error ? e.message : String(e);
@@ -4730,9 +4747,17 @@ export class BookingControlService {
       orderBy: { occurredAt: 'desc' },
     });
     const fromPt: TrainerPtSaleRow[] = rows
-      .filter((r) => !isExcludedFromPtBookingControl(r.serviceName))
+      .filter(
+        (r) =>
+          !isExcludedFromPtBookingControl(r.serviceName) &&
+          !isMultiVisitPackSale(r.serviceName),
+      )
       .map((r) => ({
         externalId: r.externalId,
+        saleDocumentId:
+          r.saleDocumentId ??
+          saleDocumentIdFromPtExternalId(r.externalId) ??
+          undefined,
         clientName: r.clientName ?? '—',
         serviceName: r.serviceName ?? 'Разовая ПТ (продажа)',
         occurredAt: r.occurredAt.toISOString(),
@@ -4751,7 +4776,16 @@ export class BookingControlService {
       { excludeSolariumAndGym: true },
     );
     const merged = mergeTrainerPtSaleRows(fromPt, fromRevenue);
-    const mapped: SpecialistServiceDebt[] = merged.map((r) => ({
+    // Integration often leaves ЛС/card composite sales as DEBT; cash register
+    // (ClubRevenue) already shows paid — including payment on a later day.
+    const withPaid = await overlayPtSalePaidFromRevenue(
+      this.prisma,
+      clubId,
+      fromD,
+      toD,
+      merged,
+    );
+    const mapped: SpecialistServiceDebt[] = withPaid.map((r) => ({
       externalId: r.externalId || r.docRef || '',
       clientName: r.clientName ?? '—',
       serviceName: r.serviceName ?? 'Разовая ПТ (продажа)',
@@ -4763,14 +4797,6 @@ export class BookingControlService {
       docRef: r.docRef ?? r.externalId ?? '',
       paymentStatus: r.paymentStatus === 'DEBT' ? 'DEBT' : 'PAID',
     }));
-    // Integration often leaves ЛС/card composite sales as DEBT; cash register
-    // (ClubRevenue) already shows paid.
-    const withPaid = await this.overlayPtSalePaidFromRevenue(
-      clubId,
-      fromD,
-      toD,
-      mapped,
-    );
     // Inverse: wrongly-PAID from Integration when debt remainder missing —
     // ClubRevenue unpaid (scope=debt) wins so ЗП / контроль don't pay debt.
     return overlayPtSaleDebtFromRevenue(
@@ -4778,114 +4804,8 @@ export class BookingControlService {
       clubId,
       fromD,
       toD,
-      withPaid,
+      mapped,
     );
-  }
-
-  /**
-   * Upgrade TrainerPtSale DEBT → PAID when ClubRevenue has card/cash/cashless/ЛС
-   * for the same day+client+trainer (or same sale document). Keeps line amount.
-   */
-  private async overlayPtSalePaidFromRevenue(
-    clubId: string,
-    fromD: Date,
-    toD: Date,
-    sales: SpecialistServiceDebt[],
-  ): Promise<SpecialistServiceDebt[]> {
-    const unpaidIdx = sales
-      .map((s, i) => (s.paymentStatus === 'DEBT' ? i : -1))
-      .filter((i) => i >= 0);
-    if (unpaidIdx.length === 0) return sales;
-
-    const entries = await this.prisma.clubRevenueEntry.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        OR: [
-          { occurredAt: { gte: fromD, lte: toD } },
-          { paidAt: { gte: fromD, lte: toD } },
-        ],
-      },
-      select: {
-        documentId: true,
-        externalId: true,
-        productName: true,
-        saleType: true,
-        clientName: true,
-        performerExternalId: true,
-        performerName: true,
-        employeeExternalId: true,
-        employeeName: true,
-        paidAmount: true,
-        personalAccount: true,
-        cash: true,
-        card: true,
-        cashless: true,
-        occurredAt: true,
-        paidAt: true,
-      },
-    });
-
-    const paidKeys = new Set<string>();
-    for (const e of entries) {
-      const product = e.productName ?? '';
-      const isPt =
-        (e.saleType ?? '').toLowerCase() === 'training' ||
-        isLikelyTrainingProductName(product);
-      if (!isPt) continue;
-      const paid =
-        (Number(e.paidAmount) || 0) > 0.01 ||
-        (Number(e.personalAccount) || 0) > 0.01 ||
-        (Number(e.cash) || 0) +
-          (Number(e.card) || 0) +
-          (Number(e.cashless) || 0) >
-          0.01;
-      if (!paid) continue;
-      const when = e.paidAt ?? e.occurredAt;
-      const day = when.toISOString().slice(0, 10);
-      const client = (e.clientName ?? '').trim().toLowerCase();
-      if (!day || !client) continue;
-      const perfCode = e.performerExternalId?.trim();
-      const perfName = e.performerName?.trim();
-      const empCode = e.employeeExternalId?.trim();
-      const empName = e.employeeName?.trim();
-      const trainerCode = perfCode || (!perfName ? empCode : undefined);
-      const trainerName = perfName || (!perfCode ? empName : undefined);
-      if (trainerCode) {
-        paidKeys.add(
-          `${day}|${client}|c:${trainerCode.replace(/^0+/, '')}`,
-        );
-      }
-      if (trainerName) {
-        paidKeys.add(`${day}|${client}|n:${trainerName.toLowerCase()}`);
-      }
-      const doc =
-        e.documentId?.trim() ||
-        e.externalId.split(':')[0] ||
-        e.externalId;
-      if (doc) paidKeys.add(`doc:${doc.toLowerCase()}`);
-    }
-
-    if (paidKeys.size === 0) return sales;
-
-    return sales.map((s) => {
-      if (s.paymentStatus !== 'DEBT') return s;
-      const day = (s.occurredAt || '').slice(0, 10);
-      const client = (s.clientName ?? '').trim().toLowerCase();
-      const code = (s.employeeCode ?? '').trim().replace(/^0+/, '');
-      const name = (s.employeeName ?? '').trim().toLowerCase();
-      const doc = (s.docRef || '').trim().toLowerCase();
-      const extRoot = (s.externalId || '').split(/[:#]/)[0]?.trim().toLowerCase();
-      const docRoot = doc.includes('#') ? doc.split('#')[0]! : doc;
-      const hit =
-        (code && paidKeys.has(`${day}|${client}|c:${code}`)) ||
-        (name && paidKeys.has(`${day}|${client}|n:${name}`)) ||
-        (doc && paidKeys.has(`doc:${doc}`)) ||
-        (docRoot && paidKeys.has(`doc:${docRoot}`)) ||
-        (extRoot && paidKeys.has(`doc:${extRoot}`));
-      if (!hit) return s;
-      return { ...s, paymentStatus: 'PAID' as const };
-    });
   }
 
   private async fetchTrainerPtSalesLive(
@@ -5984,6 +5904,7 @@ export class BookingControlService {
 
   private mapRevenueToSaleCandidate(r: {
     externalId: string;
+    documentId?: string | null;
     occurredAt: Date;
     paidAt: Date | null;
     productName: string | null;
@@ -6002,6 +5923,7 @@ export class BookingControlService {
   }): SpaSaleCandidate {
     return {
       externalId: r.externalId,
+      documentId: r.documentId ?? null,
       occurredAt: r.occurredAt,
       paidAt: r.paidAt,
       productName: r.productName,

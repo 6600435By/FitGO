@@ -8,6 +8,7 @@ import {
   isServiceBlockPackageName,
   isSpaLikeSessionTitle,
 } from '@fitgo/shared-types';
+import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
 
 /** Days before visit to look for a paid/debt sale. */
 export const SPA_SALE_LOOKBACK_DAYS = 21;
@@ -21,6 +22,8 @@ export const SPA_DEBT_LOOKBACK_DAYS = 60;
 
 export type SpaSaleCandidate = {
   externalId: string;
+  /** ClubRevenueEntry.documentId (Регистратор) when known. */
+  documentId?: string | null;
   occurredAt: Date;
   paidAt?: Date | null;
   productName?: string | null;
@@ -37,6 +40,100 @@ export type SpaSaleCandidate = {
   cashless?: number | null;
   personalAccount?: number | null;
 };
+
+function isCashOp(op: string): boolean {
+  const o = (op ?? '').toLowerCase();
+  return o === 'payment' || o === 'refund';
+}
+
+/**
+ * Collapse sale + later card payment of the same 1C document into one candidate.
+ * Keeps sale date/amount; payment only marks PAID. Avoids SALE_MULTIPLE noise.
+ */
+export function collapseSpaSalesByBasis(
+  sales: SpaSaleCandidate[],
+): SpaSaleCandidate[] {
+  const byBasis = new Map<string, SpaSaleCandidate>();
+  let anon = 0;
+  for (const s of sales) {
+    const basis = preferredSaleBasisId({
+      externalId: s.externalId,
+      documentId: s.documentId ?? null,
+    });
+    const key = basis || s.externalId || `anon:${anon++}`;
+    const prev = byBasis.get(key);
+    if (!prev) {
+      byBasis.set(key, { ...s });
+      continue;
+    }
+    const prevCash = isCashOp(prev.operationType);
+    const nextCash = isCashOp(s.operationType);
+    // Prefer non-cash row as the link target (sale / unpaid / write-off).
+    const preferNext = prevCash && !nextCash;
+    const base = preferNext ? s : prev;
+    const other = preferNext ? prev : s;
+    const paidAmount = Math.max(
+      Number(base.paidAmount) || 0,
+      Number(other.paidAmount) || 0,
+    );
+    const saleAmount = Math.max(
+      Number(base.saleAmount) || 0,
+      Number(other.saleAmount) || 0,
+    );
+    // Keep visit/sale day — do not shift to cash settlement day.
+    const occurredAt =
+      !isCashOp(base.operationType)
+        ? base.occurredAt
+        : !isCashOp(other.operationType)
+          ? other.occurredAt
+          : base.occurredAt.getTime() <= other.occurredAt.getTime()
+            ? base.occurredAt
+            : other.occurredAt;
+    const paidAtCandidates = [base.paidAt, other.paidAt].filter(
+      (d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()),
+    );
+    const paidAt =
+      paidAtCandidates.length > 0
+        ? new Date(Math.max(...paidAtCandidates.map((d) => d.getTime())))
+        : base.paidAt ?? other.paidAt ?? null;
+    let operationType = base.operationType;
+    if ((base.operationType ?? '').toLowerCase() === 'debt_writeoff') {
+      operationType = 'debt_writeoff';
+    } else if (
+      paidAmount > 0.009 ||
+      isCashOp(other.operationType) ||
+      isCashOp(base.operationType)
+    ) {
+      operationType = 'payment';
+    }
+    byBasis.set(key, {
+      ...base,
+      occurredAt,
+      paidAt,
+      paidAmount,
+      saleAmount,
+      operationType,
+      cash: Math.max(Number(base.cash) || 0, Number(other.cash) || 0) || base.cash,
+      card: Math.max(Number(base.card) || 0, Number(other.card) || 0) || base.card,
+      cashless:
+        Math.max(Number(base.cashless) || 0, Number(other.cashless) || 0) ||
+        base.cashless,
+      personalAccount:
+        Math.max(
+          Number(base.personalAccount) || 0,
+          Number(other.personalAccount) || 0,
+        ) || base.personalAccount,
+      productName: base.productName || other.productName,
+      productExternalId: base.productExternalId || other.productExternalId,
+      performerExternalId: base.performerExternalId || other.performerExternalId,
+      performerName: base.performerName || other.performerName,
+      clientExternalId: base.clientExternalId || other.clientExternalId,
+      clientName: base.clientName || other.clientName,
+      documentId: base.documentId || other.documentId,
+    });
+  }
+  return [...byBasis.values()];
+}
 
 function positiveMajor(n: number | null | undefined): number {
   const v = Number(n) || 0;
@@ -527,17 +624,21 @@ export function matchSpaSale(input: {
    */
   blockAutoLink?: boolean;
 }): SpaSaleMatchResult {
-  const { booking, sales, takenSaleIds, serviceIdByProduct, blockAutoLink } =
-    input;
+  const { booking, takenSaleIds, serviceIdByProduct, blockAutoLink } = input;
+  // Sale + later card payment of the same document → one candidate.
+  const sales = collapseSpaSalesByBasis(input.sales);
   if (!blockAutoLink && booking.linkedSaleExternalId?.trim()) {
-    const linked = sales.find(
-      (s) => s.externalId === booking.linkedSaleExternalId,
-    );
+    const linkedId = booking.linkedSaleExternalId.trim();
+    const linked =
+      sales.find((s) => s.externalId === linkedId) ??
+      input.sales.find((s) => s.externalId === linkedId);
     if (linked) {
+      const collapsed =
+        sales.find((s) => s.externalId === linked.externalId) ?? linked;
       return {
         kind: 'auto',
-        sale: linked,
-        paymentStatus: salePaymentStatus(linked),
+        sale: collapsed,
+        paymentStatus: salePaymentStatus(collapsed),
       };
     }
   }
@@ -547,8 +648,7 @@ export function matchSpaSale(input: {
   const debtWin = debtSearchWindow(visitDay);
 
   const saleAnchorTime = (s: SpaSaleCandidate) => {
-    const paid = s.paidAt?.getTime();
-    if (paid != null && Number.isFinite(paid)) return paid;
+    // Prefer sale/visit day over cash settlement paidAt for ranking.
     return s.occurredAt.getTime();
   };
 

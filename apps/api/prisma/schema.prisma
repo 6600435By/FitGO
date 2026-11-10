@@ -3188,6 +3188,9 @@ model TrainerPtSale {
   id                 String   @id @default(cuid())
   clubId             String
   externalId         String
+  /// 1C Document.Продажа UUID (from Integration externalId `{uuid}#{line}`).
+  /// Links ClubRevenue payment rows (preferredSaleBasisId) across days.
+  saleDocumentId     String?
   clientName         String?
   serviceName        String?
   occurredAt         DateTime
@@ -3209,6 +3212,7 @@ model TrainerPtSale {
   @@index([clubId, occurredAt])
   @@index([clubId, employeeCode, occurredAt])
   @@index([clubId, isActive, occurredAt])
+  @@index([clubId, saleDocumentId])
 }
 
 /// Cached specialist service debts from FitGO HTTP GET /specialist-service-debts.

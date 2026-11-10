@@ -17,6 +17,8 @@ import { isCollectibleClientDebt } from './club-revenue-debt';
 /** Row shape shared by payroll and booking-control PT sales. */
 export type TrainerPtSaleRow = {
   externalId?: string;
+  /** 1C Document.Продажа UUID — links cash payments across days. */
+  saleDocumentId?: string;
   clientName?: string;
   serviceName?: string;
   occurredAt: string;
@@ -26,7 +28,46 @@ export type TrainerPtSaleRow = {
   employeeName?: string;
   docRef?: string;
   paymentStatus?: string;
+  /** True when row came from ClubRevenue cash payment/refund, not TrainerPtSale. */
+  fromCashPayment?: boolean;
 };
+
+const DOC_UUID_RE = /^[0-9a-f-]{36}$/i;
+
+/**
+ * Extract 1C sale document UUID from Integration `externalId` (`{uuid}#{line}`)
+ * or from a bare UUID / cash-key basis.
+ */
+export function saleDocumentIdFromPtExternalId(
+  externalId: string | null | undefined,
+): string | undefined {
+  const raw = (externalId ?? '').trim();
+  if (!raw) return undefined;
+  const head = (raw.split(/[:#]/)[0] ?? '').trim();
+  if (head && DOC_UUID_RE.test(head)) return head.toLowerCase();
+  return undefined;
+}
+
+/** Normalize service title for cross-day payment ↔ sale matching. */
+function normServiceKey(name: string | null | undefined): string {
+  return (name ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ');
+}
+
+function trainerLooseKeyParts(r: {
+  employeeCode?: string;
+  employeeName?: string;
+}): { code?: string; name?: string } {
+  const code = (r.employeeCode ?? '').trim().replace(/^0+/, '');
+  const name = (r.employeeName ?? '').trim().toLowerCase();
+  return {
+    code: code || undefined,
+    name: name || undefined,
+  };
+}
 
 /**
  * Multi-visit pack / debt sale lines used only to recover unit = amount/N
@@ -336,7 +377,140 @@ export async function overlayPtSaleDebtFromRevenue<T extends TrainerPtSaleRow>(
   return applyUnpaidDebtStatusToPtSales(sales, keys);
 }
 
-/** Prefer TrainerPtSale rows; add revenue-only PT lines not already present. */
+/**
+ * Upgrade DEBT → PAID when ClubRevenue has card/cash/cashless/ЛС for the same
+ * sale document (preferredSaleBasisId) or same day+client+trainer.
+ * Payment on a later day still marks the original sale PAID.
+ */
+export async function overlayPtSalePaidFromRevenue<T extends TrainerPtSaleRow>(
+  prisma: PrismaService,
+  clubId: string,
+  fromD: Date,
+  toD: Date,
+  sales: T[],
+): Promise<T[]> {
+  if (sales.length === 0) return sales;
+  if (!sales.some((s) => (s.paymentStatus ?? '').toUpperCase() === 'DEBT')) {
+    return sales;
+  }
+
+  const entries = await prisma.clubRevenueEntry.findMany({
+    where: {
+      clubId,
+      isActive: true,
+      OR: [
+        { occurredAt: { gte: fromD, lte: toD } },
+        { paidAt: { gte: fromD, lte: toD } },
+      ],
+    },
+    select: {
+      documentId: true,
+      externalId: true,
+      productName: true,
+      saleType: true,
+      clientName: true,
+      performerExternalId: true,
+      performerName: true,
+      employeeExternalId: true,
+      employeeName: true,
+      paidAmount: true,
+      personalAccount: true,
+      cash: true,
+      card: true,
+      cashless: true,
+      occurredAt: true,
+      paidAt: true,
+    },
+  });
+
+  const paidKeys = new Set<string>();
+  for (const e of entries) {
+    const product = e.productName ?? '';
+    const isPt =
+      (e.saleType ?? '').toLowerCase() === 'training' ||
+      isLikelyTrainingProductName(product);
+    if (!isPt) continue;
+    if (!clubRevenueHasPaidMoney(e)) continue;
+    const when = e.paidAt ?? e.occurredAt;
+    const day = when.toISOString().slice(0, 10);
+    const client = (e.clientName ?? '').trim().toLowerCase();
+    if (!day || !client) continue;
+    const perfCode = e.performerExternalId?.trim();
+    const perfName = e.performerName?.trim();
+    const empCode = e.employeeExternalId?.trim();
+    const empName = e.employeeName?.trim();
+    const trainerCode = perfCode || (!perfName ? empCode : undefined);
+    const trainerName = perfName || (!perfCode ? empName : undefined);
+    if (trainerCode) {
+      paidKeys.add(`${day}|${client}|c:${trainerCode.replace(/^0+/, '')}`);
+    }
+    if (trainerName) {
+      paidKeys.add(`${day}|${client}|n:${trainerName.toLowerCase()}`);
+    }
+    const basis = preferredSaleBasisId({
+      externalId: e.externalId,
+      documentId: e.documentId,
+    });
+    if (basis) paidKeys.add(`doc:${basis.toLowerCase()}`);
+    const registrar = e.documentId?.trim();
+    if (registrar) paidKeys.add(`doc:${registrar.toLowerCase()}`);
+  }
+  if (paidKeys.size === 0) return sales;
+
+  return sales.map((s) => {
+    if ((s.paymentStatus ?? '').toUpperCase() !== 'DEBT') return s;
+    const day = (s.occurredAt || '').slice(0, 10);
+    const client = (s.clientName ?? '').trim().toLowerCase();
+    const code = (s.employeeCode ?? '').trim().replace(/^0+/, '');
+    const name = (s.employeeName ?? '').trim().toLowerCase();
+    const doc = (s.docRef || '').trim();
+    const ext = (s.externalId || '').trim();
+    const extRoot = ext.split(/[:#]/)[0]?.trim().toLowerCase();
+    const docRoot = doc.includes('#') ? doc.split('#')[0]! : doc;
+    const mappedUuid =
+      (s.saleDocumentId ?? '').trim().toLowerCase() ||
+      saleDocumentIdFromPtExternalId(ext) ||
+      saleDocumentIdFromPtExternalId(doc);
+    const hit =
+      (code && paidKeys.has(`${day}|${client}|c:${code}`)) ||
+      (name && paidKeys.has(`${day}|${client}|n:${name}`)) ||
+      (doc && paidKeys.has(`doc:${doc.toLowerCase()}`)) ||
+      (docRoot && paidKeys.has(`doc:${docRoot.toLowerCase()}`)) ||
+      (extRoot && paidKeys.has(`doc:${extRoot}`)) ||
+      (mappedUuid && paidKeys.has(`doc:${mappedUuid}`));
+    if (!hit) return s;
+    return { ...s, paymentStatus: 'PAID' };
+  });
+}
+
+function markPaid(row: TrainerPtSaleRow): TrainerPtSaleRow {
+  if (row.paymentStatus === 'PAID') return row;
+  return { ...row, paymentStatus: 'PAID' };
+}
+
+/**
+ * Cross-day identity for cash settlement → original sale.
+ * Prefer saleDocumentId; else client|trainer|service (legacy rows without UUID).
+ */
+function saleIdentityKeys(r: TrainerPtSaleRow): string[] {
+  const keys: string[] = [];
+  const uuid =
+    (r.saleDocumentId ?? '').trim().toLowerCase() ||
+    saleDocumentIdFromPtExternalId(r.externalId) ||
+    saleDocumentIdFromPtExternalId(r.docRef);
+  if (uuid) keys.push(`uuid:${uuid}`);
+  const client = (r.clientName ?? '').trim().toLowerCase();
+  const svc = normServiceKey(r.serviceName);
+  if (!client || !svc) return keys;
+  const { code, name } = trainerLooseKeyParts(r);
+  if (code) keys.push(`svc:${client}|c:${code}|${svc}`);
+  if (name) keys.push(`svc:${client}|n:${name}|${svc}`);
+  return keys;
+}
+
+/** Prefer TrainerPtSale rows; add revenue-only PT lines not already present.
+ * Cash payment/refund of an existing sale only flips PAID — never a second visit.
+ */
 export function mergeTrainerPtSaleRows(
   primary: TrainerPtSaleRow[],
   extra: TrainerPtSaleRow[],
@@ -364,21 +538,59 @@ export function mergeTrainerPtSaleRows(
     return ks;
   };
   const looseIndex = new Map<string, number[]>();
+  const identityIndex = new Map<string, number[]>();
   const consumed = new Set<number>();
   const looseMatched = new Set<string>();
-  for (const r of primary) {
+
+  const indexRow = (r: TrainerPtSaleRow, idx: number) => {
     keys.add(keyOf(r));
-    const idx = out.length;
-    out.push(r);
     for (const lk of looseKeys(r)) {
       const list = looseIndex.get(lk) ?? [];
       list.push(idx);
       looseIndex.set(lk, list);
     }
+    for (const ik of saleIdentityKeys(r)) {
+      const list = identityIndex.get(ik) ?? [];
+      list.push(idx);
+      identityIndex.set(ik, list);
+    }
+  };
+
+  const findIdentityMatch = (r: TrainerPtSaleRow): number | undefined => {
+    for (const ik of saleIdentityKeys(r)) {
+      const hit = (identityIndex.get(ik) ?? []).find((i) => !consumed.has(i));
+      if (hit != null) return hit;
+    }
+    return undefined;
+  };
+
+  for (const r of primary) {
+    const idx = out.length;
+    out.push(r);
+    indexRow(r, idx);
   }
   for (const r of extra) {
     const k = keyOf(r);
-    if (keys.has(k)) continue;
+    if (keys.has(k)) {
+      // Same day+doc already present — still upgrade PAID from cash.
+      if (r.paymentStatus === 'PAID') {
+        const idx = out.findIndex((x) => keyOf(x) === k);
+        if (idx >= 0) out[idx] = markPaid(out[idx]!);
+      }
+      continue;
+    }
+
+    // Cross-day: cash settlement of an existing sale → PAID only, keep sale date/amount.
+    const identityIdx = findIdentityMatch(r);
+    if (identityIdx != null) {
+      consumed.add(identityIdx);
+      out[identityIdx] = markPaid(out[identityIdx]!);
+      continue;
+    }
+    if (r.fromCashPayment) {
+      // Cash row with no matching sale — keep as fallback session below.
+    }
+
     let matchIdx: number | undefined;
     for (const lk of looseKeys(r)) {
       matchIdx = (looseIndex.get(lk) ?? []).find((i) => !consumed.has(i));
@@ -387,29 +599,35 @@ export function mergeTrainerPtSaleRows(
     if (matchIdx != null) {
       consumed.add(matchIdx);
       for (const lk of looseKeys(r)) looseMatched.add(lk);
-      if (r.paymentStatus === 'PAID' && out[matchIdx].paymentStatus !== 'PAID') {
-        out[matchIdx] = { ...out[matchIdx], paymentStatus: 'PAID' };
-      }
+      out[matchIdx] = markPaid(out[matchIdx]!);
       continue;
     }
     if (looseKeys(r).some((lk) => looseMatched.has(lk))) {
       continue;
     }
-    keys.add(k);
     const idx = out.length;
     out.push(r);
-    for (const lk of looseKeys(r)) {
-      const list = looseIndex.get(lk) ?? [];
-      list.push(idx);
-      looseIndex.set(lk, list);
-    }
+    indexRow(r, idx);
   }
   return out;
 }
 
+/** Cash-register settlement of a sale (not the sale document itself). */
+export function isClubRevenueCashSettlement(e: {
+  operationType?: string | null;
+  externalId?: string | null;
+}): boolean {
+  const op = (e.operationType ?? '').toLowerCase();
+  if (op === 'payment' || op === 'refund') return true;
+  return (e.externalId ?? '').includes(':cash:');
+}
+
+const SALE_MATCH_LOOKBACK_DAYS = 120;
+
 /**
  * PT one-shots from ClubRevenueEntry.
  * Match trainer by performer* (Исполнитель); employee* is sale author (admin).
+ * Cash payment/refund of a known TrainerPtSale is omitted (PAID via overlay).
  */
 export async function loadTrainerPtSalesFromRevenue(
   prisma: PrismaService,
@@ -419,20 +637,57 @@ export async function loadTrainerPtSalesFromRevenue(
   opts?: { excludeSolariumAndGym?: boolean },
 ): Promise<TrainerPtSaleRow[]> {
   const exclude = opts?.excludeSolariumAndGym ?? false;
-  const entries = await prisma.clubRevenueEntry.findMany({
-    where: {
-      clubId,
-      isActive: true,
-      OR: [
-        { occurredAt: { gte: fromD, lte: toD } },
-        { paidAt: { gte: fromD, lte: toD } },
-      ],
-    },
-    orderBy: { occurredAt: 'asc' },
-  });
+  const lookbackFrom = new Date(fromD);
+  lookbackFrom.setDate(lookbackFrom.getDate() - SALE_MATCH_LOOKBACK_DAYS);
+
+  const [entries, knownSales] = await Promise.all([
+    prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        OR: [
+          { occurredAt: { gte: fromD, lte: toD } },
+          { paidAt: { gte: fromD, lte: toD } },
+        ],
+      },
+      orderBy: { occurredAt: 'asc' },
+    }),
+    prisma.trainerPtSale.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        occurredAt: { gte: lookbackFrom, lte: toD },
+      },
+      select: {
+        saleDocumentId: true,
+        externalId: true,
+        clientName: true,
+        serviceName: true,
+        employeeCode: true,
+        employeeName: true,
+      },
+    }),
+  ]);
+
+  const knownUuids = new Set<string>();
+  const knownSvcKeys = new Set<string>();
+  for (const s of knownSales) {
+    const uuid =
+      (s.saleDocumentId ?? '').trim().toLowerCase() ||
+      saleDocumentIdFromPtExternalId(s.externalId);
+    if (uuid) knownUuids.add(uuid);
+    const client = (s.clientName ?? '').trim().toLowerCase();
+    const svc = normServiceKey(s.serviceName);
+    if (!client || !svc) continue;
+    const code = (s.employeeCode ?? '').trim().replace(/^0+/, '');
+    const name = (s.employeeName ?? '').trim().toLowerCase();
+    if (code) knownSvcKeys.add(`${client}|c:${code}|${svc}`);
+    if (name) knownSvcKeys.add(`${client}|n:${name}|${svc}`);
+  }
 
   type Agg = {
     externalId: string;
+    saleDocumentId?: string;
     clientName?: string;
     serviceName?: string;
     occurredAt: string;
@@ -440,11 +695,15 @@ export async function loadTrainerPtSalesFromRevenue(
     employeeCode?: string;
     employeeName?: string;
     docRef: string;
+    fromCashPayment: boolean;
   };
   const byKey = new Map<string, Agg>();
   for (const e of entries) {
     const product = e.productName ?? '';
+    // Skip spa/solarium/gym before cash→session so a massage payment tagged
+    // as training never becomes a phantom PT unit.
     if (exclude && isExcludedFromPtBookingControl(product)) continue;
+    if (isSpaLikeSessionTitle(product)) continue;
     const isPt =
       (e.saleType ?? '').toLowerCase() === 'training' ||
       isLikelyTrainingProductName(product);
@@ -473,7 +732,6 @@ export async function loadTrainerPtSalesFromRevenue(
       continue;
     }
     const amount = ptAmountFromPossiblyGluedProduct(product, rawAmount);
-    const when = e.paidAt ?? e.occurredAt;
     const basis = preferredSaleBasisId({
       externalId: e.externalId,
       documentId: e.documentId,
@@ -491,6 +749,30 @@ export async function loadTrainerPtSalesFromRevenue(
       if (ptPart) serviceName = ptPart;
     }
     if (exclude && isExcludedFromPtBookingControl(serviceName)) continue;
+    if (isSpaLikeSessionTitle(serviceName)) continue;
+
+    const fromCash = isClubRevenueCashSettlement(e);
+    if (fromCash) {
+      const basisUuid = DOC_UUID_RE.test(basis) ? basis.toLowerCase() : '';
+      if (basisUuid && knownUuids.has(basisUuid)) {
+        // Settlement of a cached TrainerPtSale — PAID via overlay, not a visit.
+        continue;
+      }
+      const client = (e.clientName ?? '').trim().toLowerCase();
+      const svc = normServiceKey(serviceName);
+      const code = (trainerCode ?? '').trim().replace(/^0+/, '');
+      const name = (trainerName ?? '').trim().toLowerCase();
+      if (
+        client &&
+        svc &&
+        ((code && knownSvcKeys.has(`${client}|c:${code}|${svc}`)) ||
+          (name && knownSvcKeys.has(`${client}|n:${name}|${svc}`)))
+      ) {
+        continue;
+      }
+    }
+
+    const when = e.paidAt ?? e.occurredAt;
     const productKey = (
       e.productExternalId?.trim() ||
       serviceName ||
@@ -502,10 +784,12 @@ export async function loadTrainerPtSalesFromRevenue(
     const trainerKey = (trainerCode || trainerName || '').trim().toLowerCase();
     const groupKey = `${basis}|${productKey}|${trainerKey}`;
     const whenIso = when.toISOString();
+    const saleDocumentId = DOC_UUID_RE.test(basis) ? basis.toLowerCase() : undefined;
     const prev = byKey.get(groupKey);
     if (!prev) {
       byKey.set(groupKey, {
         externalId: e.externalId,
+        saleDocumentId,
         clientName: e.clientName ?? undefined,
         serviceName,
         occurredAt: whenIso,
@@ -513,18 +797,25 @@ export async function loadTrainerPtSalesFromRevenue(
         employeeCode: trainerCode || undefined,
         employeeName: trainerName || undefined,
         docRef: basis,
+        fromCashPayment: fromCash,
       });
     } else {
-      prev.amount = Math.round((prev.amount + amount) * 100) / 100;
+      // Same sale UUID chunks: keep max amount, do not sum payment+sale.
+      if (amount > prev.amount) prev.amount = amount;
       if (whenIso < prev.occurredAt) prev.occurredAt = whenIso;
       if (!prev.clientName && e.clientName) {
         prev.clientName = e.clientName;
       }
       if (!prev.serviceName && serviceName) prev.serviceName = serviceName;
+      if (fromCash) prev.fromCashPayment = true;
+      if (!prev.saleDocumentId && saleDocumentId) {
+        prev.saleDocumentId = saleDocumentId;
+      }
     }
   }
   return [...byKey.values()].map((a) => ({
     externalId: a.externalId,
+    saleDocumentId: a.saleDocumentId,
     clientName: a.clientName,
     serviceName: a.serviceName,
     occurredAt: a.occurredAt,
@@ -533,6 +824,7 @@ export async function loadTrainerPtSalesFromRevenue(
     employeeName: a.employeeName,
     docRef: a.docRef,
     paymentStatus: 'PAID' as const,
+    fromCashPayment: a.fromCashPayment || undefined,
   }));
 }
 
@@ -563,7 +855,9 @@ export async function loadPackSalesForUnitPrice(
     orderBy: { occurredAt: 'asc' },
   });
 
-  const out: PackSaleForUnitPrice[] = [];
+  /** Collapse sale + later cash payment of same UUID into one pack row. */
+  const byBasis = new Map<string, PackSaleForUnitPrice>();
+  let anonSeq = 0;
   for (const e of entries) {
     const product = (e.productName ?? '').trim();
     const saleAmt = Number(e.saleAmount) || 0;
@@ -605,17 +899,51 @@ export async function loadPackSalesForUnitPrice(
       continue;
     }
 
-    const when = e.paidAt ?? e.occurredAt;
-    out.push({
-      clientName: e.clientName ?? undefined,
-      serviceName: product || undefined,
-      occurredAt: when.toISOString(),
-      amount: Math.round(rawAmount * 100) / 100,
-      quantity: qtyFromName && qtyFromName > 1 ? qtyFromName : undefined,
-      externalId: e.externalId || undefined,
+    const basis = preferredSaleBasisId({
+      externalId: e.externalId,
+      documentId: e.documentId,
     });
+    const groupKey =
+      basis ||
+      e.externalId ||
+      `anon:${anonSeq++}`;
+    // Prefer sale document date over later cash settlement date.
+    const when = isClubRevenueCashSettlement(e)
+      ? e.occurredAt
+      : (e.paidAt ?? e.occurredAt);
+    const amount = Math.round(rawAmount * 100) / 100;
+    const prev = byBasis.get(groupKey);
+    if (!prev) {
+      byBasis.set(groupKey, {
+        clientName: e.clientName ?? undefined,
+        serviceName: product || undefined,
+        occurredAt: when.toISOString(),
+        amount,
+        quantity: qtyFromName && qtyFromName > 1 ? qtyFromName : undefined,
+        externalId: e.externalId || undefined,
+      });
+    } else {
+      if (amount > prev.amount) prev.amount = amount;
+      const whenIso = when.toISOString();
+      if (whenIso < prev.occurredAt) {
+        prev.occurredAt = whenIso;
+        // Prefer non-cash externalId (sale line) when available.
+        if (!isClubRevenueCashSettlement(e) && e.externalId) {
+          prev.externalId = e.externalId;
+        }
+      }
+      if (!prev.clientName && e.clientName) prev.clientName = e.clientName;
+      if (!prev.serviceName && product) prev.serviceName = product;
+      if (
+        qtyFromName &&
+        qtyFromName > 1 &&
+        !(prev.quantity && prev.quantity > 1)
+      ) {
+        prev.quantity = qtyFromName;
+      }
+    }
   }
-  return out;
+  return [...byBasis.values()];
 }
 
 /**

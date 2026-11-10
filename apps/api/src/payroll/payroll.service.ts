@@ -116,6 +116,8 @@ import {
   matchPackSaleForUnitPrice,
   mergeTrainerPtSaleRows,
   overlayPtSaleDebtFromRevenue,
+  overlayPtSalePaidFromRevenue,
+  saleDocumentIdFromPtExternalId,
   trainerPtSaleDocKey,
   type TrainerPtSaleRow,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
@@ -4351,6 +4353,10 @@ export class PayrollService {
     });
     const fromPt: TrainerPtSaleRow[] = rows.map((r) => ({
       externalId: r.externalId,
+      saleDocumentId:
+        r.saleDocumentId ??
+        saleDocumentIdFromPtExternalId(r.externalId) ??
+        undefined,
       clientName: r.clientName ?? undefined,
       serviceName: r.serviceName ?? undefined,
       occurredAt: r.occurredAt.toISOString(),
@@ -4369,6 +4375,14 @@ export class PayrollService {
       toD,
     );
     const merged = mergeTrainerPtSaleRows(fromPt, fromRevenue);
+    // Late card payment of an earlier sale: mark PAID without a second visit.
+    const withPaid = await overlayPtSalePaidFromRevenue(
+      this.prisma,
+      clubId,
+      fromD,
+      toD,
+      merged,
+    );
     // Integration may mark unpaid PT as PAID when debt remainder is missing —
     // ClubRevenue unpaid wins so debt never enters ЗП.
     return overlayPtSaleDebtFromRevenue(
@@ -4376,7 +4390,7 @@ export class PayrollService {
       clubId,
       fromD,
       toD,
-      merged,
+      withPaid,
     );
   }
 

@@ -41,6 +41,7 @@ import {
   isExcludedFromPtBookingControl,
   loadTrainerPtSalesFromRevenue,
   mergeTrainerPtSaleRows,
+  saleDocumentIdFromPtExternalId,
   type TrainerPtSaleRow,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { namesMatch } from '../booking-control/spa-document-match';
@@ -1712,6 +1713,7 @@ export class StaffAnalyticsService {
           serviceName: true,
           clientName: true,
           externalId: true,
+          saleDocumentId: true,
           docRef: true,
           occurredAt: true,
           paymentStatus: true,
@@ -1729,6 +1731,10 @@ export class StaffAnalyticsService {
 
     const fromPt: TrainerPtSaleRow[] = salesRaw.map((r) => ({
       externalId: r.externalId,
+      saleDocumentId:
+        r.saleDocumentId ??
+        saleDocumentIdFromPtExternalId(r.externalId) ??
+        undefined,
       clientName: r.clientName ?? undefined,
       serviceName: r.serviceName ?? undefined,
       occurredAt: r.occurredAt.toISOString(),

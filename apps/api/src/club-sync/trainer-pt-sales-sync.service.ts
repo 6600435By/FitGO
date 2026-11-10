@@ -1,5 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { overlayPtSaleDebtFromRevenue } from '../admin-sales/trainer-pt-sales-from-revenue';
+import {
+  overlayPtSaleDebtFromRevenue,
+  saleDocumentIdFromPtExternalId,
+} from '../admin-sales/trainer-pt-sales-from-revenue';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { addMoscowDays, moscowDayKey } from './moscow-time';
@@ -64,6 +67,9 @@ export class TrainerPtSalesSyncService {
 
       for (const row of rows) {
         // Prefer sale-line key (docRef); client UUID in externalId collapses rows.
+        // Keep Integration UUID in saleDocumentId before the docRef swap.
+        const saleDocumentId =
+          saleDocumentIdFromPtExternalId(row.externalId) ?? null;
         const externalId = row.docRef || row.externalId;
         if (!externalId) continue;
         seen.add(externalId);
@@ -75,6 +81,7 @@ export class TrainerPtSalesSyncService {
           create: {
             clubId,
             externalId,
+            saleDocumentId,
             clientName: row.clientName ?? null,
             serviceName: row.serviceName ?? null,
             occurredAt,
@@ -89,6 +96,7 @@ export class TrainerPtSalesSyncService {
             syncedAt: now,
           },
           update: {
+            saleDocumentId,
             clientName: row.clientName ?? null,
             serviceName: row.serviceName ?? null,
             occurredAt,
