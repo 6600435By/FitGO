@@ -30,6 +30,7 @@ import { AddNoteDto } from './dto/add-note.dto';
 import { AddOfflineClientDto } from './dto/add-offline-client.dto';
 import { DismissInsightDto } from './dto/dismiss-insight.dto';
 import { InviteClientDto } from './dto/invite-client.dto';
+import { UpdateOfflineClientDto } from './dto/update-offline-client.dto';
 import { PutPersonalGoalsDto } from './dto/personal-goals.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import {
@@ -148,6 +149,23 @@ export class TrainerController {
       found: false,
       pending: false,
     };
+  }
+
+  @Patch('clients/:clientId')
+  updateClient(
+    @CurrentUser() user: JwtPayload,
+    @Param('clientId') clientId: string,
+    @Body() dto: UpdateOfflineClientDto,
+  ) {
+    return this.roster.updateClient(user.sub, clientId, dto);
+  }
+
+  @Delete('clients/:clientId')
+  removeClient(
+    @CurrentUser() user: JwtPayload,
+    @Param('clientId') clientId: string,
+  ) {
+    return this.roster.removeClient(user.sub, clientId);
   }
 
   @Get('message-recipients')

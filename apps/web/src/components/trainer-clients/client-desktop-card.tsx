@@ -11,9 +11,15 @@ import { ClientRightsBlocks } from '@/components/trainer-clients/client-rights-b
 export function ClientDesktopCard({
   summary,
   onClose,
+  onEdit,
+  onRemove,
+  removing,
 }: {
   summary: TrainerClientSummary;
   onClose?: () => void;
+  onEdit?: () => void;
+  onRemove?: () => void;
+  removing?: boolean;
 }) {
   const [detail, setDetail] = useState<TrainerClientDetail | null>(null);
   const [error, setError] = useState('');
@@ -160,6 +166,25 @@ export function ClientDesktopCard({
         >
           Написать
         </Link>
+        {onEdit ? (
+          <button
+            type="button"
+            className="btn-secondary text-sm"
+            onClick={onEdit}
+          >
+            Изменить
+          </button>
+        ) : null}
+        {onRemove ? (
+          <button
+            type="button"
+            className="btn-secondary text-sm text-red-300"
+            disabled={removing}
+            onClick={onRemove}
+          >
+            {removing ? 'Удаление…' : 'Удалить'}
+          </button>
+        ) : null}
       </div>
     </aside>
   );

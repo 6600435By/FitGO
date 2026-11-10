@@ -348,6 +348,13 @@ export class TrainerService {
       ? await this.ledger.clientCardSnippet(user.sub, clientId)
       : undefined;
 
+    const rosterLink = await this.prisma.trainerClientLink.findUnique({
+      where: {
+        trainerId_clientId: { trainerId: user.sub, clientId },
+      },
+      select: { notes: true },
+    });
+
     return {
       id: client.id,
       externalId: extId,
@@ -356,6 +363,7 @@ export class TrainerService {
       phone: client.phone ?? undefined,
       gender: client.gender ?? null,
       dateOfBirth: client.dateOfBirth?.toISOString().slice(0, 10) ?? null,
+      rosterNotes: rosterLink?.notes ?? undefined,
       hasApp: client.accountStatus === AccountStatus.ACTIVE,
       crmStatus:
         membershipRow?.crmStatus ??

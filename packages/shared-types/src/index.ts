@@ -487,6 +487,8 @@ export interface TrainerClientSummary {
   lastHallVisit?: string;
   cancelNoShowCount?: number;
   rosterStatus?: 'CONFIRMED' | 'PENDING' | 'REJECTED';
+  /** Private note on TrainerClientLink (add/edit client sheet). */
+  rosterNotes?: string;
   hasApp?: boolean;
   clientAccepted?: boolean;
   inRosterSince?: string;
@@ -1207,6 +1209,8 @@ export interface TrainerClientDetail {
   phone?: string;
   gender?: string | null;
   dateOfBirth?: string | null;
+  /** Private note on TrainerClientLink. */
+  rosterNotes?: string;
   crmStatus?: ClubCrmLinkStatus | null;
   /** Client has an active FitGO app account (not SHADOW). */
   hasApp?: boolean;

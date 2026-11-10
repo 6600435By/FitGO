@@ -20,10 +20,10 @@ import {
   type PreferredModality,
   type PreferredTimeOfDay,
 } from '@fitgo/shared-types';
-import { MiniBars, SegmentedControl, Sparkline } from '@fitgo/forma-ui';
+import { MiniBars, ResponsiveSheet, SegmentedControl, Sparkline } from '@fitgo/forma-ui';
 import Link from 'next/link';
-import { useParams, useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import { ClientRightsBlocks } from '@/components/trainer-clients/client-rights-blocks';
@@ -46,6 +46,7 @@ function labelList<T extends string>(
 
 export default function TrainerClientDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const returnDate = searchParams.get('date');
   const returnFrom = searchParams.get('from');
@@ -95,6 +96,14 @@ export default function TrainerClientDetailPage() {
   const [inviteBusy, setInviteBusy] = useState(false);
   const [sessionPriceInput, setSessionPriceInput] = useState('');
   const [priceBusy, setPriceBusy] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editPhone, setEditPhone] = useState('');
+  const [editFirstName, setEditFirstName] = useState('');
+  const [editLastName, setEditLastName] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editError, setEditError] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   useEffect(() => {
     if (
@@ -216,6 +225,57 @@ export default function TrainerClientDetailPage() {
     }
   };
 
+  const openEdit = () => {
+    setEditError('');
+    setEditPhone(client.phone ?? '+375');
+    setEditFirstName(client.firstName);
+    setEditLastName(client.lastName);
+    setEditNotes(client.rosterNotes ?? '');
+    setEditOpen(true);
+  };
+
+  const handleEditSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const token = getToken();
+    if (!token || !id) return;
+    setEditSaving(true);
+    setEditError('');
+    try {
+      await api.trainerUpdateClient(token, id, {
+        firstName: editFirstName.trim(),
+        lastName: editLastName.trim(),
+        phone: editPhone.trim(),
+        notes: editNotes.trim(),
+      });
+      setEditOpen(false);
+      setFeedback('Данные клиента сохранены');
+      load();
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const removeFromRoster = async () => {
+    const name = `${client.firstName} ${client.lastName}`.trim();
+    const ok = window.confirm(
+      `Удалить «${name}» из вашей базы клиентов? История тренировок в FitGO сохранится, если она есть.`,
+    );
+    if (!ok) return;
+    const token = getToken();
+    if (!token || !id) return;
+    setRemoving(true);
+    setError('');
+    try {
+      await api.trainerRemoveClient(token, id);
+      router.push('/trainer/clients');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось удалить');
+      setRemoving(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="card space-y-3">
@@ -234,6 +294,9 @@ export default function TrainerClientDetailPage() {
             {client.phone && (
               <p className="text-sm text-slate-400">{client.phone}</p>
             )}
+            {client.rosterNotes ? (
+              <p className="mt-1 text-sm text-forma-400">{client.rosterNotes}</p>
+            ) : null}
           </div>
           <div className="flex flex-wrap gap-2">
             <Link
@@ -250,8 +313,77 @@ export default function TrainerClientDetailPage() {
             >
               Написать
             </Link>
+            <button
+              type="button"
+              className="btn-secondary text-sm"
+              onClick={openEdit}
+            >
+              Изменить
+            </button>
+            <button
+              type="button"
+              className="btn-secondary text-sm text-red-300"
+              disabled={removing}
+              onClick={() => void removeFromRoster()}
+            >
+              {removing ? 'Удаление…' : 'Удалить'}
+            </button>
           </div>
         </div>
+
+        <ResponsiveSheet
+          open={editOpen}
+          onOpenChange={(open) => {
+            if (!open) setEditOpen(false);
+          }}
+          title="Редактировать клиента"
+          description="ФИО, телефон и заметка в вашей базе"
+          desktop="dialog"
+        >
+          <form onSubmit={handleEditSubmit} className="space-y-3">
+            <input
+              className="input w-full"
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder="+375…"
+              value={editPhone}
+              onChange={(e) => setEditPhone(e.target.value)}
+              required
+            />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <input
+                className="input"
+                placeholder="Имя"
+                value={editFirstName}
+                onChange={(e) => setEditFirstName(e.target.value)}
+                required
+              />
+              <input
+                className="input"
+                placeholder="Фамилия"
+                value={editLastName}
+                onChange={(e) => setEditLastName(e.target.value)}
+                required
+              />
+            </div>
+            <input
+              className="input w-full"
+              placeholder="Заметка (необязательно)"
+              value={editNotes}
+              onChange={(e) => setEditNotes(e.target.value)}
+            />
+            {editError ? (
+              <p className="text-sm text-red-400">{editError}</p>
+            ) : null}
+            <button
+              type="submit"
+              className="btn-primary w-full"
+              disabled={editSaving}
+            >
+              {editSaving ? 'Сохранение…' : 'Сохранить'}
+            </button>
+          </form>
+        </ResponsiveSheet>
 
         {client.hasApp === false ? (
           <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-200">

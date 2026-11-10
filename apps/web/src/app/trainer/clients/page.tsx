@@ -118,12 +118,14 @@ function TrainerClientsInner() {
   const searchParams = useSearchParams();
   const [clients, setClients] = useState<TrainerClientSummary[]>([]);
   const [error, setError] = useState('');
-  const [mode, setMode] = useState<'offline' | 'invite' | null>(null);
+  const [mode, setMode] = useState<'offline' | 'invite' | 'edit' | null>(null);
+  const [editClientId, setEditClientId] = useState<string | null>(null);
   const [segment, setSegment] = useState<Segment>('all');
   const [query, setQuery] = useState('');
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
   const [saving, setSaving] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
 
   const [phone, setPhone] = useState('+375');
   const [firstName, setFirstName] = useState('');
@@ -169,8 +171,10 @@ function TrainerClientsInner() {
         .trainerClientLookup(token, phone)
         .then((res) => {
           setLookup(res);
-          if (res.firstName) setFirstName(res.firstName);
-          if (res.lastName) setLastName(res.lastName);
+          if (mode === 'offline') {
+            if (res.firstName) setFirstName(res.firstName);
+            if (res.lastName) setLastName(res.lastName);
+          }
         })
         .catch(() => setLookup(null))
         .finally(() => setLooking(false));
@@ -219,8 +223,45 @@ function TrainerClientsInner() {
     setLastName('');
     setNotes('');
     setLookup(null);
+    setEditClientId(null);
     setFormError('');
     setFormSuccess('');
+  };
+
+  const openEdit = (client: TrainerClientSummary) => {
+    setFormError('');
+    setFormSuccess('');
+    setLookup(null);
+    setEditClientId(client.id);
+    setPhone(client.phone ?? '+375');
+    setFirstName(client.firstName);
+    setLastName(client.lastName);
+    setNotes(client.rosterNotes ?? '');
+    setMode('edit');
+  };
+
+  const removeClient = async (client: TrainerClientSummary) => {
+    const name = `${client.firstName} ${client.lastName}`.trim();
+    const ok = window.confirm(
+      `Удалить «${name}» из вашей базы клиентов? История тренировок в FitGO сохранится, если она есть.`,
+    );
+    if (!ok) return;
+    const token = getToken();
+    if (!token) return;
+    setRemovingId(client.id);
+    setInviteHint('');
+    try {
+      await api.trainerRemoveClient(token, client.id);
+      if (selectedId === client.id) setSelectedId(null);
+      setInviteHint('Клиент удалён из базы');
+      loadClients();
+    } catch (err) {
+      setInviteHint(
+        err instanceof Error ? err.message : 'Не удалось удалить клиента',
+      );
+    } finally {
+      setRemovingId(null);
+    }
   };
 
   const handleOfflineSubmit = async (e: FormEvent<HTMLFormElement>) => {
@@ -261,6 +302,31 @@ function TrainerClientsInner() {
       setFormSuccess(result.message);
       setMode(null);
       resetForm();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEditSubmit = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const token = getToken();
+    if (!token || !editClientId) return;
+    setSaving(true);
+    setFormError('');
+    setFormSuccess('');
+    try {
+      await api.trainerUpdateClient(token, editClientId, {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        phone: phone.trim(),
+        notes: notes.trim(),
+      });
+      setFormSuccess('Данные клиента сохранены');
+      setMode(null);
+      resetForm();
+      loadClients();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Ошибка');
     } finally {
@@ -442,6 +508,60 @@ function TrainerClientsInner() {
         </form>
       </ResponsiveSheet>
 
+      <ResponsiveSheet
+        open={mode === 'edit'}
+        onOpenChange={(open) => {
+          if (!open) {
+            setMode(null);
+            resetForm();
+          }
+        }}
+        title="Редактировать клиента"
+        description="ФИО, телефон и заметка в вашей базе"
+        desktop="dialog"
+      >
+        <form onSubmit={handleEditSubmit} className="space-y-3">
+          <input
+            className="input w-full"
+            inputMode="tel"
+            autoComplete="tel"
+            placeholder="+375…"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            required
+          />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <input
+              className="input"
+              placeholder="Имя"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              required
+            />
+            <input
+              className="input"
+              placeholder="Фамилия"
+              value={lastName}
+              onChange={(e) => setLastName(e.target.value)}
+              required
+            />
+          </div>
+          <input
+            className="input w-full"
+            placeholder="Заметка (необязательно)"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+          />
+          {formError && <p className="text-sm text-red-400">{formError}</p>}
+          {formSuccess && (
+            <p className="text-sm text-forma-400">{formSuccess}</p>
+          )}
+          <button type="submit" className="btn-primary w-full" disabled={saving}>
+            {saving ? 'Сохранение…' : 'Сохранить'}
+          </button>
+        </form>
+      </ResponsiveSheet>
+
       {inviteHint ? (
         <p className="text-sm text-forma-400">{inviteHint}</p>
       ) : null}
@@ -490,23 +610,40 @@ function TrainerClientsInner() {
                     >
                       <ClientListRow client={client} risk={risk} />
                     </button>
-                    {needsAppInvite ? (
-                      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
-                        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-200">
-                          Нет приложения
-                        </span>
-                        <button
-                          type="button"
-                          className="btn-secondary text-xs"
-                          disabled={inviteBusyId === client.id}
-                          onClick={() => void inviteFromCard(client)}
-                        >
-                          {inviteBusyId === client.id
-                            ? 'Отправка…'
-                            : 'Пригласить в FitGO'}
-                        </button>
-                      </div>
-                    ) : null}
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/5 pt-3">
+                      {needsAppInvite ? (
+                        <>
+                          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-200">
+                            Нет приложения
+                          </span>
+                          <button
+                            type="button"
+                            className="btn-secondary text-xs"
+                            disabled={inviteBusyId === client.id}
+                            onClick={() => void inviteFromCard(client)}
+                          >
+                            {inviteBusyId === client.id
+                              ? 'Отправка…'
+                              : 'Пригласить в FitGO'}
+                          </button>
+                        </>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs"
+                        onClick={() => openEdit(client)}
+                      >
+                        Изменить
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs text-red-300"
+                        disabled={removingId === client.id}
+                        onClick={() => void removeClient(client)}
+                      >
+                        {removingId === client.id ? 'Удаление…' : 'Удалить'}
+                      </button>
+                    </div>
                   </li>
                 );
               })}
@@ -519,6 +656,9 @@ function TrainerClientsInner() {
             <ClientDesktopCard
               summary={selectedClient}
               onClose={() => setSelectedId(null)}
+              onEdit={() => openEdit(selectedClient)}
+              onRemove={() => void removeClient(selectedClient)}
+              removing={removingId === selectedClient.id}
             />
           ) : (
             <div className="rounded-2xl border border-dashed border-white/10 px-4 py-10 text-center text-sm text-forma-400">

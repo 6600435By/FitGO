@@ -373,6 +373,7 @@ export class TrainerRosterService {
           : undefined,
         cancelNoShowCount: cancelNoShowByClient.get(client.id) ?? 0,
         rosterStatus: link.status,
+        rosterNotes: link.notes ?? undefined,
         hasApp: client.accountStatus === AccountStatus.ACTIVE,
         clientAccepted: link.clientAcceptedAt != null,
         inRosterSince: link.createdAt.toISOString(),
@@ -533,6 +534,162 @@ export class TrainerRosterService {
       inRosterSince: now.toISOString(),
       source: TrainerClientSource.MANUAL,
     };
+  }
+
+  async updateClient(
+    trainerId: string,
+    clientId: string,
+    dto: {
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+      notes?: string;
+    },
+  ) {
+    const link = await this.prisma.trainerClientLink.findUnique({
+      where: { trainerId_clientId: { trainerId, clientId } },
+      include: { client: true },
+    });
+    if (!link || link.status === TrainerClientLinkStatus.REJECTED) {
+      throw new ForbiddenException('Клиент не в вашей базе');
+    }
+
+    const client = link.client;
+    const userPatch: {
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+      phoneNormalized?: string;
+      email?: string;
+    } = {};
+
+    if (dto.firstName !== undefined) {
+      const firstName = dto.firstName.trim();
+      if (!firstName) throw new BadRequestException('Укажите имя');
+      if (firstName !== client.firstName) userPatch.firstName = firstName;
+    }
+    if (dto.lastName !== undefined) {
+      const lastName = dto.lastName.trim();
+      if (!lastName) throw new BadRequestException('Укажите фамилию');
+      if (lastName !== client.lastName) userPatch.lastName = lastName;
+    }
+
+    if (dto.phone !== undefined) {
+      const phoneTrimmed = dto.phone.trim();
+      const phoneNormalized = normalizePhone(phoneTrimmed);
+      if (phoneNormalized.length < 9) {
+        throw new BadRequestException('Некорректный номер телефона');
+      }
+      if (phoneNormalized !== (client.phoneNormalized ?? '')) {
+        const conflict = await this.prisma.user.findFirst({
+          where: {
+            phoneNormalized,
+            NOT: { id: clientId },
+          },
+          select: { id: true },
+        });
+        if (conflict) {
+          throw new ConflictException(
+            'Этот номер уже занят другим клиентом в FitGO',
+          );
+        }
+        userPatch.phone = phoneTrimmed;
+        userPatch.phoneNormalized = phoneNormalized;
+        if (client.accountStatus === AccountStatus.SHADOW) {
+          userPatch.email = shadowEmailForPhone(phoneNormalized);
+        }
+      }
+    }
+
+    if (Object.keys(userPatch).length > 0) {
+      await this.prisma.user.update({
+        where: { id: clientId },
+        data: userPatch,
+      });
+    }
+
+    const linkPatch: { notes?: string | null } = {};
+    if (dto.notes !== undefined) {
+      const notes = dto.notes.trim();
+      linkPatch.notes = notes.length > 0 ? notes : null;
+    }
+    if (Object.keys(linkPatch).length > 0) {
+      await this.prisma.trainerClientLink.update({
+        where: { id: link.id },
+        data: linkPatch,
+      });
+    }
+
+    const updated = await this.prisma.user.findUniqueOrThrow({
+      where: { id: clientId },
+    });
+    const updatedLink = await this.prisma.trainerClientLink.findUniqueOrThrow({
+      where: { id: link.id },
+    });
+
+    return {
+      id: updated.id,
+      firstName: updated.firstName,
+      lastName: updated.lastName,
+      phone: updated.phone ?? undefined,
+      externalId: updated.externalId ?? undefined,
+      rosterNotes: updatedLink.notes ?? undefined,
+      rosterStatus: updatedLink.status,
+      hasApp: updated.accountStatus === AccountStatus.ACTIVE,
+      clientAccepted: updatedLink.clientAcceptedAt != null,
+      inRosterSince: updatedLink.createdAt.toISOString(),
+      source: updatedLink.source,
+    };
+  }
+
+  /**
+   * Remove client from trainer roster. Shadow guests created by this trainer
+   * with no other links/bookings are deleted; app accounts are only unlinked.
+   */
+  async removeClient(trainerId: string, clientId: string) {
+    const link = await this.prisma.trainerClientLink.findUnique({
+      where: { trainerId_clientId: { trainerId, clientId } },
+      include: { client: true },
+    });
+    if (!link) {
+      throw new NotFoundException('Клиент не в вашей базе');
+    }
+
+    const phoneNormalized = link.client.phoneNormalized;
+    await this.prisma.trainerClientLink.delete({ where: { id: link.id } });
+
+    if (phoneNormalized) {
+      await this.prisma.trainerClientInvite.updateMany({
+        where: {
+          trainerId,
+          phoneNormalized,
+          status: TrainerClientInviteStatus.PENDING,
+        },
+        data: {
+          status: TrainerClientInviteStatus.REJECTED,
+          clientId,
+          respondedAt: new Date(),
+        },
+      });
+    }
+
+    const client = link.client;
+    let deletedUser = false;
+    if (
+      client.accountStatus === AccountStatus.SHADOW &&
+      client.createdByTrainerId === trainerId
+    ) {
+      const [otherLinks, bookings] = await Promise.all([
+        this.prisma.trainerClientLink.count({ where: { clientId } }),
+        this.prisma.personalTrainingBooking.count({ where: { clientId } }),
+      ]);
+      if (otherLinks === 0 && bookings === 0) {
+        await this.prisma.user.delete({ where: { id: clientId } });
+        deletedUser = true;
+      }
+    }
+
+    return { success: true as const, deletedUser };
   }
 
   async inviteClient(trainerId: string, phone: string) {

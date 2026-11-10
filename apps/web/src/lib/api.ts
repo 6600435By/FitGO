@@ -2141,6 +2141,29 @@ export const api = {
       token,
     ),
 
+  trainerUpdateClient: (
+    token: string,
+    clientId: string,
+    data: {
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+      notes?: string;
+    },
+  ) =>
+    request<TrainerClientSummary>(
+      `/trainer/clients/${clientId}`,
+      { method: 'PATCH', body: JSON.stringify(data) },
+      token,
+    ),
+
+  trainerRemoveClient: (token: string, clientId: string) =>
+    request<{ success: boolean; deletedUser: boolean }>(
+      `/trainer/clients/${clientId}`,
+      { method: 'DELETE' },
+      token,
+    ),
+
   clientTrainerInvites: (token: string) =>
     request<TrainerInviteRequest[]>('/client/trainer-invites', {}, token),
 
