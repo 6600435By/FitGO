@@ -52,4 +52,12 @@ import {
   assert.equal(localMonthStartIso(now), '2026-10-01');
 }
 
+{
+  // Europe/Minsk: local T00:00:00 shifts @db.Date to the previous UTC day.
+  // Payroll payouts must use dateOnly (UTC noon) — same as StaffCompensation.
+  const localMidnight = new Date('2025-10-01T00:00:00');
+  assert.equal(localMidnight.toISOString().slice(0, 10), '2025-09-30');
+  assert.equal(utcDateKey(dateOnly('2025-10-01')), '2025-10-01');
+}
+
 console.log('payroll-dates.test.ts: ok');

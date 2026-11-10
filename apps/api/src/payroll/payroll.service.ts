@@ -129,6 +129,7 @@ import {
   type SpaBlockSaleDoc,
 } from './spa-block-unit-price';
 import {
+  addCalendarDays,
   clubDayIso,
   dateOnly,
   localMonthStartIso,
@@ -1586,10 +1587,12 @@ export class PayrollService {
     to: string,
     opts?: {
       /**
-       * ADVANCE_HALF: GP-only group rates (no reformer/PT), TECH hours without
-       * prorated monthly оклад.
+       * ADVANCE_HALF: GP-only group rates (no reformer/PT); monthly оклад is
+       * never prorated into the 25th wave (paid only on 15th settlement).
        */
       forAdvanceHalf?: boolean;
+      /** Skip monthly оклад without applying the advance-half track filter. */
+      skipMonthlyOklad?: boolean;
     },
   ): Promise<PayrollPeriodSummary> {
     this.assertPeriod(from, to);
@@ -1730,12 +1733,12 @@ export class PayrollService {
       0,
     ).getDate();
     const slices = allPaySlices(profile);
-    const advanceTechHoursOnly =
-      Boolean(opts?.forAdvanceHalf) &&
-      slices.some((s) => s.track === 'TECH') &&
-      !slices.some((s) => s.track === 'ADMIN' || s.track === 'MANAGER');
+    // Monthly оклад → only MONTH_SETTLEMENT (15th). ADVANCE_HALF pays hours /
+    // SPA% / GP rates for days 1–15, never a prorated share of оклад.
+    const skipMonthlyOklad =
+      Boolean(opts?.forAdvanceHalf) || Boolean(opts?.skipMonthlyOklad);
     let baseSalaryMinor =
-      compensation && !advanceTechHoursOnly
+      compensation && !skipMonthlyOklad
         ? this.prorateBaseSalaryMinor(timeline, from, to, monthDays)
         : 0;
     const hasPtAnywhere = timeline.some((row) => {
@@ -2138,6 +2141,7 @@ export class PayrollService {
    *   Admins, staff-only PT, reformer-only → card advance only (0 = pay nothing).
    *   TECH / SPA / GP → period accrual; card is a share of earned (max(accrual, card)).
    *   Manager with card > 0 → card only; otherwise motivation for the range.
+   *   Monthly оклад is never included in advance — paid only on the 15th.
    * - MONTH_SETTLEMENT (15th): previous calendar month minus paid ADVANCE_HALF.
    *
    * `opts.light` — batch sheet: skip full period summary when the wave is
@@ -2219,6 +2223,13 @@ export class PayrollService {
 
     const hints: string[] = [];
     let earnedMinor = 0;
+    const summaryOpts = skipHeavySummary
+      ? undefined
+      : useAdvanceHalfAccrual
+        ? { forAdvanceHalf: true as const }
+        : kind === 'ADVANCE_HALF'
+          ? { skipMonthlyOklad: true as const }
+          : undefined;
     const summary = skipHeavySummary
       ? this.emptyPayoutSummary(userId, performerName, range, currency)
       : await this.getPeriodSummary(
@@ -2226,7 +2237,7 @@ export class PayrollService {
           userId,
           range.from,
           range.to,
-          useAdvanceHalfAccrual ? { forAdvanceHalf: true } : undefined,
+          summaryOpts,
         );
 
     if (kind === 'ADVANCE_HALF' && !periodOverridden) {
@@ -2253,6 +2264,7 @@ export class PayrollService {
               ? `; на карту ${(fixedAdvanceMinor / 100).toFixed(2)}, остаток из кассы`
               : ''),
         );
+        hints.push('Оклад в аванс не входит — выплачивается 15-го при расчёте ЗП');
         if (Boolean(user.groupPrograms) && Boolean(user.trainerReformers)) {
           hints.push(
             'ГП + реформеры: в аванс только занятия как тренер ГП (без зала реформеров)',
@@ -2268,6 +2280,7 @@ export class PayrollService {
               ? `; карта ${(fixedAdvanceMinor / 100).toFixed(2)}`
               : ''),
         );
+        hints.push('Оклад в аванс не входит — выплачивается 15-го при расчёте ЗП');
         if (fixedAdvanceMinor > 0) {
           earnedMinor = splitAdvanceWave({
             accrualMinor: summary.totalMinor,
@@ -2285,14 +2298,16 @@ export class PayrollService {
       const monthStart = `${y}-${mm}-01`;
       const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
       const monthEnd = `${y}-${mm}-${String(last).padStart(2, '0')}`;
+      // Overlap the calendar month (not strict containment): older rows written
+      // with local T00:00:00 in Europe/Minsk could store periodFrom as day−1.
       const priors = await this.prisma.payrollPayout.findMany({
         where: {
           clubId,
           userId,
           kind: PrismaPayoutKind.ADVANCE_HALF,
           status: PayrollPayoutStatus.PAID,
-          periodFrom: { gte: new Date(`${monthStart}T00:00:00`) },
-          periodTo: { lte: new Date(`${monthEnd}T23:59:59`) },
+          periodFrom: { lte: dateOnly(monthEnd) },
+          periodTo: { gte: dateOnly(monthStart) },
         },
       });
       priorPaidMinor = priors.reduce((a, p) => a + p.totalMinor, 0);
@@ -2322,20 +2337,15 @@ export class PayrollService {
     }
     const payableMinor = totalMinor + carryInMinor;
 
-    const existing = await this.prisma.payrollPayout.findFirst({
-      where: {
-        clubId,
-        userId,
-        kind:
-          kind === 'ADVANCE_HALF'
-            ? PrismaPayoutKind.ADVANCE_HALF
-            : PrismaPayoutKind.MONTH_SETTLEMENT,
-        periodFrom: new Date(`${range.from}T00:00:00`),
-        periodTo: new Date(`${range.to}T00:00:00`),
-        status: { in: [PayrollPayoutStatus.PAID, PayrollPayoutStatus.DRAFT] },
-      },
-      include: { user: true },
-    });
+    const existing = await this.findPayoutForWave(
+      clubId,
+      userId,
+      kind === 'ADVANCE_HALF'
+        ? PrismaPayoutKind.ADVANCE_HALF
+        : PrismaPayoutKind.MONTH_SETTLEMENT,
+      range.from,
+      range.to,
+    );
 
     if (existing?.status === PayrollPayoutStatus.PAID) {
       hints.push('Выплата уже зафиксирована — повторно не начисляется');
@@ -2518,9 +2528,11 @@ export class PayrollService {
       input.kind === 'ADVANCE_HALF'
         ? PrismaPayoutKind.ADVANCE_HALF
         : PrismaPayoutKind.MONTH_SETTLEMENT;
-    const periodFrom = new Date(`${preview.periodFrom}T00:00:00`);
-    const periodTo = new Date(`${preview.periodTo}T00:00:00`);
+    const periodFrom = dateOnly(preview.periodFrom);
+    const periodTo = dateOnly(preview.periodTo);
     const data = {
+      periodFrom,
+      periodTo,
       earnedMinor: preview.earnedMinor,
       priorPaidMinor: preview.priorPaidMinor,
       totalMinor: preview.totalMinor,
@@ -2534,38 +2546,32 @@ export class PayrollService {
       paidAt: null,
       note: null as string | null,
     };
-    const identity = {
-      clubId,
-      userId: input.userId,
-      kind,
-      periodFrom,
-      periodTo,
-    };
 
-    const updated = await this.prisma.payrollPayout.updateMany({
-      where: { ...identity, status: { not: PayrollPayoutStatus.PAID } },
-      data,
-    });
-    if (updated.count > 0) {
-      const row = await this.prisma.payrollPayout.findFirst({
-        where: identity,
+    const existing = await this.findPayoutForWave(
+      clubId,
+      input.userId,
+      kind,
+      preview.periodFrom,
+      preview.periodTo,
+    );
+    if (existing?.status === PayrollPayoutStatus.PAID) {
+      throw new BadRequestException('Эта выплата уже зафиксирована');
+    }
+    if (existing) {
+      const row = await this.prisma.payrollPayout.update({
+        where: { id: existing.id },
+        data,
         include: { user: true },
       });
-      if (!row) throw new NotFoundException('Черновик выплаты не найден');
       return this.mapPayout(row);
-    }
-
-    const paid = await this.prisma.payrollPayout.findFirst({
-      where: { ...identity, status: PayrollPayoutStatus.PAID },
-    });
-    if (paid) {
-      throw new BadRequestException('Эта выплата уже зафиксирована');
     }
 
     try {
       const row = await this.prisma.payrollPayout.create({
         data: {
-          ...identity,
+          clubId,
+          userId: input.userId,
+          kind,
           ...data,
           createdById: actor.sub,
         },
@@ -2653,28 +2659,37 @@ export class PayrollService {
       createdById: actor.sub,
     };
 
+    const periodFrom = dateOnly(preview.periodFrom);
+    const periodTo = dateOnly(preview.periodTo);
+    const existing = await this.findPayoutForWave(
+      clubId,
+      input.userId,
+      kind,
+      preview.periodFrom,
+      preview.periodTo,
+    );
+    if (existing?.status === PayrollPayoutStatus.PAID) {
+      throw new BadRequestException('Эта выплата уже зафиксирована');
+    }
+
     const row = await this.prisma.$transaction(async (tx) => {
-      const payout = await tx.payrollPayout.upsert({
-        where: {
-          clubId_userId_kind_periodFrom_periodTo: {
-            clubId,
-            userId: input.userId,
-            kind,
-            periodFrom: new Date(`${preview.periodFrom}T00:00:00`),
-            periodTo: new Date(`${preview.periodTo}T00:00:00`),
-          },
-        },
-        create: {
-          clubId,
-          userId: input.userId,
-          kind,
-          periodFrom: new Date(`${preview.periodFrom}T00:00:00`),
-          periodTo: new Date(`${preview.periodTo}T00:00:00`),
-          ...data,
-        },
-        update: data,
-        include: { user: true },
-      });
+      const payout = existing
+        ? await tx.payrollPayout.update({
+            where: { id: existing.id },
+            data: { periodFrom, periodTo, ...data },
+            include: { user: true },
+          })
+        : await tx.payrollPayout.create({
+            data: {
+              clubId,
+              userId: input.userId,
+              kind,
+              periodFrom,
+              periodTo,
+              ...data,
+            },
+            include: { user: true },
+          });
 
       await tx.payrollStaffBalance.upsert({
         where: { clubId_userId: { clubId, userId: input.userId } },
@@ -2695,15 +2710,15 @@ export class PayrollService {
           clubId_userId_periodFrom_periodTo: {
             clubId,
             userId: input.userId,
-            periodFrom: new Date(`${preview.periodFrom}T00:00:00`),
-            periodTo: new Date(`${preview.periodTo}T00:00:00`),
+            periodFrom,
+            periodTo,
           },
         },
         create: {
           clubId,
           userId: input.userId,
-          periodFrom: new Date(`${preview.periodFrom}T00:00:00`),
-          periodTo: new Date(`${preview.periodTo}T00:00:00`),
+          periodFrom,
+          periodTo,
           lockedById: actor.sub,
         },
         update: { lockedAt: new Date(), lockedById: actor.sub },
@@ -2762,6 +2777,47 @@ export class PayrollService {
       take: 24,
     });
     return rows.map((r) => this.mapPayout(r));
+  }
+
+  /**
+   * Find a payout for a wave window. Also matches legacy rows written with
+   * local `T00:00:00` in Europe/Minsk (stored as calendar day−1 on `@db.Date`).
+   */
+  private async findPayoutForWave(
+    clubId: string,
+    userId: string,
+    kind: PrismaPayoutKind,
+    periodFromIso: string,
+    periodToIso: string,
+  ) {
+    const exactFrom = dateOnly(periodFromIso);
+    const exactTo = dateOnly(periodToIso);
+    const exact = await this.prisma.payrollPayout.findFirst({
+      where: {
+        clubId,
+        userId,
+        kind,
+        periodFrom: exactFrom,
+        periodTo: exactTo,
+        status: { in: [PayrollPayoutStatus.PAID, PayrollPayoutStatus.DRAFT] },
+      },
+      include: { user: true },
+    });
+    if (exact) return exact;
+
+    const legacyFrom = dateOnly(addCalendarDays(periodFromIso, -1));
+    const legacyTo = dateOnly(addCalendarDays(periodToIso, -1));
+    return this.prisma.payrollPayout.findFirst({
+      where: {
+        clubId,
+        userId,
+        kind,
+        periodFrom: legacyFrom,
+        periodTo: legacyTo,
+        status: { in: [PayrollPayoutStatus.PAID, PayrollPayoutStatus.DRAFT] },
+      },
+      include: { user: true },
+    });
   }
 
   private mapPayout(row: {

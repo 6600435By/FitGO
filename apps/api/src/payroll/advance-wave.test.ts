@@ -42,11 +42,31 @@ import {
 }
 
 {
-  // Admin settlement: earned full month, prior paid advance subtracts from total.
-  const monthEarned = 500_000;
+  // Settlement 15th: full-month earned (incl. оклад) minus paid ADVANCE_HALF.
+  const monthEarned = 500_000; // оклад + motivation for the calendar month
   const priorPaidAdvance = 100_000; // confirmed ADVANCE_HALF.totalMinor
   const totalMinor = Math.max(0, monthEarned - priorPaidAdvance);
   assert.equal(totalMinor, 400_000);
+}
+
+{
+  // SPA / anyone with оклад: advance accrues services/hours only — оклад stays 0
+  // on the 25th and is paid in full on the 15th (not half in advance).
+  const spaServicesHalf = 80_000;
+  const monthlyOklad = 200_000;
+  const advanceAccrualWithoutOklad = spaServicesHalf; // skipMonthlyOklad
+  const cardAdvance = 50_000;
+  const advanceWave = splitAdvanceWave({
+    accrualMinor: advanceAccrualWithoutOklad,
+    cardAdvanceMinor: cardAdvance,
+  });
+  assert.equal(advanceWave.earnedMinor, 80_000);
+  const settlementEarned = monthlyOklad + 160_000; // full month services
+  const settlementTotal = Math.max(
+    0,
+    settlementEarned - advanceWave.earnedMinor,
+  );
+  assert.equal(settlementTotal, 280_000);
 }
 
 {
