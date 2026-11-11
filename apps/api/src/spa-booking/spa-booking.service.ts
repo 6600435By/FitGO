@@ -38,6 +38,7 @@ import {
   spaCatalogMatchesMembershipLine,
   spaStackDepth,
   UserRole,
+  listRoundSpaClientSlots,
   sessionApprovalLabelRu,
   toUsageControl,
   type ClientMembershipPackage,
@@ -808,7 +809,7 @@ export class SpaBookingService {
     });
     if (!service) throw new NotFoundException('Услуга не найдена');
 
-    const durationMs = (service.durationMin + service.bufferMin) * 60_000;
+    const occupiedMin = service.durationMin + service.bufferMin;
     const rangeStart = from ? new Date(from) : new Date();
     const rangeEnd = to
       ? new Date(to)
@@ -836,37 +837,27 @@ export class SpaBookingService {
       },
     });
 
-    const slots: Array<{ startAt: string; endAt: string }> = [];
-    const stepMs = Math.max(service.durationMin, 15) * 60_000;
+    // Client starts only on Europe/Minsk :00/:30; soft reserve after a visit
+    // is implied by the grid (staff still book any time via assertStaffBookingWindow).
+    const slots = listRoundSpaClientSlots({
+      workBands: publishedBlocks.map((b) => ({
+        startMs: b.startAt.getTime(),
+        endMs: b.endAt.getTime(),
+      })),
+      bookings: bookings.map((b) => ({
+        startMs: b.startAt.getTime(),
+        endMs: b.endAt.getTime(),
+      })),
+      durationMin: occupiedMin,
+      nowMs: Date.now(),
+      rangeStartMs: rangeStart.getTime(),
+      rangeEndMs: rangeEnd.getTime(),
+    });
 
-    for (const block of publishedBlocks) {
-      let slotStart = new Date(block.startAt);
-      const blockEnd = new Date(block.endAt);
-
-      while (slotStart.getTime() + durationMs <= blockEnd.getTime()) {
-        const slotEnd = new Date(slotStart.getTime() + durationMs);
-        const isPast = slotStart <= new Date();
-        const overlaps = bookings.some(
-          (b) => b.startAt < slotEnd && b.endAt > slotStart,
-        );
-
-        if (
-          !isPast &&
-          !overlaps &&
-          slotStart >= rangeStart &&
-          slotStart < rangeEnd
-        ) {
-          slots.push({
-            startAt: slotStart.toISOString(),
-            endAt: slotEnd.toISOString(),
-          });
-        }
-
-        slotStart = new Date(slotStart.getTime() + stepMs);
-      }
-    }
-
-    return slots.sort((a, b) => a.startAt.localeCompare(b.startAt));
+    return slots.map((s) => ({
+      startAt: new Date(s.startMs).toISOString(),
+      endAt: new Date(s.endMs).toISOString(),
+    }));
   }
 
   async listClientSlots(

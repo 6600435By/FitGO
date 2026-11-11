@@ -280,6 +280,99 @@ export function suggestSpaFitStarts(
     .slice(0, maxSuggestions);
 }
 
+/** Europe/Minsk is UTC+3 year-round (no DST). */
+const MINSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+const HALF_HOUR_MS = 30 * 60_000;
+
+/**
+ * Soft client reserve end: next Europe/Minsk :00 or :30 after `endMs`.
+ * Already on :00/:30 (exact second) → same instant (no reserve).
+ * :05–:25 → :30 same hour; :35–:55 → :00 next hour.
+ */
+export function snapSpaClientReserveEnd(endMs: number): number {
+  const local = new Date(endMs + MINSK_OFFSET_MS);
+  const y = local.getUTCFullYear();
+  const mo = local.getUTCMonth();
+  const d = local.getUTCDate();
+  const h = local.getUTCHours();
+  const m = local.getUTCMinutes();
+  const s = local.getUTCSeconds();
+  const ms = local.getUTCMilliseconds();
+
+  if ((m === 0 || m === 30) && s === 0 && ms === 0) {
+    return endMs;
+  }
+
+  const targetLocal =
+    m < 30
+      ? Date.UTC(y, mo, d, h, 30, 0, 0)
+      : Date.UTC(y, mo, d, h + 1, 0, 0, 0);
+  return targetLocal - MINSK_OFFSET_MS;
+}
+
+/**
+ * Earliest Europe/Minsk :00 or :30 at or after `ms` (exact second).
+ * Same rule as {@link snapSpaClientReserveEnd}.
+ */
+export function ceilSpaClientHalfHour(ms: number): number {
+  return snapSpaClientReserveEnd(ms);
+}
+
+export type SpaRoundClientSlot = {
+  startMs: number;
+  endMs: number;
+};
+
+/**
+ * Client-facing SPA starts on the Europe/Minsk :00 / :30 grid.
+ * Occupancy length is `durationMin` (callers pass duration + buffer).
+ * Overlap uses real booking `[start, end)` — soft reserve is implied by the grid.
+ */
+export function listRoundSpaClientSlots(opts: {
+  workBands: SpaIntervalMs[];
+  bookings: SpaIntervalMs[];
+  durationMin: number;
+  nowMs?: number;
+  rangeStartMs?: number;
+  rangeEndMs?: number;
+}): SpaRoundClientSlot[] {
+  const durationMs = Math.max(1, Math.round(opts.durationMin)) * 60_000;
+  const nowMs = opts.nowMs ?? Date.now();
+  const rangeStartMs = opts.rangeStartMs ?? nowMs;
+  const rangeEndMs =
+    opts.rangeEndMs ?? rangeStartMs + 14 * 24 * 60 * 60 * 1000;
+
+  const bands = [...opts.workBands]
+    .filter((b) => b.endMs > b.startMs)
+    .sort((a, b) => a.startMs - b.startMs);
+  const busy = opts.bookings.filter((b) => b.endMs > b.startMs);
+
+  const slots: SpaRoundClientSlot[] = [];
+  const seen = new Set<number>();
+
+  for (const band of bands) {
+    let slotStart = ceilSpaClientHalfHour(band.startMs);
+    while (slotStart + durationMs <= band.endMs) {
+      const slotEnd = slotStart + durationMs;
+      const isPast = slotStart <= nowMs;
+      const inRange = slotStart >= rangeStartMs && slotStart < rangeEndMs;
+      const overlaps = busy.some(
+        (b) => b.startMs < slotEnd && b.endMs > slotStart,
+      );
+
+      if (!isPast && inRange && !overlaps && !seen.has(slotStart)) {
+        seen.add(slotStart);
+        slots.push({ startMs: slotStart, endMs: slotEnd });
+      }
+
+      slotStart += HALF_HOUR_MS;
+    }
+  }
+
+  return slots.sort((a, b) => a.startMs - b.startMs);
+}
+
 /**
  * Pack overlapping intervals into side-by-side lanes (Google Calendar style).
  * Returns laneIndex and laneCount per id.
