@@ -162,14 +162,19 @@ function HeroNext({
           Свободное утро
         </p>
         <p className="mt-1 text-sm text-zinc-400">
-          {journalHref
-            ? 'Записей рядом нет — можно закрыть контроль или открыть расписание.'
-            : 'Записей рядом нет — откройте расписание или клиентов.'}
+          Записей рядом нет — можно начать тренировку сейчас и выбрать клиента
+          по ходу.
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <Link
-            href={scheduleHref}
+            href="/trainer/live/now"
             className="rounded-2xl bg-forma-500 px-4 py-2 text-sm font-semibold text-ink"
+          >
+            Начать тренировку
+          </Link>
+          <Link
+            href={scheduleHref}
+            className="rounded-2xl border border-white/10 px-4 py-2 text-sm text-zinc-300"
           >
             Расписание
           </Link>

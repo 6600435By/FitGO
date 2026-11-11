@@ -130,6 +130,15 @@ export function QuickActionsSheet({
     router.push(`${href}${qs ? `?${qs}` : ''}`);
   };
 
+  /** Ad-hoc timer — client can be attached mid-session on /trainer/live/now. */
+  const startWithoutBooking = () => {
+    setStartConfirmOpen(false);
+    setStartCandidate(null);
+    setStartMessage(null);
+    onOpenChange(false);
+    router.push('/trainer/live/now');
+  };
+
   return (
     <>
       <ResponsiveSheet
@@ -151,7 +160,7 @@ export function QuickActionsSheet({
           ) : null}
           <ListRow
             title="Начать тренировку"
-            subtitle="Ближайшая ПТ или группа · таймер"
+            subtitle="Ближайшая запись или сейчас без графика"
             leading={<Play className="h-5 w-5 text-forma-400" />}
             chevron
             onClick={() => {
@@ -245,6 +254,14 @@ export function QuickActionsSheet({
                 </Button>
                 <Button
                   type="button"
+                  variant="secondary"
+                  className="w-full"
+                  onClick={startWithoutBooking}
+                >
+                  Начать без этой записи
+                </Button>
+                <Button
+                  type="button"
                   variant="ghost"
                   className="w-full"
                   onClick={() => setStartConfirmOpen(false)}
@@ -258,14 +275,26 @@ export function QuickActionsSheet({
               <p className="text-sm text-zinc-300">
                 {startMessage ?? 'Нет подходящей тренировки'}
               </p>
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full"
-                onClick={() => setStartConfirmOpen(false)}
-              >
-                Понятно
-              </Button>
+              <p className="text-sm text-zinc-500">
+                Можно стартовать сейчас — клиента привяжете по ходу на таймере.
+              </p>
+              <div className="flex flex-col gap-2">
+                <Button
+                  type="button"
+                  className="w-full"
+                  onClick={startWithoutBooking}
+                >
+                  Начать без графика
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full"
+                  onClick={() => setStartConfirmOpen(false)}
+                >
+                  Отмена
+                </Button>
+              </div>
             </>
           )}
         </div>
