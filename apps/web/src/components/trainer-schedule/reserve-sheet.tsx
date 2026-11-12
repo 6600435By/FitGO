@@ -33,7 +33,7 @@ export function ReserveSheet({
   const [from, setFrom] = useState(toLocal(start));
   const [to, setTo] = useState(toLocal(defaultEnd));
   const [clientId, setClientId] = useState(clients[0]?.id ?? '');
-  const [holdHours, setHoldHours] = useState(12);
+  const [holdHours, setHoldHours] = useState('12');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -49,7 +49,10 @@ export function ReserveSheet({
         endAt: new Date(to).toISOString(),
         kind,
         holdClientId: kind === 'HOLD_CLIENT' ? clientId : undefined,
-        holdHours: kind === 'HOLD_CLIENT' ? holdHours : undefined,
+        holdHours:
+          kind === 'HOLD_CLIENT'
+            ? Math.min(168, Math.max(1, Number(holdHours) || 12))
+            : undefined,
         note: note.trim() || undefined,
       });
       onSaved();
@@ -143,7 +146,7 @@ export function ReserveSheet({
                 inputMode="numeric"
                 className="input mt-1 w-full"
                 value={holdHours}
-                onChange={(e) => setHoldHours(Number(e.target.value) || 12)}
+                onChange={(e) => setHoldHours(e.target.value)}
               />
             </label>
           </>

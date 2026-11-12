@@ -119,6 +119,39 @@ export function PersonalGoalsCard({
   );
 }
 
+type DraftGoal = {
+  metric: TrainerGoalMetric;
+  /** Raw input text so the field can be fully cleared while editing. */
+  targetText: string;
+};
+
+function targetToText(metric: TrainerGoalMetric, target: number): string {
+  return metric === 'SALES_SUM' ? String(target / 100) : String(target);
+}
+
+function parseTargetText(
+  metric: TrainerGoalMetric,
+  raw: string,
+): number | null {
+  const trimmed = raw.trim().replace(',', '.');
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return null;
+  if (metric === 'SALES_SUM') {
+    const minor = Math.round(n * 100);
+    return minor >= 1 ? minor : null;
+  }
+  const count = Math.floor(n);
+  return count >= 1 ? count : null;
+}
+
+function toDraftGoals(initial: TrainerPersonalGoalInput[]): DraftGoal[] {
+  return initial.map((g) => ({
+    metric: g.metric,
+    targetText: targetToText(g.metric, g.target),
+  }));
+}
+
 export function PersonalGoalsEditor({
   open,
   onOpenChange,
@@ -130,12 +163,12 @@ export function PersonalGoalsEditor({
   initial: TrainerPersonalGoalInput[];
   onSaved: (data: TrainerPersonalGoalsResponse) => void;
 }) {
-  const [draft, setDraft] = useState<TrainerPersonalGoalInput[]>(initial);
+  const [draft, setDraft] = useState<DraftGoal[]>(() => toDraftGoals(initial));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (open) setDraft(initial.length ? initial : []);
+    if (open) setDraft(toDraftGoals(initial));
   }, [open, initial]);
 
   const toggleMetric = (metric: TrainerGoalMetric) => {
@@ -143,35 +176,37 @@ export function PersonalGoalsEditor({
       const exists = prev.find((g) => g.metric === metric);
       if (exists) return prev.filter((g) => g.metric !== metric);
       if (prev.length >= 3) return prev;
-      const defaultTarget = metric === 'SALES_SUM' ? 500_00 : 20;
-      return [...prev, { metric, target: defaultTarget }];
+      const defaultText = metric === 'SALES_SUM' ? '500' : '20';
+      return [...prev, { metric, targetText: defaultText }];
     });
   };
 
-  const setTarget = (metric: TrainerGoalMetric, raw: string) => {
-    const n = Number(raw.replace(',', '.'));
+  const setTargetText = (metric: TrainerGoalMetric, raw: string) => {
     setDraft((prev) =>
-      prev.map((g) => {
-        if (g.metric !== metric) return g;
-        if (g.metric === 'SALES_SUM') {
-          const byn = Number.isFinite(n) ? Math.max(1, Math.round(n * 100)) : 1;
-          return { ...g, target: byn };
-        }
-        return {
-          ...g,
-          target: Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1,
-        };
-      }),
+      prev.map((g) => (g.metric === metric ? { ...g, targetText: raw } : g)),
     );
   };
 
   const save = async () => {
     const token = getToken();
     if (!token) return;
+
+    const goals: TrainerPersonalGoalInput[] = [];
+    for (const g of draft) {
+      const target = parseTargetText(g.metric, g.targetText);
+      if (target == null) {
+        setError(
+          `Укажите цель ≥ 1 для «${TRAINER_GOAL_METRIC_LABELS[g.metric]}»`,
+        );
+        return;
+      }
+      goals.push({ metric: g.metric, target });
+    }
+
     setBusy(true);
     setError('');
     try {
-      const data = await api.trainerPutMotivationGoals(token, draft);
+      const data = await api.trainerPutMotivationGoals(token, goals);
       onSaved(data);
       onOpenChange(false);
     } catch (e) {
@@ -217,13 +252,10 @@ export function PersonalGoalsEditor({
                   <input
                     type="number"
                     min={1}
+                    inputMode="decimal"
                     className="input mt-1 w-full"
-                    value={
-                      metric === 'SALES_SUM'
-                        ? selected.target / 100
-                        : selected.target
-                    }
-                    onChange={(e) => setTarget(metric, e.target.value)}
+                    value={selected.targetText}
+                    onChange={(e) => setTargetText(metric, e.target.value)}
                   />
                 </label>
               ) : null}
