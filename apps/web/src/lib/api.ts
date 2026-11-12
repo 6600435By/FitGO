@@ -4011,7 +4011,8 @@ export const api = {
       mode: 'task';
       task: { id: string; title: string };
     }>(
-      `/super-admin/sales/club/${entryId}/rework`,
+      // encode: externalId often has `#` (uuid#line) — bare `#` truncates the URL
+      `/super-admin/sales/club/${encodeURIComponent(entryId)}/rework`,
       { method: 'POST', body: JSON.stringify(body) },
       token,
     ),
@@ -4024,7 +4025,11 @@ export const api = {
         dueAt?: string;
         assignee?: { id: string; firstName: string; lastName: string };
       }>
-    >(`/super-admin/sales/club/${entryId}/rework-tasks`, {}, token),
+    >(
+      `/super-admin/sales/club/${encodeURIComponent(entryId)}/rework-tasks`,
+      {},
+      token,
+    ),
 
   superAdminSalesReworkAssignees: (token: string) =>
     request<
@@ -5192,7 +5197,10 @@ export const api = {
 
   superAdminClubSaleDetail: (token: string, id: string) =>
     request<import('@fitgo/shared-types').ClubRevenueDetailResponse>(
-      `/super-admin/sales/club/${id}`,
+      // Must encode: Integration ids use `uuid#1` (bare `#` = URL fragment),
+      // cash keys contain Cyrillic («Долг», «Лицевой счет»). Same as
+      // selfPayrollSaleDetail — without this «Продажа» from ЗП 404s.
+      `/super-admin/sales/club/${encodeURIComponent(id)}`,
       {},
       token,
     ),

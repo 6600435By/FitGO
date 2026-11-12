@@ -686,12 +686,42 @@ export class ClubRevenueService {
     clubId: string,
     id: string,
   ): Promise<ClubRevenueDetailResponse> {
+    const raw = (id ?? '').trim();
+    if (!raw) throw new NotFoundException('Sale not found');
+
+    // Payroll «Продажа» may pass Integration `uuid#line`, cash externalId, cuid,
+    // or bare document UUID (docRef) — resolve all of those.
+    const hashPrefix = raw.includes('#')
+      ? raw.slice(0, raw.indexOf('#')).trim()
+      : '';
+    const looksUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        raw,
+      ) ||
+      (hashPrefix.length > 0 &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          hashPrefix,
+        ));
+
     let row = await this.prisma.clubRevenueEntry.findFirst({
       where: {
         clubId,
         isActive: true,
-        OR: [{ id }, { externalId: id }],
+        OR: [
+          { id: raw },
+          { externalId: raw },
+          ...(hashPrefix && hashPrefix !== raw
+            ? [{ externalId: hashPrefix }, { documentId: hashPrefix }]
+            : []),
+          ...(looksUuid
+            ? [
+                { documentId: raw },
+                ...(hashPrefix ? [{ documentId: hashPrefix }] : []),
+              ]
+            : []),
+        ],
       },
+      orderBy: { occurredAt: 'asc' },
     });
     if (!row) throw new NotFoundException('Sale not found');
 
