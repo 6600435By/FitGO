@@ -766,32 +766,71 @@ export function PayrollPayoutsPanel({
             >
               {busy ? '…' : 'Рассчитать'}
             </button>
-            <button
-              type="button"
-              className="btn-secondary px-3 py-1.5 text-sm"
-              disabled={
-                busy ||
-                printBusy ||
-                !rows.some((r) => drafts[r.performerId]?.selected)
-              }
-              onClick={() => {
-                const ids = rows
-                  .filter((r) => drafts[r.performerId]?.selected)
-                  .map((r) => r.performerId);
-                if (!ids.length) {
-                  setMessage('Отметьте сотрудников галочками в таблице');
-                  return;
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="btn-secondary px-3 py-1.5 text-sm"
+                disabled={
+                  busy ||
+                  printBusy ||
+                  !rows.some((r) => drafts[r.performerId]?.selected)
                 }
-                onPrintSelected?.(ids, periodFrom, periodTo);
-              }}
-              title={
-                !rows.some((r) => drafts[r.performerId]?.selected)
-                  ? 'Отметьте сотрудников галочками в таблице'
-                  : undefined
-              }
-            >
-              {printBusy ? 'Печать…' : 'Печать'}
-            </button>
+                onClick={() => {
+                  const ids = rows
+                    .filter((r) => drafts[r.performerId]?.selected)
+                    .map((r) => r.performerId);
+                  if (!ids.length) {
+                    setMessage('Отметьте сотрудников галочками в таблице');
+                    return;
+                  }
+                  onPrintSelected?.(ids, periodFrom, periodTo);
+                }}
+                title={
+                  !rows.some((r) => drafts[r.performerId]?.selected)
+                    ? 'Отметьте сотрудников галочками в таблице'
+                    : undefined
+                }
+              >
+                {printBusy ? 'Печать…' : 'Печать'}
+              </button>
+              <button
+                type="button"
+                className="text-xs text-fitgo-300 hover:underline"
+                disabled={!rows.length}
+                onClick={() =>
+                  setDrafts((prev) => {
+                    const next = { ...prev };
+                    for (const r of rows) {
+                      const d = next[r.performerId];
+                      if (!d) continue;
+                      if (r.existingPayout?.status === 'PAID') continue;
+                      next[r.performerId] = { ...d, selected: true };
+                    }
+                    return next;
+                  })
+                }
+              >
+                Выбрать всех
+              </button>
+              <button
+                type="button"
+                className="text-xs text-slate-400 hover:underline"
+                disabled={!rows.some((r) => drafts[r.performerId]?.selected)}
+                onClick={() =>
+                  setDrafts((prev) => {
+                    const next = { ...prev };
+                    for (const id of Object.keys(next)) {
+                      const d = next[id];
+                      if (!d) continue;
+                      next[id] = { ...d, selected: false };
+                    }
+                    return next;
+                  })
+                }
+              >
+                Снять
+              </button>
+            </div>
             <button
               type="button"
               className="btn-secondary px-3 py-1.5 text-sm"

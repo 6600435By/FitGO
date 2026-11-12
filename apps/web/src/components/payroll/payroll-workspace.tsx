@@ -3,15 +3,39 @@
 import { SaleDetailDrawer } from '@/components/admin-sales/sale-detail-drawer';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { ClubPayrollReportPanel } from '@/components/payroll/club-payroll-report';
-import { MotivationBreakdownList } from '@/components/payroll/motivation-breakdown-list';
+import {
+  AttentionBar,
+  ReportHeader,
+  ReportTabs,
+  ReportToolbar,
+  buildAttentionChips,
+  money,
+  periodPresetRange,
+  useControlMisses,
+  type AttentionKind,
+  type DeptFilter,
+  type PeriodPreset,
+  type ReportTabId,
+} from '@/components/payroll/employee-report';
+import {
+  unitHasSalePeek,
+  unitSaleSearchQuery,
+} from '@/components/payroll/employee-report/sale-links';
 import { PayrollFold } from '@/components/payroll/payroll-fold';
 import { PayrollPayoutsPanel } from '@/components/payroll/payroll-payouts-panel';
-import { TrustBandDot } from '@/components/payroll/trust-band-dot';
-import { DateField } from '@/components/ui/date-field';
+import {
+  ALL_PAYSLIP,
+  DEFAULT_PAYSLIP,
+  buildPayslipText,
+  payslipFilename,
+  payslipHtmlFromSummary,
+  printHtmlPayslips,
+  type PayslipFields,
+} from '@/components/payroll/payroll-payslip';
 import type {
   ClubRevenueDetailResponse,
+  ClubRevenueLineDto,
   PayrollAdjustmentDto,
-  PayrollPaidPayoutsSummary,
   PayrollPeriodSummary,
   StaffPaySummary,
   WorkUnit,
@@ -33,7 +57,6 @@ import {
   isIsoDay,
   setPayrollSummaryCache,
 } from '@/lib/view-memory';
-import { formatDateTime } from '@/lib/utils';
 
 function isoDate(d: Date) {
   const y = d.getFullYear();
@@ -42,437 +65,11 @@ function isoDate(d: Date) {
   return `${y}-${m}-${day}`;
 }
 
-function money(minor: number, currency: string) {
-  return `${(minor / 100).toFixed(2)}\u00a0${currency}`;
-}
-
-/** Client-paid amount for PT/SPA lines; dash when free / unknown. */
-function unitCostLabel(u: WorkUnit, currency: string): string {
-  if (u.kind !== 'SPA' && u.kind !== 'PT') return '—';
-  if (u.priceMinor == null || u.priceMinor <= 0) return '—';
-  return money(u.priceMinor, currency);
-}
-
-/**
- * Employee share from motivation (PT / SPA / GROUP).
- * Fixed quota / partner / GP hall rates still show earnMinor.
- */
-function unitEarnLabel(u: WorkUnit, currency: string): string {
-  if (u.kind !== 'SPA' && u.kind !== 'PT' && u.kind !== 'GROUP') return '—';
-  if (u.earnMinor == null) return '—';
-  if (u.ratePercent != null && (u.priceMinor ?? 0) > 0) {
-    return `${u.ratePercent}% · ${money(u.earnMinor, currency)}`;
-  }
-  return money(u.earnMinor, currency);
-}
-
-function unitShowsPayCols(u: WorkUnit): boolean {
-  return u.kind === 'SPA' || u.kind === 'PT' || u.kind === 'GROUP';
-}
-
-/** Period totals under «Работы за период». */
-function workUnitsPeriodTotals(units: WorkUnit[]) {
-  let earnedMinor = 0;
-  let soldMinor = 0;
-  let classCount = 0;
-  for (const u of units) {
-    if (u.kind === 'GROUP') classCount += 1;
-    if (!u.payrollTrusted || u.isComplimentary) continue;
-    if (u.earnMinor != null) earnedMinor += u.earnMinor;
-    else if (u.kind === 'SHIFT' && u.priceMinor != null) {
-      earnedMinor += u.priceMinor;
-    }
-    if (
-      (u.kind === 'SPA' || u.kind === 'PT') &&
-      u.priceMinor != null &&
-      u.priceMinor > 0
-    ) {
-      soldMinor += u.priceMinor;
-    }
-  }
-  return { earnedMinor, soldMinor, classCount };
-}
-
-function unitDayIso(u: WorkUnit): string {
-  return u.occurredAt.slice(0, 10);
-}
-
-/** Calendar day of a work unit in club local wall clock (ru-RU, with year). */
-function unitDayLabel(u: WorkUnit): string {
-  return new Date(u.occurredAt).toLocaleDateString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
-}
-
 function formatIsoDayRu(iso: string): string {
   const [y, m, d] = iso.split('-');
   if (!y || !m || !d) return iso;
   return `${d}.${m}.${y}`;
 }
-
-function shiftIsoDays(isoDay: string, deltaDays: number): string {
-  const d = new Date(`${isoDay}T12:00:00.000Z`);
-  d.setUTCDate(d.getUTCDate() + deltaDays);
-  return d.toISOString().slice(0, 10);
-}
-
-/** True when sale opens as a single-document card (no tab switch). */
-function unitHasSalePeek(u: WorkUnit): boolean {
-  return Boolean(u.saleExternalId?.trim());
-}
-
-/**
- * Sales list deep-link when there is no single externalId (search by client /
- * program). Label in UI: «Список».
- */
-function unitSaleListHref(u: WorkUnit, mode: 'admin' | 'super'): string | null {
-  if (u.kind !== 'SPA' && u.kind !== 'PT' && u.kind !== 'GROUP') return null;
-  if (unitHasSalePeek(u)) return null;
-  const sessionDay = unitDayIso(u);
-  const saleDay = u.saleOccurredAt?.slice(0, 10) || undefined;
-  const q = new URLSearchParams();
-  if (u.kind === 'GROUP') {
-    if (!u.title?.trim() || !sessionDay) return null;
-    q.set('from', sessionDay);
-    q.set('to', sessionDay);
-    q.set('q', u.title.trim());
-  } else if (u.clientName?.trim()) {
-    const looksPack = /\(абонемент\)|\(блок\)|абонемент|пакет|блок/i.test(
-      u.title ?? '',
-    );
-    if (saleDay) {
-      q.set('from', saleDay);
-      q.set('to', saleDay);
-    } else if (sessionDay && looksPack) {
-      q.set('from', shiftIsoDays(sessionDay, -120));
-      q.set('to', sessionDay);
-    } else if (sessionDay) {
-      q.set('from', sessionDay);
-      q.set('to', sessionDay);
-    }
-    q.set('q', u.clientName.trim());
-  } else if (u.title?.trim()) {
-    if (sessionDay) {
-      q.set('from', sessionDay);
-      q.set('to', sessionDay);
-    }
-    q.set('q', u.title.trim());
-  } else {
-    return null;
-  }
-  const base = mode === 'super' ? '/super-admin/sales' : '/admin/sales';
-  return `${base}?${q.toString()}`;
-}
-
-function escapeHtml(s: string) {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-const PAYSLIP_SALE_SEGMENTS: Array<{
-  label: string;
-  sold: (s: PayrollPeriodSummary) => number;
-  contrib: (s: PayrollPeriodSummary) => number;
-}> = [
-  {
-    label: 'Абонементы',
-    sold: (s) => s.sales?.membershipMinor ?? 0,
-    contrib: (s) => s.motivationBreakdown?.membershipMinor ?? 0,
-  },
-  {
-    label: 'SPA',
-    sold: (s) => s.sales?.massageMinor ?? 0,
-    contrib: (s) => s.motivationBreakdown?.spaMinor ?? 0,
-  },
-  {
-    label: 'Солярий',
-    sold: (s) => s.sales?.solariumMinor ?? 0,
-    contrib: (s) => s.motivationBreakdown?.solariumMinor ?? 0,
-  },
-  {
-    label: 'Магазин',
-    sold: (s) => s.sales?.shopMinor ?? 0,
-    contrib: (s) => s.motivationBreakdown?.shopMinor ?? 0,
-  },
-  {
-    label: 'Корпо',
-    sold: (s) => s.sales?.corporateMinor ?? 0,
-    contrib: (s) => s.motivationBreakdown?.corporateMinor ?? 0,
-  },
-];
-
-function hasPayslipSalesSegments(summary: PayrollPeriodSummary): boolean {
-  return summary.sales != null || summary.motivationBreakdown != null;
-}
-
-function payslipSalesSegmentHtml(
-  summary: PayrollPeriodSummary,
-  cur: string,
-): string | null {
-  if (!hasPayslipSalesSegments(summary)) return null;
-  const rows = PAYSLIP_SALE_SEGMENTS.map((seg) => {
-    const sold = money(seg.sold(summary), cur);
-    const contrib = money(seg.contrib(summary), cur);
-    return `<tr><td>${escapeHtml(seg.label)}</td><td class="num">${escapeHtml(sold)}</td><td class="num">${escapeHtml(contrib)}</td></tr>`;
-  }).join('');
-  return `<h2>Продажи по сегментам</h2><table><thead><tr><th>Сегмент</th><th class="num">Продано</th><th class="num">В мотивацию</th></tr></thead><tbody>${rows}</tbody></table>`;
-}
-
-function payslipHeaderOnly(fields: PayslipFields): boolean {
-  return (
-    (fields.fio || fields.period) &&
-    !fields.motivation &&
-    !fields.bonus &&
-    !fields.fine &&
-    !fields.shifts &&
-    !fields.totals
-  );
-}
-
-function payslipHtmlFromSummary(
-  summary: PayrollPeriodSummary,
-  fields: PayslipFields,
-): string {
-  const cur = summary.currency;
-  const bonuses = summary.adjustments.filter((a) => a.amountMinor > 0);
-  const fines = summary.adjustments.filter((a) => a.amountMinor < 0);
-  const centered = payslipHeaderOnly(fields);
-  const slipClass = centered ? 'slip slip--centered' : 'slip';
-  const parts: string[] = [`<section class="${slipClass}">`];
-  if (centered) {
-    parts.push('<div class="sheet">');
-  }
-  if (fields.fio || fields.period) {
-    parts.push('<div class="header-block">');
-    if (fields.fio) {
-      parts.push(
-        `<p class="meta meta-name">${escapeHtml(summary.performerName)}</p>`,
-      );
-    }
-    if (fields.period) {
-      parts.push(
-        `<p class="meta"><strong>Период:</strong> ${escapeHtml(summary.from)} — ${escapeHtml(summary.to)}</p>`,
-      );
-    }
-    parts.push('</div>');
-  }
-  if (fields.motivation) {
-    parts.push('<h2>Начисления</h2><table>');
-    parts.push(
-      `<tr><td>Оклад / часы</td><td class="num">${escapeHtml(money(summary.baseSalaryMinor, cur))}</td></tr>`,
-    );
-    parts.push(
-      `<tr><td>Мотивация</td><td class="num">${escapeHtml(money(summary.motivationMinor, cur))}</td></tr>`,
-    );
-    parts.push('</table>');
-    const chips =
-      summary.payChips?.length > 0 ? summary.payChips : ['Ставки не заданы'];
-    parts.push(
-      `<p class="chips">${chips.map((c) => escapeHtml(c)).join(' · ')}</p>`,
-    );
-    const salesBlock = payslipSalesSegmentHtml(summary, cur);
-    if (salesBlock) parts.push(salesBlock);
-  }
-  if (fields.bonus) {
-    parts.push('<h2>Премии</h2>');
-    if (!bonuses.length) parts.push('<p class="empty">нет</p>');
-    else {
-      parts.push('<table>');
-      for (const a of bonuses) {
-        parts.push(
-          `<tr><td>${escapeHtml(a.reason)}</td><td class="num">+${escapeHtml(money(a.amountMinor, cur))}</td></tr>`,
-        );
-      }
-      parts.push('</table>');
-    }
-  }
-  if (fields.fine) {
-    parts.push('<h2>Штрафы</h2>');
-    if (!fines.length) parts.push('<p class="empty">нет</p>');
-    else {
-      parts.push('<table>');
-      for (const a of fines) {
-        parts.push(
-          `<tr><td>${escapeHtml(a.reason)}</td><td class="num">${escapeHtml(money(a.amountMinor, cur))}</td></tr>`,
-        );
-      }
-      parts.push('</table>');
-    }
-  }
-  if (fields.shifts) {
-    const shifts = summary.workUnits.filter((u) => u.kind === 'SHIFT');
-    parts.push('<h2>Смены</h2>');
-    if (!shifts.length) parts.push('<p class="empty">нет</p>');
-    else {
-      parts.push('<table>');
-      for (const u of shifts) {
-        parts.push(
-          `<tr><td>${escapeHtml(u.occurredAt.slice(0, 10))} · ${u.quantity} ч</td><td class="num">${escapeHtml(money(u.priceMinor ?? 0, cur))}</td></tr>`,
-        );
-      }
-      parts.push('</table>');
-    }
-  }
-  if (fields.totals) {
-    parts.push(
-      `<p class="total"><strong>Итого к выплате:</strong> ${escapeHtml(money(summary.totalMinor, cur))}</p>`,
-    );
-  }
-  if (centered) {
-    parts.push('</div>');
-  }
-  parts.push('</section>');
-  return parts.join('\n');
-}
-
-function printHtmlPayslips(sections: Array<{ name: string; html: string }>) {
-  if (!sections.length) return;
-  const iframe = document.createElement('iframe');
-  iframe.setAttribute(
-    'style',
-    'position:fixed;left:-10000px;top:0;width:210mm;height:297mm;border:0',
-  );
-  iframe.setAttribute('title', 'Печать расчётных листков');
-  document.body.appendChild(iframe);
-  const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
-  if (!doc) {
-    document.body.removeChild(iframe);
-    return;
-  }
-  // break-before on next slip (not break-after on a tall centered block) —
-  // Safari otherwise inserts a blank page after nearly-full A4 height.
-  const body = sections
-    .map((s, i) =>
-      i > 0 ? s.html.replace('class="slip', 'class="slip slip-next') : s.html,
-    )
-    .join('\n');
-  doc.open();
-  doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Печать</title>
-<style>
-  @page{size:A4;margin:14mm}
-  html,body{margin:0;padding:0}
-  body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:13px;color:#111;line-height:1.45;background:#fff}
-  .slip{max-width:640px;margin:0 auto;box-sizing:border-box}
-  .slip-next{page-break-before:always;break-before:page}
-  .slip--centered{max-width:none;width:100%;margin:0}
-  .slip--centered .sheet{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:100%;height:250mm;text-align:center}
-  .header-block{text-align:center;margin:0 0 16px}
-  .slip--centered .header-block{margin:0}
-  h2{font-size:12px;text-transform:uppercase;letter-spacing:0.06em;color:#555;margin:16px 0 6px}
-  table{width:100%;border-collapse:collapse}
-  th{padding:4px 0;border-bottom:1px solid #ccc;font-size:11px;text-align:left;font-weight:600;color:#555}
-  th.num,td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-  td{padding:4px 0;border-bottom:1px solid #e5e7eb;vertical-align:top}
-  .meta{margin:4px 0;color:#333;font-size:14px}
-  .meta-name{font-size:16px;font-weight:600}
-  .chips{font-size:11px;color:#666;margin-top:6px}
-  .empty{color:#999;margin:0}
-  .total{margin-top:16px;padding-top:12px;border-top:2px solid #111;font-size:15px}
-</style></head><body>${body}</body></html>`);
-  doc.close();
-
-  const cleanup = () => {
-    if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-  };
-  const win = iframe.contentWindow;
-  if (win) {
-    win.addEventListener('afterprint', cleanup, { once: true });
-  }
-  const run = () => {
-    try {
-      win?.focus();
-      win?.print();
-    } catch {
-      cleanup();
-    }
-    // Fallback if afterprint never fires (some Safari builds).
-    setTimeout(cleanup, 60_000);
-  };
-  if (iframe.contentDocument?.readyState === 'complete') {
-    setTimeout(run, 50);
-  } else {
-    iframe.addEventListener('load', () => setTimeout(run, 50), { once: true });
-  }
-}
-
-/** Safe filename: ФИО + period, without forbidden path characters. */
-function payslipFilename(name: string, from: string, to: string): string {
-  const safe = name
-    .normalize('NFKC')
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '')
-    .replace(/\s+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^[.\s_]+|[.\s_]+$/g, '')
-    .slice(0, 80);
-  // Keep YYYY-MM-DD as YYYY-MM-DD (hyphen is OK in filenames)
-  const period = `${from}_${to}`.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '');
-  return `Raschet_${safe || 'sotrudnik'}_${period}.txt`;
-}
-
-type DeptFilter =
-  | 'ALL'
-  | 'MANAGER'
-  | 'ADMIN'
-  | 'TRAINER'
-  | 'SPECIALIST'
-  | 'TECH'
-  | 'EXTERNAL';
-
-const DEPT_FILTERS: { id: DeptFilter; label: string }[] = [
-  { id: 'ALL', label: 'Все' },
-  { id: 'MANAGER', label: 'Упр.' },
-  { id: 'ADMIN', label: 'Админы' },
-  { id: 'TRAINER', label: 'Тренеры' },
-  { id: 'SPECIALIST', label: 'SPA' },
-  { id: 'TECH', label: 'Техперсонал' },
-  { id: 'EXTERNAL', label: 'Сторонние' },
-];
-
-const TRACK_HINT: Record<string, string> = {
-  ADMIN: 'Часы + % абонементов/доп/магазин/корпо + премии/штрафы (без безнала)',
-  MANAGER: 'Оклад + % абонементов/доп клуба + корпо + премии/штрафы (без безнала)',
-  GROUP_TRAINER: 'Тиры ставка×зал×люди (из расписания)',
-  SPA: '% услуг + блок массажа + фикс из абонемента + биоимпеданс AllSports',
-  TECH: 'Часы смены + премии/штрафы отдельно',
-  PT: '% от оплаченных ПТ (ступени по объёму; подарки в счёт)',
-  CLUB: '% ПТ клубных тренеров, без оклада и аванса',
-};
-
-type PayslipFields = {
-  fio: boolean;
-  period: boolean;
-  motivation: boolean;
-  bonus: boolean;
-  fine: boolean;
-  totals: boolean;
-  shifts: boolean;
-};
-
-/** Defaults when opening the print dialog. */
-const DEFAULT_PAYSLIP: PayslipFields = {
-  fio: true,
-  period: true,
-  motivation: true,
-  bonus: true,
-  fine: true,
-  totals: true,
-  shifts: false,
-};
-
-const ALL_PAYSLIP: PayslipFields = {
-  fio: true,
-  period: true,
-  motivation: true,
-  bonus: true,
-  fine: true,
-  totals: true,
-  shifts: true,
-};
 
 type Props = {
   mode: 'super' | 'admin';
@@ -485,6 +82,7 @@ type EmployeeViewMem = {
   deptFilter: DeptFilter;
   employeeReportOpen: boolean;
   payoutsOpen: boolean;
+  tab: ReportTabId;
 };
 
 const DEPT_FILTER_IDS: DeptFilter[] = [
@@ -497,11 +95,30 @@ const DEPT_FILTER_IDS: DeptFilter[] = [
   'EXTERNAL',
 ];
 
+const REPORT_TAB_IDS: ReportTabId[] = [
+  'overview',
+  'pt',
+  'group',
+  'reformer',
+  'spa',
+  'shift',
+  'gifts',
+  'attention',
+  'adjustments',
+];
+
 function parseDeptFilter(raw: unknown): DeptFilter {
   return typeof raw === 'string' &&
     DEPT_FILTER_IDS.includes(raw as DeptFilter)
     ? (raw as DeptFilter)
     : 'ALL';
+}
+
+function parseReportTab(raw: unknown): ReportTabId {
+  return typeof raw === 'string' &&
+    REPORT_TAB_IDS.includes(raw as ReportTabId)
+    ? (raw as ReportTabId)
+    : 'overview';
 }
 
 function filterStaffByDept(
@@ -537,6 +154,7 @@ export function PayrollWorkspace({ mode }: Props) {
   const searchParams = useSearchParams();
   const ownerId = getUser()?.id ?? '';
   const urlHydrated = useRef(false);
+  const autoLoadSkip = useRef(true);
 
   const boot = useMemo(() => {
     const d = new Date(today);
@@ -548,6 +166,7 @@ export function PayrollWorkspace({ mode }: Props) {
       deptFilter: 'ALL',
       employeeReportOpen: mode === 'admin',
       payoutsOpen: false,
+      tab: 'overview',
     };
     return resolveViewFilters<EmployeeViewMem>({
       userId: ownerId,
@@ -585,10 +204,7 @@ export function PayrollWorkspace({ mode }: Props) {
       from: boot.from,
       to: boot.to,
     });
-    if (hit) {
-      // calculatedAt applied in effect below — keep sync with cache hit
-      return hit.summary;
-    }
+    if (hit) return hit.summary;
     return null;
   });
   const [message, setMessage] = useState('');
@@ -598,14 +214,14 @@ export function PayrollWorkspace({ mode }: Props) {
   const [adjReason, setAdjReason] = useState('');
   const [editingAdjId, setEditingAdjId] = useState<string | null>(null);
   const [printOpen, setPrintOpen] = useState(false);
-  const [printFields, setPrintFields] = useState<PayslipFields>(DEFAULT_PAYSLIP);
+  const [printFields, setPrintFields] =
+    useState<PayslipFields>(DEFAULT_PAYSLIP);
   const [docPreview, setDocPreview] = useState('');
   const [deptFilter, setDeptFilter] = useState<DeptFilter>(() =>
     parseDeptFilter(boot.deptFilter),
   );
   const [batchIds, setBatchIds] = useState<Set<string>>(new Set());
   const [batchPrinting, setBatchPrinting] = useState(false);
-  /** Period used by the print dialog (employee report or payouts wave). */
   const [printRange, setPrintRange] = useState<{ from: string; to: string }>({
     from: boot.from,
     to: boot.to,
@@ -615,9 +231,14 @@ export function PayrollWorkspace({ mode }: Props) {
   const [employeeReportOpen, setEmployeeReportOpen] = useState(
     Boolean(boot.employeeReportOpen),
   );
-  /** Always start collapsed — do not restore from view memory. */
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [payoutsOpen, setPayoutsOpen] = useState(Boolean(boot.payoutsOpen));
+  const [reportTab, setReportTab] = useState<ReportTabId>(() =>
+    parseReportTab(boot.tab),
+  );
+  const [attentionFocus, setAttentionFocus] = useState<AttentionKind | null>(
+    null,
+  );
   const [peekSession, setPeekSession] = useState<{
     sessionKey: string;
     from: string;
@@ -626,10 +247,13 @@ export function PayrollWorkspace({ mode }: Props) {
   const [saleDetail, setSaleDetail] =
     useState<ClubRevenueDetailResponse | null>(null);
   const [saleDetailLoading, setSaleDetailLoading] = useState(false);
+  const [salePicker, setSalePicker] = useState<{
+    lines: ClubRevenueLineDto[];
+    currency: string;
+  } | null>(null);
 
   const bookingPeekApi = useMemo(
-    () =>
-      createBookingControlApi(mode === 'super' ? 'super-admin' : 'admin'),
+    () => createBookingControlApi(mode === 'super' ? 'super-admin' : 'admin'),
     [mode],
   );
 
@@ -637,6 +261,7 @@ export function PayrollWorkspace({ mode }: Props) {
     const token = getToken();
     if (!token) return;
     setSaleDetailLoading(true);
+    setSalePicker(null);
     try {
       const d = await api.superAdminClubSaleDetail(token, externalId);
       setSaleDetail(d);
@@ -646,6 +271,42 @@ export function PayrollWorkspace({ mode }: Props) {
       setSaleDetailLoading(false);
     }
   }, []);
+
+  /** Open sale card in-page (linked id or ClubRevenue search). */
+  const openSaleForUnit = useCallback(
+    async (u: WorkUnit) => {
+      if (unitHasSalePeek(u)) {
+        await openSalePeek(u.saleExternalId!.trim());
+        return;
+      }
+      const search = unitSaleSearchQuery(u);
+      if (!search) return;
+      const token = getToken();
+      if (!token) return;
+      setSaleDetailLoading(true);
+      setMessage('');
+      try {
+        const report = await api.superAdminClubSales(token, search);
+        const lines = report.lines ?? [];
+        if (lines.length === 0) {
+          setMessage('Продажа не найдена за период строки');
+          return;
+        }
+        if (lines.length === 1) {
+          await openSalePeek(lines[0]!.externalId);
+          return;
+        }
+        setSalePicker({ lines, currency: report.currency });
+      } catch (e) {
+        setMessage(
+          e instanceof Error ? e.message : 'Не удалось найти продажу',
+        );
+      } finally {
+        setSaleDetailLoading(false);
+      }
+    },
+    [openSalePeek],
+  );
 
   useEffect(() => {
     if (!boot.userId || !ownerId) return;
@@ -659,20 +320,11 @@ export function PayrollWorkspace({ mode }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- seed once from cache
   }, []);
 
-  const clearSummary = () => {
-    setSummary(null);
-    setSummaryCalculatedAt(null);
-  };
-
   const filteredStaff = useMemo(
     () => filterStaffByDept(staff, deptFilter),
     [staff, deptFilter],
   );
 
-  /**
-   * Select options are only filteredStaff. Never keep an out-of-filter id —
-   * browsers then show the first option while Calculate still uses the old id.
-   */
   const reportUserId = useMemo(() => {
     if (!canEdit) return userId;
     if (filteredStaff.some((s) => s.userId === userId)) return userId;
@@ -688,6 +340,7 @@ export function PayrollWorkspace({ mode }: Props) {
       deptFilter,
       employeeReportOpen,
       payoutsOpen,
+      tab: reportTab,
     },
     toSearchParams: (d) => {
       const q = new URLSearchParams();
@@ -698,42 +351,13 @@ export function PayrollWorkspace({ mode }: Props) {
     },
   });
 
-  /** Only resolve inside the active dept filter so badge/track match the select. */
   const selected =
     filteredStaff.find((s) => s.userId === reportUserId) ??
     (!canEdit ? staff.find((s) => s.userId === userId) : undefined);
 
-  const motivationBreakdownVisible =
-    summary?.motivationBreakdown != null &&
-    (summary.motivationBreakdown.membershipMinor > 0 ||
-      summary.motivationBreakdown.spaMinor > 0 ||
-      summary.motivationBreakdown.solariumMinor > 0 ||
-      summary.motivationBreakdown.shopMinor > 0 ||
-      summary.motivationBreakdown.corporateMinor > 0);
-
-  const trustedGroupUnits = useMemo(
-    () =>
-      (summary?.workUnits ?? []).filter(
-        (u) => u.kind === 'GROUP' && u.payrollTrusted,
-      ),
-    [summary?.workUnits],
-  );
-
-  const workTotals = useMemo(
-    () => workUnitsPeriodTotals(summary?.workUnits ?? []),
-    [summary?.workUnits],
-  );
-
-  const unconfirmedUnits = useMemo(
-    () => (summary?.workUnits ?? []).filter((u) => !u.payrollTrusted).length,
-    [summary?.workUnits],
-  );
-
   const bookingControlHref = useMemo(() => {
     const base =
-      mode === 'super'
-        ? '/super-admin/review-queue'
-        : '/admin/booking-control';
+      mode === 'super' ? '/super-admin/review-queue' : '/admin/booking-control';
     const q = new URLSearchParams({
       from,
       to,
@@ -742,6 +366,31 @@ export function PayrollWorkspace({ mode }: Props) {
     if (reportUserId) q.set('performerId', reportUserId);
     return `${base}?${q.toString()}`;
   }, [mode, from, to, reportUserId]);
+
+  const {
+    misses: controlMisses,
+    loading: controlLoading,
+    reload: reloadControlMisses,
+  } = useControlMisses({
+    mode,
+    performerId: reportUserId,
+    from: summary?.from ?? from,
+    to: summary?.to ?? to,
+    workUnits: summary?.workUnits,
+    enabled: Boolean(summary && employeeReportOpen && reportUserId),
+  });
+
+  const attentionChips = useMemo(
+    () =>
+      summary
+        ? buildAttentionChips({
+            controlMissCount: controlMisses.length,
+            units: summary.workUnits,
+            anomalyHints: summary.anomalyHints,
+          })
+        : [],
+    [summary, controlMisses.length],
+  );
 
   useEffect(() => {
     const token = getToken();
@@ -753,7 +402,6 @@ export function PayrollWorkspace({ mode }: Props) {
         setStaff(list);
         if (urlUserId && list.some((s) => s.userId === urlUserId)) {
           setUserId(urlUserId);
-          // URL employee wins over remembered dept — show them in the list.
           setDeptFilter('ALL');
           urlHydrated.current = true;
         } else if (boot.userId && list.some((s) => s.userId === boot.userId)) {
@@ -770,10 +418,9 @@ export function PayrollWorkspace({ mode }: Props) {
     if (!canEdit) return;
     if (reportUserId === userId) return;
     setUserId(reportUserId);
-    clearSummary();
   }, [canEdit, reportUserId, userId]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const token = getToken();
     const id = reportUserId;
     if (!token || !id) return;
@@ -793,12 +440,28 @@ export function PayrollWorkspace({ mode }: Props) {
         setPayrollSummaryCache(ownerId, { mode, userId: id, from, to }, s);
       }
     } catch (e) {
-      clearSummary();
+      setSummary(null);
+      setSummaryCalculatedAt(null);
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     } finally {
       setLoading(false);
     }
-  };
+  }, [reportUserId, userId, mode, from, to, ownerId]);
+
+  /** Auto-calc on employee / period change (debounce). */
+  useEffect(() => {
+    if (!employeeReportOpen || !reportUserId) return;
+    if (autoLoadSkip.current) {
+      autoLoadSkip.current = false;
+      if (summary) return;
+    }
+    const t = window.setTimeout(() => {
+      void load();
+    }, 400);
+    return () => window.clearTimeout(t);
+    // intentionally omit `load` identity churn — key off filters
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportUserId, from, to, employeeReportOpen]);
 
   const refreshFrom1c = async () => {
     const token = getToken();
@@ -889,6 +552,7 @@ export function PayrollWorkspace({ mode }: Props) {
     setEditingAdjId(a.id);
     setAdjAmount(String(a.amountMinor / 100));
     setAdjReason(a.reason);
+    setReportTab('adjustments');
   };
 
   const cancelEditAdj = () => {
@@ -912,124 +576,11 @@ export function PayrollWorkspace({ mode }: Props) {
     }
   };
 
-  const buildPayslipText = (
-    fields: PayslipFields,
-    source: PayrollPeriodSummary | null = summary,
-    ctx?: { ids: Set<string>; from: string; to: string },
-  ): string => {
-    const ids = ctx?.ids ?? batchIds;
-    const rangeFrom = ctx?.from ?? printRange.from;
-    const rangeTo = ctx?.to ?? printRange.to;
-    if (!source) {
-      const first =
-        staff.find((s) => ids.has(s.userId))?.name ?? '…';
-      const lines: string[] = [];
-      if (fields.fio) lines.push(first);
-      if (fields.period) lines.push(`Период: ${rangeFrom} — ${rangeTo}`);
-      if (
-        fields.motivation ||
-        fields.bonus ||
-        fields.fine ||
-        fields.shifts ||
-        fields.totals
-      ) {
-        lines.push('');
-        lines.push(
-          `(детальные поля подставятся при печати по ${ids.size} сотрудник(ам))`,
-        );
-      }
-      if (ids.size > 1) {
-        lines.push('');
-        lines.push(`Выбрано сотрудников: ${ids.size}`);
-      }
-      lines.push('');
-      return lines.join('\n');
-    }
-    const cur = source.currency;
-    const bonuses = source.adjustments.filter((a) => a.amountMinor > 0);
-    const fines = source.adjustments.filter((a) => a.amountMinor < 0);
-    const lines: string[] = [];
-    if (fields.fio) lines.push(source.performerName);
-    if (fields.period) lines.push(`Период: ${source.from} — ${source.to}`);
-    if (fields.motivation) {
-      lines.push('');
-      lines.push('Мотивация / ставки:');
-      const chips =
-        source.payChips?.length > 0 ? source.payChips : ['Ставки не заданы'];
-      for (const c of chips) lines.push(`  · ${c}`);
-      lines.push(`  Оклад / часы: ${money(source.baseSalaryMinor, cur)}`);
-      lines.push(`  Мотивация: ${money(source.motivationMinor, cur)}`);
-      if (hasPayslipSalesSegments(source)) {
-        lines.push('');
-        lines.push('Продажи по сегментам (продано → в мотивацию):');
-        for (const seg of PAYSLIP_SALE_SEGMENTS) {
-          lines.push(
-            `  ${seg.label}: ${money(seg.sold(source), cur)} → ${money(seg.contrib(source), cur)}`,
-          );
-        }
-      }
-    }
-    if (fields.bonus) {
-      lines.push('');
-      lines.push('Премии:');
-      if (!bonuses.length) lines.push('  нет');
-      else {
-        for (const a of bonuses) {
-          lines.push(`  + ${money(a.amountMinor, cur)} — ${a.reason}`);
-        }
-      }
-    }
-    if (fields.fine) {
-      lines.push('');
-      lines.push('Штрафы:');
-      if (!fines.length) lines.push('  нет');
-      else {
-        for (const a of fines) {
-          lines.push(`  ${money(a.amountMinor, cur)} — ${a.reason}`);
-        }
-      }
-    }
-    if (fields.shifts) {
-      const shifts = source.workUnits.filter((u) => u.kind === 'SHIFT');
-      lines.push('');
-      lines.push('Смены:');
-      if (!shifts.length) lines.push('  нет');
-      else {
-        for (const u of shifts) {
-          lines.push(
-            `  ${u.occurredAt.slice(0, 10)}  ${u.quantity} ч  ${money(u.priceMinor ?? 0, cur)}`,
-          );
-        }
-      }
-    }
-    if (fields.totals) {
-      lines.push('');
-      lines.push('-'.repeat(40));
-      lines.push(
-        `Корректировки всего: ${money(source.adjustmentsMinor, cur)}`,
-      );
-      lines.push(`ИТОГО НАЧИСЛЕНО: ${money(source.totalMinor, cur)}`);
-      const paid = source.paidPayouts;
-      if (paid && (paid.advanceMinor > 0 || paid.totalPaidMinor > 0)) {
-        if (paid.advanceMinor > 0) {
-          lines.push(
-            `Аванс выплачен: ${money(paid.advanceMinor, cur)} (карта ${money(paid.advanceCardMinor, cur)} · касса ${money(paid.advanceCashMinor, cur)})`,
-          );
-        }
-        lines.push(`Выплачено всего: ${money(paid.totalPaidMinor, cur)}`);
-        const rest = Math.max(0, source.totalMinor - paid.totalPaidMinor);
-        lines.push(`Остаток: ${money(rest, cur)}`);
-      }
-    }
-    if (ids.size > 1) {
-      lines.push('');
-      lines.push(`Выбрано сотрудников: ${ids.size}`);
-    }
-    lines.push('');
-    return lines.join('\n');
-  };
-
-  const openPrintDialogFor = (ids: string[], rangeFrom: string, rangeTo: string) => {
+  const openPrintDialogFor = (
+    ids: string[],
+    rangeFrom: string,
+    rangeTo: string,
+  ) => {
     if (!canEdit || ids.length === 0) return;
     const idSet = new Set(ids);
     setBatchIds(idSet);
@@ -1043,17 +594,16 @@ export function PayrollWorkspace({ mode }: Props) {
         ? summary
         : null;
     setDocPreview(
-      buildPayslipText(DEFAULT_PAYSLIP, previewSource, {
+      buildPayslipText({
+        fields: DEFAULT_PAYSLIP,
+        source: previewSource,
         ids: idSet,
         from: rangeFrom,
         to: rangeTo,
+        staff,
       }),
     );
     setPrintOpen(true);
-  };
-
-  const openPrintDialog = () => {
-    openPrintDialogFor([...batchIds], from, to);
   };
 
   const refreshPreview = (fields: PayslipFields) => {
@@ -1066,16 +616,28 @@ export function PayrollWorkspace({ mode }: Props) {
         ? summary
         : null;
     setDocPreview(
-      buildPayslipText(fields, previewSource, {
+      buildPayslipText({
+        fields,
+        source: previewSource,
         ids: batchIds,
         from: printRange.from,
         to: printRange.to,
+        staff,
       }),
     );
   };
 
   const savePayslipFile = async () => {
-    const text = docPreview || buildPayslipText(printFields);
+    const text =
+      docPreview ||
+      buildPayslipText({
+        fields: printFields,
+        source: summary,
+        ids: batchIds,
+        from: printRange.from,
+        to: printRange.to,
+        staff,
+      });
     if (!text || !summary) return;
     const fileName = payslipFilename(
       summary.performerName,
@@ -1120,7 +682,6 @@ export function PayrollWorkspace({ mode }: Props) {
         return;
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') return;
-        // fall through to download
       }
     }
 
@@ -1135,15 +696,6 @@ export function PayrollWorkspace({ mode }: Props) {
     setMessage(
       `Файл «${fileName}» скачан в папку загрузок (браузер не дал выбрать место)`,
     );
-  };
-
-  const toggleBatchId = (id: string) => {
-    setBatchIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   };
 
   const printSelectedPayslips = async () => {
@@ -1176,12 +728,7 @@ export function PayrollWorkspace({ mode }: Props) {
     }
   };
 
-  /** Open employee report fold, set period filters, load summary (club/payouts). */
-  const openEmployeeReport = async (
-    id: string,
-    f: string,
-    t: string,
-  ) => {
+  const openEmployeeReport = async (id: string, f: string, t: string) => {
     if (!canEdit) return;
     setDeptFilter('ALL');
     setUserId(id);
@@ -1210,11 +757,34 @@ export function PayrollWorkspace({ mode }: Props) {
         setPayrollSummaryCache(ownerId, { mode, userId: id, from: f, to: t }, s);
       }
     } catch (e) {
-      clearSummary();
+      setSummary(null);
+      setSummaryCalculatedAt(null);
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     } finally {
       setLoading(false);
     }
+  };
+
+  const onPreset = (p: PeriodPreset) => {
+    const range = periodPresetRange(p);
+    setFrom(range.from);
+    setTo(range.to);
+  };
+
+  const onToggleSpaPartner = async (unitId: string, next: string | null) => {
+    const token = getToken();
+    if (!token) return;
+    try {
+      await api.payrollSetSpaPartner(token, unitId, next);
+      await load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Ошибка');
+    }
+  };
+
+  const onDeptChange = (d: DeptFilter) => {
+    if (d === deptFilter) return;
+    setDeptFilter(d);
   };
 
   return (
@@ -1267,845 +837,124 @@ export function PayrollWorkspace({ mode }: Props) {
       )}
 
       <div id="payroll-employee-report">
-      <PayrollFold
-        open={employeeReportOpen}
-        onToggle={() => setEmployeeReportOpen((o) => !o)}
-        title="Отчёт по сотруднику"
-        subtitle={
-          selected
-            ? `${selected.name}${
-                summary
-                  ? ` · ${formatIsoDayRu(summary.from)}–${formatIsoDayRu(summary.to)} · ${money(summary.totalMinor, summary.currency)}`
-                  : ''
-              }`
-            : 'Индивидуальный расчёт и проверка'
-        }
-        icon={UserRound}
-        badge={selected?.name}
-      >
-        {canEdit && (
-          <div className="mb-3 flex flex-wrap gap-1.5">
-            {DEPT_FILTERS.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => {
-                  if (f.id === deptFilter) return;
-                  setDeptFilter(f.id);
-                  clearSummary();
+        <PayrollFold
+          open={employeeReportOpen}
+          onToggle={() => setEmployeeReportOpen((o) => !o)}
+          title="Отчёт по сотруднику"
+          subtitle={
+            selected
+              ? `${selected.name}${
+                  summary
+                    ? ` · ${formatIsoDayRu(summary.from)}–${formatIsoDayRu(summary.to)} · ${money(summary.totalMinor, summary.currency)}`
+                    : ''
+                }`
+              : 'Индивидуальный расчёт и проверка'
+          }
+          icon={UserRound}
+          badge={selected?.name}
+        >
+          <ReportToolbar
+            canEdit={canEdit}
+            deptFilter={deptFilter}
+            onDeptFilter={onDeptChange}
+            filteredStaff={filteredStaff}
+            reportUserId={reportUserId}
+            onUserId={(id) => setUserId(id)}
+            from={from}
+            to={to}
+            onFrom={setFrom}
+            onTo={setTo}
+            onPreset={onPreset}
+            loading={loading}
+            syncing1c={syncing1c}
+            onRecalc={() => void load()}
+            onRefresh1c={() => void refreshFrom1c()}
+            onPrint={() => {
+              if (reportUserId) {
+                openPrintDialogFor([reportUserId], from, to);
+              }
+            }}
+            printBusy={batchPrinting}
+          />
+
+          {summary && summaryCalculatedAt != null && (
+            <p className="text-[11px] text-slate-500">
+              Расчёт на {formatCalculatedAt(summaryCalculatedAt)}. «Пересчитать»
+              или «Обновить из 1С» — заново.
+            </p>
+          )}
+
+          {message && (
+            <p className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-200">
+              {message}
+            </p>
+          )}
+
+          {summary ? (
+            <>
+              <ReportHeader
+                summary={summary}
+                selected={selected}
+                canEdit={canEdit}
+                filterFrom={from}
+                filterTo={to}
+                onLock={() => void lock()}
+              />
+
+              <AttentionBar
+                chips={attentionChips}
+                anomalyHints={summary.anomalyHints}
+                onOpen={(tab, kind) => {
+                  setAttentionFocus(kind);
+                  setReportTab(tab);
                 }}
-                className={
-                  deptFilter === f.id
-                    ? 'btn-primary px-2.5 py-1 text-xs'
-                    : 'btn-secondary px-2.5 py-1 text-xs'
+              />
+
+              <ReportTabs
+                summary={summary}
+                tab={reportTab}
+                onTab={(t) => {
+                  setReportTab(t);
+                  if (t !== 'attention') setAttentionFocus(null);
+                }}
+                attentionFocus={attentionFocus}
+                controlMisses={controlMisses}
+                controlLoading={controlLoading}
+                bookingControlHref={bookingControlHref}
+                mode={mode}
+                canEdit={canEdit}
+                onOpenControl={(sessionKey, day) =>
+                  setPeekSession({ sessionKey, from: day, to: day })
                 }
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="flex flex-wrap items-end gap-2">
-          {canEdit ? (
-            <label className="min-w-[12rem] flex-1 text-[10px] font-medium uppercase tracking-wide text-slate-500">
-              Сотрудник
-              <select
-                className="input mt-1 w-full min-w-[12rem] py-1.5 text-sm"
-                value={reportUserId}
-                onChange={(e) => {
-                  setUserId(e.target.value);
-                  clearSummary();
-                }}
-              >
-                {filteredStaff.length === 0 ? (
-                  <option value="">Нет сотрудников в фильтре</option>
-                ) : (
-                  filteredStaff.map((s) => (
-                    <option key={s.userId} value={s.userId}>
-                      {s.name}
-                      {s.track ? ` · ${s.track}` : ''}
-                    </option>
-                  ))
-                )}
-              </select>
-            </label>
-          ) : (
-            <div className="min-w-[12rem] flex-1 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2.5">
-              <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                Моя ЗП
-              </p>
-              <p className="mt-0.5 font-medium text-white">
-                {selected?.name ?? '…'}
-              </p>
-            </div>
-          )}
-          <DateField
-            label="С"
-            value={from}
-            onChange={(v) => {
-              setFrom(v);
-              clearSummary();
-            }}
-            className="w-[9.5rem]"
-            inputClassName="text-sm"
-          />
-          <DateField
-            label="По"
-            value={to}
-            onChange={(v) => {
-              setTo(v);
-              clearSummary();
-            }}
-            className="w-[9.5rem]"
-            inputClassName="text-sm"
-          />
-          <button
-            type="button"
-            className="btn-primary px-3 py-1.5 text-sm"
-            disabled={loading || !reportUserId}
-            onClick={load}
-          >
-            {loading ? 'Считаем…' : 'Рассчитать'}
-          </button>
-          <button
-            type="button"
-            className="btn-secondary px-3 py-1.5 text-sm"
-            disabled={syncing1c || loading || !reportUserId}
-            onClick={() => void refreshFrom1c()}
-            title="Перечитать занятия из 1С за выбранный период и пересчитать"
-          >
-            {syncing1c ? 'Обновляем…' : 'Обновить из 1С'}
-          </button>
-          {canEdit && (
-            <button
-              type="button"
-              className="btn-secondary px-3 py-1.5 text-sm"
-              disabled={batchPrinting || batchIds.size === 0}
-              onClick={openPrintDialog}
-              title={
-                batchIds.size === 0
-                  ? 'Отметьте сотрудников галочками ниже'
-                  : undefined
-              }
-            >
-              {batchPrinting ? 'Печать…' : 'Печать'}
-            </button>
-          )}
-          {canEdit && (
-            <button
-              type="button"
-              className="btn-secondary px-3 py-1.5 text-sm"
-              disabled={!summary?.canLock}
-              onClick={lock}
-              title={
-                summary && !summary.canLock
-                  ? `Открытых нестыковок: ${summary.openExceptions}`
-                  : 'Зафиксировать период ЗП для выбранного сотрудника'
-              }
-            >
-              Подтвердить выплату
-            </button>
-          )}
-        </div>
-
-        {summary && summaryCalculatedAt != null && (
-          <p className="text-[11px] text-slate-500">
-            Расчёт на {formatCalculatedAt(summaryCalculatedAt)}. «Рассчитать» или
-            «Обновить из 1С» — пересчитать заново.
-          </p>
-        )}
-
-        {canEdit && filteredStaff.length > 0 && (
-          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                Пакетная печать расчётников
-              </p>
-              <div className="flex gap-2 text-xs">
-                <button
-                  type="button"
-                  className="text-fitgo-300 hover:underline"
-                  onClick={() =>
-                    setBatchIds(new Set(filteredStaff.map((s) => s.userId)))
-                  }
-                >
-                  Выбрать всех в фильтре
-                </button>
-                <button
-                  type="button"
-                  className="text-slate-400 hover:underline"
-                  onClick={() => setBatchIds(new Set())}
-                >
-                  Снять
-                </button>
-              </div>
-            </div>
-            <ul className="grid max-h-40 gap-1 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
-              {filteredStaff.map((s) => (
-                <li key={s.userId}>
-                  <label
-                    className={
-                      batchIds.has(s.userId)
-                        ? 'flex cursor-pointer items-center gap-2 rounded-lg bg-fitgo-500/15 px-2 py-1 text-sm'
-                        : 'flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-slate-800'
-                    }
-                  >
-                    <input
-                      type="checkbox"
-                      checked={batchIds.has(s.userId)}
-                      onChange={() => toggleBatchId(s.userId)}
-                    />
-                    <span className="truncate text-slate-200">{s.name}</span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {selected && (
-          <div className="mt-3 space-y-1.5 border-t border-slate-800/80 pt-2">
-            <div className="flex flex-wrap items-center gap-2">
-              {selected.track && (
-                <span className="rounded-md bg-slate-800 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-300">
-                  {selected.track}
-                </span>
-              )}
-              {canEdit && (
-                <Link
-                  href={`/super-admin/staff/${selected.userId}`}
-                  className="text-xs text-fitgo-400 hover:underline"
-                >
-                  Изменить ставки
-                </Link>
-              )}
-            </div>
-            {selected.track && TRACK_HINT[selected.track] && (
-              <p className="text-xs text-slate-500">
-                {TRACK_HINT[selected.track]}
-              </p>
-            )}
-            <div className="flex flex-wrap gap-1.5">
-              {selected.payChips.map((c) => (
-                <span
-                  key={c}
-                  className="rounded-full border border-slate-700/80 bg-slate-900/80 px-2.5 py-0.5 text-xs text-slate-300"
-                >
-                  {c}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-      
-            {message && (
-              <p className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-sm text-amber-200">
-                {message}
-              </p>
-            )}
-      {summary && (
-        <>
-          <p className="text-xs text-slate-500">
-            Расчёт за{' '}
-            <span className="tabular-nums text-slate-300">
-              {formatIsoDayRu(summary.from)}–{formatIsoDayRu(summary.to)}
-            </span>
-            {summary.from !== from || summary.to !== to
-              ? ' — даты изменены, нажмите «Рассчитать»'
-              : null}
-          </p>
-          <section className="grid grid-cols-2 gap-2.5 md:grid-cols-4 md:gap-3">
-            <Stat
-              label="Оклад / часы"
-              value={money(summary.baseSalaryMinor, summary.currency)}
-            />
-            <Stat
-              label="Мотивация"
-              value={money(summary.motivationMinor, summary.currency)}
-            />
-            <Stat
-              label="± Корректировки"
-              value={money(summary.adjustmentsMinor, summary.currency)}
-            />
-            <Stat
-              label="Итого"
-              value={money(summary.totalMinor, summary.currency)}
-              emphasize
-            />
-          </section>
-
-          <PaidPayoutsStrip
-            paid={summary.paidPayouts}
-            earnedMinor={summary.totalMinor}
-            currency={summary.currency}
-          />
-
-          {motivationBreakdownVisible && summary.motivationBreakdown ? (
-            <section className="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-                Из чего мотивация
-              </p>
-              <MotivationBreakdownList
-                breakdown={summary.motivationBreakdown}
-                sales={summary.sales}
-                currency={summary.currency}
+                onOpenSale={(unit) => void openSaleForUnit(unit)}
+                onToggleSpaPartner={(unitId, next) =>
+                  void onToggleSpaPartner(unitId, next)
+                }
+                saleDetailLoading={saleDetailLoading}
+                adjAmount={adjAmount}
+                adjReason={adjReason}
+                editingAdjId={editingAdjId}
+                onAdjAmount={setAdjAmount}
+                onAdjReason={setAdjReason}
+                onSaveAdj={() => void saveAdj()}
+                onCancelEditAdj={cancelEditAdj}
+                onStartEditAdj={startEditAdj}
+                onDeleteAdj={(id) => void deleteAdj(id)}
               />
-            </section>
+            </>
           ) : null}
 
-          {summary.groupStats ? (
-            <section className="grid grid-cols-2 gap-2.5 md:grid-cols-2">
-              <Stat
-                label="Занятий в ЗП"
-                value={String(summary.groupStats.classCount)}
-              />
-              <Stat
-                label="Среднее людей"
-                value={summary.groupStats.avgPeople.toLocaleString('ru-RU', {
-                  maximumFractionDigits: 1,
-                })}
-              />
-            </section>
-          ) : null}
-
-          {summary.ptStats ? (
-            <section className="grid grid-cols-2 gap-2.5 md:grid-cols-2">
-              <Stat
-                label="ПТ за период"
-                value={String(summary.ptStats.sessionCount)}
-              />
-              <Stat
-                label="% по шкале"
-                value={`${summary.ptStats.percent}%`}
-              />
-            </section>
-          ) : null}
-
-          {unconfirmedUnits > 0 ? (
-            <Link
-              href={bookingControlHref}
-              className="block rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-100"
-            >
-              Не подтверждено: {unconfirmedUnits} занятий/услуг → контроль
-              записей
-            </Link>
-          ) : null}
-
-          <section className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-3 text-sm">
-            <span className="font-medium text-white">{summary.performerName}</span>
-            <span
-              className={
-                summary.openExceptions ? 'text-amber-300' : 'text-emerald-400'
-              }
-            >
-              нестыковок: {summary.openExceptions}
-            </span>
-            <span className="text-slate-500">
-              без замечаний {summary.greenCount}
-              {summary.resolvedCount > 0
-                ? ` · принято ${summary.resolvedCount}`
-                : ''}
-            </span>
-            {summary.locked && (
-              <span className="rounded-full bg-fitgo-500/15 px-2 py-0.5 text-xs text-fitgo-300">
-                LOCKED
-              </span>
-            )}
-          </section>
-
-          {summary.anomalyHints.length > 0 && (
-            <ul className="space-y-1 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">
-              {summary.anomalyHints.map((h) => (
-                <li key={h}>· {h}</li>
-              ))}
-            </ul>
-          )}
-
-          {canEdit && (
-            <section className="space-y-3 rounded-2xl border border-slate-800 p-4 md:flex md:items-end md:gap-3 md:space-y-0">
-              <div className="md:flex-1 space-y-1">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  {editingAdjId ? 'Редактировать корректировку' : 'Премия / штраф'}
-                </p>
-                <div className="grid gap-2 sm:grid-cols-[8rem_1fr]">
-                  <input
-                    className="input"
-                    inputMode="decimal"
-                    placeholder="± BYN"
-                    value={adjAmount}
-                    onChange={(e) => setAdjAmount(e.target.value)}
-                  />
-                  <input
-                    className="input"
-                    placeholder="Причина"
-                    value={adjReason}
-                    onChange={(e) => setAdjReason(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div className="flex w-full gap-2 md:w-auto">
-                <button
-                  type="button"
-                  className="btn-secondary flex-1 md:flex-none"
-                  onClick={saveAdj}
-                >
-                  {editingAdjId ? 'Сохранить' : 'Добавить'}
-                </button>
-                {editingAdjId && (
-                  <button
-                    type="button"
-                    className="btn-secondary flex-1 md:flex-none"
-                    onClick={cancelEditAdj}
-                  >
-                    Отмена
-                  </button>
-                )}
-              </div>
-            </section>
-          )}
-
-          {(summary.adjustments?.length ?? 0) > 0 && (
-            <section className="space-y-2 rounded-2xl border border-slate-800 p-4">
-              <h2 className="text-sm font-medium text-slate-300">
-                Премии и штрафы
-              </h2>
-              <ul className="space-y-1 text-sm">
-                {summary.adjustments.map((a: PayrollAdjustmentDto) => (
-                  <li
-                    key={a.id}
-                    className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-900/80 py-2"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <span className="text-slate-400">{a.reason}</span>
-                      <span
-                        className={`ml-2 tabular-nums ${
-                          a.amountMinor >= 0
-                            ? 'text-emerald-400'
-                            : 'text-red-300'
-                        }`}
-                      >
-                        {money(a.amountMinor, summary.currency)}
-                      </span>
-                    </div>
-                    {canEdit && (
-                      <div className="flex gap-3 text-xs">
-                        <button
-                          type="button"
-                          className="text-sky-300"
-                          onClick={() => startEditAdj(a)}
-                        >
-                          Изменить
-                        </button>
-                        <button
-                          type="button"
-                          className="text-red-300"
-                          onClick={() => deleteAdj(a.id)}
-                        >
-                          Удалить
-                        </button>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {summary.groupStats ? (
-            <section className="space-y-2 rounded-2xl border border-slate-800 p-4">
-              <h2 className="text-sm font-medium text-slate-300">
-                Занятия в расчёте ЗП ({trustedGroupUnits.length})
-              </h2>
-              {trustedGroupUnits.length === 0 ? (
-                <p className="text-sm text-slate-500">
-                  Нет подтверждённых групповых занятий
-                </p>
-              ) : (
-                <ul className="max-h-64 space-y-1 overflow-y-auto text-sm">
-                  {trustedGroupUnits.map((u) => (
-                    <li
-                      key={u.id}
-                      className="flex justify-between gap-2 border-b border-slate-900/80 py-1.5 text-slate-300"
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="tabular-nums text-slate-500">
-                          {unitDayLabel(u)}
-                        </span>{' '}
-                        · {u.title}
-                        {u.roomTitle ? (
-                          <span className="text-slate-500">
-                            {' '}
-                            · {u.roomTitle}
-                          </span>
-                        ) : null}
-                      </span>
-                      <span className="shrink-0 tabular-nums">
-                        {u.quantity} чел.
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          ) : null}
-
-          <section className="space-y-2">
-            <h2 className="text-sm font-medium text-slate-300">
-              Работы за период ({summary.workUnits.length})
-            </h2>
-
-            <div className="space-y-2 md:hidden">
-              {summary.workUnits.length === 0 ? (
-                <p className="text-sm text-slate-500">Нет строк</p>
-              ) : (
-                summary.workUnits.map((u) => (
-                  <article
-                    key={`${u.kind}-${u.id}`}
-                    className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className="font-medium text-white">{u.title}</p>
-                        <p className="text-xs text-slate-500">
-                          {formatDateTime(u.occurredAt)}
-                          {u.clientName ? ` · ${u.clientName}` : ''}
-                        </p>
-                      </div>
-                      <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] uppercase text-slate-300">
-                        {u.kind}
-                      </span>
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-400">
-                      <span>
-                        {u.kind === 'SHIFT'
-                          ? `${u.quantity} ч`
-                          : `×${u.quantity}`}
-                      </span>
-                      {u.kind === 'GROUP' && u.roomTitle && (
-                        <span className="text-slate-500">{u.roomTitle}</span>
-                      )}
-                      {unitShowsPayCols(u) && (
-                        <>
-                          <span>
-                            {unitCostLabel(u, summary.currency)}
-                          </span>
-                          <span className="text-slate-300">
-                            {unitEarnLabel(u, summary.currency)}
-                          </span>
-                        </>
-                      )}
-                      {u.kind === 'SPA' && canEdit && (
-                        <button
-                          type="button"
-                          className={
-                            u.partnerSource === 'ALLSPORTS'
-                              ? 'rounded bg-emerald-900/50 px-1.5 py-0.5 text-[10px] text-emerald-300'
-                              : 'rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400'
-                          }
-                          onClick={async () => {
-                            const token = getToken();
-                            if (!token) return;
-                            const next =
-                              u.partnerSource === 'ALLSPORTS'
-                                ? null
-                                : 'ALLSPORTS';
-                            try {
-                              await api.payrollSetSpaPartner(token, u.id, next);
-                              await load();
-                            } catch (e) {
-                              setMessage(
-                                e instanceof Error ? e.message : 'Ошибка',
-                              );
-                            }
-                          }}
-                        >
-                          {u.partnerSource === 'ALLSPORTS'
-                            ? 'AllSports ✓'
-                            : 'AllSports'}
-                        </button>
-                      )}
-                      {u.kind === 'SHIFT' && u.priceMinor != null && (
-                        <span className="text-emerald-400">
-                          {money(u.priceMinor, summary.currency)}
-                        </span>
-                      )}
-                      <TrustBandDot
-                        trustBand={u.trustBand}
-                        trustHints={u.trustHints}
-                      />
-                      {u.isComplimentary && (
-                        <span className="text-violet-300">подарок</span>
-                      )}
-                      {u.spaBlockPriceSource === 'CATALOG' && (
-                        <span className="text-amber-300">
-                          каталог −N%, проверить оплату
-                        </span>
-                      )}
-                      <span
-                        className={
-                          u.payrollTrusted && !u.isComplimentary
-                            ? 'text-emerald-400'
-                            : 'text-slate-500'
-                        }
-                      >
-                        {u.isComplimentary
-                          ? 'в счёт'
-                          : u.payrollTrusted
-                            ? 'в ЗП'
-                            : 'не в ЗП'}
-                      </span>
-                    </div>
-                    {unitShowsPayCols(u) &&
-                      (u.sessionKey ||
-                        unitHasSalePeek(u) ||
-                        unitSaleListHref(u, mode)) && (
-                        <div className="mt-2 flex flex-wrap gap-3 text-xs">
-                          {u.sessionKey ? (
-                            <button
-                              type="button"
-                              className="text-sky-300 hover:underline"
-                              onClick={() =>
-                                setPeekSession({
-                                  sessionKey: u.sessionKey!,
-                                  from: unitDayIso(u),
-                                  to: unitDayIso(u),
-                                })
-                              }
-                            >
-                              Контроль
-                            </button>
-                          ) : null}
-                          {unitHasSalePeek(u) ? (
-                            <button
-                              type="button"
-                              className="text-sky-300 hover:underline"
-                              disabled={saleDetailLoading}
-                              onClick={() =>
-                                void openSalePeek(u.saleExternalId!.trim())
-                              }
-                            >
-                              Продажа
-                            </button>
-                          ) : unitSaleListHref(u, mode) ? (
-                            <Link
-                              href={unitSaleListHref(u, mode)!}
-                              className="text-sky-300 hover:underline"
-                            >
-                              Список
-                            </Link>
-                          ) : null}
-                        </div>
-                      )}
-                  </article>
-                ))
-              )}
-              {summary.workUnits.length > 0 ? (
-                <div className="rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-2.5 text-xs text-slate-400">
-                  <span className="font-medium uppercase tracking-wide text-slate-500">
-                    Итого
-                  </span>
-                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
-                    <span>
-                      Начислено:{' '}
-                      <span className="tabular-nums text-emerald-300">
-                        {money(workTotals.earnedMinor, summary.currency)}
-                      </span>
-                    </span>
-                    <span>
-                      Продано:{' '}
-                      <span className="tabular-nums text-slate-200">
-                        {money(workTotals.soldMinor, summary.currency)}
-                      </span>
-                    </span>
-                    <span>
-                      Занятий:{' '}
-                      <span className="tabular-nums text-slate-200">
-                        {workTotals.classCount}
-                      </span>
-                    </span>
-                  </div>
-                </div>
-              ) : null}
+          {!summary && !loading && (
+            <div className="rounded-2xl border border-dashed border-slate-800 px-4 py-12 text-center">
+              <p className="text-sm text-slate-400">
+                Выберите сотрудника и период
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                Расчёт подгрузится автоматически
+              </p>
             </div>
-
-            <div className="hidden overflow-hidden rounded-2xl border border-slate-800 md:block">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-950/80 text-left text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3">Когда</th>
-                    <th className="px-4 py-3">Вид</th>
-                    <th className="px-4 py-3">Услуга</th>
-                    <th className="px-4 py-3">Кол-во</th>
-                    <th className="px-4 py-3">Стоимость</th>
-                    <th className="px-4 py-3">%</th>
-                    <th className="px-4 py-3">Trust</th>
-                    <th className="px-4 py-3">В ЗП</th>
-                    <th className="px-4 py-3">Ссылки</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {summary.workUnits.map((u) => {
-                    const saleListHref = unitSaleListHref(u, mode);
-                    const showPayCols = unitShowsPayCols(u);
-                    return (
-                      <tr
-                        key={`${u.kind}-${u.id}`}
-                        className="border-t border-slate-900/80"
-                      >
-                        <td className="px-4 py-2.5 text-slate-400">
-                          {formatDateTime(u.occurredAt)}
-                        </td>
-                        <td className="px-4 py-2.5">{u.kind}</td>
-                        <td className="px-4 py-2.5">
-                          {u.title}
-                          {u.isComplimentary ? (
-                            <span className="ml-1 text-violet-300">
-                              · подарок
-                            </span>
-                          ) : null}
-                          {u.spaBlockPriceSource === 'CATALOG' ? (
-                            <span className="ml-1 text-amber-300">
-                              · каталог −N%, проверить оплату
-                            </span>
-                          ) : null}
-                          {u.clientName ? (
-                            <span className="text-slate-500">
-                              {' '}
-                              · {u.clientName}
-                            </span>
-                          ) : null}
-                          {u.kind === 'SHIFT' && u.priceMinor != null ? (
-                            <span className="ml-1 text-emerald-400">
-                              · {money(u.priceMinor, summary.currency)}
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          {u.kind === 'SHIFT' ? `${u.quantity} ч` : u.quantity}
-                        </td>
-                        <td className="px-4 py-2.5 tabular-nums text-slate-300">
-                          {showPayCols
-                            ? unitCostLabel(u, summary.currency)
-                            : '—'}
-                        </td>
-                        <td className="px-4 py-2.5 tabular-nums text-slate-300">
-                          {showPayCols
-                            ? unitEarnLabel(u, summary.currency)
-                            : '—'}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <TrustBandDot
-                            trustBand={u.trustBand}
-                            trustHints={u.trustHints}
-                          />
-                        </td>
-                        <td className="px-4 py-2.5">
-                          {u.isComplimentary ? (
-                            <span className="text-violet-300">счёт</span>
-                          ) : u.payrollTrusted ? (
-                            <span className="text-emerald-400">да</span>
-                          ) : (
-                            <span className="text-slate-600">нет</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          {showPayCols ? (
-                            <span className="inline-flex flex-wrap gap-2 text-xs">
-                              {u.sessionKey ? (
-                                <button
-                                  type="button"
-                                  className="text-sky-300 hover:underline"
-                                  onClick={() =>
-                                    setPeekSession({
-                                      sessionKey: u.sessionKey!,
-                                      from: unitDayIso(u),
-                                      to: unitDayIso(u),
-                                    })
-                                  }
-                                >
-                                  Контроль
-                                </button>
-                              ) : (
-                                <span className="text-slate-600">Контроль</span>
-                              )}
-                              {unitHasSalePeek(u) ? (
-                                <button
-                                  type="button"
-                                  className="text-sky-300 hover:underline"
-                                  disabled={saleDetailLoading}
-                                  onClick={() =>
-                                    void openSalePeek(u.saleExternalId!.trim())
-                                  }
-                                >
-                                  Продажа
-                                </button>
-                              ) : saleListHref ? (
-                                <Link
-                                  href={saleListHref}
-                                  className="text-sky-300 hover:underline"
-                                >
-                                  Список
-                                </Link>
-                              ) : (
-                                <span className="text-slate-600">Продажа</span>
-                              )}
-                            </span>
-                          ) : (
-                            <span className="text-slate-600">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                {summary.workUnits.length > 0 ? (
-                  <tfoot>
-                    <tr className="border-t border-slate-700 bg-slate-950/90 text-xs">
-                      <td
-                        colSpan={4}
-                        className="px-4 py-3 font-medium uppercase tracking-wide text-slate-500"
-                      >
-                        Итого
-                      </td>
-                      <td className="px-4 py-3 tabular-nums text-slate-200">
-                        {money(workTotals.soldMinor, summary.currency)}
-                        <span className="mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-slate-500">
-                          продано
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 tabular-nums text-emerald-300">
-                        {money(workTotals.earnedMinor, summary.currency)}
-                        <span className="mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-slate-500">
-                          начислено
-                        </span>
-                      </td>
-                      <td
-                        colSpan={3}
-                        className="px-4 py-3 tabular-nums text-slate-200"
-                      >
-                        {workTotals.classCount}{' '}
-                        <span className="text-slate-500">занятий</span>
-                      </td>
-                    </tr>
-                  </tfoot>
-                ) : null}
-              </table>
-            </div>
-          </section>
-        </>
-      )}
-
-      {!summary && !loading && (
-        <div className="rounded-2xl border border-dashed border-slate-800 px-4 py-12 text-center">
-          <p className="text-sm text-slate-400">
-            Выберите сотрудника и период
-          </p>
-          <p className="mt-1 text-xs text-slate-600">
-            Затем нажмите «Рассчитать»
-          </p>
-        </div>
-      )}
-      </PayrollFold>
+          )}
+        </PayrollFold>
       </div>
 
       {printOpen && (
@@ -2201,8 +1050,7 @@ export function PayrollWorkspace({ mode }: Props) {
                 type="button"
                 className="btn-primary flex-1"
                 disabled={
-                  batchPrinting ||
-                  !Object.values(printFields).some(Boolean)
+                  batchPrinting || !Object.values(printFields).some(Boolean)
                 }
                 onClick={() => void printSelectedPayslips()}
               >
@@ -2258,8 +1106,67 @@ export function PayrollWorkspace({ mode }: Props) {
           onDetailClose={() => {
             setPeekSession(null);
             void load();
+            void reloadControlMisses();
           }}
         />
+      ) : null}
+
+      {salePicker ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 sm:items-center"
+          onMouseDown={() => !saleDetailLoading && setSalePicker(null)}
+        >
+          <div
+            className="max-h-[90vh] w-full max-w-lg space-y-3 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-xl"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Продажа</h2>
+                <p className="text-xs text-slate-400">
+                  Найдено несколько документов — выберите карточку
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary px-2.5 py-1 text-xs"
+                onClick={() => setSalePicker(null)}
+              >
+                Закрыть
+              </button>
+            </div>
+            <ul className="space-y-1.5">
+              {salePicker.lines.map((line) => (
+                <li key={line.id}>
+                  <button
+                    type="button"
+                    className="flex w-full flex-col gap-0.5 rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2.5 text-left hover:border-slate-600"
+                    disabled={saleDetailLoading}
+                    onClick={() => void openSalePeek(line.externalId)}
+                  >
+                    <span className="text-sm text-slate-100">
+                      {line.productName?.trim() || 'Продажа'}
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      {new Date(line.occurredAt).toLocaleString('ru-RU', {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                      {line.clientName ? ` · ${line.clientName}` : ''}
+                      <span className="ml-2 tabular-nums text-slate-300">
+                        {(line.amountMinor / 100).toFixed(2)}{' '}
+                        {salePicker.currency}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
       ) : null}
 
       {saleDetail ? (
@@ -2270,119 +1177,5 @@ export function PayrollWorkspace({ mode }: Props) {
         />
       ) : null}
     </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  emphasize,
-}: {
-  label: string;
-  value: string;
-  emphasize?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-xl border px-2.5 py-2 md:px-3 md:py-2.5 ${
-        emphasize
-          ? 'border-fitgo-500/40 bg-fitgo-500/10'
-          : 'border-slate-800 bg-slate-950/50'
-      }`}
-    >
-      <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500 md:text-xs">
-        {label}
-      </p>
-      <p
-        className={`mt-1 font-semibold tabular-nums ${
-          emphasize
-            ? 'text-lg text-fitgo-300 md:text-xl'
-            : 'text-base text-white md:text-lg'
-        }`}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
-
-/** Confirmed аванс / остаток under the main calc cards — full width, not a 5th grid cell. */
-function PaidPayoutsStrip({
-  paid,
-  earnedMinor,
-  currency,
-}: {
-  paid?: PayrollPaidPayoutsSummary;
-  earnedMinor: number;
-  currency: string;
-}) {
-  const advance = paid?.advanceMinor ?? 0;
-  const card = paid?.advanceCardMinor ?? 0;
-  const cash = paid?.advanceCashMinor ?? 0;
-  const settlement = paid?.settlementMinor ?? 0;
-  const totalPaid = paid?.totalPaidMinor ?? 0;
-  const remaining = Math.max(0, earnedMinor - totalPaid);
-  const hasAny = advance > 0 || settlement > 0 || totalPaid > 0;
-
-  return (
-    <section
-      className={`rounded-xl border px-3 py-2.5 md:px-4 md:py-3 ${
-        hasAny
-          ? 'border-sky-500/25 bg-sky-500/5'
-          : 'border-slate-800 bg-slate-950/40'
-      }`}
-    >
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
-        <div className="min-w-0">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500 md:text-xs">
-            Аванс выплачен
-          </p>
-          <p
-            className={`mt-1 text-base font-semibold tabular-nums md:text-lg ${
-              advance > 0 ? 'text-sky-200' : 'text-slate-400'
-            }`}
-          >
-            {money(advance, currency)}
-          </p>
-          <p className="mt-0.5 text-[11px] tabular-nums text-slate-500">
-            карта {money(card, currency)}
-            <span className="mx-1 text-slate-700">·</span>
-            из кассы {money(cash, currency)}
-          </p>
-        </div>
-        <div className="min-w-0 border-t border-slate-800/80 pt-3 sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500 md:text-xs">
-            Выплачено всего
-          </p>
-          <p className="mt-1 text-base font-semibold tabular-nums text-slate-200 md:text-lg">
-            {money(totalPaid, currency)}
-          </p>
-          {settlement > 0 ? (
-            <p className="mt-0.5 text-[11px] tabular-nums text-slate-500">
-              в т.ч. расчёт 15-го {money(settlement, currency)}
-            </p>
-          ) : (
-            <p className="mt-0.5 text-[11px] text-slate-600">
-              подтверждённые выплаты за период
-            </p>
-          )}
-        </div>
-        <div className="min-w-0 border-t border-slate-800/80 pt-3 sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500 md:text-xs">
-            Остаток
-          </p>
-          <p
-            className={`mt-1 text-base font-semibold tabular-nums md:text-lg ${
-              remaining > 0 ? 'text-fitgo-300' : 'text-slate-400'
-            }`}
-          >
-            {money(remaining, currency)}
-          </p>
-          <p className="mt-0.5 text-[11px] text-slate-600">
-            начислено минус выплаты
-          </p>
-        </div>
-      </div>
-    </section>
   );
 }
