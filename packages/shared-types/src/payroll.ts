@@ -181,6 +181,24 @@ export interface PtPayrollStats {
   percent: number;
 }
 
+/**
+ * Confirmed (PAID) payouts whose wave window overlaps the summary period.
+ * Used on the employee calc strip: аванс всего + карта / касса.
+ */
+export interface PayrollPaidPayoutsSummary {
+  /** Sum of ADVANCE_HALF totalMinor. */
+  advanceMinor: number;
+  advanceCardMinor: number;
+  /** actualCash (or cash) on ADVANCE_HALF. */
+  advanceCashMinor: number;
+  /** Sum of MONTH_SETTLEMENT totalMinor. */
+  settlementMinor: number;
+  settlementCardMinor: number;
+  settlementCashMinor: number;
+  /** Card + cash across all PAID waves in the period. */
+  totalPaidMinor: number;
+}
+
 export interface PayrollPeriodSummary {
   from: string;
   to: string;
@@ -202,6 +220,8 @@ export interface PayrollPeriodSummary {
   canLock: boolean;
   locked: boolean;
   anomalyHints: string[];
+  /** Confirmed payouts overlapping [from, to] (аванс / расчёт). */
+  paidPayouts?: PayrollPaidPayoutsSummary;
   /** ADMIN/MANAGER attributed sales bases (when sales % applies). */
   sales?: StaffSalesBreakdown;
   /** ADMIN/MANAGER: how motivationMinor splits across categories. */

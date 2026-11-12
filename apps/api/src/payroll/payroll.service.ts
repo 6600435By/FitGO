@@ -47,6 +47,7 @@ import {
   type PayrollAdjustmentDto,
   type PayrollCorporateSaleDto,
   type PayrollPeriodSummary,
+  type PayrollPaidPayoutsSummary,
   type PayrollPayoutDto,
   type PayrollPayoutKind,
   type PayrollAdvanceBreakdown,
@@ -1936,6 +1937,13 @@ export class PayrollService {
       anomalyHints.push('Без мотивации — исключён из расчёта ЗП');
     }
 
+    const paidPayouts = await this.sumPaidPayoutsForPeriod(
+      clubId,
+      performerId,
+      from,
+      to,
+    );
+
     return {
       from,
       to,
@@ -1963,6 +1971,7 @@ export class PayrollService {
       canLock: openTotal === 0 && !locked,
       locked: Boolean(locked),
       anomalyHints,
+      paidPayouts,
       ...(allPaySlices(profile).some(
         (s) => s.track === 'ADMIN' || s.track === 'MANAGER',
       )
@@ -1970,6 +1979,77 @@ export class PayrollService {
         : {}),
       ...(groupStats ? { groupStats } : {}),
       ...(ptStats ? { ptStats } : {}),
+    };
+  }
+
+  /**
+   * PAID waves whose [periodFrom, periodTo] overlaps the selected summary range.
+   * Overlap (not strict containment) covers legacy day−1 date rows.
+   */
+  private async sumPaidPayoutsForPeriod(
+    clubId: string,
+    userId: string,
+    from: string,
+    to: string,
+  ): Promise<PayrollPaidPayoutsSummary> {
+    const empty: PayrollPaidPayoutsSummary = {
+      advanceMinor: 0,
+      advanceCardMinor: 0,
+      advanceCashMinor: 0,
+      settlementMinor: 0,
+      settlementCardMinor: 0,
+      settlementCashMinor: 0,
+      totalPaidMinor: 0,
+    };
+    const rows = await this.prisma.payrollPayout.findMany({
+      where: {
+        clubId,
+        userId,
+        status: PayrollPayoutStatus.PAID,
+        periodFrom: { lte: dateOnly(to) },
+        periodTo: { gte: dateOnly(from) },
+      },
+      select: {
+        kind: true,
+        totalMinor: true,
+        cardTransferMinor: true,
+        cashMinor: true,
+        actualCashMinor: true,
+      },
+    });
+    if (!rows.length) return empty;
+
+    let advanceMinor = 0;
+    let advanceCardMinor = 0;
+    let advanceCashMinor = 0;
+    let settlementMinor = 0;
+    let settlementCardMinor = 0;
+    let settlementCashMinor = 0;
+    let totalPaidMinor = 0;
+
+    for (const p of rows) {
+      const cash = p.actualCashMinor ?? p.cashMinor;
+      const paid = p.cardTransferMinor + cash;
+      totalPaidMinor += paid;
+      if (p.kind === PrismaPayoutKind.ADVANCE_HALF) {
+        advanceMinor += p.totalMinor;
+        advanceCardMinor += p.cardTransferMinor;
+        advanceCashMinor += cash;
+      } else {
+        settlementMinor += p.totalMinor;
+        settlementCardMinor += p.cardTransferMinor;
+        settlementCashMinor += cash;
+      }
+    }
+
+    return {
+      advanceMinor,
+      advanceCardMinor,
+      advanceCashMinor,
+      settlementMinor,
+      settlementCardMinor,
+      settlementCashMinor,
+      totalPaidMinor,
     };
   }
 
@@ -2477,6 +2557,15 @@ export class PayrollService {
       currency,
       canLock: true,
       locked: false,
+      paidPayouts: {
+        advanceMinor: 0,
+        advanceCardMinor: 0,
+        advanceCashMinor: 0,
+        settlementMinor: 0,
+        settlementCardMinor: 0,
+        settlementCashMinor: 0,
+        totalPaidMinor: 0,
+      },
       anomalyHints: [],
     };
   }

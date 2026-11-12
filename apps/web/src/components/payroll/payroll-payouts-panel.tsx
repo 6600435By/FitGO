@@ -51,6 +51,10 @@ type RowDraft = {
   card: string;
   cash: string;
   selected: boolean;
+  /** Quick fine amount (BYN), applied as negative adjustment. */
+  fine: string;
+  /** Quick bonus amount (BYN), applied as positive adjustment. */
+  bonus: string;
 };
 
 type PayoutCtx = {
@@ -453,10 +457,13 @@ export function PayrollPayoutsPanel({
             scheduleSave(p.performerId, card, cash, ctx);
           }
         }
+        const prev = draftsRef.current[p.performerId];
         next[p.performerId] = {
           card,
           cash,
           selected: !paid && p.payableMinor !== 0,
+          fine: prev?.fine ?? '',
+          bonus: prev?.bonus ?? '',
         };
       }
       draftsRef.current = next;
@@ -479,6 +486,8 @@ export function PayrollPayoutsPanel({
       card: '0',
       cash: '0',
       selected: false,
+      fine: '',
+      bonus: '',
     };
     const next = { ...cur, ...patch };
     if (patch.card !== undefined && payableMinor !== undefined) {
@@ -490,6 +499,43 @@ export function PayrollPayoutsPanel({
     setDrafts(merged);
     if (patch.card !== undefined || patch.cash !== undefined) {
       scheduleSave(userId, next.card, next.cash);
+    }
+  };
+
+  const applyQuickAdj = async (
+    userId: string,
+    kind: 'fine' | 'bonus',
+  ) => {
+    const token = getToken();
+    if (!token) return;
+    const d = draftsRef.current[userId];
+    const raw = kind === 'fine' ? d?.fine : d?.bonus;
+    const abs = Math.abs(parseMoneyToMinor(raw || '0'));
+    if (!abs) {
+      setMessage(kind === 'fine' ? 'Укажите сумму штрафа' : 'Укажите сумму премии');
+      return;
+    }
+    if (!periodFrom || !periodTo) {
+      setMessage('Сначала задайте период');
+      return;
+    }
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.payrollAdjustment(token, {
+        userId,
+        amountMinor: kind === 'fine' ? -abs : abs,
+        reason: kind === 'fine' ? 'Штраф' : 'Премия',
+        periodFrom,
+        periodTo,
+      });
+      updateDraft(userId, kind === 'fine' ? { fine: '' } : { bonus: '' });
+      setMessage(kind === 'fine' ? 'Штраф добавлен' : 'Премия добавлена');
+      await load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось добавить');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -562,7 +608,7 @@ export function PayrollPayoutsPanel({
       open={open}
       onToggle={onToggle}
       title="Выплаты ЗП / Аванс"
-      subtitle="Переключатель 25 / 15, период вручную, факт из кассы и перенос остатка"
+      subtitle="Заработано и аванс по сотруднику, карта/касса, быстрые штраф и премия"
       icon={Banknote}
       badge={payKind === 'ADVANCE_HALF' ? '25 · аванс' : '15 · расчёт'}
     >
@@ -724,138 +770,386 @@ export function PayrollPayoutsPanel({
           )}
 
           {rows.length > 0 && (
-            <div className="overflow-x-auto rounded-lg border border-slate-800">
-              <table className="min-w-full text-left text-xs">
-                <thead className="bg-slate-900/90 text-[10px] uppercase text-slate-500">
-                  <tr>
-                    <th className="px-2 py-1.5"> </th>
-                    <th className="px-2 py-1.5">ФИО</th>
-                    <th className="px-2 py-1.5">Начислено</th>
-                    <th className="px-2 py-1.5">Перенос</th>
-                    <th className="px-2 py-1.5">К выплате</th>
-                    <th className="px-2 py-1.5">Карта</th>
-                    <th className="px-2 py-1.5">Из кассы</th>
-                    <th className="px-2 py-1.5">Δ</th>
-                    <th className="px-2 py-1.5">Статус</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => {
-                    const d = drafts[r.performerId] ?? {
-                      card: '0',
-                      cash: '0',
-                      selected: false,
-                    };
-                    const card = parseMoneyToMinor(d.card || '0');
-                    const cash = parseMoneyToMinor(d.cash || '0');
-                    const delta = r.payableMinor - (card + cash);
-                    const paid = r.existingPayout?.status === 'PAID';
-                    const saved = r.existingPayout?.status === 'DRAFT';
-                    return (
-                      <tr
-                        key={r.performerId}
-                        className="border-t border-slate-800/80 text-slate-200"
-                      >
-                        <td className="px-2 py-1">
-                          <input
-                            type="checkbox"
-                            disabled={paid}
-                            checked={d.selected && !paid}
-                            onChange={(e) =>
-                              updateDraft(r.performerId, {
-                                selected: e.target.checked,
-                              })
-                            }
-                          />
-                        </td>
-                        <td className="px-2 py-1 font-medium">
-                          {r.performerName}
-                          {r.usesFixedAdvance && (
-                            <span className="ml-1 text-[10px] text-fitgo-300">
-                              фикс
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-2 py-1 tabular-nums">
-                          {money(r.totalMinor, currency)}
-                        </td>
-                        <td className="px-2 py-1 tabular-nums text-slate-400">
-                          {r.carryInMinor
-                            ? money(r.carryInMinor, currency)
-                            : '—'}
-                        </td>
-                        <td className="px-2 py-1 tabular-nums text-emerald-300">
-                          {money(r.payableMinor, currency)}
-                        </td>
-                        <td className="px-2 py-1">
-                          <input
-                            className="input w-20 py-1 text-xs"
-                            disabled={paid}
-                            inputMode="decimal"
-                            value={d.card}
-                            onChange={(e) =>
-                              updateDraft(
-                                r.performerId,
-                                { card: e.target.value },
-                                r.payableMinor,
-                              )
-                            }
-                            onBlur={() => flushDraft(r.performerId)}
-                          />
-                        </td>
-                        <td className="px-2 py-1">
-                          <input
-                            className="input w-20 py-1 text-xs"
-                            disabled={paid}
-                            inputMode="decimal"
-                            value={d.cash}
-                            onChange={(e) =>
-                              updateDraft(r.performerId, {
-                                cash: e.target.value,
-                              })
-                            }
-                            onBlur={() => flushDraft(r.performerId)}
-                          />
-                        </td>
-                        <td
-                          className={`px-2 py-1 tabular-nums ${
-                            delta === 0
-                              ? 'text-slate-500'
-                              : delta > 0
-                                ? 'text-amber-300'
-                                : 'text-sky-300'
-                          }`}
-                        >
-                          {delta === 0
-                            ? '—'
-                            : `${delta > 0 ? '+' : ''}${(delta / 100).toFixed(2)}`}
-                        </td>
-                        <td className="px-2 py-1 text-[10px] text-slate-500">
-                          {paid ? 'выплачено' : saved ? 'сохранено' : 'черновик'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t border-slate-700 bg-slate-950/90 text-slate-200">
-                    <td
-                      colSpan={5}
-                      className="px-2 py-2 font-medium uppercase tracking-wide text-slate-500"
+            <>
+              <p className="text-[11px] text-slate-500">
+                {payKind === 'MONTH_SETTLEMENT'
+                  ? 'Заработано — начисление за месяц; Аванс — уже подтверждённая выплата 25-го; К выплате — остаток.'
+                  : 'Заработано — начисление волны 1–15; Аванс здесь ещё не вычитается (это сама выплата 25-го).'}
+                {' '}
+                Штраф / премия — в корректировки периода и сразу в пересчёт.
+              </p>
+
+              {/* Mobile / narrow: stacked cards */}
+              <ul className="space-y-2 md:hidden">
+                {rows.map((r) => {
+                  const d = drafts[r.performerId] ?? {
+                    card: '0',
+                    cash: '0',
+                    selected: false,
+                    fine: '',
+                    bonus: '',
+                  };
+                  const card = parseMoneyToMinor(d.card || '0');
+                  const cash = parseMoneyToMinor(d.cash || '0');
+                  const delta = r.payableMinor - (card + cash);
+                  const paid = r.existingPayout?.status === 'PAID';
+                  const saved = r.existingPayout?.status === 'DRAFT';
+                  return (
+                    <li
+                      key={r.performerId}
+                      className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"
                     >
-                      Итого
-                    </td>
-                    <td className="px-2 py-2 tabular-nums font-medium">
-                      {money(payoutTotals.cardMinor, currency)}
-                    </td>
-                    <td className="px-2 py-2 tabular-nums font-medium">
-                      {money(payoutTotals.cashMinor, currency)}
-                    </td>
-                    <td colSpan={2} />
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
+                      <div className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          className="mt-1"
+                          disabled={paid}
+                          checked={d.selected && !paid}
+                          onChange={(e) =>
+                            updateDraft(r.performerId, {
+                              selected: e.target.checked,
+                            })
+                          }
+                        />
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                            <p className="font-medium text-slate-100">
+                              {r.performerName}
+                              {r.usesFixedAdvance ? (
+                                <span className="ml-1 text-[10px] text-fitgo-300">
+                                  фикс
+                                </span>
+                              ) : null}
+                            </p>
+                            <span className="text-[10px] uppercase text-slate-500">
+                              {paid
+                                ? 'выплачено'
+                                : saved
+                                  ? 'сохранено'
+                                  : 'черновик'}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 text-xs">
+                            <div>
+                              <p className="text-[10px] uppercase text-slate-500">
+                                Заработано
+                              </p>
+                              <p className="tabular-nums text-slate-200">
+                                {money(r.earnedMinor, currency)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] uppercase text-slate-500">
+                                Аванс
+                              </p>
+                              <p className="tabular-nums text-sky-200/90">
+                                {r.priorPaidMinor
+                                  ? money(r.priorPaidMinor, currency)
+                                  : '—'}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] uppercase text-slate-500">
+                                К выплате
+                              </p>
+                              <p className="tabular-nums text-emerald-300">
+                                {money(r.payableMinor, currency)}
+                              </p>
+                            </div>
+                          </div>
+                          {r.carryInMinor ? (
+                            <p className="text-[11px] text-slate-500">
+                              перенос {money(r.carryInMinor, currency)}
+                              {delta !== 0
+                                ? ` · Δ ${delta > 0 ? '+' : ''}${(delta / 100).toFixed(2)}`
+                                : ''}
+                            </p>
+                          ) : delta !== 0 ? (
+                            <p className="text-[11px] text-amber-300/90">
+                              Δ {delta > 0 ? '+' : ''}
+                              {(delta / 100).toFixed(2)}
+                            </p>
+                          ) : null}
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="text-[10px] uppercase text-slate-500">
+                              Карта
+                              <input
+                                className="input mt-1 w-full py-1.5 text-sm"
+                                disabled={paid}
+                                inputMode="decimal"
+                                value={d.card}
+                                onChange={(e) =>
+                                  updateDraft(
+                                    r.performerId,
+                                    { card: e.target.value },
+                                    r.payableMinor,
+                                  )
+                                }
+                                onBlur={() => flushDraft(r.performerId)}
+                              />
+                            </label>
+                            <label className="text-[10px] uppercase text-slate-500">
+                              Из кассы
+                              <input
+                                className="input mt-1 w-full py-1.5 text-sm"
+                                disabled={paid}
+                                inputMode="decimal"
+                                value={d.cash}
+                                onChange={(e) =>
+                                  updateDraft(r.performerId, {
+                                    cash: e.target.value,
+                                  })
+                                }
+                                onBlur={() => flushDraft(r.performerId)}
+                              />
+                            </label>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 border-t border-slate-800/80 pt-2">
+                            <div className="flex gap-1">
+                              <input
+                                className="input min-w-0 flex-1 py-1.5 text-sm"
+                                placeholder="Штраф"
+                                inputMode="decimal"
+                                disabled={busy}
+                                value={d.fine}
+                                onChange={(e) =>
+                                  updateDraft(r.performerId, {
+                                    fine: e.target.value,
+                                  })
+                                }
+                              />
+                              <button
+                                type="button"
+                                className="btn-secondary shrink-0 px-2 py-1 text-xs text-red-200"
+                                disabled={busy || !d.fine.trim()}
+                                onClick={() =>
+                                  void applyQuickAdj(r.performerId, 'fine')
+                                }
+                              >
+                                −
+                              </button>
+                            </div>
+                            <div className="flex gap-1">
+                              <input
+                                className="input min-w-0 flex-1 py-1.5 text-sm"
+                                placeholder="Премия"
+                                inputMode="decimal"
+                                disabled={busy}
+                                value={d.bonus}
+                                onChange={(e) =>
+                                  updateDraft(r.performerId, {
+                                    bonus: e.target.value,
+                                  })
+                                }
+                              />
+                              <button
+                                type="button"
+                                className="btn-secondary shrink-0 px-2 py-1 text-xs text-emerald-200"
+                                disabled={busy || !d.bonus.trim()}
+                                onClick={() =>
+                                  void applyQuickAdj(r.performerId, 'bonus')
+                                }
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              {/* Desktop: compact table + quick adj under FIO */}
+              <div className="hidden overflow-x-auto rounded-lg border border-slate-800 md:block">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="bg-slate-900/90 text-[10px] uppercase text-slate-500">
+                    <tr>
+                      <th className="px-2 py-1.5"> </th>
+                      <th className="px-2 py-1.5">ФИО</th>
+                      <th className="px-2 py-1.5">Заработано</th>
+                      <th className="px-2 py-1.5">Аванс</th>
+                      <th className="px-2 py-1.5">К выплате</th>
+                      <th className="px-2 py-1.5">Карта</th>
+                      <th className="px-2 py-1.5">Из кассы</th>
+                      <th className="px-2 py-1.5">Статус</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => {
+                      const d = drafts[r.performerId] ?? {
+                        card: '0',
+                        cash: '0',
+                        selected: false,
+                        fine: '',
+                        bonus: '',
+                      };
+                      const card = parseMoneyToMinor(d.card || '0');
+                      const cash = parseMoneyToMinor(d.cash || '0');
+                      const delta = r.payableMinor - (card + cash);
+                      const paid = r.existingPayout?.status === 'PAID';
+                      const saved = r.existingPayout?.status === 'DRAFT';
+                      return (
+                        <tr
+                          key={r.performerId}
+                          className="border-t border-slate-800/80 text-slate-200 align-top"
+                        >
+                          <td className="px-2 py-2">
+                            <input
+                              type="checkbox"
+                              disabled={paid}
+                              checked={d.selected && !paid}
+                              onChange={(e) =>
+                                updateDraft(r.performerId, {
+                                  selected: e.target.checked,
+                                })
+                              }
+                            />
+                          </td>
+                          <td className="px-2 py-2">
+                            <p className="font-medium">
+                              {r.performerName}
+                              {r.usesFixedAdvance ? (
+                                <span className="ml-1 text-[10px] text-fitgo-300">
+                                  фикс
+                                </span>
+                              ) : null}
+                            </p>
+                            {(r.carryInMinor !== 0 || delta !== 0) && (
+                              <p className="mt-0.5 text-[10px] text-slate-500">
+                                {r.carryInMinor
+                                  ? `перенос ${money(r.carryInMinor, currency)}`
+                                  : null}
+                                {r.carryInMinor && delta !== 0 ? ' · ' : null}
+                                {delta !== 0
+                                  ? `Δ ${delta > 0 ? '+' : ''}${(delta / 100).toFixed(2)}`
+                                  : null}
+                              </p>
+                            )}
+                            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                              <input
+                                className="input w-[4.5rem] py-1 text-[11px]"
+                                placeholder="Штраф"
+                                inputMode="decimal"
+                                disabled={busy}
+                                value={d.fine}
+                                onChange={(e) =>
+                                  updateDraft(r.performerId, {
+                                    fine: e.target.value,
+                                  })
+                                }
+                                aria-label={`Штраф ${r.performerName}`}
+                              />
+                              <button
+                                type="button"
+                                className="btn-secondary px-1.5 py-0.5 text-[10px] text-red-200"
+                                disabled={busy || !d.fine.trim()}
+                                title="Добавить штраф"
+                                onClick={() =>
+                                  void applyQuickAdj(r.performerId, 'fine')
+                                }
+                              >
+                                −
+                              </button>
+                              <input
+                                className="input w-[4.5rem] py-1 text-[11px]"
+                                placeholder="Премия"
+                                inputMode="decimal"
+                                disabled={busy}
+                                value={d.bonus}
+                                onChange={(e) =>
+                                  updateDraft(r.performerId, {
+                                    bonus: e.target.value,
+                                  })
+                                }
+                                aria-label={`Премия ${r.performerName}`}
+                              />
+                              <button
+                                type="button"
+                                className="btn-secondary px-1.5 py-0.5 text-[10px] text-emerald-200"
+                                disabled={busy || !d.bonus.trim()}
+                                title="Добавить премию"
+                                onClick={() =>
+                                  void applyQuickAdj(r.performerId, 'bonus')
+                                }
+                              >
+                                +
+                              </button>
+                            </div>
+                          </td>
+                          <td className="px-2 py-2 tabular-nums">
+                            {money(r.earnedMinor, currency)}
+                          </td>
+                          <td className="px-2 py-2 tabular-nums text-sky-200/90">
+                            {r.priorPaidMinor
+                              ? money(r.priorPaidMinor, currency)
+                              : '—'}
+                          </td>
+                          <td className="px-2 py-2 tabular-nums text-emerald-300">
+                            {money(r.payableMinor, currency)}
+                          </td>
+                          <td className="px-2 py-2">
+                            <input
+                              className="input w-20 py-1 text-xs"
+                              disabled={paid}
+                              inputMode="decimal"
+                              value={d.card}
+                              onChange={(e) =>
+                                updateDraft(
+                                  r.performerId,
+                                  { card: e.target.value },
+                                  r.payableMinor,
+                                )
+                              }
+                              onBlur={() => flushDraft(r.performerId)}
+                            />
+                          </td>
+                          <td className="px-2 py-2">
+                            <input
+                              className="input w-20 py-1 text-xs"
+                              disabled={paid}
+                              inputMode="decimal"
+                              value={d.cash}
+                              onChange={(e) =>
+                                updateDraft(r.performerId, {
+                                  cash: e.target.value,
+                                })
+                              }
+                              onBlur={() => flushDraft(r.performerId)}
+                            />
+                          </td>
+                          <td className="px-2 py-2 text-[10px] text-slate-500">
+                            {paid
+                              ? 'выплачено'
+                              : saved
+                                ? 'сохранено'
+                                : 'черновик'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-slate-700 bg-slate-950/90 text-slate-200">
+                      <td
+                        colSpan={5}
+                        className="px-2 py-2 font-medium uppercase tracking-wide text-slate-500"
+                      >
+                        Итого по листу
+                      </td>
+                      <td className="px-2 py-2 tabular-nums font-medium">
+                        {money(payoutTotals.cardMinor, currency)}
+                      </td>
+                      <td className="px-2 py-2 tabular-nums font-medium">
+                        {money(payoutTotals.cashMinor, currency)}
+                      </td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </>
           )}
 
           {rows.some((r) => r.hints.length > 0) && (

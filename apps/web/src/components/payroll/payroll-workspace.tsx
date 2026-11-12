@@ -11,6 +11,7 @@ import { DateField } from '@/components/ui/date-field';
 import type {
   ClubRevenueDetailResponse,
   PayrollAdjustmentDto,
+  PayrollPaidPayoutsSummary,
   PayrollPeriodSummary,
   StaffPaySummary,
   WorkUnit,
@@ -991,7 +992,18 @@ export function PayrollWorkspace({ mode }: Props) {
       lines.push(
         `Корректировки всего: ${money(source.adjustmentsMinor, cur)}`,
       );
-      lines.push(`ИТОГО К ВЫПЛАТЕ: ${money(source.totalMinor, cur)}`);
+      lines.push(`ИТОГО НАЧИСЛЕНО: ${money(source.totalMinor, cur)}`);
+      const paid = source.paidPayouts;
+      if (paid && (paid.advanceMinor > 0 || paid.totalPaidMinor > 0)) {
+        if (paid.advanceMinor > 0) {
+          lines.push(
+            `Аванс выплачен: ${money(paid.advanceMinor, cur)} (карта ${money(paid.advanceCardMinor, cur)} · касса ${money(paid.advanceCashMinor, cur)})`,
+          );
+        }
+        lines.push(`Выплачено всего: ${money(paid.totalPaidMinor, cur)}`);
+        const rest = Math.max(0, source.totalMinor - paid.totalPaidMinor);
+        lines.push(`Остаток: ${money(rest, cur)}`);
+      }
     }
     if (ids.size > 1) {
       lines.push('');
@@ -1487,6 +1499,12 @@ export function PayrollWorkspace({ mode }: Props) {
               emphasize
             />
           </section>
+
+          <PaidPayoutsStrip
+            paid={summary.paidPayouts}
+            earnedMinor={summary.totalMinor}
+            currency={summary.currency}
+          />
 
           {motivationBreakdownVisible && summary.motivationBreakdown ? (
             <section className="rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-3">
@@ -2250,5 +2268,86 @@ function Stat({
         {value}
       </p>
     </div>
+  );
+}
+
+/** Confirmed аванс / остаток under the main calc cards — full width, not a 5th grid cell. */
+function PaidPayoutsStrip({
+  paid,
+  earnedMinor,
+  currency,
+}: {
+  paid?: PayrollPaidPayoutsSummary;
+  earnedMinor: number;
+  currency: string;
+}) {
+  const advance = paid?.advanceMinor ?? 0;
+  const card = paid?.advanceCardMinor ?? 0;
+  const cash = paid?.advanceCashMinor ?? 0;
+  const settlement = paid?.settlementMinor ?? 0;
+  const totalPaid = paid?.totalPaidMinor ?? 0;
+  const remaining = Math.max(0, earnedMinor - totalPaid);
+  const hasAny = advance > 0 || settlement > 0 || totalPaid > 0;
+
+  return (
+    <section
+      className={`rounded-xl border px-3 py-2.5 md:px-4 md:py-3 ${
+        hasAny
+          ? 'border-sky-500/25 bg-sky-500/5'
+          : 'border-slate-800 bg-slate-950/40'
+      }`}
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+        <div className="min-w-0">
+          <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500 md:text-xs">
+            Аванс выплачен
+          </p>
+          <p
+            className={`mt-1 text-base font-semibold tabular-nums md:text-lg ${
+              advance > 0 ? 'text-sky-200' : 'text-slate-400'
+            }`}
+          >
+            {money(advance, currency)}
+          </p>
+          <p className="mt-0.5 text-[11px] tabular-nums text-slate-500">
+            карта {money(card, currency)}
+            <span className="mx-1 text-slate-700">·</span>
+            из кассы {money(cash, currency)}
+          </p>
+        </div>
+        <div className="min-w-0 border-t border-slate-800/80 pt-3 sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0">
+          <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500 md:text-xs">
+            Выплачено всего
+          </p>
+          <p className="mt-1 text-base font-semibold tabular-nums text-slate-200 md:text-lg">
+            {money(totalPaid, currency)}
+          </p>
+          {settlement > 0 ? (
+            <p className="mt-0.5 text-[11px] tabular-nums text-slate-500">
+              в т.ч. расчёт 15-го {money(settlement, currency)}
+            </p>
+          ) : (
+            <p className="mt-0.5 text-[11px] text-slate-600">
+              подтверждённые выплаты за период
+            </p>
+          )}
+        </div>
+        <div className="min-w-0 border-t border-slate-800/80 pt-3 sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0">
+          <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500 md:text-xs">
+            Остаток
+          </p>
+          <p
+            className={`mt-1 text-base font-semibold tabular-nums md:text-lg ${
+              remaining > 0 ? 'text-fitgo-300' : 'text-slate-400'
+            }`}
+          >
+            {money(remaining, currency)}
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-600">
+            начислено минус выплаты
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
