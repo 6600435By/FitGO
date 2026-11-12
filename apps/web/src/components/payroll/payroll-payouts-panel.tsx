@@ -28,6 +28,33 @@ function money(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)}\u00a0${currency}`;
 }
 
+/** Fact advance paid (card+cash), not accrued totalMinor. */
+function AdvancePaidCell({
+  row,
+  currency,
+}: {
+  row: PayrollPayoutPreview;
+  currency: string;
+}) {
+  const paid = row.priorAdvancePaidMinor ?? 0;
+  if (!paid && !row.priorAdvanceCardMinor && !row.priorAdvanceCashMinor) {
+    return <span className="text-slate-500">—</span>;
+  }
+  return (
+    <div className="leading-tight">
+      <p className="tabular-nums text-sky-200/90">
+        {money(paid, currency)}
+      </p>
+      <p className="mt-0.5 text-[10px] tabular-nums text-slate-500">
+        карта {money(row.priorAdvanceCardMinor ?? 0, currency)}
+      </p>
+      <p className="text-[10px] tabular-nums text-slate-500">
+        касса {money(row.priorAdvanceCashMinor ?? 0, currency)}
+      </p>
+    </div>
+  );
+}
+
 type Dept =
   | 'ALL'
   | 'MANAGER'
@@ -795,8 +822,10 @@ export function PayrollPayoutsPanel({
             <>
               <p className="text-[11px] text-slate-500">
                 {payKind === 'MONTH_SETTLEMENT'
-                  ? 'Заработано — начисление за месяц; Аванс — уже подтверждённая выплата 25-го; К выплате — остаток.'
-                  : 'Заработано — начисление волны 1–15; Аванс здесь ещё не вычитается (это сама выплата 25-го).'}
+                  ? 'Заработано — начисление за месяц; Аванс — факт подтверждённой выплаты 25-го (карта + касса); К выплате — остаток.'
+                  : 'Заработано — начисление волны 1–15; колонка Аванс пуста (это сама выплата 25-го).'}
+                {' '}
+                Долг — личный долг сотрудника как клиента клуба (не вычитается из выплаты).
                 {' '}
                 ФИО → отчёт сотрудника (
                 {payKind === 'ADVANCE_HALF' ? '1–15' : 'весь месяц'}
@@ -869,7 +898,23 @@ export function PayrollPayoutsPanel({
                                   : 'черновик'}
                             </span>
                           </div>
-                          <div className="grid grid-cols-3 gap-2 text-xs">
+                          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                            <div>
+                              <p className="text-[10px] uppercase text-slate-500">
+                                Долг
+                              </p>
+                              <p
+                                className={`tabular-nums ${
+                                  (r.staffDebtMinor ?? 0) > 0
+                                    ? 'text-rose-300'
+                                    : 'text-slate-500'
+                                }`}
+                              >
+                                {(r.staffDebtMinor ?? 0) > 0
+                                  ? money(r.staffDebtMinor, currency)
+                                  : '—'}
+                              </p>
+                            </div>
                             <div>
                               <p className="text-[10px] uppercase text-slate-500">
                                 Заработано
@@ -882,11 +927,7 @@ export function PayrollPayoutsPanel({
                               <p className="text-[10px] uppercase text-slate-500">
                                 Аванс
                               </p>
-                              <p className="tabular-nums text-sky-200/90">
-                                {r.priorPaidMinor
-                                  ? money(r.priorPaidMinor, currency)
-                                  : '—'}
-                              </p>
+                              <AdvancePaidCell row={r} currency={currency} />
                             </div>
                             <div>
                               <p className="text-[10px] uppercase text-slate-500">
@@ -1008,6 +1049,7 @@ export function PayrollPayoutsPanel({
                     <tr>
                       <th className="px-2 py-1.5"> </th>
                       <th className="px-2 py-1.5">ФИО</th>
+                      <th className="px-2 py-1.5">Долг</th>
                       <th className="px-2 py-1.5">Заработано</th>
                       <th className="px-2 py-1.5">Аванс</th>
                       <th className="px-2 py-1.5">К выплате</th>
@@ -1134,13 +1176,27 @@ export function PayrollPayoutsPanel({
                               </button>
                             </div>
                           </td>
+                          <td
+                            className={`px-2 py-2 tabular-nums ${
+                              (r.staffDebtMinor ?? 0) > 0
+                                ? 'font-medium text-rose-300'
+                                : 'text-slate-500'
+                            }`}
+                            title={
+                              (r.staffDebtMinor ?? 0) > 0
+                                ? 'Личный долг сотрудника как клиента (не вычитается из выплаты)'
+                                : undefined
+                            }
+                          >
+                            {(r.staffDebtMinor ?? 0) > 0
+                              ? money(r.staffDebtMinor, currency)
+                              : '—'}
+                          </td>
                           <td className="px-2 py-2 tabular-nums">
                             {money(r.earnedMinor, currency)}
                           </td>
-                          <td className="px-2 py-2 tabular-nums text-sky-200/90">
-                            {r.priorPaidMinor
-                              ? money(r.priorPaidMinor, currency)
-                              : '—'}
+                          <td className="px-2 py-2">
+                            <AdvancePaidCell row={r} currency={currency} />
                           </td>
                           <td className="px-2 py-2 tabular-nums text-emerald-300">
                             {money(r.payableMinor, currency)}
@@ -1189,7 +1245,7 @@ export function PayrollPayoutsPanel({
                   <tfoot>
                     <tr className="border-t border-slate-700 bg-slate-950/90 text-slate-200">
                       <td
-                        colSpan={5}
+                        colSpan={6}
                         className="px-2 py-2 font-medium uppercase tracking-wide text-slate-500"
                       >
                         Итого по листу

@@ -337,7 +337,15 @@ export interface PayrollPayoutPreview {
   usesFixedAdvance: boolean;
   fixedAdvanceMinor: number;
   earnedMinor: number;
+  /**
+   * Accrued ADVANCE_HALF totalMinor (used to compute settlement remainder).
+   * UI «Аванс» should prefer priorAdvancePaid* (fact card+cash).
+   */
   priorPaidMinor: number;
+  /** Fact: card + cash on confirmed ADVANCE_HALF for the month. */
+  priorAdvancePaidMinor: number;
+  priorAdvanceCardMinor: number;
+  priorAdvanceCashMinor: number;
   /** Accrued for wave (earned − prior), before carry. */
   totalMinor: number;
   /** Balance from previous rounding (+ underpay / − overpay). */
@@ -345,6 +353,11 @@ export interface PayrollPayoutPreview {
   carryHint?: string;
   /** totalMinor + carryIn — amount to settle this wave. */
   payableMinor: number;
+  /**
+   * Staff personal debt as club client (ClubRevenue unpaid cache).
+   * Display-only — not deducted from payableMinor.
+   */
+  staffDebtMinor: number;
   currency: string;
   /** Existing paid payout for this window (blocks duplicate). */
   existingPayout?: PayrollPayoutDto;

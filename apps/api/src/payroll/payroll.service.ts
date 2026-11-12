@@ -2377,6 +2377,9 @@ export class PayrollService {
     }
 
     let priorPaidMinor = 0;
+    let priorAdvancePaidMinor = 0;
+    let priorAdvanceCardMinor = 0;
+    let priorAdvanceCashMinor = 0;
     if (kind === 'MONTH_SETTLEMENT') {
       const y = Number(range.from.slice(0, 4));
       const m = Number(range.from.slice(5, 7));
@@ -2396,10 +2399,20 @@ export class PayrollService {
           periodTo: { gte: dateOnly(monthStart) },
         },
       });
-      priorPaidMinor = priors.reduce((a, p) => a + p.totalMinor, 0);
+      // Accrued wave total (settlement math); fact paid = card + cash (UI).
+      for (const p of priors) {
+        priorPaidMinor += p.totalMinor;
+        const cash = p.actualCashMinor ?? p.cashMinor;
+        priorAdvanceCardMinor += p.cardTransferMinor;
+        priorAdvanceCashMinor += cash;
+        priorAdvancePaidMinor += p.cardTransferMinor + cash;
+      }
       if (priorPaidMinor > 0) {
         hints.push(
-          `Вычтен аванс 25-е за ${monthStart}–${monthEnd}: ${(priorPaidMinor / 100).toFixed(2)}`,
+          `Вычтен аванс 25-е за ${monthStart}–${monthEnd}: ${(priorPaidMinor / 100).toFixed(2)}` +
+            (priorAdvancePaidMinor !== priorPaidMinor
+              ? ` (факт выплаты ${(priorAdvancePaidMinor / 100).toFixed(2)})`
+              : ''),
         );
       } else {
         hints.push('Аванс 25-е за этот месяц ещё не зафиксирован');
@@ -2437,6 +2450,8 @@ export class PayrollService {
       hints.push('Выплата уже зафиксирована — повторно не начисляется');
     }
 
+    const staffDebtMinor = await this.staffDebtMinorForPayout(clubId, userId);
+
     const preview: PayrollPayoutPreview = {
       kind,
       periodFrom: range.from,
@@ -2447,10 +2462,14 @@ export class PayrollService {
       fixedAdvanceMinor,
       earnedMinor,
       priorPaidMinor,
+      priorAdvancePaidMinor,
+      priorAdvanceCardMinor,
+      priorAdvanceCashMinor,
       totalMinor,
       carryInMinor,
       carryHint,
       payableMinor,
+      staffDebtMinor,
       currency: summary.currency,
       existingPayout: existing ? this.mapPayout(existing) : undefined,
       summary,
@@ -2521,9 +2540,13 @@ export class PayrollService {
           fixedAdvanceMinor: 0,
           earnedMinor: 0,
           priorPaidMinor: 0,
+          priorAdvancePaidMinor: 0,
+          priorAdvanceCardMinor: 0,
+          priorAdvanceCashMinor: 0,
           totalMinor: 0,
           carryInMinor: 0,
           payableMinor: 0,
+          staffDebtMinor: 0,
           currency: 'BYN',
           summary: this.emptyPayoutSummary(s.userId, s.name, { from, to }, 'BYN'),
           hints: [`Не удалось рассчитать: ${msg}`],
@@ -4005,6 +4028,79 @@ export class PayrollService {
       clientName: fio,
       clientExternalId: clientExt,
     };
+  }
+
+  /**
+   * Fast staff debt for payout batch: ClubRevenue unpaid only (no live 1C).
+   * Display-only — does not change payableMinor.
+   */
+  private async staffDebtMinorForPayout(
+    clubId: string,
+    userId: string,
+  ): Promise<number> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+      select: {
+        firstName: true,
+        lastName: true,
+        staffClientExternalId: true,
+      },
+    });
+    if (!user) return 0;
+
+    const fio = `${user.lastName} ${user.firstName}`.trim();
+    const clientExt = user.staffClientExternalId?.trim() || null;
+    const unpaidRows = clientExt
+      ? await this.prisma.clubRevenueEntry.findMany({
+          where: {
+            clubId,
+            isActive: true,
+            operationType: 'unpaid',
+            clientExternalId: clientExt,
+          },
+          select: {
+            externalId: true,
+            productName: true,
+            amount: true,
+            saleAmount: true,
+          },
+          take: 40,
+        })
+      : await this.prisma.clubRevenueEntry.findMany({
+          where: {
+            clubId,
+            isActive: true,
+            operationType: 'unpaid',
+            clientExternalId: { not: null },
+            OR: [
+              { clientName: { equals: fio, mode: 'insensitive' } },
+              {
+                clientName: {
+                  equals: `${fio} (Сотрудник)`,
+                  mode: 'insensitive',
+                },
+              },
+            ],
+          },
+          select: {
+            externalId: true,
+            productName: true,
+            amount: true,
+            saleAmount: true,
+          },
+          take: 40,
+        });
+
+    return Math.round(
+      unpaidRows
+        .filter((r) =>
+          isCollectibleClientDebt({
+            externalId: r.externalId,
+            productName: r.productName,
+          }),
+        )
+        .reduce((s, r) => s + Math.abs(r.amount || r.saleAmount || 0), 0) * 100,
+    );
   }
 
   async getSelfOverview(
