@@ -504,6 +504,33 @@ function parseDeptFilter(raw: unknown): DeptFilter {
     : 'ALL';
 }
 
+function filterStaffByDept(
+  list: StaffPaySummary[],
+  dept: DeptFilter,
+): StaffPaySummary[] {
+  if (dept === 'ALL') return list;
+  return list.filter((s) => {
+    if (dept === 'EXTERNAL') {
+      return s.employmentKind === 'EXTERNAL';
+    }
+    if (s.employmentKind === 'EXTERNAL') return false;
+    if (dept === 'MANAGER') {
+      return s.roles.includes('MANAGER') || s.track === 'MANAGER';
+    }
+    if (s.roles.includes(dept)) return true;
+    if (dept === 'ADMIN' && s.track === 'ADMIN') return true;
+    if (
+      dept === 'TRAINER' &&
+      (s.track === 'PT' || s.track === 'CLUB' || s.track === 'GROUP_TRAINER')
+    ) {
+      return true;
+    }
+    if (dept === 'SPECIALIST' && s.track === 'SPA') return true;
+    if (dept === 'TECH' && s.track === 'TECH') return true;
+    return false;
+  });
+}
+
 export function PayrollWorkspace({ mode }: Props) {
   const today = useMemo(() => new Date(), []);
   const pathname = usePathname();
@@ -632,10 +659,30 @@ export function PayrollWorkspace({ mode }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- seed once from cache
   }, []);
 
+  const clearSummary = () => {
+    setSummary(null);
+    setSummaryCalculatedAt(null);
+  };
+
+  const filteredStaff = useMemo(
+    () => filterStaffByDept(staff, deptFilter),
+    [staff, deptFilter],
+  );
+
+  /**
+   * Select options are only filteredStaff. Never keep an out-of-filter id —
+   * browsers then show the first option while Calculate still uses the old id.
+   */
+  const reportUserId = useMemo(() => {
+    if (!canEdit) return userId;
+    if (filteredStaff.some((s) => s.userId === userId)) return userId;
+    return filteredStaff[0]?.userId ?? '';
+  }, [canEdit, filteredStaff, userId]);
+
   usePersistViewMemory<EmployeeViewMem>({
     slot: 'employee',
     data: {
-      userId,
+      userId: reportUserId || userId,
       from,
       to,
       deptFilter,
@@ -651,36 +698,10 @@ export function PayrollWorkspace({ mode }: Props) {
     },
   });
 
-  const clearSummary = () => {
-    setSummary(null);
-    setSummaryCalculatedAt(null);
-  };
-
-  const filteredStaff = useMemo(() => {
-    if (deptFilter === 'ALL') return staff;
-    return staff.filter((s) => {
-      if (deptFilter === 'EXTERNAL') {
-        return s.employmentKind === 'EXTERNAL';
-      }
-      if (s.employmentKind === 'EXTERNAL') return false;
-      if (deptFilter === 'MANAGER') {
-        return s.roles.includes('MANAGER') || s.track === 'MANAGER';
-      }
-      if (s.roles.includes(deptFilter)) return true;
-      if (deptFilter === 'ADMIN' && s.track === 'ADMIN') return true;
-      if (
-        deptFilter === 'TRAINER' &&
-        (s.track === 'PT' || s.track === 'GROUP_TRAINER')
-      )
-        return true;
-      if (deptFilter === 'SPECIALIST' && s.track === 'SPA') return true;
-      if (deptFilter === 'TECH' && s.track === 'TECH') return true;
-      return false;
-    });
-  }, [staff, deptFilter]);
-
-  const selected = filteredStaff.find((s) => s.userId === userId)
-    ?? staff.find((s) => s.userId === userId);
+  /** Only resolve inside the active dept filter so badge/track match the select. */
+  const selected =
+    filteredStaff.find((s) => s.userId === reportUserId) ??
+    (!canEdit ? staff.find((s) => s.userId === userId) : undefined);
 
   const motivationBreakdownVisible =
     summary?.motivationBreakdown != null &&
@@ -718,9 +739,9 @@ export function PayrollWorkspace({ mode }: Props) {
       to,
       needsReview: '1',
     });
-    if (userId) q.set('performerId', userId);
+    if (reportUserId) q.set('performerId', reportUserId);
     return `${base}?${q.toString()}`;
-  }, [mode, from, to, userId]);
+  }, [mode, from, to, reportUserId]);
 
   useEffect(() => {
     const token = getToken();
@@ -732,6 +753,8 @@ export function PayrollWorkspace({ mode }: Props) {
         setStaff(list);
         if (urlUserId && list.some((s) => s.userId === urlUserId)) {
           setUserId(urlUserId);
+          // URL employee wins over remembered dept — show them in the list.
+          setDeptFilter('ALL');
           urlHydrated.current = true;
         } else if (boot.userId && list.some((s) => s.userId === boot.userId)) {
           setUserId(boot.userId);
@@ -745,42 +768,29 @@ export function PayrollWorkspace({ mode }: Props) {
 
   useEffect(() => {
     if (!canEdit) return;
-    if (filteredStaff.length === 0) {
-      if (!urlUserId && !boot.userId) {
-        setUserId('');
-        clearSummary();
-      }
-      return;
-    }
-    if (!filteredStaff.some((s) => s.userId === userId)) {
-      if (
-        (urlUserId && staff.some((s) => s.userId === urlUserId)) ||
-        (boot.userId && staff.some((s) => s.userId === boot.userId))
-      ) {
-        // Remembered / URL employee is outside current dept filter — keep id.
-        return;
-      }
-      setUserId(filteredStaff[0]!.userId);
-      clearSummary();
-    }
-  }, [canEdit, filteredStaff, userId, urlUserId, staff, boot.userId]);
+    if (reportUserId === userId) return;
+    setUserId(reportUserId);
+    clearSummary();
+  }, [canEdit, reportUserId, userId]);
 
   const load = async () => {
     const token = getToken();
-    if (!token || !userId) return;
+    const id = reportUserId;
+    if (!token || !id) return;
+    if (id !== userId) setUserId(id);
     setLoading(true);
     setMessage('');
     setEmployeeReportOpen(true);
     try {
       const s =
         mode === 'super'
-          ? await api.payrollSummary(token, { userId, from, to })
-          : await api.adminPayrollSummary(token, { userId, from, to });
+          ? await api.payrollSummary(token, { userId: id, from, to })
+          : await api.adminPayrollSummary(token, { userId: id, from, to });
       setSummary(s);
       const at = Date.now();
       setSummaryCalculatedAt(at);
       if (ownerId) {
-        setPayrollSummaryCache(ownerId, { mode, userId, from, to }, s);
+        setPayrollSummaryCache(ownerId, { mode, userId: id, from, to }, s);
       }
     } catch (e) {
       clearSummary();
@@ -792,13 +802,15 @@ export function PayrollWorkspace({ mode }: Props) {
 
   const refreshFrom1c = async () => {
     const token = getToken();
-    if (!token || !userId) return;
+    const id = reportUserId;
+    if (!token || !id) return;
+    if (id !== userId) setUserId(id);
     setSyncing1c(true);
     setMessage('');
     try {
       const res = await api.classSyncRefreshForPayroll(
         token,
-        { from, to, userId },
+        { from, to, userId: id },
         mode === 'super' ? 'super' : 'admin',
       );
       setMessage(res.message);
@@ -815,14 +827,16 @@ export function PayrollWorkspace({ mode }: Props) {
   const lock = async () => {
     if (!canEdit) return;
     const token = getToken();
-    if (!token || !userId) return;
+    const id = reportUserId;
+    if (!token || !id) return;
+    if (id !== userId) setUserId(id);
     try {
-      const s = await api.payrollLock(token, { userId, from, to });
+      const s = await api.payrollLock(token, { userId: id, from, to });
       setSummary(s);
       const at = Date.now();
       setSummaryCalculatedAt(at);
       if (ownerId) {
-        setPayrollSummaryCache(ownerId, { mode, userId, from, to }, s);
+        setPayrollSummaryCache(ownerId, { mode, userId: id, from, to }, s);
       }
       setMessage('Выплата подтверждена — период зафиксирован');
     } catch (e) {
@@ -833,7 +847,9 @@ export function PayrollWorkspace({ mode }: Props) {
   const saveAdj = async () => {
     if (!canEdit) return;
     const token = getToken();
-    if (!token || !userId || !adjReason.trim()) return;
+    const id = reportUserId;
+    if (!token || !id || !adjReason.trim()) return;
+    if (id !== userId) setUserId(id);
     setMessage('');
     try {
       if (editingAdjId) {
@@ -844,7 +860,7 @@ export function PayrollWorkspace({ mode }: Props) {
         setMessage('Корректировка обновлена');
       } else {
         const created = await api.payrollAdjustment(token, {
-          userId,
+          userId: id,
           amountMinor: Math.round(Number(adjAmount || 0) * 100),
           reason: adjReason.trim(),
           periodFrom: from,
@@ -1189,6 +1205,7 @@ export function PayrollWorkspace({ mode }: Props) {
           open={summaryOpen}
           onToggle={() => setSummaryOpen((o) => !o)}
           onSelectEmployee={(id, f, t) => {
+            setDeptFilter('ALL');
             setUserId(id);
             setFrom(f);
             setTo(t);
@@ -1259,7 +1276,11 @@ export function PayrollWorkspace({ mode }: Props) {
               <button
                 key={f.id}
                 type="button"
-                onClick={() => setDeptFilter(f.id)}
+                onClick={() => {
+                  if (f.id === deptFilter) return;
+                  setDeptFilter(f.id);
+                  clearSummary();
+                }}
                 className={
                   deptFilter === f.id
                     ? 'btn-primary px-2.5 py-1 text-xs'
@@ -1277,7 +1298,7 @@ export function PayrollWorkspace({ mode }: Props) {
               Сотрудник
               <select
                 className="input mt-1 w-full min-w-[12rem] py-1.5 text-sm"
-                value={userId}
+                value={reportUserId}
                 onChange={(e) => {
                   setUserId(e.target.value);
                   clearSummary();
@@ -1328,7 +1349,7 @@ export function PayrollWorkspace({ mode }: Props) {
           <button
             type="button"
             className="btn-primary px-3 py-1.5 text-sm"
-            disabled={loading || !userId}
+            disabled={loading || !reportUserId}
             onClick={load}
           >
             {loading ? 'Считаем…' : 'Рассчитать'}
@@ -1336,7 +1357,7 @@ export function PayrollWorkspace({ mode }: Props) {
           <button
             type="button"
             className="btn-secondary px-3 py-1.5 text-sm"
-            disabled={syncing1c || loading || !userId}
+            disabled={syncing1c || loading || !reportUserId}
             onClick={() => void refreshFrom1c()}
             title="Перечитать занятия из 1С за выбранный период и пересчитать"
           >

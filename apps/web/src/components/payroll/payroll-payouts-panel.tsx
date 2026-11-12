@@ -391,6 +391,7 @@ export function PayrollPayoutsPanel({
         return (
           s.roles.includes('TRAINER') ||
           s.track === 'PT' ||
+          s.track === 'CLUB' ||
           s.track === 'GROUP_TRAINER'
         );
       }
