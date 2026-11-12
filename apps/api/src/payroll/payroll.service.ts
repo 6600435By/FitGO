@@ -3159,7 +3159,8 @@ export class PayrollService {
 
   /**
    * Delete compensation versions after `effectiveFrom` that sit on open
-   * (unlocked) days. Locked-period versions are kept.
+   * (unlocked) days. Hard-locked period versions are kept.
+   * ADVANCE_HALF locks do not protect versions — оклад is not in advance.
    */
   private async supersedeLaterCompensationVersions(
     clubId: string,
@@ -3176,27 +3177,65 @@ export class PayrollService {
     });
     for (const row of later) {
       const iso = utcDateKey(row.effectiveFrom);
-      const locked = await this.prisma.payrollPeriodLock.findFirst({
-        where: {
-          clubId,
-          userId,
-          periodFrom: { lte: dateOnly(iso) },
-          periodTo: { gte: dateOnly(iso) },
-        },
-      });
-      if (locked) continue;
+      const frozen = await this.compensationDayFrozen(clubId, userId, iso);
+      if (frozen.frozen) continue;
       await this.prisma.staffCompensation.delete({ where: { id: row.id } });
     }
   }
 
-  /** Refuse saving a rate into a locked payroll period. */
+  /**
+   * Refuse saving a rate into a hard-locked day (month settlement / full
+   * confirm). Paid ADVANCE_HALF alone must not block — оклад is paid on the
+   * 15th, and clubs need to correct rates after the 25th advance wave.
+   */
   private async assertCompensationDateOpen(
     clubId: string,
     userId: string,
     effectiveFrom: string,
   ) {
-    const day = dateOnly(effectiveFrom);
-    const locked = await this.prisma.payrollPeriodLock.findFirst({
+    const frozen = await this.compensationDayFrozen(
+      clubId,
+      userId,
+      effectiveFrom,
+    );
+    if (!frozen.frozen || !frozen.until) return;
+    const openFrom = (() => {
+      const next = dateOnly(frozen.until);
+      next.setUTCDate(next.getUTCDate() + 1);
+      return utcDateKey(next);
+    })();
+    throw new BadRequestException(
+      `Период до ${frozen.until} закрыт — ставка с ${effectiveFrom} недоступна. Выберите дату с ${openFrom}.`,
+    );
+  }
+
+  /**
+   * Hard freeze for rate versions: paid MONTH_SETTLEMENT, or a period lock
+   * that is not merely the ADVANCE_HALF wave (оклад is paid on the 15th).
+   */
+  private async compensationDayFrozen(
+    clubId: string,
+    userId: string,
+    isoDay: string,
+  ): Promise<{ frozen: boolean; until?: string }> {
+    const day = dateOnly(isoDay);
+
+    const monthSettled = await this.prisma.payrollPayout.findFirst({
+      where: {
+        clubId,
+        userId,
+        status: PayrollPayoutStatus.PAID,
+        kind: PrismaPayoutKind.MONTH_SETTLEMENT,
+        periodFrom: { lte: day },
+        periodTo: { gte: day },
+      },
+      orderBy: { periodTo: 'desc' },
+    });
+    if (monthSettled) {
+      return { frozen: true, until: utcDateKey(monthSettled.periodTo) };
+    }
+
+    const locks = await this.prisma.payrollPeriodLock.findMany({
       where: {
         clubId,
         userId,
@@ -3205,16 +3244,32 @@ export class PayrollService {
       },
       orderBy: { periodTo: 'desc' },
     });
-    if (!locked) return;
-    const until = utcDateKey(locked.periodTo);
-    const openFrom = (() => {
-      const next = dateOnly(until);
-      next.setUTCDate(next.getUTCDate() + 1);
-      return utcDateKey(next);
-    })();
-    throw new BadRequestException(
-      `Период до ${until} закрыт — ставка с ${effectiveFrom} недоступна. Выберите дату с ${openFrom}.`,
-    );
+    if (!locks.length) return { frozen: false };
+
+    const advanceCovering = await this.prisma.payrollPayout.findFirst({
+      where: {
+        clubId,
+        userId,
+        status: PayrollPayoutStatus.PAID,
+        kind: PrismaPayoutKind.ADVANCE_HALF,
+        periodFrom: { lte: day },
+        periodTo: { gte: day },
+      },
+      orderBy: { periodTo: 'desc' },
+    });
+    if (advanceCovering) {
+      const advFrom = utcDateKey(advanceCovering.periodFrom);
+      const advTo = utcDateKey(advanceCovering.periodTo);
+      const onlyAdvanceLocks = locks.every((locked) => {
+        const from = utcDateKey(locked.periodFrom);
+        const to = utcDateKey(locked.periodTo);
+        return from >= advFrom && to <= advTo;
+      });
+      // Paid advance wave alone must not freeze rate edits.
+      if (onlyAdvanceLocks) return { frozen: false };
+    }
+
+    return { frozen: true, until: utcDateKey(locks[0]!.periodTo) };
   }
 
   async listPayTemplates(clubId: string): Promise<StaffPayTemplateDto[]> {

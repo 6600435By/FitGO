@@ -23,7 +23,7 @@ import {
 import { UserRole } from '@fitgo/shared-types';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { api } from '@/lib/api';
+import { ApiError, api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 
 function firstOfCurrentMonth(): string {
@@ -165,9 +165,25 @@ export function StaffPayProfileEditor({
     StaffCompensationRateVersion[]
   >([]);
   const [message, setMessage] = useState('');
+  const [messageErr, setMessageErr] = useState(false);
   const [saving, setSaving] = useState(false);
   const [copying, setCopying] = useState(false);
   const [templateBusy, setTemplateBusy] = useState(false);
+
+  const showOk = (text: string) => {
+    setMessageErr(false);
+    setMessage(text);
+  };
+  const showErr = (e: unknown) => {
+    setMessageErr(true);
+    const text =
+      e instanceof ApiError
+        ? e.message
+        : e instanceof Error
+          ? e.message
+          : 'Ошибка';
+    setMessage(text);
+  };
 
   const profileRef = useRef(profile);
   const byTrackRef = useRef(byTrack);
@@ -360,6 +376,7 @@ export function StaffPayProfileEditor({
     flushDrafts();
     setSaving(true);
     setMessage('');
+    setMessageErr(false);
     try {
       const { payProfile, baseSalaryMinor } = assembleProfile();
       const row = await api.payrollSaveStaffProfile(token, userId, {
@@ -372,13 +389,13 @@ export function StaffPayProfileEditor({
       const later = (row.rateVersions ?? []).filter(
         (v) => v.effectiveFrom > from,
       );
-      setMessage(
+      showOk(
         later.length
           ? `Мотивация сохранена с ${formatRateDay(from)}, но с ${formatRateDay(later[0]!.effectiveFrom)} осталась другая версия (закрытый период ЗП) — в расчёте она всё ещё действует.`
           : `Мотивация сохранена с ${formatRateDay(from)}`,
       );
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Ошибка');
+      showErr(e);
     } finally {
       setSaving(false);
     }
@@ -444,6 +461,7 @@ export function StaffPayProfileEditor({
     }
     setCopying(true);
     setMessage('');
+    setMessageErr(false);
     try {
       const { payProfile, baseSalaryMinor } = assembleProfile();
       const from = effectiveFromRef.current;
@@ -475,11 +493,11 @@ export function StaffPayProfileEditor({
           });
       const row = await api.payrollStaffProfile(token, userId);
       applyLoadedProfile(row);
-      setMessage(
+      showOk(
         `Скопировано сотрудникам: ${result.copied} (с ${formatRateDay(from)}).`,
       );
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Ошибка копирования');
+      showErr(e);
     } finally {
       setCopying(false);
     }
@@ -513,6 +531,7 @@ export function StaffPayProfileEditor({
     }
     setTemplateBusy(true);
     setMessage('');
+    setMessageErr(false);
     try {
       const { payProfile, baseSalaryMinor } = assembleProfile();
       const from = effectiveFromRef.current;
@@ -529,11 +548,11 @@ export function StaffPayProfileEditor({
           payProfile,
         });
       }
-      setMessage(
+      showOk(
         `Шаблон сохранён (${labels.join(', ')}). При добавлении нового сотрудника схема подставится автоматически.`,
       );
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Ошибка шаблона');
+      showErr(e);
     } finally {
       setTemplateBusy(false);
     }
@@ -557,17 +576,18 @@ export function StaffPayProfileEditor({
     }
     setTemplateBusy(true);
     setMessage('');
+    setMessageErr(false);
     try {
       const row = await api.payrollApplyPayTemplate(token, userId, {
         tracks,
         effectiveFrom: effectiveFromRef.current,
       });
       applyLoadedProfile(row);
-      setMessage(
+      showOk(
         `Шаблон применён с ${formatRateDay(effectiveFromRef.current)}`,
       );
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : 'Ошибка применения шаблона');
+      showErr(e);
     } finally {
       setTemplateBusy(false);
     }
@@ -1251,7 +1271,15 @@ export function StaffPayProfileEditor({
           <p className="text-xs text-slate-500">{hint}</p>
         ) : null;
       })()}
-      {message && <p className="text-sm text-fitgo-300">{message}</p>}
+      {message ? (
+        <p
+          className={
+            messageErr ? 'text-sm text-red-400' : 'text-sm text-fitgo-300'
+          }
+        >
+          {message}
+        </p>
+      ) : null}
     </div>
   );
 }
