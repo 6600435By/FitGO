@@ -1176,6 +1176,47 @@ export function PayrollWorkspace({ mode }: Props) {
     }
   };
 
+  /** Open employee report fold, set period filters, load summary (club/payouts). */
+  const openEmployeeReport = async (
+    id: string,
+    f: string,
+    t: string,
+  ) => {
+    if (!canEdit) return;
+    setDeptFilter('ALL');
+    setUserId(id);
+    setFrom(f);
+    setTo(t);
+    setEmployeeReportOpen(true);
+    requestAnimationFrame(() => {
+      document
+        .getElementById('payroll-employee-report')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    const token = getToken();
+    if (!token) return;
+    setLoading(true);
+    setMessage('');
+    try {
+      const s = await api.payrollSummary(token, {
+        userId: id,
+        from: f,
+        to: t,
+      });
+      setSummary(s);
+      const at = Date.now();
+      setSummaryCalculatedAt(at);
+      if (ownerId) {
+        setPayrollSummaryCache(ownerId, { mode, userId: id, from: f, to: t }, s);
+      }
+    } catch (e) {
+      clearSummary();
+      setMessage(e instanceof Error ? e.message : 'Ошибка');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-5xl space-y-3 pb-8 md:max-w-none">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -1205,39 +1246,7 @@ export function PayrollWorkspace({ mode }: Props) {
           open={summaryOpen}
           onToggle={() => setSummaryOpen((o) => !o)}
           onSelectEmployee={(id, f, t) => {
-            setDeptFilter('ALL');
-            setUserId(id);
-            setFrom(f);
-            setTo(t);
-            setEmployeeReportOpen(true);
-            void (async () => {
-              const token = getToken();
-              if (!token) return;
-              setLoading(true);
-              setMessage('');
-              try {
-                const s = await api.payrollSummary(token, {
-                  userId: id,
-                  from: f,
-                  to: t,
-                });
-                setSummary(s);
-                const at = Date.now();
-                setSummaryCalculatedAt(at);
-                if (ownerId) {
-                  setPayrollSummaryCache(
-                    ownerId,
-                    { mode, userId: id, from: f, to: t },
-                    s,
-                  );
-                }
-              } catch (e) {
-                clearSummary();
-                setMessage(e instanceof Error ? e.message : 'Ошибка');
-              } finally {
-                setLoading(false);
-              }
-            })();
+            void openEmployeeReport(id, f, t);
           }}
         />
       )}
@@ -1251,9 +1260,13 @@ export function PayrollWorkspace({ mode }: Props) {
             openPrintDialogFor(ids, rangeFrom, rangeTo)
           }
           printBusy={batchPrinting}
+          onOpenEmployeeReport={(id, f, t) => {
+            void openEmployeeReport(id, f, t);
+          }}
         />
       )}
 
+      <div id="payroll-employee-report">
       <PayrollFold
         open={employeeReportOpen}
         onToggle={() => setEmployeeReportOpen((o) => !o)}
@@ -2093,6 +2106,7 @@ export function PayrollWorkspace({ mode }: Props) {
         </div>
       )}
       </PayrollFold>
+      </div>
 
       {printOpen && (
         <div

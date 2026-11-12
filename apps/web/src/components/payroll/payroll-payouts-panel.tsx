@@ -134,6 +134,15 @@ type Props = {
     periodTo: string,
   ) => void;
   printBusy?: boolean;
+  /**
+   * Open «Отчёт по сотруднику» for this person.
+   * Period: аванс → 1–15 of wave month; ЗП 15-го → full calendar month paid.
+   */
+  onOpenEmployeeReport?: (
+    userId: string,
+    periodFrom: string,
+    periodTo: string,
+  ) => void;
 };
 
 type PayoutViewMem = {
@@ -156,12 +165,24 @@ const PAYOUT_DEPTS: Dept[] = [
   'EXTERNAL',
 ];
 
+/** Report window for FIO deep-link: wave semantics, not free-form date edits. */
+function employeeReportRange(
+  kind: PayrollPayoutKind,
+  year: number,
+  month: number,
+): { from: string; to: string } {
+  return kind === 'ADVANCE_HALF'
+    ? advanceHalfRange(year, month)
+    : monthSettlementRange(year, month);
+}
+
 export function PayrollPayoutsPanel({
   staff,
   open,
   onToggle,
   onPrintSelected,
   printBusy = false,
+  onOpenEmployeeReport,
 }: Props) {
   const today = useMemo(() => new Date(), []);
   const pathname = usePathname();
@@ -777,7 +798,9 @@ export function PayrollPayoutsPanel({
                   ? 'Заработано — начисление за месяц; Аванс — уже подтверждённая выплата 25-го; К выплате — остаток.'
                   : 'Заработано — начисление волны 1–15; Аванс здесь ещё не вычитается (это сама выплата 25-го).'}
                 {' '}
-                Штраф / премия — в корректировки периода и сразу в пересчёт.
+                ФИО → отчёт сотрудника (
+                {payKind === 'ADVANCE_HALF' ? '1–15' : 'весь месяц'}
+                ). Штраф / премия — в корректировки периода.
               </p>
 
               {/* Mobile / narrow: stacked cards */}
@@ -814,14 +837,30 @@ export function PayrollPayoutsPanel({
                         />
                         <div className="min-w-0 flex-1 space-y-2">
                           <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
-                            <p className="font-medium text-slate-100">
+                            <button
+                              type="button"
+                              className="text-left font-medium text-sky-300 hover:text-sky-200 hover:underline"
+                              title="Открыть отчёт по сотруднику за период волны"
+                              onClick={() => {
+                                const range = employeeReportRange(
+                                  payKind,
+                                  payYear,
+                                  payMonth,
+                                );
+                                onOpenEmployeeReport?.(
+                                  r.performerId,
+                                  range.from,
+                                  range.to,
+                                );
+                              }}
+                            >
                               {r.performerName}
                               {r.usesFixedAdvance ? (
-                                <span className="ml-1 text-[10px] text-fitgo-300">
+                                <span className="ml-1 text-[10px] text-fitgo-300 no-underline">
                                   фикс
                                 </span>
                               ) : null}
-                            </p>
+                            </button>
                             <span className="text-[10px] uppercase text-slate-500">
                               {paid
                                 ? 'выплачено'
@@ -1009,14 +1048,30 @@ export function PayrollPayoutsPanel({
                             />
                           </td>
                           <td className="px-2 py-2">
-                            <p className="font-medium">
+                            <button
+                              type="button"
+                              className="text-left font-medium text-sky-300 hover:text-sky-200 hover:underline"
+                              title="Открыть отчёт по сотруднику за период волны"
+                              onClick={() => {
+                                const range = employeeReportRange(
+                                  payKind,
+                                  payYear,
+                                  payMonth,
+                                );
+                                onOpenEmployeeReport?.(
+                                  r.performerId,
+                                  range.from,
+                                  range.to,
+                                );
+                              }}
+                            >
                               {r.performerName}
                               {r.usesFixedAdvance ? (
-                                <span className="ml-1 text-[10px] text-fitgo-300">
+                                <span className="ml-1 text-[10px] text-fitgo-300 no-underline">
                                   фикс
                                 </span>
                               ) : null}
-                            </p>
+                            </button>
                             {(r.carryInMinor !== 0 || delta !== 0) && (
                               <p className="mt-0.5 text-[10px] text-slate-500">
                                 {r.carryInMinor
