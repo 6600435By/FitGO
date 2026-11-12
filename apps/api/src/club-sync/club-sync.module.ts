@@ -53,6 +53,7 @@ import { TrainerPtSalesSyncService } from './trainer-pt-sales-sync.service';
     ClubSyncStatusService,
     BookingGateway,
     ScheduleSlotsSyncService,
+    TrainerPtSalesSyncService,
   ],
 })
 export class ClubSyncModule {}

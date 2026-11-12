@@ -644,15 +644,12 @@ export class FitgoHttpProvider {
       from: input.from,
       to: input.to,
     });
-    try {
-      const data = await this.request<
-        import('@fitgo/shared-types').SpecialistServiceDebt[]
-      >(`/trainer-pt-sales?${q.toString()}`, { timeoutMs: 45_000 });
-      return Array.isArray(data) ? data : [];
-    } catch {
-      // Missing template, hang, or 1C error — caller treats as empty sales
-      return [];
-    }
+    // Do not swallow errors as [] — club-sync used to soft-deactivate the whole
+    // window on «empty» pulls after timeout, wiping PT rows and scrambling ЗП.
+    const data = await this.request<
+      import('@fitgo/shared-types').SpecialistServiceDebt[]
+    >(`/trainer-pt-sales?${q.toString()}`, { timeoutMs: 45_000 });
+    return Array.isArray(data) ? data : [];
   }
 
   async getClubVisitsPage(params: {

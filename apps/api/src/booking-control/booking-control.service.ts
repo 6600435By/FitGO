@@ -31,6 +31,7 @@ import {
 } from '@prisma/client';
 import { requireClubId } from '../auth/require-club-id';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
+import { TrainerPtSalesSyncService } from '../club-sync/trainer-pt-sales-sync.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   filterControlByHall,
@@ -185,6 +186,7 @@ export class BookingControlService {
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
     private readonly classSessions: ClassSessionsSyncService,
+    private readonly trainerPtSalesSync: TrainerPtSalesSyncService,
     private readonly sessionApproval: SessionApprovalService,
     private readonly managerTasks: ManagerOriginTasksService,
   ) {}
@@ -1739,82 +1741,12 @@ export class BookingControlService {
     let ptUpserted = 0;
     let ptError: string | undefined;
     try {
-      const live = await this.fetchTrainerPtSalesLive(from, to);
-      if (live.length) {
-        const fromD = new Date(`${from}T00:00:00.000`);
-        const toD = new Date(`${to}T23:59:59.999`);
-        // ClubRevenue unpaid wins over Integration false-PAID (all performers).
-        const reconciled =
-          !Number.isNaN(fromD.getTime()) && !Number.isNaN(toD.getTime())
-            ? await overlayPtSaleDebtFromRevenue(
-                this.prisma,
-                clubId,
-                fromD,
-                toD,
-                live,
-              )
-            : live;
-        const now = new Date();
-        for (const row of reconciled) {
-          // Prefer sale-line key (docRef); client UUID in externalId collapses rows.
-          // Keep Integration UUID in saleDocumentId before the docRef swap.
-          const saleDocumentId =
-            saleDocumentIdFromPtExternalId(row.externalId) ?? null;
-          const externalId = row.docRef || row.externalId;
-          if (!externalId) continue;
-          const occurredAt = new Date(row.occurredAt);
-          if (Number.isNaN(occurredAt.getTime())) continue;
-          await this.prisma.trainerPtSale.upsert({
-            where: { clubId_externalId: { clubId, externalId } },
-            create: {
-              clubId,
-              externalId,
-              saleDocumentId,
-              clientName: row.clientName ?? null,
-              serviceName: row.serviceName ?? null,
-              occurredAt,
-              amount: row.amount ?? 0,
-              currency: row.currency ?? null,
-              employeeCode: row.employeeCode ?? null,
-              employeeName: row.employeeName ?? null,
-              docRef: row.docRef ?? null,
-              paymentStatus: row.paymentStatus ?? null,
-              bookingRef: row.bookingRef ?? null,
-              isActive: true,
-              syncedAt: now,
-            },
-            update: {
-              saleDocumentId,
-              clientName: row.clientName ?? null,
-              serviceName: row.serviceName ?? null,
-              occurredAt,
-              amount: row.amount ?? 0,
-              currency: row.currency ?? null,
-              employeeCode: row.employeeCode ?? null,
-              employeeName: row.employeeName ?? null,
-              docRef: row.docRef ?? null,
-              paymentStatus: row.paymentStatus ?? null,
-              bookingRef: row.bookingRef ?? null,
-              isActive: true,
-              syncedAt: now,
-            },
-          });
-          ptUpserted += 1;
-        }
-        // Cache only one-shot PT sales for the register; pack SKUs stay in DB
-        // for unit-price recovery but are not appointments.
-        const forControl = reconciled.filter(
-          (r) =>
-            !isExcludedFromPtBookingControl(r.serviceName) &&
-            !isMultiVisitPackSale(r.serviceName),
-        );
-        const cacheKey = `${clubId}|${from}|${to}`;
-        this.ptSalesCache.set(cacheKey, {
-          at: Date.now(),
-          rows: forControl,
-        });
-        this.indexTrainerPtSales(forControl);
-      }
+      // Same path as club-sync: chunked pull, safe soft-deactivate (no wipe on
+      // timeout/empty). Manual upsert alone used to revive rows that nightly
+      // FULL then deleted again after a failed /trainer-pt-sales call.
+      const pt = await this.trainerPtSalesSync.syncClub(clubId, { from, to });
+      ptUpserted = pt.upserted;
+      this.ptSalesCache.delete(`${clubId}|${from}|${to}`);
     } catch (e) {
       ptError = e instanceof Error ? e.message : String(e);
     }

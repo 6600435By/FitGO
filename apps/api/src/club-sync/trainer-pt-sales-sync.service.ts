@@ -6,6 +6,11 @@ import {
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { addMoscowDays, moscowDayKey } from './moscow-time';
+import {
+  shouldSoftDeactivateTrainerPtSales,
+  splitYmdRangeInclusive,
+  TRAINER_PT_SALES_CHUNK_DAYS,
+} from './trainer-pt-sales-sync.util';
 
 const RESOURCE_KEY = 'trainer_pt_sales';
 
@@ -47,88 +52,12 @@ export class TrainerPtSalesSyncService {
       return { from, to, upserted: 0 };
     }
 
+    const chunks = splitYmdRangeInclusive(from, to, TRAINER_PT_SALES_CHUNK_DAYS);
+    let upserted = 0;
     try {
-      const raw = await provider.getTrainerPtSales({ from, to });
-      const fromD = new Date(`${from}T00:00:00.000`);
-      const toD = new Date(`${to}T23:59:59.999`);
-      const rows =
-        !Number.isNaN(fromD.getTime()) && !Number.isNaN(toD.getTime())
-          ? await overlayPtSaleDebtFromRevenue(
-              this.prisma,
-              clubId,
-              fromD,
-              toD,
-              raw,
-            )
-          : raw;
-      const now = new Date();
-      let upserted = 0;
-      const seen = new Set<string>();
-
-      for (const row of rows) {
-        // Prefer sale-line key (docRef); client UUID in externalId collapses rows.
-        // Keep Integration UUID in saleDocumentId before the docRef swap.
-        const saleDocumentId =
-          saleDocumentIdFromPtExternalId(row.externalId) ?? null;
-        const externalId = row.docRef || row.externalId;
-        if (!externalId) continue;
-        seen.add(externalId);
-        const occurredAt = new Date(row.occurredAt);
-        if (Number.isNaN(occurredAt.getTime())) continue;
-
-        await this.prisma.trainerPtSale.upsert({
-          where: { clubId_externalId: { clubId, externalId } },
-          create: {
-            clubId,
-            externalId,
-            saleDocumentId,
-            clientName: row.clientName ?? null,
-            serviceName: row.serviceName ?? null,
-            occurredAt,
-            amount: row.amount ?? 0,
-            currency: row.currency ?? null,
-            employeeCode: row.employeeCode ?? null,
-            employeeName: row.employeeName ?? null,
-            docRef: row.docRef ?? null,
-            paymentStatus: row.paymentStatus ?? null,
-            bookingRef: row.bookingRef ?? null,
-            isActive: true,
-            syncedAt: now,
-          },
-          update: {
-            saleDocumentId,
-            clientName: row.clientName ?? null,
-            serviceName: row.serviceName ?? null,
-            occurredAt,
-            amount: row.amount ?? 0,
-            currency: row.currency ?? null,
-            employeeCode: row.employeeCode ?? null,
-            employeeName: row.employeeName ?? null,
-            docRef: row.docRef ?? null,
-            paymentStatus: row.paymentStatus ?? null,
-            bookingRef: row.bookingRef ?? null,
-            isActive: true,
-            syncedAt: now,
-          },
-        });
-        upserted += 1;
+      for (const chunk of chunks) {
+        upserted += await this.syncChunk(clubId, chunk.from, chunk.to);
       }
-
-      // Soft-deactivate rows in window missing from this pull.
-      const rangeStart = new Date(`${from}T00:00:00.000Z`);
-      const rangeEnd = new Date(`${to}T23:59:59.999Z`);
-      await this.prisma.trainerPtSale.updateMany({
-        where: {
-          clubId,
-          occurredAt: { gte: rangeStart, lte: rangeEnd },
-          isActive: true,
-          ...(seen.size
-            ? { externalId: { notIn: [...seen] } }
-            : {}),
-        },
-        data: { isActive: false, syncedAt: now },
-      });
-
       await this.mark(clubId, 'ok', null);
       this.logger.log(`Trainer PT sales ${clubId}: ${upserted} (${from}…${to})`);
       return { from, to, upserted };
@@ -137,6 +66,142 @@ export class TrainerPtSalesSyncService {
       await this.mark(clubId, 'error', msg);
       throw err;
     }
+  }
+
+  private async syncChunk(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<number> {
+    const provider = this.fitness.getProvider();
+    const pull = provider.getTrainerPtSales;
+    if (!pull) return 0;
+
+    // Let errors propagate — never treat failure as «0 sales → wipe window».
+    const raw = await pull.call(provider, { from, to });
+    const fromD = new Date(`${from}T00:00:00.000`);
+    const toD = new Date(`${to}T23:59:59.999`);
+    const mapped = (Array.isArray(raw) ? raw : []).map((row) => ({
+      externalId: row.externalId ?? undefined,
+      clientName: row.clientName ?? undefined,
+      serviceName: row.serviceName ?? undefined,
+      occurredAt: row.occurredAt,
+      amount: row.amount ?? 0,
+      currency: row.currency ?? null,
+      employeeCode: row.employeeCode ?? undefined,
+      employeeName: row.employeeName ?? undefined,
+      docRef: row.docRef ?? undefined,
+      paymentStatus: row.paymentStatus ?? undefined,
+      bookingRef: row.bookingRef ?? null,
+    }));
+    const rows =
+      !Number.isNaN(fromD.getTime()) && !Number.isNaN(toD.getTime())
+        ? await overlayPtSaleDebtFromRevenue(
+            this.prisma,
+            clubId,
+            fromD,
+            toD,
+            mapped,
+          )
+        : mapped;
+    const now = new Date();
+    let upserted = 0;
+    const seen = new Set<string>();
+    const metaByExt = new Map(
+      mapped.map((r) => [r.docRef || r.externalId || '', r] as const),
+    );
+
+    for (const row of rows) {
+      // Prefer sale-line key (docRef); client UUID in externalId collapses rows.
+      // Keep Integration UUID in saleDocumentId before the docRef swap.
+      const saleDocumentId =
+        saleDocumentIdFromPtExternalId(row.externalId) ?? null;
+      const externalId = row.docRef || row.externalId;
+      if (!externalId) continue;
+      seen.add(externalId);
+      const occurredAt = new Date(row.occurredAt);
+      if (Number.isNaN(occurredAt.getTime())) continue;
+      const meta = metaByExt.get(externalId);
+
+      await this.prisma.trainerPtSale.upsert({
+        where: { clubId_externalId: { clubId, externalId } },
+        create: {
+          clubId,
+          externalId,
+          saleDocumentId,
+          clientName: row.clientName ?? null,
+          serviceName: row.serviceName ?? null,
+          occurredAt,
+          amount: row.amount ?? 0,
+          currency: meta?.currency ?? null,
+          employeeCode: row.employeeCode ?? null,
+          employeeName: row.employeeName ?? null,
+          docRef: row.docRef ?? null,
+          paymentStatus: row.paymentStatus ?? null,
+          bookingRef: meta?.bookingRef ?? null,
+          isActive: true,
+          syncedAt: now,
+        },
+        update: {
+          saleDocumentId,
+          clientName: row.clientName ?? null,
+          serviceName: row.serviceName ?? null,
+          occurredAt,
+          amount: row.amount ?? 0,
+          currency: meta?.currency ?? null,
+          employeeCode: row.employeeCode ?? null,
+          employeeName: row.employeeName ?? null,
+          docRef: row.docRef ?? null,
+          paymentStatus: row.paymentStatus ?? null,
+          bookingRef: meta?.bookingRef ?? null,
+          isActive: true,
+          syncedAt: now,
+        },
+      });
+      upserted += 1;
+    }
+
+    // Soft-deactivate only on a complete-looking pull (same window as upsert).
+    const rangeStart = fromD;
+    const rangeEnd = toD;
+    if (Number.isNaN(rangeStart.getTime()) || Number.isNaN(rangeEnd.getTime())) {
+      return upserted;
+    }
+
+    const existingActiveCount = await this.prisma.trainerPtSale.count({
+      where: {
+        clubId,
+        isActive: true,
+        occurredAt: { gte: rangeStart, lte: rangeEnd },
+      },
+    });
+
+    if (
+      !shouldSoftDeactivateTrainerPtSales({
+        seenCount: seen.size,
+        existingActiveCount,
+      })
+    ) {
+      if (existingActiveCount > 0 && seen.size < existingActiveCount) {
+        this.logger.warn(
+          `Trainer PT sales ${clubId}: skip deactivate ${from}…${to} ` +
+            `(seen=${seen.size}, active=${existingActiveCount})`,
+        );
+      }
+      return upserted;
+    }
+
+    await this.prisma.trainerPtSale.updateMany({
+      where: {
+        clubId,
+        occurredAt: { gte: rangeStart, lte: rangeEnd },
+        isActive: true,
+        externalId: { notIn: [...seen] },
+      },
+      data: { isActive: false, syncedAt: now },
+    });
+
+    return upserted;
   }
 
   private async mark(clubId: string, status: string, error: string | null) {
