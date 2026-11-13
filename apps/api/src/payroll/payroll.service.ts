@@ -589,13 +589,20 @@ export class PayrollService {
         packageQty: primary?.packageQty,
       });
       const isServiceBlock = writeOffOrigin === 'BLOCK';
-      let unitFromPackage = resolvePackageUnitPriceMinor({
-        unitPriceMinor: primary?.unitPriceMinor,
-        packageAmountMinor: primary?.packageAmountMinor,
-        packageQty: primary?.packageQty,
-        paymentBasis: primary?.paymentBasis,
-        sessionTitle: o.title,
-      });
+      const spaBlockHasPackageAmount =
+        (primary?.packageAmountMinor ?? 0) > 0;
+      // Block write-offs: 1C often sends catalog one-shot unit (60) while the
+      // money lives on Продажа (450 for 10 → 45). Only trust packageAmount/N.
+      let unitFromPackage =
+        isServiceBlock && !spaBlockHasPackageAmount
+          ? undefined
+          : resolvePackageUnitPriceMinor({
+              unitPriceMinor: primary?.unitPriceMinor,
+              packageAmountMinor: primary?.packageAmountMinor,
+              packageQty: primary?.packageQty,
+              paymentBasis: primary?.paymentBasis,
+              sessionTitle: o.title,
+            });
       let packSaleExt: string | undefined;
       let packSaleAt: string | undefined;
       // ClubRevenue «Блок массажа 10» is an umbrella SKU — same name for лицо
@@ -615,20 +622,16 @@ export class PayrollService {
         }
       }
       const packDateIso = extractPackDateIsoFromBasis(primary?.paymentBasis);
-      let priceMinor =
-        unitFromPackage ??
-        matched?.priceMinor ??
-        matched?.service.priceMinor ??
-        undefined;
+      let priceMinor = isServiceBlock
+        ? unitFromPackage
+        : (unitFromPackage ??
+          matched?.priceMinor ??
+          matched?.service.priceMinor ??
+          undefined);
       let spaBlockPriceSource: WorkUnit['spaBlockPriceSource'];
       let trustBand: WorkUnit['trustBand'] = 'GREEN';
-      // Block write-off without 1C unit → SaleTransaction / N, else catalog −%.
-      if (
-        isServiceBlock &&
-        !bioimpedance &&
-        !(priceMinor != null && priceMinor > 0) &&
-        primary?.clientName
-      ) {
+      // Block: prefer SaleTransaction/N; else catalog −% when no packageAmount.
+      if (isServiceBlock && !bioimpedance && primary?.clientName) {
         const clientKey = `${primary.clientName
           .trim()
           .toLowerCase()
@@ -647,15 +650,18 @@ export class PayrollService {
           catalogUnitMinor,
           serviceExternalId,
         });
-        if (blockMatch) {
+        if (blockMatch?.source === 'SALE') {
+          priceMinor = blockMatch.unitPriceMinor;
+          spaBlockPriceSource = 'SALE';
+          packSaleExt = blockMatch.externalId ?? packSaleExt;
+          packSaleAt = blockMatch.occurredAt ?? packSaleAt;
+        } else if (
+          !(priceMinor != null && priceMinor > 0) &&
+          blockMatch
+        ) {
           priceMinor = blockMatch.unitPriceMinor;
           spaBlockPriceSource = blockMatch.source;
-          if (blockMatch.source === 'SALE') {
-            packSaleExt = blockMatch.externalId ?? packSaleExt;
-            packSaleAt = blockMatch.occurredAt ?? packSaleAt;
-          } else {
-            trustBand = 'AMBER';
-          }
+          trustBand = 'AMBER';
         }
       }
       const partner =
@@ -1292,13 +1298,21 @@ export class PayrollService {
         isSpecialist &&
         (bioimpedanceEarly ||
           (!isGift && isSpaLikeSessionTitle(o.title)));
-      let unitFromPackage = resolvePackageUnitPriceMinor({
-        unitPriceMinor: primary?.unitPriceMinor,
-        packageAmountMinor: primary?.packageAmountMinor,
-        packageQty: primary?.packageQty,
-        paymentBasis: primary?.paymentBasis,
-        sessionTitle: o.title,
-      });
+      const spaBlockHasPackageAmountEarly =
+        (primary?.packageAmountMinor ?? 0) > 0;
+      // SPA-like block as PT: ignore bare 1C catalog unit (same as kind=SPA).
+      let unitFromPackage =
+        asSpaEarly &&
+        isServiceBlockEarly &&
+        !spaBlockHasPackageAmountEarly
+          ? undefined
+          : resolvePackageUnitPriceMinor({
+              unitPriceMinor: primary?.unitPriceMinor,
+              packageAmountMinor: primary?.packageAmountMinor,
+              packageQty: primary?.packageQty,
+              paymentBasis: primary?.paymentBasis,
+              sessionTitle: o.title,
+            });
       let packSaleExt: string | undefined;
       let packSaleAt: string | undefined;
       // PT training packs: ClubRevenue sale/N. SPA-like massage stored as PT:
@@ -1329,7 +1343,9 @@ export class PayrollService {
             (unitFromPackage != null || (matched?.priceMinor ?? 0) > 0)));
       const priceMinor = isGift
         ? 0
-        : (unitFromPackage ?? matched?.priceMinor ?? undefined);
+        : asSpaEarly && isServiceBlockEarly
+          ? unitFromPackage
+          : (unitFromPackage ?? matched?.priceMinor ?? undefined);
       const roomTitle = o.roomTitle ?? undefined;
       const roomKey = resolveGroupRoomKey(roomTitle);
       const serviceExternalId = serviceExternalIdEarly;
@@ -1360,7 +1376,6 @@ export class PayrollService {
         isServiceBlock &&
         !bioimpedance &&
         !isGift &&
-        !(spaPriceMinor != null && spaPriceMinor > 0) &&
         primary?.clientName
       ) {
         const clientKey = `${primary.clientName
@@ -1381,15 +1396,18 @@ export class PayrollService {
           catalogUnitMinor,
           serviceExternalId,
         });
-        if (blockMatch) {
+        if (blockMatch?.source === 'SALE') {
+          spaPriceMinor = blockMatch.unitPriceMinor;
+          spaBlockPriceSource = 'SALE';
+          packSaleExt = blockMatch.externalId ?? packSaleExt;
+          packSaleAt = blockMatch.occurredAt ?? packSaleAt;
+        } else if (
+          !(spaPriceMinor != null && spaPriceMinor > 0) &&
+          blockMatch
+        ) {
           spaPriceMinor = blockMatch.unitPriceMinor;
           spaBlockPriceSource = blockMatch.source;
-          if (blockMatch.source === 'SALE') {
-            packSaleExt = blockMatch.externalId ?? packSaleExt;
-            packSaleAt = blockMatch.occurredAt ?? packSaleAt;
-          } else {
-            trustBand = 'AMBER';
-          }
+          trustBand = 'AMBER';
         }
       }
       // VIP-included → spaQuotaRates. Ignore catalog unitPrice from 1C (else %).

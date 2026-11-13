@@ -92,6 +92,7 @@ function AdminSpaWorkspaceInner() {
   const searchParams = useSearchParams();
   const deepLinkDay = searchParams.get('day')?.trim() || '';
   const deepLinkSpecialist = searchParams.get('specialist')?.trim() || '';
+  const deepLinkBookingId = searchParams.get('booking')?.trim() || '';
   const [tab, setTab] = useState<
     'services' | 'rules' | 'specialists' | 'calendar'
   >('calendar');
@@ -186,7 +187,44 @@ function AdminSpaWorkspaceInner() {
       setFocusSpecialistId(deepLinkSpecialist);
       setWeekFilterSpecialistId(deepLinkSpecialist);
     }
-  }, [deepLinkDay, deepLinkSpecialist]);
+    if (deepLinkBookingId) {
+      setTab('calendar');
+      setBoardView('day');
+    }
+  }, [deepLinkDay, deepLinkSpecialist, deepLinkBookingId]);
+
+  /** Deep-link from контроль: /admin/spa?booking=<id>&day=… */
+  useEffect(() => {
+    if (!deepLinkBookingId) return;
+    const fromBoard = board?.bookings.find((b) => b.id === deepLinkBookingId);
+    if (fromBoard) {
+      setSelectedBooking(fromBoard);
+      const start = new Date(fromBoard.startAt);
+      start.setHours(0, 0, 0, 0);
+      setDay(start);
+      setTab('calendar');
+      return;
+    }
+    const fromList = bookings.find((b) => b.id === deepLinkBookingId);
+    if (!fromList) return;
+    setSelectedBooking({
+      id: fromList.id,
+      specialistId: fromList.specialistId,
+      startAt: fromList.startAt,
+      endAt: fromList.endAt,
+      serviceId: fromList.serviceId,
+      serviceName: fromList.serviceName,
+      clientId: fromList.clientId || undefined,
+      clientName: fromList.clientName,
+      status: fromList.status,
+      paymentType: fromList.paymentType,
+      busy: false,
+    });
+    const start = new Date(fromList.startAt);
+    start.setHours(0, 0, 0, 0);
+    setDay(start);
+    setTab('calendar');
+  }, [deepLinkBookingId, board, bookings]);
 
   const changeBoardView = (v: SpaBoardView) => {
     setBoardView(v);

@@ -24,7 +24,10 @@ import { BookingControlPanel } from '@/components/booking-control/booking-contro
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import { createBookingControlApi } from '@/lib/booking-control-api';
+import {
+  createBookingControlApi,
+  spaBookingEditHrefForBase,
+} from '@/lib/booking-control-api';
 import { AutoTasksSettings, TaskButton } from './discrepancy-tasks';
 
 type TaskLinks = Map<string, DiscrepancyTaskLink>;
@@ -569,6 +572,7 @@ export function DiscrepanciesWorkspace() {
           initialSessionKey={peekSession.sessionKey}
           initialFrom={peekSession.from}
           initialTo={peekSession.to}
+          spaBookingEditHref={spaBookingEditHrefForBase('super-admin')}
           onDetailClose={() => {
             setPeekSession(null);
             load();

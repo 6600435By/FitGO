@@ -84,7 +84,7 @@ import {
 }
 
 {
-  // Хлебаказова: 450 / 5 = 90
+  // Хлебаказова (курс 5): 450 / 5 = 90
   const docs = groupMassageSalesToDocs([
     {
       externalSaleId: '1281cee1-b544-4785-a928-60e062dceda9',
@@ -105,6 +105,44 @@ import {
   assert.ok(match);
   assert.equal(match!.unitPriceMinor, 9000);
   assert.equal(match!.packQty, 5);
+}
+
+{
+  // Хлебаказова Продажа 27339: блок 10 за 450 → 45/визит (не каталог 60).
+  const docs = groupMassageSalesToDocs([
+    {
+      externalSaleId: '1281cee1-b544-4785-a928-60e062dceda9',
+      clientName: 'Хлебаказова Оксана',
+      soldAt: new Date('2026-09-08T08:52:55Z'),
+      amount: 450,
+      productName: 'Массаж классический 25 мин',
+      productExternalId: '7223308a-a555-11e8-80e8-7085c20c362e',
+      isActive: false,
+    },
+    {
+      externalSaleId:
+        '1281cee1-b544-4785-a928-60e062dceda9:7223308a-a555-11e8-80e8-7085c20c362e:20260908115255:p2026-09-12',
+      clientName: 'Хлебаказова Оксана',
+      soldAt: new Date('2026-09-08T08:52:55Z'),
+      amount: 450,
+      productName: 'Массаж классический 25 мин',
+      productExternalId: '7223308a-a555-11e8-80e8-7085c20c362e',
+      isActive: true,
+    },
+  ]);
+  const resolved = resolveSpaBlockUnitPrice({
+    sales: docs,
+    clientName: 'Хлебаказова Оксана',
+    paymentBasis:
+      'Пакет услуг "Блок массажа 10 новый" 27339 от 08.09.2026',
+    sessionTitle: 'Массаж классический 25 мин',
+    catalogUnitMinor: 6000,
+    serviceExternalId: '7223308a-a555-11e8-80e8-7085c20c362e',
+  });
+  assert.ok(resolved);
+  assert.equal(resolved!.source, 'SALE');
+  assert.equal(resolved!.unitPriceMinor, 4500);
+  assert.equal(resolved!.packQty, 10);
 }
 
 {

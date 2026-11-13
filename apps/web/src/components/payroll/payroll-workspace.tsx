@@ -48,7 +48,10 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
-import { createBookingControlApi } from '@/lib/booking-control-api';
+import {
+  createBookingControlApi,
+  spaBookingEditHrefForBase,
+} from '@/lib/booking-control-api';
 import {
   resolveViewFilters,
   usePersistViewMemory,
@@ -397,10 +400,11 @@ export function PayrollWorkspace({ mode }: Props) {
   const bookingControlHref = useMemo(() => {
     const base =
       mode === 'super' ? '/super-admin/review-queue' : '/admin/booking-control';
+    // Same «На контроле» as Attention — not needsReview=1 (только «На проверке»).
     const q = new URLSearchParams({
       from,
       to,
-      needsReview: '1',
+      queue: 'pending',
     });
     if (reportUserId) q.set('performerId', reportUserId);
     return `${base}?${q.toString()}`;
@@ -1142,6 +1146,9 @@ export function PayrollWorkspace({ mode }: Props) {
           initialSessionKey={peekSession.sessionKey}
           initialFrom={peekSession.from}
           initialTo={peekSession.to}
+          spaBookingEditHref={spaBookingEditHrefForBase(
+            mode === 'super' ? 'super-admin' : 'admin',
+          )}
           onDetailClose={() => {
             setPeekSession(null);
             void load();

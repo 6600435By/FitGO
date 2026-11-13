@@ -396,10 +396,13 @@ type Props = {
    */
   showOpsHints?: boolean;
   /**
-   * Specialist: deep-link to edit the SPA booking in the journal.
-   * Admin/SA do not need this.
+   * Deep-link to edit the SPA booking (specialist journal or admin/SA SPA board).
+   * `meta.startAt` / `specialistId` help open the correct day/column.
    */
-  spaBookingEditHref?: (bookingId: string) => string;
+  spaBookingEditHref?: (
+    bookingId: string,
+    meta?: { startAt?: string; specialistId?: string },
+  ) => string;
 };
 
 function todayIso() {
@@ -3797,9 +3800,12 @@ export function BookingControlPanel({
                       <p className="mt-1">
                         <a
                           className="text-sm text-fitgo-400 underline-offset-2 hover:underline"
-                          href={spaBookingEditHref(selected.fitgoBookingId)}
+                          href={spaBookingEditHref(selected.fitgoBookingId, {
+                            startAt: selected.startAt,
+                            specialistId: selected.performerId,
+                          })}
                         >
-                          Открыть запись
+                          Редактировать запись
                         </a>
                       </p>
                     ) : null}
@@ -4214,11 +4220,20 @@ export function BookingControlPanel({
                   <p>
                     <button
                       type="button"
-                      className="text-xs text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline"
+                      className="btn-secondary px-2 py-1 text-xs"
                       disabled={linkDocBusy}
-                      onClick={() => void unlinkSelectedSpa()}
+                      onClick={() => {
+                        if (
+                          !window.confirm(
+                            'Отвязать оплату 1С от этой записи? После этого можно выбрать другую продажу.',
+                          )
+                        ) {
+                          return;
+                        }
+                        void unlinkSelectedSpa();
+                      }}
                     >
-                      Отвязать документ 1С
+                      Отвязать оплату 1С
                     </button>
                   </p>
                 ) : null}

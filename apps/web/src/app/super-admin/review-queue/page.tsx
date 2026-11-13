@@ -5,7 +5,10 @@ import { useSearchParams } from 'next/navigation';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import { createBookingControlApi } from '@/lib/booking-control-api';
+import {
+  createBookingControlApi,
+  spaBookingEditHrefForBase,
+} from '@/lib/booking-control-api';
 
 function SuperAdminBookingControlInner() {
   const searchParams = useSearchParams();
@@ -75,6 +78,7 @@ function SuperAdminBookingControlInner() {
         if (!token) throw new Error('Нет сессии');
         await api.adminCancelSpaBooking(token, bookingId);
       }}
+      spaBookingEditHref={spaBookingEditHrefForBase('super-admin')}
       subtitle="Можно подтвердить ГП без тренера и админа или вернуть на доработку. Без подтверждения занятие не идёт в ЗП."
     />
   );

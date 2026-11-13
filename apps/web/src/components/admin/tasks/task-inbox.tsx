@@ -30,7 +30,10 @@ import { RenewalTaskSheet } from '@/components/admin/renewal-task-sheet';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
-import { createBookingControlApi } from '@/lib/booking-control-api';
+import {
+  createBookingControlApi,
+  spaBookingEditHrefForBase,
+} from '@/lib/booking-control-api';
 import {
   resolveViewFilters,
   usePersistViewMemory,
@@ -557,6 +560,7 @@ export function TaskInbox() {
       initialSessionKey={peekSession.sessionKey}
       initialFrom={peekSession.from}
       initialTo={peekSession.to}
+      spaBookingEditHref={spaBookingEditHrefForBase('admin')}
       onDetailClose={() => {
         setPeekSession(null);
         void load();

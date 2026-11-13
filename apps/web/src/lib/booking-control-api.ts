@@ -4,6 +4,23 @@ import { getToken } from '@/lib/auth';
 
 export type BookingControlApiBase = 'admin' | 'super-admin';
 
+/** Deep-link to SPA board edit dialog for admin / manager / super-admin. */
+export function spaBookingEditHrefForBase(
+  base: BookingControlApiBase,
+): (
+  bookingId: string,
+  meta?: { startAt?: string; specialistId?: string },
+) => string {
+  const path = base === 'super-admin' ? '/super-admin/spa' : '/admin/spa';
+  return (bookingId, meta) => {
+    const q = new URLSearchParams({ booking: bookingId });
+    const day = meta?.startAt?.slice(0, 10);
+    if (day && /^\d{4}-\d{2}-\d{2}$/.test(day)) q.set('day', day);
+    if (meta?.specialistId?.trim()) q.set('specialist', meta.specialistId.trim());
+    return `${path}?${q}`;
+  };
+}
+
 /** Shared BookingControlPanel API wired to admin or super-admin routes. */
 export function createBookingControlApi(
   base: BookingControlApiBase,

@@ -6,7 +6,10 @@ import { useSearchParams } from 'next/navigation';
 import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
-import { createBookingControlApi } from '@/lib/booking-control-api';
+import {
+  createBookingControlApi,
+  spaBookingEditHrefForBase,
+} from '@/lib/booking-control-api';
 
 function AdminBookingControlInner() {
   const searchParams = useSearchParams();
@@ -68,6 +71,7 @@ function AdminBookingControlInner() {
         if (!token) throw new Error('Нет сессии');
         await api.adminCancelSpaBooking(token, bookingId);
       }}
+      spaBookingEditHref={spaBookingEditHrefForBase('admin')}
       subtitle="ГП: проверьте отметки тренера, поставьте Прибыл/Не прибыл и подтвердите. Без подтверждения занятие не идёт в ЗП."
     />
   );

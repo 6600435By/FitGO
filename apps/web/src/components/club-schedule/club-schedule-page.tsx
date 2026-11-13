@@ -22,7 +22,10 @@ import { ClubScheduleWeekGrid } from '@/components/club-schedule/club-schedule-w
 import { DateField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
-import { createBookingControlApi } from '@/lib/booking-control-api';
+import {
+  createBookingControlApi,
+  spaBookingEditHrefForBase,
+} from '@/lib/booking-control-api';
 import {
   createTrainerBookingControlApi,
   trainerDeletePtBookingFromControl,
@@ -566,6 +569,11 @@ export function ClubSchedulePage({
                   if (!token) throw new Error('Нет сессии');
                   await api.adminCancelSpaBooking(token, bookingId);
                 }
+          }
+          spaBookingEditHref={
+            apiBase === 'admin' || apiBase === 'super-admin'
+              ? spaBookingEditHrefForBase(apiBase)
+              : undefined
           }
           deletePtBooking={
             isTrainer ? trainerDeletePtBookingFromControl : undefined

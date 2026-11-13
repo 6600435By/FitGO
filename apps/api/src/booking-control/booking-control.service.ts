@@ -1325,8 +1325,9 @@ export class BookingControlService {
         spaOneCTitle = settled.oneCTitle;
         spaLinkedSaleId = settled.linkedSaleExternalId;
         spaServiceId = spaBooking?.serviceId ?? spaBooking?.service?.id;
+        // Always offer RELINK for admin/manager/SA — wrong auto-match must be
+        // replaceable without opening a remark first.
         if (
-          open &&
           spaBooking &&
           spaLinkedSaleId &&
           (!spaLinkHint || spaLinkHint.kind === 'LINKED')
@@ -1639,11 +1640,8 @@ export class BookingControlService {
       const linkedSale =
         settled.linkedSaleExternalId ?? b.linkedSaleExternalId ?? undefined;
       let spaLinkHint = settled.hint;
-      if (
-        open &&
-        linkedSale &&
-        (!spaLinkHint || spaLinkHint.kind === 'LINKED')
-      ) {
+      // Always offer RELINK when a sale is linked (wrong auto-match).
+      if (linkedSale && (!spaLinkHint || spaLinkHint.kind === 'LINKED')) {
         spaLinkHint =
           (await this.buildSpaRelinkHint(clubId, {
             id: b.id,
@@ -6405,7 +6403,7 @@ export class BookingControlService {
     return {
       kind: 'RELINK',
       message:
-        'Привязана неверная продажа? Выберите другую — замечание останется открытым',
+        'Привязана неверная продажа? Выберите другую или отвяжите оплату',
       candidates,
     };
   }
