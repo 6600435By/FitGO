@@ -887,7 +887,8 @@ export class PayrollService {
     }
 
     // FitGO SPA with DEBT / PENDING — show in ЗП as «не в ЗП» (never pay).
-    // Overlay when a 1C visit already created a trusted unit for the same booking.
+    // Do NOT overlay onto units already built from a 1C visit: Onex paymentBasis
+    // (VIP/абонемент / оплачено) wins over a stale SpaBooking.paymentStatus=DEBT.
     for (const b of partnerSpaBookings) {
       if (
         b.paymentStatus !== 'DEBT' &&
@@ -900,13 +901,8 @@ export class PayrollService {
         title: b.service.name,
       });
       if (bioimpedance) continue;
-      if (spaPaidViaOnex.has(b.id)) {
-        const existing = units.find(
-          (u) => u.kind === 'SPA' && u.id === b.id && u.payrollTrusted,
-        );
-        if (existing) markSpaUnitAsUnpaidDebt(existing);
-        continue;
-      }
+      // Already have an Onex / linked unit for this booking — leave it alone.
+      if (spaPaidViaOnex.has(b.id)) continue;
       if (
         b.crmDocRef?.trim() &&
         onexSpa.some(
@@ -1025,9 +1021,9 @@ export class PayrollService {
         if (client) takenDayClient.add(dayClient);
       }
 
-      // Open ClubRevenue unpaid (scope=debt) for SPA services by Исполнитель:
-      // overlay trusted visit rows + emit missing lines so specialists see
-      // «Не оплачена (долг)» in the period (still not counted in totals).
+      // ClubRevenue unpaid (scope=debt): only overlay visits that already
+      // point at that sale id. Do not invent debt rows / day+client matches —
+      // that flooded ЗП and attached wrong «Продажа» links (бар/ЛС).
       const unpaidSpaRevenue = await this.prisma.clubRevenueEntry.findMany({
         where: {
           clubId,
@@ -1036,11 +1032,6 @@ export class PayrollService {
           occurredAt: { gte: fromD, lte: toD },
         },
       });
-      const takenUnpaidSaleExt = new Set(
-        units
-          .filter((u) => u.kind === 'SPA' && u.saleExternalId)
-          .map((u) => u.saleExternalId!.trim()),
-      );
       for (const sale of unpaidSpaRevenue) {
         if (!isCollectibleClientDebt(sale)) continue;
         if (clubRevenueHasPaidMoney(sale)) continue;
@@ -1052,69 +1043,17 @@ export class PayrollService {
           continue;
         }
         const saleExt = sale.externalId?.trim();
-        const day = sale.occurredAt.toISOString().slice(0, 10);
-        const clientKey = (sale.clientName ?? '')
-          .trim()
-          .toLowerCase()
-          .replace(/ё/g, 'е')
-          .replace(/\s+/g, ' ');
-        const dayClient = `${day}|${clientKey}`;
-
-        let overlaid = false;
+        if (!saleExt) continue;
         for (const u of units) {
-          if (u.kind !== 'SPA' || !u.payrollTrusted) continue;
-          const sameSale =
-            !!saleExt && u.saleExternalId?.trim() === saleExt;
-          const uDay = u.occurredAt.slice(0, 10);
-          const uClient = (u.clientName ?? '')
-            .trim()
-            .toLowerCase()
-            .replace(/ё/g, 'е')
-            .replace(/\s+/g, ' ');
-          // Day+client only when the visit has no linked sale yet — avoid
-          // untrusting a paid sibling visit the same day.
-          const sameDayClient =
-            !!clientKey &&
-            !u.saleExternalId?.trim() &&
-            `${uDay}|${uClient}` === dayClient;
-          if (!sameSale && !sameDayClient) continue;
-          markSpaUnitAsUnpaidDebt(u);
-          if (saleExt && !u.saleExternalId) u.saleExternalId = saleExt;
-          overlaid = true;
+          if (
+            u.kind === 'SPA' &&
+            u.payrollTrusted &&
+            !u.spaMembershipQuota &&
+            u.saleExternalId?.trim() === saleExt
+          ) {
+            markSpaUnitAsUnpaidDebt(u);
+          }
         }
-        if (overlaid) {
-          if (saleExt) takenUnpaidSaleExt.add(saleExt);
-          continue;
-        }
-        if (saleExt && takenUnpaidSaleExt.has(saleExt)) continue;
-
-        const debtMajor =
-          Number(sale.saleAmount) || Number(sale.amount) || 0;
-        const priceMinor =
-          debtMajor >= 0.01 ? Math.round(debtMajor * 100) : undefined;
-        const unitId = `debt:${saleExt || sale.id}`;
-        if (spaPaidViaOnex.has(unitId)) continue;
-        const spaUnit: WorkUnit = {
-          id: unitId,
-          kind: 'SPA',
-          performerId,
-          title: product || 'SPA',
-          occurredAt: sale.occurredAt.toISOString(),
-          quantity: 1,
-          priceMinor,
-          trustBand: 'RED',
-          trustResolution: 'NONE',
-          payrollTrusted: false,
-          clientName: sale.clientName ?? undefined,
-          serviceExternalId: sale.productExternalId ?? undefined,
-          sessionKey: fitgoSessionKey('SPA', unitId),
-          saleExternalId: saleExt || undefined,
-        };
-        markSpaUnitAsUnpaidDebt(spaUnit);
-        units.push(spaUnit);
-        remarkKeys.push(spaUnit.sessionKey!);
-        spaPaidViaOnex.add(unitId);
-        if (saleExt) takenUnpaidSaleExt.add(saleExt);
       }
     }
 

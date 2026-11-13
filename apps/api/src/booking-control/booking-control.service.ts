@@ -126,6 +126,7 @@ import {
   saleAmountMajor,
   saleIsComplimentaryPartner,
   saleIsSpaLinkCandidate,
+  salePaymentStatus,
   saleTakenBlocksSpaLink,
   namesMatch,
   serviceNamesMatch,
@@ -5874,6 +5875,35 @@ export class BookingControlService {
     };
   }
 
+  /**
+   * Resolve a previously linked ClubRevenue row even if sync deactivated it
+   * or the externalId key changed (cash/debt twin of the same document).
+   */
+  private async loadLinkedSpaSale(
+    clubId: string,
+    linkedId: string,
+  ): Promise<SpaSaleCandidate | null> {
+    const id = linkedId.trim();
+    if (!id) return null;
+    const head = (id.split(/[:#]/)[0] ?? '').trim();
+    const aliases =
+      head && /^[0-9a-f-]{36}$/i.test(head)
+        ? [
+            { externalId: head },
+            { externalId: { startsWith: `${head}:` } },
+            { documentId: head },
+          ]
+        : [];
+    const row = await this.prisma.clubRevenueEntry.findFirst({
+      where: {
+        clubId,
+        OR: [{ externalId: id }, ...aliases],
+      },
+      orderBy: [{ isActive: 'desc' }, { occurredAt: 'desc' }],
+    });
+    return row ? this.mapRevenueToSaleCandidate(row) : null;
+  }
+
   private async loadSpaSaleCandidates(
     clubId: string,
     booking: SpaBookingMatchInput,
@@ -5881,13 +5911,15 @@ export class BookingControlService {
     const win = debtSearchWindow(booking.startAt);
     const clientExt = booking.clientExternalId?.trim();
     const linkedId = booking.linkedSaleExternalId?.trim();
+    // Linked id must load even when isActive=false (sync cleanup) — otherwise
+    // control shows «Нет документа в 1С» and looks like the sale was unlinked.
     const rows = await this.prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
-        isActive: true,
         OR: [
           ...(linkedId ? [{ externalId: linkedId }] : []),
           {
+            isActive: true,
             occurredAt: { gte: win.from, lte: win.to },
             operationType: {
               in: ['payment', 'unpaid', 'sale', 'debt_writeoff'],
@@ -5908,7 +5940,15 @@ export class BookingControlService {
       orderBy: { occurredAt: 'desc' },
       take: 80,
     });
-    return rows.map((r) => this.mapRevenueToSaleCandidate(r));
+    const mapped = rows.map((r) => this.mapRevenueToSaleCandidate(r));
+    if (
+      linkedId &&
+      !mapped.some((s) => s.externalId === linkedId)
+    ) {
+      const linked = await this.loadLinkedSpaSale(clubId, linkedId);
+      if (linked) mapped.unshift(linked);
+    }
+    return mapped;
   }
 
   private async spaServiceIdByProduct(
@@ -5966,6 +6006,93 @@ export class BookingControlService {
   } | null> {
     if (!clubId || !booking?.id) return null;
     const blockAuto = Boolean(booking.saleAutoLinkBlocked);
+    const existingLink = booking.linkedSaleExternalId?.trim() || '';
+    // Honour a stored link even when soft-match would only offer «блок» hints.
+    // Sync may deactivate the exact externalId — still treat as linked.
+    if (!blockAuto && existingLink) {
+      const linkedSale = await this.loadLinkedSpaSale(clubId, existingLink);
+      if (!linkedSale) {
+        // Keep the link visible — do not fall through to «Нет документа в 1С».
+        return {
+          settlement: {
+            status: 'UNKNOWN',
+            label: 'Продажа привязана (нет строки в кэше — обновите из 1С)',
+            source: 'sale',
+            editableInApp: true,
+          },
+          payment: 'UNKNOWN',
+          payTag: 'SALE',
+          linkedSaleExternalId: existingLink,
+          hint: {
+            kind: 'SALE_MULTIPLE',
+            message: 'Привязанный документ не найден в кэше — выберите продажу',
+            candidates: [],
+          },
+        };
+      }
+      const complimentary = saleIsComplimentaryPartner(linkedSale);
+      const partnerPay =
+        complimentary ||
+        isSpaAllSportsBioimpedance({
+          serviceExternalId:
+            linkedSale.productExternalId ?? booking.service?.externalId,
+          title: linkedSale.productName ?? booking.service?.name,
+        });
+      const amountMajor = saleAmountMajor(linkedSale);
+      const amountMinor =
+        amountMajor > 0 ? Math.round(amountMajor * 100) : undefined;
+      const paymentStatus = salePaymentStatus(linkedSale);
+      // Repair booking pointer onto the live twin key when sync renamed it.
+      if (booking.linkedSaleExternalId !== linkedSale.externalId) {
+        await this.prisma.spaBooking
+          .update({
+            where: { id: booking.id },
+            data: {
+              linkedSaleExternalId: linkedSale.externalId,
+              oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+              saleAutoLinkBlocked: false,
+              ...(amountMinor != null && amountMinor > 0
+                ? { priceMinor: amountMinor }
+                : {}),
+              paymentStatus:
+                paymentStatus === 'PAID'
+                  ? ServicePaymentStatus.PAID
+                  : ServicePaymentStatus.DEBT,
+              ...(paymentStatus === 'PAID'
+                ? { paidAt: new Date(), eligibleForMotivation: true }
+                : { eligibleForMotivation: false }),
+            },
+          })
+          .catch(() => undefined);
+      }
+      if (paymentStatus === 'PAID') {
+        return {
+          settlement: {
+            status: 'PAID',
+            label: paidSaleSettlementLabel(linkedSale),
+            source: 'sale',
+            amountMinor,
+            editableInApp: false,
+          },
+          payment: partnerPay ? 'PARTNER' : 'PAID',
+          payTag: 'SALE',
+          linkedSaleExternalId: linkedSale.externalId,
+        };
+      }
+      return {
+        settlement: {
+          status: 'AWAITING_PAYMENT',
+          label: awaitingPaymentLabel(linkedSale),
+          source: 'sale',
+          amountMinor,
+          editableInApp: false,
+        },
+        payment: 'DEBT',
+        payTag: 'SALE',
+        linkedSaleExternalId: linkedSale.externalId,
+      };
+    }
+
     const matchInput = this.toSpaMatchInput({
       id: booking.id,
       startAt: booking.startAt,

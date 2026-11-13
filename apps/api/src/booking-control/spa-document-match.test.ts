@@ -99,6 +99,31 @@ function sale(
   }
 }
 
+// --- Stored link keeps auto even when only a cash-key twin is in the list ---
+{
+  const visit = new Date('2026-10-29T13:35:00.000Z');
+  const doc = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const b = booking({
+    id: 'b-linked-twin',
+    startAt: visit,
+    linkedSaleExternalId: `${doc}:1`,
+    serviceName: 'Массаж классический 25 мин',
+  });
+  const twin = sale({
+    externalId: `pay:${doc}:cash:card:cli:${doc}:ts:op`,
+    documentId: doc,
+    occurredAt: new Date('2026-10-20T13:26:00.000Z'),
+    productName: 'Блок массажа 10 новый',
+    saleAmount: 450,
+    paidAmount: 450,
+  });
+  const r = matchSpaSale({ booking: b, sales: [twin] });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.sale.externalId, twin.externalId);
+  }
+}
+
 // --- Debt sold another day, paid later still links by document ---
 {
   const visit = new Date('2026-10-19T07:00:00.000Z');

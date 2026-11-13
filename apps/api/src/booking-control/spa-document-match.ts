@@ -629,9 +629,24 @@ export function matchSpaSale(input: {
   const sales = collapseSpaSalesByBasis(input.sales);
   if (!blockAutoLink && booking.linkedSaleExternalId?.trim()) {
     const linkedId = booking.linkedSaleExternalId.trim();
-    const linked =
-      sales.find((s) => s.externalId === linkedId) ??
-      input.sales.find((s) => s.externalId === linkedId);
+    const linkedBasis = preferredSaleBasisId({
+      externalId: linkedId,
+      documentId: null,
+    });
+    const findLinked = (list: SpaSaleCandidate[]) =>
+      list.find((s) => s.externalId === linkedId) ??
+      list.find((s) => {
+        const basis = preferredSaleBasisId({
+          externalId: s.externalId,
+          documentId: s.documentId ?? null,
+        });
+        return (
+          basis === linkedBasis ||
+          s.documentId?.trim().toLowerCase() === linkedBasis ||
+          s.externalId.startsWith(`${linkedBasis}:`)
+        );
+      });
+    const linked = findLinked(sales) ?? findLinked(input.sales);
     if (linked) {
       const collapsed =
         sales.find((s) => s.externalId === linked.externalId) ?? linked;

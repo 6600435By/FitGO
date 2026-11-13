@@ -18,6 +18,8 @@ import {
   type ReportTabId,
 } from '@/components/payroll/employee-report';
 import {
+  pickSaleLinesForUnit,
+  scoreSaleLineForUnit,
   unitHasSalePeek,
   unitSaleSearchQuery,
 } from '@/components/payroll/employee-report/sale-links';
@@ -275,35 +277,72 @@ export function PayrollWorkspace({ mode }: Props) {
   /** Open sale card in-page (linked id or ClubRevenue search). */
   const openSaleForUnit = useCallback(
     async (u: WorkUnit) => {
-      if (unitHasSalePeek(u)) {
-        await openSalePeek(u.saleExternalId!.trim());
-        return;
-      }
-      const search = unitSaleSearchQuery(u);
-      if (!search) return;
       const token = getToken();
       if (!token) return;
-      setSaleDetailLoading(true);
-      setMessage('');
-      try {
-        const report = await api.superAdminClubSales(token, search);
-        const lines = report.lines ?? [];
-        if (lines.length === 0) {
+
+      const searchAndOpen = async () => {
+        const search = unitSaleSearchQuery({
+          ...u,
+          // Force search even when a stale saleExternalId was rejected.
+          saleExternalId: undefined,
+        });
+        if (!search) {
           setMessage('Продажа не найдена за период строки');
           return;
         }
-        if (lines.length === 1) {
-          await openSalePeek(lines[0]!.externalId);
-          return;
+        setSaleDetailLoading(true);
+        setMessage('');
+        try {
+          const report = await api.superAdminClubSales(token, search);
+          const lines = pickSaleLinesForUnit(u, report.lines ?? []);
+          if (lines.length === 0) {
+            setMessage(
+              'Подходящая продажа не найдена (отфильтрованы чужие товары клиента)',
+            );
+            return;
+          }
+          if (lines.length === 1) {
+            await openSalePeek(lines[0]!.externalId);
+            return;
+          }
+          setSalePicker({ lines, currency: report.currency });
+        } catch (e) {
+          setMessage(
+            e instanceof Error ? e.message : 'Не удалось найти продажу',
+          );
+        } finally {
+          setSaleDetailLoading(false);
         }
-        setSalePicker({ lines, currency: report.currency });
-      } catch (e) {
-        setMessage(
-          e instanceof Error ? e.message : 'Не удалось найти продажу',
-        );
-      } finally {
-        setSaleDetailLoading(false);
+      };
+
+      if (unitHasSalePeek(u)) {
+        const ext = u.saleExternalId!.trim();
+        setSaleDetailLoading(true);
+        setMessage('');
+        try {
+          const d = await api.superAdminClubSaleDetail(token, ext);
+          const score = scoreSaleLineForUnit(u, {
+            productName: d.line?.productName ?? null,
+            clientName: d.line?.clientName ?? null,
+            occurredAt: d.line?.occurredAt ?? '',
+          });
+          // Linked id points at bar/ЛС / other client product — search instead.
+          if (score < 0 && (u.kind === 'SPA' || u.kind === 'PT')) {
+            await searchAndOpen();
+            return;
+          }
+          setSaleDetail(d);
+        } catch (e) {
+          setMessage(
+            e instanceof Error ? e.message : 'Не удалось открыть продажу',
+          );
+        } finally {
+          setSaleDetailLoading(false);
+        }
+        return;
       }
+
+      await searchAndOpen();
     },
     [openSalePeek],
   );
