@@ -3,6 +3,7 @@ import type { WorkUnit } from '@fitgo/shared-types';
 import {
   PAYROLL_DEBT_HINT,
   dedupeSpaPayrollUnits,
+  payrollClientNamesMatch,
   preferSpaPayrollUnit,
   spaUnitCoversVisit,
 } from './spa-payroll-debt';
@@ -24,48 +25,83 @@ function spa(
 }
 
 {
-  const trusted = spa({
-    id: 'onex:1',
-    occurredAt: '2026-10-29T13:35:00.000Z',
-    title: 'Массаж классический 25 мин (блок)',
-  });
   assert.equal(
-    spaUnitCoversVisit(
-      [trusted],
-      'Князева Алёна',
-      new Date('2026-10-29T13:40:00.000Z'),
-      { onlyTrusted: true },
-    ),
+    payrollClientNamesMatch('Петров Андрей', 'Петров Андрей Юрьевич'),
     true,
   );
   assert.equal(
-    spaUnitCoversVisit(
-      [trusted],
-      'Другой Клиент',
-      new Date('2026-10-29T13:40:00.000Z'),
-    ),
+    payrollClientNamesMatch('Бич Татьяна', 'Бич Татьяна Александровна'),
+    true,
+  );
+  assert.equal(
+    payrollClientNamesMatch('Петров Андрей', 'Сидоров Иван'),
     false,
   );
 }
 
 {
-  const paid = spa({
+  const trusted = spa({
     id: 'onex:1',
-    occurredAt: '2026-10-29T13:35:00.000Z',
+    occurredAt: '2026-10-29T15:00:00.000Z',
+    title: 'Массаж классический общий (абонемент)',
+    clientName: 'Петров Андрей Юрьевич',
+    spaMembershipQuota: true,
+  });
+  assert.equal(
+    spaUnitCoversVisit(
+      [trusted],
+      'Петров Андрей',
+      new Date('2026-10-29T15:00:00.000Z'),
+      { onlyTrusted: true },
+    ),
+    true,
+  );
+}
+
+{
+  const abo = spa({
+    id: 'onex:vip',
+    occurredAt: '2026-10-29T15:00:00.000Z',
+    title: 'Массаж классический общий (абонемент)',
+    clientName: 'Бич Татьяна Александровна',
     payrollTrusted: true,
-    saleExternalId: 'pack-1',
+    spaMembershipQuota: true,
+    priceMinor: 0,
+    earnMinor: 2000,
   });
   const debt = spa({
     id: 'fitgo-debt',
-    occurredAt: '2026-10-29T13:35:00.000Z',
+    occurredAt: '2026-10-29T15:00:00.000Z',
+    title: 'Массаж классический 50 мин',
+    clientName: 'Бич Татьяна',
     payrollTrusted: false,
     trustBand: 'RED',
     trustHints: [PAYROLL_DEBT_HINT],
+    priceMinor: 9000,
   });
-  assert.equal(preferSpaPayrollUnit(paid, debt), paid);
-  const out = dedupeSpaPayrollUnits([paid, debt]);
+  assert.equal(preferSpaPayrollUnit(abo, debt), abo);
+  const out = dedupeSpaPayrollUnits([abo, debt]);
   assert.equal(out.length, 1);
-  assert.equal(out[0]?.id, 'onex:1');
+  assert.equal(out[0]?.id, 'onex:vip');
+}
+
+{
+  const petrovAbo = spa({
+    id: 'onex:p',
+    occurredAt: '2026-10-29T15:00:00.000Z',
+    title: 'Массаж классический общий (абонемент)',
+    clientName: 'Петров Андрей Юрьевич',
+    spaMembershipQuota: true,
+  });
+  const petrovDebt = spa({
+    id: 'fitgo-p',
+    occurredAt: '2026-10-29T15:00:00.000Z',
+    title: 'Массаж классический 50 мин',
+    clientName: 'Петров Андрей',
+    payrollTrusted: false,
+    trustHints: [PAYROLL_DEBT_HINT],
+  });
+  assert.equal(dedupeSpaPayrollUnits([petrovAbo, petrovDebt]).length, 1);
 }
 
 {

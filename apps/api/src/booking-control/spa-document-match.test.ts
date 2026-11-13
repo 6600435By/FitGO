@@ -142,7 +142,7 @@ function sale(
   }
 }
 
-// --- Unpaid multi-visit pack is not a visit payment candidate ---
+// --- Multi-visit pack purchase is never a visit payment candidate ---
 {
   const visit = new Date('2026-10-29T13:35:00.000Z');
   const b = booking({
@@ -150,7 +150,7 @@ function sale(
     startAt: visit,
     serviceName: 'Массаж классический 25 мин',
   });
-  const pack = sale({
+  const unpaid = sale({
     externalId: 'sale-pack-unpaid',
     occurredAt: new Date('2026-10-20T13:26:00.000Z'),
     productName: 'Блок массажа 10 новый',
@@ -158,8 +158,15 @@ function sale(
     paidAmount: 0,
     operationType: 'unpaid',
   });
-  const r = matchSpaSale({ booking: b, sales: [pack] });
-  assert.equal(r.kind, 'none');
+  const paid = sale({
+    externalId: 'sale-pack-paid',
+    occurredAt: new Date('2026-10-20T15:47:00.000Z'),
+    productName: 'Блок массажа 10 новый',
+    saleAmount: 675,
+    paidAmount: 675,
+  });
+  assert.equal(matchSpaSale({ booking: b, sales: [unpaid] }).kind, 'none');
+  assert.equal(matchSpaSale({ booking: b, sales: [paid] }).kind, 'none');
 }
 
 // --- Other nomenclature → hint ---
@@ -728,7 +735,7 @@ assert.equal(namesMatch('Бирюкова Екатерина', 'Бирюкова
   assert.equal(onlyCafe.kind, 'none');
 }
 
-// Taken retail SPA sale is blocked; massage block may still be offered.
+// Taken retail SPA sale is blocked; massage block purchase is never offered.
 {
   const visit = new Date('2026-10-19T07:00:00.000Z');
   const b = booking({ id: 'b-block', startAt: visit });
@@ -757,13 +764,7 @@ assert.equal(namesMatch('Бирюкова Екатерина', 'Бирюкова
     sales: [takenRetail, block],
     takenSaleIds: new Set(['sale-taken-retail', 'sale-mass-block']),
   });
-  // Exact auto would need same service name; block ≠ «Массаж классический 50 мин»
-  // → other nomenclature hint with only the block (taken retail filtered out).
-  assert.equal(r.kind, 'hint');
-  if (r.kind === 'hint') {
-    assert.equal(r.hint.candidates.length, 1);
-    assert.equal(r.hint.candidates[0]?.externalId, 'sale-mass-block');
-  }
+  assert.equal(r.kind, 'none');
 }
 
 // Guest booking (no clientExternalId) + 50% discount sale (catalog 80 → paid 40).

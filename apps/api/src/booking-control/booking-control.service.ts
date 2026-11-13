@@ -5459,7 +5459,16 @@ export class BookingControlService {
       // Matching ignores catalog vs sale amount (manual % discounts etc.).
       if (!isQuota) {
         const saleHit = await this.tryResolveSpaSale(booking, input.clubId);
+        if (saleHit && saleHit.settlement.status !== 'NOT_IN_1C') {
+          return saleHit;
+        }
+        // VIP / pack write-off in Onex by FIO — before asking to link client.
+        const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId);
+        if (dayHit) return dayHit;
         if (saleHit) return saleHit;
+      } else {
+        const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId);
+        if (dayHit) return dayHit;
       }
       return {
         settlement: {
@@ -5620,8 +5629,14 @@ export class BookingControlService {
 
     // Linked / soft-matched ClubRevenueEntry sale (reception без bookingRef).
     // Skip when this detail is already a 1C visit row — pay from the visit.
+    // Soft sale hints (pack leftovers) must not block VIP/абонемент day-merge.
     if (booking && !onex) {
       const saleHit = await this.tryResolveSpaSale(booking, input.clubId);
+      if (saleHit && saleHit.settlement.status !== 'NOT_IN_1C') {
+        return saleHit;
+      }
+      const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId);
+      if (dayHit) return dayHit;
       if (saleHit) return saleHit;
     }
 
@@ -5751,6 +5766,12 @@ export class BookingControlService {
         payment: 'UNKNOWN',
         payTag: 'SALE',
       };
+    }
+
+    // FitGO slot marked PAID/sale but 1C posted VIP / pack write-off same day.
+    if (booking) {
+      const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId);
+      if (dayHit) return dayHit;
     }
 
     return {
@@ -6265,7 +6286,7 @@ export class BookingControlService {
     return null;
   }
 
-  /** SPA / massage-block sales only; skip retail already linked elsewhere. */
+  /** Retail SPA sales for link UI; skip packs and retail already linked elsewhere. */
   private mapSpaSaleLinkCandidates(
     sales: SpaSaleCandidate[],
     serviceMap: Map<string, string>,
@@ -6276,6 +6297,7 @@ export class BookingControlService {
       .filter(
         (s) =>
           saleIsSpaLinkCandidate(s, serviceMap) &&
+          !isMultiVisitPackSale(s.productName) &&
           !saleTakenBlocksSpaLink(s, takenSaleIds),
       )
       .slice(0, limit)
@@ -6454,32 +6476,59 @@ export class BookingControlService {
     const sessions = await this.prisma.onexClassSession.findMany({
       where: {
         clubId,
-        kind: OnexClassKind.SPA,
         isActive: true,
         startAt: { gte: from, lte: to },
         status: { not: OnexClassStatus.CANCELLED },
+        OR: [
+          { kind: OnexClassKind.SPA },
+          // 1C sometimes tags VIP massage as PT until re-sync.
+          { kind: OnexClassKind.PT, title: { contains: 'массаж', mode: 'insensitive' } },
+        ],
       },
       include: { members: true },
     });
+    const onexSessions = sessions
+      .filter(
+        (o) =>
+          o.kind === OnexClassKind.SPA || isSpaLikeSessionTitle(o.title),
+      )
+      .map((o) => this.toSpaOnexCandidate(o));
     const result = matchSpaVisitByDay({
       booking: matchInput,
-      onexSessions: sessions.map((o) => this.toSpaOnexCandidate(o)),
+      onexSessions,
     });
     if (result.kind === 'auto') {
       const o = result.onex;
+      const member = o.members.find((m) => !m.cancelled) ?? o.members[0];
+      const membershipName =
+        membershipNameFromPaymentBasis(member?.paymentBasis) ||
+        booking.membershipServiceName?.trim() ||
+        undefined;
+      const basisPay = inferPaymentFromBasis(member?.paymentBasis);
+      const asQuota =
+        basisPay === 'QUOTA' ||
+        (member?.paySource ?? '').toUpperCase() === 'PACKAGE' ||
+        Boolean(membershipName);
       await this.prisma.spaBooking
         .update({
           where: { id: booking.id },
           data: {
             crmDocRef: o.externalId,
             oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+            ...(asQuota
+              ? {
+                  paymentType: SpaPaymentType.QUOTA,
+                  paymentStatus: ServicePaymentStatus.PAID,
+                  paidAt: new Date(),
+                  eligibleForMotivation: true,
+                  ...(membershipName
+                    ? { membershipServiceName: membershipName }
+                    : {}),
+                }
+              : {}),
           },
         })
         .catch(() => undefined);
-      const membershipName =
-        membershipNameFromPaymentBasis(
-          o.members.find((m) => !m.cancelled)?.paymentBasis,
-        ) || booking.membershipServiceName?.trim() || undefined;
       const serviceTitle = booking.service?.name?.trim();
       return {
         settlement: {

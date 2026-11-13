@@ -1,4 +1,5 @@
 import type { WorkUnit } from '@fitgo/shared-types';
+import { namesMatch } from '../booking-control/spa-document-match';
 
 /** SPA / PT debt row: shown in period detail, never counted in ЗП totals. */
 export const PAYROLL_DEBT_HINT = 'Долг, в расчёт не входит';
@@ -16,8 +17,25 @@ export function normalizePayrollClientKey(
     .replace(/\s+/g, ' ');
 }
 
+/** Same person: exact key or FIO soft-match («Петров Андрей» ≈ «Петров Андрей Юрьевич»). */
+export function payrollClientNamesMatch(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const ka = normalizePayrollClientKey(a);
+  const kb = normalizePayrollClientKey(b);
+  if (!ka || !kb) return false;
+  if (ka === kb) return true;
+  return namesMatch(a, b);
+}
+
 export function spaUnitHasDebtHint(u: WorkUnit): boolean {
   return Boolean(u.trustHints?.includes(PAYROLL_DEBT_HINT));
+}
+
+function looksMembershipSpa(u: WorkUnit): boolean {
+  if (u.spaMembershipQuota) return true;
+  return /\(абонемент\)/i.test(u.title ?? '');
 }
 
 /**
@@ -30,14 +48,13 @@ export function spaUnitCoversVisit(
   startAt: Date,
   opts?: { onlyTrusted?: boolean; excludeId?: string },
 ): boolean {
-  const client = normalizePayrollClientKey(clientName);
-  if (!client) return false;
+  if (!normalizePayrollClientKey(clientName)) return false;
   const t = startAt.getTime();
   for (const u of units) {
     if (u.kind !== 'SPA') continue;
     if (opts?.excludeId && u.id === opts.excludeId) continue;
     if (opts?.onlyTrusted && !u.payrollTrusted) continue;
-    if (normalizePayrollClientKey(u.clientName) !== client) continue;
+    if (!payrollClientNamesMatch(u.clientName, clientName)) continue;
     const ut = new Date(u.occurredAt).getTime();
     if (Number.isFinite(ut) && Math.abs(ut - t) <= SPA_VISIT_COVER_WINDOW_MS) {
       return true;
@@ -54,6 +71,9 @@ export function preferSpaPayrollUnit(a: WorkUnit, b: WorkUnit): WorkUnit {
   const aDebt = spaUnitHasDebtHint(a);
   const bDebt = spaUnitHasDebtHint(b);
   if (aDebt !== bDebt) return aDebt ? b : a;
+  const aMem = looksMembershipSpa(a);
+  const bMem = looksMembershipSpa(b);
+  if (aMem !== bMem) return aMem ? a : b;
   const aOnex = a.id.startsWith('onex:');
   const bOnex = b.id.startsWith('onex:');
   // Prefer the row that still carries a sale / pack link for «Продажа».
@@ -67,7 +87,7 @@ export function preferSpaPayrollUnit(a: WorkUnit, b: WorkUnit): WorkUnit {
 
 /**
  * Collapse SPA twins (same client + close time): keep one unit.
- * Drops FitGO «не оплачено» when 1C already has the block write-off.
+ * Drops FitGO «не оплачено» when 1C already has the membership/block write-off.
  */
 export function dedupeSpaPayrollUnits(units: WorkUnit[]): WorkUnit[] {
   const spaIdx: number[] = [];
@@ -81,15 +101,14 @@ export function dedupeSpaPayrollUnits(units: WorkUnit[]): WorkUnit[] {
     const ia = spaIdx[a]!;
     if (drop.has(ia)) continue;
     const ua = units[ia]!;
-    const client = normalizePayrollClientKey(ua.clientName);
-    if (!client) continue;
+    if (!normalizePayrollClientKey(ua.clientName)) continue;
     const ta = new Date(ua.occurredAt).getTime();
     if (!Number.isFinite(ta)) continue;
     for (let b = a + 1; b < spaIdx.length; b++) {
       const ib = spaIdx[b]!;
       if (drop.has(ib)) continue;
       const ub = units[ib]!;
-      if (normalizePayrollClientKey(ub.clientName) !== client) continue;
+      if (!payrollClientNamesMatch(ua.clientName, ub.clientName)) continue;
       const tb = new Date(ub.occurredAt).getTime();
       if (!Number.isFinite(tb)) continue;
       if (Math.abs(ta - tb) > SPA_VISIT_COVER_WINDOW_MS) continue;

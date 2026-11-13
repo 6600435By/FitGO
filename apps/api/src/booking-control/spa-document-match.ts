@@ -512,15 +512,18 @@ export function nomenclatureMatches(
 }
 
 /**
- * Sale product is a SPA catalog row, spa-like title, or multi-visit massage block.
- * Bars / café / PT one-offs must not appear in booking-control link hints.
+ * Sale product is a SPA catalog / spa-like retail title for visit linking.
+ * Multi-visit pack purchases («Блок массажа 10») are not visit payment docs —
+ * they must not appear in «Привязать» hints (write-offs pay motivation).
+ * Bars / café / PT one-offs must not appear either.
  */
 export function saleIsSpaLinkCandidate(
   sale: SpaSaleCandidate,
   serviceIdByProduct?: Map<string, string>,
 ): boolean {
+  if (isMultiVisitPackSale(sale.productName)) return false;
+  if (isServiceBlockPackageName(sale.productName)) return false;
   if (isSpaLikeSessionTitle(sale.productName)) return true;
-  if (isServiceBlockPackageName(sale.productName)) return true;
   if (!serviceIdByProduct) return false;
   if (sale.productExternalId?.trim()) {
     if (serviceIdByProduct.has(sale.productExternalId.trim())) return true;
@@ -688,9 +691,9 @@ export function matchSpaSale(input: {
     if (!inWindow(s)) return false;
     if (!clientMatchesSale(s, booking)) return false;
     if (!saleIsSpaLinkCandidate(s, serviceIdByProduct)) return false;
-    // Unpaid multi-visit packs («Блок массажа 10») are not visit payment docs —
-    // they flooded «не оплачено» / Привязать. Paid packs may still be offered.
-    if (isMultiVisitPackSale(s.productName) && !saleIsPaid(s)) return false;
+    // Multi-visit pack purchases («Блок массажа 10») are not visit payment docs —
+    // motivation comes from 1C write-offs. Do not offer them as «Привязать».
+    if (isMultiVisitPackSale(s.productName)) return false;
     return true;
   });
   if (forClient.length === 0) return { kind: 'none' };
