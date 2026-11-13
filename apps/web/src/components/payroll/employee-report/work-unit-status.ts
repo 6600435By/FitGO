@@ -53,9 +53,12 @@ export function classifyWorkUnit(u: WorkUnit): WorkUnitStatus {
         : u.trustBand === 'AMBER'
           ? 'ожидает подтверждения'
           : 'не в ЗП');
+    const isDebt = (u.trustHints ?? []).some((h) =>
+      /долг|не оплачен/i.test(h),
+    );
     return {
       level: 'excluded',
-      label: 'не в ЗП',
+      label: isDebt ? 'не оплачено' : 'не в ЗП',
       reason,
     };
   }

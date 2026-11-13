@@ -150,6 +150,9 @@ function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   return p;
 }
 
+/** SPA / PT debt row: shown in period detail, never counted in ЗП totals. */
+const PAYROLL_DEBT_HINT = 'Долг, в расчёт не входит';
+
 /** Append a payroll trust hint and raise the band (worst wins). */
 function pushWorkUnitTrust(
   u: WorkUnit,
@@ -160,6 +163,12 @@ function pushWorkUnitTrust(
   if (!hints.includes(hint)) hints.push(hint);
   u.trustHints = hints;
   u.trustBand = worstTrustBand([u.trustBand, band]);
+}
+
+/** Mark SPA line as unpaid debt — visible «не в ЗП», not paid. */
+function markSpaUnitAsUnpaidDebt(u: WorkUnit): void {
+  u.payrollTrusted = false;
+  pushWorkUnitTrust(u, 'RED', PAYROLL_DEBT_HINT);
 }
 
 /** Default / payment / catalog hints after remark and GROUP gates. */
@@ -721,6 +730,7 @@ export class PayrollService {
     const spaPaidViaOnex = new Set(
       units.filter((u) => u.kind === 'SPA').map((u) => u.id),
     );
+    // Include DEBT / PENDING so unpaid sales appear as «не в ЗП» (not paid).
     const linkedSpaBookings = await this.prisma.spaBooking.findMany({
       where: {
         clubId,
@@ -728,7 +738,6 @@ export class PayrollService {
         linkedSaleExternalId: { not: null },
         startAt: { gte: fromD, lte: toD },
         status: { not: 'CANCELLED' },
-        paymentStatus: 'PAID',
       },
       include: { service: true, client: true },
     });
@@ -753,15 +762,53 @@ export class PayrollService {
         serviceExternalId: b.service.externalId,
         title: b.service.name,
       });
-      // Debt / unpaid: never pay SPA from saleAmount — except СписаниеЗадолженности
-      // (debt_writeoff): specialist gets % from the written-off amount.
-      const debtWriteOff = clubRevenueIsDebtWriteOff(sale);
-      if (!clubRevenueHasPaidMoney(sale) && !bioimpedance && !debtWriteOff) {
-        continue;
-      }
       // Multi-visit pack sale («Блок массажа 10») is not SPA motivation —
       // only conducted write-offs pay (pack amount / N).
       if (isMultiVisitPackSale(sale.productName)) continue;
+      const clientName = b.client
+        ? `${b.client.lastName} ${b.client.firstName}`.trim()
+        : b.guestName ?? undefined;
+      const partnerSource =
+        bioimpedance || b.partnerSource?.toUpperCase() === 'ALLSPORTS'
+          ? 'ALLSPORTS'
+          : b.partnerSource ?? undefined;
+      // Debt / unpaid: never pay SPA from saleAmount — except СписаниеЗадолженности
+      // (debt_writeoff): specialist gets % from the written-off amount.
+      const debtWriteOff = clubRevenueIsDebtWriteOff(sale);
+      const unpaidSale =
+        !clubRevenueHasPaidMoney(sale) && !bioimpedance && !debtWriteOff;
+      if (unpaidSale) {
+        const debtMajor =
+          Number(sale.saleAmount) || Number(sale.amount) || 0;
+        const priceMinor =
+          debtMajor >= 0.01
+            ? Math.round(debtMajor * 100)
+            : (b.priceMinor ?? b.service.priceMinor ?? undefined);
+        const spaUnit: WorkUnit = {
+          id: b.id,
+          kind: 'SPA',
+          performerId,
+          title: b.service.name,
+          occurredAt: b.startAt.toISOString(),
+          quantity: 1,
+          priceMinor,
+          trustBand: 'RED',
+          trustResolution: 'NONE',
+          payrollTrusted: false,
+          clientName,
+          serviceId: b.serviceId,
+          serviceExternalId: b.service.externalId ?? undefined,
+          partnerSource,
+          isSpaAllSportsBioimpedance: bioimpedance,
+          sessionKey: fitgoSessionKey('SPA', b.id),
+          saleExternalId: saleExt,
+        };
+        markSpaUnitAsUnpaidDebt(spaUnit);
+        units.push(spaUnit);
+        remarkKeys.push(fitgoSessionKey('SPA', b.id));
+        spaPaidViaOnex.add(b.id);
+        continue;
+      }
       const amountMajor = debtWriteOff
         ? Number(sale.saleAmount) || 0
         : Number(sale.paidAmount) ||
@@ -773,9 +820,6 @@ export class PayrollService {
       // Free AllSports биоимпеданс: 0 BYN in 1C, pay spaPartnerRateMinor from profile.
       if (amountMajor < 0.01 && !bioimpedance) continue;
       const priceMinor = Math.round(amountMajor * 100);
-      const clientName = b.client
-        ? `${b.client.lastName} ${b.client.firstName}`.trim()
-        : b.guestName ?? undefined;
       units.push({
         id: b.id,
         kind: 'SPA',
@@ -790,10 +834,7 @@ export class PayrollService {
         clientName,
         serviceId: b.serviceId,
         serviceExternalId: b.service.externalId ?? undefined,
-        partnerSource:
-          bioimpedance || b.partnerSource?.toUpperCase() === 'ALLSPORTS'
-            ? 'ALLSPORTS'
-            : b.partnerSource ?? undefined,
+        partnerSource,
         isSpaAllSportsBioimpedance: bioimpedance,
         sessionKey: fitgoSessionKey('SPA', b.id),
         saleExternalId: saleExt,
@@ -841,6 +882,63 @@ export class PayrollService {
         sessionKey: fitgoSessionKey('SPA', b.id),
         saleExternalId: b.linkedSaleExternalId?.trim() || undefined,
       });
+      remarkKeys.push(fitgoSessionKey('SPA', b.id));
+      spaPaidViaOnex.add(b.id);
+    }
+
+    // FitGO SPA with DEBT / PENDING — show in ЗП as «не в ЗП» (never pay).
+    // Overlay when a 1C visit already created a trusted unit for the same booking.
+    for (const b of partnerSpaBookings) {
+      if (
+        b.paymentStatus !== 'DEBT' &&
+        b.paymentStatus !== 'PENDING_PAYMENT'
+      ) {
+        continue;
+      }
+      const bioimpedance = isSpaAllSportsBioimpedance({
+        serviceExternalId: b.service.externalId,
+        title: b.service.name,
+      });
+      if (bioimpedance) continue;
+      if (spaPaidViaOnex.has(b.id)) {
+        const existing = units.find(
+          (u) => u.kind === 'SPA' && u.id === b.id && u.payrollTrusted,
+        );
+        if (existing) markSpaUnitAsUnpaidDebt(existing);
+        continue;
+      }
+      if (
+        b.crmDocRef?.trim() &&
+        onexSpa.some(
+          (o) =>
+            o.externalId === b.crmDocRef || o.number === b.crmDocRef,
+        )
+      ) {
+        continue;
+      }
+      const clientName = b.client
+        ? `${b.client.lastName} ${b.client.firstName}`.trim()
+        : b.guestName ?? undefined;
+      const spaUnit: WorkUnit = {
+        id: b.id,
+        kind: 'SPA',
+        performerId,
+        title: b.service.name,
+        occurredAt: b.startAt.toISOString(),
+        quantity: 1,
+        priceMinor: b.priceMinor ?? b.service.priceMinor ?? undefined,
+        trustBand: 'RED',
+        trustResolution: 'NONE',
+        payrollTrusted: false,
+        clientName,
+        serviceId: b.serviceId,
+        serviceExternalId: b.service.externalId ?? undefined,
+        partnerSource: b.partnerSource ?? undefined,
+        sessionKey: fitgoSessionKey('SPA', b.id),
+        saleExternalId: b.linkedSaleExternalId?.trim() || undefined,
+      };
+      markSpaUnitAsUnpaidDebt(spaUnit);
+      units.push(spaUnit);
       remarkKeys.push(fitgoSessionKey('SPA', b.id));
       spaPaidViaOnex.add(b.id);
     }
@@ -925,6 +1023,98 @@ export class PayrollService {
         spaPaidViaOnex.add(unitId);
         if (saleExt) takenSaleExt.add(saleExt);
         if (client) takenDayClient.add(dayClient);
+      }
+
+      // Open ClubRevenue unpaid (scope=debt) for SPA services by Исполнитель:
+      // overlay trusted visit rows + emit missing lines so specialists see
+      // «Не оплачена (долг)» in the period (still not counted in totals).
+      const unpaidSpaRevenue = await this.prisma.clubRevenueEntry.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          operationType: 'unpaid',
+          occurredAt: { gte: fromD, lte: toD },
+        },
+      });
+      const takenUnpaidSaleExt = new Set(
+        units
+          .filter((u) => u.kind === 'SPA' && u.saleExternalId)
+          .map((u) => u.saleExternalId!.trim()),
+      );
+      for (const sale of unpaidSpaRevenue) {
+        if (!isCollectibleClientDebt(sale)) continue;
+        if (clubRevenueHasPaidMoney(sale)) continue;
+        if (clubRevenueIsDebtWriteOff(sale)) continue;
+        const product = sale.productName ?? '';
+        if (!isSpaLikeSessionTitle(product)) continue;
+        if (isMultiVisitPackSale(product)) continue;
+        if (!revenueMatchesSpaPerformer(sale, performerCodes, performerName)) {
+          continue;
+        }
+        const saleExt = sale.externalId?.trim();
+        const day = sale.occurredAt.toISOString().slice(0, 10);
+        const clientKey = (sale.clientName ?? '')
+          .trim()
+          .toLowerCase()
+          .replace(/ё/g, 'е')
+          .replace(/\s+/g, ' ');
+        const dayClient = `${day}|${clientKey}`;
+
+        let overlaid = false;
+        for (const u of units) {
+          if (u.kind !== 'SPA' || !u.payrollTrusted) continue;
+          const sameSale =
+            !!saleExt && u.saleExternalId?.trim() === saleExt;
+          const uDay = u.occurredAt.slice(0, 10);
+          const uClient = (u.clientName ?? '')
+            .trim()
+            .toLowerCase()
+            .replace(/ё/g, 'е')
+            .replace(/\s+/g, ' ');
+          // Day+client only when the visit has no linked sale yet — avoid
+          // untrusting a paid sibling visit the same day.
+          const sameDayClient =
+            !!clientKey &&
+            !u.saleExternalId?.trim() &&
+            `${uDay}|${uClient}` === dayClient;
+          if (!sameSale && !sameDayClient) continue;
+          markSpaUnitAsUnpaidDebt(u);
+          if (saleExt && !u.saleExternalId) u.saleExternalId = saleExt;
+          overlaid = true;
+        }
+        if (overlaid) {
+          if (saleExt) takenUnpaidSaleExt.add(saleExt);
+          continue;
+        }
+        if (saleExt && takenUnpaidSaleExt.has(saleExt)) continue;
+
+        const debtMajor =
+          Number(sale.saleAmount) || Number(sale.amount) || 0;
+        const priceMinor =
+          debtMajor >= 0.01 ? Math.round(debtMajor * 100) : undefined;
+        const unitId = `debt:${saleExt || sale.id}`;
+        if (spaPaidViaOnex.has(unitId)) continue;
+        const spaUnit: WorkUnit = {
+          id: unitId,
+          kind: 'SPA',
+          performerId,
+          title: product || 'SPA',
+          occurredAt: sale.occurredAt.toISOString(),
+          quantity: 1,
+          priceMinor,
+          trustBand: 'RED',
+          trustResolution: 'NONE',
+          payrollTrusted: false,
+          clientName: sale.clientName ?? undefined,
+          serviceExternalId: sale.productExternalId ?? undefined,
+          sessionKey: fitgoSessionKey('SPA', unitId),
+          saleExternalId: saleExt || undefined,
+        };
+        markSpaUnitAsUnpaidDebt(spaUnit);
+        units.push(spaUnit);
+        remarkKeys.push(spaUnit.sessionKey!);
+        spaPaidViaOnex.add(unitId);
+        if (saleExt) takenUnpaidSaleExt.add(saleExt);
       }
     }
 
@@ -1556,7 +1746,8 @@ export class PayrollService {
         u.kind === 'SPA' &&
         u.id &&
         !String(u.id).startsWith('onex:') &&
-        !String(u.id).startsWith('revbio:')
+        !String(u.id).startsWith('revbio:') &&
+        !String(u.id).startsWith('debt:')
       ) {
         remarkAliases.push(fitgoSessionKey('SPA', u.id));
       }
@@ -4220,8 +4411,11 @@ export class PayrollService {
       return a <= toT && b >= fromT;
     });
 
+    // Debt rows are shown as «не в ЗП» but are not «needs confirmation».
     const unconfirmedCount = summary.workUnits.filter(
-      (u) => !u.payrollTrusted,
+      (u) =>
+        !u.payrollTrusted &&
+        !u.trustHints?.includes(PAYROLL_DEBT_HINT),
     ).length;
     const unpaidCount = unpaidItems.filter(
       (i) => i.kind === 'PT' || i.kind === 'SPA',

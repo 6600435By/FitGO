@@ -134,7 +134,13 @@ export default function PayrollPage() {
                       <p style={{ color: 'var(--muted)' }}>
                         {new Date(u.occurredAt).toLocaleDateString('ru-RU')}
                         {u.clientName ? ` · ${u.clientName}` : ''}
-                        {u.payrollTrusted ? '' : ' · не в ЗП'}
+                        {u.payrollTrusted
+                          ? ''
+                          : u.trustHints?.some((h) =>
+                                /долг|не оплачен/i.test(h),
+                              )
+                            ? ' · не оплачено'
+                            : ' · не в ЗП'}
                       </p>
                     </div>
                     <p className="tabular-nums">

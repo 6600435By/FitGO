@@ -1120,7 +1120,13 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
                           <PayWaveBadge wave={u.payWave} />
                         ) : null}
                         {!u.payrollTrusted ? (
-                          <span className="ml-1 text-amber-300">· ждёт</span>
+                          <span className="ml-1 text-amber-300">
+                            {u.trustHints?.some((h) =>
+                              /долг|не оплачен/i.test(h),
+                            )
+                              ? '· не оплачено'
+                              : '· ждёт'}
+                          </span>
                         ) : null}
                         {u.sessionKey ? (
                           <button
@@ -1156,14 +1162,18 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
                           trustHints={u.trustHints}
                         />
                         <span>
-                          {u.earnMinor != null && u.earnMinor > 0 ? (
+                          {u.payrollTrusted &&
+                          u.earnMinor != null &&
+                          u.earnMinor > 0 ? (
                             <span className="block text-emerald-300">
                               {money(u.earnMinor, currency)}
                             </span>
                           ) : null}
                           <span
                             className={
-                              u.earnMinor != null && u.earnMinor > 0
+                              u.payrollTrusted &&
+                              u.earnMinor != null &&
+                              u.earnMinor > 0
                                 ? 'text-[11px] text-slate-500'
                                 : undefined
                             }
