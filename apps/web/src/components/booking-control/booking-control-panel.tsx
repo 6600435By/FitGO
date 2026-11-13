@@ -160,6 +160,16 @@ export type BookingControlApi = {
     sessionKey: string,
     adminComment?: string,
   ) => Promise<unknown>;
+  /** Manager/SA: permanently remove session from payroll (staff list hides it). */
+  excludeFromPayroll?: (
+    sessionKey: string,
+    reason?: string,
+  ) => Promise<unknown>;
+  /** Manager/SA: undo excludeFromPayroll. */
+  restoreToPayroll?: (
+    sessionKey: string,
+    comment?: string,
+  ) => Promise<unknown>;
   /** Club admins/managers for remark assignee picker (manager/SA). */
   listRemarkAssignees?: () => Promise<BookingControlPerformerOption[]>;
   /** Manager/SA: set who should check and mark «Отработано». */
@@ -329,6 +339,8 @@ type Props = {
   canReturnApproval?: boolean;
   /** Manager / SA: sheet with trainer / admin / staff targets */
   canManagerRework?: boolean;
+  /** Manager / SA: permanently remove session from payroll */
+  canExcludePayroll?: boolean;
   /** Manager / super-admin: bulk confirm unapproved GROUP in the period */
   canBulkApprove?: boolean;
   /** Admin/manager/SA/trainer: show Photo button on GROUP detail */
@@ -643,6 +655,7 @@ export function BookingControlPanel({
   approvalActor = 'admin',
   canReturnApproval = false,
   canManagerRework = false,
+  canExcludePayroll = false,
   canBulkApprove = false,
   canViewHallPhotos = false,
   initialSessionKey,
@@ -2084,6 +2097,40 @@ export function BookingControlPanel({
       load();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
+    }
+  };
+
+  const excludePayroll = async () => {
+    if (!selected || !api.excludeFromPayroll) return;
+    const reason =
+      adminComment.trim() ||
+      comment.trim() ||
+      'Снято с ЗП из‑за нестыковки';
+    try {
+      await api.excludeFromPayroll(selected.sessionKey, reason);
+      setMessage('Занятие снято с ЗП — у сотрудника больше не отображается');
+      setAdminComment('');
+      setComment('');
+      await openDetail(selected.sessionKey);
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось снять с ЗП');
+    }
+  };
+
+  const restorePayroll = async () => {
+    if (!selected || !api.restoreToPayroll) return;
+    try {
+      await api.restoreToPayroll(
+        selected.sessionKey,
+        adminComment.trim() || undefined,
+      );
+      setMessage('Занятие снова в ЗП');
+      setAdminComment('');
+      await openDetail(selected.sessionKey);
+      load();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось вернуть в ЗП');
     }
   };
 
@@ -4928,6 +4975,42 @@ export function BookingControlPanel({
                   >
                     На доработку
                   </button>
+                ) : null}
+                {selected.kind !== 'GROUP' &&
+                canExcludePayroll &&
+                selected.remark?.status !== 'EXCLUDED' &&
+                api.excludeFromPayroll ? (
+                  <div className="space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+                    <p className="text-xs text-amber-100/90">
+                      Снять выплаты ЗП — занятие пропадёт у сотрудника. Для
+                      нестыковок (лишняя продажа / неверная дата).
+                    </p>
+                    <button
+                      type="button"
+                      className="btn-secondary w-full text-sm"
+                      onClick={() => void excludePayroll()}
+                    >
+                      Снять с ЗП
+                    </button>
+                  </div>
+                ) : null}
+                {selected.remark?.status === 'EXCLUDED' ? (
+                  <div className="space-y-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm">
+                    <p className="font-medium text-rose-100">Снято с ЗП</p>
+                    <p className="text-slate-300">
+                      {selected.remark.adminComment ||
+                        selected.remark.staffComment}
+                    </p>
+                    {canExcludePayroll && api.restoreToPayroll ? (
+                      <button
+                        type="button"
+                        className="btn-primary w-full text-sm"
+                        onClick={() => void restorePayroll()}
+                      >
+                        Вернуть в ЗП
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
                 {selected.kind !== 'GROUP' && !selected.remark && (
                   <div className="space-y-2">

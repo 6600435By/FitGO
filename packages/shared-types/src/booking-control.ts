@@ -30,7 +30,7 @@ export type BookingControlPayTag = 'SALE' | 'PACKAGE';
 
 export interface BookingControlRemark {
   id: string;
-  status: 'OPEN' | 'CLOSED';
+  status: 'OPEN' | 'CLOSED' | 'EXCLUDED';
   staffComment: string;
   staffName: string;
   /** Who should check and mark «Отработано» (manager/SA assignment). */

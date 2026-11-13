@@ -130,6 +130,32 @@ export class BookingControlController {
     );
   }
 
+  @Post('super-admin/booking-control/exclude-payroll')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  excludePayrollSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; reason?: string },
+  ) {
+    return this.bookingControl.excludeFromPayroll(
+      user,
+      body.sessionKey ?? '',
+      body.reason,
+    );
+  }
+
+  @Post('super-admin/booking-control/restore-payroll')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
+  restorePayrollSuperAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; comment?: string },
+  ) {
+    return this.bookingControl.restoreToPayroll(
+      user,
+      body.sessionKey ?? '',
+      body.comment,
+    );
+  }
+
   @Post('super-admin/booking-control/refresh-from-1c')
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   refreshSuperAdmin(
@@ -339,6 +365,32 @@ export class BookingControlController {
       user,
       body.sessionKey ?? '',
       body.adminComment,
+    );
+  }
+
+  @Post('admin/booking-control/exclude-payroll')
+  @Roles(UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  excludePayrollAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; reason?: string },
+  ) {
+    return this.bookingControl.excludeFromPayroll(
+      user,
+      body.sessionKey ?? '',
+      body.reason,
+    );
+  }
+
+  @Post('admin/booking-control/restore-payroll')
+  @Roles(UserRole.MANAGER, UserRole.SUPER_ADMIN)
+  restorePayrollAdmin(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sessionKey?: string; comment?: string },
+  ) {
+    return this.bookingControl.restoreToPayroll(
+      user,
+      body.sessionKey ?? '',
+      body.comment,
     );
   }
 

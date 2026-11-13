@@ -1109,7 +1109,10 @@ export class BookingControlService {
         orderBy: { createdAt: 'desc' },
       });
       const mappedRemarks = remarks.map((r) => this.mapRemark(r));
-      const open = mappedRemarks.find((r) => r.status === 'OPEN') ?? null;
+      const open =
+        mappedRemarks.find((r) => r.status === 'OPEN') ??
+        mappedRemarks.find((r) => r.status === 'EXCLUDED') ??
+        null;
 
       if (viewer?.ownOnly) {
         await this.assertOwnOnex(clubId, viewer.userId, s);
@@ -1454,7 +1457,10 @@ export class BookingControlService {
       orderBy: { createdAt: 'desc' },
     });
     const mappedRemarks = remarks.map((r) => this.mapRemark(r));
-    const open = mappedRemarks.find((r) => r.status === 'OPEN') ?? null;
+    const open =
+      mappedRemarks.find((r) => r.status === 'OPEN') ??
+      mappedRemarks.find((r) => r.status === 'EXCLUDED') ??
+      null;
 
     if (parsed.source === 'SALE') {
       // Prefer list cache (no 1C round-trip). Fallback: one ≤30d fetch, never multi-window loops.
@@ -3962,11 +3968,155 @@ export class BookingControlService {
     return new Set(rows.map((r) => r.sessionKey));
   }
 
+  /** Manager/SA permanently excluded sessionKeys (hold payroll, hidden from staff). */
+  async excludedRemarkKeys(
+    clubId: string,
+    keys: string[],
+  ): Promise<Set<string>> {
+    if (!keys.length) return new Set();
+    const rows = await this.prisma.sessionRemark.findMany({
+      where: {
+        clubId,
+        status: SessionRemarkStatus.EXCLUDED,
+        sessionKey: { in: keys },
+      },
+      select: { sessionKey: true },
+    });
+    return new Set(rows.map((r) => r.sessionKey));
+  }
+
   async hasOpenRemark(clubId: string, sessionKey: string): Promise<boolean> {
     const n = await this.prisma.sessionRemark.count({
       where: { clubId, sessionKey, status: SessionRemarkStatus.OPEN },
     });
     return n > 0;
+  }
+
+  /**
+   * Manager / SA: permanently remove a session from payroll.
+   * Staff self-ЗП no longer lists the unit; admin report shows «Снято с ЗП».
+   */
+  async excludeFromPayroll(
+    actor: JwtPayload,
+    sessionKey: string,
+    reason?: string | null,
+  ): Promise<BookingControlRemark> {
+    const clubId = requireClubId(actor);
+    if (!this.isManagerLike(actor)) {
+      throw new ForbiddenException(
+        'Снять с ЗП может управляющий или супер-админ',
+      );
+    }
+    if (!sessionKey?.trim()) {
+      throw new BadRequestException('Не указано занятие');
+    }
+    const detail = await this.detail(clubId, sessionKey);
+    const key = detail.sessionKey;
+    const note =
+      reason?.trim() ||
+      'Снято с ЗП из‑за нестыковки (управляющий / супер-админ)';
+
+    const parsed = parseSessionKey(key);
+    const kind =
+      parsed?.source === '1C'
+        ? await this.kindFromOnex(clubId, parsed.id)
+        : parsed?.source === 'SALE'
+          ? SessionRemarkKind.PT
+          : ((parsed?.kind as SessionRemarkKind | undefined) ??
+            SessionRemarkKind.PT);
+
+    const holding = await this.prisma.sessionRemark.findFirst({
+      where: {
+        clubId,
+        sessionKey: key,
+        status: {
+          in: [SessionRemarkStatus.OPEN, SessionRemarkStatus.EXCLUDED],
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (holding?.status === SessionRemarkStatus.EXCLUDED) {
+      const row = await this.prisma.sessionRemark.update({
+        where: { id: holding.id },
+        data: {
+          adminComment: note,
+          adminId: actor.sub,
+          closedAt: new Date(),
+        },
+        include: this.remarkInclude,
+      });
+      return this.mapRemark(row);
+    }
+    if (holding) {
+      const row = await this.prisma.sessionRemark.update({
+        where: { id: holding.id },
+        data: {
+          status: SessionRemarkStatus.EXCLUDED,
+          adminComment: note,
+          adminId: actor.sub,
+          closedAt: new Date(),
+        },
+        include: this.remarkInclude,
+      });
+      return this.mapRemark(row);
+    }
+
+    const row = await this.prisma.sessionRemark.create({
+      data: {
+        clubId,
+        kind,
+        sessionKey: key,
+        status: SessionRemarkStatus.EXCLUDED,
+        staffComment: note,
+        staffId: actor.sub,
+        adminComment: note,
+        adminId: actor.sub,
+        closedAt: new Date(),
+      },
+      include: this.remarkInclude,
+    });
+    return this.mapRemark(row);
+  }
+
+  /** Manager / SA: put an excluded session back into payroll. */
+  async restoreToPayroll(
+    actor: JwtPayload,
+    sessionKey: string,
+    comment?: string | null,
+  ): Promise<BookingControlRemark> {
+    const clubId = requireClubId(actor);
+    if (!this.isManagerLike(actor)) {
+      throw new ForbiddenException(
+        'Вернуть в ЗП может управляющий или супер-админ',
+      );
+    }
+    if (!sessionKey?.trim()) {
+      throw new BadRequestException('Не указано занятие');
+    }
+    const detail = await this.detail(clubId, sessionKey);
+    const excluded = await this.prisma.sessionRemark.findFirst({
+      where: {
+        clubId,
+        sessionKey: detail.sessionKey,
+        status: SessionRemarkStatus.EXCLUDED,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!excluded) {
+      throw new NotFoundException('Занятие не снято с ЗП');
+    }
+    const text = comment?.trim() || 'Возвращено в ЗП';
+    const row = await this.prisma.sessionRemark.update({
+      where: { id: excluded.id },
+      data: {
+        status: SessionRemarkStatus.CLOSED,
+        adminComment: text,
+        adminId: actor.sub,
+        closedAt: new Date(),
+      },
+      include: this.remarkInclude,
+    });
+    return this.mapRemark(row);
   }
 
   private isAdminLike(actor: JwtPayload): boolean {
@@ -4536,7 +4686,12 @@ export class BookingControlService {
   }): BookingControlRemark {
     return {
       id: r.id,
-      status: r.status === SessionRemarkStatus.OPEN ? 'OPEN' : 'CLOSED',
+      status:
+        r.status === SessionRemarkStatus.OPEN
+          ? 'OPEN'
+          : r.status === SessionRemarkStatus.EXCLUDED
+            ? 'EXCLUDED'
+            : 'CLOSED',
       staffComment: r.staffComment,
       staffName: `${r.staff.lastName} ${r.staff.firstName}`.trim(),
       assigneeId: r.assigneeId ?? undefined,

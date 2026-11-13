@@ -1,6 +1,7 @@
 'use client';
 
 import type { BookingControlListItem, WorkUnit } from '@fitgo/shared-types';
+import { bookingControlQueueSegment } from '@fitgo/shared-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   createBookingControlApi,
@@ -16,36 +17,29 @@ type Args = {
   from: string;
   to: string;
   workUnits: WorkUnit[] | undefined;
-  /** When true, fetch needsReview list. */
+  /** When true, fetch performer control list. */
   enabled: boolean;
 };
 
 /**
- * Booking-control rows that need review and are missing from payroll workUnits
- * (or present but with a different sessionKey alias). Diff by sessionKey.
+ * Same «На контроле» bucket as Booking Control for this performer/period
+ * (unpaid, not-in-1C, journal, remarks, overdue approval) — not the narrower
+ * API needsReview flag (remarks / pending approval only).
  */
 export function useControlMisses({
   mode,
   performerId,
   from,
   to,
-  workUnits,
   enabled,
 }: Args) {
   const [items, setItems] = useState<ControlMiss[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const base: BookingControlApiBase =
     mode === 'super' ? 'super-admin' : 'admin';
-
-  const knownKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const u of workUnits ?? []) {
-      if (u.sessionKey?.trim()) keys.add(u.sessionKey.trim());
-    }
-    return keys;
-  }, [workUnits]);
 
   const load = useCallback(async () => {
     if (!enabled || !performerId || !from || !to) {
@@ -61,12 +55,13 @@ export function useControlMisses({
     setError('');
     try {
       const api = createBookingControlApi(base);
+      // Full performer list — pending filter matches Control queue (client-side).
       const list = await api.list({
         from,
         to,
         performerId,
-        needsReview: true,
       });
+      setNowMs(Date.now());
       setItems(list);
     } catch (e) {
       setItems([]);
@@ -80,14 +75,18 @@ export function useControlMisses({
     void load();
   }, [load]);
 
-  const misses = useMemo(
-    () => items.filter((row) => !knownKeys.has(row.sessionKey)),
-    [items, knownKeys],
+  const pending = useMemo(
+    () =>
+      items.filter(
+        (row) => bookingControlQueueSegment(row, nowMs) === 'pending',
+      ),
+    [items, nowMs],
   );
 
   return {
-    misses,
-    allNeedsReview: items,
+    /** Full «На контроле» list — same set as Booking Control pending. */
+    misses: pending,
+    allNeedsReview: pending,
     loading,
     error,
     reload: load,

@@ -65,6 +65,7 @@ import {
   type StaffPayTrackSlice,
   type StaffSalesBreakdown,
   type WorkUnit,
+  bookingControlHasControlWork,
   worstTrustBand,
 } from '@fitgo/shared-types';
 import type { TrustBand as SharedTrustBand } from '@fitgo/shared-types';
@@ -80,10 +81,7 @@ import {
   PayrollPayoutStatus,
   PersonalBookingStatus,
   Role,
-  SpaBookingStatus,
   StaffEmploymentKind as PrismaEmploymentKind,
-  TrustBand,
-  TrustResolution,
 } from '@prisma/client';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
@@ -144,6 +142,7 @@ import {
 } from './payroll-dates';
 import {
   PAYROLL_DEBT_HINT,
+  PAYROLL_EXCLUDED_HINT,
   dedupeSpaPayrollUnits,
   spaUnitCoversVisit,
 } from './spa-payroll-debt';
@@ -1679,12 +1678,12 @@ export class PayrollService {
       }
     }
 
-    // Open remarks hold payroll; GROUP needs dual approval (admin or SA/manager override)
+    // Open / excluded remarks hold payroll; GROUP needs dual approval
     const uniqueRemarkKeys = [...new Set(remarkKeys)];
-    const openKeys = await this.bookingControl.openRemarkKeys(
-      clubId,
-      uniqueRemarkKeys,
-    );
+    const [openKeys, excludedKeys] = await Promise.all([
+      this.bookingControl.openRemarkKeys(clubId, uniqueRemarkKeys),
+      this.bookingControl.excludedRemarkKeys(clubId, uniqueRemarkKeys),
+    ]);
     const approvedGroupKeys =
       await this.bookingControl.approvedGroupSessionKeys(
         clubId,
@@ -1738,7 +1737,10 @@ export class PayrollService {
       ) {
         remarkAliases.push(fitgoSessionKey('SPA', u.id));
       }
-      if (remarkAliases.some((k) => openKeys.has(k))) {
+      if (remarkAliases.some((k) => excludedKeys.has(k))) {
+        u.payrollTrusted = false;
+        pushWorkUnitTrust(u, 'RED', PAYROLL_EXCLUDED_HINT);
+      } else if (remarkAliases.some((k) => openKeys.has(k))) {
         u.payrollTrusted = false;
         pushWorkUnitTrust(u, 'RED', 'Открыто замечание');
       }
@@ -1797,24 +1799,15 @@ export class PayrollService {
 
     const workUnits = await this.listWorkUnits(clubId, performerId, from, to);
 
-    const openGroupForUser = await this.prisma.groupClassSession.count({
-      where: {
-        clubId,
-        trainerId: performerId,
-        status: GroupClassSessionStatus.NEEDS_ADMIN,
-        startAt: {
-          gte: new Date(`${from}T00:00:00`),
-          lte: new Date(`${to}T23:59:59`),
-        },
-      },
-    });
-    const openBookingExceptions = await this.countOpenExceptions(
+    // Same «На контроле» count as Booking Control for this performer/period
+    // (unpaid / not-in-1C / journal / remarks / overdue approval) — not only
+    // CONFIRMED_BY_PERFORMER trust rows (that under-counted vs Контроль).
+    const openTotal = await this.countOpenControlPending(
       clubId,
       performerId,
       from,
       to,
     );
-    const openTotal = openGroupForUser + openBookingExceptions;
 
     const trusted = workUnits.filter((u) => u.payrollTrusted);
     const greenCount = trusted.filter((u) => u.trustBand === 'GREEN').length;
@@ -4398,6 +4391,11 @@ export class PayrollService {
       return a <= toT && b >= fromT;
     });
 
+    // Staff must not see units managers permanently removed from payroll.
+    summary.workUnits = summary.workUnits.filter(
+      (u) => !u.trustHints?.includes(PAYROLL_EXCLUDED_HINT),
+    );
+
     // Debt rows are shown as «не в ЗП» but are not «needs confirmation».
     const unconfirmedCount = summary.workUnits.filter(
       (u) =>
@@ -4573,45 +4571,21 @@ export class PayrollService {
     };
   }
 
-  private async countOpenExceptions(
+  /** Rows in Booking Control «На контроле» for this staff member and period. */
+  private async countOpenControlPending(
     clubId: string,
     performerId: string,
-    from?: string,
-    to?: string,
-  ) {
-    const range =
-      from && to
-        ? {
-            startAt: {
-              gte: new Date(`${from}T00:00:00`),
-              lte: new Date(`${to}T23:59:59`),
-            },
-          }
-        : {};
-    const [spa, pt] = await Promise.all([
-      this.prisma.spaBooking.count({
-        where: {
-          clubId,
-          specialistId: performerId,
-          performanceStatus: 'CONFIRMED_BY_PERFORMER',
-          trustResolution: TrustResolution.NONE,
-          trustBand: { in: [TrustBand.AMBER, TrustBand.RED] },
-          status: { not: SpaBookingStatus.CANCELLED },
-          ...range,
-        },
-      }),
-      this.prisma.personalTrainingBooking.count({
-        where: {
-          trainerId: performerId,
-          performanceStatus: 'CONFIRMED_BY_PERFORMER',
-          trustResolution: TrustResolution.NONE,
-          trustBand: { in: [TrustBand.AMBER, TrustBand.RED] },
-          status: { not: PersonalBookingStatus.CANCELLED },
-          ...range,
-        },
-      }),
-    ]);
-    return spa + pt;
+    from: string,
+    to: string,
+  ): Promise<number> {
+    const items = await this.bookingControl.list(clubId, {
+      from,
+      to,
+      performerId,
+      skipExternal: true,
+    });
+    const now = Date.now();
+    return items.filter((i) => bookingControlHasControlWork(i, now)).length;
   }
 
   private async resolveCompensation(

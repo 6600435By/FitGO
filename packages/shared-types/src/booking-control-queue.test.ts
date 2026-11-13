@@ -168,6 +168,33 @@ describe('bookingControlQueueSegment', () => {
     );
   });
 
+  it('approved but unpaid stays pending (ЗП attention ↔ Контроль)', () => {
+    assert.equal(
+      bookingControlQueueSegment(
+        row({
+          sessionKey: 'debt',
+          status: 'SCHEDULED',
+          approvalPhase: 'APPROVED',
+          payment: 'DEBT',
+        }),
+        NOW,
+      ),
+      'pending',
+    );
+    assert.equal(
+      bookingControlQueueSegment(
+        row({
+          sessionKey: 'unk',
+          status: 'SCHEDULED',
+          approvalPhase: 'APPROVED',
+          payment: 'UNKNOWN',
+        }),
+        NOW,
+      ),
+      'pending',
+    );
+  });
+
   it('past clean without phase is done', () => {
     assert.equal(
       bookingControlQueueSegment(

@@ -672,6 +672,19 @@ export function isClubRevenueCashSettlement(e: {
   return (e.externalId ?? '').includes(':cash:');
 }
 
+/**
+ * Cash/ЛС settlement of an earlier sale must keep the sale date (not pay day).
+ * Otherwise Oct 12 debt paid 30.10 shows as a phantom PT on 30.10.
+ */
+export function resolvePtCashOccurredAt(
+  paymentAt: Date,
+  basisUuid: string | undefined,
+  priorSaleAtByUuid: Map<string, Date>,
+): Date {
+  if (!basisUuid) return paymentAt;
+  return priorSaleAtByUuid.get(basisUuid) ?? paymentAt;
+}
+
 const SALE_MATCH_LOOKBACK_DAYS = 120;
 
 /**
@@ -715,6 +728,7 @@ export async function loadTrainerPtSalesFromRevenue(
         serviceName: true,
         employeeCode: true,
         employeeName: true,
+        occurredAt: true,
       },
     }),
     // Prior PT sale/debt stubs (lookback) — late split card pays must not
@@ -746,6 +760,7 @@ export async function loadTrainerPtSalesFromRevenue(
         productName: true,
         saleType: true,
         operationType: true,
+        occurredAt: true,
       },
     }),
   ]);
@@ -754,11 +769,20 @@ export async function loadTrainerPtSalesFromRevenue(
   // one cached sale (Новик 19.10) must not drop other sales' card payments
   // (14.10 / 26.10) for the same «Занятие с тренером 50р.».
   const knownUuids = new Set<string>();
+  /** Earliest sale/debt date by document UUID — backdate late cash/ЛС pays. */
+  const priorSaleAtByUuid = new Map<string, Date>();
+  const rememberPriorSaleAt = (uuid: string, when: Date) => {
+    const prev = priorSaleAtByUuid.get(uuid);
+    if (!prev || when < prev) priorSaleAtByUuid.set(uuid, when);
+  };
   for (const s of knownSales) {
     const uuid =
       (s.saleDocumentId ?? '').trim().toLowerCase() ||
       saleDocumentIdFromPtExternalId(s.externalId);
-    if (uuid) knownUuids.add(uuid);
+    if (uuid) {
+      knownUuids.add(uuid);
+      rememberPriorSaleAt(uuid, s.occurredAt);
+    }
   }
   for (const d of lookbackDocs) {
     if (isClubRevenueCashSettlement(d)) continue;
@@ -766,13 +790,21 @@ export async function loadTrainerPtSalesFromRevenue(
     const isPt =
       (d.saleType ?? '').toLowerCase() === 'training' ||
       isLikelyTrainingProductName(product);
-    if (!isPt) continue;
     const basis = preferredSaleBasisId({
       externalId: d.externalId,
       documentId: d.documentId,
     });
-    if (basis && DOC_UUID_RE.test(basis)) knownUuids.add(basis.toLowerCase());
     const doc = (d.documentId ?? '').trim().toLowerCase();
+    // Always remember sale/debt date (even «Продажа N от …» stubs) so a later
+    // card/ЛС payment keeps the training day, not the cashier day.
+    if (basis && DOC_UUID_RE.test(basis)) {
+      rememberPriorSaleAt(basis.toLowerCase(), d.occurredAt);
+    }
+    if (doc && DOC_UUID_RE.test(doc)) {
+      rememberPriorSaleAt(doc, d.occurredAt);
+    }
+    if (!isPt) continue;
+    if (basis && DOC_UUID_RE.test(basis)) knownUuids.add(basis.toLowerCase());
     if (doc && DOC_UUID_RE.test(doc)) knownUuids.add(doc);
   }
 
@@ -851,16 +883,19 @@ export async function loadTrainerPtSalesFromRevenue(
     if (isSpaLikeSessionTitle(serviceName)) continue;
 
     const fromCash = isClubRevenueCashSettlement(e);
+    const basisUuid = DOC_UUID_RE.test(basis) ? basis.toLowerCase() : '';
     if (fromCash) {
-      const basisUuid = DOC_UUID_RE.test(basis) ? basis.toLowerCase() : '';
       if (basisUuid && knownUuids.has(basisUuid)) {
         // Settlement of a cached TrainerPtSale — PAID via overlay, not a visit.
         continue;
       }
     }
 
-    // Prefer sale/debt document date over later cash settlement date.
-    const when = fromCash ? (e.paidAt ?? e.occurredAt) : e.occurredAt;
+    // Prefer sale/debt document date over later cash/ЛС settlement date.
+    const paymentAt = fromCash ? (e.paidAt ?? e.occurredAt) : e.occurredAt;
+    const when = fromCash
+      ? resolvePtCashOccurredAt(paymentAt, basisUuid || undefined, priorSaleAtByUuid)
+      : paymentAt;
     const productKey = (
       e.productExternalId?.trim() ||
       serviceName ||

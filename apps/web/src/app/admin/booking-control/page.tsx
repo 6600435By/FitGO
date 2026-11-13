@@ -56,6 +56,7 @@ function AdminBookingControlInner() {
       approvalActor={isManagerOrSa ? 'override' : 'admin'}
       canReturnApproval
       canManagerRework={isManagerOrSa}
+      canExcludePayroll={isManagerOrSa}
       canViewHallPhotos
       initialSessionKey={initialSessionKey}
       initialFrom={initialFrom}

@@ -52,6 +52,16 @@ export function createBookingControlApi(
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlResolve(token, base, sessionKey, adminComment);
     },
+    excludeFromPayroll: async (sessionKey, reason) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlExcludePayroll(token, base, sessionKey, reason);
+    },
+    restoreToPayroll: async (sessionKey, comment) => {
+      const token = getToken();
+      if (!token) throw new Error('Нет сессии');
+      return api.bookingControlRestorePayroll(token, base, sessionKey, comment);
+    },
     listRemarkAssignees: async () => {
       const token = getToken();
       if (!token) return [];

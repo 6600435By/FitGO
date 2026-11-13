@@ -441,6 +441,8 @@ enum SessionRemarkKind {
 enum SessionRemarkStatus {
   OPEN
   CLOSED
+  /// Manager/SA permanently removed the session from payroll (staff do not see it).
+  EXCLUDED
 }
 
 enum MotivationRateKind {
@@ -2983,7 +2985,7 @@ model GroupApprovalNote {
   @@index([clubId, sessionKey, createdAt])
 }
 
-/// Staff/admin remark on a register session (holds payroll while OPEN).
+/// Staff/admin remark on a register session (holds payroll while OPEN or EXCLUDED).
 model SessionRemark {
   id            String               @id @default(cuid())
   clubId        String

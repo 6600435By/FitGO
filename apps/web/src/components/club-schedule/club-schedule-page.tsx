@@ -556,6 +556,7 @@ export function ClubSchedulePage({
           canBulkApprove={apiBase === 'super-admin'}
           canReturnApproval={!isTrainer}
           canManagerRework={apiBase === 'super-admin'}
+          canExcludePayroll={apiBase === 'super-admin'}
           canViewHallPhotos
           detailOnly
           initialSessionKey={openSession.sessionKey}

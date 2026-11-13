@@ -3,6 +3,8 @@ import { namesMatch } from '../booking-control/spa-document-match';
 
 /** SPA / PT debt row: shown in period detail, never counted in ЗП totals. */
 export const PAYROLL_DEBT_HINT = 'Долг, в расчёт не входит';
+/** Manager/SA permanently removed the unit from payroll. */
+export const PAYROLL_EXCLUDED_HINT = 'Снято с ЗП';
 
 /** Same-visit window: FitGO booking vs 1C Onex often differ by a few minutes. */
 export const SPA_VISIT_COVER_WINDOW_MS = 90 * 60 * 1000;

@@ -93,8 +93,23 @@ export function ReportTabs({
     () => attentionFromUnits(units),
     [units],
   );
+  // Avoid double-counting rows already listed under «Не прошли контроль».
+  const pendingKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const m of controlMisses) {
+      if (m.sessionKey?.trim()) keys.add(m.sessionKey.trim());
+    }
+    return keys;
+  }, [controlMisses]);
+  const unitsNeedingCheck = useMemo(
+    () =>
+      checkOrExcluded.filter(
+        (u) => !u.sessionKey?.trim() || !pendingKeys.has(u.sessionKey.trim()),
+      ),
+    [checkOrExcluded, pendingKeys],
+  );
 
-  const attentionCount = checkOrExcluded.length + controlMisses.length;
+  const attentionCount = controlMisses.length + unitsNeedingCheck.length;
   const adjSum = summary.adjustmentsMinor;
   const reformerGroupCount = reformer.filter((u) => u.kind === 'GROUP').length;
   const reformerPersonalCount = reformer.filter(
@@ -331,8 +346,14 @@ export function ReportTabs({
 
       {active === 'attention' ? (
         <AttentionTab
-          units={filterAttentionUnits(checkOrExcluded, attentionFocus)}
-          misses={controlMisses}
+          units={filterAttentionUnits(unitsNeedingCheck, attentionFocus)}
+          misses={
+            attentionFocus === 'excluded' ||
+            attentionFocus === 'noEarn' ||
+            attentionFocus === 'catalog'
+              ? []
+              : controlMisses
+          }
           controlLoading={controlLoading}
           bookingControlHref={bookingControlHref}
           currency={cur}

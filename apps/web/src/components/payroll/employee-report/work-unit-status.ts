@@ -56,9 +56,12 @@ export function classifyWorkUnit(u: WorkUnit): WorkUnitStatus {
     const isDebt = (u.trustHints ?? []).some((h) =>
       /долг|не оплачен/i.test(h),
     );
+    const isExcluded = (u.trustHints ?? []).some((h) =>
+      /снято с зп/i.test(h),
+    );
     return {
       level: 'excluded',
-      label: isDebt ? 'не оплачено' : 'не в ЗП',
+      label: isDebt ? 'не оплачено' : isExcluded ? 'снято с ЗП' : 'не в ЗП',
       reason,
     };
   }

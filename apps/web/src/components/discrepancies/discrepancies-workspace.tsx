@@ -566,6 +566,7 @@ export function DiscrepanciesWorkspace() {
           approvalActor="override"
           canReturnApproval
           canManagerRework
+          canExcludePayroll
           canViewHallPhotos
           canBulkApprove
           detailOnly

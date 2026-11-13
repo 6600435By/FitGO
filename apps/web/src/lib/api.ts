@@ -3773,6 +3773,42 @@ export const api = {
       token,
     ),
 
+  bookingControlExcludePayroll: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    sessionKey: string,
+    reason?: string,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlRemark>(
+      `/${base}/booking-control/exclude-payroll`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionKey,
+          ...(reason?.trim() ? { reason: reason.trim() } : {}),
+        }),
+      },
+      token,
+    ),
+
+  bookingControlRestorePayroll: (
+    token: string,
+    base: 'super-admin' | 'admin',
+    sessionKey: string,
+    comment?: string,
+  ) =>
+    request<import('@fitgo/shared-types').BookingControlRemark>(
+      `/${base}/booking-control/restore-payroll`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          sessionKey,
+          ...(comment?.trim() ? { comment: comment.trim() } : {}),
+        }),
+      },
+      token,
+    ),
+
   bookingControlRefreshFrom1c: (
     token: string,
     base: 'super-admin' | 'admin',

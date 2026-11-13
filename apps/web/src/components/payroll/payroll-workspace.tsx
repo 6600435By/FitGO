@@ -42,6 +42,7 @@ import type {
   StaffPaySummary,
   WorkUnit,
 } from '@fitgo/shared-types';
+import { UserRole } from '@fitgo/shared-types';
 import { UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
@@ -158,6 +159,14 @@ export function PayrollWorkspace({ mode }: Props) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const ownerId = getUser()?.id ?? '';
+  const canExcludePayroll = useMemo(() => {
+    const roles = getUser()?.roles ?? [];
+    return (
+      mode === 'super' ||
+      roles.includes(UserRole.SUPER_ADMIN) ||
+      roles.includes(UserRole.MANAGER)
+    );
+  }, [mode]);
   const urlHydrated = useRef(false);
   const autoLoadSkip = useRef(true);
 
@@ -1140,6 +1149,7 @@ export function PayrollWorkspace({ mode }: Props) {
           approvalActor={mode === 'super' ? 'override' : 'admin'}
           canReturnApproval
           canManagerRework={mode === 'super'}
+          canExcludePayroll={canExcludePayroll}
           canViewHallPhotos
           canBulkApprove={mode === 'super'}
           detailOnly

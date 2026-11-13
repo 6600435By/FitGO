@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import {
   mergeTrainerPtSaleRows,
+  resolvePtCashOccurredAt,
   saleDocumentIdFromPtExternalId,
   type TrainerPtSaleRow,
 } from './trainer-pt-sales-from-revenue';
@@ -37,6 +38,24 @@ function pt(
   );
   assert.equal(saleDocumentIdFromPtExternalId('30167#1'), undefined);
   assert.equal(saleDocumentIdFromPtExternalId(SALE_UUID), SALE_UUID);
+}
+
+// Late ЛС/card pay of 12.10 sale must keep 12.10, not cashier day 30.10.
+{
+  const saleAt = new Date('2026-10-12T20:08:38.000Z');
+  const payAt = new Date('2026-10-30T17:28:00.000Z');
+  const prior = new Map([[SALE_UUID, saleAt]]);
+  const resolved = resolvePtCashOccurredAt(payAt, SALE_UUID, prior);
+  assert.equal(resolved.toISOString(), saleAt.toISOString());
+  assert.equal(
+    resolvePtCashOccurredAt(payAt, undefined, prior).toISOString(),
+    payAt.toISOString(),
+  );
+  assert.equal(
+    resolvePtCashOccurredAt(payAt, '00000000-0000-0000-0000-000000000000', prior)
+      .toISOString(),
+    payAt.toISOString(),
+  );
 }
 
 // Novikova: sale 02.10 + card payment 06.10 → one PAID row on 02.10, amount 40.
