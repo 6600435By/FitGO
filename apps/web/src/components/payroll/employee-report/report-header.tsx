@@ -97,17 +97,30 @@ export function ReportHeader({
               type="button"
               className="btn-secondary px-2.5 py-1 text-xs"
               disabled={!summary.canLock}
+              title={
+                summary.locked
+                  ? 'Период уже зафиксирован'
+                  : 'Фиксирует период начисления (не меняет карту/кассу в листе выплат)'
+              }
               onClick={onLock}
             >
-              Подтвердить выплату
+              {summary.locked ? 'Период закрыт' : 'Закрыть период'}
             </button>
           ) : null}
         </div>
       </div>
 
+      {canEdit && remaining > 0 ? (
+        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-100">
+          Остаток {money(remaining, summary.currency)} — измените «Карта» /
+          «Из кассы» в листе выплат выше (строки со статусом «Выплачено» тоже
+          редактируются) и сохраните.
+        </p>
+      ) : null}
+
       {canEdit && !summary.canLock && !summary.locked ? (
         <p className="text-xs text-amber-200/90">
-          Подтверждение недоступно
+          Закрытие периода недоступно
           {summary.openExceptions > 0
             ? ` — открытых нестыковок: ${summary.openExceptions}`
             : ''}
@@ -138,8 +151,19 @@ export function ReportHeader({
           label="Выплачено"
           value={money(totalPaid, summary.currency)}
           hint={
-            advance > 0
-              ? `аванс ${money(advance, summary.currency)} · карта ${money(paid?.advanceCardMinor ?? 0, summary.currency)} · касса ${money(paid?.advanceCashMinor ?? 0, summary.currency)}`
+            totalPaid > 0
+              ? [
+                  advance > 0
+                    ? `аванс ${money(paid?.advanceCardMinor ?? 0, summary.currency)}+${money(paid?.advanceCashMinor ?? 0, summary.currency)}`
+                    : null,
+                  (paid?.settlementCardMinor ?? 0) +
+                    (paid?.settlementCashMinor ?? 0) >
+                  0
+                    ? `расчёт ${money(paid?.settlementCardMinor ?? 0, summary.currency)}+${money(paid?.settlementCashMinor ?? 0, summary.currency)}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || 'подтверждённые выплаты за период'
               : 'подтверждённые выплаты за период'
           }
         />

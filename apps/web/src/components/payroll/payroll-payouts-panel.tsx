@@ -55,6 +55,44 @@ function AdvancePaidCell({
   );
 }
 
+/** Visible payout row status: draft / saved / paid. */
+function PayoutStatusBadge({
+  paid,
+  saved,
+}: {
+  paid: boolean;
+  saved: boolean;
+}) {
+  if (paid) {
+    return (
+      <span
+        className="inline-flex items-center rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-300"
+        title="Выплата подтверждена — суммы можно изменить и сохранить"
+      >
+        Выплачено
+      </span>
+    );
+  }
+  if (saved) {
+    return (
+      <span
+        className="inline-flex items-center rounded-md border border-sky-500/40 bg-sky-500/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-sky-300"
+        title="Черновик сохранён на сервере, ещё не подтверждён"
+      >
+        Сохранено
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center rounded-md border border-amber-500/35 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-200"
+      title="Суммы ещё не сохранены / не подтверждены"
+    >
+      Черновик
+    </span>
+  );
+}
+
 type Dept =
   | 'ALL'
   | 'MANAGER'
@@ -170,6 +208,8 @@ type Props = {
     periodFrom: string,
     periodTo: string,
   ) => void;
+  /** After draft save / confirm / amend — refresh employee report «Выплачено». */
+  onPayoutAmountsChanged?: (userId?: string) => void;
 };
 
 type PayoutViewMem = {
@@ -210,6 +250,7 @@ export function PayrollPayoutsPanel({
   onPrintSelected,
   printBusy = false,
   onOpenEmployeeReport,
+  onPayoutAmountsChanged,
 }: Props) {
   const today = useMemo(() => new Date(), []);
   const pathname = usePathname();
@@ -365,6 +406,7 @@ export function PayrollPayoutsPanel({
           row.performerId === userId ? { ...row, existingPayout: dto } : row,
         ),
       );
+      onPayoutAmountsChanged?.(userId);
     } catch (e) {
       if (saveSeq.current[userId] !== seq) return;
       setMessage(
@@ -507,10 +549,15 @@ export function PayrollPayoutsPanel({
           }
         }
         const prev = draftsRef.current[p.performerId];
+        const cardN = parseMoneyToMinor(card || '0');
+        const cashN = parseMoneyToMinor(cash || '0');
+        const gap = p.payableMinor - (cardN + cashN);
+        // Unpaid with amount, or paid but card+cash ≠ к выплате (e.g. after recalc).
+        const selected = p.payableMinor !== 0 && (!paid || gap !== 0);
         next[p.performerId] = {
           card,
           cash,
-          selected: !paid && p.payableMinor !== 0,
+          selected,
           fine: prev?.fine ?? '',
           bonus: prev?.bonus ?? '',
         };
@@ -591,28 +638,27 @@ export function PayrollPayoutsPanel({
   const confirmSelected = async () => {
     const token = getToken();
     if (!token) return;
-    const items = rows
-      .filter((r) => {
-        const d = drafts[r.performerId];
-        return d?.selected && r.existingPayout?.status !== 'PAID';
-      })
-      .map((r) => {
-        const d = drafts[r.performerId]!;
-        return {
-          userId: r.performerId,
-          cardTransferMinor: parseMoneyToMinor(d.card || '0'),
-          actualCashMinor: parseMoneyToMinor(d.cash || '0'),
-        };
-      });
+    const selectedRows = rows.filter((r) => drafts[r.performerId]?.selected);
+    const items = selectedRows.map((r) => {
+      const d = drafts[r.performerId]!;
+      return {
+        userId: r.performerId,
+        cardTransferMinor: parseMoneyToMinor(d.card || '0'),
+        actualCashMinor: parseMoneyToMinor(d.cash || '0'),
+      };
+    });
     if (!items.length) {
       setMessage('Нет выбранных строк для подтверждения');
       return;
     }
-    if (
-      !window.confirm(
-        `Подтвердить ${items.length} выплат(ы) за ${periodFrom}–${periodTo}?`,
-      )
-    ) {
+    const amendCount = selectedRows.filter(
+      (r) => r.existingPayout?.status === 'PAID',
+    ).length;
+    const confirmMsg =
+      amendCount > 0
+        ? `Подтвердить ${items.length} выплат(ы) за ${periodFrom}–${periodTo}? В том числе изменить уже выплаченные: ${amendCount}.`
+        : `Подтвердить ${items.length} выплат(ы) за ${periodFrom}–${periodTo}?`;
+    if (!window.confirm(confirmMsg)) {
       return;
     }
     dropPendingSaves();
@@ -630,8 +676,13 @@ export function PayrollPayoutsPanel({
       for (const item of items) {
         clearLocalDraft(ctxRef.current, item.userId);
       }
-      setMessage(`Подтверждено: ${items.length}`);
+      setMessage(
+        amendCount > 0
+          ? `Подтверждено: ${items.length} (изменено выплаченных: ${amendCount})`
+          : `Подтверждено: ${items.length}`,
+      );
       await load();
+      onPayoutAmountsChanged?.();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка подтверждения');
     } finally {
@@ -803,7 +854,6 @@ export function PayrollPayoutsPanel({
                     for (const r of rows) {
                       const d = next[r.performerId];
                       if (!d) continue;
-                      if (r.existingPayout?.status === 'PAID') continue;
                       next[r.performerId] = { ...d, selected: true };
                     }
                     return next;
@@ -841,8 +891,14 @@ export function PayrollPayoutsPanel({
             </button>
           </div>
           <p className="text-[11px] text-slate-500">
-            Карта и касса, введённые вручную, сохраняются до подтверждения.
-            После выплаты черновик снимается.
+            Карта и касса сохраняются автоматически. Статусы:{' '}
+            <span className="text-amber-200">черновик</span>
+            {' · '}
+            <span className="text-sky-300">сохранено</span>
+            {' · '}
+            <span className="text-emerald-300">выплачено</span>
+            . Выплаченные строки можно править — измените сумму и уйдите из
+            поля (или подтвердите снова), остаток в отчёте пересчитается.
           </p>
 
           {(periodFrom !== defaultRange.from ||
@@ -895,8 +951,8 @@ export function PayrollPayoutsPanel({
                         <input
                           type="checkbox"
                           className="mt-1"
-                          disabled={paid}
-                          checked={d.selected && !paid}
+                          disabled={busy}
+                          checked={d.selected}
                           onChange={(e) =>
                             updateDraft(r.performerId, {
                               selected: e.target.checked,
@@ -904,7 +960,7 @@ export function PayrollPayoutsPanel({
                           }
                         />
                         <div className="min-w-0 flex-1 space-y-2">
-                          <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                             <button
                               type="button"
                               className="text-left font-medium text-sky-300 hover:text-sky-200 hover:underline"
@@ -929,13 +985,7 @@ export function PayrollPayoutsPanel({
                                 </span>
                               ) : null}
                             </button>
-                            <span className="text-[10px] uppercase text-slate-500">
-                              {paid
-                                ? 'выплачено'
-                                : saved
-                                  ? 'сохранено'
-                                  : 'черновик'}
-                            </span>
+                            <PayoutStatusBadge paid={paid} saved={saved} />
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
                             <div>
@@ -995,7 +1045,7 @@ export function PayrollPayoutsPanel({
                               Карта
                               <input
                                 className="input mt-1 w-full py-1.5 text-sm"
-                                disabled={paid}
+                                disabled={busy}
                                 inputMode="decimal"
                                 value={d.card}
                                 onChange={(e) =>
@@ -1012,7 +1062,7 @@ export function PayrollPayoutsPanel({
                               Из кассы
                               <input
                                 className="input mt-1 w-full py-1.5 text-sm"
-                                disabled={paid}
+                                disabled={busy}
                                 inputMode="decimal"
                                 value={d.cash}
                                 onChange={(e) =>
@@ -1119,8 +1169,8 @@ export function PayrollPayoutsPanel({
                           <td className="px-2 py-2">
                             <input
                               type="checkbox"
-                              disabled={paid}
-                              checked={d.selected && !paid}
+                              disabled={busy}
+                              checked={d.selected}
                               onChange={(e) =>
                                 updateDraft(r.performerId, {
                                   selected: e.target.checked,
@@ -1243,7 +1293,7 @@ export function PayrollPayoutsPanel({
                           <td className="px-2 py-2">
                             <input
                               className="input w-20 py-1 text-xs"
-                              disabled={paid}
+                              disabled={busy}
                               inputMode="decimal"
                               value={d.card}
                               onChange={(e) =>
@@ -1259,7 +1309,7 @@ export function PayrollPayoutsPanel({
                           <td className="px-2 py-2">
                             <input
                               className="input w-20 py-1 text-xs"
-                              disabled={paid}
+                              disabled={busy}
                               inputMode="decimal"
                               value={d.cash}
                               onChange={(e) =>
@@ -1270,12 +1320,8 @@ export function PayrollPayoutsPanel({
                               onBlur={() => flushDraft(r.performerId)}
                             />
                           </td>
-                          <td className="px-2 py-2 text-[10px] text-slate-500">
-                            {paid
-                              ? 'выплачено'
-                              : saved
-                                ? 'сохранено'
-                                : 'черновик'}
+                          <td className="px-2 py-2">
+                            <PayoutStatusBadge paid={paid} saved={saved} />
                           </td>
                         </tr>
                       );

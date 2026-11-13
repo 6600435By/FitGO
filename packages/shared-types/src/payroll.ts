@@ -394,7 +394,7 @@ export function splitAdvanceWave(input: {
 /**
  * Card / cash shown on the payout sheet.
  * A saved DRAFT (manager typed card or cash) replaces the profile prefill.
- * PAID keeps the recorded split for the locked row; it is not a working draft.
+ * PAID keeps the recorded split (editable — amend and re-confirm to fix remainder).
  * With no saved row, 25th prefills card from «Выплата аванса на карту».
  */
 export function resolvePayoutFormSplit(input: {

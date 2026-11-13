@@ -553,7 +553,7 @@ export function PayrollWorkspace({ mode }: Props) {
       if (ownerId) {
         setPayrollSummaryCache(ownerId, { mode, userId: id, from, to }, s);
       }
-      setMessage('Выплата подтверждена — период зафиксирован');
+      setMessage('Период зафиксирован. Суммы карты/кассы меняйте в листе выплат выше.');
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка подтверждения');
     }
@@ -884,6 +884,15 @@ export function PayrollWorkspace({ mode }: Props) {
           printBusy={batchPrinting}
           onOpenEmployeeReport={(id, f, t) => {
             void openEmployeeReport(id, f, t);
+          }}
+          onPayoutAmountsChanged={(userId) => {
+            if (
+              employeeReportOpen &&
+              reportUserId &&
+              (!userId || userId === reportUserId)
+            ) {
+              void load();
+            }
           }}
         />
       )}

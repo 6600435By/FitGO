@@ -2624,7 +2624,9 @@ export class PayrollService {
     );
 
     if (existing?.status === PayrollPayoutStatus.PAID) {
-      hints.push('Выплата уже зафиксирована — повторно не начисляется');
+      hints.push(
+        'Выплата зафиксирована — карту и кассу можно изменить (остаток в отчёте пересчитается)',
+      );
     }
 
     const staffDebtMinor = await this.staffDebtMinorForPayout(clubId, userId);
@@ -2787,8 +2789,10 @@ export class PayrollService {
   }
 
   /**
-   * Remember card/cash typed on the payout sheet. Does not mark the wave paid
-   * and does not move the staff balance. A later confirm replaces this draft.
+   * Remember card/cash typed on the payout sheet.
+   * DRAFT: does not mark paid / does not move staff balance until confirm.
+   * PAID: amends the recorded split in place and recalculates staff balance
+   * (needed when accrual changed after a wave was already confirmed).
    */
   async savePayoutDraft(
     actor: JwtPayload,
@@ -2812,17 +2816,28 @@ export class PayrollService {
       input.month,
       { periodFrom: input.periodFrom, periodTo: input.periodTo },
     );
-    if (preview.existingPayout?.status === 'PAID') {
-      throw new BadRequestException('Эта выплата уже зафиксирована');
-    }
-    const card = Math.max(0, Math.round(input.cardTransferMinor ?? 0));
-    const actualCash = Math.round(
-      input.actualCashMinor ?? preview.payableMinor - card,
-    );
     const kind =
       input.kind === 'ADVANCE_HALF'
         ? PrismaPayoutKind.ADVANCE_HALF
         : PrismaPayoutKind.MONTH_SETTLEMENT;
+    const existing = await this.findPayoutForWave(
+      clubId,
+      input.userId,
+      kind,
+      preview.periodFrom,
+      preview.periodTo,
+    );
+    if (existing?.status === PayrollPayoutStatus.PAID) {
+      return this.confirmPayout(actor, {
+        ...input,
+        note: existing.note ?? undefined,
+      });
+    }
+
+    const card = Math.max(0, Math.round(input.cardTransferMinor ?? 0));
+    const actualCash = Math.round(
+      input.actualCashMinor ?? preview.payableMinor - card,
+    );
     const periodFrom = dateOnly(preview.periodFrom);
     const periodTo = dateOnly(preview.periodTo);
     const data = {
@@ -2842,16 +2857,6 @@ export class PayrollService {
       note: null as string | null,
     };
 
-    const existing = await this.findPayoutForWave(
-      clubId,
-      input.userId,
-      kind,
-      preview.periodFrom,
-      preview.periodTo,
-    );
-    if (existing?.status === PayrollPayoutStatus.PAID) {
-      throw new BadRequestException('Эта выплата уже зафиксирована');
-    }
     if (existing) {
       const row = await this.prisma.payrollPayout.update({
         where: { id: existing.id },
@@ -2886,6 +2891,10 @@ export class PayrollService {
     }
   }
 
+  /**
+   * Confirm (or amend) a wave payout. Re-confirming a PAID row updates card/cash
+   * and staff balance without creating a duplicate wave.
+   */
   async confirmPayout(
     actor: JwtPayload,
     input: {
@@ -2909,9 +2918,6 @@ export class PayrollService {
       input.month,
       { periodFrom: input.periodFrom, periodTo: input.periodTo },
     );
-    if (preview.existingPayout?.status === 'PAID') {
-      throw new BadRequestException('Эта выплата уже зафиксирована');
-    }
     const card = Math.max(0, Math.round(input.cardTransferMinor ?? 0));
     const suggestedCash = preview.payableMinor - card;
     const actualCash =
@@ -2938,6 +2944,16 @@ export class PayrollService {
           ? `недоплата ${(carryOutMinor / 100).toFixed(2)} с ${waveLabel} ${preview.periodFrom}–${preview.periodTo}`
           : `переплата ${(Math.abs(carryOutMinor) / 100).toFixed(2)} с ${waveLabel} ${preview.periodFrom}–${preview.periodTo}`;
 
+    const periodFrom = dateOnly(preview.periodFrom);
+    const periodTo = dateOnly(preview.periodTo);
+    const existing = await this.findPayoutForWave(
+      clubId,
+      input.userId,
+      kind,
+      preview.periodFrom,
+      preview.periodTo,
+    );
+    const amendingPaid = existing?.status === PayrollPayoutStatus.PAID;
     const data = {
       earnedMinor: preview.earnedMinor,
       priorPaidMinor: preview.priorPaidMinor,
@@ -2949,23 +2965,10 @@ export class PayrollService {
       carryOutMinor,
       currency: preview.currency,
       status: PayrollPayoutStatus.PAID,
-      paidAt: new Date(),
+      paidAt: amendingPaid ? (existing.paidAt ?? new Date()) : new Date(),
       note: input.note?.trim() || null,
       createdById: actor.sub,
     };
-
-    const periodFrom = dateOnly(preview.periodFrom);
-    const periodTo = dateOnly(preview.periodTo);
-    const existing = await this.findPayoutForWave(
-      clubId,
-      input.userId,
-      kind,
-      preview.periodFrom,
-      preview.periodTo,
-    );
-    if (existing?.status === PayrollPayoutStatus.PAID) {
-      throw new BadRequestException('Эта выплата уже зафиксирована');
-    }
 
     const row = await this.prisma.$transaction(async (tx) => {
       const payout = existing
