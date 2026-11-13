@@ -1,5 +1,8 @@
 import type { ClubRevenueLineDto, WorkUnit } from '@fitgo/shared-types';
-import { isSpaLikeSessionTitle } from '@fitgo/shared-types';
+import {
+  isMultiVisitPackSale,
+  isSpaLikeSessionTitle,
+} from '@fitgo/shared-types';
 
 export function unitDayIso(u: WorkUnit): string {
   return u.occurredAt.slice(0, 10);
@@ -88,6 +91,11 @@ export function scoreSaleLineForUnit(
 
   let score = 0;
   if (u.kind === 'SPA') {
+    const unitLooksPack = /\(абонемент\)|\(блок\)|абонемент|пакет|блок/i.test(
+      u.title ?? '',
+    );
+    // Pack purchase ≠ single visit cheque (unless the unit itself is from a block).
+    if (isMultiVisitPackSale(line.productName) && !unitLooksPack) return -1;
     if (isSpaLikeSessionTitle(product)) score += 40;
     else if (/массаж|spa|биоимпедан|solari|солярри/i.test(product)) score += 30;
     else return -1; // bar / shop / membership cash — never for SPA visit

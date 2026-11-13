@@ -142,6 +142,26 @@ function sale(
   }
 }
 
+// --- Unpaid multi-visit pack is not a visit payment candidate ---
+{
+  const visit = new Date('2026-10-29T13:35:00.000Z');
+  const b = booking({
+    id: 'b-unpaid-pack',
+    startAt: visit,
+    serviceName: 'Массаж классический 25 мин',
+  });
+  const pack = sale({
+    externalId: 'sale-pack-unpaid',
+    occurredAt: new Date('2026-10-20T13:26:00.000Z'),
+    productName: 'Блок массажа 10 новый',
+    saleAmount: 450,
+    paidAmount: 0,
+    operationType: 'unpaid',
+  });
+  const r = matchSpaSale({ booking: b, sales: [pack] });
+  assert.equal(r.kind, 'none');
+}
+
 // --- Other nomenclature → hint ---
 {
   const visit = new Date('2026-10-19T07:00:00.000Z');

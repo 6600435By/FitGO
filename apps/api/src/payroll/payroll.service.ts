@@ -142,6 +142,11 @@ import {
   rateChangeHintText,
   utcDateKey,
 } from './payroll-dates';
+import {
+  PAYROLL_DEBT_HINT,
+  dedupeSpaPayrollUnits,
+  spaUnitCoversVisit,
+} from './spa-payroll-debt';
 
 function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -149,9 +154,6 @@ function asPayProfile(raw: unknown): StaffPayProfile | undefined {
   if (!p.track) return undefined;
   return p;
 }
-
-/** SPA / PT debt row: shown in period detail, never counted in ЗП totals. */
-const PAYROLL_DEBT_HINT = 'Долг, в расчёт не входит';
 
 /** Append a payroll trust hint and raise the band (worst wins). */
 function pushWorkUnitTrust(
@@ -763,7 +765,8 @@ export class PayrollService {
         title: b.service.name,
       });
       // Multi-visit pack sale («Блок массажа 10») is not SPA motivation —
-      // only conducted write-offs pay (pack amount / N).
+      // only conducted write-offs pay (pack amount / N). Never show pack
+      // purchases themselves as «не оплачено» in employee ЗП.
       if (isMultiVisitPackSale(sale.productName)) continue;
       const clientName = b.client
         ? `${b.client.lastName} ${b.client.firstName}`.trim()
@@ -778,6 +781,8 @@ export class PayrollService {
       const unpaidSale =
         !clubRevenueHasPaidMoney(sale) && !bioimpedance && !debtWriteOff;
       if (unpaidSale) {
+        // 1C visit / paid sibling already covers this slot — no debt twin.
+        if (spaUnitCoversVisit(units, clientName, b.startAt)) continue;
         const debtMajor =
           Number(sale.saleAmount) || Number(sale.amount) || 0;
         const priceMinor =
@@ -889,6 +894,7 @@ export class PayrollService {
     // FitGO SPA with DEBT / PENDING — show in ЗП as «не в ЗП» (never pay).
     // Do NOT overlay onto units already built from a 1C visit: Onex paymentBasis
     // (VIP/абонемент / оплачено) wins over a stale SpaBooking.paymentStatus=DEBT.
+    // Pack / quota visits are funded by write-offs — never list pack sales here.
     for (const b of partnerSpaBookings) {
       if (
         b.paymentStatus !== 'DEBT' &&
@@ -912,9 +918,22 @@ export class PayrollService {
       ) {
         continue;
       }
+      // Quota / package debit — motivation comes from 1C write-off, not debt.
+      if (b.paymentType === 'QUOTA' || b.membershipPackageId) continue;
       const clientName = b.client
         ? `${b.client.lastName} ${b.client.firstName}`.trim()
         : b.guestName ?? undefined;
+      // Same client + close time already in units (Onex block write-off etc.).
+      if (spaUnitCoversVisit(units, clientName, b.startAt)) continue;
+      const linkedExt = b.linkedSaleExternalId?.trim();
+      if (linkedExt) {
+        const linkedSale = await this.prisma.clubRevenueEntry.findFirst({
+          where: { clubId, externalId: linkedExt, isActive: true },
+          select: { productName: true },
+        });
+        // Linked «Блок массажа 10» is not an unpaid retail SPA line.
+        if (isMultiVisitPackSale(linkedSale?.productName)) continue;
+      }
       const spaUnit: WorkUnit = {
         id: b.id,
         kind: 'SPA',
@@ -931,7 +950,7 @@ export class PayrollService {
         serviceExternalId: b.service.externalId ?? undefined,
         partnerSource: b.partnerSource ?? undefined,
         sessionKey: fitgoSessionKey('SPA', b.id),
-        saleExternalId: b.linkedSaleExternalId?.trim() || undefined,
+        saleExternalId: linkedExt || undefined,
       };
       markSpaUnitAsUnpaidDebt(spaUnit);
       units.push(spaUnit);
@@ -1049,11 +1068,22 @@ export class PayrollService {
             u.kind === 'SPA' &&
             u.payrollTrusted &&
             !u.spaMembershipQuota &&
+            !u.spaBlockPriceSource &&
+            !/\(блок\)\s*$/i.test(u.title ?? '') &&
             u.saleExternalId?.trim() === saleExt
           ) {
             markSpaUnitAsUnpaidDebt(u);
           }
         }
+      }
+    }
+
+    // Drop FitGO «не оплачено» twins next to 1C block write-offs / paid SPA.
+    {
+      const deduped = dedupeSpaPayrollUnits(units);
+      if (deduped !== units) {
+        units.length = 0;
+        units.push(...deduped);
       }
     }
 

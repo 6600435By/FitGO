@@ -5,6 +5,7 @@
 
 import type { SpaLinkCandidate, SpaLinkHint } from '@fitgo/shared-types';
 import {
+  isMultiVisitPackSale,
   isServiceBlockPackageName,
   isSpaLikeSessionTitle,
 } from '@fitgo/shared-types';
@@ -682,13 +683,16 @@ export function matchSpaSale(input: {
     return false;
   };
 
-  const forClient = sales.filter(
-    (s) =>
-      !saleTakenBlocksSpaLink(s, takenSaleIds) &&
-      inWindow(s) &&
-      clientMatchesSale(s, booking) &&
-      saleIsSpaLinkCandidate(s, serviceIdByProduct),
-  );
+  const forClient = sales.filter((s) => {
+    if (saleTakenBlocksSpaLink(s, takenSaleIds)) return false;
+    if (!inWindow(s)) return false;
+    if (!clientMatchesSale(s, booking)) return false;
+    if (!saleIsSpaLinkCandidate(s, serviceIdByProduct)) return false;
+    // Unpaid multi-visit packs («Блок массажа 10») are not visit payment docs —
+    // they flooded «не оплачено» / Привязать. Paid packs may still be offered.
+    if (isMultiVisitPackSale(s.productName) && !saleIsPaid(s)) return false;
+    return true;
+  });
   if (forClient.length === 0) return { kind: 'none' };
 
   const resolveServiceId = (s: SpaSaleCandidate): string | undefined => {
