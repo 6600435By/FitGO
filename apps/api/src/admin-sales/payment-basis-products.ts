@@ -64,6 +64,30 @@ export function shouldReplaceProductWithBasis(
 const DOC_UUID_RE = /^[0-9a-f-]{36}$/i;
 
 /**
+ * Sale-document UUID from a cash-scope externalId.
+ * Analytics BSL: `payDoc:cash:Тип:client:saleDoc:ts:op…` — UUIDs after Тип are
+ * client then saleDoc; take the last UUID before the timestamp.
+ * Legacy / tests: `payDoc:cash:Тип:saleDoc:ts` or `…:cli-1:saleDoc:ts` — single UUID.
+ */
+export function cashKeySaleDocId(externalId: string): string | undefined {
+  const parts = externalId.split(':');
+  const cashIdx = parts.indexOf('cash');
+  if (cashIdx < 0) return undefined;
+  const uuids: string[] = [];
+  for (let i = cashIdx + 1; i < parts.length; i++) {
+    const p = (parts[i] ?? '').trim();
+    if (DOC_UUID_RE.test(p)) {
+      uuids.push(p.toLowerCase());
+      continue;
+    }
+    // Stop at timestamp / op once we already saw a UUID (skip non-UUID Тип / cli-1).
+    if (uuids.length > 0) break;
+  }
+  if (uuids.length >= 2) return uuids[uuids.length - 1];
+  return uuids[0];
+}
+
+/**
  * Sale document UUID candidates from club-revenue externalId / documentId.
  * cash: `payDoc:cash:Тип:client:saleDoc:ts:op…`
  * debt: `saleDoc:debt:client`
@@ -77,14 +101,12 @@ export function saleDocIdsForRevenueRow(row: {
   documentId: string | null;
 }): string[] {
   const ids = new Set<string>();
+  const cashSale = cashKeySaleDocId(row.externalId);
+  if (cashSale) ids.add(cashSale);
   const parts = row.externalId.split(':');
-  const cashIdx = parts.indexOf('cash');
-  if (cashIdx >= 0 && parts[cashIdx + 3]) {
-    ids.add(parts[cashIdx + 3]);
-  }
   const debtIdx = parts.indexOf('debt');
   if (debtIdx > 0) {
-    ids.add(parts[0]);
+    ids.add(parts[0]!);
   }
   if (row.documentId?.trim()) {
     ids.add(row.documentId.trim());
@@ -101,11 +123,8 @@ export function preferredSaleBasisId(row: {
   documentId: string | null;
 }): string {
   const parts = row.externalId.split(':');
-  const cashIdx = parts.indexOf('cash');
-  if (cashIdx >= 0) {
-    const basis = (parts[cashIdx + 3] ?? '').trim();
-    if (basis && DOC_UUID_RE.test(basis)) return basis.toLowerCase();
-  }
+  const cashSale = cashKeySaleDocId(row.externalId);
+  if (cashSale) return cashSale;
   const ids = saleDocIdsForRevenueRow(row);
   if (ids[0]) return ids[0]!.toLowerCase();
   const doc = row.documentId?.trim();
@@ -135,9 +154,7 @@ export function pickBasisLinesForRevenueRow(
     if (byRegistrar) return byRegistrar.lines;
   }
 
-  const parts = row.externalId.split(':');
-  const cashIdx = parts.indexOf('cash');
-  const osn = cashIdx >= 0 ? parts[cashIdx + 3] : null;
+  const osn = cashKeySaleDocId(row.externalId);
   if (osn) {
     const byOsn = withLines.find((x) => x.d === osn);
     if (byOsn) return byOsn.lines;

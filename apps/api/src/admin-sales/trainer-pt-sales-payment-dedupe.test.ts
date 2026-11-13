@@ -3,11 +3,16 @@
  */
 import assert from 'node:assert/strict';
 import {
+  dropPrePayOnPaymentEpochPtSales,
   mergeTrainerPtSaleRows,
   resolvePtCashOccurredAt,
   saleDocumentIdFromPtExternalId,
   type TrainerPtSaleRow,
 } from './trainer-pt-sales-from-revenue';
+import {
+  cashKeySaleDocId,
+  preferredSaleBasisId,
+} from './payment-basis-products';
 import {
   collapseSpaSalesByBasis,
   matchSpaSale,
@@ -415,7 +420,7 @@ function pt(
     performerName: 'Бирюкова Екатерина',
     card: 90,
   };
-  // preferredSaleBasisId for cash key needs :cash: at index with basis at +3
+  // preferredSaleBasisId: BSL cash key has saleDoc at cash+4 (client at +3).
   const payCash: SpaSaleCandidate = {
     ...pay,
     externalId: `paydoc:cash:Долг:cli-1:${saleUuid}:20261006150000:payment`,
@@ -446,6 +451,156 @@ function pt(
     assert.equal(r.paymentStatus, 'PAID');
     assert.equal(r.sale.occurredAt.toISOString().slice(0, 10), '2026-10-02');
   }
+}
+
+// Analytics cash key: payDoc:cash:Тип:client:saleDoc:ts:op — basis is saleDoc (+4), not client (+3).
+{
+  const saleDoc = 'c3903ce3-7064-44f5-a80d-7192ac9efdac';
+  const client = 'ae8a0bd3-e615-11ee-8dd3-a45d36c32cf1';
+  const payDoc = '243f0ec7-c7ef-11f1-8dec-a45d36c32cf1';
+  const ext = `${payDoc}:cash:Долг:${client}:${saleDoc}:20261030192800:payment:p2026-10-30`;
+  assert.equal(cashKeySaleDocId(ext), saleDoc);
+  assert.equal(
+    preferredSaleBasisId({ externalId: ext, documentId: payDoc }),
+    saleDoc,
+  );
+  // Legacy without client still resolves sale at +3.
+  assert.equal(
+    cashKeySaleDocId(`paydoc:cash:Долг:${saleDoc}:20261006102800:payment`),
+    saleDoc,
+  );
+}
+
+// Aksyuchits-like: Sep sale paid in Oct → one PAID row on sale day, then epoch drops it.
+{
+  const saleUuid = 'c3903ce3-7064-44f5-a80d-7192ac9efdac';
+  const saleAt = new Date('2026-09-23T00:00:00.000Z');
+  const payAt = new Date('2026-10-30T17:28:00.000Z');
+  assert.equal(
+    resolvePtCashOccurredAt(payAt, saleUuid, new Map([[saleUuid, saleAt]]))
+      .toISOString()
+      .slice(0, 10),
+    '2026-09-23',
+  );
+  const merged = mergeTrainerPtSaleRows(
+    [
+      pt({
+        occurredAt: '2026-09-23T00:00:00.000Z',
+        clientName: 'Аксючиц Полина Сергеевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        saleDocumentId: saleUuid,
+        externalId: `${saleUuid}#1`,
+        docRef: '29392#1',
+        paymentStatus: 'DEBT',
+      }),
+    ],
+    [
+      pt({
+        occurredAt: '2026-10-30T17:28:00.000Z',
+        clientName: 'Аксючиц Полина Сергеевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        saleDocumentId: saleUuid,
+        paymentStatus: 'PAID',
+        fromCashPayment: true,
+      }),
+    ],
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]!.occurredAt.slice(0, 10), '2026-09-23');
+  assert.equal(merged[0]!.paymentStatus, 'PAID');
+  assert.equal(dropPrePayOnPaymentEpochPtSales(merged).length, 0);
+}
+
+// 12.06 sale / 05.10 pay and 28.09 / 02.10 — epoch empties both.
+{
+  assert.equal(
+    dropPrePayOnPaymentEpochPtSales([
+      pt({ occurredAt: '2026-06-12T10:00:00.000Z', amount: 45 }),
+      pt({ occurredAt: '2026-09-28T10:00:00.000Z', amount: 50 }),
+    ]).length,
+    0,
+  );
+}
+
+// Oct 12 sale + Oct 30 pay (known UUID) → one PAID row on 12.10; survives epoch.
+{
+  const uuid = 'aaaaaaaa-bbbb-cccc-dddd-111111111111';
+  const merged = mergeTrainerPtSaleRows(
+    [
+      pt({
+        occurredAt: '2026-10-12T20:08:00.000Z',
+        clientName: 'Аксючиц Полина Сергеевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        saleDocumentId: uuid,
+        paymentStatus: 'DEBT',
+      }),
+    ],
+    [
+      pt({
+        occurredAt: '2026-10-30T17:28:00.000Z',
+        clientName: 'Аксючиц Полина Сергеевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        saleDocumentId: uuid,
+        paymentStatus: 'PAID',
+        fromCashPayment: true,
+      }),
+    ],
+  );
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]!.occurredAt.slice(0, 10), '2026-10-12');
+  assert.equal(merged[0]!.paymentStatus, 'PAID');
+  assert.equal(merged[0]!.amount, 50);
+  const kept = dropPrePayOnPaymentEpochPtSales(merged);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0]!.occurredAt.slice(0, 10), '2026-10-12');
+}
+
+// 12.10 and 14.10 different sale UUIDs → two rows (do not collapse by client+50р).
+{
+  const merged = mergeTrainerPtSaleRows(
+    [
+      pt({
+        occurredAt: '2026-10-12T20:08:00.000Z',
+        clientName: 'Аксючиц Полина Сергеевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        saleDocumentId: 'aaaaaaaa-bbbb-cccc-dddd-121212121212',
+        paymentStatus: 'PAID',
+      }),
+      pt({
+        occurredAt: '2026-10-14T14:41:00.000Z',
+        clientName: 'Аксючиц Полина Сергеевна',
+        serviceName: 'Занятие с тренером 50р.',
+        amount: 50,
+        saleDocumentId: 'aaaaaaaa-bbbb-cccc-dddd-141414141414',
+        paymentStatus: 'PAID',
+      }),
+    ],
+    [],
+  );
+  assert.equal(merged.length, 2);
+  assert.equal(dropPrePayOnPaymentEpochPtSales(merged).length, 2);
+}
+
+// Cash without prior sale date stays on cashier day and is kept (may be new Oct sale).
+{
+  const payAt = new Date('2026-10-30T17:28:00.000Z');
+  assert.equal(
+    resolvePtCashOccurredAt(payAt, undefined, new Map()).toISOString(),
+    payAt.toISOString(),
+  );
+  const kept = dropPrePayOnPaymentEpochPtSales([
+    pt({
+      occurredAt: '2026-10-30T17:28:00.000Z',
+      paymentStatus: 'PAID',
+      fromCashPayment: true,
+    }),
+  ]);
+  assert.equal(kept.length, 1);
 }
 
 console.log('trainer-pt-sales-payment-dedupe.test.ts: ok');

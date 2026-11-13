@@ -114,6 +114,7 @@ import {
 import {
   clubRevenueHasPaidMoney,
   clubRevenueIsDebtWriteOff,
+  dropPrePayOnPaymentEpochPtSales,
   loadPackSalesForUnitPrice,
   loadTrainerPtSalesFromRevenue,
   matchPackSaleForUnitPrice,
@@ -135,6 +136,7 @@ import {
   addCalendarDays,
   clubDayIso,
   dateOnly,
+  isBeforePayOnPaymentEpoch,
   localMonthStartIso,
   localTodayIso,
   rateChangeHintText,
@@ -1481,6 +1483,10 @@ export class PayrollService {
             ? 'Долг, в расчёт не входит'
             : 'Оплата не в расчёте',
         );
+      }
+      // Personal reformer before pay-on-payment epoch: already settled as debt.
+      if (isReformerPersonal && isBeforePayOnPaymentEpoch(o.startAt)) {
+        continue;
       }
       units.push(ptSpaUnit);
       if (
@@ -4862,13 +4868,15 @@ export class PayrollService {
     );
     // Integration may mark unpaid PT as PAID when debt remainder is missing —
     // ClubRevenue unpaid wins so debt never enters ЗП.
-    return overlayPtSaleDebtFromRevenue(
+    const withDebt = await overlayPtSaleDebtFromRevenue(
       this.prisma,
       clubId,
       fromD,
       toD,
       withPaid,
     );
+    // Pre-2026-10-01 one-shots already settled as debt before the app.
+    return dropPrePayOnPaymentEpochPtSales(withDebt);
   }
 
   /**

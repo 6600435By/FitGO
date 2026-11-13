@@ -6,6 +6,21 @@
 /** Club calendar timezone (no DST). */
 export const CLUB_TZ = 'Europe/Minsk';
 
+/**
+ * First club day of pay-on-payment for one-shot PT / personal reformer.
+ * Services and sale documents before this day were already settled as debt
+ * before the app — later cash only clears that debt (no ЗП / control row).
+ */
+export const PAY_ON_PAYMENT_EPOCH = '2026-10-01';
+
+/** True when the club calendar day is strictly before {@link PAY_ON_PAYMENT_EPOCH}. */
+export function isBeforePayOnPaymentEpoch(
+  date: Date | string | number | null | undefined,
+): boolean {
+  if (date == null || date === '') return false;
+  return clubDayIso(date) < PAY_ON_PAYMENT_EPOCH;
+}
+
 /** Calendar day YYYY-MM-DD in club TZ — not UTC `toISOString().slice(0, 10)`. */
 export function clubDayIso(date: Date | string | number = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', {

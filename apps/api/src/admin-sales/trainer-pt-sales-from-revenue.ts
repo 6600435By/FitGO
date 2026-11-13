@@ -7,6 +7,7 @@ import {
   parsePackVisitCountFromTitle,
 } from '@fitgo/shared-types';
 import type { PrismaService } from '../prisma/prisma.service';
+import { isBeforePayOnPaymentEpoch } from '../payroll/payroll-dates';
 import { preferredSaleBasisId } from './payment-basis-products';
 import {
   isLikelyTrainingProductName,
@@ -685,6 +686,17 @@ export function resolvePtCashOccurredAt(
   return priorSaleAtByUuid.get(basisUuid) ?? paymentAt;
 }
 
+/**
+ * Drop one-shot PT rows whose sale/service day is before pay-on-payment epoch.
+ * Late cash for those sales only clears pre-app debt — no control card / ЗП.
+ * Rows that could not be backdated keep the cashier day and stay (may be new).
+ */
+export function dropPrePayOnPaymentEpochPtSales<
+  T extends { occurredAt: string },
+>(sales: T[]): T[] {
+  return sales.filter((s) => !isBeforePayOnPaymentEpoch(s.occurredAt));
+}
+
 const SALE_MATCH_LOOKBACK_DAYS = 120;
 
 /**
@@ -703,7 +715,7 @@ export async function loadTrainerPtSalesFromRevenue(
   const lookbackFrom = new Date(fromD);
   lookbackFrom.setDate(lookbackFrom.getDate() - SALE_MATCH_LOOKBACK_DAYS);
 
-  const [entries, knownSales, lookbackDocs] = await Promise.all([
+  const [entries, knownSales, lookbackDocs, saleTxRows] = await Promise.all([
     prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
@@ -763,6 +775,21 @@ export async function loadTrainerPtSalesFromRevenue(
         occurredAt: true,
       },
     }),
+    // Analytics sale date (soldAt) — cash-scope rows only have the payment day.
+    prisma.saleTransaction.findMany({
+      where: {
+        clubId,
+        soldAt: { gte: lookbackFrom, lte: toD },
+        OR: [
+          { saleType: 'training' },
+          { productName: { contains: 'Занятие с тренером' } },
+          { productName: { contains: 'занятие с тренером' } },
+          { productName: { contains: 'реформер' } },
+          { productName: { contains: 'Реформер' } },
+        ],
+      },
+      select: { externalSaleId: true, soldAt: true },
+    }),
   ]);
 
   // Only UUID suppresses a cash visit. client|trainer|service is too broad:
@@ -803,9 +830,19 @@ export async function loadTrainerPtSalesFromRevenue(
     if (doc && DOC_UUID_RE.test(doc)) {
       rememberPriorSaleAt(doc, d.occurredAt);
     }
+    // Suppress cash→visit only for real PT nomenclature rows (not «Продажа N»).
+    // Debt presentation stubs still backdate via priorSaleAtByUuid above.
     if (!isPt) continue;
     if (basis && DOC_UUID_RE.test(basis)) knownUuids.add(basis.toLowerCase());
     if (doc && DOC_UUID_RE.test(doc)) knownUuids.add(doc);
+  }
+  // Analytics soldAt fills prior map when ClubRevenue only has the pay day.
+  // Do not add to knownUuids — cash must still become the period visit when
+  // TrainerPtSale is missing (backdated, then epoch-filtered if pre-Oct).
+  for (const tx of saleTxRows) {
+    const uuid = saleDocumentIdFromPtExternalId(tx.externalSaleId);
+    if (!uuid) continue;
+    rememberPriorSaleAt(uuid, tx.soldAt);
   }
 
   type Agg = {

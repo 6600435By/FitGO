@@ -88,6 +88,7 @@ import {
 } from './pt-document-match';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import {
+  dropPrePayOnPaymentEpochPtSales,
   isExcludedFromPtBookingControl,
   isGymFloorSessionTitle,
   isHiddenFromTrainerBookingControl,
@@ -4885,13 +4886,15 @@ export class BookingControlService {
     }));
     // Inverse: wrongly-PAID from Integration when debt remainder missing —
     // ClubRevenue unpaid (scope=debt) wins so ЗП / контроль don't pay debt.
-    return overlayPtSaleDebtFromRevenue(
+    const withDebt = await overlayPtSaleDebtFromRevenue(
       this.prisma,
       clubId,
       fromD,
       toD,
       mapped,
     );
+    // Pre-2026-10-01 one-shots already settled as debt before the app.
+    return dropPrePayOnPaymentEpochPtSales(withDebt);
   }
 
   private async fetchTrainerPtSalesLive(

@@ -6,8 +6,10 @@ import {
   addCalendarDays,
   clubDayIso,
   dateOnly,
+  isBeforePayOnPaymentEpoch,
   localMonthStartIso,
   localTodayIso,
+  PAY_ON_PAYMENT_EPOCH,
   rateChangeHintText,
   utcDateKey,
 } from './payroll-dates';
@@ -58,6 +60,18 @@ import {
   const localMidnight = new Date('2025-10-01T00:00:00');
   assert.equal(localMidnight.toISOString().slice(0, 10), '2025-09-30');
   assert.equal(utcDateKey(dateOnly('2025-10-01')), '2025-10-01');
+}
+
+{
+  assert.equal(PAY_ON_PAYMENT_EPOCH, '2026-10-01');
+  assert.equal(isBeforePayOnPaymentEpoch('2026-09-30'), true);
+  assert.equal(isBeforePayOnPaymentEpoch('2026-09-28T21:00:00.000Z'), true);
+  assert.equal(isBeforePayOnPaymentEpoch('2026-10-01'), false);
+  assert.equal(isBeforePayOnPaymentEpoch('2026-10-12T20:08:00.000Z'), false);
+  // Personal reformer visit day.
+  assert.equal(isBeforePayOnPaymentEpoch('2026-09-25T12:00:00.000Z'), true);
+  assert.equal(isBeforePayOnPaymentEpoch('2026-10-03T12:00:00.000Z'), false);
+  assert.equal(isBeforePayOnPaymentEpoch(null), false);
 }
 
 console.log('payroll-dates.test.ts: ok');
