@@ -7,11 +7,13 @@ import type {
 } from '@fitgo/shared-types';
 import {
   advanceHalfRange,
+  isPayoutOverTolerance,
   monthSettlementRange,
   parseMoneyToMinor,
+  PAYOUT_OVERPAY_TOLERANCE_MINOR,
   resolvePayoutFormSplit,
 } from '@fitgo/shared-types';
-import { Banknote } from 'lucide-react';
+import { Banknote, Pencil } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PayrollFold } from '@/components/payroll/payroll-fold';
@@ -81,7 +83,7 @@ function PayoutStatusBadge({
     return (
       <span
         className="inline-flex items-center rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-300"
-        title="Выплата подтверждена — карту и кассу можно изменить и сохранить"
+        title="Выплата подтверждена — правка только через «Изменить»"
       >
         Выплачено
       </span>
@@ -320,6 +322,12 @@ export function PayrollPayoutsPanel({
   );
   const [rows, setRows] = useState<PayrollPayoutPreview[]>([]);
   const [drafts, setDrafts] = useState<Record<string, RowDraft>>({});
+  /** PAID rows unlocked for intentional amend (card/cash). */
+  const [editingPaid, setEditingPaid] = useState<Record<string, boolean>>({});
+  /** Snapshot before edit — used by «Отмена». */
+  const [paidEditBaseline, setPaidEditBaseline] = useState<
+    Record<string, { card: string; cash: string }>
+  >({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const ctxRef = useRef<PayoutCtx>({
@@ -335,6 +343,8 @@ export function PayrollPayoutsPanel({
   const loadSeq = useRef(0);
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const persistRef = useRef<
     (
       userId: string,
@@ -373,6 +383,8 @@ export function PayrollPayoutsPanel({
       setRows([]);
       draftsRef.current = {};
       setDrafts({});
+      setEditingPaid({});
+      setPaidEditBaseline({});
       return;
     }
     setPeriodFrom(defaultRange.from);
@@ -380,7 +392,13 @@ export function PayrollPayoutsPanel({
     setRows([]);
     draftsRef.current = {};
     setDrafts({});
+    setEditingPaid({});
+    setPaidEditBaseline({});
   }, [defaultRange.from, defaultRange.to]);
+
+  const isPaidRow = (userId: string) =>
+    rowsRef.current.find((r) => r.performerId === userId)?.existingPayout
+      ?.status === 'PAID';
 
   const persistDraft = async (
     userId: string,
@@ -390,6 +408,8 @@ export function PayrollPayoutsPanel({
   ) => {
     const token = getToken();
     if (!token) return;
+    // PAID must never autosave — only explicit «Сохранить» (confirm amend).
+    if (isPaidRow(userId)) return;
     const seq = (saveSeq.current[userId] ?? 0) + 1;
     saveSeq.current[userId] = seq;
     try {
@@ -565,9 +585,8 @@ export function PayrollPayoutsPanel({
         const prev = draftsRef.current[p.performerId];
         const cardN = parseMoneyToMinor(card || '0');
         const cashN = parseMoneyToMinor(cash || '0');
-        const gap = p.payableMinor - (cardN + cashN);
-        // Unpaid with amount, or paid but card+cash ≠ к выплате (e.g. after recalc).
-        const selected = p.payableMinor !== 0 && (!paid || gap !== 0);
+        // PAID never auto-selected for batch confirm — amend only via «Изменить».
+        const selected = !paid && p.payableMinor !== 0;
         next[p.performerId] = {
           card,
           cash,
@@ -578,6 +597,8 @@ export function PayrollPayoutsPanel({
       }
       draftsRef.current = next;
       setDrafts(next);
+      setEditingPaid({});
+      setPaidEditBaseline({});
     } catch (e) {
       if (seq !== loadSeq.current) return;
       setRows([]);
@@ -607,8 +628,111 @@ export function PayrollPayoutsPanel({
     const merged = { ...draftsRef.current, [userId]: next };
     draftsRef.current = merged;
     setDrafts(merged);
-    if (patch.card !== undefined || patch.cash !== undefined) {
+    // Autosave only drafts / new rows. PAID: wait for «Сохранить».
+    if (
+      (patch.card !== undefined || patch.cash !== undefined) &&
+      !isPaidRow(userId)
+    ) {
       scheduleSave(userId, next.card, next.cash);
+    }
+  };
+
+  const beginEditPaid = (userId: string) => {
+    const d = draftsRef.current[userId];
+    if (!d) return;
+    setPaidEditBaseline((prev) => ({
+      ...prev,
+      [userId]: { card: d.card, cash: d.cash },
+    }));
+    setEditingPaid((prev) => ({ ...prev, [userId]: true }));
+    setMessage('');
+  };
+
+  const cancelEditPaid = (userId: string) => {
+    const pending = pendingSaves.current[userId];
+    if (pending) {
+      clearTimeout(pending.timer);
+      delete pendingSaves.current[userId];
+    }
+    const baseline = paidEditBaseline[userId];
+    const row = rowsRef.current.find((r) => r.performerId === userId);
+    const card =
+      baseline?.card ??
+      (row?.existingPayout
+        ? minorInput(row.existingPayout.cardTransferMinor)
+        : draftsRef.current[userId]?.card ?? '0');
+    const cash =
+      baseline?.cash ??
+      (row?.existingPayout
+        ? minorInput(row.existingPayout.actualCashMinor)
+        : draftsRef.current[userId]?.cash ?? '0');
+    updateDraft(userId, { card, cash, selected: false });
+    setEditingPaid((prev) => {
+      const next = { ...prev };
+      delete next[userId];
+      return next;
+    });
+    setPaidEditBaseline((prev) => {
+      const next = { ...prev };
+      delete next[userId];
+      return next;
+    });
+    setMessage('');
+  };
+
+  const saveEditPaid = async (userId: string) => {
+    const token = getToken();
+    if (!token) return;
+    const row = rowsRef.current.find((r) => r.performerId === userId);
+    const d = draftsRef.current[userId];
+    if (!row || !d || row.existingPayout?.status !== 'PAID') return;
+    const cardMinor = parseMoneyToMinor(d.card || '0');
+    const cashMinor = parseMoneyToMinor(d.cash || '0');
+    const paidTotal = cardMinor + cashMinor;
+    if (isPayoutOverTolerance(row.payableMinor, paidTotal)) {
+      setMessage(
+        `${row.performerName}: карта+касса (${(paidTotal / 100).toFixed(2)}) больше «к выплате» (${(row.payableMinor / 100).toFixed(2)}) более чем на ${(PAYOUT_OVERPAY_TOLERANCE_MINOR / 100).toFixed(2)} BYN. Чтобы выдать больше — добавьте премию.`,
+      );
+      return;
+    }
+    if (
+      !window.confirm(
+        `Сохранить изменение выплаты для ${row.performerName}? Остаток переноса пересчитается.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.payrollPayoutConfirm(token, {
+        userId,
+        kind: payKind,
+        year: payYear,
+        month: payMonth,
+        periodFrom: periodFrom || undefined,
+        periodTo: periodTo || undefined,
+        cardTransferMinor: cardMinor,
+        actualCashMinor: cashMinor,
+      });
+      clearLocalDraft(ctxRef.current, userId);
+      setEditingPaid((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+      setPaidEditBaseline((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+      setMessage(`Выплата изменена: ${row.performerName}`);
+      await load();
+      onPayoutAmountsChanged?.(userId);
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Не удалось сохранить выплату');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -653,7 +777,34 @@ export function PayrollPayoutsPanel({
     const token = getToken();
     if (!token) return;
     const selectedRows = rows.filter((r) => drafts[r.performerId]?.selected);
-    const items = selectedRows.map((r) => {
+    const unpaidRows = selectedRows.filter(
+      (r) => r.existingPayout?.status !== 'PAID',
+    );
+    const skippedPaid = selectedRows.length - unpaidRows.length;
+    if (!unpaidRows.length) {
+      setMessage(
+        skippedPaid > 0
+          ? 'Выплаченные строки не подтверждаются пакетом — откройте «Изменить» → «Сохранить» на строке.'
+          : 'Нет выбранных строк для подтверждения',
+      );
+      return;
+    }
+    const overpayRow = unpaidRows.find((r) => {
+      const d = drafts[r.performerId]!;
+      const paid =
+        parseMoneyToMinor(d.card || '0') + parseMoneyToMinor(d.cash || '0');
+      return isPayoutOverTolerance(r.payableMinor, paid);
+    });
+    if (overpayRow) {
+      const d = drafts[overpayRow.performerId]!;
+      const paid =
+        parseMoneyToMinor(d.card || '0') + parseMoneyToMinor(d.cash || '0');
+      setMessage(
+        `${overpayRow.performerName}: карта+касса (${(paid / 100).toFixed(2)}) больше «к выплате» (${(overpayRow.payableMinor / 100).toFixed(2)}) более чем на ${(PAYOUT_OVERPAY_TOLERANCE_MINOR / 100).toFixed(2)} BYN. Чтобы выдать больше — добавьте премию.`,
+      );
+      return;
+    }
+    const items = unpaidRows.map((r) => {
       const d = drafts[r.performerId]!;
       return {
         userId: r.performerId,
@@ -661,17 +812,11 @@ export function PayrollPayoutsPanel({
         actualCashMinor: parseMoneyToMinor(d.cash || '0'),
       };
     });
-    if (!items.length) {
-      setMessage('Нет выбранных строк для подтверждения');
-      return;
-    }
-    const amendCount = selectedRows.filter(
-      (r) => r.existingPayout?.status === 'PAID',
-    ).length;
-    const confirmMsg =
-      amendCount > 0
-        ? `Подтвердить ${items.length} выплат(ы) за ${periodFrom}–${periodTo}? В том числе изменить уже выплаченные: ${amendCount}.`
-        : `Подтвердить ${items.length} выплат(ы) за ${periodFrom}–${periodTo}?`;
+    const confirmMsg = `Подтвердить ${items.length} выплат(ы) за ${periodFrom}–${periodTo}?${
+      skippedPaid > 0
+        ? ` (пропущено выплаченных: ${skippedPaid} — правьте через «Изменить»)`
+        : ''
+    }`;
     if (!window.confirm(confirmMsg)) {
       return;
     }
@@ -691,8 +836,8 @@ export function PayrollPayoutsPanel({
         clearLocalDraft(ctxRef.current, item.userId);
       }
       setMessage(
-        amendCount > 0
-          ? `Подтверждено: ${items.length} (изменено выплаченных: ${amendCount})`
+        skippedPaid > 0
+          ? `Подтверждено: ${items.length} (выплаченные пропущены: ${skippedPaid})`
           : `Подтверждено: ${items.length}`,
       );
       await load();
@@ -905,14 +1050,14 @@ export function PayrollPayoutsPanel({
             </button>
           </div>
           <p className="text-[11px] text-slate-500">
-            Карта и касса сохраняются автоматически. Статусы:{' '}
+            Черновики: карта/касса сохраняются автоматически. Статусы:{' '}
             <span className="text-amber-200">черновик</span>
             {' · '}
             <span className="text-sky-300">сохранено</span>
             {' · '}
             <span className="text-emerald-300">выплачено</span>
-            . Выплаченные строки можно править — измените сумму и уйдите из
-            поля (или подтвердите снова); «к выплате» и ЗП считают по факту.
+            . Уже выплаченные — только через «Изменить» → «Сохранить» (иначе
+            случайная правка снова создаёт перенос).
           </p>
 
           {(periodFrom !== defaultRange.from ||
@@ -934,7 +1079,8 @@ export function PayrollPayoutsPanel({
                   ? 'К выплате = заработано − аванс (факт карта+касса) + перенос. Аванс — то, что уже выдали 25-го, не начисление.'
                   : 'Заработано — начисление волны 1–15; колонка Аванс пуста (это сама выплата 25-го). Перенос к авансу не применяется.'}
                 {' '}
-                Если карта+касса меньше «к выплате» — останется перенос на следующую выплату; больше — переплата.
+                Если карта+касса меньше «к выплате» — останется перенос на следующую выплату.
+                Переплата больше {(PAYOUT_OVERPAY_TOLERANCE_MINOR / 100).toFixed(0)} BYN сверх «к выплате» запрещена — только через премию.
                 {' '}
                 Долг — личный долг сотрудника как клиента клуба (не вычитается из выплаты).
                 {' '}
@@ -957,6 +1103,8 @@ export function PayrollPayoutsPanel({
                   const cash = parseMoneyToMinor(d.cash || '0');
                   const paid = r.existingPayout?.status === 'PAID';
                   const saved = r.existingPayout?.status === 'DRAFT';
+                  const editing = Boolean(editingPaid[r.performerId]);
+                  const paidLocked = paid && !editing;
                   const rem = remainderHint(r.payableMinor, card, cash);
                   return (
                     <li
@@ -968,6 +1116,11 @@ export function PayrollPayoutsPanel({
                           type="checkbox"
                           className="mt-1"
                           disabled={busy}
+                          title={
+                            paid
+                              ? 'Для печати / выбора. Пакетное подтверждение выплаченных недоступно — правьте через «Изменить»'
+                              : undefined
+                          }
                           checked={d.selected}
                           onChange={(e) =>
                             updateDraft(r.performerId, {
@@ -1001,7 +1154,45 @@ export function PayrollPayoutsPanel({
                                 </span>
                               ) : null}
                             </button>
-                            <PayoutStatusBadge paid={paid} saved={saved} />
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <PayoutStatusBadge paid={paid} saved={saved} />
+                              {paid && !editing ? (
+                                <button
+                                  type="button"
+                                  className="btn-secondary inline-flex items-center gap-1 px-2 py-0.5 text-[10px]"
+                                  disabled={busy}
+                                  title="Изменить карту/кассу выплаченной строки"
+                                  onClick={() => beginEditPaid(r.performerId)}
+                                >
+                                  <Pencil className="h-3 w-3" aria-hidden />
+                                  Изменить
+                                </button>
+                              ) : null}
+                              {paid && editing ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn-primary px-2 py-0.5 text-[10px]"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      void saveEditPaid(r.performerId)
+                                    }
+                                  >
+                                    Сохранить
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary px-2 py-0.5 text-[10px]"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      cancelEditPaid(r.performerId)
+                                    }
+                                  >
+                                    Отмена
+                                  </button>
+                                </>
+                              ) : null}
+                            </div>
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
                             <div>
@@ -1058,8 +1249,11 @@ export function PayrollPayoutsPanel({
                             <label className="text-[10px] uppercase text-slate-500">
                               Карта
                               <input
-                                className="input mt-1 w-full py-1.5 text-sm"
-                                disabled={busy}
+                                className={`input mt-1 w-full py-1.5 text-sm ${
+                                  paidLocked ? 'opacity-70' : ''
+                                }`}
+                                disabled={busy || paidLocked}
+                                readOnly={paidLocked}
                                 inputMode="decimal"
                                 value={d.card}
                                 onChange={(e) =>
@@ -1069,14 +1263,19 @@ export function PayrollPayoutsPanel({
                                     r.payableMinor,
                                   )
                                 }
-                                onBlur={() => flushDraft(r.performerId)}
+                                onBlur={() => {
+                                  if (!paidLocked) flushDraft(r.performerId);
+                                }}
                               />
                             </label>
                             <label className="text-[10px] uppercase text-slate-500">
                               Из кассы
                               <input
-                                className="input mt-1 w-full py-1.5 text-sm"
-                                disabled={busy}
+                                className={`input mt-1 w-full py-1.5 text-sm ${
+                                  paidLocked ? 'opacity-70' : ''
+                                }`}
+                                disabled={busy || paidLocked}
+                                readOnly={paidLocked}
                                 inputMode="decimal"
                                 value={d.cash}
                                 onChange={(e) =>
@@ -1084,7 +1283,9 @@ export function PayrollPayoutsPanel({
                                     cash: e.target.value,
                                   })
                                 }
-                                onBlur={() => flushDraft(r.performerId)}
+                                onBlur={() => {
+                                  if (!paidLocked) flushDraft(r.performerId);
+                                }}
                               />
                             </label>
                           </div>
@@ -1174,6 +1375,8 @@ export function PayrollPayoutsPanel({
                       const cash = parseMoneyToMinor(d.cash || '0');
                       const paid = r.existingPayout?.status === 'PAID';
                       const saved = r.existingPayout?.status === 'DRAFT';
+                      const editing = Boolean(editingPaid[r.performerId]);
+                      const paidLocked = paid && !editing;
                       const rem = remainderHint(r.payableMinor, card, cash);
                       return (
                         <tr
@@ -1184,6 +1387,11 @@ export function PayrollPayoutsPanel({
                             <input
                               type="checkbox"
                               disabled={busy}
+                              title={
+                                paid
+                                  ? 'Для печати / выбора. Пакетное подтверждение выплаченных недоступно — правьте через «Изменить»'
+                                  : undefined
+                              }
                               checked={d.selected}
                               onChange={(e) =>
                                 updateDraft(r.performerId, {
@@ -1306,8 +1514,11 @@ export function PayrollPayoutsPanel({
                           </td>
                           <td className="px-2 py-2">
                             <input
-                              className="input w-20 py-1 text-xs"
-                              disabled={busy}
+                              className={`input w-20 py-1 text-xs ${
+                                paidLocked ? 'opacity-70' : ''
+                              }`}
+                              disabled={busy || paidLocked}
+                              readOnly={paidLocked}
                               inputMode="decimal"
                               value={d.card}
                               onChange={(e) =>
@@ -1317,13 +1528,18 @@ export function PayrollPayoutsPanel({
                                   r.payableMinor,
                                 )
                               }
-                              onBlur={() => flushDraft(r.performerId)}
+                              onBlur={() => {
+                                if (!paidLocked) flushDraft(r.performerId);
+                              }}
                             />
                           </td>
                           <td className="px-2 py-2">
                             <input
-                              className="input w-20 py-1 text-xs"
-                              disabled={busy}
+                              className={`input w-20 py-1 text-xs ${
+                                paidLocked ? 'opacity-70' : ''
+                              }`}
+                              disabled={busy || paidLocked}
+                              readOnly={paidLocked}
                               inputMode="decimal"
                               value={d.cash}
                               onChange={(e) =>
@@ -1331,11 +1547,51 @@ export function PayrollPayoutsPanel({
                                   cash: e.target.value,
                                 })
                               }
-                              onBlur={() => flushDraft(r.performerId)}
+                              onBlur={() => {
+                                if (!paidLocked) flushDraft(r.performerId);
+                              }}
                             />
                           </td>
                           <td className="px-2 py-2">
-                            <PayoutStatusBadge paid={paid} saved={saved} />
+                            <div className="flex flex-col items-start gap-1">
+                              <PayoutStatusBadge paid={paid} saved={saved} />
+                              {paid && !editing ? (
+                                <button
+                                  type="button"
+                                  className="btn-secondary inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px]"
+                                  disabled={busy}
+                                  title="Изменить карту/кассу выплаченной строки"
+                                  onClick={() => beginEditPaid(r.performerId)}
+                                >
+                                  <Pencil className="h-3 w-3" aria-hidden />
+                                  Изменить
+                                </button>
+                              ) : null}
+                              {paid && editing ? (
+                                <div className="flex flex-wrap gap-1">
+                                  <button
+                                    type="button"
+                                    className="btn-primary px-1.5 py-0.5 text-[10px]"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      void saveEditPaid(r.performerId)
+                                    }
+                                  >
+                                    Сохранить
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary px-1.5 py-0.5 text-[10px]"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      cancelEditPaid(r.performerId)
+                                    }
+                                  >
+                                    Отмена
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
                           </td>
                         </tr>
                       );

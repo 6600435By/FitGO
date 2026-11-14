@@ -429,9 +429,64 @@ export function settlementRemainderMinor(input: {
 }
 
 /**
+ * Max card+cash above «к выплате» without a bonus (cash rounding). 15 BYN.
+ * Larger overpay only via «Премия» (raises accrued / payable).
+ */
+export const PAYOUT_OVERPAY_TOLERANCE_MINOR = 15_00;
+
+/** True when card+cash exceeds payable by more than the rounding tolerance. */
+export function isPayoutOverTolerance(
+  payableMinor: number,
+  paidMinor: number,
+  toleranceMinor: number = PAYOUT_OVERPAY_TOLERANCE_MINOR,
+): boolean {
+  return Math.round(paidMinor) - Math.round(payableMinor) > toleranceMinor;
+}
+
+/**
+ * Carry-in for a 15th settlement when a payout row already exists for the wave.
+ *
+ * Never re-read live staff balance on amend: after confirm the balance holds
+ * this wave's carryOut, and using it as carryIn double-counts («останется перенос»).
+ *
+ * Ghost heal: snapshotted carryIn ≈ this wave's carryOut and the prior
+ * settlement left no debt → treat carryIn as 0 (self-referential pollution).
+ */
+export function resolveSettlementCarryInMinor(input: {
+  liveBalanceMinor: number;
+  existing?: {
+    carryInMinor: number;
+    carryOutMinor: number;
+  } | null;
+  /**
+   * Prior month settlement carryOut (`null` = no prior PAID settlement row).
+   * `0` means prior wave closed with no remainder.
+   */
+  priorSettlementCarryOutMinor: number | null;
+}): number {
+  const bal = Math.round(input.liveBalanceMinor);
+  const existing = input.existing;
+  if (!existing) {
+    return bal;
+  }
+  const snap = Math.round(existing.carryInMinor);
+  const carryOut = Math.round(existing.carryOutMinor);
+  const prior = input.priorSettlementCarryOutMinor;
+  const priorCleared = prior === null || prior === 0;
+  const snapMirrorsOut =
+    snap !== 0 &&
+    carryOut !== 0 &&
+    Math.abs(snap - carryOut) <= PAYOUT_OVERPAY_TOLERANCE_MINOR;
+  if (priorCleared && snapMirrorsOut) {
+    return 0;
+  }
+  return snap;
+}
+
+/**
  * Card / cash shown on the payout sheet.
  * A saved DRAFT (manager typed card or cash) replaces the profile prefill.
- * PAID keeps the recorded split (editable — amend and re-confirm to fix remainder).
+ * PAID keeps the recorded split (UI locks fields until «Изменить» → amend).
  * With no saved row, 25th prefills card from «Выплата аванса на карту».
  */
 export function resolvePayoutFormSplit(input: {

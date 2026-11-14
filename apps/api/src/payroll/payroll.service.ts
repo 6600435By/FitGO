@@ -15,6 +15,9 @@ import {
   payProfileForCalculation,
   payProfileSummary,
   resolveFixedAdvanceMinor,
+  isPayoutOverTolerance,
+  PAYOUT_OVERPAY_TOLERANCE_MINOR,
+  resolveSettlementCarryInMinor,
   settlementRemainderMinor,
   splitAdvanceWave,
   isAsdGroupSession,
@@ -2603,27 +2606,58 @@ export class PayrollService {
       }
     }
 
+    const existing = await this.findPayoutForWave(
+      clubId,
+      userId,
+      kind === 'ADVANCE_HALF'
+        ? PrismaPayoutKind.ADVANCE_HALF
+        : PrismaPayoutKind.MONTH_SETTLEMENT,
+      range.from,
+      range.to,
+    );
+
     const balance = await this.prisma.payrollStaffBalance.findUnique({
       where: { clubId_userId: { clubId, userId } },
     });
     // Carry only on 15th. Advance under/over is absorbed via fact deduction.
     // Legacy: 25th wrote under/over into balance — if balance still equals that
     // advance carryOut, use the advance's carryIn (pre-25th remainder) once.
+    // When a payout already exists for this wave, never re-read live balance as
+    // carryIn (it holds this wave's carryOut → «останется перенос» ghost).
     let carryInMinor = 0;
     let carryHint = balance?.hint ?? undefined;
     if (kind === 'MONTH_SETTLEMENT') {
       const bal = balance?.balanceMinor ?? 0;
       const firstAdvance = advancePriors[0];
+      let liveCarry = bal;
       if (
         firstAdvance &&
         firstAdvance.carryOutMinor !== 0 &&
         bal === firstAdvance.carryOutMinor
       ) {
         // Drop legacy advance under/over from balance; keep pre-25th carry only.
-        carryInMinor = firstAdvance.carryInMinor;
+        liveCarry = firstAdvance.carryInMinor;
         carryHint = undefined;
-      } else {
-        carryInMinor = bal;
+      }
+      const priorCarryOut = existing
+        ? await this.findPriorSettlementCarryOut(clubId, userId, range.from)
+        : null;
+      carryInMinor = resolveSettlementCarryInMinor({
+        liveBalanceMinor: liveCarry,
+        existing: existing
+          ? {
+              carryInMinor: existing.carryInMinor ?? 0,
+              carryOutMinor: existing.carryOutMinor ?? 0,
+            }
+          : null,
+        priorSettlementCarryOutMinor: existing ? priorCarryOut : null,
+      });
+      if (
+        existing &&
+        carryInMinor === 0 &&
+        (existing.carryInMinor ?? 0) !== 0
+      ) {
+        carryHint = undefined;
       }
       if (carryInMinor !== 0) {
         const sign = carryInMinor > 0 ? '+' : '';
@@ -2649,24 +2683,65 @@ export class PayrollService {
     const totalMinor = remainder.totalMinor;
     const payableMinor = remainder.payableMinor;
 
-    const existing = await this.findPayoutForWave(
-      clubId,
-      userId,
-      kind === 'ADVANCE_HALF'
-        ? PrismaPayoutKind.ADVANCE_HALF
-        : PrismaPayoutKind.MONTH_SETTLEMENT,
-      range.from,
-      range.to,
-    );
-
-    // Live payable always — PAID rows stay editable; card/cash come from existingPayout.
-    if (existing?.status === PayrollPayoutStatus.PAID) {
+    // Heal polluted same-wave carry: rewrite payout snapshot + staff balance so
+    // the ghost does not leak into the next month if the row is never re-confirmed.
+    let existingForPreview = existing;
+    if (
+      kind === 'MONTH_SETTLEMENT' &&
+      existing &&
+      (existing.status === PayrollPayoutStatus.PAID ||
+        existing.status === PayrollPayoutStatus.DRAFT) &&
+      carryInMinor === 0 &&
+      (existing.carryInMinor ?? 0) !== 0
+    ) {
+      const factPaid =
+        existing.cardTransferMinor +
+        (existing.actualCashMinor ?? existing.cashMinor);
+      const healedCarryOut = payableMinor - factPaid;
+      const waveLabel = 'расчёта 15-е';
+      const healedHint =
+        healedCarryOut === 0
+          ? null
+          : healedCarryOut > 0
+            ? `недоплата ${(healedCarryOut / 100).toFixed(2)} с ${waveLabel} ${range.from}–${range.to}`
+            : `переплата ${(Math.abs(healedCarryOut) / 100).toFixed(2)} с ${waveLabel} ${range.from}–${range.to}`;
+      existingForPreview = await this.prisma.payrollPayout.update({
+        where: { id: existing.id },
+        data: {
+          carryInMinor: 0,
+          carryOutMinor: healedCarryOut,
+          totalMinor,
+          earnedMinor,
+          priorPaidMinor,
+        },
+        include: { user: true },
+      });
+      await this.prisma.payrollStaffBalance.upsert({
+        where: { clubId_userId: { clubId, userId } },
+        create: {
+          clubId,
+          userId,
+          balanceMinor: healedCarryOut,
+          hint: healedHint,
+        },
+        update: {
+          balanceMinor: healedCarryOut,
+          hint: healedHint,
+        },
+      });
       hints.push(
-        'Выплата подтверждена — карту и кассу можно изменить (остаток пересчитается)',
+        'Сброшен ложный перенос (остаток этой же выплаты) — баланс пересчитан',
+      );
+    }
+
+    // Live payable always; PAID card/cash amend only via explicit UI «Изменить».
+    if (existingForPreview?.status === PayrollPayoutStatus.PAID) {
+      hints.push(
+        'Выплата подтверждена — правка карты/кассы через «Изменить» (остаток пересчитается)',
       );
       if (
         kind === 'MONTH_SETTLEMENT' &&
-        existing.priorPaidMinor !== priorAdvancePaidMinor
+        existingForPreview.priorPaidMinor !== priorAdvancePaidMinor
       ) {
         hints.push(
           'Аванс изменён после расчёта — перепроверьте карту/кассу 15-го',
@@ -2676,7 +2751,10 @@ export class PayrollService {
 
     // If this is an advance preview and settlement for the month is already PAID,
     // warn that changing advance fact will shift the 15th remainder.
-    if (kind === 'ADVANCE_HALF' && existing?.status === PayrollPayoutStatus.PAID) {
+    if (
+      kind === 'ADVANCE_HALF' &&
+      existingForPreview?.status === PayrollPayoutStatus.PAID
+    ) {
       const y = Number(range.from.slice(0, 4));
       const m = Number(range.from.slice(5, 7));
       const settlementRange = monthSettlementRange(y, m);
@@ -2715,7 +2793,9 @@ export class PayrollService {
       payableMinor,
       staffDebtMinor,
       currency: summary.currency,
-      existingPayout: existing ? this.mapPayout(existing) : undefined,
+      existingPayout: existingForPreview
+        ? this.mapPayout(existingForPreview)
+        : undefined,
       summary,
       hints,
     };
@@ -2993,6 +3073,11 @@ export class PayrollService {
     }
     const payable = preview.payableMinor;
     const paid = card + actualCash;
+    if (isPayoutOverTolerance(payable, paid)) {
+      throw new BadRequestException(
+        `Карта+касса (${(paid / 100).toFixed(2)}) больше «к выплате» (${(payable / 100).toFixed(2)}) более чем на ${(PAYOUT_OVERPAY_TOLERANCE_MINOR / 100).toFixed(2)} BYN (округление). Чтобы выдать больше — добавьте премию.`,
+      );
+    }
     const carryOutMinor = payable - paid;
     const kind =
       input.kind === 'ADVANCE_HALF'
@@ -3143,6 +3228,27 @@ export class PayrollService {
       take: 24,
     });
     return rows.map((r) => this.mapPayout(r));
+  }
+
+  /** Latest PAID 15th settlement strictly before this period (for carry heal). */
+  private async findPriorSettlementCarryOut(
+    clubId: string,
+    userId: string,
+    beforePeriodFromIso: string,
+  ): Promise<number | null> {
+    const before = dateOnly(beforePeriodFromIso);
+    const row = await this.prisma.payrollPayout.findFirst({
+      where: {
+        clubId,
+        userId,
+        kind: PrismaPayoutKind.MONTH_SETTLEMENT,
+        status: PayrollPayoutStatus.PAID,
+        periodFrom: { lt: before },
+      },
+      orderBy: { periodFrom: 'desc' },
+      select: { carryOutMinor: true },
+    });
+    return row ? row.carryOutMinor : null;
   }
 
   /**
