@@ -5,6 +5,7 @@ import type {
   PayrollSelfOverview,
   WorkUnit,
 } from '@fitgo/shared-types';
+import { payoutFactPaidMinor } from '@fitgo/shared-types';
 import { AnimatedNumber, PageHeader } from '@fitgo/forma-ui';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
@@ -332,6 +333,13 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
   const groupStats = summary?.groupStats;
   const slice = useMemo(() => periodSlice(from, to), [from, to]);
   const showWaveTags = Boolean(advance?.eligible);
+  const paidPayouts = summary?.paidPayouts;
+  const totalPaidFactMinor = paidPayouts?.totalPaidMinor ?? 0;
+  const carryInMinor = data?.carryInMinor ?? 0;
+  /** Same idea as admin sheet: начислено − факт выплат + перенос. */
+  const remainingMinor = summary
+    ? summary.totalMinor - totalPaidFactMinor + carryInMinor
+    : 0;
 
   /** Confirmed GROUP + reformer-hall / personal reformer PT for the sessions list. */
   const trustedSessionUnits: WorkUnit[] = useMemo(
@@ -641,27 +649,31 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
           <section className="card space-y-3">
             <div>
               <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                К выплате
+                Остаток к выплате
               </p>
               {formaSkin ? (
                 <p className="mt-1 font-display text-4xl font-bold tabular-nums text-white">
-                  <AnimatedNumber value={summary.totalMinor / 100} decimals={2} />
+                  <AnimatedNumber value={remainingMinor / 100} decimals={2} />
                   <span className="ml-2 text-lg font-medium text-zinc-400">
                     {currency}
                   </span>
                 </p>
               ) : (
                 <p className="mt-1 text-3xl font-semibold tabular-nums text-white">
-                  {money(summary.totalMinor, currency)}
+                  {money(remainingMinor, currency)}
                 </p>
               )}
               <p className="mt-1 text-sm text-slate-400">
                 {summary.performerName}
                 {summary.locked ? ' · период закрыт' : ''}
               </p>
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+                Начислено − уже выплачено (карта+касса)
+                {carryInMinor !== 0 ? ' + перенос' : ''}
+              </p>
               {formaSkin && monthForecastMinor != null ? (
                 <p className="mt-2 text-sm text-zinc-400">
-                  Прогноз до конца месяца ≈{' '}
+                  Прогноз начисления до конца месяца ≈{' '}
                   <span className="font-medium text-forma-400">
                     {money(monthForecastMinor, currency)}
                   </span>
@@ -683,7 +695,24 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
                 </Link>
               ) : null}
             </div>
-            <ul className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+            <ul className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+              <li className="rounded-lg bg-slate-900/70 px-3 py-2">
+                <p className="text-[11px] text-slate-500">Начислено</p>
+                <p className="tabular-nums text-slate-200">
+                  {money(summary.totalMinor, currency)}
+                </p>
+              </li>
+              <li className="rounded-lg bg-slate-900/70 px-3 py-2">
+                <p className="text-[11px] text-slate-500">Уже выплачено</p>
+                <p className="tabular-nums text-sky-200/90">
+                  {money(totalPaidFactMinor, currency)}
+                </p>
+                {paidPayouts && paidPayouts.advanceMinor > 0 ? (
+                  <p className="mt-0.5 text-[10px] text-slate-500">
+                    в т.ч. аванс {money(paidPayouts.advanceMinor, currency)}
+                  </p>
+                ) : null}
+              </li>
               <li className="rounded-lg bg-slate-900/70 px-3 py-2">
                 <p className="text-[11px] text-slate-500">Оклад / часы</p>
                 <p className="tabular-nums text-slate-200">
@@ -696,13 +725,27 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
                   {money(summary.motivationMinor, currency)}
                 </p>
               </li>
-              <li className="rounded-lg bg-slate-900/70 px-3 py-2">
-                <p className="text-[11px] text-slate-500">Премии / штрафы</p>
-                <p className="tabular-nums text-slate-200">
-                  {money(summary.adjustmentsMinor, currency)}
-                </p>
-              </li>
             </ul>
+            {(summary.adjustmentsMinor !== 0 || carryInMinor !== 0) && (
+              <ul className="grid grid-cols-2 gap-2 text-sm">
+                {summary.adjustmentsMinor !== 0 ? (
+                  <li className="rounded-lg bg-slate-900/70 px-3 py-2">
+                    <p className="text-[11px] text-slate-500">Премии / штрафы</p>
+                    <p className="tabular-nums text-slate-200">
+                      {money(summary.adjustmentsMinor, currency)}
+                    </p>
+                  </li>
+                ) : null}
+                {carryInMinor !== 0 ? (
+                  <li className="rounded-lg bg-slate-900/70 px-3 py-2">
+                    <p className="text-[11px] text-slate-500">Перенос</p>
+                    <p className="tabular-nums text-slate-200">
+                      {money(carryInMinor, currency)}
+                    </p>
+                  </li>
+                ) : null}
+              </ul>
+            )}
             {hasMotivationBreakdown && summary.motivationBreakdown ? (
               <div className="border-t border-slate-800 pt-2">
                 <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
@@ -768,27 +811,47 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
               <div>
                 <p className="text-[11px] font-medium uppercase tracking-wide text-emerald-400/90">
                   Аванс 25-е · {formatIsoRangeRu(advance.periodFrom, advance.periodTo)}
+                  {paidPayouts && paidPayouts.advanceMinor > 0
+                    ? ' · выплачен'
+                    : ''}
                 </p>
                 <p className="mt-1 text-2xl font-semibold tabular-nums text-white">
-                  {money(advance.earnedMinor, currency)}
+                  {money(
+                    paidPayouts && paidPayouts.advanceMinor > 0
+                      ? paidPayouts.advanceMinor
+                      : advance.earnedMinor,
+                    currency,
+                  )}
                 </p>
                 <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                  {advance.usesFixedAdvance
-                    ? 'Фиксированная выплата на карту по профилю (занятия — в расчёт 15-го).'
-                    : 'Начисление за занятия 1–15, которые входят в аванс (ГП без реформеров).'}
+                  {paidPayouts && paidPayouts.advanceMinor > 0
+                    ? 'Факт выплаты 25-го (карта + касса) — вычитается из остатка к выплате.'
+                    : advance.usesFixedAdvance
+                      ? 'Фиксированная выплата на карту по профилю (занятия — в расчёт 15-го).'
+                      : 'Ожидаемое начисление за занятия 1–15 (ГП без реформеров).'}
                 </p>
               </div>
               <ul className="grid grid-cols-2 gap-2 text-sm">
                 <li className="rounded-lg border border-emerald-500/20 bg-slate-900/60 px-3 py-2">
                   <p className="text-[11px] text-slate-500">На карту</p>
                   <p className="tabular-nums text-emerald-200">
-                    {money(advance.cardMinor, currency)}
+                    {money(
+                      paidPayouts && paidPayouts.advanceMinor > 0
+                        ? paidPayouts.advanceCardMinor
+                        : advance.cardMinor,
+                      currency,
+                    )}
                   </p>
                 </li>
                 <li className="rounded-lg border border-slate-700/80 bg-slate-900/60 px-3 py-2">
                   <p className="text-[11px] text-slate-500">Из кассы</p>
                   <p className="tabular-nums text-slate-200">
-                    {money(advance.cashMinor, currency)}
+                    {money(
+                      paidPayouts && paidPayouts.advanceMinor > 0
+                        ? paidPayouts.advanceCashMinor
+                        : advance.cashMinor,
+                      currency,
+                    )}
                   </p>
                 </li>
               </ul>
@@ -952,7 +1015,8 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
                           .reverse()
                           .slice(0, 2)
                           .join('.');
-                        return `${day} ${payoutKindRu(p.kind)} ${money(p.totalMinor, p.currency)}`;
+                        const fact = payoutFactPaidMinor(p);
+                        return `${day} ${payoutKindRu(p.kind)} ${money(fact, p.currency)}`;
                       })
                       .join(' · ')}
                   </p>
@@ -963,22 +1027,33 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
               </button>
               {payoutsOpen ? (
                 <ul className="space-y-2 border-t border-slate-800 pt-2 text-sm">
-                  {data.payoutsInPeriod.map((p) => (
-                    <li
-                      key={p.id}
-                      className="flex justify-between gap-2 text-slate-300"
-                    >
-                      <span>
-                        {payoutKindRu(p.kind)} · {p.periodFrom}–{p.periodTo}
-                        {p.paidAt
-                          ? ` · ${formatDateTime(p.paidAt)}`
-                          : ''}
-                      </span>
-                      <span className="tabular-nums text-emerald-300">
-                        {money(p.totalMinor, p.currency)}
-                      </span>
-                    </li>
-                  ))}
+                  {data.payoutsInPeriod.map((p) => {
+                    const fact = payoutFactPaidMinor(p);
+                    return (
+                      <li
+                        key={p.id}
+                        className="flex justify-between gap-2 text-slate-300"
+                      >
+                        <span>
+                          {payoutKindRu(p.kind)} · {p.periodFrom}–{p.periodTo}
+                          {p.paidAt
+                            ? ` · ${formatDateTime(p.paidAt)}`
+                            : ''}
+                          <span className="mt-0.5 block text-[11px] text-slate-500">
+                            карта {money(p.cardTransferMinor, p.currency)} ·
+                            касса{' '}
+                            {money(
+                              p.actualCashMinor ?? p.cashMinor,
+                              p.currency,
+                            )}
+                          </span>
+                        </span>
+                        <span className="tabular-nums text-emerald-300">
+                          {money(fact, p.currency)}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
             </section>

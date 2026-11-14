@@ -15,6 +15,7 @@ import {
   payProfileForCalculation,
   payProfileSummary,
   resolveFixedAdvanceMinor,
+  settlementRemainderMinor,
   splitAdvanceWave,
   isAsdGroupSession,
   isComplimentarySessionTitle,
@@ -2209,11 +2210,12 @@ export class PayrollService {
       const paid = p.cardTransferMinor + cash;
       totalPaidMinor += paid;
       if (p.kind === PrismaPayoutKind.ADVANCE_HALF) {
-        advanceMinor += p.totalMinor;
+        // Fact handed over — same basis as settlement «к выплате».
+        advanceMinor += paid;
         advanceCardMinor += p.cardTransferMinor;
         advanceCashMinor += cash;
       } else {
-        settlementMinor += p.totalMinor;
+        settlementMinor += paid;
         settlementCardMinor += p.cardTransferMinor;
         settlementCashMinor += cash;
       }
@@ -2557,6 +2559,13 @@ export class PayrollService {
     let priorAdvancePaidMinor = 0;
     let priorAdvanceCardMinor = 0;
     let priorAdvanceCashMinor = 0;
+    let advancePriors: Array<{
+      cardTransferMinor: number;
+      cashMinor: number;
+      actualCashMinor: number | null;
+      carryInMinor: number;
+      carryOutMinor: number;
+    }> = [];
     if (kind === 'MONTH_SETTLEMENT') {
       const y = Number(range.from.slice(0, 4));
       const m = Number(range.from.slice(5, 7));
@@ -2566,7 +2575,7 @@ export class PayrollService {
       const monthEnd = `${y}-${mm}-${String(last).padStart(2, '0')}`;
       // Overlap the calendar month (not strict containment): older rows written
       // with local T00:00:00 in Europe/Minsk could store periodFrom as day−1.
-      const priors = await this.prisma.payrollPayout.findMany({
+      advancePriors = await this.prisma.payrollPayout.findMany({
         where: {
           clubId,
           userId,
@@ -2575,43 +2584,70 @@ export class PayrollService {
           periodFrom: { lte: dateOnly(monthEnd) },
           periodTo: { gte: dateOnly(monthStart) },
         },
+        orderBy: { periodFrom: 'asc' },
       });
-      // Accrued wave total (settlement math); fact paid = card + cash (UI).
-      for (const p of priors) {
-        priorPaidMinor += p.totalMinor;
+      // Settlement deducts fact (card + cash), not accrued ADVANCE_HALF.totalMinor.
+      for (const p of advancePriors) {
         const cash = p.actualCashMinor ?? p.cashMinor;
         priorAdvanceCardMinor += p.cardTransferMinor;
         priorAdvanceCashMinor += cash;
         priorAdvancePaidMinor += p.cardTransferMinor + cash;
       }
-      if (priorPaidMinor > 0) {
+      priorPaidMinor = priorAdvancePaidMinor;
+      if (priorAdvancePaidMinor > 0) {
         hints.push(
-          `Вычтен аванс 25-е за ${monthStart}–${monthEnd}: ${(priorPaidMinor / 100).toFixed(2)}` +
-            (priorAdvancePaidMinor !== priorPaidMinor
-              ? ` (факт выплаты ${(priorAdvancePaidMinor / 100).toFixed(2)})`
-              : ''),
+          `Вычтен аванс 25-е (факт карта+касса) за ${monthStart}–${monthEnd}: ${(priorAdvancePaidMinor / 100).toFixed(2)}`,
         );
       } else {
         hints.push('Аванс 25-е за этот месяц ещё не зафиксирован');
       }
     }
 
-    const totalMinor = Math.max(0, earnedMinor - priorPaidMinor);
-
     const balance = await this.prisma.payrollStaffBalance.findUnique({
       where: { clubId_userId: { clubId, userId } },
     });
-    const carryInMinor = balance?.balanceMinor ?? 0;
-    const carryHint = balance?.hint ?? undefined;
-    if (carryInMinor !== 0) {
-      const sign = carryInMinor > 0 ? '+' : '';
-      hints.push(
-        carryHint
-          ? `Перенос остатка ${sign}${(carryInMinor / 100).toFixed(2)}: ${carryHint}`
-          : `Перенос остатка с прошлой выплаты: ${sign}${(carryInMinor / 100).toFixed(2)}`,
-      );
+    // Carry only on 15th. Advance under/over is absorbed via fact deduction.
+    // Legacy: 25th wrote under/over into balance — if balance still equals that
+    // advance carryOut, use the advance's carryIn (pre-25th remainder) once.
+    let carryInMinor = 0;
+    let carryHint = balance?.hint ?? undefined;
+    if (kind === 'MONTH_SETTLEMENT') {
+      const bal = balance?.balanceMinor ?? 0;
+      const firstAdvance = advancePriors[0];
+      if (
+        firstAdvance &&
+        firstAdvance.carryOutMinor !== 0 &&
+        bal === firstAdvance.carryOutMinor
+      ) {
+        // Drop legacy advance under/over from balance; keep pre-25th carry only.
+        carryInMinor = firstAdvance.carryInMinor;
+        carryHint = undefined;
+      } else {
+        carryInMinor = bal;
+      }
+      if (carryInMinor !== 0) {
+        const sign = carryInMinor > 0 ? '+' : '';
+        hints.push(
+          carryHint
+            ? `Перенос остатка ${sign}${(carryInMinor / 100).toFixed(2)}: ${carryHint}`
+            : `Перенос остатка с прошлой выплаты: ${sign}${(carryInMinor / 100).toFixed(2)}`,
+        );
+      }
     }
-    const payableMinor = totalMinor + carryInMinor;
+
+    const remainder =
+      kind === 'MONTH_SETTLEMENT'
+        ? settlementRemainderMinor({
+            earnedMinor,
+            advancePaidFactMinor: priorAdvancePaidMinor,
+            carryInMinor,
+          })
+        : {
+            totalMinor: Math.max(0, earnedMinor),
+            payableMinor: Math.max(0, earnedMinor),
+          };
+    const totalMinor = remainder.totalMinor;
+    const payableMinor = remainder.payableMinor;
 
     const existing = await this.findPayoutForWave(
       clubId,
@@ -2623,10 +2659,39 @@ export class PayrollService {
       range.to,
     );
 
+    // Live payable always — PAID rows stay editable; card/cash come from existingPayout.
     if (existing?.status === PayrollPayoutStatus.PAID) {
       hints.push(
-        'Выплата зафиксирована — карту и кассу можно изменить (остаток в отчёте пересчитается)',
+        'Выплата подтверждена — карту и кассу можно изменить (остаток пересчитается)',
       );
+      if (
+        kind === 'MONTH_SETTLEMENT' &&
+        existing.priorPaidMinor !== priorAdvancePaidMinor
+      ) {
+        hints.push(
+          'Аванс изменён после расчёта — перепроверьте карту/кассу 15-го',
+        );
+      }
+    }
+
+    // If this is an advance preview and settlement for the month is already PAID,
+    // warn that changing advance fact will shift the 15th remainder.
+    if (kind === 'ADVANCE_HALF' && existing?.status === PayrollPayoutStatus.PAID) {
+      const y = Number(range.from.slice(0, 4));
+      const m = Number(range.from.slice(5, 7));
+      const settlementRange = monthSettlementRange(y, m);
+      const settlement = await this.findPayoutForWave(
+        clubId,
+        userId,
+        PrismaPayoutKind.MONTH_SETTLEMENT,
+        settlementRange.from,
+        settlementRange.to,
+      );
+      if (settlement?.status === PayrollPayoutStatus.PAID) {
+        hints.push(
+          'Расчёт 15-го уже выплачен — после правки аванса перепроверьте его карту/кассу',
+        );
+      }
     }
 
     const staffDebtMinor = await this.staffDebtMinorForPayout(clubId, userId);
@@ -2791,8 +2856,7 @@ export class PayrollService {
   /**
    * Remember card/cash typed on the payout sheet.
    * DRAFT: does not mark paid / does not move staff balance until confirm.
-   * PAID: amends the recorded split in place and recalculates staff balance
-   * (needed when accrual changed after a wave was already confirmed).
+   * PAID: amends the recorded split in place (live payable + staff balance on 15th).
    */
   async savePayoutDraft(
     actor: JwtPayload,
@@ -2893,7 +2957,7 @@ export class PayrollService {
 
   /**
    * Confirm (or amend) a wave payout. Re-confirming a PAID row updates card/cash
-   * and staff balance without creating a duplicate wave.
+   * from live payable. Staff balance moves only on MONTH_SETTLEMENT (15th).
    */
   async confirmPayout(
     actor: JwtPayload,
@@ -2934,11 +2998,12 @@ export class PayrollService {
       input.kind === 'ADVANCE_HALF'
         ? PrismaPayoutKind.ADVANCE_HALF
         : PrismaPayoutKind.MONTH_SETTLEMENT;
+    const isSettlement = kind === PrismaPayoutKind.MONTH_SETTLEMENT;
 
     const waveLabel =
       input.kind === 'ADVANCE_HALF' ? 'аванса 25-е' : 'расчёта 15-е';
     const carryHint =
-      carryOutMinor === 0
+      !isSettlement || carryOutMinor === 0
         ? null
         : carryOutMinor > 0
           ? `недоплата ${(carryOutMinor / 100).toFixed(2)} с ${waveLabel} ${preview.periodFrom}–${preview.periodTo}`
@@ -2962,7 +3027,8 @@ export class PayrollService {
       cashMinor: suggestedCash,
       actualCashMinor: actualCash,
       carryInMinor: preview.carryInMinor,
-      carryOutMinor,
+      // Advance: do not park under/over in staff balance (fact deducted on 15th).
+      carryOutMinor: isSettlement ? carryOutMinor : 0,
       currency: preview.currency,
       status: PayrollPayoutStatus.PAID,
       paidAt: amendingPaid ? (existing.paidAt ?? new Date()) : new Date(),
@@ -2989,19 +3055,21 @@ export class PayrollService {
             include: { user: true },
           });
 
-      await tx.payrollStaffBalance.upsert({
-        where: { clubId_userId: { clubId, userId: input.userId } },
-        create: {
-          clubId,
-          userId: input.userId,
-          balanceMinor: carryOutMinor,
-          hint: carryHint,
-        },
-        update: {
-          balanceMinor: carryOutMinor,
-          hint: carryHint,
-        },
-      });
+      if (isSettlement) {
+        await tx.payrollStaffBalance.upsert({
+          where: { clubId_userId: { clubId, userId: input.userId } },
+          create: {
+            clubId,
+            userId: input.userId,
+            balanceMinor: carryOutMinor,
+            hint: carryHint,
+          },
+          update: {
+            balanceMinor: carryOutMinor,
+            hint: carryHint,
+          },
+        });
+      }
 
       await tx.payrollPeriodLock.upsert({
         where: {
@@ -4370,7 +4438,7 @@ export class PayrollService {
       throw new ForbiddenException('Нет доступа к расчёту ЗП');
     }
 
-    const [summary, staffDebt, allPayouts, unpaidItems, unpaidSalesMinor] =
+    const [summary, staffDebt, allPayouts, unpaidItems, unpaidSalesMinor, balance] =
       await Promise.all([
         this.getPeriodSummary(clubId, user.sub, from, to),
         this.resolveStaffClientDebt(clubId, user.sub),
@@ -4390,6 +4458,10 @@ export class PayrollService {
               .sellerOpenUnpaidMinor(clubId, user.sub, to)
               .catch(() => 0)
           : Promise.resolve(undefined as number | undefined),
+        this.prisma.payrollStaffBalance.findUnique({
+          where: { clubId_userId: { clubId, userId: user.sub } },
+          select: { balanceMinor: true },
+        }),
       ]);
 
     const fromT = new Date(`${from}T00:00:00`).getTime();
@@ -4432,6 +4504,7 @@ export class PayrollService {
       summary,
       staffDebt,
       payoutsInPeriod,
+      carryInMinor: balance?.balanceMinor ?? 0,
       unconfirmedCount,
       unpaidCount,
       unpaidSalesMinor:
@@ -6102,10 +6175,16 @@ export class PayrollService {
       ]);
       const advancePaidMinor = payouts
         .filter((p) => p.kind === PrismaPayoutKind.ADVANCE_HALF)
-        .reduce((a, p) => a + p.totalMinor, 0);
+        .reduce((a, p) => {
+          const cash = p.actualCashMinor ?? p.cashMinor;
+          return a + p.cardTransferMinor + cash;
+        }, 0);
       const settlementPaidMinor = payouts
         .filter((p) => p.kind === PrismaPayoutKind.MONTH_SETTLEMENT)
-        .reduce((a, p) => a + p.totalMinor, 0);
+        .reduce((a, p) => {
+          const cash = p.actualCashMinor ?? p.cashMinor;
+          return a + p.cardTransferMinor + cash;
+        }, 0);
       const cardPaidMinor = payouts.reduce(
         (a, p) => a + p.cardTransferMinor,
         0,
@@ -6114,7 +6193,8 @@ export class PayrollService {
         const cash = p.actualCashMinor ?? p.cashMinor;
         return a + p.cardTransferMinor + cash;
       }, 0);
-      const priorPaidMinor = payouts.reduce((a, p) => a + p.totalMinor, 0);
+      // Fact paid across waves (same basis as employee «остаток»).
+      const priorPaidMinor = periodPaidTotalMinor;
       const bonusMinor = summary.adjustments
         .filter((a) => a.amountMinor > 0)
         .reduce((a, x) => a + x.amountMinor, 0);
@@ -6152,7 +6232,7 @@ export class PayrollService {
         settlementPaidMinor,
         periodPaidTotalMinor,
         priorPaidMinor,
-        toPayMinor: Math.max(0, summary.totalMinor - priorPaidMinor),
+        toPayMinor: Math.max(0, summary.totalMinor - periodPaidTotalMinor),
         openExceptions: summary.openExceptions,
         locked: summary.locked,
         currency: summary.currency,

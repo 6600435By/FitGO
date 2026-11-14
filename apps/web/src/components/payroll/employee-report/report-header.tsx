@@ -112,9 +112,9 @@ export function ReportHeader({
 
       {canEdit && remaining > 0 ? (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-100">
-          Остаток {money(remaining, summary.currency)} — измените «Карта» /
-          «Из кассы» в листе выплат выше (строки со статусом «Выплачено» тоже
-          редактируются) и сохраните.
+          Остаток {money(remaining, summary.currency)} = начислено − факт
+          выплат (карта+касса). Измените «Карта» / «Из кассы» в листе выплат
+          выше (строки «Выплачено» тоже редактируются) и сохраните.
         </p>
       ) : null}
 
@@ -148,7 +148,7 @@ export function ReportHeader({
           }
         />
         <Metric
-          label="Выплачено"
+          label="Выплачено (факт)"
           value={money(totalPaid, summary.currency)}
           hint={
             totalPaid > 0
@@ -163,14 +163,15 @@ export function ReportHeader({
                     : null,
                 ]
                   .filter(Boolean)
-                  .join(' · ') || 'подтверждённые выплаты за период'
-              : 'подтверждённые выплаты за период'
+                  .join(' · ') || 'карта + касса за период'
+              : 'карта + касса за период'
           }
         />
         <Metric
-          label="Остаток"
+          label="Остаток к выплате"
           value={money(remaining, summary.currency)}
           tone={remaining > 0 ? 'accent' : undefined}
+          hint="начислено − факт выплат"
         />
       </div>
 

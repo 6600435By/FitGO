@@ -7,6 +7,7 @@ import {
   payProfileForCalculation,
   resolveFixedAdvanceMinor,
   resolvePayoutFormSplit,
+  settlementRemainderMinor,
   splitAdvanceWave,
   trainerPayFlags,
   type StaffPayProfile,
@@ -42,11 +43,56 @@ import {
 }
 
 {
-  // Settlement 15th: full-month earned (incl. оклад) minus paid ADVANCE_HALF.
-  const monthEarned = 500_000; // оклад + motivation for the calendar month
-  const priorPaidAdvance = 100_000; // confirmed ADVANCE_HALF.totalMinor
-  const totalMinor = Math.max(0, monthEarned - priorPaidAdvance);
-  assert.equal(totalMinor, 400_000);
+  // Settlement 15th: earned − advance fact (card+cash), not accrued totalMinor.
+  const monthEarned = 500_000;
+  const advanceFact = 100_000;
+  const r = settlementRemainderMinor({
+    earnedMinor: monthEarned,
+    advancePaidFactMinor: advanceFact,
+    carryInMinor: 0,
+  });
+  assert.equal(r.totalMinor, 400_000);
+  assert.equal(r.payableMinor, 400_000);
+}
+
+{
+  // Fact over accrued: deduct what was actually paid; old carry once.
+  const r = settlementRemainderMinor({
+    earnedMinor: 244_000,
+    advancePaidFactMinor: 126_500,
+    carryInMinor: -547,
+  });
+  assert.equal(r.totalMinor, 117_500);
+  assert.equal(r.payableMinor, 116_953);
+}
+
+{
+  // Amend advance fact upward → settlement «к выплате» shrinks (live remainder).
+  const before = settlementRemainderMinor({
+    earnedMinor: 300_000,
+    advancePaidFactMinor: 100_000,
+    carryInMinor: 0,
+  });
+  const after = settlementRemainderMinor({
+    earnedMinor: 300_000,
+    advancePaidFactMinor: 130_000,
+    carryInMinor: 0,
+  });
+  assert.equal(before.payableMinor, 200_000);
+  assert.equal(after.payableMinor, 170_000);
+  // Gap vs previously paid settlement card+cash (e.g. paid 200k, now owe 170k).
+  const paidSettlementFact = 200_000;
+  assert.equal(after.payableMinor - paidSettlementFact, -30_000);
+}
+
+{
+  // PAID amend: gap drives re-confirm selection (payable − card − cash).
+  const payable = 150_653;
+  const card = 0;
+  const cash = 150_653;
+  assert.equal(payable - (card + cash), 0);
+  const afterBonus = 160_653;
+  assert.equal(afterBonus - (card + cash), 10_000);
 }
 
 {

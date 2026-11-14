@@ -183,20 +183,30 @@ export interface PtPayrollStats {
 
 /**
  * Confirmed (PAID) payouts whose wave window overlaps the summary period.
- * Used on the employee calc strip: аванс всего + карта / касса.
+ * All amounts are fact (карта + касса), not accrued totalMinor.
  */
 export interface PayrollPaidPayoutsSummary {
-  /** Sum of ADVANCE_HALF totalMinor. */
+  /** Fact: card + cash on ADVANCE_HALF. */
   advanceMinor: number;
   advanceCardMinor: number;
   /** actualCash (or cash) on ADVANCE_HALF. */
   advanceCashMinor: number;
-  /** Sum of MONTH_SETTLEMENT totalMinor. */
+  /** Fact: card + cash on MONTH_SETTLEMENT. */
   settlementMinor: number;
   settlementCardMinor: number;
   settlementCashMinor: number;
   /** Card + cash across all PAID waves in the period. */
   totalPaidMinor: number;
+}
+
+/** Fact money handed over on a confirmed/draft payout row. */
+export function payoutFactPaidMinor(p: {
+  cardTransferMinor: number;
+  actualCashMinor?: number | null;
+  cashMinor?: number | null;
+}): number {
+  const cash = p.actualCashMinor ?? p.cashMinor ?? 0;
+  return Math.round(p.cardTransferMinor) + Math.round(cash);
 }
 
 export interface PayrollPeriodSummary {
@@ -285,6 +295,11 @@ export interface PayrollSelfOverview {
   summary: PayrollPeriodSummary;
   staffDebt: PayrollStaffDebt;
   payoutsInPeriod: PayrollPayoutDto[];
+  /**
+   * Prior under/over from last settlement (+ недоплата / − переплата).
+   * Used in «остаток ≈ начислено − выплачено + перенос».
+   */
+  carryInMinor: number;
   /** Work units that are not payrollTrusted (need confirmation). */
   unconfirmedCount: number;
   /** PT/SPA sessions with payment DEBT in the period. */
@@ -338,20 +353,26 @@ export interface PayrollPayoutPreview {
   fixedAdvanceMinor: number;
   earnedMinor: number;
   /**
-   * Accrued ADVANCE_HALF totalMinor (used to compute settlement remainder).
-   * UI «Аванс» should prefer priorAdvancePaid* (fact card+cash).
+   * Amount deducted from month earned on settlement (fact card+cash of ADVANCE_HALF).
+   * On ADVANCE_HALF waves this is 0. Kept on the payout snapshot after confirm.
    */
   priorPaidMinor: number;
-  /** Fact: card + cash on confirmed ADVANCE_HALF for the month. */
+  /** Fact: card + cash on confirmed ADVANCE_HALF for the month (UI «Аванс»). */
   priorAdvancePaidMinor: number;
   priorAdvanceCardMinor: number;
   priorAdvanceCashMinor: number;
-  /** Accrued for wave (earned − prior), before carry. */
+  /**
+   * Wave remainder before carry.
+   * Settlement: max(0, earned − advance fact). Advance: earned for 1–15.
+   */
   totalMinor: number;
-  /** Balance from previous rounding (+ underpay / − overpay). */
+  /**
+   * Prior under/over from a previous settlement (+ недоплата / − переплата).
+   * Applied only on MONTH_SETTLEMENT; advance waves ignore carry.
+   */
   carryInMinor: number;
   carryHint?: string;
-  /** totalMinor + carryIn — amount to settle this wave. */
+  /** totalMinor + carryIn (carry only on 15th) — к выплате. */
   payableMinor: number;
   /**
    * Staff personal debt as club client (ClubRevenue unpaid cache).
@@ -389,6 +410,22 @@ export function splitAdvanceWave(input: {
     cardMinor,
     cashMinor: earnedMinor - cardMinor,
   };
+}
+
+/**
+ * 15th settlement: к выплате = заработано − аванс (факт) + перенос.
+ * Advance under/over is absorbed by deducting fact, not by a separate Δ.
+ */
+export function settlementRemainderMinor(input: {
+  earnedMinor: number;
+  advancePaidFactMinor: number;
+  carryInMinor: number;
+}): { totalMinor: number; payableMinor: number } {
+  const earned = Math.max(0, Math.round(input.earnedMinor));
+  const advanceFact = Math.max(0, Math.round(input.advancePaidFactMinor));
+  const carryIn = Math.round(input.carryInMinor);
+  const totalMinor = Math.max(0, earned - advanceFact);
+  return { totalMinor, payableMinor: totalMinor + carryIn };
 }
 
 /**

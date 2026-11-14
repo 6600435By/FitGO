@@ -79,22 +79,64 @@ export default function PayrollPage() {
 
       {summary && (
         <>
-          <section className="grid gap-3 sm:grid-cols-3">
-            {[
-              ['Оклад', summary.baseSalaryMinor],
-              ['Мотивация', summary.motivationMinor],
-              ['Итого', summary.totalMinor],
-            ].map(([label, value]) => (
-              <div key={label as string} className="panel">
-                <p className="text-xs uppercase tracking-wide" style={{ color: 'var(--muted)' }}>
-                  {label}
-                </p>
-                <p className="mt-1 font-display text-2xl">
-                  {money(value as number, summary.currency)}
-                </p>
-              </div>
-            ))}
+          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {(() => {
+              const paid = summary.paidPayouts;
+              const totalPaid = paid?.totalPaidMinor ?? 0;
+              const remaining = summary.totalMinor - totalPaid;
+              return [
+                ['Начислено', summary.totalMinor],
+                ['Уже выплачено', totalPaid],
+                ['Остаток к выплате', remaining],
+                ['Мотивация', summary.motivationMinor],
+              ].map(([label, value]) => (
+                <div key={label as string} className="panel">
+                  <p
+                    className="text-xs uppercase tracking-wide"
+                    style={{ color: 'var(--muted)' }}
+                  >
+                    {label}
+                  </p>
+                  <p className="mt-1 font-display text-2xl">
+                    {money(value as number, summary.currency)}
+                  </p>
+                  {label === 'Уже выплачено' &&
+                  paid &&
+                  paid.advanceMinor > 0 ? (
+                    <p className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>
+                      аванс {money(paid.advanceMinor, summary.currency)} (факт
+                      карта+касса)
+                    </p>
+                  ) : null}
+                  {label === 'Остаток к выплате' ? (
+                    <p className="mt-1 text-xs" style={{ color: 'var(--muted)' }}>
+                      начислено − выплачено
+                    </p>
+                  ) : null}
+                </div>
+              ));
+            })()}
           </section>
+          {summary.baseSalaryMinor !== 0 || summary.adjustmentsMinor !== 0 ? (
+            <section className="grid gap-3 sm:grid-cols-2">
+              {[
+                ['Оклад / часы', summary.baseSalaryMinor],
+                ['Премии / штрафы', summary.adjustmentsMinor],
+              ].map(([label, value]) => (
+                <div key={label as string} className="panel">
+                  <p
+                    className="text-xs uppercase tracking-wide"
+                    style={{ color: 'var(--muted)' }}
+                  >
+                    {label}
+                  </p>
+                  <p className="mt-1 font-display text-xl">
+                    {money(value as number, summary.currency)}
+                  </p>
+                </div>
+              ))}
+            </section>
+          ) : null}
 
           {summary.payChips.length > 0 && (
             <div className="flex flex-wrap gap-2">

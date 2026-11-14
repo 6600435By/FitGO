@@ -28,6 +28,20 @@ function money(minor: number, currency: string) {
   return `${(minor / 100).toFixed(2)}\u00a0${currency}`;
 }
 
+/** Gap between «к выплате» and card+cash typed for this wave. */
+function remainderHint(
+  payableMinor: number,
+  cardMinor: number,
+  cashMinor: number,
+): string | null {
+  const gap = payableMinor - (cardMinor + cashMinor);
+  if (gap === 0) return null;
+  if (gap > 0) {
+    return `останется перенос +${(gap / 100).toFixed(2)}`;
+  }
+  return `переплата ${(Math.abs(gap) / 100).toFixed(2)}`;
+}
+
 /** Fact advance paid (card+cash), not accrued totalMinor. */
 function AdvancePaidCell({
   row,
@@ -67,7 +81,7 @@ function PayoutStatusBadge({
     return (
       <span
         className="inline-flex items-center rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-300"
-        title="Выплата подтверждена — суммы можно изменить и сохранить"
+        title="Выплата подтверждена — карту и кассу можно изменить и сохранить"
       >
         Выплачено
       </span>
@@ -898,7 +912,7 @@ export function PayrollPayoutsPanel({
             {' · '}
             <span className="text-emerald-300">выплачено</span>
             . Выплаченные строки можно править — измените сумму и уйдите из
-            поля (или подтвердите снова), остаток в отчёте пересчитается.
+            поля (или подтвердите снова); «к выплате» и ЗП считают по факту.
           </p>
 
           {(periodFrom !== defaultRange.from ||
@@ -917,8 +931,10 @@ export function PayrollPayoutsPanel({
             <>
               <p className="text-[11px] text-slate-500">
                 {payKind === 'MONTH_SETTLEMENT'
-                  ? 'Заработано — начисление за месяц; Аванс — факт подтверждённой выплаты 25-го (карта + касса); К выплате — остаток.'
-                  : 'Заработано — начисление волны 1–15; колонка Аванс пуста (это сама выплата 25-го).'}
+                  ? 'К выплате = заработано − аванс (факт карта+касса) + перенос. Аванс — то, что уже выдали 25-го, не начисление.'
+                  : 'Заработано — начисление волны 1–15; колонка Аванс пуста (это сама выплата 25-го). Перенос к авансу не применяется.'}
+                {' '}
+                Если карта+касса меньше «к выплате» — останется перенос на следующую выплату; больше — переплата.
                 {' '}
                 Долг — личный долг сотрудника как клиента клуба (не вычитается из выплаты).
                 {' '}
@@ -939,9 +955,9 @@ export function PayrollPayoutsPanel({
                   };
                   const card = parseMoneyToMinor(d.card || '0');
                   const cash = parseMoneyToMinor(d.cash || '0');
-                  const delta = r.payableMinor - (card + cash);
                   const paid = r.existingPayout?.status === 'PAID';
                   const saved = r.existingPayout?.status === 'DRAFT';
+                  const rem = remainderHint(r.payableMinor, card, cash);
                   return (
                     <li
                       key={r.performerId}
@@ -1027,19 +1043,17 @@ export function PayrollPayoutsPanel({
                               </p>
                             </div>
                           </div>
-                          {r.carryInMinor ? (
+                          {(r.carryInMinor !== 0 || rem) && (
                             <p className="text-[11px] text-slate-500">
-                              перенос {money(r.carryInMinor, currency)}
-                              {delta !== 0
-                                ? ` · Δ ${delta > 0 ? '+' : ''}${(delta / 100).toFixed(2)}`
-                                : ''}
+                              {r.carryInMinor !== 0
+                                ? `перенос ${money(r.carryInMinor, currency)}`
+                                : null}
+                              {r.carryInMinor !== 0 && rem ? ' · ' : null}
+                              {rem ? (
+                                <span className="text-amber-300/90">{rem}</span>
+                              ) : null}
                             </p>
-                          ) : delta !== 0 ? (
-                            <p className="text-[11px] text-amber-300/90">
-                              Δ {delta > 0 ? '+' : ''}
-                              {(delta / 100).toFixed(2)}
-                            </p>
-                          ) : null}
+                          )}
                           <div className="grid grid-cols-2 gap-2">
                             <label className="text-[10px] uppercase text-slate-500">
                               Карта
@@ -1158,9 +1172,9 @@ export function PayrollPayoutsPanel({
                       };
                       const card = parseMoneyToMinor(d.card || '0');
                       const cash = parseMoneyToMinor(d.cash || '0');
-                      const delta = r.payableMinor - (card + cash);
                       const paid = r.existingPayout?.status === 'PAID';
                       const saved = r.existingPayout?.status === 'DRAFT';
+                      const rem = remainderHint(r.payableMinor, card, cash);
                       return (
                         <tr
                           key={r.performerId}
@@ -1203,15 +1217,15 @@ export function PayrollPayoutsPanel({
                                 </span>
                               ) : null}
                             </button>
-                            {(r.carryInMinor !== 0 || delta !== 0) && (
+                            {(r.carryInMinor !== 0 || rem) && (
                               <p className="mt-0.5 text-[10px] text-slate-500">
-                                {r.carryInMinor
+                                {r.carryInMinor !== 0
                                   ? `перенос ${money(r.carryInMinor, currency)}`
                                   : null}
-                                {r.carryInMinor && delta !== 0 ? ' · ' : null}
-                                {delta !== 0
-                                  ? `Δ ${delta > 0 ? '+' : ''}${(delta / 100).toFixed(2)}`
-                                  : null}
+                                {r.carryInMinor !== 0 && rem ? ' · ' : null}
+                                {rem ? (
+                                  <span className="text-amber-300/90">{rem}</span>
+                                ) : null}
                               </p>
                             )}
                             <div className="mt-1.5 flex flex-wrap items-center gap-1">

@@ -189,8 +189,23 @@ export function payslipHtmlFromSummary(
   }
   if (fields.totals) {
     parts.push(
-      `<p class="total"><strong>Итого к выплате:</strong> ${escapeHtml(money(summary.totalMinor, cur))}</p>`,
+      `<p class="total"><strong>Итого начислено:</strong> ${escapeHtml(money(summary.totalMinor, cur))}</p>`,
     );
+    const paid = summary.paidPayouts;
+    if (paid && paid.totalPaidMinor > 0) {
+      if (paid.advanceMinor > 0) {
+        parts.push(
+          `<p>Аванс выплачен (факт): ${escapeHtml(money(paid.advanceMinor, cur))} (карта ${escapeHtml(money(paid.advanceCardMinor, cur))} · касса ${escapeHtml(money(paid.advanceCashMinor, cur))})</p>`,
+        );
+      }
+      parts.push(
+        `<p>Выплачено всего: ${escapeHtml(money(paid.totalPaidMinor, cur))}</p>`,
+      );
+      const rest = Math.max(0, summary.totalMinor - paid.totalPaidMinor);
+      parts.push(
+        `<p class="total"><strong>Остаток к выплате:</strong> ${escapeHtml(money(rest, cur))}</p>`,
+      );
+    }
   }
   if (centered) {
     parts.push('</div>');
@@ -386,12 +401,12 @@ export function buildPayslipText(opts: {
     if (paid && (paid.advanceMinor > 0 || paid.totalPaidMinor > 0)) {
       if (paid.advanceMinor > 0) {
         lines.push(
-          `Аванс выплачен: ${money(paid.advanceMinor, cur)} (карта ${money(paid.advanceCardMinor, cur)} · касса ${money(paid.advanceCashMinor, cur)})`,
+          `Аванс выплачен (факт): ${money(paid.advanceMinor, cur)} (карта ${money(paid.advanceCardMinor, cur)} · касса ${money(paid.advanceCashMinor, cur)})`,
         );
       }
-      lines.push(`Выплачено всего: ${money(paid.totalPaidMinor, cur)}`);
+      lines.push(`Выплачено всего (факт): ${money(paid.totalPaidMinor, cur)}`);
       const rest = Math.max(0, source.totalMinor - paid.totalPaidMinor);
-      lines.push(`Остаток: ${money(rest, cur)}`);
+      lines.push(`Остаток к выплате: ${money(rest, cur)}`);
     }
   }
   if (ids.size > 1) {
