@@ -585,12 +585,11 @@ export function PayrollPayoutsPanel({
         const prev = draftsRef.current[p.performerId];
         const cardN = parseMoneyToMinor(card || '0');
         const cashN = parseMoneyToMinor(cash || '0');
-        // PAID never auto-selected for batch confirm — amend only via «Изменить».
-        const selected = !paid && p.payableMinor !== 0;
+        // Never auto-check: accidental «Подтвердить» mass-marked drafts as PAID.
         next[p.performerId] = {
           card,
           cash,
-          selected,
+          selected: false,
           fine: prev?.fine ?? '',
           bonus: prev?.bonus ?? '',
         };
@@ -731,6 +730,51 @@ export function PayrollPayoutsPanel({
       onPayoutAmountsChanged?.(userId);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Не удалось сохранить выплату');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reopenToDraft = async (userId: string) => {
+    const token = getToken();
+    if (!token) return;
+    const row = rowsRef.current.find((r) => r.performerId === userId);
+    if (!row || row.existingPayout?.status !== 'PAID') return;
+    if (
+      !window.confirm(
+        `Вернуть выплату ${row.performerName} в черновик? Статус снова «Сохранено», перенос восстановится как до подтверждения. Подтвердите снова, когда будете готовы.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.payrollPayoutReopenDraft(token, {
+        userId,
+        kind: payKind,
+        year: payYear,
+        month: payMonth,
+        periodFrom: periodFrom || undefined,
+        periodTo: periodTo || undefined,
+      });
+      setEditingPaid((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+      setPaidEditBaseline((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+      setMessage(`Возвращено в черновик: ${row.performerName}`);
+      await load();
+      onPayoutAmountsChanged?.(userId);
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : 'Не удалось вернуть в черновик',
+      );
     } finally {
       setBusy(false);
     }
@@ -1056,8 +1100,9 @@ export function PayrollPayoutsPanel({
             <span className="text-sky-300">сохранено</span>
             {' · '}
             <span className="text-emerald-300">выплачено</span>
-            . Уже выплаченные — только через «Изменить» → «Сохранить» (иначе
-            случайная правка снова создаёт перенос).
+            . Уже выплаченные — «Изменить» → «Сохранить», либо «В черновик» если
+            подтвердили по ошибке. Галочки не ставятся сами — отметьте вручную
+            перед «Подтвердить выплаты».
           </p>
 
           {(periodFrom !== defaultRange.from ||
@@ -1157,16 +1202,29 @@ export function PayrollPayoutsPanel({
                             <div className="flex flex-wrap items-center gap-1.5">
                               <PayoutStatusBadge paid={paid} saved={saved} />
                               {paid && !editing ? (
-                                <button
-                                  type="button"
-                                  className="btn-secondary inline-flex items-center gap-1 px-2 py-0.5 text-[10px]"
-                                  disabled={busy}
-                                  title="Изменить карту/кассу выплаченной строки"
-                                  onClick={() => beginEditPaid(r.performerId)}
-                                >
-                                  <Pencil className="h-3 w-3" aria-hidden />
-                                  Изменить
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary inline-flex items-center gap-1 px-2 py-0.5 text-[10px]"
+                                    disabled={busy}
+                                    title="Изменить карту/кассу выплаченной строки"
+                                    onClick={() => beginEditPaid(r.performerId)}
+                                  >
+                                    <Pencil className="h-3 w-3" aria-hidden />
+                                    Изменить
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary px-2 py-0.5 text-[10px] text-amber-200"
+                                    disabled={busy}
+                                    title="Снять подтверждение — снова черновик"
+                                    onClick={() =>
+                                      void reopenToDraft(r.performerId)
+                                    }
+                                  >
+                                    В черновик
+                                  </button>
+                                </>
                               ) : null}
                               {paid && editing ? (
                                 <>
@@ -1556,16 +1614,29 @@ export function PayrollPayoutsPanel({
                             <div className="flex flex-col items-start gap-1">
                               <PayoutStatusBadge paid={paid} saved={saved} />
                               {paid && !editing ? (
-                                <button
-                                  type="button"
-                                  className="btn-secondary inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px]"
-                                  disabled={busy}
-                                  title="Изменить карту/кассу выплаченной строки"
-                                  onClick={() => beginEditPaid(r.performerId)}
-                                >
-                                  <Pencil className="h-3 w-3" aria-hidden />
-                                  Изменить
-                                </button>
+                                <div className="flex flex-wrap gap-1">
+                                  <button
+                                    type="button"
+                                    className="btn-secondary inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px]"
+                                    disabled={busy}
+                                    title="Изменить карту/кассу выплаченной строки"
+                                    onClick={() => beginEditPaid(r.performerId)}
+                                  >
+                                    <Pencil className="h-3 w-3" aria-hidden />
+                                    Изменить
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-secondary px-1.5 py-0.5 text-[10px] text-amber-200"
+                                    disabled={busy}
+                                    title="Снять подтверждение — снова черновик"
+                                    onClick={() =>
+                                      void reopenToDraft(r.performerId)
+                                    }
+                                  >
+                                    В черновик
+                                  </button>
+                                </div>
                               ) : null}
                               {paid && editing ? (
                                 <div className="flex flex-wrap gap-1">

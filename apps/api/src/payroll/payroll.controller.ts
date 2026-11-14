@@ -446,6 +446,29 @@ export class PayrollController {
     }
     return this.payroll.confirmPayoutBatch(user, body);
   }
+
+  /** Undo accidental confirm: PAID → DRAFT (keeps card/cash amounts). */
+  @Post('payouts/reopen-draft')
+  reopenPayoutToDraft(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      userId: string;
+      kind: 'ADVANCE_HALF' | 'MONTH_SETTLEMENT';
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+    },
+  ) {
+    if (body.kind !== 'ADVANCE_HALF' && body.kind !== 'MONTH_SETTLEMENT') {
+      throw new BadRequestException('Неверный тип выплаты');
+    }
+    if (!body.userId) {
+      throw new BadRequestException('Не указан сотрудник');
+    }
+    return this.payroll.reopenPayoutToDraft(user, body);
+  }
 }
 
 @Controller('admin/payroll')

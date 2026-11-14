@@ -2683,14 +2683,13 @@ export class PayrollService {
     const totalMinor = remainder.totalMinor;
     const payableMinor = remainder.payableMinor;
 
-    // Heal polluted same-wave carry: rewrite payout snapshot + staff balance so
-    // the ghost does not leak into the next month if the row is never re-confirmed.
+    // Heal polluted same-wave carry on PAID only (never mutate DRAFT on GET,
+    // and never write staff balance for an unconfirmed draft).
     let existingForPreview = existing;
     if (
       kind === 'MONTH_SETTLEMENT' &&
       existing &&
-      (existing.status === PayrollPayoutStatus.PAID ||
-        existing.status === PayrollPayoutStatus.DRAFT) &&
+      existing.status === PayrollPayoutStatus.PAID &&
       carryInMinor === 0 &&
       (existing.carryInMinor ?? 0) !== 0
     ) {
@@ -2972,10 +2971,9 @@ export class PayrollService {
       preview.periodTo,
     );
     if (existing?.status === PayrollPayoutStatus.PAID) {
-      return this.confirmPayout(actor, {
-        ...input,
-        note: existing.note ?? undefined,
-      });
+      throw new BadRequestException(
+        'Выплата уже подтверждена — измените через «Изменить» → «Сохранить», либо верните в черновик',
+      );
     }
 
     const card = Math.max(0, Math.round(input.cardTransferMinor ?? 0));
@@ -3173,6 +3171,103 @@ export class PayrollService {
           lockedById: actor.sub,
         },
         update: { lockedAt: new Date(), lockedById: actor.sub },
+      });
+
+      return payout;
+    });
+
+    this.invalidateClubSummaryCache(clubId);
+    return this.mapPayout(row);
+  }
+
+  /**
+   * Undo accidental PAID → DRAFT. Restores staff balance to this wave's
+   * carryIn (state before the payment was applied) and drops the period lock.
+   */
+  async reopenPayoutToDraft(
+    actor: JwtPayload,
+    input: {
+      userId: string;
+      kind: PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+    },
+  ): Promise<PayrollPayoutDto> {
+    const clubId = requireClubId(actor);
+    const preview = await this.previewPayout(
+      clubId,
+      input.userId,
+      input.kind,
+      input.year,
+      input.month,
+      { periodFrom: input.periodFrom, periodTo: input.periodTo },
+    );
+    const kind =
+      input.kind === 'ADVANCE_HALF'
+        ? PrismaPayoutKind.ADVANCE_HALF
+        : PrismaPayoutKind.MONTH_SETTLEMENT;
+    const existing = await this.findPayoutForWave(
+      clubId,
+      input.userId,
+      kind,
+      preview.periodFrom,
+      preview.periodTo,
+    );
+    if (!existing || existing.status !== PayrollPayoutStatus.PAID) {
+      throw new BadRequestException('Нет подтверждённой выплаты для возврата в черновик');
+    }
+    const periodFrom = dateOnly(preview.periodFrom);
+    const periodTo = dateOnly(preview.periodTo);
+    const restoreBalance = existing.carryInMinor ?? 0;
+    const isSettlement = kind === PrismaPayoutKind.MONTH_SETTLEMENT;
+    const restoreHint =
+      isSettlement && restoreBalance !== 0
+        ? `восстановлен перенос до выплаты ${preview.periodFrom}–${preview.periodTo}`
+        : null;
+
+    const row = await this.prisma.$transaction(async (tx) => {
+      const payout = await tx.payrollPayout.update({
+        where: { id: existing.id },
+        data: {
+          status: PayrollPayoutStatus.DRAFT,
+          paidAt: null,
+          // Keep typed card/cash; recalculate remainder vs live payable.
+          carryInMinor: preview.carryInMinor,
+          carryOutMinor: preview.payableMinor -
+            (existing.cardTransferMinor +
+              (existing.actualCashMinor ?? existing.cashMinor)),
+          totalMinor: preview.totalMinor,
+          earnedMinor: preview.earnedMinor,
+          priorPaidMinor: preview.priorPaidMinor,
+        },
+        include: { user: true },
+      });
+
+      if (isSettlement) {
+        await tx.payrollStaffBalance.upsert({
+          where: { clubId_userId: { clubId, userId: input.userId } },
+          create: {
+            clubId,
+            userId: input.userId,
+            balanceMinor: restoreBalance,
+            hint: restoreHint,
+          },
+          update: {
+            balanceMinor: restoreBalance,
+            hint: restoreHint,
+          },
+        });
+      }
+
+      await tx.payrollPeriodLock.deleteMany({
+        where: {
+          clubId,
+          userId: input.userId,
+          periodFrom,
+          periodTo,
+        },
       });
 
       return payout;

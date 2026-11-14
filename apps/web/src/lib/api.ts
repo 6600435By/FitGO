@@ -5036,6 +5036,23 @@ export const api = {
       token,
     ),
 
+  payrollPayoutReopenDraft: (
+    token: string,
+    body: {
+      userId: string;
+      kind: import('@fitgo/shared-types').PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').PayrollPayoutDto>(
+      '/super-admin/payroll/payouts/reopen-draft',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
   adminPayrollStaff: (token: string) =>
     request<import('@fitgo/shared-types').StaffPaySummary[]>(
       '/admin/payroll/staff',
