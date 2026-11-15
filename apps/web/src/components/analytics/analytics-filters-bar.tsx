@@ -4,6 +4,7 @@ const SEGMENTS = [
   { value: '', label: 'Все сегменты' },
   { value: 'membership', label: 'Абонементы' },
   { value: 'training', label: 'ПТ / тренинги' },
+  { value: 'reformers', label: 'Реформеры' },
   { value: 'spa', label: 'СПА' },
   { value: 'solarium', label: 'Солярий' },
   { value: 'shop', label: 'Магазин' },
@@ -18,7 +19,7 @@ const PAYMENTS = [
   { value: 'card', label: 'Карта' },
   { value: 'cashless', label: 'Безнал' },
   { value: 'personalAccount', label: 'Лицевой счёт' },
-  { value: 'corpo', label: 'Корпо (ручное)' },
+  { value: 'corpo', label: 'Корпо (ЗП)' },
 ];
 
 export type AnalyticsFilterState = {

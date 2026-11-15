@@ -27,10 +27,7 @@ import {
   OnexClassStatus,
   PersonalBookingStatus,
 } from '@prisma/client';
-import {
-  classifySaleType,
-  loadPayrollSegmentSets,
-} from '../admin-sales/admin-sales-segments';
+import { loadPayrollSegmentSets } from '../admin-sales/admin-sales-segments';
 import {
   isCollectibleClientDebt,
   isStaffDebtorName,
@@ -50,12 +47,15 @@ import {
 } from './analytics-filters';
 import {
   ANALYTICS_SEG_LABEL,
+  ANALYTICS_SEG_PREFER,
   aggregateAnalyticsMoney,
+  classifyAnalyticsSegment,
 } from './analytics-money';
 import { buildCapacityResolver } from './capacity-resolve';
 import { classifySpaPaymentBucket } from './staff-analytics.helpers';
 import {
   assertPeriod,
+  deltaPct,
   metric,
   minskParts,
   rangeBounds,
@@ -246,6 +246,22 @@ export class ClubAnalyticsService {
         ? `Сравнение визитов н/д — проходы в кэше с ${visitCoverage.since ?? '—'}`
         : undefined;
 
+    const cmpSegMap = new Map(
+      moneyCmp.bySegment.map((s) => [s.key, s.amountMinor]),
+    );
+    const bySegment = moneyCur.bySegment.map((s) => {
+      const compareAmountMinor = moneyCompareOk
+        ? (cmpSegMap.get(s.key) ?? 0)
+        : null;
+      return {
+        ...s,
+        compareAmountMinor,
+        deltaPct: moneyCompareOk
+          ? deltaPct(s.amountMinor, compareAmountMinor)
+          : null,
+      };
+    });
+
     const money: ClubAnalyticsMoney = {
       revenue: metric(moneyCur.revenueMinor, moneyCmp.revenueMinor, {
         unit: 'money' as const,
@@ -259,7 +275,7 @@ export class ClubAnalyticsService {
             : undefined,
       }),
       byPayment: moneyCur.byPayment,
-      bySegment: moneyCur.bySegment,
+      bySegment,
       segmentSumMinor: moneyCur.segmentSumMinor,
       segmentGapMinor: moneyCur.segmentGapMinor,
       avgCheck: metric(moneyCur.avgCheckMinor, moneyCmp.avgCheckMinor, {
@@ -278,16 +294,30 @@ export class ClubAnalyticsService {
       debtBreakdown: {
         clientsMinor: debtSnap.clientsMinor,
         staffMinor: debtSnap.staffMinor,
+        clientsBySegment: debtSnap.clientsBySegment,
+        staffBySegment: debtSnap.staffBySegment,
       },
       installments,
     };
 
     const stockHint = 'Нет сводки абонементов — опубликуйте scope=members';
+    const stockCompareOk =
+      membersCur.stockAvailable &&
+      membersCmp.stockAvailable &&
+      membersCur.stockExactAsOf &&
+      membersCmp.stockExactAsOf;
+    const stockCompareHint =
+      membersCur.stockAvailable && !stockCompareOk
+        ? 'Сравнение н/д — нет сводки абонементов на дату конца периода'
+        : undefined;
     const members = {
       active: metric(membersCur.active, membersCmp.active, {
         unit: 'count',
         unavailable: !membersCur.stockAvailable,
-        hint: !membersCur.stockAvailable ? stockHint : undefined,
+        skipCompare: !stockCompareOk,
+        hint: !membersCur.stockAvailable
+          ? stockHint
+          : stockCompareHint,
       }),
       newClients: metric(membersCur.newClients, membersCmp.newClients, {
         unit: 'count',
@@ -308,22 +338,34 @@ export class ClubAnalyticsService {
       churn: metric(membersCur.churn, membersCmp.churn, {
         unit: 'count',
         unavailable: !membersCur.churnAvailable,
-        hint: !membersCur.churnAvailable ? stockHint : undefined,
+        skipCompare: !stockCompareOk,
+        hint: !membersCur.churnAvailable
+          ? stockHint
+          : stockCompareHint,
       }),
       frozen: metric(membersCur.frozen, membersCmp.frozen, {
         unit: 'count',
         unavailable: !membersCur.stockAvailable,
-        hint: !membersCur.stockAvailable ? stockHint : undefined,
+        skipCompare: !stockCompareOk,
+        hint: !membersCur.stockAvailable
+          ? stockHint
+          : stockCompareHint,
       }),
       expiring7: metric(membersCur.expiring7, membersCmp.expiring7, {
         unit: 'count',
         unavailable: !membersCur.stockAvailable,
-        hint: !membersCur.stockAvailable ? stockHint : undefined,
+        skipCompare: !stockCompareOk,
+        hint: !membersCur.stockAvailable
+          ? stockHint
+          : stockCompareHint,
       }),
       expiring30: metric(membersCur.expiring30, membersCmp.expiring30, {
         unit: 'count',
         unavailable: !membersCur.stockAvailable,
-        hint: !membersCur.stockAvailable ? stockHint : undefined,
+        skipCompare: !stockCompareOk,
+        hint: !membersCur.stockAvailable
+          ? stockHint
+          : stockCompareHint,
       }),
     };
 
@@ -587,29 +629,74 @@ export class ClubAnalyticsService {
 
   /** Open collectible unpaid sales — snapshot (not period-bound). */
   private async debtSnapshot(clubId: string) {
+    const payrollSegs = await loadPayrollSegmentSets(this.config);
     const rows = await this.prisma.clubRevenueEntry.findMany({
       where: { clubId, isActive: true, operationType: 'unpaid' },
       select: {
         externalId: true,
         productName: true,
+        productExternalId: true,
+        saleType: true,
         clientName: true,
         saleAmount: true,
         amount: true,
       },
     });
+    const emptySeg = (): Record<string, number> => {
+      const o: Record<string, number> = {};
+      for (const k of ANALYTICS_SEG_PREFER) o[k] = 0;
+      o.unclassified = 0;
+      return o;
+    };
+    const clientsSeg = emptySeg();
+    const staffSeg = emptySeg();
     let clientsMinor = 0;
     let staffMinor = 0;
     for (const r of rows) {
       if (!isCollectibleClientDebt(r)) continue;
       const minor = Math.round((Number(r.saleAmount || r.amount) || 0) * 100);
       if (minor <= 0) continue;
-      if (isStaffDebtorName(r.clientName)) staffMinor += minor;
-      else clientsMinor += minor;
+      const seg = classifyAnalyticsSegment(
+        r.saleType,
+        r.productName,
+        r.productExternalId,
+        payrollSegs,
+      );
+      const key =
+        seg === 'corporate' || seg === 'other' ? 'unclassified' : seg;
+      if (isStaffDebtorName(r.clientName)) {
+        staffMinor += minor;
+        staffSeg[key] = (staffSeg[key] ?? 0) + minor;
+      } else {
+        clientsMinor += minor;
+        clientsSeg[key] = (clientsSeg[key] ?? 0) + minor;
+      }
     }
+    const toList = (
+      map: Record<string, number>,
+    ): Array<{ key: string; label: string; amountMinor: number }> => {
+      const list: Array<{ key: string; label: string; amountMinor: number }> =
+        ANALYTICS_SEG_PREFER.map((key) => ({
+          key,
+          label: ANALYTICS_SEG_LABEL[key] ?? key,
+          amountMinor: map[key] ?? 0,
+        }));
+      const unc = map.unclassified ?? 0;
+      if (unc > 0) {
+        list.push({
+          key: 'unclassified',
+          label: ANALYTICS_SEG_LABEL.unclassified,
+          amountMinor: unc,
+        });
+      }
+      return list;
+    };
     return {
       clientsMinor,
       staffMinor,
       totalMinor: clientsMinor + staffMinor,
+      clientsBySegment: toList(clientsSeg),
+      staffBySegment: toList(staffSeg),
     };
   }
 
@@ -620,7 +707,7 @@ export class ClubAnalyticsService {
     filters: AnalyticsMoneyFilters = {},
   ) {
     const { start, end } = rangeBounds(from, to);
-    const [receipts, manuals, payrollSegs] = await Promise.all([
+    const [receipts, manuals, payrollSegs, payrollCorpo] = await Promise.all([
       this.prisma.clubRevenueEntry.findMany({
         where: {
           clubId,
@@ -668,17 +755,36 @@ export class ClubAnalyticsService {
         },
       }),
       this.prisma.clubRevenueManualEntry.findMany({
-        where: { clubId, entryDate: { gte: start, lte: end } },
+        where: {
+          clubId,
+          kind: 'other',
+          entryDate: { gte: start, lte: end },
+        },
         select: { kind: true, amountMinor: true, entryDate: true },
       }),
       loadPayrollSegmentSets(this.config),
+      // Period fully inside [from, to] — same rule as payroll listCorporateSales.
+      this.prisma.payrollCorporateSale.findMany({
+        where: {
+          clubId,
+          periodFrom: { gte: new Date(`${from}T00:00:00`) },
+          periodTo: { lte: new Date(`${to}T23:59:59`) },
+        },
+        select: { amountMinor: true },
+      }),
     ]);
+
+    const payrollCorporateMinor = payrollCorpo.reduce(
+      (s, r) => s + (r.amountMinor || 0),
+      0,
+    );
 
     return aggregateAnalyticsMoney({
       from,
       to,
       receipts,
       manuals,
+      payrollCorporateMinor,
       payrollSegs,
       filters,
     });
@@ -688,16 +794,21 @@ export class ClubAnalyticsService {
    * Stock counters: ClubMembersSummary when present and non-empty;
    * otherwise ClubMembershipSnapshot (ACTIVE/FROZEN as in СтатусЧленстваJSON).
    * Zero-all summary rows (failed/unpublished scope=members) do not block fallback.
+   * `exactAsOf` is true only when the summary row is for `to` itself — required
+   * for period comparison (stale lte-to snapshots must not inflate deltas).
    */
   private async resolveMembersStock(clubId: string, from: string, to: string) {
-    let summary = await this.prisma.clubMembersSummary.findUnique({
+    const exactSummary = await this.prisma.clubMembersSummary.findUnique({
       where: { clubId_asOfDate: { clubId, asOfDate: to } },
     });
+    let summary = exactSummary;
+    let exactAsOf = !!exactSummary;
     if (!summary) {
       summary = await this.prisma.clubMembersSummary.findFirst({
         where: { clubId, asOfDate: { lte: to } },
         orderBy: { asOfDate: 'desc' },
       });
+      exactAsOf = false;
     }
 
     const summaryEmpty =
@@ -714,6 +825,7 @@ export class ClubAnalyticsService {
         : [];
       return {
         available: true as const,
+        exactAsOf,
         active: summary.active,
         frozen: summary.frozen,
         expiring7: summary.expiring7,
@@ -735,6 +847,7 @@ export class ClubAnalyticsService {
     if (!snapshots.length) {
       return {
         available: false as const,
+        exactAsOf: false,
         active: 0,
         frozen: 0,
         expiring7: 0,
@@ -787,6 +900,8 @@ export class ClubAnalyticsService {
     }
     return {
       available: true as const,
+      // Snapshots are a live catalog as of "now", not a dated summary for `to`.
+      exactAsOf: false,
       active,
       frozen,
       expiring7,
@@ -809,39 +924,53 @@ export class ClubAnalyticsService {
       payrollSegs,
     );
 
-    const priorSales = await this.prisma.saleTransaction.findMany({
-      where: {
-        clubId,
-        isActive: true,
-        paidAt: { not: null },
-        soldAt: { lt: start },
-        clientExternalId: {
-          in: [
-            ...new Set(
-              memSales
-                .map((s) => s.clientExternalId)
-                .filter((id): id is string => Boolean(id)),
-            ),
-          ],
-        },
-      },
-      select: { clientExternalId: true, soldAt: true },
-      orderBy: { soldAt: 'desc' },
-    });
+    const clientIds = [
+      ...new Set(
+        memSales
+          .map((s) => s.clientExternalId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+
+    // Prior membership sales only (not shop/SPA) so a water bottle does not
+    // turn a first membership into a "renewal".
+    const priorMemSales =
+      clientIds.length === 0
+        ? []
+        : await this.membershipSalesViaSegments(
+            clubId,
+            new Date(0),
+            new Date(start.getTime() - 1),
+            payrollSegs,
+            clientIds,
+          );
     const lastPrior = new Map<string, Date>();
-    for (const p of priorSales) {
+    for (const p of priorMemSales) {
       if (!p.clientExternalId) continue;
-      if (!lastPrior.has(p.clientExternalId)) {
+      const prev = lastPrior.get(p.clientExternalId);
+      if (!prev || p.soldAt > prev) {
         lastPrior.set(p.clientExternalId, p.soldAt);
+      }
+    }
+
+    // Unique clients in period: first membership sale decides new vs renewal.
+    const firstSaleByClient = new Map<
+      string,
+      { soldAt: Date }
+    >();
+    for (const sale of memSales) {
+      const cid = sale.clientExternalId;
+      if (!cid) continue;
+      const prev = firstSaleByClient.get(cid);
+      if (!prev || sale.soldAt < prev.soldAt) {
+        firstSaleByClient.set(cid, { soldAt: sale.soldAt });
       }
     }
 
     let newClients = 0;
     let renewals = 0;
     const renewedClients = new Set<string>();
-    for (const sale of memSales) {
-      const cid = sale.clientExternalId;
-      if (!cid) continue;
+    for (const [cid, sale] of firstSaleByClient) {
       const prior = lastPrior.get(cid);
       if (!prior) {
         newClients++;
@@ -857,16 +986,24 @@ export class ClubAnalyticsService {
       }
     }
 
+    // Renewal rate: among memberships that ended in the period, share of
+    // clients who also bought a membership in the same period (≤ 100%).
+    let renewedExpired = 0;
+    for (const cid of stock.expiredClients) {
+      if (firstSaleByClient.has(cid)) renewedExpired++;
+    }
+
     let churn = 0;
     for (const cid of stock.expiredClients) {
-      if (!renewedClients.has(cid)) churn++;
+      if (!firstSaleByClient.has(cid)) churn++;
     }
 
     const renewalRateAvailable = stock.available && stock.expiredInPeriod > 0;
     const renewalRatePct = renewalRateAvailable
-      ? Math.round(
-          (renewedClients.size / stock.expiredInPeriod) * 1000,
-        ) / 10
+      ? Math.min(
+          100,
+          Math.round((renewedExpired / stock.expiredInPeriod) * 1000) / 10,
+        )
       : 0;
 
     return {
@@ -879,6 +1016,7 @@ export class ClubAnalyticsService {
       renewalRatePct,
       churn,
       stockAvailable: stock.available,
+      stockExactAsOf: stock.exactAsOf,
       stockSource: stock.source,
       renewalRateAvailable,
       churnAvailable: stock.available,
@@ -890,6 +1028,7 @@ export class ClubAnalyticsService {
     start: Date,
     end: Date,
     payrollSegs: Awaited<ReturnType<typeof loadPayrollSegmentSets>>,
+    clientExternalIds?: string[],
   ) {
     const all = await this.prisma.saleTransaction.findMany({
       where: {
@@ -897,11 +1036,15 @@ export class ClubAnalyticsService {
         isActive: true,
         paidAt: { not: null },
         soldAt: { gte: start, lte: end },
+        ...(clientExternalIds?.length
+          ? { clientExternalId: { in: clientExternalIds } }
+          : {}),
       },
       select: {
         clientExternalId: true,
         soldAt: true,
         productName: true,
+        productExternalId: true,
         saleType: true,
       },
     });
@@ -913,12 +1056,14 @@ export class ClubAnalyticsService {
       );
     }
     return all.filter((s) => {
-      const t = classifySaleType(
+      // Analytics membership only — exclude reformers that sit in membership 1C set.
+      const seg = classifyAnalyticsSegment(
         s.saleType ?? undefined,
         s.productName,
+        s.productExternalId,
         payrollSegs,
       );
-      return t === 'membership';
+      return seg === 'membership';
     });
   }
 
@@ -1792,13 +1937,7 @@ export class ClubAnalyticsService {
       bySeg.set(p.segment, list);
     }
     // Always include empty preferred segments when filtering all.
-    for (const key of [
-      'membership',
-      'training',
-      'spa',
-      'solarium',
-      'shop',
-    ] as const) {
+    for (const key of ANALYTICS_SEG_PREFER) {
       if (!filters.segment && !bySeg.has(key)) bySeg.set(key, []);
     }
 

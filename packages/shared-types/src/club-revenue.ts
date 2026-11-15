@@ -145,6 +145,9 @@ export interface ClubRevenueReportResponse {
   manualEntries: ClubRevenueManualEntryDto[];
   currency: string;
   hint?: string;
+  /** When segment filter is active — full sum of matching lines (not table cap). */
+  filteredLinesTotalMinor?: number;
+  filteredLinesCount?: number;
   lastSyncedAt?: string | null;
 }
 

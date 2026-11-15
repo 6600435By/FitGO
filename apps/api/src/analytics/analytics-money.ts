@@ -1,10 +1,18 @@
 /**
- * One-pass club money aggregates from ClubRevenueEntry (+ manuals).
+ * One-pass club money aggregates from ClubRevenueEntry (+ manuals / payroll корпо).
  * Minsk day bounds; business cut includes cashless + personal account.
+ *
+ * Analytics segment keys are separate from payroll `classifySaleType` so
+ * admin % motivation is unchanged when reformers / corporate rules evolve here.
  */
 import type { PayrollSegmentSets } from '../admin-sales/admin-sales-segments';
-import { classifySaleType } from '../admin-sales/admin-sales-segments';
+import {
+  classifySaleType,
+  isReformerGroupNomenclature,
+  isReformerPersonalNomenclature,
+} from '../admin-sales/admin-sales-segments';
 import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
+import { isGroupReformerTitle } from './pricing-analytics.rules';
 import { rangeBounds, weekBuckets } from './analytics-period';
 import type {
   AnalyticsMoneyFilters,
@@ -15,6 +23,7 @@ import type {
 export const ANALYTICS_SEG_LABEL: Record<string, string> = {
   membership: 'Абонементы',
   training: 'ПТ / тренинги',
+  reformers: 'Реформеры',
   spa: 'СПА',
   solarium: 'Солярий',
   shop: 'Магазин',
@@ -22,6 +31,16 @@ export const ANALYTICS_SEG_LABEL: Record<string, string> = {
   other: 'Прочее',
   unclassified: 'Не разнесено',
 };
+
+/** Prefer order for always-visible segment bars (zeros still shown). */
+export const ANALYTICS_SEG_PREFER = [
+  'membership',
+  'training',
+  'reformers',
+  'spa',
+  'solarium',
+  'shop',
+] as const;
 
 export type AnalyticsSegKey = keyof typeof ANALYTICS_SEG_LABEL;
 
@@ -82,6 +101,8 @@ export interface MoneyAggResult {
     label: string;
     amountMinor: number;
     share: number;
+    compareAmountMinor?: number | null;
+    deltaPct?: number | null;
   }>;
   segmentSumMinor: number;
   segmentGapMinor: number;
@@ -126,12 +147,24 @@ function minskDay(d: Date): string {
   }).format(d);
 }
 
-function classifySeg(
+/**
+ * Club analytics / sales money segment. Reformers (group + personal) win over
+ * membership/training so SKUs tagged in those 1C app segments still land here.
+ * Does not change payroll `classifySaleType`.
+ */
+export function classifyAnalyticsSegment(
   saleType: string | null | undefined,
   productName: string | null | undefined,
   productExternalId: string | null | undefined,
   segments: PayrollSegmentSets | null,
 ): AnalyticsSegKey {
+  if (
+    isReformerPersonalNomenclature(productName, productExternalId, segments) ||
+    isReformerGroupNomenclature(productName, productExternalId, segments) ||
+    isGroupReformerTitle(productName ?? '')
+  ) {
+    return 'reformers';
+  }
   const bucket = classifySaleType(
     saleType ?? undefined,
     productName,
@@ -255,6 +288,8 @@ export function aggregateAnalyticsMoney(input: {
   to: string;
   receipts: AnalyticsCreRow[];
   manuals: AnalyticsManualRow[];
+  /** Payroll «Корпо» rows whose period is fully inside [from, to]. */
+  payrollCorporateMinor?: number;
   payrollSegs: PayrollSegmentSets | null;
   filters?: AnalyticsMoneyFilters;
 }): MoneyAggResult {
@@ -273,6 +308,7 @@ export function aggregateAnalyticsMoney(input: {
   const segMinor: Record<string, number> = {
     membership: 0,
     training: 0,
+    reformers: 0,
     spa: 0,
     solarium: 0,
     shop: 0,
@@ -326,7 +362,8 @@ export function aggregateAnalyticsMoney(input: {
     else if (seg === 'spa' || seg === 'solarium') cur.spaMinor += minor;
     else if (seg === 'shop') cur.shopMinor += minor;
     else if (seg === 'corporate') cur.corporateMinor += minor;
-    else if (seg === 'training') cur.trainingMinor += minor;
+    else if (seg === 'training' || seg === 'reformers')
+      cur.trainingMinor += minor;
     else cur.otherMinor += minor;
     cur.totalMinor += minor;
     byEmployee.set(empId, cur);
@@ -339,7 +376,13 @@ export function aggregateAnalyticsMoney(input: {
     minor: number,
   ) => {
     if (minor <= 0) return;
-    if (seg !== 'spa' && seg !== 'solarium' && seg !== 'training') return;
+    if (
+      seg !== 'spa' &&
+      seg !== 'solarium' &&
+      seg !== 'training' &&
+      seg !== 'reformers'
+    )
+      return;
     const cur = byPerformer.get(perfId) ?? {
       name,
       spaMinor: 0,
@@ -347,7 +390,7 @@ export function aggregateAnalyticsMoney(input: {
       totalMinor: 0,
     };
     cur.name = name || cur.name;
-    if (seg === 'training') cur.trainingMinor += minor;
+    if (seg === 'training' || seg === 'reformers') cur.trainingMinor += minor;
     else cur.spaMinor += minor;
     cur.totalMinor += minor;
     byPerformer.set(perfId, cur);
@@ -361,7 +404,7 @@ export function aggregateAnalyticsMoney(input: {
     if (!matchesProduct(f.product, r.productExternalId, r.productName)) continue;
 
     const day = minskDay(r.paidAt ?? r.occurredAt);
-    const seg = classifySeg(
+    const seg = classifyAnalyticsSegment(
       r.saleType,
       r.productName,
       r.productExternalId,
@@ -479,21 +522,27 @@ export function aggregateAnalyticsMoney(input: {
 
   let corpoMinor = 0;
   let otherMinor = 0;
-  if (
+  const manualsOk =
     (!f.employee || f.employee === 'none') &&
     (!f.performer || f.performer === 'none') &&
     !f.product &&
     !f.q &&
-    (!paymentFilter || paymentFilter === 'corpo')
+    (!paymentFilter || paymentFilter === 'corpo');
+
+  // Корпо: PayrollCorporateSale (period fully inside range). Manual corpo
+  // entries are ignored here to avoid double-count with the ЗП field.
+  if (manualsOk && (!f.segment || f.segment === 'corporate')) {
+    corpoMinor = Math.max(0, Math.round(input.payrollCorporateMinor ?? 0));
+  }
+
+  if (
+    manualsOk &&
+    paymentFilter !== 'corpo' &&
+    (!f.segment || f.segment === 'other')
   ) {
     for (const m of input.manuals) {
       if (m.entryDate < start || m.entryDate > end) continue;
-      if (m.kind === 'corpo') {
-        if (f.segment && f.segment !== 'corporate') continue;
-        corpoMinor += m.amountMinor;
-      } else if (m.kind === 'other') {
-        if (f.segment && f.segment !== 'other') continue;
-        if (paymentFilter === 'corpo') continue;
+      if (m.kind === 'other') {
         otherMinor += m.amountMinor;
       }
     }
@@ -524,13 +573,7 @@ export function aggregateAnalyticsMoney(input: {
     cash + card + cashless + personalAccount + corpoMinor + otherMinor;
   const segmentGapMinor = moneyIn - segmentSumMinor;
 
-  const prefer = new Set([
-    'membership',
-    'training',
-    'spa',
-    'solarium',
-    'shop',
-  ]);
+  const prefer = new Set<string>(ANALYTICS_SEG_PREFER);
   const bySegment = Object.entries(segMinor)
     .filter(([key, v]) => v > 0 || prefer.has(key))
     .map(([key, amountMinor]) => ({
@@ -538,6 +581,8 @@ export function aggregateAnalyticsMoney(input: {
       label: ANALYTICS_SEG_LABEL[key] ?? key,
       amountMinor,
       share: segmentSumMinor > 0 ? amountMinor / segmentSumMinor : 0,
+      compareAmountMinor: null as number | null,
+      deltaPct: null as number | null,
     }));
 
   const paymentCount = paymentDocs.size;

@@ -1120,7 +1120,7 @@ export class StaffAnalyticsService {
       '../admin-sales/admin-sales-segments'
     );
     const { aggregateAnalyticsMoney } = await import('./analytics-money');
-    const [receipts, manuals, payrollSegs] = await Promise.all([
+    const [receipts, manuals, payrollSegs, payrollCorpo] = await Promise.all([
       this.prisma.clubRevenueEntry.findMany({
         where: {
           clubId,
@@ -1168,16 +1168,33 @@ export class StaffAnalyticsService {
         },
       }),
       this.prisma.clubRevenueManualEntry.findMany({
-        where: { clubId, entryDate: { gte: start, lte: end } },
+        where: {
+          clubId,
+          kind: 'other',
+          entryDate: { gte: start, lte: end },
+        },
         select: { kind: true, amountMinor: true, entryDate: true },
       }),
       loadPayrollSegmentSets(this.config),
+      this.prisma.payrollCorporateSale.findMany({
+        where: {
+          clubId,
+          periodFrom: { gte: new Date(`${from}T00:00:00`) },
+          periodTo: { lte: new Date(`${to}T23:59:59`) },
+        },
+        select: { amountMinor: true },
+      }),
     ]);
+    const payrollCorporateMinor = payrollCorpo.reduce(
+      (s, r) => s + (r.amountMinor || 0),
+      0,
+    );
     const agg = aggregateAnalyticsMoney({
       from,
       to,
       receipts,
       manuals,
+      payrollCorporateMinor,
       payrollSegs,
       filters,
     });

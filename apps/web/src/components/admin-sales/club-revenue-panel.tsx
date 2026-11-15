@@ -121,6 +121,17 @@ const PAYMENT_CHIPS: { id: string; label: string }[] = [
   { id: 'mixed', label: 'Смешанная' },
 ];
 
+/** Same keys as analytics «По сегментам» / API `segment` query. */
+const SEGMENT_CHIPS: { id: string; label: string }[] = [
+  { id: 'all', label: 'Все сегменты' },
+  { id: 'membership', label: 'Абонементы' },
+  { id: 'training', label: 'ПТ / тренинги' },
+  { id: 'reformers', label: 'Реформеры' },
+  { id: 'spa', label: 'СПА' },
+  { id: 'solarium', label: 'Солярий' },
+  { id: 'shop', label: 'Магазин' },
+];
+
 function Chip({
   active,
   children,
@@ -903,30 +914,38 @@ export function ClubRevenuePanel() {
           </Chip>
         ))}
       </div>
-      {(segment || debtor) && (
+      <div className="flex flex-wrap gap-2">
+        {SEGMENT_CHIPS.map((c) => (
+          <Chip
+            key={c.id}
+            active={(segment || 'all') === c.id}
+            onClick={() => setSegment(c.id === 'all' ? '' : c.id)}
+          >
+            {c.label}
+          </Chip>
+        ))}
+      </div>
+      {debtor ? (
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-          {segment ? <span>Сегмент: {segment}</span> : null}
-          {debtor ? (
-            <span>
-              Должник: {debtor === 'staff' ? 'сотрудники' : 'клиенты'}
-            </span>
-          ) : null}
+          <span>
+            Должник: {debtor === 'staff' ? 'сотрудники' : 'клиенты'}
+          </span>
           <button
             type="button"
             className="text-fitgo-400 hover:underline"
-            onClick={() => {
-              setSegment('');
-              setDebtor('');
-            }}
+            onClick={() => setDebtor('')}
           >
-            Сбросить
+            Сбросить должника
           </button>
         </div>
-      )}
+      ) : null}
 
       {error ? <p className="text-sm text-rose-400">{error}</p> : null}
       {loading && !data ? (
         <p className="text-sm text-slate-500">Загрузка…</p>
+      ) : null}
+      {data?.hint ? (
+        <p className="text-xs text-slate-500">{data.hint}</p>
       ) : null}
       {data ? (
         <SummaryCards

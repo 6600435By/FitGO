@@ -12,6 +12,7 @@ export type AnalyticsPaymentFilter =
 export type AnalyticsSegmentFilter =
   | 'membership'
   | 'training'
+  | 'reformers'
   | 'spa'
   | 'solarium'
   | 'shop'
@@ -58,6 +59,7 @@ export function parseAnalyticsFilters(raw: {
   const allowedSeg = new Set([
     'membership',
     'training',
+    'reformers',
     'spa',
     'solarium',
     'shop',

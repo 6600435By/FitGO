@@ -15,10 +15,7 @@ import { Role } from '@prisma/client';
 import { ManagerOriginTasksService } from '../admin-tasks/manager-origin-tasks.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
-import {
-  classifySaleType,
-  loadPayrollSegmentSets,
-} from './admin-sales-segments';
+import { loadPayrollSegmentSets } from './admin-sales-segments';
 import {
   isCollectibleClientDebt,
   isStaffDebtorName,
@@ -32,6 +29,7 @@ import {
   shouldReplaceProductWithBasis,
   summarizeBasisProducts,
 } from './payment-basis-products';
+import { classifyAnalyticsSegment } from '../analytics/analytics-money';
 import { PrismaService } from '../prisma/prisma.service';
 
 function toMinor(major: number): number {
@@ -536,39 +534,70 @@ export class ClubRevenueService {
     }
 
     const segment = params.segment?.trim().toLowerCase();
-    if (segment && segment !== 'all' && segment !== 'corporate') {
+    const segmentActive =
+      !!segment && segment !== 'all' && segment !== 'corporate';
+    // Segment filter aligned with analytics bars: same classifier; for money
+    // (non-unpaid) keep only ops that feed aggregateAnalyticsMoney.
+    if (segmentActive) {
       const payrollSegs = await loadPayrollSegmentSets(this.config);
-      const segmentKey =
-        segment === 'spa'
-          ? 'massage'
-          : segment === 'training'
-            ? 'training'
-            : segment;
+      if (op !== 'unpaid') {
+        lineRows = lineRows.filter((r) => {
+          if (r.operationType === 'refund') return false;
+          if (
+            r.operationType === 'personal_credit' ||
+            r.operationType === 'personal_burn'
+          ) {
+            return false;
+          }
+          if (
+            r.operationType === 'payment' ||
+            r.operationType === 'personal_deposit'
+          ) {
+            return true;
+          }
+          if (r.operationType === 'sale' && (Number(r.paidAmount) || 0) > 0) {
+            return true;
+          }
+          return false;
+        });
+      }
       lineRows = lineRows.filter((r) => {
-        const classified = classifySaleType(
+        const classified = classifyAnalyticsSegment(
           r.saleType ?? undefined,
           r.productName,
-          payrollSegs,
           r.productExternalId,
+          payrollSegs,
         );
-        if (segment === 'spa') return classified === 'massage';
         if (segment === 'other') {
           return (
-            classified !== 'membership' &&
-            classified !== 'training' &&
-            classified !== 'massage' &&
-            classified !== 'solarium' &&
-            classified !== 'shop'
+            classified === 'other' || classified === 'unclassified'
           );
         }
-        return classified === segmentKey;
+        return classified === segment;
       });
     }
+
+    const lineAmountMinor = (r: Row): number => {
+      if (op === 'unpaid') {
+        return toMinor(Number(r.saleAmount || r.amount) || 0);
+      }
+      if (payPart === 'cash') return toMinor(r.cash);
+      if (payPart === 'card') return toMinor(r.card);
+      if (payPart === 'cashless') return toMinor(r.cashless);
+      if (payPart === 'personalAccount') return toMinor(r.personalAccount);
+      return toMinor(r.cash) + toMinor(r.card) + toMinor(r.cashless) + toMinor(r.personalAccount);
+    };
+
+    const filteredLinesTotalMinor = lineRows.reduce(
+      (s, r) => s + lineAmountMinor(r),
+      0,
+    );
 
     const lineLimit =
       params.lineLimit != null && params.lineLimit > 0
         ? params.lineLimit
         : 2000;
+    const truncated = lineRows.length > lineLimit;
     const lines = lineRows.slice(0, lineLimit).map((r) => {
       const line = this.toLine(r, from, to);
       if (payPart === 'cash') {
@@ -583,6 +612,8 @@ export class ClubRevenueService {
       } else if (payPart === 'personalAccount') {
         line.amountMinor = toMinor(r.personalAccount);
         line.paidAmountMinor = toMinor(r.personalAccount);
+      } else if (segmentActive && op !== 'unpaid') {
+        line.amountMinor = lineAmountMinor(r);
       }
       return line;
     });
@@ -616,10 +647,18 @@ export class ClubRevenueService {
       });
     }
 
-    const hint =
+    let hint =
       lines.length === 0
         ? 'Нет данных за период. Нажмите «Обновить из 1С».'
         : 'Итоги в карточках — за весь выбранный период. Клик по цифре фильтрует только таблицу.';
+    if (segmentActive) {
+      const major = (filteredLinesTotalMinor / 100).toLocaleString('ru-RU', {
+        maximumFractionDigits: 2,
+      });
+      hint = `Сегмент: сумма строк ${major} BYN (${lineRows.length} шт.)${
+        truncated ? `, в таблице первые ${lineLimit}` : ''
+      }. Карточки сверху — за весь период.`;
+    }
 
     return {
       from: params.from,
@@ -630,6 +669,10 @@ export class ClubRevenueService {
       manualEntries: manualDtos,
       currency: club?.currency ?? 'BYN',
       hint,
+      filteredLinesTotalMinor: segmentActive
+        ? filteredLinesTotalMinor
+        : undefined,
+      filteredLinesCount: segmentActive ? lineRows.length : undefined,
       lastSyncedAt: syncState?.lastSuccessAt?.toISOString() ?? null,
     };
   }

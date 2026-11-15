@@ -2,6 +2,7 @@
 
 import type { ClubAnalyticsReport } from '@fitgo/shared-types';
 import Link from 'next/link';
+import { useState } from 'react';
 import { AnalyticsDataQualityBar } from './analytics-filters-bar';
 import { MetricCard } from './metric-card';
 
@@ -37,6 +38,23 @@ function controlHref(
   return `/super-admin/review-queue?${q.toString()}`;
 }
 
+function segmentDeltaLabel(deltaPct: number | null | undefined) {
+  if (deltaPct == null) return null;
+  const sign = deltaPct > 0 ? '+' : '';
+  const color =
+    deltaPct > 0
+      ? 'text-emerald-400'
+      : deltaPct < 0
+        ? 'text-rose-400'
+        : 'text-slate-500';
+  return (
+    <span className={`text-[11px] ${color}`}>
+      {sign}
+      {deltaPct}% к сравнению
+    </span>
+  );
+}
+
 export function ClubAnalyticsPanel({
   report,
   showPay,
@@ -46,6 +64,7 @@ export function ClubAnalyticsPanel({
   showPay: boolean;
   onFilterSegment?: (segment: string) => void;
 }) {
+  const [debtOpen, setDebtOpen] = useState<'client' | 'staff' | null>(null);
   const { money: m, members, visits, services, currency, from, to } = report;
   const netRevenue = {
     ...m.revenue,
@@ -154,25 +173,73 @@ export function ClubAnalyticsPanel({
         {m.debtBreakdown && (
           <div className="card mt-3">
             <p className="mb-2 text-sm font-medium">Дебиторка — расшифровка</p>
-            <ul className="space-y-1 text-sm text-slate-300">
-              <li className="flex justify-between gap-3">
-                <Link
-                  href={salesHref(from, to, { op: 'unpaid', debtor: 'client' })}
-                  className="text-fitgo-400 hover:underline"
-                >
-                  Клиенты
-                </Link>
-                <span>{money(m.debtBreakdown.clientsMinor, currency)}</span>
-              </li>
-              <li className="flex justify-between gap-3">
-                <Link
-                  href={salesHref(from, to, { op: 'unpaid', debtor: 'staff' })}
-                  className="text-fitgo-400 hover:underline"
-                >
-                  Сотрудники
-                </Link>
-                <span>{money(m.debtBreakdown.staffMinor, currency)}</span>
-              </li>
+            <ul className="space-y-2 text-sm text-slate-300">
+              {(
+                [
+                  {
+                    id: 'client' as const,
+                    label: 'Клиенты',
+                    total: m.debtBreakdown.clientsMinor,
+                    segments: m.debtBreakdown.clientsBySegment ?? [],
+                  },
+                  {
+                    id: 'staff' as const,
+                    label: 'Сотрудники',
+                    total: m.debtBreakdown.staffMinor,
+                    segments: m.debtBreakdown.staffBySegment ?? [],
+                  },
+                ] as const
+              ).map((group) => (
+                <li key={group.id}>
+                  <div className="flex justify-between gap-3">
+                    <button
+                      type="button"
+                      className="text-left text-fitgo-400 hover:underline"
+                      onClick={() =>
+                        setDebtOpen((cur) =>
+                          cur === group.id ? null : group.id,
+                        )
+                      }
+                    >
+                      {group.label}
+                      <span className="ml-1 text-slate-500">
+                        {debtOpen === group.id ? '▾' : '▸'}
+                      </span>
+                    </button>
+                    <Link
+                      href={salesHref(from, to, {
+                        op: 'unpaid',
+                        debtor: group.id,
+                      })}
+                      className="hover:underline"
+                    >
+                      {money(group.total, currency)}
+                    </Link>
+                  </div>
+                  {debtOpen === group.id && (
+                    <ul className="mt-1 space-y-1 border-l border-slate-700 pl-3 text-xs">
+                      {group.segments.map((s) => (
+                        <li
+                          key={s.key}
+                          className="flex justify-between gap-2 text-slate-400"
+                        >
+                          <Link
+                            href={salesHref(from, to, {
+                              op: 'unpaid',
+                              debtor: group.id,
+                              segment: s.key,
+                            })}
+                            className="text-fitgo-400/90 hover:underline"
+                          >
+                            {s.label}
+                          </Link>
+                          <span>{money(s.amountMinor, currency)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              ))}
             </ul>
           </div>
         )}
@@ -236,6 +303,10 @@ export function ClubAnalyticsPanel({
         </div>
         <div className="card mt-3">
           <p className="mb-2 text-sm font-medium">По сегментам</p>
+          <p className="mb-2 text-[11px] text-slate-500">
+            Суммы до возвратов. Сравнение:{' '}
+            {report.compareFrom} — {report.compareTo}
+          </p>
           <ul className="space-y-2">
             {m.bySegment.map((s) => (
               <li key={s.key} className="text-sm">
@@ -247,22 +318,26 @@ export function ClubAnalyticsPanel({
                   >
                     {s.label}
                   </button>
-                  <span className="text-slate-400">
+                  <span className="text-right text-slate-400">
                     <Link
                       href={salesHref(from, to, {
                         op: 'payment',
                         segment:
-                          s.key === 'spa'
-                            ? 'massage'
-                            : s.key === 'unclassified'
-                              ? undefined
-                              : s.key,
+                          s.key === 'unclassified' || s.key === 'corporate'
+                            ? undefined
+                            : s.key,
                       })}
                       className="hover:underline"
                     >
                       {money(s.amountMinor, currency)}
                     </Link>{' '}
                     · {Math.round(s.share * 100)}%
+                    {segmentDeltaLabel(s.deltaPct) && (
+                      <>
+                        <br />
+                        {segmentDeltaLabel(s.deltaPct)}
+                      </>
+                    )}
                   </span>
                 </div>
                 <div className="mt-1 h-2 rounded-full bg-slate-800">

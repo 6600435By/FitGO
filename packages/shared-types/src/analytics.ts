@@ -55,6 +55,9 @@ export interface ClubAnalyticsMoney {
     label: string;
     amountMinor: number;
     share: number;
+    /** Same segment sum for compare window (prev / yoy). */
+    compareAmountMinor?: number | null;
+    deltaPct?: number | null;
   }>;
   /** Sum of bySegment amounts (before refunds). */
   segmentSumMinor: number;
@@ -67,6 +70,18 @@ export interface ClubAnalyticsMoney {
   debtBreakdown: {
     clientsMinor: number;
     staffMinor: number;
+    /** Per-segment open debt for clients (always-show keys + optional unclassified). */
+    clientsBySegment: Array<{
+      key: string;
+      label: string;
+      amountMinor: number;
+    }>;
+    /** Per-segment open debt for staff. */
+    staffBySegment: Array<{
+      key: string;
+      label: string;
+      amountMinor: number;
+    }>;
   };
   /**
    * Open installment schedules from 1C Analytics `scope=installments`.
