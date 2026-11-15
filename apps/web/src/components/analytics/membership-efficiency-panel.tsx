@@ -54,6 +54,8 @@ export function MembershipEfficiencyPanel({
   );
   const [clientsPage, setClientsPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [trainersLoading, setTrainersLoading] = useState(false);
+  const [clientsLoading, setClientsLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showMethod, setShowMethod] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -64,52 +66,87 @@ export function MembershipEfficiencyPanel({
 
   const familyParam = family === 'ALL' ? undefined : family;
 
-  const load = useCallback(async () => {
+  const loadReport = useCallback(async () => {
     const token = getToken();
     if (!token) return;
     setLoading(true);
+    setTrainers(null);
+    setClients(null);
     try {
-      const [r, t, c] = await Promise.all([
-        api.analyticsMemberships(token, {
-          from,
-          to,
-          basis,
-          view,
-          family: familyParam,
-        }),
-        api.analyticsMembershipsTrainers(token, {
-          from,
-          to,
-          basis,
-          family: familyParam,
-        }),
-        api.analyticsMembershipsClients(token, {
-          from,
-          to,
-          basis,
-          family: familyParam,
-          segment: segment === 'ALL' ? undefined : segment,
-          page: clientsPage,
-          pageSize: 50,
-        }),
-      ]);
+      const r = await api.analyticsMemberships(token, {
+        from,
+        to,
+        basis,
+        view,
+        family: familyParam,
+      });
       setReport(r);
-      setTrainers(t);
-      setClients(c);
     } catch (e) {
+      setReport(null);
       onError(errMessage(e, 'Ошибка загрузки'));
     } finally {
       setLoading(false);
     }
-  }, [from, to, basis, view, familyParam, segment, clientsPage, onError]);
+  }, [from, to, basis, view, familyParam, onError]);
+
+  const loadTrainers = useCallback(async () => {
+    const token = getToken();
+    if (!token) return;
+    setTrainersLoading(true);
+    try {
+      const t = await api.analyticsMembershipsTrainers(token, {
+        from,
+        to,
+        basis,
+        family: familyParam,
+      });
+      setTrainers(t);
+    } catch (e) {
+      onError(errMessage(e, 'Ошибка загрузки тренеров'));
+    } finally {
+      setTrainersLoading(false);
+    }
+  }, [from, to, basis, familyParam, onError]);
+
+  const loadClients = useCallback(async () => {
+    const token = getToken();
+    if (!token) return;
+    setClientsLoading(true);
+    try {
+      const c = await api.analyticsMembershipsClients(token, {
+        from,
+        to,
+        basis,
+        family: familyParam,
+        segment: segment === 'ALL' ? undefined : segment,
+        page: clientsPage,
+        pageSize: 50,
+      });
+      setClients(c);
+    } catch (e) {
+      onError(errMessage(e, 'Ошибка загрузки клиентов'));
+    } finally {
+      setClientsLoading(false);
+    }
+  }, [from, to, basis, familyParam, segment, clientsPage, onError]);
 
   useEffect(() => {
     setClientsPage(1);
   }, [segment, from, to, basis, familyParam]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadReport();
+  }, [loadReport]);
+
+  useEffect(() => {
+    if (!report || subTab !== 'trainers') return;
+    void loadTrainers();
+  }, [report, subTab, loadTrainers]);
+
+  useEffect(() => {
+    if (!report || subTab !== 'clients') return;
+    void loadClients();
+  }, [report, subTab, loadClients]);
 
   const onExport = async () => {
     const token = getToken();
@@ -282,16 +319,36 @@ export function MembershipEfficiencyPanel({
         />
       )}
 
-      {subTab === 'trainers' && trainers && <TrainersTab report={trainers} />}
+      {subTab === 'trainers' && (
+        <>
+          {trainersLoading && !trainers && (
+            <div className="flex justify-center py-8">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+            </div>
+          )}
+          {trainers && <TrainersTab report={trainers} />}
+        </>
+      )}
 
-      {subTab === 'clients' && clients && (
-        <ClientsTab
-          report={clients}
-          segment={segment}
-          onSegment={setSegment}
-          onOpenProduct={setSelectedProductExternalId}
-          onPage={setClientsPage}
-        />
+      {subTab === 'clients' && (
+        <>
+          {clientsLoading && !clients && (
+            <div className="flex justify-center py-8">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-fitgo-500 border-t-transparent" />
+            </div>
+          )}
+          {clients && (
+            <div className={clientsLoading ? 'opacity-60' : ''}>
+              <ClientsTab
+                report={clients}
+                segment={segment}
+                onSegment={setSegment}
+                onOpenProduct={setSelectedProductExternalId}
+                onPage={setClientsPage}
+              />
+            </div>
+          )}
+        </>
       )}
 
       {selectedProductExternalId && (
@@ -305,7 +362,7 @@ export function MembershipEfficiencyPanel({
           fallbackCurrency={report.currency}
           onClose={closeDrawer}
           onError={onError}
-          onSaved={() => void load()}
+          onSaved={() => void loadReport()}
         />
       )}
 
@@ -325,9 +382,9 @@ export function MembershipEfficiencyPanel({
           onClose={() => setShowSettings(false)}
           onSaved={() => {
             setShowSettings(false);
-            void load();
+            void loadReport();
           }}
-          onProductSaved={() => void load()}
+          onProductSaved={() => void loadReport()}
           onError={onError}
         />
       )}

@@ -221,6 +221,35 @@ function calendarMonthsOverlapping(
   return out;
 }
 
+/** Split [from, to] into inclusive chunks of at most `maxDays` (ISO dates). */
+function splitInclusiveDayChunks(
+  from: string,
+  to: string,
+  maxDays: number,
+): Array<{ from: string; to: string }> {
+  if (from > to) return [];
+  const span = Math.max(1, maxDays);
+  const out: Array<{ from: string; to: string }> = [];
+  let cursor = from;
+  while (cursor <= to) {
+    const chunkToRaw = addCalendarDays(cursor, span - 1);
+    const chunkTo = chunkToRaw <= to ? chunkToRaw : to;
+    out.push({ from: cursor, to: chunkTo });
+    cursor = addCalendarDays(chunkTo, 1);
+  }
+  return out;
+}
+
+type GroupSessionEarnRow = {
+  earnMinor: number;
+  quantity: number;
+  title: string;
+  trainerUserId: string;
+  occurredAt: string;
+  roomTitle?: string;
+  sessionKey: string;
+};
+
 /**
  * Club-only trainers (Роль/схема = только «Тренеры клуб») are not paid in FitGO.
  * Keep them if they also have ГП / штат / реформер or another payroll role.
@@ -5247,26 +5276,36 @@ export class PayrollService {
   /**
    * Club-wide GROUP session earnings for membership efficiency.
    * Key = 1C appointment / Onex externalId (without `1c:` prefix).
+   * Period must be ≤31 days (same as payroll UI).
    */
   async listGroupSessionEarningsForClub(
     clubId: string,
     from: string,
     to: string,
-  ): Promise<
-    Map<
-      string,
-      {
-        earnMinor: number;
-        quantity: number;
-        title: string;
-        trainerUserId: string;
-        occurredAt: string;
-        roomTitle?: string;
-        sessionKey: string;
-      }
-    >
-  > {
+  ): Promise<Map<string, GroupSessionEarnRow>> {
     this.assertPeriod(from, to);
+    return this.listGroupSessionEarningsForClubRange(clubId, from, to);
+  }
+
+  /**
+   * Same as {@link listGroupSessionEarningsForClub} but accepts multi-month
+   * ranges. Staff / rates / compensation timeline load once; work units are
+   * fetched in ≤31-day chunks (assertPeriod limit inside listWorkUnits).
+   */
+  async listGroupSessionEarningsForClubRange(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<Map<string, GroupSessionEarnRow>> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      throw new BadRequestException('from/to YYYY-MM-DD');
+    }
+    const fromMs = Date.parse(`${from}T00:00:00`);
+    const toMs = Date.parse(`${to}T00:00:00`);
+    if (Number.isNaN(fromMs) || Number.isNaN(toMs) || toMs < fromMs) {
+      throw new BadRequestException('Некорректный период');
+    }
+
     const staff = await this.listStaffPaySummaries(clubId, {
       excludeClubTrainerOnly: true,
     });
@@ -5277,18 +5316,8 @@ export class PayrollService {
         s.roles.includes('TRAINER'),
     );
     const rates = await this.listRates(clubId);
-    const out = new Map<
-      string,
-      {
-        earnMinor: number;
-        quantity: number;
-        title: string;
-        trainerUserId: string;
-        occurredAt: string;
-        roomTitle?: string;
-        sessionKey: string;
-      }
-    >();
+    const chunks = splitInclusiveDayChunks(from, to, 31);
+    const out = new Map<string, GroupSessionEarnRow>();
 
     for (const s of groupStaff) {
       const performer = await this.prisma.user.findFirst({
@@ -5306,42 +5335,56 @@ export class PayrollService {
       });
       if (!trainerFlags.gp && !trainerFlags.reformers) continue;
 
-      const units = await this.listWorkUnits(clubId, s.userId, from, to);
-      const groupUnits = units.filter((u) => u.kind === 'GROUP');
-      if (!groupUnits.length) continue;
+      let profileForDay:
+        | ((isoDay: string) => StaffPayProfile | undefined)
+        | null = null;
 
-      const timeline = await this.loadCompensationTimeline(
-        clubId,
-        s.userId,
-        from,
-        to,
-      );
-      const compensation =
-        this.pickCompensationRow(timeline, to) ??
-        (await this.resolveCompensation(clubId, s.userId, from, to));
-      const profileForDay = (isoDay: string) =>
-        this.profileFromCompensationRow(
-          this.pickCompensationRow(timeline, isoDay) ?? compensation,
-          trainerFlags,
+      for (const chunk of chunks) {
+        const units = await this.listWorkUnits(
+          clubId,
+          s.userId,
+          chunk.from,
+          chunk.to,
         );
-      this.annotateUnitEarningsVersioned(groupUnits, rates, profileForDay);
+        const groupUnits = units.filter((u) => u.kind === 'GROUP');
+        if (!groupUnits.length) continue;
 
-      for (const u of groupUnits) {
-        const sk = u.sessionKey ?? '';
-        const externalId = sk.startsWith('1c:') ? sk.slice(3) : sk;
-        if (!externalId) continue;
-        const prev = out.get(externalId);
-        const earn = u.earnMinor ?? 0;
-        if (prev && prev.earnMinor >= earn) continue;
-        out.set(externalId, {
-          earnMinor: earn,
-          quantity: u.quantity,
-          title: u.title,
-          trainerUserId: s.userId,
-          occurredAt: u.occurredAt,
-          roomTitle: u.roomTitle,
-          sessionKey: sk,
-        });
+        if (!profileForDay) {
+          const timeline = await this.loadCompensationTimeline(
+            clubId,
+            s.userId,
+            from,
+            to,
+          );
+          const compensation =
+            this.pickCompensationRow(timeline, to) ??
+            (await this.resolveCompensation(clubId, s.userId, from, to));
+          profileForDay = (isoDay: string) =>
+            this.profileFromCompensationRow(
+              this.pickCompensationRow(timeline, isoDay) ?? compensation,
+              trainerFlags,
+            );
+        }
+
+        this.annotateUnitEarningsVersioned(groupUnits, rates, profileForDay);
+
+        for (const u of groupUnits) {
+          const sk = u.sessionKey ?? '';
+          const externalId = sk.startsWith('1c:') ? sk.slice(3) : sk;
+          if (!externalId) continue;
+          const prev = out.get(externalId);
+          const earn = u.earnMinor ?? 0;
+          if (prev && prev.earnMinor >= earn) continue;
+          out.set(externalId, {
+            earnMinor: earn,
+            quantity: u.quantity,
+            title: u.title,
+            trainerUserId: s.userId,
+            occurredAt: u.occurredAt,
+            roomTitle: u.roomTitle,
+            sessionKey: sk,
+          });
+        }
       }
     }
     return out;

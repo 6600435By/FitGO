@@ -52,8 +52,6 @@ import {
   metric,
   rangeBounds,
 } from "./analytics-period";
-/** Payroll rejects periods longer than 31 days — chunk earnings fetches. */
-const EARNINGS_CHUNK_DAYS = 31;
 import {
   defaultMembershipEconomicsSettings,
   emptyPayrollHints,
@@ -1709,28 +1707,21 @@ export class MembershipEfficiencyService {
     to: string,
   ): Promise<EarningsMap> {
     return this.cached(this.earningsCache, `${clubId}|${from}|${to}`, async () => {
-      const chunks = splitIsoRangeInclusive(from, to, EARNINGS_CHUNK_DAYS);
-      const merged: EarningsMap = new Map();
-      for (const chunk of chunks) {
-        try {
-          const part = await this.payroll.listGroupSessionEarningsForClub(
-            clubId,
-            chunk.from,
-            chunk.to,
-          );
-          for (const [k, v] of part) {
-            const prev = merged.get(k);
-            if (!prev || v.earnMinor >= prev.earnMinor) merged.set(k, v);
-          }
-        } catch (err) {
-          this.logger.warn(
-            `group earnings chunk ${chunk.from}…${chunk.to}: ${
-              err instanceof Error ? err.message : err
-            }`,
-          );
-        }
+      try {
+        // Staff/rates once; work units chunked inside payroll (≤31d).
+        return await this.payroll.listGroupSessionEarningsForClubRange(
+          clubId,
+          from,
+          to,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `group earnings ${from}…${to}: ${
+            err instanceof Error ? err.message : err
+          }`,
+        );
+        return new Map();
       }
-      return merged;
     });
   }
 
@@ -1896,7 +1887,7 @@ export class MembershipEfficiencyService {
           saleDocumentId: true,
         },
       }),
-      // Earnings only over visit window; chunked inside getEarnings (≤31d).
+      // Earnings over visit window; staff/rates once, workUnits chunked in payroll.
       this.getEarnings(clubId, lookbackFrom, params.to),
       this.deriveRetailPrices(clubId, params.from, params.to),
       this.getPayrollHints(clubId),
@@ -3277,26 +3268,6 @@ function estimateGroupSessionRateMinor(
   }
   // Last resort — call shared resolver without room (legacy flat path).
   return resolveGroupSessionRateMinor(attendees, undefined, ESTIMATE_TIERS);
-}
-
-function splitIsoRangeInclusive(
-  from: string,
-  to: string,
-  maxDays: number,
-): Array<{ from: string; to: string }> {
-  if (from > to) return [];
-  const span = Math.max(1, maxDays);
-  const out: Array<{ from: string; to: string }> = [];
-  let cursor = from;
-  while (cursor <= to) {
-    const chunkTo = (() => {
-      const d = addDaysIso(cursor, span - 1);
-      return d <= to ? d : to;
-    })();
-    out.push({ from: cursor, to: chunkTo });
-    cursor = addDaysIso(chunkTo, 1);
-  }
-  return out;
 }
 
 // ── Sales / visit linking ───────────────────────────────────────────────────
