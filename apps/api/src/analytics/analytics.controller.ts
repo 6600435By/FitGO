@@ -35,7 +35,10 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { AdminTaskReportService } from './admin-task-report.service';
 import { ClubAnalyticsService } from './club-analytics.service';
-import { MembershipEfficiencyService } from './membership-efficiency.service';
+import {
+  MembershipEfficiencyService,
+  type MembershipProductProfilePatch,
+} from './membership-efficiency.service';
 import { PricingAnalyticsService } from './pricing-analytics.service';
 import { StaffAnalyticsService } from './staff-analytics.service';
 
@@ -418,5 +421,74 @@ export class AnalyticsController {
       throw new ForbiddenException();
     }
     return this.memberships.putSettings(user, body);
+  }
+
+  @Get('memberships/products')
+  @Roles(UserRole.SUPER_ADMIN)
+  membershipsProducts(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('basis') basis?: MembershipEfficiencyBasis,
+    @Query('family') family?: string | string[],
+  ) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    return this.memberships.listProducts(user, { from, to, basis, family });
+  }
+
+  @Get('memberships/products/:productExternalId')
+  @Roles(UserRole.SUPER_ADMIN)
+  membershipsProductDetail(
+    @CurrentUser() user: JwtPayload,
+    @Param('productExternalId') productExternalId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('basis') basis?: MembershipEfficiencyBasis,
+  ) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    return this.memberships.getProductDetail(user, productExternalId, {
+      from,
+      to,
+      basis,
+    });
+  }
+
+  @Put('memberships/products/:productExternalId')
+  @Roles(UserRole.SUPER_ADMIN)
+  membershipsProductPut(
+    @CurrentUser() user: JwtPayload,
+    @Param('productExternalId') productExternalId: string,
+    @Body() body: MembershipProductProfilePatch,
+  ) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    return this.memberships.putProductProfile(user, productExternalId, body);
+  }
+
+  @Get('memberships/discounts')
+  @Roles(UserRole.SUPER_ADMIN)
+  membershipsDiscounts(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('basis') basis?: MembershipEfficiencyBasis,
+    @Query('family') family?: string | string[],
+    @Query('productExternalId') productExternalId?: string,
+  ) {
+    if (!user.roles.includes(UserRole.SUPER_ADMIN)) {
+      throw new ForbiddenException();
+    }
+    return this.memberships.listDiscounts(user, {
+      from,
+      to,
+      basis,
+      family,
+      productExternalId,
+    });
   }
 }

@@ -69,6 +69,10 @@ import {
   type MembershipEfficiencyBasis,
   type MembershipEfficiencyView,
   type MembershipUtilizationSegment,
+  type MembershipProductsReport,
+  type MembershipProductDetail,
+  type MembershipProductProfileDto,
+  type MembershipDiscountsReport,
   type PricingSegmentKey,
   type UpsertCompetitorPriceDto,
   type UpsertSaleWindowDto,
@@ -3428,6 +3432,85 @@ export const api = {
       { method: 'PUT', body: JSON.stringify(body) },
       token,
     ),
+
+  analyticsMembershipsProducts: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      basis?: MembershipEfficiencyBasis;
+      family?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.basis) q.set('basis', params.basis);
+    if (params.family) q.set('family', params.family);
+    return request<MembershipProductsReport>(
+      `/super-admin/analytics/memberships/products?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsMembershipsProductDetail: (
+    token: string,
+    productExternalId: string,
+    params: {
+      from: string;
+      to: string;
+      basis?: MembershipEfficiencyBasis;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.basis) q.set('basis', params.basis);
+    return request<MembershipProductDetail>(
+      `/super-admin/analytics/memberships/products/${encodeURIComponent(productExternalId)}?${q}`,
+      {},
+      token,
+    );
+  },
+
+  analyticsMembershipsProductPut: (
+    token: string,
+    productExternalId: string,
+    body: Partial<MembershipProductProfileDto>,
+  ) =>
+    request<MembershipProductProfileDto>(
+      `/super-admin/analytics/memberships/products/${encodeURIComponent(productExternalId)}`,
+      { method: 'PUT', body: JSON.stringify(body) },
+      token,
+    ),
+
+  analyticsMembershipsDiscounts: (
+    token: string,
+    params: {
+      from: string;
+      to: string;
+      basis?: MembershipEfficiencyBasis;
+      family?: string;
+      productExternalId?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      from: params.from,
+      to: params.to,
+    });
+    if (params.basis) q.set('basis', params.basis);
+    if (params.family) q.set('family', params.family);
+    if (params.productExternalId)
+      q.set('productExternalId', params.productExternalId);
+    return request<MembershipDiscountsReport>(
+      `/super-admin/analytics/memberships/discounts?${q}`,
+      {},
+      token,
+    );
+  },
 
   analyticsMarketAddCompetitor: (
     token: string,

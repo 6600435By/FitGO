@@ -4,12 +4,33 @@ import type {
   MembershipEconomicsSettings,
   MembershipFamilyConfig,
   MembershipPriceAllocation,
+  MembershipProductCatalogRow,
+  MembershipProductProfileDto,
+  MembershipScenarioKey,
+  MembershipScenarioResult,
   MembershipUsageFacts,
   MembershipUtilizationSegment,
   MembershipVisitBucket,
   MembershipWaterfallStep,
 } from '@fitgo/shared-types';
-import { membershipNameFromPaymentBasis } from '@fitgo/shared-types';
+import {
+  breakevenPriceMinor,
+  computeFullCostBreakdown,
+  computeMembershipWhatIf,
+  maxDiscountPctFromRetail,
+  maxGpVisitsForTerm,
+  maxGpVisitsPerMonth,
+  membershipNameFromPaymentBasis,
+} from '@fitgo/shared-types';
+
+export const computeWhatIf = computeMembershipWhatIf;
+export {
+  breakevenPriceMinor,
+  computeFullCostBreakdown,
+  maxDiscountPctFromRetail,
+  maxGpVisitsForTerm,
+  maxGpVisitsPerMonth,
+};
 
 export function toMinor(major: number): number {
   return Math.round((Number(major) || 0) * 100);
@@ -88,11 +109,26 @@ export function isoDay(raw: string | Date | null | undefined): string | null {
 export function monthsBetween(start: string, end: string): number {
   const a = new Date(`${start}T12:00:00Z`);
   const b = new Date(`${end}T12:00:00Z`);
-  const days = Math.max(1, Math.round((b.getTime() - a.getTime()) / 86400000) + 1);
+  const days = Math.max(
+    1,
+    Math.round((b.getTime() - a.getTime()) / 86400000) + 1,
+  );
   return Math.max(1, Math.round((days / 30.44) * 10) / 10);
 }
 
+export function addMonthsIso(start: string, months: number): string {
+  const d = new Date(`${start}T12:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + Math.max(1, Math.round(months)));
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export interface SaleCandidate {
+  id?: string;
+  documentId?: string | null;
+  productExternalId?: string | null;
   productName: string | null;
   paidAmount: number;
   saleAmount: number;
@@ -103,8 +139,7 @@ export interface SaleCandidate {
 }
 
 /**
- * Pick best membership sale for a package instance.
- * Prefer same family + sale on/before start (or first visit), closest date.
+ * Pick best membership sale for a package instance (legacy visit-first path).
  */
 export function matchSaleToMembership(input: {
   clientExternalId: string;
@@ -134,7 +169,6 @@ export function matchSaleToMembership(input: {
         (new Date(`${day}T12:00:00Z`).getTime() -
           new Date(`${anchor}T12:00:00Z`).getTime()) /
         86400000;
-      // Prefer sales on/before start; penalize after.
       score = diff <= 0 ? Math.abs(diff) : 1000 + diff;
     } else {
       score = -s.occurredAt.getTime();
@@ -173,10 +207,9 @@ export function allocateRetailPrice(input: {
   gpVisits: number;
   gymVisits: number;
 }): MembershipPriceAllocation {
-  const pa =
-    Math.round(
-      input.family.personalAccountPerMonthMajor * input.months * 100,
-    );
+  const pa = Math.round(
+    input.family.personalAccountPerMonthMajor * input.months * 100,
+  );
   const massageQuota = Math.round(
     input.family.massageQuotaPerMonth * input.months,
   );
@@ -214,6 +247,56 @@ export function allocateRetailPrice(input: {
   };
 }
 
+/** Allocate paid price using product profile quotas (full term). */
+export function allocatePriceFromProfile(input: {
+  paidMinor: number;
+  profile: Pick<
+    MembershipProductProfileDto,
+    | 'accessGp'
+    | 'accessGym'
+    | 'massageIncluded'
+    | 'solariumMinutes'
+    | 'personalAccountCreditMinor'
+  >;
+  massageRetailMinor: number;
+  solariumMinuteRetailMinor: number;
+  gpVisits: number;
+  gymVisits: number;
+}): MembershipPriceAllocation {
+  const pa = Math.max(0, input.profile.personalAccountCreditMinor);
+  const massage = input.profile.massageIncluded * input.massageRetailMinor;
+  const solarium =
+    input.profile.solariumMinutes * input.solariumMinuteRetailMinor;
+  const reserved = pa + massage + solarium;
+  const access = Math.max(0, input.paidMinor - reserved);
+  const gp = input.profile.accessGp ? input.gpVisits : 0;
+  const gym = input.profile.accessGym ? input.gymVisits : 0;
+  const totalVisits = gp + gym;
+  let accessGp = 0;
+  let accessGym = 0;
+  if (totalVisits > 0 && access > 0) {
+    accessGp = Math.round((access * gp) / totalVisits);
+    accessGym = access - accessGp;
+  } else if (access > 0 && input.profile.accessGp) {
+    accessGp = access;
+  } else if (access > 0) {
+    accessGym = access;
+  }
+  return {
+    paidMinor: input.paidMinor,
+    personalAccountAllocatedMinor: Math.min(pa, input.paidMinor),
+    massageAllocatedMinor: Math.min(massage, Math.max(0, input.paidMinor - pa)),
+    solariumAllocatedMinor: Math.min(
+      solarium,
+      Math.max(0, input.paidMinor - pa - massage),
+    ),
+    accessMinor: access,
+    accessGpMinor: accessGp,
+    accessGymMinor: accessGym,
+  };
+}
+
+/** @deprecated Prefer computeFullCostBreakdown */
 export function computeCostBreakdown(input: {
   trainerMinor: number;
   massageUsed: number;
@@ -224,28 +307,43 @@ export function computeCostBreakdown(input: {
   personalAccountCogsShare: number;
   visitCount: number;
   overheadPerVisitMinor: number;
-}): MembershipCostBreakdown {
-  const massageMinor = input.massageUsed * input.massageCostMinor;
-  const solariumMinor =
-    input.solariumMinutesUsed * input.solariumMinuteCostMinor;
-  const personalAccountCogsMinor = Math.round(
-    input.personalAccountSpentMinor * input.personalAccountCogsShare,
-  );
-  const overheadMinor =
-    input.visitCount * input.overheadPerVisitMinor;
-  const totalMinor =
-    input.trainerMinor +
-    massageMinor +
-    solariumMinor +
-    personalAccountCogsMinor +
-    overheadMinor;
-  return {
+}): {
+  trainerMinor: number;
+  massageMinor: number;
+  solariumMinor: number;
+  personalAccountCogsMinor: number;
+  overheadMinor: number;
+  totalMinor: number;
+} {
+  const full = computeFullCostBreakdown({
+    paidMinor: 0,
+    salesCommissionPct: 0,
+    acquiringPct: 0,
+    taxPct: 0,
     trainerMinor: input.trainerMinor,
-    massageMinor,
-    solariumMinor,
-    personalAccountCogsMinor,
-    overheadMinor,
-    totalMinor,
+    ptUsed: 0,
+    ptCostMinor: 0,
+    massageUsed: input.massageUsed,
+    massageCostMinor: input.massageCostMinor,
+    bodyCompositionUsed: 0,
+    bodyCompositionCostMinor: 0,
+    solariumMinutesUsed: input.solariumMinutesUsed,
+    solariumMinuteCostMinor: input.solariumMinuteCostMinor,
+    personalAccountSpentMinor: input.personalAccountSpentMinor,
+    personalAccountCogsShare: input.personalAccountCogsShare,
+    visitCount: input.visitCount,
+    overheadPerVisitMinor: input.overheadPerVisitMinor,
+    months: 0,
+    fixedOverheadPerMemberMonthMinor: 0,
+    includeFixedOverhead: false,
+  });
+  return {
+    trainerMinor: full.trainerMinor,
+    massageMinor: full.massageMinor,
+    solariumMinor: full.solariumMinor,
+    personalAccountCogsMinor: full.personalAccountCogsMinor,
+    overheadMinor: full.overheadMinor,
+    totalMinor: full.totalMinor,
   };
 }
 
@@ -266,8 +364,7 @@ export function trainerPerVisit(
 }
 
 /**
- * Visits after which cumulative trainer cost exceeds GP access share.
- * Uses average trainer-per-visit from the instance.
+ * Legacy: visits after which cumulative trainer cost exceeds GP access share.
  */
 export function breakevenVisits(
   accessGpMinor: number,
@@ -281,6 +378,182 @@ export function breakevenVisits(
     return null;
   }
   return Math.max(1, Math.ceil(accessGpMinor / avgTrainerPerVisitMinor));
+}
+
+export function buildScenarioResults(input: {
+  paidMinor: number;
+  retailPriceMinor: number | null;
+  months: number;
+  settings: MembershipEconomicsSettings;
+  salesCommissionPct: number;
+  avgTrainerPerVisitMinor: number;
+  fact: {
+    gpVisits: number;
+    gymVisits: number;
+    trainerMinor: number;
+    ptUsed: number;
+    massageUsed: number;
+    bodyCompositionUsed: number;
+    solariumMinutesUsed: number;
+    personalAccountSpentMinor: number;
+  };
+  quotas: {
+    pt: number;
+    massage: number;
+    bodyComposition: number;
+    solariumMinutes: number;
+    personalAccountCreditMinor: number;
+  };
+  costs: {
+    ptCostMinor: number;
+    massageCostMinor: number;
+    bodyCompositionCostMinor: number;
+    solariumMinuteCostMinor: number;
+  };
+}): MembershipScenarioResult[] {
+  const s = input.settings;
+  const overhead =
+    s.gymVisitVariableCostMinor > 0
+      ? s.gymVisitVariableCostMinor
+      : s.overheadPerVisitMinor;
+
+  const run = (
+    key: MembershipScenarioKey,
+    label: string,
+    usage: typeof input.fact,
+    includeFixed: boolean,
+  ): MembershipScenarioResult => {
+    const visitCount = usage.gpVisits + usage.gymVisits;
+    const trainerMinor =
+      key === 'fact'
+        ? usage.trainerMinor
+        : Math.round(usage.gpVisits * input.avgTrainerPerVisitMinor);
+    const cost = computeFullCostBreakdown({
+      paidMinor: input.paidMinor,
+      salesCommissionPct: input.salesCommissionPct,
+      acquiringPct: s.acquiringPct,
+      taxPct: s.taxPct,
+      trainerMinor,
+      ptUsed: usage.ptUsed,
+      ptCostMinor: input.costs.ptCostMinor,
+      massageUsed: usage.massageUsed,
+      massageCostMinor: input.costs.massageCostMinor,
+      bodyCompositionUsed: usage.bodyCompositionUsed,
+      bodyCompositionCostMinor: input.costs.bodyCompositionCostMinor,
+      solariumMinutesUsed: usage.solariumMinutesUsed,
+      solariumMinuteCostMinor: input.costs.solariumMinuteCostMinor,
+      personalAccountSpentMinor: usage.personalAccountSpentMinor,
+      personalAccountCogsShare: s.personalAccountCogsShare,
+      visitCount,
+      overheadPerVisitMinor: overhead,
+      months: input.months,
+      fixedOverheadPerMemberMonthMinor: s.fixedOverheadPerMemberMonthMinor,
+      includeFixedOverhead: includeFixed,
+    });
+    const marginMinor = input.paidMinor - cost.totalMinor;
+    const marginPct =
+      input.paidMinor > 0
+        ? Math.round((marginMinor / input.paidMinor) * 1000) / 10
+        : null;
+    const nonTrainerVar =
+      cost.variableTotalMinor -
+      trainerMinor +
+      (includeFixed ? cost.fixedOverheadMinor : 0);
+    // nonTrainer already excludes trainer; for BE price use costs that don't scale with price
+    const fixedVariable =
+      trainerMinor +
+      cost.ptMinor +
+      cost.massageMinor +
+      cost.bodyCompositionMinor +
+      cost.solariumMinor +
+      cost.personalAccountCogsMinor +
+      cost.overheadMinor +
+      (includeFixed ? cost.fixedOverheadMinor : 0);
+    const be = breakevenPriceMinor({
+      salesCommissionPct: input.salesCommissionPct,
+      acquiringPct: s.acquiringPct,
+      taxPct: s.taxPct,
+      fixedVariableCostMinor: fixedVariable,
+    });
+    const maxTerm = maxGpVisitsForTerm({
+      paidMinor: input.paidMinor,
+      nonTrainerVariableMinor:
+        cost.salesCommissionMinor +
+        cost.acquiringMinor +
+        cost.taxMinor +
+        cost.ptMinor +
+        cost.massageMinor +
+        cost.bodyCompositionMinor +
+        cost.solariumMinor +
+        cost.personalAccountCogsMinor +
+        cost.overheadMinor +
+        (includeFixed ? cost.fixedOverheadMinor : 0),
+      avgTrainerPerVisitMinor: input.avgTrainerPerVisitMinor || null,
+    });
+    void nonTrainerVar;
+    return {
+      key,
+      label,
+      cost,
+      marginMinor,
+      marginPct,
+      breakevenPriceMinor: be,
+      maxDiscountPctFromRetail: maxDiscountPctFromRetail(
+        input.retailPriceMinor,
+        be,
+      ),
+      maxGpVisitsPerMonth: maxGpVisitsPerMonth(maxTerm, input.months),
+    };
+  };
+
+  const weeks = Math.max(1 / 7, input.months * (30.44 / 7));
+  const normGp = Math.round(s.normVisitsPerWeek * weeks);
+  const normGym = Math.round(normGp * 0.5);
+
+  return [
+    run('fact', 'Факт', input.fact, false),
+    run(
+      'norm',
+      'Норма',
+      {
+        gpVisits: normGp,
+        gymVisits: normGym,
+        trainerMinor: 0,
+        ptUsed: Math.min(input.fact.ptUsed, input.quotas.pt),
+        massageUsed: Math.round(input.quotas.massage * 0.6),
+        bodyCompositionUsed: Math.min(
+          1,
+          input.quotas.bodyComposition,
+        ),
+        solariumMinutesUsed: Math.round(input.quotas.solariumMinutes * 0.5),
+        personalAccountSpentMinor: Math.round(
+          input.quotas.personalAccountCreditMinor * 0.7,
+        ),
+      },
+      false,
+    ),
+    run(
+      'full',
+      'Полное использование',
+      {
+        gpVisits: Math.max(normGp, input.fact.gpVisits),
+        gymVisits: Math.max(normGym, input.fact.gymVisits),
+        trainerMinor: 0,
+        ptUsed: input.quotas.pt,
+        massageUsed: input.quotas.massage,
+        bodyCompositionUsed: input.quotas.bodyComposition,
+        solariumMinutesUsed: input.quotas.solariumMinutes,
+        personalAccountSpentMinor: input.quotas.personalAccountCreditMinor,
+      },
+      false,
+    ),
+    run(
+      'withFixedOverhead',
+      'С постоянными накладными',
+      input.fact,
+      true,
+    ),
+  ];
 }
 
 export function utilizationIndex(
@@ -300,10 +573,7 @@ export function utilizationSegment(
   daysSinceLastVisit: number | null,
   sleepingDays: number,
 ): MembershipUtilizationSegment {
-  if (
-    daysSinceLastVisit != null &&
-    daysSinceLastVisit >= sleepingDays
-  ) {
+  if (daysSinceLastVisit != null && daysSinceLastVisit >= sleepingDays) {
     return 'sleeping';
   }
   if (index >= thresholds.max) return 'max';
@@ -320,24 +590,40 @@ export function burnedValueMinor(input: {
   solariumMinutesQuota: number;
   solariumMinutesUsed: number;
   solariumMinuteRetailMinor: number;
+  ptQuota?: number;
+  ptUsed?: number;
+  ptRetailMinor?: number;
 }): number {
   const unusedMassage = Math.max(0, input.massageQuota - input.massageUsed);
-  const unusedSol =
-    Math.max(0, input.solariumMinutesQuota - input.solariumMinutesUsed);
+  const unusedSol = Math.max(
+    0,
+    input.solariumMinutesQuota - input.solariumMinutesUsed,
+  );
+  const unusedPt = Math.max(
+    0,
+    (input.ptQuota ?? 0) - (input.ptUsed ?? 0),
+  );
   return (
     Math.max(0, input.personalAccountBurnedMinor) +
     unusedMassage * input.massageRetailMinor +
-    unusedSol * input.solariumMinuteRetailMinor
+    unusedSol * input.solariumMinuteRetailMinor +
+    unusedPt * (input.ptRetailMinor ?? 0)
   );
 }
 
 export function buildWaterfall(input: {
   paidMinor: number;
+  salesCommissionMinor?: number;
+  acquiringMinor?: number;
+  taxMinor?: number;
   trainerMinor: number;
+  ptMinor?: number;
   massageMinor: number;
+  bodyCompositionMinor?: number;
   solariumMinor: number;
   personalAccountCogsMinor: number;
   overheadMinor: number;
+  fixedOverheadMinor?: number;
 }): MembershipWaterfallStep[] {
   const steps: MembershipWaterfallStep[] = [];
   let running = input.paidMinor;
@@ -348,14 +634,20 @@ export function buildWaterfall(input: {
     runningMinor: running,
   });
   const deltas: Array<[string, string, number]> = [
+    ['commission', 'Комиссия продаж', -(input.salesCommissionMinor ?? 0)],
+    ['acquiring', 'Эквайринг', -(input.acquiringMinor ?? 0)],
+    ['tax', 'Налог', -(input.taxMinor ?? 0)],
     ['trainer', 'Тренеры ГП', -input.trainerMinor],
+    ['pt', 'ПТ', -(input.ptMinor ?? 0)],
     ['massage', 'Массаж', -input.massageMinor],
+    ['body', 'Анализ состава', -(input.bodyCompositionMinor ?? 0)],
     ['solarium', 'Солярий', -input.solariumMinor],
     ['pa', 'Себестоимость ЛС', -input.personalAccountCogsMinor],
-    ['overhead', 'Накладные', -input.overheadMinor],
+    ['overhead', 'Переменные накладные', -input.overheadMinor],
+    ['fixed', 'Постоянные накладные', -(input.fixedOverheadMinor ?? 0)],
   ];
   for (const [key, label, delta] of deltas) {
-    if (delta === 0 && key !== 'trainer') continue;
+    if (delta === 0 && key !== 'trainer' && key !== 'commission') continue;
     running += delta;
     steps.push({ key, label, deltaMinor: delta, runningMinor: running });
   }
@@ -406,6 +698,19 @@ export function familyStatus(
   return 'green';
 }
 
+export function productStatus(
+  row: Pick<
+    MembershipProductCatalogRow,
+    'marginPct' | 'compositionComplete' | 'priceHeadroomPct'
+  >,
+): 'green' | 'yellow' | 'red' {
+  if (!row.compositionComplete) return 'yellow';
+  if (row.marginPct != null && row.marginPct < 15) return 'red';
+  if (row.priceHeadroomPct != null && row.priceHeadroomPct < 0) return 'red';
+  if (row.marginPct != null && row.marginPct < 30) return 'yellow';
+  return 'green';
+}
+
 export function buildMembershipInsights(input: {
   families: Array<{
     label: string;
@@ -413,6 +718,23 @@ export function buildMembershipInsights(input: {
     underOrSleepingShare: number;
     personalAccountBurnPct: number | null;
     marginPct: number | null;
+  }>;
+  products?: Array<{
+    name: string;
+    soldCount: number;
+    marginPct: number | null;
+    breakevenPriceMinor: number | null;
+    avgPaidMinor: number;
+    compositionComplete: boolean;
+    ptUsePct: number | null;
+    personalAccountUsePct: number | null;
+    soldWithDiscountShare: number | null;
+    priceHeadroomPct: number | null;
+  }>;
+  discounts?: Array<{
+    discountName: string;
+    marginPct: number | null;
+    salesCount: number;
   }>;
   lowFillClassTitles: string[];
   dataQualityWarning: string | null;
@@ -453,6 +775,56 @@ export function buildMembershipInsights(input: {
       });
     }
   }
+  for (const p of input.products ?? []) {
+    if (!p.compositionComplete && p.soldCount > 0) {
+      out.push({
+        severity: 'warning',
+        title: `${p.name}: состав не заполнен`,
+        body: 'Заполните квоты в настройках — без состава маржа оценочная.',
+        action: 'Открыть карточку абонемента',
+      });
+    }
+    if (
+      p.breakevenPriceMinor != null &&
+      p.avgPaidMinor > 0 &&
+      p.avgPaidMinor < p.breakevenPriceMinor
+    ) {
+      out.push({
+        severity: 'critical',
+        title: `${p.name}: цена ниже безубыточной`,
+        body: `Средняя продажа ниже минимальной цены. Убыточно при текущем использовании.`,
+        action: 'Открыть карточку абонемента',
+      });
+    }
+    if (p.ptUsePct != null && p.ptUsePct < 30 && p.soldCount >= 3) {
+      out.push({
+        severity: 'info',
+        title: `${p.name}: подарочная ПТ почти не используется`,
+        body: `Использование ПТ ${Math.round(p.ptUsePct)}%. Можно убрать из состава или усилить конверсию.`,
+      });
+    }
+    if (p.soldCount === 0) {
+      out.push({
+        severity: 'info',
+        title: `${p.name}: нет продаж за период`,
+        body: 'Абонемент в каталоге, но не продавался.',
+      });
+    }
+  }
+  for (const d of input.discounts ?? []) {
+    if (
+      d.salesCount >= 3 &&
+      d.marginPct != null &&
+      d.marginPct < 0
+    ) {
+      out.push({
+        severity: 'critical',
+        title: `Акция «${d.discountName}» уводит в минус`,
+        body: `Маржа ${Math.round(d.marginPct)}% по ${d.salesCount} продажам.`,
+        action: 'Открыть «Скидки и акции»',
+      });
+    }
+  }
   for (const title of input.lowFillClassTitles.slice(0, 3)) {
     out.push({
       severity: 'warning',
@@ -488,8 +860,64 @@ export function quotasForTerm(
   };
 }
 
+export function quotasFromProfile(
+  profile: Pick<
+    MembershipProductProfileDto,
+    | 'massageIncluded'
+    | 'ptIncluded'
+    | 'bodyCompositionIncluded'
+    | 'solariumMinutes'
+    | 'personalAccountCreditMinor'
+  >,
+): Pick<
+  MembershipUsageFacts,
+  | 'massageQuota'
+  | 'ptQuota'
+  | 'bodyCompositionQuota'
+  | 'solariumMinutesQuota'
+  | 'personalAccountCreditedMinor'
+> {
+  return {
+    massageQuota: profile.massageIncluded,
+    ptQuota: profile.ptIncluded,
+    bodyCompositionQuota: profile.bodyCompositionIncluded,
+    solariumMinutesQuota: profile.solariumMinutes,
+    personalAccountCreditedMinor: profile.personalAccountCreditMinor,
+  };
+}
+
 export function daysBetween(a: string, b: string): number {
   const x = new Date(`${a}T12:00:00Z`).getTime();
   const y = new Date(`${b}T12:00:00Z`).getTime();
   return Math.round((y - x) / 86400000);
+}
+
+export function profileCompositionComplete(
+  profile: Pick<
+    MembershipProductProfileDto,
+    'termMonths' | 'accessGp' | 'accessGym'
+  > | null,
+): boolean {
+  if (!profile) return false;
+  return profile.termMonths >= 1;
+}
+
+/** Detect SPA/PT/solarium line kinds from pack service name. */
+export function classifyPackServiceName(name: string): {
+  kind: 'massage' | 'body' | 'pt' | 'solarium' | 'gp' | 'other';
+  remaining: number | null;
+} {
+  const n = normalizeName(name);
+  const qtyMatch = name.match(/\((\d+)\)\s*$/);
+  const remaining = qtyMatch ? Number(qtyMatch[1]) : null;
+  if (/подар.*пт|пт с тренер|персональн/.test(n) && !/групп/.test(n)) {
+    return { kind: 'pt', remaining };
+  }
+  if (/соляр/.test(n)) return { kind: 'solarium', remaining };
+  if (/состав|inbody|биоимпеданс|анализ/.test(n)) {
+    return { kind: 'body', remaining };
+  }
+  if (/массаж/.test(n)) return { kind: 'massage', remaining };
+  if (/групп/.test(n)) return { kind: 'gp', remaining };
+  return { kind: 'other', remaining };
 }

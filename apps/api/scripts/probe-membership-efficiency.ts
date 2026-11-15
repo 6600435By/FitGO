@@ -127,6 +127,54 @@ async function main() {
     where: { clubId: club.id, isActive: true },
   });
   console.log('hall visits', hall);
+
+  const catalogMembership = await prisma.catalogProduct.count({
+    where: { clubId: club.id, kind: 'membership', active: true },
+  });
+  const profiles = await prisma.membershipProductProfile.count({
+    where: { clubId: club.id, excluded: false },
+  });
+  const discounts = await prisma.providedDiscountRow.count({
+    where: { clubId: club.id },
+  });
+  const salesWithDoc = await prisma.clubRevenueEntry.count({
+    where: {
+      clubId: club.id,
+      isActive: true,
+      saleType: 'membership',
+      documentId: { not: null },
+    },
+  });
+  const salesWithProductId = await prisma.clubRevenueEntry.count({
+    where: {
+      clubId: club.id,
+      isActive: true,
+      saleType: 'membership',
+      productExternalId: { not: null },
+    },
+  });
+  console.log('catalog membership SKUs', catalogMembership);
+  console.log('membership product profiles', profiles);
+  console.log('provided discount rows', discounts);
+  console.log(
+    'membership sales with documentId',
+    salesWithDoc,
+    '/',
+    memSales,
+    'with productExternalId',
+    salesWithProductId,
+  );
+
+  const distinctProducts = await prisma.clubRevenueEntry.findMany({
+    where: { clubId: club.id, isActive: true, saleType: 'membership' },
+    select: { productName: true, productExternalId: true },
+    distinct: ['productExternalId'],
+    take: 50,
+  });
+  console.log('distinct membership products (by externalId)', distinctProducts.length);
+  for (const p of distinctProducts.slice(0, 15)) {
+    console.log('-', p.productName, p.productExternalId?.slice(0, 8) ?? 'no-id');
+  }
 }
 
 main()

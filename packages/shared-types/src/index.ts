@@ -699,6 +699,7 @@ export * from './booking-control';
 export * from './club-schedule';
 export * from './hall-class-snapshot';
 export * from './analytics';
+export * from './membership-economics-calc';
 export * from './pricing-analytics';
 export * from './visit-mix';
 export * from './membership-included';

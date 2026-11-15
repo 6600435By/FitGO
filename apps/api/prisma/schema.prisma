@@ -583,6 +583,7 @@ model Club {
   providedDiscountSyncStates ProvidedDiscountSyncState[]
   providedDiscountMonths ProvidedDiscountMonth[]
   membershipEconomicsSettings MembershipEconomicsSettings?
+  membershipProductProfiles MembershipProductProfile[]
 }
 
 model ClubTheme {
@@ -3255,6 +3256,39 @@ model MembershipEconomicsSettings {
   updatedBy String?
 
   club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+}
+
+/// Per-SKU membership composition card (quotas, term, access flags).
+model MembershipProductProfile {
+  id                         String   @id @default(cuid())
+  clubId                     String
+  /// 1C nomenclature UUID
+  productExternalId          String
+  name                       String
+  groupLabel                 String?
+  termMonths                 Int      @default(1)
+  accessGp                   Boolean  @default(true)
+  accessGym                  Boolean  @default(true)
+  /// null = unlimited GP visits
+  gpVisitsLimit              Int?
+  ptIncluded                  Int      @default(0)
+  massageIncluded            Int      @default(0)
+  bodyCompositionIncluded    Int      @default(0)
+  solariumMinutes            Int      @default(0)
+  personalAccountCreditMinor Int      @default(0)
+  retailPriceOverrideMinor   Int?
+  excluded                   Boolean  @default(false)
+  /// JSON string[] of auto-filled field names
+  autoFilledFields           Json     @default("[]")
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  updatedBy                  String?
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, productExternalId])
+  @@index([clubId, excluded])
+  @@index([clubId, groupLabel])
 }
 
 enum PhoneOtpPurpose {
