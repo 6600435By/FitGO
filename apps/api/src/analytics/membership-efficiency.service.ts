@@ -1887,8 +1887,10 @@ export class MembershipEfficiencyService {
           saleDocumentId: true,
         },
       }),
-      // Earnings over visit window; staff/rates once, workUnits chunked in payroll.
-      this.getEarnings(clubId, lookbackFrom, params.to),
+      // Earnings only for the report window (not 2y lookback). Older GP visits
+      // fall back to estimate tiers in gpVisitCost — full lookback payroll was
+      // timing out the PHP/Apache proxy (~180s) on prod.
+      this.getEarnings(clubId, params.from, params.to),
       this.deriveRetailPrices(clubId, params.from, params.to),
       this.getPayrollHints(clubId),
       this.prisma.membershipProductProfile.findMany({ where: { clubId } }),

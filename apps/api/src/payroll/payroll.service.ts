@@ -5317,14 +5317,17 @@ export class PayrollService {
     );
     const rates = await this.listRates(clubId);
     const chunks = splitInclusiveDayChunks(from, to, 31);
-    const out = new Map<string, GroupSessionEarnRow>();
+    const performers = await this.prisma.user.findMany({
+      where: { clubId, id: { in: groupStaff.map((s) => s.userId) } },
+      include: { roles: true },
+    });
+    const performerById = new Map(performers.map((u) => [u.id, u]));
 
-    for (const s of groupStaff) {
-      const performer = await this.prisma.user.findFirst({
-        where: { id: s.userId, clubId },
-        include: { roles: true },
-      });
-      if (!performer) continue;
+    type PartialEarn = Map<string, GroupSessionEarnRow>;
+    const runOne = async (s: (typeof groupStaff)[number]): Promise<PartialEarn> => {
+      const local = new Map<string, GroupSessionEarnRow>();
+      const performer = performerById.get(s.userId);
+      if (!performer) return local;
       const trainerFlags = trainerPayFlags({
         roles: performer.roles.map((r) => r.role),
         groupPrograms: performer.groupPrograms,
@@ -5333,7 +5336,7 @@ export class PayrollService {
         trainerReformers: performer.trainerReformers,
         trainerGroupsSet: performer.trainerGroupsSet,
       });
-      if (!trainerFlags.gp && !trainerFlags.reformers) continue;
+      if (!trainerFlags.gp && !trainerFlags.reformers) return local;
 
       let profileForDay:
         | ((isoDay: string) => StaffPayProfile | undefined)
@@ -5372,10 +5375,10 @@ export class PayrollService {
           const sk = u.sessionKey ?? '';
           const externalId = sk.startsWith('1c:') ? sk.slice(3) : sk;
           if (!externalId) continue;
-          const prev = out.get(externalId);
+          const prev = local.get(externalId);
           const earn = u.earnMinor ?? 0;
           if (prev && prev.earnMinor >= earn) continue;
-          out.set(externalId, {
+          local.set(externalId, {
             earnMinor: earn,
             quantity: u.quantity,
             title: u.title,
@@ -5384,6 +5387,21 @@ export class PayrollService {
             roomTitle: u.roomTitle,
             sessionKey: sk,
           });
+        }
+      }
+      return local;
+    };
+
+    // Bound concurrency so we don't stampede Postgres on cold analytics.
+    const CONCURRENCY = 4;
+    const out = new Map<string, GroupSessionEarnRow>();
+    for (let i = 0; i < groupStaff.length; i += CONCURRENCY) {
+      const batch = groupStaff.slice(i, i + CONCURRENCY);
+      const parts = await Promise.all(batch.map(runOne));
+      for (const part of parts) {
+        for (const [k, v] of part) {
+          const prev = out.get(k);
+          if (!prev || v.earnMinor >= prev.earnMinor) out.set(k, v);
         }
       }
     }
