@@ -80,7 +80,6 @@ try {
   pnpm install
   pnpm --filter @fitgo/shared-types build
   pnpm --filter @fitgo/1c-adapter build
-  pnpm --filter @fitgo/osmi-adapter build
   pnpm --filter @fitgo/api exec prisma generate
   pnpm --filter @fitgo/api exec prisma db push --skip-generate --accept-data-loss
   pnpm --filter @fitgo/api exec node ./scripts/apply-db-constraints.mjs

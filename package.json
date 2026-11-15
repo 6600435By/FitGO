@@ -9,7 +9,7 @@
     "db:up": "bash scripts/ensure-postgres.sh",
     "dev:clean": "rm -rf apps/web/.next && pnpm dev:3010",
     "dev:all": "turbo run dev",
-    "dev:deps": "turbo run build --filter=@fitgo/shared-types --filter=@fitgo/1c-adapter --filter=@fitgo/osmi-adapter",
+    "dev:deps": "turbo run build --filter=@fitgo/shared-types --filter=@fitgo/1c-adapter",
     "lint": "turbo run lint",
     "db:generate": "pnpm --filter @fitgo/api db:generate",
     "db:push": "pnpm --filter @fitgo/api db:push",

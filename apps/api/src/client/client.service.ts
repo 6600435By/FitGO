@@ -33,7 +33,6 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PersonalTrainingService } from '../personal-training/personal-training.service';
 import { SpaBookingService } from '../spa-booking/spa-booking.service';
 import { WaitlistService } from '../waitlist/waitlist.service';
-import { OsmiCardService } from '../osmi/osmi-card.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import { BookingGateway } from '../club-sync/booking-gateway.service';
@@ -66,7 +65,6 @@ export class ClientService {
     private readonly spaBooking: SpaBookingService,
     private readonly notifications: NotificationsService,
     private readonly waitlist: WaitlistService,
-    private readonly osmiCards: OsmiCardService,
     private readonly clubMembership: ClubMembershipService,
     private readonly crmLink: ClubCrmLinkService,
     private readonly visitSync: VisitSyncService,
@@ -512,7 +510,6 @@ export class ClientService {
           )
         : undefined);
     const clubName = clubRecord?.name ?? 'Клуб';
-    const osmiEnabled = this.osmiCards.isEnabled();
 
     // Home shows only 3 recent visits — don't pull a wide 1C range over VPN.
     const visitsTo = new Date();
@@ -536,74 +533,11 @@ export class ClientService {
       liveBundle.membership,
       packages,
     );
-    let membershipSource: '1c' | 'osmi' | 'derived' | null = membership
-      ? '1c'
-      : null;
+    let membershipSource: '1c' | 'derived' | null = membership ? '1c' : null;
     let accessCard = liveBundle.accessCard;
     let cardSource: ClubCardView['source'] | undefined = accessCard
       ? '1c'
       : undefined;
-
-    // OSMI: barcode fallback only when 1C card missing (avoid extra wait when 1C ok)
-    if (osmiEnabled && dbUser?.phone && activeMembership && !accessCard) {
-      try {
-        const osmiResult = await this.osmiCards.getClubCard(user);
-        if (!membership && osmiResult.card?.membership) {
-          membership = osmiResult.card.membership;
-          membershipSource = 'osmi';
-        }
-        if (osmiResult.card) {
-          accessCard = {
-            id: osmiResult.card.id,
-            barcode: osmiResult.card.barcode,
-            clientName: osmiResult.card.clientName,
-            clubName: osmiResult.card.clubName,
-          };
-          cardSource = 'osmi';
-        } else {
-          const osmiAccess = this.osmiCards.getAccessCardFromCache({
-            id: dbUser.id,
-            firstName: dbUser.firstName,
-            lastName: dbUser.lastName,
-            osmiCardId: dbUser.osmiCardId,
-            osmiBarcode: dbUser.osmiBarcode,
-            club: clubRecord ?? { name: clubName },
-          });
-          if (osmiAccess) {
-            accessCard = osmiAccess;
-            cardSource = 'osmi';
-          }
-        }
-      } catch {
-        const osmiAccess = this.osmiCards.getAccessCardFromCache({
-          id: dbUser.id,
-          firstName: dbUser.firstName,
-          lastName: dbUser.lastName,
-          osmiCardId: dbUser.osmiCardId,
-          osmiBarcode: dbUser.osmiBarcode,
-          club: clubRecord ?? { name: clubName },
-        });
-        if (osmiAccess) {
-          accessCard = osmiAccess;
-          cardSource = 'osmi';
-        }
-      }
-    } else if (
-      osmiEnabled &&
-      dbUser?.phone &&
-      activeMembership &&
-      !membership
-    ) {
-      try {
-        const osmiResult = await this.osmiCards.getClubCard(user);
-        if (osmiResult.card?.membership) {
-          membership = osmiResult.card.membership;
-          membershipSource = 'osmi';
-        }
-      } catch {
-        // ignore
-      }
-    }
 
     if (!membership) {
       membership = deriveMembershipFromVisits(externalVisits);
@@ -733,15 +667,6 @@ export class ClientService {
     };
     const live = await this.fetchLiveBundle(user.sub, externalId, visitPeriod);
     let membership: Membership | null = live.membership;
-
-    if (!membership && this.osmiCards.isEnabled()) {
-      try {
-        const osmiResult = await this.osmiCards.getClubCard(user);
-        membership = osmiResult.card?.membership ?? null;
-      } catch {
-        // ignore
-      }
-    }
 
     if (!membership && externalId) {
       membership = deriveMembershipFromVisits(live.visits);
@@ -1319,38 +1244,6 @@ export class ClientService {
     }
 
     if (crmStatus === 'PENDING_CRM' || !externalId) {
-      // OSMI barcode allowed for trial entry before 1C CRM link
-      if (this.osmiCards.isEnabled() && dbUser.phone?.trim()) {
-        try {
-          const osmiResult = await this.osmiCards.getClubCard(user, {
-            forceRefresh: options?.forceRefresh,
-          });
-          if (osmiResult.card) {
-            return {
-              enabled: true as const,
-              card: {
-                ...osmiResult.card,
-                membership: null,
-                source: 'osmi' as const,
-              },
-              needsPhone: false,
-              crmStatus: 'PENDING_CRM' as const,
-              syncError: osmiResult.syncError,
-              anketaUrl: osmiResult.anketaUrl,
-            };
-          }
-          return {
-            enabled: true as const,
-            card: null,
-            needsPhone: osmiResult.needsPhone,
-            crmStatus: 'PENDING_CRM' as const,
-            syncError: osmiResult.syncError,
-            anketaUrl: osmiResult.anketaUrl,
-          };
-        } catch {
-          // fall through
-        }
-      }
       return {
         enabled: true as const,
         card: null as ClubCardView | null,
@@ -1385,40 +1278,6 @@ export class ClientService {
         needsPhone: false,
         crmStatus: 'LINKED' as const,
       };
-    }
-
-    // Barcode fallback via OSMI (membership still from 1C)
-    if (this.osmiCards.isEnabled() && dbUser.phone?.trim()) {
-      try {
-        const osmiResult = await this.osmiCards.getClubCard(user, {
-          forceRefresh: options?.forceRefresh,
-        });
-        if (osmiResult.card) {
-          const card: ClubCardView = {
-            ...osmiResult.card,
-            membership,
-            source: 'osmi',
-          };
-          return {
-            enabled: true as const,
-            card,
-            needsPhone: false,
-            crmStatus: 'LINKED' as const,
-            syncError: osmiResult.syncError,
-            anketaUrl: osmiResult.anketaUrl,
-          };
-        }
-        return {
-          enabled: true as const,
-          card: null,
-          needsPhone: osmiResult.needsPhone,
-          crmStatus: 'LINKED' as const,
-          syncError: osmiResult.syncError,
-          anketaUrl: osmiResult.anketaUrl,
-        };
-      } catch {
-        // fall through
-      }
     }
 
     return {

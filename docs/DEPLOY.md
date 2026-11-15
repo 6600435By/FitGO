@@ -12,7 +12,6 @@
 pnpm install
 pnpm --filter @fitgo/shared-types build
 pnpm --filter @fitgo/1c-adapter build
-pnpm --filter @fitgo/osmi-adapter build
 pnpm --filter @fitgo/api build
 pnpm --filter @fitgo/web build
 ```
@@ -74,7 +73,6 @@ git clone <repo> FitGO && cd FitGO
 pnpm install
 pnpm --filter @fitgo/shared-types build
 pnpm --filter @fitgo/1c-adapter build
-pnpm --filter @fitgo/osmi-adapter build
 pnpm --filter @fitgo/api exec prisma generate
 pnpm db:push && pnpm db:seed   # с DATABASE_URL прода
 pnpm --filter @fitgo/api build && pnpm --filter @fitgo/web build

@@ -338,8 +338,6 @@ try {
   Assert-LastExit 'shared-types build'
   pnpm --filter @fitgo/1c-adapter build
   Assert-LastExit '1c-adapter build'
-  pnpm --filter @fitgo/osmi-adapter build
-  Assert-LastExit 'osmi-adapter build'
   pnpm --filter @fitgo/api exec prisma generate
   Assert-LastExit 'prisma generate'
   Write-Host 'DB push + minimal seed (C)...'

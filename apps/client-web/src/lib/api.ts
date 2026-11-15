@@ -162,7 +162,7 @@ export interface ClientDashboard {
   membership: Membership | null;
   visits: Visit[];
   accessCard: AccessCard | null;
-  cardSource?: '1c' | 'osmi' | 'fitgo';
+  cardSource?: '1c' | 'fitgo';
   crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
   /** Pack in 1C segment «групповые реформеры» (or service-line heuristic). */
   allowsGroupReformer?: boolean;
@@ -663,7 +663,6 @@ export const api = {
       card: ClubCardView | null;
       needsPhone: boolean;
       crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
-      anketaUrl?: string;
       syncError?: string;
       membership?: Membership | null;
     }>('/client/card', {}, token),
@@ -674,7 +673,6 @@ export const api = {
       card: ClubCardView | null;
       needsPhone: boolean;
       crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
-      anketaUrl?: string;
       syncError?: string;
       membership?: Membership | null;
     }>('/client/card/sync', { method: 'POST' }, token),

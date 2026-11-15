@@ -19,7 +19,7 @@ export function HomeMembershipCard({
   onFrozen,
 }: {
   membership: Membership;
-  membershipSource?: '1c' | 'osmi' | 'derived' | null;
+  membershipSource?: '1c' | 'derived' | null;
   serviceActions?: ReactNode;
   onFrozen: (next: Membership) => void;
 }) {

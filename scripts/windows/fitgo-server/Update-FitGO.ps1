@@ -137,7 +137,6 @@ try {
   pnpm install
   pnpm --filter @fitgo/shared-types build
   pnpm --filter @fitgo/1c-adapter build
-  pnpm --filter @fitgo/osmi-adapter build
   pnpm --filter @fitgo/api exec prisma generate
   # Schema evolves; never drop data. Prefer migrate later; push OK for early SP.
   # --accept-data-loss: only for new unique warnings (not table drops); without it Update hangs on y/N.

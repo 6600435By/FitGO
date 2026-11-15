@@ -63,7 +63,7 @@ interface DashboardData {
     externalId?: string;
   };
   membership: Membership | null;
-  membershipSource?: '1c' | 'osmi' | 'derived' | null;
+  membershipSource?: '1c' | 'derived' | null;
   packages?: ClientMembershipPackage[];
   visits: Visit[];
   accessCard?: {
@@ -72,7 +72,7 @@ interface DashboardData {
     clientName: string;
     clubName: string;
   } | null;
-  cardSource?: '1c' | 'osmi' | 'fitgo';
+  cardSource?: '1c' | 'fitgo';
   club: { name: string; address?: string; slug?: string } | null;
   crmStatus?: 'LINKED' | 'PENDING_CRM' | null;
 }

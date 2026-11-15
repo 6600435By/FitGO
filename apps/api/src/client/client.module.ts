@@ -3,7 +3,6 @@ import { ClubCrmLinkService } from '../common/club-crm-link.service';
 import { ClubSyncModule } from '../club-sync/club-sync.module';
 import { EngagementModule } from '../engagement/engagement.module';
 import { NotificationsModule } from '../notifications/notifications.module';
-import { OsmiModule } from '../osmi/osmi.module';
 import { PersonalTrainingModule } from '../personal-training/personal-training.module';
 import { SpaBookingModule } from '../spa-booking/spa-booking.module';
 import { TrainerRosterModule } from '../trainer-roster/trainer-roster.module';
@@ -18,7 +17,6 @@ import { ClientProfileService } from './client-profile.service';
     SpaBookingModule,
     NotificationsModule,
     WaitlistModule,
-    OsmiModule,
     TrainerRosterModule,
     EngagementModule,
     ClubSyncModule,

@@ -223,7 +223,7 @@ export function MembershipWallet({
 }: {
   membership: Membership;
   packages: ClientMembershipPackage[];
-  membershipSource?: '1c' | 'osmi' | 'derived' | null;
+  membershipSource?: '1c' | 'derived' | null;
   isEnabled: (key: ProductModuleKey) => boolean;
   onFrozen: (next: Membership) => void;
 }) {

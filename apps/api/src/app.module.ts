@@ -14,7 +14,6 @@ import { ServiceUsageModule } from './service-usage/service-usage.module';
 import { SuperAdminModule } from './super-admin/super-admin.module';
 import { TrainerModule } from './trainer/trainer.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
-import { OsmiModule } from './osmi/osmi.module';
 import { FeaturesModule } from './features/features.module';
 import { GroupSessionModule } from './group-session/group-session.module';
 import { PayrollModule } from './payroll/payroll.module';
@@ -51,7 +50,6 @@ import { WebkassaModule } from './webkassa/webkassa.module';
     PersonalTrainingModule,
     SpaBookingModule,
     WaitlistModule,
-    OsmiModule,
     GroupSessionModule,
     PayrollModule,
     PtTimesheetModule,

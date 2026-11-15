@@ -43,7 +43,6 @@ function ClientCardPageInner() {
   const [membershipOnly, setMembershipOnly] = useState<Membership | null>(null);
   const [crmStatus, setCrmStatus] = useState<ClubCrmLinkStatus | null>(null);
   const [needsPhone, setNeedsPhone] = useState(false);
-  const [anketaUrl, setAnketaUrl] = useState<string | undefined>();
   const [syncError, setSyncError] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(() => !readAccessCardCache());
@@ -78,7 +77,6 @@ function ClientCardPageInner() {
         .clientClubCard(token)
         .then((result) => {
           setNeedsPhone(result.needsPhone);
-          setAnketaUrl(result.anketaUrl);
           setSyncError(result.syncError ?? '');
           setCrmStatus(result.crmStatus ?? null);
           setMembershipOnly(result.membership ?? null);
@@ -264,16 +262,6 @@ function ClientCardPageInner() {
           <Button className="w-full" loading={syncing} onClick={handleSync}>
             Обновить
           </Button>
-          {anketaUrl ? (
-            <a
-              href={anketaUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn-secondary block"
-            >
-              Получить карту на сайте OSMI
-            </a>
-          ) : null}
         </div>
       </div>
     );

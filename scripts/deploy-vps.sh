@@ -8,7 +8,6 @@ git pull --ff-only
 pnpm install
 pnpm --filter @fitgo/shared-types build
 pnpm --filter @fitgo/1c-adapter build
-pnpm --filter @fitgo/osmi-adapter build
 pnpm --filter @fitgo/api exec prisma generate
 pnpm --filter @fitgo/api build
 pnpm --filter @fitgo/web build

@@ -430,8 +430,6 @@ if ($Mode -eq 'Release') {
     if ($LASTEXITCODE -ne 0) { throw 'shared-types build failed' }
     pnpm --filter @fitgo/1c-adapter build
     if ($LASTEXITCODE -ne 0) { throw '1c-adapter build failed' }
-    pnpm --filter @fitgo/osmi-adapter build
-    if ($LASTEXITCODE -ne 0) { throw 'osmi-adapter build failed' }
     pnpm --filter @fitgo/api exec prisma generate
     if ($LASTEXITCODE -ne 0) { throw 'prisma generate failed' }
     pnpm --filter @fitgo/api build

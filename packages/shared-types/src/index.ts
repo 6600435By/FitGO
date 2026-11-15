@@ -197,7 +197,7 @@ export const PRODUCT_MODULE_CATALOG: ProductModuleDefinition[] = [
   {
     key: 'club_card',
     label: 'Карта доступа',
-    description: 'Штрихкод 1С/OSMI и визиты',
+    description: 'Штрихкод 1С и визиты',
     defaultEnabled: true,
     surfaces: ['/client/card', '/client/visits'],
   },
@@ -383,7 +383,7 @@ export interface AccessCard {
 export interface ClubCardView {
   id: string;
   barcode: string;
-  /** Barcode symbology (e.g. CODE128 for 13-digit club cards, PDF417 for OSMI) */
+  /** Barcode symbology (e.g. CODE128 for 13-digit club cards) */
   barcodeFormat?: 'CODE128' | 'PDF417' | 'QR';
   clientName: string;
   clubName: string;
@@ -391,8 +391,7 @@ export interface ClubCardView {
   walletUrl?: string;
   stripImageId?: string;
   syncedAt: string;
-  source: '1c' | 'osmi' | 'fitgo';
-  anketaUrl?: string;
+  source: '1c' | 'fitgo';
 }
 
 export interface ScheduleSlot {
