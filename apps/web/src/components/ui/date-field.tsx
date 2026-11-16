@@ -1,6 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import {
   addMonths,
@@ -20,7 +28,12 @@ import {
   startOfWeek,
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
+import {
+  CalendarDays,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-react';
 
 const POPOVER_WIDTH_PX = 280; // w-[17.5rem]
 const POPOVER_EST_HEIGHT_PX = 340;
@@ -53,6 +66,50 @@ const MONTH_OPTIONS = Array.from({ length: 12 }, (_, i) => ({
   value: i,
   label: format(new Date(2020, i, 1), 'LLLL', { locale: ru }),
 }));
+
+/** Compact month/year control — not `.input` (Forma .input is 3rem + nearly invisible on dark popover). */
+function PeriodSelect({
+  ariaLabel,
+  value,
+  onChange,
+  formaAccent,
+  className,
+  children,
+}: {
+  ariaLabel: string;
+  value: number;
+  onChange: (next: number) => void;
+  formaAccent: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`relative ${className ?? ''}`}>
+      <select
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className={[
+          'h-8 w-full cursor-pointer appearance-none rounded-lg border py-0 pl-2 pr-7 text-xs capitalize outline-none transition',
+          'focus-visible:ring-2',
+          formaAccent
+            ? 'border-white/10 bg-ink-raised text-white hover:border-white/20 hover:bg-white/[0.06] focus-visible:ring-forma-500/50'
+            : 'border-slate-500 bg-slate-800 text-slate-100 hover:border-slate-400 hover:bg-slate-700 focus-visible:ring-fitgo-500/50',
+        ].join(' ')}
+        style={{ colorScheme: 'dark' }}
+      >
+        {children}
+      </select>
+      <ChevronDown
+        className={[
+          'pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2',
+          formaAccent ? 'text-forma-400' : 'text-slate-400',
+        ].join(' ')}
+        aria-hidden
+      />
+    </div>
+  );
+}
 
 function toIsoDate(d: Date): string {
   return format(d, 'yyyy-MM-dd');
@@ -325,34 +382,32 @@ export function DateField({
                 <ChevronLeft className="h-4 w-4" />
               </button>
               <div className="flex min-w-0 flex-1 items-center gap-1">
-                <select
-                  aria-label="Месяц"
-                  className="input h-8 min-w-0 flex-1 px-1.5 py-0 text-xs capitalize"
+                <PeriodSelect
+                  ariaLabel="Месяц"
+                  formaAccent={formaAccent}
+                  className="min-w-0 flex-1"
                   value={getMonth(cursor)}
-                  onChange={(e) =>
-                    setCursor((c) => setMonth(c, Number(e.target.value)))
-                  }
+                  onChange={(m) => setCursor((c) => setMonth(c, m))}
                 >
                   {MONTH_OPTIONS.map((m) => (
                     <option key={m.value} value={m.value}>
                       {m.label}
                     </option>
                   ))}
-                </select>
-                <select
-                  aria-label="Год"
-                  className="input h-8 w-[4.75rem] shrink-0 px-1.5 py-0 text-xs tabular-nums"
+                </PeriodSelect>
+                <PeriodSelect
+                  ariaLabel="Год"
+                  formaAccent={formaAccent}
+                  className="w-[4.75rem] shrink-0"
                   value={getYear(cursor)}
-                  onChange={(e) =>
-                    setCursor((c) => setYear(c, Number(e.target.value)))
-                  }
+                  onChange={(y) => setCursor((c) => setYear(c, y))}
                 >
                   {years.map((y) => (
                     <option key={y} value={y}>
                       {y}
                     </option>
                   ))}
-                </select>
+                </PeriodSelect>
               </div>
               <button
                 type="button"
@@ -452,17 +507,28 @@ export function DateField({
         onClick={() => {
           if (!disabled) setOpen((v) => !v);
         }}
-        className={`input flex items-center justify-between gap-2 text-left tabular-nums disabled:cursor-not-allowed disabled:opacity-50 ${
+        className={`input flex cursor-pointer items-center justify-between gap-2 text-left tabular-nums disabled:cursor-not-allowed disabled:opacity-50 ${
           open ? openRingClass : ''
         } ${inputClassName ?? ''}`}
       >
-        <span className={value ? 'text-slate-100' : 'text-slate-500'}>
+        <span
+          className={
+            value
+              ? formaAccent
+                ? 'text-white'
+                : 'text-slate-100'
+              : 'text-slate-500'
+          }
+        >
           {display}
         </span>
-        <CalendarDays
-          className={`h-4 w-4 shrink-0 ${accentText}`}
-          aria-hidden
-        />
+        <span className="flex shrink-0 items-center gap-1">
+          <CalendarDays className={`h-4 w-4 ${accentText}`} aria-hidden />
+          <ChevronDown
+            className={`h-3.5 w-3.5 ${formaAccent ? 'text-zinc-400' : 'text-slate-500'}`}
+            aria-hidden
+          />
+        </span>
       </button>
       {required ? (
         <input

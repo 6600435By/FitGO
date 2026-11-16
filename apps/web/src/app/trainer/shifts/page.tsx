@@ -11,6 +11,7 @@ export default function TrainerStaffRosterPage() {
     <div className={forma ? 'mx-auto max-w-5xl space-y-3' : undefined}>
       {forma ? (
         <PageHeader
+          className="mb-1"
           title="Смены"
           subtitle="Календарь месяца · итог часов считается по опубликованному графику"
         />

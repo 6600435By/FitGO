@@ -20,6 +20,7 @@ import {
 } from '@fitgo/shared-types';
 import { AnimatedNumber } from '@fitgo/forma-ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { FormaMonthNav } from '@/components/trainer-shell/forma-month-nav';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
 import {
@@ -481,10 +482,17 @@ export function StaffRosterCalendar({
 
   return (
     <div className="space-y-5 pb-10">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        {hideTitle ? (
-          <div />
-        ) : (
+      {hideTitle ? (
+        <FormaMonthNav
+          value={new Date(year, month - 1, 1, 12)}
+          showToday={mode === 'trainer'}
+          onChange={(next) => {
+            setYear(next.getFullYear());
+            setMonth(next.getMonth() + 1);
+          }}
+        />
+      ) : (
+        <header className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold text-white">График смен</h1>
             <p className="mt-0.5 hidden text-sm text-slate-400 sm:block">
@@ -497,19 +505,19 @@ export function StaffRosterCalendar({
                     : 'Двойной щелчок по дню — добавить или изменить. Можно скопировать смену на период или выбранные дни недели.'}
             </p>
           </div>
-        )}
-        <div className="flex items-center gap-2">
-          <button type="button" className="btn-secondary px-3 py-1.5" onClick={prevMonth}>
-            ←
-          </button>
-          <span className="min-w-[10rem] text-center capitalize text-white">
-            {monthLabel(year, month)}
-          </span>
-          <button type="button" className="btn-secondary px-3 py-1.5" onClick={nextMonth}>
-            →
-          </button>
-        </div>
-      </header>
+          <div className="flex items-center gap-2">
+            <button type="button" className="btn-secondary px-3 py-1.5" onClick={prevMonth}>
+              ←
+            </button>
+            <span className="min-w-[10rem] text-center capitalize text-white">
+              {monthLabel(year, month)}
+            </span>
+            <button type="button" className="btn-secondary px-3 py-1.5" onClick={nextMonth}>
+              →
+            </button>
+          </div>
+        </header>
+      )}
 
       {mode !== 'trainer' && (
         <div className="flex flex-wrap gap-2">

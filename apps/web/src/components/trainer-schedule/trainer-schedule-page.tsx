@@ -12,6 +12,7 @@ import {
 import { addDays, format, parseISO } from 'date-fns';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { FormaMonthNav } from '@/components/trainer-shell/forma-month-nav';
 import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -304,12 +305,15 @@ export function TrainerSchedulePage() {
 
       {forma ? (
         <>
-          <DateStrip
-            days={dateStripDays}
-            value={format(date, 'yyyy-MM-dd')}
-            onChange={(key) => updateDate(new Date(`${key}T12:00:00`))}
-          />
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="space-y-2">
+            <FormaMonthNav value={date} onChange={updateDate} />
+            <DateStrip
+              days={dateStripDays}
+              value={format(date, 'yyyy-MM-dd')}
+              onChange={(key) => updateDate(new Date(`${key}T12:00:00`))}
+            />
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3">
             <SegmentedControl<ScheduleTypeFilter>
               layoutId="sched-filter"
               value={filter}
