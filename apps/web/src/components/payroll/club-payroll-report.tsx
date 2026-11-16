@@ -479,23 +479,31 @@ export function ClubPayrollReportPanel({
     try {
       const dept = department === 'ALL' ? undefined : department;
       const cmp = sameSlicePreviousMonth(from, to);
-      const [r, c] = await Promise.all([
-        api.payrollClubSummary(token, { from, to, department: dept }),
-        api.payrollClubSummary(token, {
+      // Paint current month first; MoM compare loads after (does not block table).
+      const r = await api.payrollClubSummary(token, {
+        from,
+        to,
+        department: dept,
+      });
+      setReport(r);
+      setCompare(null);
+      setExpandedSection(null);
+      setLoading(false);
+      await loadCorp();
+      try {
+        const c = await api.payrollClubSummary(token, {
           from: cmp.from,
           to: cmp.to,
           department: dept,
-        }),
-      ]);
-      setReport(r);
-      setCompare(c);
-      setExpandedSection(null);
-      await loadCorp();
+        });
+        setCompare(c);
+      } catch {
+        /* compare is optional */
+      }
     } catch (e) {
       setReport(null);
       setCompare(null);
       setMessage(e instanceof Error ? e.message : 'Ошибка отчёта');
-    } finally {
       setLoading(false);
     }
   };

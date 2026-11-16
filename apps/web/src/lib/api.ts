@@ -5068,6 +5068,7 @@ export const api = {
       periodTo?: string;
       cardTransferMinor?: number;
       actualCashMinor?: number;
+      expectedUpdatedAt?: string;
     },
   ) =>
     request<import('@fitgo/shared-types').PayrollPayoutDto>(
@@ -5088,6 +5089,7 @@ export const api = {
       cardTransferMinor?: number;
       actualCashMinor?: number;
       note?: string;
+      expectedUpdatedAt?: string;
     },
   ) =>
     request<import('@fitgo/shared-types').PayrollPayoutDto>(
@@ -5109,6 +5111,7 @@ export const api = {
         cardTransferMinor?: number;
         actualCashMinor?: number;
         note?: string;
+        expectedUpdatedAt?: string;
       }>;
     },
   ) =>
@@ -5131,6 +5134,87 @@ export const api = {
   ) =>
     request<import('@fitgo/shared-types').PayrollPayoutDto>(
       '/super-admin/payroll/payouts/reopen-draft',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  payrollPayoutList: (
+    token: string,
+    params: {
+      kind: import('@fitgo/shared-types').PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      kind: params.kind,
+      year: String(params.year),
+      month: String(params.month),
+    });
+    if (params.periodFrom) q.set('periodFrom', params.periodFrom);
+    if (params.periodTo) q.set('periodTo', params.periodTo);
+    return request<import('@fitgo/shared-types').PayrollPayoutDto[]>(
+      `/super-admin/payroll/payouts/list?${q}`,
+      {},
+      token,
+    );
+  },
+
+  payrollPayoutPresence: (
+    token: string,
+    params: {
+      kind: import('@fitgo/shared-types').PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+    },
+  ) => {
+    const q = new URLSearchParams({
+      kind: params.kind,
+      year: String(params.year),
+      month: String(params.month),
+    });
+    if (params.periodFrom) q.set('periodFrom', params.periodFrom);
+    if (params.periodTo) q.set('periodTo', params.periodTo);
+    return request<import('@fitgo/shared-types').PayrollPayoutPresence>(
+      `/super-admin/payroll/payouts/presence?${q}`,
+      {},
+      token,
+    );
+  },
+
+  payrollPayoutPresenceHeartbeat: (
+    token: string,
+    body: {
+      kind: import('@fitgo/shared-types').PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+      rowUserId?: string | null;
+    },
+  ) =>
+    request<import('@fitgo/shared-types').PayrollPayoutPresence>(
+      '/super-admin/payroll/payouts/presence/heartbeat',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  payrollPayoutPresenceLeave: (
+    token: string,
+    body: {
+      kind: import('@fitgo/shared-types').PayrollPayoutKind;
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+    },
+  ) =>
+    request<{ ok: true }>(
+      '/super-admin/payroll/payouts/presence/leave',
       { method: 'POST', body: JSON.stringify(body) },
       token,
     ),

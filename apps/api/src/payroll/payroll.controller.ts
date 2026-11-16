@@ -393,6 +393,7 @@ export class PayrollController {
       periodTo?: string;
       cardTransferMinor?: number;
       actualCashMinor?: number;
+      expectedUpdatedAt?: string;
     },
   ) {
     if (body.kind !== 'ADVANCE_HALF' && body.kind !== 'MONTH_SETTLEMENT') {
@@ -418,6 +419,7 @@ export class PayrollController {
       cardTransferMinor?: number;
       actualCashMinor?: number;
       note?: string;
+      expectedUpdatedAt?: string;
     },
   ) {
     return this.payroll.confirmPayout(user, body);
@@ -438,6 +440,7 @@ export class PayrollController {
         cardTransferMinor?: number;
         actualCashMinor?: number;
         note?: string;
+        expectedUpdatedAt?: string;
       }>;
     },
   ) {
@@ -468,6 +471,85 @@ export class PayrollController {
       throw new BadRequestException('Не указан сотрудник');
     }
     return this.payroll.reopenPayoutToDraft(user, body);
+  }
+
+  @Get('payouts/list')
+  listPayoutsForWave(
+    @CurrentUser() user: JwtPayload,
+    @Query('kind') kind: string,
+    @Query('year') year: string,
+    @Query('month') month: string,
+    @Query('periodFrom') periodFrom?: string,
+    @Query('periodTo') periodTo?: string,
+  ) {
+    if (kind !== 'ADVANCE_HALF' && kind !== 'MONTH_SETTLEMENT') {
+      throw new BadRequestException('Неверный тип выплаты');
+    }
+    return this.payroll.listPayoutsForWave(user, {
+      kind,
+      year: Number(year),
+      month: Number(month),
+      periodFrom,
+      periodTo,
+    });
+  }
+
+  @Get('payouts/presence')
+  listPayoutPresence(
+    @CurrentUser() user: JwtPayload,
+    @Query('kind') kind: string,
+    @Query('year') year: string,
+    @Query('month') month: string,
+    @Query('periodFrom') periodFrom?: string,
+    @Query('periodTo') periodTo?: string,
+  ) {
+    if (kind !== 'ADVANCE_HALF' && kind !== 'MONTH_SETTLEMENT') {
+      throw new BadRequestException('Неверный тип выплаты');
+    }
+    return this.payroll.listPayoutPresence(user, {
+      kind,
+      year: Number(year),
+      month: Number(month),
+      periodFrom,
+      periodTo,
+    });
+  }
+
+  @Post('payouts/presence/heartbeat')
+  heartbeatPayoutPresence(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      kind: 'ADVANCE_HALF' | 'MONTH_SETTLEMENT';
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+      rowUserId?: string | null;
+    },
+  ) {
+    if (body.kind !== 'ADVANCE_HALF' && body.kind !== 'MONTH_SETTLEMENT') {
+      throw new BadRequestException('Неверный тип выплаты');
+    }
+    return this.payroll.heartbeatPayoutPresence(user, body);
+  }
+
+  @Post('payouts/presence/leave')
+  leavePayoutPresence(
+    @CurrentUser() user: JwtPayload,
+    @Body()
+    body: {
+      kind: 'ADVANCE_HALF' | 'MONTH_SETTLEMENT';
+      year: number;
+      month: number;
+      periodFrom?: string;
+      periodTo?: string;
+    },
+  ) {
+    if (body.kind !== 'ADVANCE_HALF' && body.kind !== 'MONTH_SETTLEMENT') {
+      throw new BadRequestException('Неверный тип выплаты');
+    }
+    return this.payroll.leavePayoutPresence(user, body);
   }
 }
 

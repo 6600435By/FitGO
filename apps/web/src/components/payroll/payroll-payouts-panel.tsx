@@ -1,7 +1,9 @@
 'use client';
 
 import type {
+  PayrollPayoutDto,
   PayrollPayoutKind,
+  PayrollPayoutPresence,
   PayrollPayoutPreview,
   StaffPaySummary,
 } from '@fitgo/shared-types';
@@ -15,10 +17,10 @@ import {
 } from '@fitgo/shared-types';
 import { Banknote, Pencil } from 'lucide-react';
 import { usePathname } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PayrollFold } from '@/components/payroll/payroll-fold';
 import { DateField } from '@/components/ui/date-field';
-import { api } from '@/lib/api';
+import { ApiError, api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 import {
   resolveViewFilters,
@@ -330,6 +332,8 @@ export function PayrollPayoutsPanel({
   >({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [presence, setPresence] = useState<PayrollPayoutPresence | null>(null);
+  const [focusedRowUserId, setFocusedRowUserId] = useState<string | null>(null);
   const ctxRef = useRef<PayoutCtx>({
     payKind,
     payYear,
@@ -341,6 +345,8 @@ export function PayrollPayoutsPanel({
   const pendingSaves = useRef<Record<string, PendingSave>>({});
   const saveSeq = useRef<Record<string, number>>({});
   const loadSeq = useRef(0);
+  const focusedRowRef = useRef<string | null>(null);
+  focusedRowRef.current = focusedRowUserId;
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
   const rowsRef = useRef(rows);
@@ -400,6 +406,37 @@ export function PayrollPayoutsPanel({
     rowsRef.current.find((r) => r.performerId === userId)?.existingPayout
       ?.status === 'PAID';
 
+  const applyServerPayout = useCallback(
+    (dto: PayrollPayoutDto, opts?: { replaceDraft?: boolean }) => {
+      setRows((prev) =>
+        prev.map((row) =>
+          row.performerId === dto.userId
+            ? { ...row, existingPayout: dto }
+            : row,
+        ),
+      );
+      if (opts?.replaceDraft) {
+        const card = minorInput(dto.cardTransferMinor);
+        const cash = minorInput(dto.actualCashMinor);
+        const cur = draftsRef.current[dto.userId] ?? {
+          card: '0',
+          cash: '0',
+          selected: false,
+          fine: '',
+          bonus: '',
+        };
+        const next = {
+          ...draftsRef.current,
+          [dto.userId]: { ...cur, card, cash },
+        };
+        draftsRef.current = next;
+        setDrafts(next);
+        writeLocalDraft(ctxRef.current, dto.userId, card, cash, false);
+      }
+    },
+    [],
+  );
+
   const persistDraft = async (
     userId: string,
     card: string,
@@ -412,6 +449,9 @@ export function PayrollPayoutsPanel({
     if (isPaidRow(userId)) return;
     const seq = (saveSeq.current[userId] ?? 0) + 1;
     saveSeq.current[userId] = seq;
+    const expectedUpdatedAt = rowsRef.current.find(
+      (r) => r.performerId === userId,
+    )?.existingPayout?.updatedAt;
     try {
       const dto = await api.payrollPayoutSaveDraft(token, {
         userId,
@@ -422,6 +462,7 @@ export function PayrollPayoutsPanel({
         periodTo: ctx.periodTo || undefined,
         cardTransferMinor: parseMoneyToMinor(card || '0'),
         actualCashMinor: parseMoneyToMinor(cash || '0'),
+        expectedUpdatedAt,
       });
       if (saveSeq.current[userId] !== seq) return;
       if (!pendingSaves.current[userId]) {
@@ -435,14 +476,30 @@ export function PayrollPayoutsPanel({
       ) {
         return;
       }
-      setRows((prev) =>
-        prev.map((row) =>
-          row.performerId === userId ? { ...row, existingPayout: dto } : row,
-        ),
-      );
+      applyServerPayout(dto);
       onPayoutAmountsChanged?.(userId);
     } catch (e) {
       if (saveSeq.current[userId] !== seq) return;
+      if (e instanceof ApiError && e.status === 409) {
+        setMessage(
+          e.message ||
+            'Эту строку только что сохранил другой сотрудник. Показаны его суммы.',
+        );
+        try {
+          const list = await api.payrollPayoutList(token, {
+            kind: ctx.payKind,
+            year: ctx.payYear,
+            month: ctx.payMonth,
+            periodFrom: ctx.periodFrom || undefined,
+            periodTo: ctx.periodTo || undefined,
+          });
+          const fresh = list.find((p) => p.userId === userId);
+          if (fresh) applyServerPayout(fresh, { replaceDraft: true });
+        } catch {
+          /* keep message */
+        }
+        return;
+      }
       setMessage(
         e instanceof Error ? e.message : 'Не удалось сохранить черновик',
       );
@@ -496,6 +553,163 @@ export function PayrollPayoutsPanel({
       pendingSaves.current = {};
     };
   }, []);
+
+  /** Presence heartbeat while the payout fold is open and the tab is visible. */
+  useEffect(() => {
+    if (!open) {
+      setPresence(null);
+      return;
+    }
+    const token = getToken();
+    if (!token) return;
+    let stopped = false;
+    const waveBody = () => ({
+      kind: ctxRef.current.payKind,
+      year: ctxRef.current.payYear,
+      month: ctxRef.current.payMonth,
+      periodFrom: ctxRef.current.periodFrom || undefined,
+      periodTo: ctxRef.current.periodTo || undefined,
+    });
+    const beat = async () => {
+      if (stopped || document.visibilityState === 'hidden') return;
+      try {
+        const next = await api.payrollPayoutPresenceHeartbeat(token, {
+          ...waveBody(),
+          rowUserId: focusedRowRef.current,
+        });
+        if (!stopped) setPresence(next);
+      } catch {
+        /* ignore transient */
+      }
+    };
+    void beat();
+    const heartbeatTimer = setInterval(() => void beat(), 15_000);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void beat();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      stopped = true;
+      clearInterval(heartbeatTimer);
+      document.removeEventListener('visibilitychange', onVis);
+      void api.payrollPayoutPresenceLeave(token, waveBody()).catch(() => undefined);
+      setPresence(null);
+    };
+  }, [open, payKind, payYear, payMonth, periodFrom, periodTo]);
+
+  /** Push focused row into the lease immediately (do not wait for 15s tick). */
+  useEffect(() => {
+    if (!open) return;
+    const token = getToken();
+    if (!token) return;
+    let cancelled = false;
+    void api
+      .payrollPayoutPresenceHeartbeat(token, {
+        kind: payKind,
+        year: payYear,
+        month: payMonth,
+        periodFrom: periodFrom || undefined,
+        periodTo: periodTo || undefined,
+        rowUserId: focusedRowUserId,
+      })
+      .then((next) => {
+        if (!cancelled) setPresence(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    focusedRowUserId,
+    open,
+    payKind,
+    payYear,
+    payMonth,
+    periodFrom,
+    periodTo,
+  ]);
+
+  /** Poll peer saves every 8s; skip rows the user is actively editing. */
+  useEffect(() => {
+    if (!open || rows.length === 0) return;
+    const token = getToken();
+    if (!token) return;
+    let stopped = false;
+    const poll = async () => {
+      if (stopped || document.visibilityState === 'hidden') return;
+      try {
+        const list = await api.payrollPayoutList(token, {
+          kind: ctxRef.current.payKind,
+          year: ctxRef.current.payYear,
+          month: ctxRef.current.payMonth,
+          periodFrom: ctxRef.current.periodFrom || undefined,
+          periodTo: ctxRef.current.periodTo || undefined,
+        });
+        if (stopped) return;
+        const focusId = focusedRowRef.current;
+        const byId = new Map(list.map((p) => [p.userId, p]));
+        let hint: string | null = null;
+        setRows((prev) =>
+          prev.map((row) => {
+            const fresh = byId.get(row.performerId);
+            if (!fresh) return row;
+            if (row.performerId === focusId) return row;
+            if (pendingSaves.current[row.performerId]) return row;
+            const prevAt = row.existingPayout?.updatedAt;
+            if (prevAt && fresh.updatedAt && prevAt === fresh.updatedAt) {
+              return row;
+            }
+            if (
+              !row.existingPayout ||
+              (fresh.updatedAt && fresh.updatedAt !== prevAt)
+            ) {
+              const card = minorInput(fresh.cardTransferMinor);
+              const cash = minorInput(fresh.actualCashMinor);
+              const cur = draftsRef.current[row.performerId];
+              if (cur) {
+                const nextDrafts = {
+                  ...draftsRef.current,
+                  [row.performerId]: { ...cur, card, cash },
+                };
+                draftsRef.current = nextDrafts;
+                setDrafts(nextDrafts);
+              }
+              if (fresh.updatedAt && fresh.updatedAt !== prevAt) {
+                hint = `Обновлена строка ${row.performerName}.`;
+              }
+              return { ...row, existingPayout: fresh };
+            }
+            return row;
+          }),
+        );
+        if (hint) setMessage(hint);
+      } catch {
+        /* ignore */
+      }
+    };
+    const timer = setInterval(() => void poll(), 8_000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [open, rows.length, payKind, payYear, payMonth, periodFrom, periodTo]);
+
+  const rowLockEditor = useCallback(
+    (userId: string) => {
+      if (!presence) return null;
+      const other = presence.editors.find(
+        (e) =>
+          e.editorId !== presence.selfEditorId && e.rowUserId === userId,
+      );
+      return other ?? null;
+    },
+    [presence],
+  );
+
+  const presenceOthers = useMemo(() => {
+    if (!presence) return [];
+    return presence.editors.filter((e) => e.editorId !== presence.selfEditorId);
+  }, [presence]);
 
   const filteredStaff = useMemo(() => {
     if (department === 'ALL') return staff;
@@ -713,6 +927,7 @@ export function PayrollPayoutsPanel({
         periodTo: periodTo || undefined,
         cardTransferMinor: cardMinor,
         actualCashMinor: cashMinor,
+        expectedUpdatedAt: row.existingPayout?.updatedAt,
       });
       clearLocalDraft(ctxRef.current, userId);
       setEditingPaid((prev) => {
@@ -729,6 +944,26 @@ export function PayrollPayoutsPanel({
       await load();
       onPayoutAmountsChanged?.(userId);
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setMessage(
+          e.message ||
+            'Эту строку только что сохранил другой сотрудник. Показаны его суммы.',
+        );
+        try {
+          const list = await api.payrollPayoutList(token, {
+            kind: payKind,
+            year: payYear,
+            month: payMonth,
+            periodFrom: periodFrom || undefined,
+            periodTo: periodTo || undefined,
+          });
+          const fresh = list.find((p) => p.userId === userId);
+          if (fresh) applyServerPayout(fresh, { replaceDraft: true });
+        } catch {
+          /* keep message */
+        }
+        return;
+      }
       setMessage(e instanceof Error ? e.message : 'Не удалось сохранить выплату');
     } finally {
       setBusy(false);
@@ -854,6 +1089,7 @@ export function PayrollPayoutsPanel({
         userId: r.performerId,
         cardTransferMinor: parseMoneyToMinor(d.card || '0'),
         actualCashMinor: parseMoneyToMinor(d.cash || '0'),
+        expectedUpdatedAt: r.existingPayout?.updatedAt,
       };
     });
     const confirmMsg = `Подтвердить ${items.length} выплат(ы) за ${periodFrom}–${periodTo}?${
@@ -1113,6 +1349,19 @@ export function PayrollPayoutsPanel({
             </p>
           )}
 
+          {presenceOthers.length > 0 && (
+            <p className="text-xs text-sky-300/90">
+              На листе:{' '}
+              {presenceOthers
+                .map((e) =>
+                  e.rowUserId
+                    ? `${e.editorName} (строка)`
+                    : e.editorName,
+                )
+                .join(', ')}
+            </p>
+          )}
+
           {message && (
             <p className="text-xs text-amber-300/90">{message}</p>
           )}
@@ -1150,6 +1399,8 @@ export function PayrollPayoutsPanel({
                   const saved = r.existingPayout?.status === 'DRAFT';
                   const editing = Boolean(editingPaid[r.performerId]);
                   const paidLocked = paid && !editing;
+                  const peerLock = rowLockEditor(r.performerId);
+                  const peerLocked = Boolean(peerLock);
                   const rem = remainderHint(r.payableMinor, card, cash);
                   return (
                     <li
@@ -1206,7 +1457,7 @@ export function PayrollPayoutsPanel({
                                   <button
                                     type="button"
                                     className="btn-secondary inline-flex items-center gap-1 px-2 py-0.5 text-[10px]"
-                                    disabled={busy}
+                                    disabled={busy || peerLocked}
                                     title="Изменить карту/кассу выплаченной строки"
                                     onClick={() => beginEditPaid(r.performerId)}
                                   >
@@ -1216,7 +1467,7 @@ export function PayrollPayoutsPanel({
                                   <button
                                     type="button"
                                     className="btn-secondary px-2 py-0.5 text-[10px] text-amber-200"
-                                    disabled={busy}
+                                    disabled={busy || peerLocked}
                                     title="Снять подтверждение — снова черновик"
                                     onClick={() =>
                                       void reopenToDraft(r.performerId)
@@ -1303,17 +1554,27 @@ export function PayrollPayoutsPanel({
                               ) : null}
                             </p>
                           )}
+                          {peerLock ? (
+                            <p className="text-[11px] text-amber-300/90">
+                              Строку редактирует {peerLock.editorName}.
+                            </p>
+                          ) : null}
                           <div className="grid grid-cols-2 gap-2">
                             <label className="text-[10px] uppercase text-slate-500">
                               Карта
                               <input
                                 className={`input mt-1 w-full py-1.5 text-sm ${
-                                  paidLocked ? 'opacity-70' : ''
+                                  paidLocked || peerLocked ? 'opacity-70' : ''
                                 }`}
-                                disabled={busy || paidLocked}
-                                readOnly={paidLocked}
+                                disabled={busy || paidLocked || peerLocked}
+                                readOnly={paidLocked || peerLocked}
                                 inputMode="decimal"
                                 value={d.card}
+                                onFocus={() => {
+                                  if (!paidLocked && !peerLocked) {
+                                    setFocusedRowUserId(r.performerId);
+                                  }
+                                }}
                                 onChange={(e) =>
                                   updateDraft(
                                     r.performerId,
@@ -1322,7 +1583,12 @@ export function PayrollPayoutsPanel({
                                   )
                                 }
                                 onBlur={() => {
-                                  if (!paidLocked) flushDraft(r.performerId);
+                                  if (!paidLocked && !peerLocked) {
+                                    flushDraft(r.performerId);
+                                  }
+                                  setFocusedRowUserId((cur) =>
+                                    cur === r.performerId ? null : cur,
+                                  );
                                 }}
                               />
                             </label>
@@ -1330,19 +1596,29 @@ export function PayrollPayoutsPanel({
                               Из кассы
                               <input
                                 className={`input mt-1 w-full py-1.5 text-sm ${
-                                  paidLocked ? 'opacity-70' : ''
+                                  paidLocked || peerLocked ? 'opacity-70' : ''
                                 }`}
-                                disabled={busy || paidLocked}
-                                readOnly={paidLocked}
+                                disabled={busy || paidLocked || peerLocked}
+                                readOnly={paidLocked || peerLocked}
                                 inputMode="decimal"
                                 value={d.cash}
+                                onFocus={() => {
+                                  if (!paidLocked && !peerLocked) {
+                                    setFocusedRowUserId(r.performerId);
+                                  }
+                                }}
                                 onChange={(e) =>
                                   updateDraft(r.performerId, {
                                     cash: e.target.value,
                                   })
                                 }
                                 onBlur={() => {
-                                  if (!paidLocked) flushDraft(r.performerId);
+                                  if (!paidLocked && !peerLocked) {
+                                    flushDraft(r.performerId);
+                                  }
+                                  setFocusedRowUserId((cur) =>
+                                    cur === r.performerId ? null : cur,
+                                  );
                                 }}
                               />
                             </label>
@@ -1353,7 +1629,7 @@ export function PayrollPayoutsPanel({
                                 className="input min-w-0 flex-1 py-1.5 text-sm"
                                 placeholder="Штраф"
                                 inputMode="decimal"
-                                disabled={busy}
+                                disabled={busy || peerLocked}
                                 value={d.fine}
                                 onChange={(e) =>
                                   updateDraft(r.performerId, {
@@ -1364,7 +1640,7 @@ export function PayrollPayoutsPanel({
                               <button
                                 type="button"
                                 className="btn-secondary shrink-0 px-2 py-1 text-xs text-red-200"
-                                disabled={busy || !d.fine.trim()}
+                                disabled={busy || peerLocked || !d.fine.trim()}
                                 onClick={() =>
                                   void applyQuickAdj(r.performerId, 'fine')
                                 }
@@ -1377,7 +1653,7 @@ export function PayrollPayoutsPanel({
                                 className="input min-w-0 flex-1 py-1.5 text-sm"
                                 placeholder="Премия"
                                 inputMode="decimal"
-                                disabled={busy}
+                                disabled={busy || peerLocked}
                                 value={d.bonus}
                                 onChange={(e) =>
                                   updateDraft(r.performerId, {
@@ -1388,7 +1664,7 @@ export function PayrollPayoutsPanel({
                               <button
                                 type="button"
                                 className="btn-secondary shrink-0 px-2 py-1 text-xs text-emerald-200"
-                                disabled={busy || !d.bonus.trim()}
+                                disabled={busy || peerLocked || !d.bonus.trim()}
                                 onClick={() =>
                                   void applyQuickAdj(r.performerId, 'bonus')
                                 }
@@ -1435,6 +1711,8 @@ export function PayrollPayoutsPanel({
                       const saved = r.existingPayout?.status === 'DRAFT';
                       const editing = Boolean(editingPaid[r.performerId]);
                       const paidLocked = paid && !editing;
+                      const peerLock = rowLockEditor(r.performerId);
+                      const peerLocked = Boolean(peerLock);
                       const rem = remainderHint(r.payableMinor, card, cash);
                       return (
                         <tr
@@ -1573,12 +1851,22 @@ export function PayrollPayoutsPanel({
                           <td className="px-2 py-2">
                             <input
                               className={`input w-20 py-1 text-xs ${
-                                paidLocked ? 'opacity-70' : ''
+                                paidLocked || peerLocked ? 'opacity-70' : ''
                               }`}
-                              disabled={busy || paidLocked}
-                              readOnly={paidLocked}
+                              disabled={busy || paidLocked || peerLocked}
+                              readOnly={paidLocked || peerLocked}
                               inputMode="decimal"
                               value={d.card}
+                              title={
+                                peerLock
+                                  ? `Строку редактирует ${peerLock.editorName}.`
+                                  : undefined
+                              }
+                              onFocus={() => {
+                                if (!paidLocked && !peerLocked) {
+                                  setFocusedRowUserId(r.performerId);
+                                }
+                              }}
                               onChange={(e) =>
                                 updateDraft(
                                   r.performerId,
@@ -1587,38 +1875,63 @@ export function PayrollPayoutsPanel({
                                 )
                               }
                               onBlur={() => {
-                                if (!paidLocked) flushDraft(r.performerId);
+                                if (!paidLocked && !peerLocked) {
+                                  flushDraft(r.performerId);
+                                }
+                                setFocusedRowUserId((cur) =>
+                                  cur === r.performerId ? null : cur,
+                                );
                               }}
                             />
                           </td>
                           <td className="px-2 py-2">
                             <input
                               className={`input w-20 py-1 text-xs ${
-                                paidLocked ? 'opacity-70' : ''
+                                paidLocked || peerLocked ? 'opacity-70' : ''
                               }`}
-                              disabled={busy || paidLocked}
-                              readOnly={paidLocked}
+                              disabled={busy || paidLocked || peerLocked}
+                              readOnly={paidLocked || peerLocked}
                               inputMode="decimal"
                               value={d.cash}
+                              title={
+                                peerLock
+                                  ? `Строку редактирует ${peerLock.editorName}.`
+                                  : undefined
+                              }
+                              onFocus={() => {
+                                if (!paidLocked && !peerLocked) {
+                                  setFocusedRowUserId(r.performerId);
+                                }
+                              }}
                               onChange={(e) =>
                                 updateDraft(r.performerId, {
                                   cash: e.target.value,
                                 })
                               }
                               onBlur={() => {
-                                if (!paidLocked) flushDraft(r.performerId);
+                                if (!paidLocked && !peerLocked) {
+                                  flushDraft(r.performerId);
+                                }
+                                setFocusedRowUserId((cur) =>
+                                  cur === r.performerId ? null : cur,
+                                );
                               }}
                             />
                           </td>
                           <td className="px-2 py-2">
                             <div className="flex flex-col items-start gap-1">
                               <PayoutStatusBadge paid={paid} saved={saved} />
+                              {peerLock ? (
+                                <span className="text-[10px] text-amber-300/90">
+                                  Редактирует {peerLock.editorName}
+                                </span>
+                              ) : null}
                               {paid && !editing ? (
                                 <div className="flex flex-wrap gap-1">
                                   <button
                                     type="button"
                                     className="btn-secondary inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px]"
-                                    disabled={busy}
+                                    disabled={busy || peerLocked}
                                     title="Изменить карту/кассу выплаченной строки"
                                     onClick={() => beginEditPaid(r.performerId)}
                                   >
@@ -1628,7 +1941,7 @@ export function PayrollPayoutsPanel({
                                   <button
                                     type="button"
                                     className="btn-secondary px-1.5 py-0.5 text-[10px] text-amber-200"
-                                    disabled={busy}
+                                    disabled={busy || peerLocked}
                                     title="Снять подтверждение — снова черновик"
                                     onClick={() =>
                                       void reopenToDraft(r.performerId)
@@ -1643,7 +1956,7 @@ export function PayrollPayoutsPanel({
                                   <button
                                     type="button"
                                     className="btn-primary px-1.5 py-0.5 text-[10px]"
-                                    disabled={busy}
+                                    disabled={busy || peerLocked}
                                     onClick={() =>
                                       void saveEditPaid(r.performerId)
                                     }

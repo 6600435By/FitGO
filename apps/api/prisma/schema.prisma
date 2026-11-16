@@ -545,6 +545,7 @@ model Club {
   payrollAdjustments   PayrollAdjustment[]
   payrollPeriodLocks   PayrollPeriodLock[]
   payrollPayouts       PayrollPayout[]
+  payrollEditLeases    PayrollEditLease[]
   payrollCorporateSales PayrollCorporateSale[]
   payrollStaffBalances PayrollStaffBalance[]
   trainerShifts        TrainerShift[]
@@ -2309,6 +2310,27 @@ model PayrollPayout {
 
   @@unique([clubId, userId, kind, periodFrom, periodTo])
   @@index([clubId, userId, status])
+}
+
+/// Soft presence + row lease while manager/SA edits the payout sheet.
+model PayrollEditLease {
+  id          String            @id @default(cuid())
+  clubId      String
+  kind        PayrollPayoutKind
+  periodFrom  DateTime          @db.Date
+  periodTo    DateTime          @db.Date
+  editorId    String
+  editorName  String
+  /// Focused employee row; null = on the sheet without a locked row.
+  rowUserId   String?
+  heartbeatAt DateTime          @default(now())
+  createdAt   DateTime          @default(now())
+
+  club Club @relation(fields: [clubId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, kind, periodFrom, periodTo, editorId])
+  @@index([clubId, kind, periodFrom, periodTo, heartbeatAt])
+  @@index([clubId, kind, periodFrom, periodTo, rowUserId])
 }
 
 /// Per-employee rounding / under-over pay balance for next open payout.

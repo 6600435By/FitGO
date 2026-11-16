@@ -340,6 +340,22 @@ export interface PayrollPayoutDto {
   paidAt?: string;
   note?: string;
   createdAt: string;
+  /** Optimistic lock for concurrent draft/confirm saves. */
+  updatedAt?: string;
+  /** Last writer (draft/confirm); used for conflict hints. */
+  updatedById?: string;
+}
+
+export interface PayrollPayoutPresenceEditor {
+  editorId: string;
+  editorName: string;
+  rowUserId?: string;
+  heartbeatAt: string;
+}
+
+export interface PayrollPayoutPresence {
+  selfEditorId: string;
+  editors: PayrollPayoutPresenceEditor[];
 }
 
 export interface PayrollPayoutPreview {
