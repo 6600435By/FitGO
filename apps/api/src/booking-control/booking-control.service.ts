@@ -134,6 +134,7 @@ import {
   saleIsPaid,
   saleIsSpaLinkCandidate,
   salePaymentStatus,
+  saleSearchWindow,
   saleTakenBlocksSpaLink,
   namesMatch,
   serviceNamesMatch,
@@ -532,6 +533,8 @@ export class BookingControlService {
     }
 
     // SPA retail Продажа with Исполнитель (no salon visit / onex row).
+    // Collapse mixed pays by sale-doc basis; skip when a 1C/FitGO visit already
+    // covers the same client+service (else payment days flood «На контроле»).
     if (wantSpaSales) {
       const spaSales = await this.prisma.clubRevenueEntry.findMany({
         where: {
@@ -544,17 +547,25 @@ export class BookingControlService {
         },
         orderBy: { occurredAt: 'asc' },
       });
-      const seenSpaSaleDocs = new Set<string>();
-      // Onex SPA already listed — skip same client+day to avoid twin rows.
-      const onexSpaDayClient = new Set(
-        items
-          .filter((i) => i.kind === 'SPA' && i.source === '1C')
-          .map((i) => {
-            const day = minskDayKey(new Date(i.startAt));
-            const client = (i.clientName ?? '').trim().toLowerCase();
-            return `${day}|${client}`;
-          }),
-      );
+      const existingSpaVisits: Array<{
+        clientName?: string | null;
+        title: string;
+        startAt: string;
+      }> = [
+        ...items.filter(
+          (i) =>
+            i.kind === 'SPA' && (i.source === '1C' || i.source === 'FITGO'),
+        ),
+        // FitGO SPA rows are appended later — still block retail twins.
+        ...allSpa.map((b) => ({
+          clientName: b.client
+            ? `${b.client.lastName} ${b.client.firstName}`.trim()
+            : b.guestName,
+          title: b.service?.name || 'SPA',
+          startAt: b.startAt.toISOString(),
+        })),
+      ];
+      const spaRetailCandidates: SpaSaleCandidate[] = [];
       for (const sale of spaSales) {
         const product = sale.productName ?? '';
         if (!isSpaLikeSessionTitle(product)) continue;
@@ -581,7 +592,14 @@ export class BookingControlService {
             currency: 'BYN',
             employeeCode: sale.performerExternalId?.trim() || '',
             employeeName: sale.performerName?.trim() || '',
-            docRef: sale.documentId?.trim() || sale.externalId || sale.id,
+            docRef:
+              preferredSaleBasisId({
+                externalId: sale.externalId || sale.id,
+                documentId: sale.documentId ?? null,
+              }) ||
+              sale.documentId?.trim() ||
+              sale.externalId ||
+              sale.id,
             paymentStatus: 'PAID',
           },
           performerFilterId,
@@ -590,31 +608,69 @@ export class BookingControlService {
           staffByExt,
         );
         if (!perfOk) continue;
-        const docKey = (
-          sale.documentId?.trim() ||
-          sale.externalId?.split(':')[0] ||
-          sale.externalId ||
-          sale.id
-        ).toLowerCase();
-        if (seenSpaSaleDocs.has(docKey)) continue;
+        spaRetailCandidates.push({
+          externalId: sale.externalId || sale.id,
+          documentId: sale.documentId,
+          occurredAt: sale.occurredAt,
+          paidAt: sale.paidAt,
+          productName: product,
+          productExternalId: sale.productExternalId,
+          clientExternalId: sale.clientExternalId,
+          clientName: sale.clientName,
+          performerExternalId: sale.performerExternalId,
+          performerName: sale.performerName,
+          saleAmount: Number(sale.saleAmount) || 0,
+          paidAmount: Number(sale.paidAmount) || 0,
+          operationType: sale.operationType ?? 'sale',
+          cash: sale.cash,
+          card: sale.card,
+          cashless: sale.cashless,
+          personalAccount: sale.personalAccount,
+        });
+      }
+      const seenSpaSaleDocs = new Set<string>();
+      for (const sale of collapseSpaSalesByBasis(spaRetailCandidates)) {
+        const product = sale.productName ?? '';
+        const docKey = preferredSaleBasisId({
+          externalId: sale.externalId,
+          documentId: sale.documentId ?? null,
+        });
+        if (!docKey || seenSpaSaleDocs.has(docKey)) continue;
         const startAt = this.normalizeOccurredAt(
           sale.occurredAt.toISOString(),
         );
         const day = minskDayKey(new Date(startAt));
         const client = (sale.clientName ?? '').trim().toLowerCase();
-        if (client && onexSpaDayClient.has(`${day}|${client}`)) continue;
-        const debtWriteOff = clubRevenueIsDebtWriteOff(sale);
-        const paid = clubRevenueHasPaidMoney(sale) || debtWriteOff;
+        const coveredByVisit = existingSpaVisits.some((i) => {
+          if (!namesMatch(i.clientName, sale.clientName)) return false;
+          if (!serviceNamesMatch(i.title, product)) return false;
+          const visitAt = new Date(i.startAt);
+          if (!Number.isFinite(visitAt.getTime())) return false;
+          const { from, to } = saleSearchWindow(visitAt);
+          const saleAt = sale.occurredAt;
+          return saleAt >= from && saleAt <= to;
+        });
+        if (coveredByVisit) continue;
+        if (
+          client &&
+          existingSpaVisits.some(
+            (i) =>
+              minskDayKey(new Date(i.startAt)) === day &&
+              namesMatch(i.clientName, sale.clientName),
+          )
+        ) {
+          continue;
+        }
+        const debtWriteOff =
+          (sale.operationType ?? '').toLowerCase() === 'debt_writeoff';
+        const paid = saleIsPaid(sale) || debtWriteOff;
         const op = (sale.operationType ?? '').toLowerCase();
         if (!paid && op === 'unpaid') {
           // show unpaid debt
         } else if (!paid && op !== 'sale' && op !== 'unpaid') {
           continue;
         }
-        const amountMajor =
-          Math.abs(Number(sale.saleAmount) || 0) ||
-          Math.abs(Number(sale.paidAmount) || 0) ||
-          Math.abs(Number(sale.amount) || 0);
+        const amountMajor = saleAmountMajor(sale);
         if (amountMajor <= 0.009 && !debtWriteOff && paid) continue;
         seenSpaSaleDocs.add(docKey);
         const sessionKey = saleSessionKey('SPA', docKey);
@@ -1595,6 +1651,20 @@ export class BookingControlService {
       null;
 
     if (parsed.source === 'SALE') {
+      // SPA retail (sale:SPA:…) — ClubRevenue by sale-doc basis, not TrainerPtSale.
+      if (parsed.kind === 'SPA') {
+        const spaSale = await this.findSpaRetailSale(clubId, parsed.id);
+        if (!spaSale) throw new NotFoundException('Продажа не найдена');
+        if (viewer?.ownOnly) {
+          await this.assertOwnSpaRetailSale(clubId, viewer.userId, spaSale);
+        }
+        return this.mapSpaRetailSaleDetail(
+          sessionKey,
+          spaSale,
+          open,
+          mappedRemarks,
+        );
+      }
       // Prefer list cache (no 1C round-trip). Fallback: one ≤30d fetch, never multi-window loops.
       const sale = await this.findTrainerPtSale(clubId, parsed.id);
       if (!sale) throw new NotFoundException('Продажа не найдена');
@@ -5173,6 +5243,168 @@ export class BookingControlService {
       priceMinor: Math.round((Number(sale.amount) || 0) * 100),
       history,
     };
+  }
+
+  /**
+   * Resolve collapsed SPA retail sale by preferred sale-doc basis
+   * (`sale:SPA:{basis}` session keys from list / payroll).
+   */
+  private async findSpaRetailSale(
+    clubId: string,
+    docOrExt: string,
+  ): Promise<SpaSaleCandidate | undefined> {
+    const needle = docOrExt.trim().toLowerCase();
+    if (!needle) return undefined;
+    const from = new Date(`${this.ymdDaysAgo(90)}T00:00:00.000`);
+    const to = new Date(`${this.ymdToday()}T23:59:59.999`);
+    const rows = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        occurredAt: { gte: from, lte: to },
+        operationType: {
+          in: ['sale', 'payment', 'unpaid', 'debt_writeoff'],
+        },
+      },
+      orderBy: { occurredAt: 'asc' },
+    });
+    const candidates: SpaSaleCandidate[] = [];
+    for (const sale of rows) {
+      const product = sale.productName ?? '';
+      if (!isSpaLikeSessionTitle(product)) continue;
+      const basis = preferredSaleBasisId({
+        externalId: sale.externalId || sale.id,
+        documentId: sale.documentId ?? null,
+      });
+      const ext = (sale.externalId || '').toLowerCase();
+      const doc = (sale.documentId || '').toLowerCase();
+      if (
+        basis !== needle &&
+        ext !== needle &&
+        doc !== needle &&
+        !ext.startsWith(`${needle}:`)
+      ) {
+        continue;
+      }
+      candidates.push({
+        externalId: sale.externalId || sale.id,
+        documentId: sale.documentId,
+        occurredAt: sale.occurredAt,
+        paidAt: sale.paidAt,
+        productName: product,
+        productExternalId: sale.productExternalId,
+        clientExternalId: sale.clientExternalId,
+        clientName: sale.clientName,
+        performerExternalId: sale.performerExternalId,
+        performerName: sale.performerName,
+        saleAmount: Number(sale.saleAmount) || 0,
+        paidAmount: Number(sale.paidAmount) || 0,
+        operationType: sale.operationType ?? 'sale',
+        cash: sale.cash,
+        card: sale.card,
+        cashless: sale.cashless,
+        personalAccount: sale.personalAccount,
+      });
+    }
+    if (!candidates.length) return undefined;
+    const collapsed = collapseSpaSalesByBasis(candidates);
+    return (
+      collapsed.find(
+        (s) =>
+          preferredSaleBasisId({
+            externalId: s.externalId,
+            documentId: s.documentId ?? null,
+          }) === needle,
+      ) ?? collapsed[0]
+    );
+  }
+
+  private mapSpaRetailSaleDetail(
+    sessionKey: string,
+    sale: SpaSaleCandidate,
+    open: BookingControlRemark | null,
+    mappedRemarks: BookingControlRemark[],
+  ): BookingControlDetail {
+    const debtWriteOff =
+      (sale.operationType ?? '').toLowerCase() === 'debt_writeoff';
+    const payment: BookingControlPayment =
+      saleIsPaid(sale) || debtWriteOff ? 'PAID' : 'DEBT';
+    const saleCounts = this.singleClientCounts('COMPLETED', {
+      arrived: payment === 'PAID',
+    });
+    const at = this.normalizeOccurredAt(sale.occurredAt.toISOString());
+    const empCode = sale.performerExternalId?.trim() || null;
+    const amountMajor = saleAmountMajor(sale);
+    return {
+      sessionKey,
+      kind: 'SPA',
+      source: 'SALE',
+      title: sale.productName || 'SPA (продажа)',
+      startAt: at,
+      status: 'COMPLETED',
+      performerName: sale.performerName?.trim() || '—',
+      performerId: empCode || undefined,
+      employeeExternalId: empCode,
+      clientName: sale.clientName || '—',
+      number: humanDocumentNumber(sale.externalId) || undefined,
+      attendeeCount: saleCounts.arrivedCount,
+      bookedCount: saleCounts.bookedCount,
+      arrivedCount: saleCounts.arrivedCount,
+      noShowCount: saleCounts.noShowCount,
+      payment,
+      payTag: 'SALE',
+      needsReview: Boolean(open),
+      members: [
+        {
+          externalId: sale.externalId || 'sale',
+          clientName: sale.clientName || '—',
+          attendance: payment === 'PAID' ? 'ATTENDED' : 'EXPECTED',
+          payment,
+        },
+      ],
+      remark: open,
+      remarksHistory: mappedRemarks,
+      crmDocRef:
+        preferredSaleBasisId({
+          externalId: sale.externalId,
+          documentId: sale.documentId ?? null,
+        }) || undefined,
+      priceMinor: Math.round(amountMajor * 100),
+      history: [
+        {
+          at,
+          action: 'Продажа в 1С',
+          byName: sale.performerName?.trim() || undefined,
+        },
+      ],
+    };
+  }
+
+  private async assertOwnSpaRetailSale(
+    clubId: string,
+    userId: string,
+    sale: SpaSaleCandidate,
+  ) {
+    const u = await this.prisma.user.findFirst({
+      where: { id: userId, clubId },
+    });
+    if (!u) throw new ForbiddenException('Чужая продажа');
+    const name = `${u.lastName} ${u.firstName}`.trim().toLowerCase();
+    const saleCode = (sale.performerExternalId ?? '').trim();
+    const codes = [u.externalId, u.employeeCode]
+      .map((c) => c?.trim())
+      .filter((c): c is string => Boolean(c));
+    const codeOk =
+      Boolean(saleCode) &&
+      codes.some(
+        (c) =>
+          c === saleCode ||
+          c.replace(/^0+/, '') === saleCode.replace(/^0+/, ''),
+      );
+    const nameOk =
+      sale.performerName &&
+      sale.performerName.trim().toLowerCase() === name;
+    if (!codeOk && !nameOk) throw new ForbiddenException('Чужая продажа');
   }
 
   /**

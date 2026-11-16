@@ -131,6 +131,15 @@ import {
   trainerPtSaleDocKey,
   type TrainerPtSaleRow,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
+import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
+import {
+  collapseSpaSalesByBasis,
+  saleAmountMajor,
+  saleIsPaid,
+  saleSearchWindow,
+  serviceNamesMatch,
+  type SpaSaleCandidate,
+} from '../booking-control/spa-document-match';
 import {
   buildPacksSameDayMap,
   loadSpaBlockSales,
@@ -152,6 +161,7 @@ import {
   PAYROLL_DEBT_HINT,
   PAYROLL_EXCLUDED_HINT,
   dedupeSpaPayrollUnits,
+  payrollClientNamesMatch,
   spaUnitCoversVisit,
 } from './spa-payroll-debt';
 
@@ -648,6 +658,8 @@ export class PayrollService {
       const ref = b.crmDocRef?.trim();
       if (ref && !spaBookingByCrm.has(ref)) spaBookingByCrm.set(ref, b);
     }
+    /** Sale-doc bases already covered by Onex / linked FitGO SPA visits. */
+    const spaVisitSaleBases = new Set<string>();
     for (const o of onexSpa) {
       const key = onexSessionKey(o.externalId);
       remarkKeys.push(key);
@@ -819,6 +831,17 @@ export class PayrollService {
         );
       }
       units.push(spaUnit);
+      const pkgDoc = primary?.packageDocId?.trim();
+      if (pkgDoc) spaVisitSaleBases.add(pkgDoc.toLowerCase());
+      for (const ext of [
+        packSaleExt,
+        matched?.linkedSaleExternalId?.trim(),
+      ]) {
+        if (!ext) continue;
+        spaVisitSaleBases.add(
+          preferredSaleBasisId({ externalId: ext, documentId: null }),
+        );
+      }
     }
 
     // ── SPA from linked reception sales (no 1C visit / onex row) ────────────
@@ -869,6 +892,9 @@ export class PayrollService {
         continue;
       }
       const saleExt = b.linkedSaleExternalId!.trim();
+      spaVisitSaleBases.add(
+        preferredSaleBasisId({ externalId: saleExt, documentId: null }),
+      );
       const sale = linkedSaleByExt.get(saleExt);
       if (!sale) continue;
       const bioimpedance = isSpaAllSportsBioimpedance({
@@ -1152,8 +1178,8 @@ export class PayrollService {
       }
 
       // Paid / written-off SPA retail sales (Продажа with Исполнитель, no
-      // Документ.Занятие). Reception often sells massage without a salon visit
-      // — still must hit Контроль/ЗП for the performer.
+      // Документ.Занятие). Collapse mixed pays by sale-doc basis — never emit
+      // one ЗП row per payment registrar UUID (Ходанович-style splits).
       const spaRetailRevenue = await this.prisma.clubRevenueEntry.findMany({
         where: {
           clubId,
@@ -1164,7 +1190,7 @@ export class PayrollService {
           },
         },
       });
-      const seenSpaRetailDocs = new Set<string>();
+      const spaRetailCandidates: SpaSaleCandidate[] = [];
       for (const sale of spaRetailRevenue) {
         const product = sale.productName ?? '';
         if (!isSpaLikeSessionTitle(product)) continue;
@@ -1181,39 +1207,74 @@ export class PayrollService {
           continue;
         }
         if (isPlaceholderClassEmployeeName(sale.performerName)) continue;
-        const debtWriteOff = clubRevenueIsDebtWriteOff(sale);
-        const paid = clubRevenueHasPaidMoney(sale) || debtWriteOff;
+        if (!sale.performerName?.trim() && !sale.performerExternalId?.trim()) {
+          continue;
+        }
+        spaRetailCandidates.push({
+          externalId: sale.externalId || sale.id,
+          documentId: sale.documentId,
+          occurredAt: sale.occurredAt,
+          paidAt: sale.paidAt,
+          productName: product,
+          productExternalId: sale.productExternalId,
+          clientExternalId: sale.clientExternalId,
+          clientName: sale.clientName,
+          performerExternalId: sale.performerExternalId,
+          performerName: sale.performerName,
+          saleAmount: Number(sale.saleAmount) || 0,
+          paidAmount: Number(sale.paidAmount) || 0,
+          operationType: sale.operationType ?? 'sale',
+          cash: sale.cash,
+          card: sale.card,
+          cashless: sale.cashless,
+          personalAccount: sale.personalAccount,
+        });
+      }
+      const collapsedSpaRetail = collapseSpaSalesByBasis(spaRetailCandidates);
+      const seenSpaRetailDocs = new Set<string>();
+      for (const sale of collapsedSpaRetail) {
+        const product = sale.productName ?? '';
+        const debtWriteOff =
+          (sale.operationType ?? '').toLowerCase() === 'debt_writeoff';
+        const paid = saleIsPaid(sale) || debtWriteOff;
         const op = (sale.operationType ?? '').toLowerCase();
         // Open unpaid without money stays visible as debt via overlay below;
         // earn only settled / written-off lines here.
         if (!paid && op === 'unpaid') continue;
         if (!paid && op !== 'sale') continue;
         const saleExt = sale.externalId?.trim();
-        const docKey = (
-          sale.documentId?.trim() ||
-          saleExt?.split(':')[0] ||
-          saleExt ||
-          sale.id
-        ).toLowerCase();
-        if (seenSpaRetailDocs.has(docKey)) continue;
+        const docKey = preferredSaleBasisId({
+          externalId: sale.externalId,
+          documentId: sale.documentId ?? null,
+        });
+        if (!docKey || seenSpaRetailDocs.has(docKey)) continue;
+        if (spaVisitSaleBases.has(docKey)) continue;
         if (saleExt && takenSaleExt.has(saleExt)) continue;
+        // Visit already in ЗП for this client+service (mixed pays land on
+        // other days — do not invent retail twins by payment date).
+        const saleAt = sale.occurredAt;
+        const coveredByVisit = units.some((u) => {
+          if (u.kind !== 'SPA' || !u.payrollTrusted) return false;
+          if (!payrollClientNamesMatch(u.clientName, sale.clientName)) {
+            return false;
+          }
+          if (!serviceNamesMatch(u.title, product)) return false;
+          const visitAt = new Date(u.occurredAt);
+          if (!Number.isFinite(visitAt.getTime())) return false;
+          const { from, to } = saleSearchWindow(visitAt);
+          return saleAt >= from && saleAt <= to;
+        });
+        if (coveredByVisit) continue;
         const day = sale.occurredAt.toISOString().slice(0, 10);
         const client = (sale.clientName ?? '').trim().toLowerCase();
         const dayClient = `${day}|${client}`;
-        // Same client+day already paid from Onex visit / linked booking.
         if (client && takenDayClient.has(dayClient)) continue;
-        const amountMajor =
-          Math.abs(Number(sale.saleAmount) || 0) ||
-          Math.abs(Number(sale.paidAmount) || 0) ||
-          Math.abs(Number(sale.amount) || 0) ||
-          Math.abs(Number(sale.cash) || 0) +
-            Math.abs(Number(sale.card) || 0) +
-            Math.abs(Number(sale.cashless) || 0) +
-            Math.abs(Number(sale.personalAccount) || 0);
+        const amountMajor = saleAmountMajor(sale);
         if (amountMajor <= 0.009 && !debtWriteOff) continue;
         const unitId = `revsale:${docKey}`;
         if (spaPaidViaOnex.has(unitId)) continue;
         const priceMinor = Math.round(amountMajor * 100);
+        const sessionKey = saleSessionKey('SPA', docKey);
         const spaUnit: WorkUnit = {
           id: unitId,
           kind: 'SPA',
@@ -1227,16 +1288,17 @@ export class PayrollService {
           payrollTrusted: paid,
           clientName: sale.clientName ?? undefined,
           serviceExternalId: sale.productExternalId ?? undefined,
-          sessionKey: fitgoSessionKey('SPA', unitId),
-          saleExternalId: saleExt || undefined,
+          sessionKey,
+          saleExternalId: saleExt || docKey,
         };
         if (!paid) {
           markSpaUnitAsUnpaidDebt(spaUnit);
         }
         units.push(spaUnit);
-        remarkKeys.push(fitgoSessionKey('SPA', unitId));
+        remarkKeys.push(sessionKey);
         spaPaidViaOnex.add(unitId);
         seenSpaRetailDocs.add(docKey);
+        spaVisitSaleBases.add(docKey);
         if (saleExt) takenSaleExt.add(saleExt);
         if (client) takenDayClient.add(dayClient);
       }
