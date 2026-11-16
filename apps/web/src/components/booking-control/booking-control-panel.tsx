@@ -309,6 +309,8 @@ export type BookingControlApi = {
   adoptSpaToJournal?: (
     sessionKey: string,
     serviceId?: string,
+    /** Journal card picked after MULTIPLE_JOURNAL_CANDIDATES. */
+    bookingId?: string,
   ) => Promise<BookingControlDetail>;
   /** Adopt unambiguous missing-journal rows. */
   bulkAdoptSpaToJournal?: (
@@ -999,6 +1001,17 @@ export function BookingControlPanel({
   const [bulkBusy, setBulkBusy] = useState(false);
   const [adoptBusyKey, setAdoptBusyKey] = useState<string | null>(null);
   const [adoptServiceId, setAdoptServiceId] = useState('');
+  const [adoptCandidates, setAdoptCandidates] = useState<{
+    sessionKey: string;
+    serviceId?: string;
+    candidates: Array<{
+      bookingId: string;
+      startAt: string;
+      endAt: string;
+      serviceName: string;
+      clientName: string;
+    }>;
+  } | null>(null);
   const [bulkAdoptBusy, setBulkAdoptBusy] = useState(false);
   const [pendingGroupsOpen, setPendingGroupsOpen] = useState(false);
   const [message, setMessage] = useState('');
@@ -1726,7 +1739,11 @@ export function BookingControlPanel({
     }
   };
 
-  const adoptToJournal = async (sessionKey: string, serviceId?: string) => {
+  const adoptToJournal = async (
+    sessionKey: string,
+    serviceId?: string,
+    bookingId?: string,
+  ) => {
     if (!api.adoptSpaToJournal) return;
     setAdoptBusyKey(sessionKey);
     setMessage('');
@@ -1735,9 +1752,11 @@ export function BookingControlPanel({
       const d = await api.adoptSpaToJournal(
         sessionKey,
         serviceId?.trim() || undefined,
+        bookingId?.trim() || undefined,
       );
       setSelected(d);
       setAdoptServiceId('');
+      setAdoptCandidates(null);
       await load();
       const slot = d.adoptedJournalSlot;
       if (slot) {
@@ -1760,11 +1779,39 @@ export function BookingControlPanel({
               code?: string;
               day?: string;
               specialistId?: string;
+              candidates?: Array<{
+                bookingId: string;
+                startAt: string;
+                endAt: string;
+                serviceName: string;
+                clientName: string;
+              }>;
             })
           : null;
       const code = e instanceof ApiError ? e.code ?? body?.code : undefined;
       const day = body?.day?.trim();
       const specialistId = body?.specialistId?.trim();
+      if (
+        code === 'MULTIPLE_JOURNAL_CANDIDATES' &&
+        body?.candidates &&
+        body.candidates.length > 0
+      ) {
+        setAdoptCandidates({
+          sessionKey,
+          serviceId: serviceId?.trim() || undefined,
+          candidates: body.candidates,
+        });
+        if (!selected || selected.sessionKey !== sessionKey) {
+          try {
+            await openDetail(sessionKey);
+          } catch {
+            /* keep picker below */
+          }
+        }
+        setMessage(text);
+        setMessageLink(null);
+        return;
+      }
       if (
         day &&
         (code === 'NO_SHIFT' ||
@@ -1867,6 +1914,7 @@ export function BookingControlPanel({
     setLinkPhone('');
     setLinkPhoneMsg('');
     setLinkCascadeCandidates([]);
+    setAdoptCandidates(null);
     setSelected(null);
     onDetailClose?.();
   };
@@ -2308,6 +2356,15 @@ export function BookingControlPanel({
         if (selected.kind === 'SPA' && !phase && approvalActor === 'performer') {
           return true;
         }
+        // Manager / SA closes the card themselves while there is no row yet.
+        // APPROVED already — nothing left to confirm.
+        if (
+          !phase &&
+          approvalActor === 'override' &&
+          selected.status !== 'CANCELLED'
+        ) {
+          return true;
+        }
         return false;
       }
       if (approvalActor === 'override') return true;
@@ -2478,6 +2535,20 @@ export function BookingControlPanel({
         selected.approvalPhase === 'PENDING_PERFORMER' ||
         selected.approvalPhase === 'PENDING_TRAINER'),
   );
+
+  /** PT/SPA have no approver column — take the last confirm note author. */
+  const ptSpaApprovedLabel = (() => {
+    const notes = selected?.approvalNotes ?? [];
+    for (let i = notes.length - 1; i >= 0; i -= 1) {
+      const n = notes[i]!;
+      if (n.action !== 'CONFIRM') continue;
+      if (n.authorRole !== 'ADMIN' && n.authorRole !== 'OVERRIDE') continue;
+      const name = n.authorName?.trim();
+      if (name) return `Подтверждено · ${name}`;
+      break;
+    }
+    return 'Подтверждено администратором';
+  })();
 
   const openManagerRework = async () => {
     if (!selected || !api.managerRework) return;
@@ -3925,6 +3996,16 @@ export function BookingControlPanel({
                         : ''}
                       {selected.roomTitle ? ` · ${selected.roomTitle}` : ''}
                     </p>
+                    {selected.kind === 'SPA' &&
+                    selected.journalStartAt &&
+                    selected.visitStartAt &&
+                    selected.journalStartAt !== selected.visitStartAt ? (
+                      <p className="text-xs text-slate-500">
+                        Журнал: {formatDateTime(selected.journalStartAt)}
+                        {' · '}
+                        1С: {formatDateTime(selected.visitStartAt)}
+                      </p>
+                    ) : null}
                     <p className="text-sm text-slate-400">
                       {selected.performerName}
                       {selected.kind !== 'GROUP' && selected.clientName
@@ -4038,6 +4119,50 @@ export function BookingControlPanel({
                     </button>
                   </div>
                 ) : null}
+                {adoptCandidates &&
+                adoptCandidates.sessionKey === selected.sessionKey ? (
+                  <div className="space-y-2 rounded-xl border border-sky-500/35 bg-sky-500/10 p-3 text-sm">
+                    <p className="text-sky-100">
+                      Несколько записей в журнале — выберите, к какой привязать
+                      визит 1С
+                    </p>
+                    <ul className="space-y-1.5">
+                      {adoptCandidates.candidates.map((c) => (
+                        <li
+                          key={c.bookingId}
+                          className="flex flex-wrap items-center gap-2 text-xs text-slate-300"
+                        >
+                          <span className="min-w-0 flex-1">
+                            {formatDateTime(c.startAt)}
+                            {c.serviceName ? ` · ${c.serviceName}` : ''}
+                            {c.clientName ? ` · ${c.clientName}` : ''}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn-primary px-2 py-0.5 text-[11px]"
+                            disabled={adoptBusyKey === selected.sessionKey}
+                            onClick={() =>
+                              void adoptToJournal(
+                                adoptCandidates.sessionKey,
+                                adoptCandidates.serviceId,
+                                c.bookingId,
+                              )
+                            }
+                          >
+                            Привязать
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      className="text-xs text-slate-500 underline-offset-2 hover:text-slate-300 hover:underline"
+                      onClick={() => setAdoptCandidates(null)}
+                    >
+                      Отмена
+                    </button>
+                  </div>
+                ) : null}
                 {photosOpen && (
                   <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
                     <div className="flex items-center justify-between gap-2">
@@ -4100,12 +4225,21 @@ export function BookingControlPanel({
                     </ul>
                   </div>
                 )}
-                {selected.source === 'SALE' && selected.payment === 'PAID' && (
+                {selected.source === 'SALE' &&
+                selected.payment === 'PAID' &&
+                selected.kind === 'PT' ? (
                   <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
                     Разовая ПТ из строки продажи 1С (исполнитель + сумма). В ЗП:
                     сумма × % из карточки мотивации ПТ.
                   </p>
-                )}
+                ) : null}
+                {selected.source === 'SALE' &&
+                selected.payment === 'PAID' &&
+                selected.kind === 'SPA' ? (
+                  <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+                    Продажа 1С без записи в журнале. В ЗП: итог строки × % SPA.
+                  </p>
+                ) : null}
                 {selected.source === 'SALE' && selected.payment === 'DEBT' && (
                   <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
                     Нет оплаты — в ЗП не входит, пока продажа не оплачена в 1С.
@@ -4347,7 +4481,7 @@ export function BookingControlPanel({
                     {selected.approvalPhase === 'APPROVED' ? (
                       <p className="text-xs text-emerald-200/90">
                         Запись уже подтверждена — можно поправить ФИО/телефон и
-                        привязать продажу без «На доработку».
+                        привязать продажу без возврата специалисту.
                       </p>
                     ) : null}
                     <label className="block space-y-1 text-sm">
@@ -4676,7 +4810,7 @@ export function BookingControlPanel({
                       if (selected.approvalPhase === 'APPROVED') {
                         return (
                           <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2 text-xs text-slate-300">
-                            <p className="text-emerald-300">Подтверждено администратором</p>
+                            <p className="text-emerald-300">{ptSpaApprovedLabel}</p>
                             {selected.returnComment ? (
                               <p className="text-rose-300">
                                 Комментарий: {selected.returnComment}
@@ -4689,7 +4823,9 @@ export function BookingControlPanel({
                                 onClick={() => void returnApproval()}
                                 disabled={approveBusy}
                               >
-                                {approveBusy ? 'Отправляем…' : 'На доработку'}
+                                {approveBusy
+                                  ? 'Отправляем…'
+                                  : 'Вернуть специалисту'}
                               </button>
                             ) : null}
                           </div>
@@ -4725,7 +4861,9 @@ export function BookingControlPanel({
                               onClick={() => void returnApproval()}
                               disabled={approveBusy}
                             >
-                              {approveBusy ? 'Отправляем…' : 'На доработку'}
+                              {approveBusy
+                                ? 'Отправляем…'
+                                : 'Вернуть специалисту'}
                             </button>
                           ) : null}
                         </div>
@@ -4749,7 +4887,7 @@ export function BookingControlPanel({
                       if (selected.approvalPhase === 'APPROVED') {
                         return (
                           <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2 text-xs text-slate-300">
-                            <p className="text-emerald-300">Подтверждено администратором</p>
+                            <p className="text-emerald-300">{ptSpaApprovedLabel}</p>
                             {selected.returnComment ? (
                               <p className="text-rose-300">
                                 Комментарий: {selected.returnComment}
@@ -4762,7 +4900,9 @@ export function BookingControlPanel({
                                 onClick={() => void returnApproval()}
                                 disabled={approveBusy}
                               >
-                                {approveBusy ? 'Отправляем…' : 'На доработку'}
+                                {approveBusy
+                                  ? 'Отправляем…'
+                                  : 'Вернуть специалисту'}
                               </button>
                             ) : null}
                           </div>
@@ -4802,7 +4942,9 @@ export function BookingControlPanel({
                               onClick={() => void returnApproval()}
                               disabled={approveBusy}
                             >
-                              {approveBusy ? 'Отправляем…' : 'На доработку'}
+                              {approveBusy
+                                ? 'Отправляем…'
+                                : 'Вернуть специалисту'}
                             </button>
                           ) : null}
                         </div>
@@ -4980,7 +5122,7 @@ export function BookingControlPanel({
                           onClick={() => void openManagerRework()}
                           disabled={approveBusy || reworkBusy}
                         >
-                          На доработку
+                          Назначить доработку
                         </button>
                       ) : canReturnApproval && api.returnGroupApproval ? (
                         <button
@@ -4989,7 +5131,7 @@ export function BookingControlPanel({
                           onClick={returnApproval}
                           disabled={approveBusy}
                         >
-                          На доработку
+                          Вернуть специалисту
                         </button>
                       ) : null}
                     </div>
@@ -5028,7 +5170,7 @@ export function BookingControlPanel({
                     onClick={() => void openManagerRework()}
                     disabled={reworkBusy}
                   >
-                    На доработку
+                    Назначить доработку
                   </button>
                 ) : null}
                 {selected.kind !== 'GROUP' &&
@@ -5117,7 +5259,7 @@ export function BookingControlPanel({
                       remarkAssignees.length > 0 ? (
                         <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
                           <p className="text-xs font-medium text-slate-300">
-                            На доработку — кто проверит
+                            Кто проверит
                           </p>
                           <select
                             className="input w-full text-sm"
@@ -5302,7 +5444,7 @@ export function BookingControlPanel({
       )}
       <ManagerReworkSheet
         open={reworkOpen}
-        title="На доработку"
+        title="Назначить доработку"
         subtitle={selected?.title}
         targets={reworkTargets}
         assignees={reworkAssignees}

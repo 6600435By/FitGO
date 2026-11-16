@@ -4223,7 +4223,7 @@ export const api = {
   bookingControlSpaAdoptJournal: (
     token: string,
     base: 'super-admin' | 'admin' | 'specialist',
-    body: { sessionKey: string; serviceId?: string },
+    body: { sessionKey: string; serviceId?: string; bookingId?: string },
   ) =>
     request<import('@fitgo/shared-types').BookingControlDetail>(
       `/${base}/booking-control/spa-adopt-journal`,

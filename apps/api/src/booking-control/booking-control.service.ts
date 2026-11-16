@@ -52,6 +52,7 @@ import {
   sessionApprovalPhase,
   humanDocumentNumber,
   isMultiVisitPackSale,
+  isServiceBlockPackageName,
   isSpaAllSportsBioimpedance,
   isSpaLikeSessionTitle,
   isMembershipIncludedSpaTitle,
@@ -119,9 +120,14 @@ import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
 import {
   awaitingPaymentLabel,
   buildSpaDayMergePairs,
+  clientMatchesSale,
   collapseSpaSalesByBasis,
+  collapseSpaSalesByLine,
   debtSearchWindow,
   autoSaleAsHint,
+  idsMatch,
+  nomenclatureMatches,
+  performerMatchesBooking,
   matchSpaSale,
   matchSpaVisitByDay,
   minskDayKey,
@@ -133,11 +139,14 @@ import {
   saleIsComplimentaryPartner,
   saleIsPaid,
   saleIsSpaLinkCandidate,
+  saleLineTotalMajor,
   salePaymentStatus,
   saleSearchWindow,
   saleTakenBlocksSpaLink,
+  spaSaleLineKey,
   namesMatch,
   serviceNamesMatch,
+  serviceNamesMatchForSaleLink,
   toSaleCandidate,
   type SpaBookingMatchInput,
   type SpaOnexCandidate,
@@ -628,19 +637,35 @@ export class BookingControlService {
           personalAccount: sale.personalAccount,
         });
       }
-      const seenSpaSaleDocs = new Set<string>();
-      for (const sale of collapseSpaSalesByBasis(spaRetailCandidates)) {
+      // Sale externalIds / lines already attached to a journal booking —
+      // the FitGO card carries them, a SALE twin would double the visit.
+      const linkedSaleIds = new Set(
+        allSpa
+          .map((b) => b.linkedSaleExternalId?.trim())
+          .filter((x): x is string => Boolean(x)),
+      );
+      const linkedSaleLineKeys = new Set(
+        spaRetailCandidates
+          .filter((s) => linkedSaleIds.has(s.externalId))
+          .map((s) => spaSaleLineKey(s)),
+      );
+      const seenSpaSaleLines = new Set<string>();
+      // One card per nomenclature line: two SKUs of one document = two rows.
+      for (const sale of collapseSpaSalesByLine(spaRetailCandidates)) {
         const product = sale.productName ?? '';
-        const docKey = preferredSaleBasisId({
-          externalId: sale.externalId,
-          documentId: sale.documentId ?? null,
-        });
-        if (!docKey || seenSpaSaleDocs.has(docKey)) continue;
+        const lineKey = spaSaleLineKey(sale);
+        if (!lineKey || seenSpaSaleLines.has(lineKey)) continue;
+        if (
+          linkedSaleIds.has(sale.externalId) ||
+          linkedSaleLineKeys.has(lineKey)
+        ) {
+          continue;
+        }
         const startAt = this.normalizeOccurredAt(
           sale.occurredAt.toISOString(),
         );
-        const day = minskDayKey(new Date(startAt));
-        const client = (sale.clientName ?? '').trim().toLowerCase();
+        // Hide only when a visit of the SAME service covers this client —
+        // a second procedure on the same day keeps its own card.
         const coveredByVisit = existingSpaVisits.some((i) => {
           if (!namesMatch(i.clientName, sale.clientName)) return false;
           if (!serviceNamesMatch(i.title, product)) return false;
@@ -651,16 +676,6 @@ export class BookingControlService {
           return saleAt >= from && saleAt <= to;
         });
         if (coveredByVisit) continue;
-        if (
-          client &&
-          existingSpaVisits.some(
-            (i) =>
-              minskDayKey(new Date(i.startAt)) === day &&
-              namesMatch(i.clientName, sale.clientName),
-          )
-        ) {
-          continue;
-        }
         const debtWriteOff =
           (sale.operationType ?? '').toLowerCase() === 'debt_writeoff';
         const paid = saleIsPaid(sale) || debtWriteOff;
@@ -670,10 +685,11 @@ export class BookingControlService {
         } else if (!paid && op !== 'sale' && op !== 'unpaid') {
           continue;
         }
-        const amountMajor = saleAmountMajor(sale);
+        // Price of THIS line — never the tender coverage of the whole document.
+        const amountMajor = saleLineTotalMajor(sale);
         if (amountMajor <= 0.009 && !debtWriteOff && paid) continue;
-        seenSpaSaleDocs.add(docKey);
-        const sessionKey = saleSessionKey('SPA', docKey);
+        seenSpaSaleLines.add(lineKey);
+        const sessionKey = saleSessionKey('SPA', lineKey);
         const payment: BookingControlPayment = paid ? 'PAID' : 'DEBT';
         const performerId =
           (sale.performerExternalId &&
@@ -1475,6 +1491,9 @@ export class BookingControlService {
       let spaOneCTitle: string | undefined;
       let spaLinkedSaleId: string | undefined;
       let spaServiceId: string | undefined;
+      /** FitGO journal card time — 1C visit time is often the slot, not the fact. */
+      let spaJournalStartAt: string | undefined;
+      let spaJournalEndAt: string | undefined;
       if (kind === 'SPA') {
         const spaBooking =
           matched?.id
@@ -1516,6 +1535,10 @@ export class BookingControlService {
         spaOneCTitle = settled.oneCTitle;
         spaLinkedSaleId = settled.linkedSaleExternalId;
         spaServiceId = spaBooking?.serviceId ?? spaBooking?.service?.id;
+        if (spaBooking) {
+          spaJournalStartAt = spaBooking.startAt.toISOString();
+          spaJournalEndAt = spaBooking.endAt.toISOString();
+        }
         // Always offer RELINK for admin/manager/SA — wrong auto-match must be
         // replaceable without opening a remark first.
         if (
@@ -1590,8 +1613,14 @@ export class BookingControlService {
         kind,
         source: '1C',
         title: s.title,
-        startAt: s.startAt.toISOString(),
-        endAt: s.endAt?.toISOString(),
+        // Journal card wins when the visit is adopted — 1C often keeps the
+        // reception slot while the specialist moved the card.
+        startAt: spaJournalStartAt ?? s.startAt.toISOString(),
+        endAt: spaJournalEndAt ?? s.endAt?.toISOString(),
+        journalStartAt: spaJournalStartAt,
+        journalEndAt: spaJournalEndAt,
+        visitStartAt: s.startAt.toISOString(),
+        visitEndAt: s.endAt?.toISOString(),
         status: mapOnexStatusToControl(s.status),
         performerName,
         clientName:
@@ -5255,6 +5284,8 @@ export class BookingControlService {
   ): Promise<SpaSaleCandidate | undefined> {
     const needle = docOrExt.trim().toLowerCase();
     if (!needle) return undefined;
+    // `basis#product` — one nomenclature line of a sale document.
+    const basisNeedle = needle.split('#')[0] || needle;
     const from = new Date(`${this.ymdDaysAgo(90)}T00:00:00.000`);
     const to = new Date(`${this.ymdToday()}T23:59:59.999`);
     const rows = await this.prisma.clubRevenueEntry.findMany({
@@ -5279,10 +5310,10 @@ export class BookingControlService {
       const ext = (sale.externalId || '').toLowerCase();
       const doc = (sale.documentId || '').toLowerCase();
       if (
-        basis !== needle &&
-        ext !== needle &&
-        doc !== needle &&
-        !ext.startsWith(`${needle}:`)
+        basis !== basisNeedle &&
+        ext !== basisNeedle &&
+        doc !== basisNeedle &&
+        !ext.startsWith(`${basisNeedle}:`)
       ) {
         continue;
       }
@@ -5307,15 +5338,17 @@ export class BookingControlService {
       });
     }
     if (!candidates.length) return undefined;
-    const collapsed = collapseSpaSalesByBasis(candidates);
+    const collapsed = collapseSpaSalesByLine(candidates);
     return (
+      collapsed.find((s) => spaSaleLineKey(s).toLowerCase() === needle) ??
       collapsed.find(
         (s) =>
           preferredSaleBasisId({
             externalId: s.externalId,
             documentId: s.documentId ?? null,
-          }) === needle,
-      ) ?? collapsed[0]
+          }) === basisNeedle,
+      ) ??
+      collapsed[0]
     );
   }
 
@@ -5334,7 +5367,8 @@ export class BookingControlService {
     });
     const at = this.normalizeOccurredAt(sale.occurredAt.toISOString());
     const empCode = sale.performerExternalId?.trim() || null;
-    const amountMajor = saleAmountMajor(sale);
+    // Line price, not the document's tender coverage.
+    const amountMajor = saleLineTotalMajor(sale);
     return {
       sessionKey,
       kind: 'SPA',
@@ -5887,6 +5921,7 @@ export class BookingControlService {
       linkedSaleExternalId?: string | null;
       saleAutoLinkBlocked?: boolean | null;
       startAt: Date;
+      specialistId?: string | null;
       partnerSource?: string | null;
       clientExternalId?: string | null;
       oneCLinkStatus?: string | null;
@@ -6624,6 +6659,44 @@ export class BookingControlService {
     return map;
   }
 
+  /**
+   * Payroll period covering this day is confirmed/locked.
+   * Money fields of a settled visit must not be rewritten by a GET.
+   * Mirrors the lock lookup in payroll.service (periodFrom/To at UTC noon).
+   */
+  private async isPayrollPeriodClosed(
+    clubId: string,
+    day: Date,
+    userId?: string | null,
+  ): Promise<boolean> {
+    if (!(day instanceof Date) || !Number.isFinite(day.getTime())) return false;
+    const [y, m, d] = minskDayKey(day).split('-').map(Number);
+    if (!y || !m || !d) return false;
+    const dayNoon = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+    const lock = await this.prisma.payrollPeriodLock.findFirst({
+      where: {
+        clubId,
+        ...(userId?.trim() ? { userId: userId.trim() } : {}),
+        periodFrom: { lte: dayNoon },
+        periodTo: { gte: dayNoon },
+      },
+      select: { id: true },
+    });
+    return Boolean(lock);
+  }
+
+  /** Linked sale still describes this visit (client + performer + nomenclature). */
+  private spaLinkStillValid(
+    sale: SpaSaleCandidate,
+    matchInput: SpaBookingMatchInput,
+  ): boolean {
+    return (
+      clientMatchesSale(sale, matchInput) &&
+      performerMatchesBooking(sale, matchInput) &&
+      nomenclatureMatches(sale, matchInput)
+    );
+  }
+
   private async tryResolveSpaSale(
     booking: {
       id: string;
@@ -6634,6 +6707,7 @@ export class BookingControlService {
       linkedSaleExternalId?: string | null;
       saleAutoLinkBlocked?: boolean | null;
       startAt: Date;
+      specialistId?: string | null;
       clientExternalId?: string | null;
       membershipServiceName?: string | null;
       guestName?: string | null;
@@ -6665,8 +6739,31 @@ export class BookingControlService {
     if (!clubId || !booking?.id) return null;
     const blockAuto = Boolean(booking.saleAutoLinkBlocked);
     const existingLink = booking.linkedSaleExternalId?.trim() || '';
+    const matchInput = this.toSpaMatchInput({
+      id: booking.id,
+      startAt: booking.startAt,
+      paymentType: booking.paymentType,
+      crmDocRef: booking.crmDocRef,
+      linkedSaleExternalId: blockAuto ? null : booking.linkedSaleExternalId,
+      clientExternalId: booking.clientExternalId,
+      guestName: booking.guestName,
+      client: booking.client,
+      specialist: booking.specialist ?? {
+        externalId: null,
+        employeeCode: null,
+        firstName: null,
+        lastName: null,
+      },
+      service: {
+        name: booking.service?.name ?? '',
+        externalId: booking.service?.externalId,
+      },
+    });
     // Honour a stored link even when soft-match would only offer «блок» hints.
     // Sync may deactivate the exact externalId — still treat as linked.
+    let stickySale: SpaSaleCandidate | null = null;
+    /** Link no longer describes the visit, but ЗП is closed — display only. */
+    let stickyFrozen = false;
     if (!blockAuto && existingLink) {
       const linkedSale = await this.loadLinkedSpaSale(clubId, existingLink);
       if (!linkedSale) {
@@ -6688,25 +6785,57 @@ export class BookingControlService {
           },
         };
       }
-      const complimentary = saleIsComplimentaryPartner(linkedSale);
+      if (this.spaLinkStillValid(linkedSale, matchInput)) {
+        stickySale = linkedSale;
+      } else {
+        // Client / performer / nomenclature changed since the link — drop the
+        // stale pointer and re-match, unless ЗП for that day is already closed.
+        const closed = await this.isPayrollPeriodClosed(
+          clubId,
+          booking.startAt,
+          booking.specialistId,
+        );
+        if (closed) {
+          stickySale = linkedSale;
+          stickyFrozen = true;
+        } else {
+          await this.prisma.spaBooking
+            .update({
+              where: { id: booking.id },
+              data: {
+                linkedSaleExternalId: null,
+                priceMinor: null,
+                eligibleForMotivation: false,
+              },
+            })
+            .catch(() => undefined);
+          booking.linkedSaleExternalId = null;
+          matchInput.linkedSaleExternalId = null;
+        }
+      }
+    }
+    if (stickySale) {
+      const complimentary = saleIsComplimentaryPartner(stickySale);
       const partnerPay =
         complimentary ||
         isSpaAllSportsBioimpedance({
           serviceExternalId:
-            linkedSale.productExternalId ?? booking.service?.externalId,
-          title: linkedSale.productName ?? booking.service?.name,
+            stickySale.productExternalId ?? booking.service?.externalId,
+          title: stickySale.productName ?? booking.service?.name,
         });
-      const amountMajor = saleAmountMajor(linkedSale);
+      // This nomenclature line, not the document's tender coverage.
+      const amountMajor =
+        saleLineTotalMajor(stickySale) || saleAmountMajor(stickySale);
       const amountMinor =
         amountMajor > 0 ? Math.round(amountMajor * 100) : undefined;
-      const paymentStatus = salePaymentStatus(linkedSale);
+      const paymentStatus = salePaymentStatus(stickySale);
       // Repair booking pointer onto the live twin key when sync renamed it.
-      if (booking.linkedSaleExternalId !== linkedSale.externalId) {
+      if (!stickyFrozen && booking.linkedSaleExternalId !== stickySale.externalId) {
         await this.prisma.spaBooking
           .update({
             where: { id: booking.id },
             data: {
-              linkedSaleExternalId: linkedSale.externalId,
+              linkedSaleExternalId: stickySale.externalId,
               oneCLinkStatus: SpaOneCLinkStatus.LINKED,
               saleAutoLinkBlocked: false,
               ...(amountMinor != null && amountMinor > 0
@@ -6727,50 +6856,30 @@ export class BookingControlService {
         return {
           settlement: {
             status: 'PAID',
-            label: paidSaleSettlementLabel(linkedSale),
+            label: paidSaleSettlementLabel(stickySale),
             source: 'sale',
             amountMinor,
             editableInApp: false,
           },
           payment: partnerPay ? 'PARTNER' : 'PAID',
           payTag: 'SALE',
-          linkedSaleExternalId: linkedSale.externalId,
+          linkedSaleExternalId: stickySale.externalId,
         };
       }
       return {
         settlement: {
           status: 'AWAITING_PAYMENT',
-          label: awaitingPaymentLabel(linkedSale),
+          label: awaitingPaymentLabel(stickySale),
           source: 'sale',
           amountMinor,
           editableInApp: false,
         },
         payment: 'DEBT',
         payTag: 'SALE',
-        linkedSaleExternalId: linkedSale.externalId,
+        linkedSaleExternalId: stickySale.externalId,
       };
     }
 
-    const matchInput = this.toSpaMatchInput({
-      id: booking.id,
-      startAt: booking.startAt,
-      paymentType: booking.paymentType,
-      crmDocRef: booking.crmDocRef,
-      linkedSaleExternalId: blockAuto ? null : booking.linkedSaleExternalId,
-      clientExternalId: booking.clientExternalId,
-      guestName: booking.guestName,
-      client: booking.client,
-      specialist: booking.specialist ?? {
-        externalId: null,
-        employeeCode: null,
-        firstName: null,
-        lastName: null,
-      },
-      service: {
-        name: booking.service?.name ?? '',
-        externalId: booking.service?.externalId,
-      },
-    });
     if (!matchInput.serviceName && !matchInput.clientExternalId) return null;
 
     const [sales, serviceMap, taken] = await Promise.all([
@@ -6826,13 +6935,17 @@ export class BookingControlService {
             sale.productExternalId ?? booking.service?.externalId,
           title: sale.productName ?? booking.service?.name,
         });
-      // Fact document total (or paid coverage when fully settled) — not a cash slice.
-      const amountMajor = saleIsPaid(sale)
-        ? saleAmountMajor(sale) || Number(sale.saleAmount) || 0
-        : Number(sale.saleAmount) || saleAmountMajor(sale) || 0;
+      // Price of this nomenclature line (after 1C discount) — never the
+      // tender coverage of a document that pays several lines.
+      const amountMajor = saleLineTotalMajor(sale) || saleAmountMajor(sale);
       const amountMinor =
         amountMajor > 0 ? Math.round(amountMajor * 100) : undefined;
-      if (booking.linkedSaleExternalId !== sale.externalId) {
+      const periodClosed = await this.isPayrollPeriodClosed(
+        clubId,
+        booking.startAt,
+        booking.specialistId,
+      );
+      if (!periodClosed && booking.linkedSaleExternalId !== sale.externalId) {
         await this.prisma.spaBooking
           .update({
             where: { id: booking.id },
@@ -7220,6 +7333,22 @@ export class BookingControlService {
     if (!saleId) throw new BadRequestException('Укажите продажу');
     const sale = await this.loadLinkedSpaSale(clubId, saleId);
     if (!sale) throw new NotFoundException('Продажа не найдена');
+    // Pack purchases pay motivation through 1C write-offs, not through a visit.
+    if (
+      isMultiVisitPackSale(sale.productName) ||
+      isServiceBlockPackageName(sale.productName)
+    ) {
+      throw new BadRequestException('Это покупка блока, не разовый визит');
+    }
+    if (
+      await this.isPayrollPeriodClosed(
+        clubId,
+        booking.startAt,
+        booking.specialistId,
+      )
+    ) {
+      throw new ForbiddenException('Период ЗП за этот день закрыт');
+    }
     const linkId = sale.externalId;
     const taken = await this.prisma.spaBooking.findFirst({
       where: {
@@ -7233,9 +7362,8 @@ export class BookingControlService {
       throw new BadRequestException('Эта продажа уже привязана к другой записи');
     }
     const paid = saleIsPaid(sale);
-    const amountMajor = saleIsPaid(sale)
-      ? saleAmountMajor(sale) || Number(sale.saleAmount) || 0
-      : Number(sale.saleAmount) || saleAmountMajor(sale) || 0;
+    // Line price of the chosen document row, not its tender coverage.
+    const amountMajor = saleLineTotalMajor(sale) || saleAmountMajor(sale);
     const amountMinor =
       amountMajor > 0.009 ? Math.round(amountMajor * 100) : undefined;
     await this.prisma.spaBooking.update({
@@ -7329,7 +7457,7 @@ export class BookingControlService {
   async adoptSpaToJournal(
     user: JwtPayload,
     sessionKey: string,
-    opts?: { serviceId?: string; ownOnly?: boolean },
+    opts?: { serviceId?: string; ownOnly?: boolean; bookingId?: string },
   ): Promise<BookingControlDetail> {
     const clubId = requireClubId(user);
     const parsed = parseSessionKey(sessionKey);
@@ -7464,6 +7592,153 @@ export class BookingControlService {
     const { start: dayStart, end: dayEnd } = minskDayBoundsUtc(day);
     const dayRu = formatMinskDayShort(day);
 
+    const payment = inferPaymentFromBasis(primary?.paymentBasis);
+    const payTag = inferPayTag({
+      paySource: primary?.paySource,
+      payment,
+      source: '1C',
+    });
+    // VIP pack lines («Массаж классический общий») vs paid multi-visit packs.
+    const membershipIncluded =
+      Boolean(service.membershipQuotaName) ||
+      isMembershipIncludedSpaTitle(onex.title);
+    const membershipQuota =
+      membershipIncluded ||
+      payTag === 'PACKAGE' ||
+      payment === 'QUOTA';
+    const paymentType = membershipQuota
+      ? SpaPaymentType.QUOTA
+      : SpaPaymentType.PAID;
+    const completed =
+      onex.status === OnexClassStatus.COMPLETED ||
+      String(onex.status).toUpperCase() === 'COMPLETED';
+    const origin = (user.roles ?? []).includes(UserRole.SPECIALIST)
+      ? SpaBookingOrigin.SPECIALIST_ASSIGNED
+      : SpaBookingOrigin.ADMIN_ASSIGNED;
+    // SpaBooking.membershipServiceName = 1C pack line («Массаж классический общий»),
+    // not the VIP product title from paymentBasis.
+    const membershipServiceName = membershipQuota
+      ? (service.membershipQuotaName ?? (onex.title.trim() || null))
+      : null;
+    // VIP included → no catalog/list price. Paid packs keep unit from 1C.
+    const priceMinor = membershipIncluded
+      ? null
+      : resolvePackageUnitPriceMinor({
+          unitPriceMinor: primary?.unitPriceMinor,
+          packageAmountMinor: primary?.packageAmountMinor,
+          packageQty: primary?.packageQty,
+          paymentBasis: primary?.paymentBasis,
+          sessionTitle: onex.title,
+        }) ??
+        (membershipQuota ? null : service.priceMinor) ??
+        null;
+
+    // A 1C visit that arrives after the journal card: attach it instead of
+    // creating a twin in the earliest free slot.
+    const attachCandidates = (
+      await this.prisma.spaBooking.findMany({
+        where: {
+          clubId,
+          specialistId: specialist.id,
+          startAt: { gte: dayStart, lte: dayEnd },
+          crmDocRef: null,
+          status: {
+            notIn: [SpaBookingStatus.CANCELLED, SpaBookingStatus.FAILED],
+          },
+        },
+        include: { client: true, service: true },
+        orderBy: { startAt: 'asc' },
+      })
+    ).filter((b) => {
+      if (clientId && b.clientId) {
+        if (b.clientId !== clientId) return false;
+      } else {
+        const ext = b.clientExternalId?.trim() || b.client?.externalId?.trim();
+        const sameCard = clientExternalId && ext && idsMatch(ext, clientExternalId);
+        const label = b.client
+          ? `${b.client.lastName ?? ''} ${b.client.firstName ?? ''}`.trim()
+          : b.guestName?.trim() || '';
+        if (!sameCard && !namesMatch(label, primary?.clientName)) return false;
+      }
+      if (b.serviceId === service.id) return true;
+      return (
+        serviceNamesMatchForSaleLink(b.service?.name, onex.title) ||
+        serviceNamesMatch(b.service?.name, onex.title)
+      );
+    });
+
+    // Picked by the operator from the MULTIPLE_JOURNAL_CANDIDATES list.
+    const pickedBookingId = opts?.bookingId?.trim();
+    let picked = pickedBookingId
+      ? attachCandidates.find((b) => b.id === pickedBookingId) ?? null
+      : null;
+    if (pickedBookingId && !picked) {
+      // Operator may also point at an unlinked card of that specialist/day
+      // that our auto-match rejected (other client spelling / service).
+      picked = await this.prisma.spaBooking.findFirst({
+        where: {
+          clubId,
+          id: pickedBookingId,
+          specialistId: specialist.id,
+          startAt: { gte: dayStart, lte: dayEnd },
+          crmDocRef: null,
+          status: {
+            notIn: [SpaBookingStatus.CANCELLED, SpaBookingStatus.FAILED],
+          },
+        },
+        include: { client: true, service: true },
+      });
+      if (!picked) {
+        throw new BadRequestException(
+          'Выбранная запись журнала не найдена или уже связана с 1С',
+        );
+      }
+    }
+
+    if (!picked && attachCandidates.length > 1) {
+      throw new BadRequestException({
+        statusCode: 400,
+        message: `На ${dayRu} у специалиста несколько подходящих записей — выберите, к какой привязать визит 1С`,
+        code: 'MULTIPLE_JOURNAL_CANDIDATES',
+        day,
+        candidates: attachCandidates.map((b) => ({
+          bookingId: b.id,
+          startAt: b.startAt.toISOString(),
+          endAt: b.endAt.toISOString(),
+          serviceName: b.service?.name ?? '',
+          clientName: b.client
+            ? `${b.client.lastName ?? ''} ${b.client.firstName ?? ''}`.trim()
+            : b.guestName ?? '',
+        })),
+      });
+    }
+
+    const existing = picked ?? attachCandidates[0] ?? null;
+    if (existing) {
+      // Journal time / service / status stay as the specialist planned them.
+      await this.prisma.spaBooking.update({
+        where: { id: existing.id },
+        data: {
+          crmDocRef: onex.externalId,
+          oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+          ...(membershipServiceName && !existing.membershipServiceName
+            ? { membershipServiceName }
+            : {}),
+          ...(priceMinor != null && existing.priceMinor == null
+            ? { priceMinor }
+            : {}),
+          ...(completed && !existing.consumedInCrmAt
+            ? { consumedInCrmAt: onex.startAt }
+            : {}),
+        },
+      });
+      await this.prisma.onexClassSession.update({
+        where: { id: onex.id },
+        data: { fitgoBookingRef: existing.id },
+      });
+      return this.detail(clubId, onexSessionKey(onex.externalId));
+    }
+
     const publishedBlocks =
       await this.prisma.specialistAvailabilityBlock.findMany({
         where: {
@@ -7545,47 +7820,6 @@ export class BookingControlService {
         durationMin,
       });
     }
-
-    const payment = inferPaymentFromBasis(primary?.paymentBasis);
-    const payTag = inferPayTag({
-      paySource: primary?.paySource,
-      payment,
-      source: '1C',
-    });
-    // VIP pack lines («Массаж классический общий») vs paid multi-visit packs.
-    const membershipIncluded =
-      Boolean(service.membershipQuotaName) ||
-      isMembershipIncludedSpaTitle(onex.title);
-    const membershipQuota =
-      membershipIncluded ||
-      payTag === 'PACKAGE' ||
-      payment === 'QUOTA';
-    const paymentType = membershipQuota
-      ? SpaPaymentType.QUOTA
-      : SpaPaymentType.PAID;
-    const completed =
-      onex.status === OnexClassStatus.COMPLETED ||
-      String(onex.status).toUpperCase() === 'COMPLETED';
-    const origin = (user.roles ?? []).includes(UserRole.SPECIALIST)
-      ? SpaBookingOrigin.SPECIALIST_ASSIGNED
-      : SpaBookingOrigin.ADMIN_ASSIGNED;
-    // SpaBooking.membershipServiceName = 1C pack line («Массаж классический общий»),
-    // not the VIP product title from paymentBasis.
-    const membershipServiceName = membershipQuota
-      ? (service.membershipQuotaName ?? (onex.title.trim() || null))
-      : null;
-    // VIP included → no catalog/list price. Paid packs keep unit from 1C.
-    const priceMinor = membershipIncluded
-      ? null
-      : resolvePackageUnitPriceMinor({
-          unitPriceMinor: primary?.unitPriceMinor,
-          packageAmountMinor: primary?.packageAmountMinor,
-          packageQty: primary?.packageQty,
-          paymentBasis: primary?.paymentBasis,
-          sessionTitle: onex.title,
-        }) ??
-        (membershipQuota ? null : service.priceMinor) ??
-        null;
 
     const booking = await this.prisma.spaBooking.create({
       data: {
@@ -7676,6 +7910,14 @@ export class BookingControlService {
         let reason = 'Не удалось добавить';
         if (e instanceof BadRequestException || e instanceof ConflictException) {
           const res = e.getResponse();
+          if (
+            typeof res === 'object' &&
+            res &&
+            (res as { code?: string }).code === 'MULTIPLE_JOURNAL_CANDIDATES'
+          ) {
+            skipped.push({ sessionKey, reason: 'нужно выбрать запись' });
+            continue;
+          }
           reason =
             typeof res === 'string'
               ? res

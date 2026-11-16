@@ -193,12 +193,13 @@ export function createBookingControlApi(
       if (!token) throw new Error('Нет сессии');
       return api.payrollHoldPreview(token, base, sessionKey);
     },
-    adoptSpaToJournal: async (sessionKey, serviceId) => {
+    adoptSpaToJournal: async (sessionKey, serviceId, bookingId) => {
       const token = getToken();
       if (!token) throw new Error('Нет сессии');
       return api.bookingControlSpaAdoptJournal(token, base, {
         sessionKey,
         serviceId,
+        bookingId,
       });
     },
     bulkAdoptSpaToJournal: async (sessionKeys) => {

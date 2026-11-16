@@ -84,12 +84,17 @@ function SpecialistMySessionsInner() {
           comment,
         );
       },
-      adoptSpaToJournal: async (sessionKey: string, serviceId?: string) => {
+      adoptSpaToJournal: async (
+        sessionKey: string,
+        serviceId?: string,
+        bookingId?: string,
+      ) => {
         const token = getToken();
         if (!token) throw new Error('Нет сессии');
         return api.bookingControlSpaAdoptJournal(token, 'specialist', {
           sessionKey,
           serviceId,
+          bookingId,
         });
       },
       bulkAdoptSpaToJournal: async (sessionKeys: string[]) => {

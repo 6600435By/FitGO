@@ -133,11 +133,13 @@ import {
 } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
 import {
-  collapseSpaSalesByBasis,
+  collapseSpaSalesByLine,
   saleAmountMajor,
   saleIsPaid,
+  saleLineTotalMajor,
   saleSearchWindow,
   serviceNamesMatch,
+  spaSaleLineKey,
   type SpaSaleCandidate,
 } from '../booking-control/spa-document-match';
 import {
@@ -660,6 +662,11 @@ export class PayrollService {
     }
     /** Sale-doc bases already covered by Onex / linked FitGO SPA visits. */
     const spaVisitSaleBases = new Set<string>();
+    /**
+     * Exact nomenclature lines (basis#product) a visit already pays for.
+     * A second line of the same document is still an own retail unit.
+     */
+    const spaVisitSaleLines = new Set<string>();
     for (const o of onexSpa) {
       const key = onexSessionKey(o.externalId);
       remarkKeys.push(key);
@@ -897,6 +904,14 @@ export class PayrollService {
       );
       const sale = linkedSaleByExt.get(saleExt);
       if (!sale) continue;
+      spaVisitSaleLines.add(
+        spaSaleLineKey({
+          externalId: sale.externalId,
+          documentId: sale.documentId,
+          productExternalId: sale.productExternalId,
+          productName: sale.productName,
+        }),
+      );
       const bioimpedance = isSpaAllSportsBioimpedance({
         serviceExternalId: b.service.externalId,
         title: b.service.name,
@@ -1114,15 +1129,6 @@ export class PayrollService {
           .filter((u) => u.kind === 'SPA' && u.saleExternalId)
           .map((u) => u.saleExternalId!.trim()),
       );
-      const takenDayClient = new Set(
-        units
-          .filter((u) => u.kind === 'SPA')
-          .map((u) => {
-            const day = u.occurredAt.slice(0, 10);
-            const client = (u.clientName ?? '').trim().toLowerCase();
-            return `${day}|${client}`;
-          }),
-      );
       for (const sale of bioRevenue) {
         if (
           !isSpaAllSportsBioimpedance({
@@ -1147,10 +1153,6 @@ export class PayrollService {
         if (money > 0.01) continue;
         const saleExt = sale.externalId?.trim();
         if (saleExt && takenSaleExt.has(saleExt)) continue;
-        const day = sale.occurredAt.toISOString().slice(0, 10);
-        const client = (sale.clientName ?? '').trim().toLowerCase();
-        const dayClient = `${day}|${client}`;
-        if (client && takenDayClient.has(dayClient)) continue;
         const unitId = `revbio:${saleExt || sale.id}`;
         if (spaPaidViaOnex.has(unitId)) continue;
         units.push({
@@ -1174,7 +1176,6 @@ export class PayrollService {
         remarkKeys.push(fitgoSessionKey('SPA', unitId));
         spaPaidViaOnex.add(unitId);
         if (saleExt) takenSaleExt.add(saleExt);
-        if (client) takenDayClient.add(dayClient);
       }
 
       // Paid / written-off SPA retail sales (Продажа with Исполнитель, no
@@ -1230,8 +1231,10 @@ export class PayrollService {
           personalAccount: sale.personalAccount,
         });
       }
-      const collapsedSpaRetail = collapseSpaSalesByBasis(spaRetailCandidates);
-      const seenSpaRetailDocs = new Set<string>();
+      // One unit per nomenclature line — two procedures in one document are
+      // two paid visits, not a single max-amount row.
+      const collapsedSpaRetail = collapseSpaSalesByLine(spaRetailCandidates);
+      const seenSpaRetailLines = new Set<string>();
       for (const sale of collapsedSpaRetail) {
         const product = sale.productName ?? '';
         const debtWriteOff =
@@ -1247,8 +1250,17 @@ export class PayrollService {
           externalId: sale.externalId,
           documentId: sale.documentId ?? null,
         });
-        if (!docKey || seenSpaRetailDocs.has(docKey)) continue;
-        if (spaVisitSaleBases.has(docKey)) continue;
+        const lineKey = spaSaleLineKey(sale);
+        if (!lineKey || seenSpaRetailLines.has(lineKey)) continue;
+        if (spaVisitSaleLines.has(lineKey)) continue;
+        // Basis covered by a visit whose exact line is unknown (pack docs) —
+        // suppress the whole document, otherwise only the paid line.
+        if (
+          spaVisitSaleBases.has(docKey) &&
+          ![...spaVisitSaleLines].some((k) => k.startsWith(`${docKey}#`))
+        ) {
+          continue;
+        }
         if (saleExt && takenSaleExt.has(saleExt)) continue;
         // Visit already in ЗП for this client+service (mixed pays land on
         // other days — do not invent retail twins by payment date).
@@ -1265,16 +1277,14 @@ export class PayrollService {
           return saleAt >= from && saleAt <= to;
         });
         if (coveredByVisit) continue;
-        const day = sale.occurredAt.toISOString().slice(0, 10);
-        const client = (sale.clientName ?? '').trim().toLowerCase();
-        const dayClient = `${day}|${client}`;
-        if (client && takenDayClient.has(dayClient)) continue;
-        const amountMajor = saleAmountMajor(sale);
+        // Price of this line only — a mixed payment of a two-line document
+        // must not push the other line's money onto this unit.
+        const amountMajor = saleLineTotalMajor(sale) || saleAmountMajor(sale);
         if (amountMajor <= 0.009 && !debtWriteOff) continue;
-        const unitId = `revsale:${docKey}`;
+        const unitId = `revsale:${lineKey}`;
         if (spaPaidViaOnex.has(unitId)) continue;
         const priceMinor = Math.round(amountMajor * 100);
-        const sessionKey = saleSessionKey('SPA', docKey);
+        const sessionKey = saleSessionKey('SPA', lineKey);
         const spaUnit: WorkUnit = {
           id: unitId,
           kind: 'SPA',
@@ -1297,10 +1307,9 @@ export class PayrollService {
         units.push(spaUnit);
         remarkKeys.push(sessionKey);
         spaPaidViaOnex.add(unitId);
-        seenSpaRetailDocs.add(docKey);
-        spaVisitSaleBases.add(docKey);
+        seenSpaRetailLines.add(lineKey);
+        spaVisitSaleLines.add(lineKey);
         if (saleExt) takenSaleExt.add(saleExt);
-        if (client) takenDayClient.add(dayClient);
       }
 
       // ClubRevenue unpaid (scope=debt): only overlay visits that already

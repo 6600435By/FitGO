@@ -548,12 +548,12 @@ export class BookingControlController {
   @Roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.SUPER_ADMIN)
   adoptSpaJournalAdmin(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { sessionKey?: string; serviceId?: string },
+    @Body() body: { sessionKey?: string; serviceId?: string; bookingId?: string },
   ) {
     return this.bookingControl.adoptSpaToJournal(
       user,
       body.sessionKey ?? '',
-      { serviceId: body.serviceId },
+      { serviceId: body.serviceId, bookingId: body.bookingId },
     );
   }
 
@@ -636,12 +636,12 @@ export class BookingControlController {
   @Roles(UserRole.SUPER_ADMIN, UserRole.MANAGER)
   adoptSpaJournalSuper(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { sessionKey?: string; serviceId?: string },
+    @Body() body: { sessionKey?: string; serviceId?: string; bookingId?: string },
   ) {
     return this.bookingControl.adoptSpaToJournal(
       user,
       body.sessionKey ?? '',
-      { serviceId: body.serviceId },
+      { serviceId: body.serviceId, bookingId: body.bookingId },
     );
   }
 
@@ -816,12 +816,12 @@ export class BookingControlController {
   @Roles(UserRole.SPECIALIST)
   adoptSpaJournalSpecialist(
     @CurrentUser() user: JwtPayload,
-    @Body() body: { sessionKey?: string; serviceId?: string },
+    @Body() body: { sessionKey?: string; serviceId?: string; bookingId?: string },
   ) {
     return this.bookingControl.adoptSpaToJournal(
       user,
       body.sessionKey ?? '',
-      { serviceId: body.serviceId, ownOnly: true },
+      { serviceId: body.serviceId, bookingId: body.bookingId, ownOnly: true },
     );
   }
 

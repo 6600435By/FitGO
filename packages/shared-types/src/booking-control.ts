@@ -195,6 +195,10 @@ export type SpaLinkHintKind =
   | 'SALE_NO_PERFORMER'
   | 'SALE_OTHER_PERFORMER'
   | 'SALE_MULTIPLE'
+  /** Same FIO but a different 1C client card on the sale. */
+  | 'SALE_CLIENT_MISMATCH'
+  /** Cache row joined several SKUs of one document («A, B»). */
+  | 'SALE_JOINED_PRODUCT'
   | 'VISIT_MULTIPLE'
   | 'LINKED'
   /** Already linked; admin may pick another sale (e.g. open remark). */
@@ -352,15 +356,29 @@ export interface SpaAdoptedJournalSlot {
 }
 
 /** Structured body when «В журнал» cannot place a clean slot. */
-export type SpaAdoptJournalErrorCode = 'NO_SHIFT' | 'NO_FREE_SLOT' | 'SLOT_TAKEN';
+export type SpaAdoptJournalErrorCode =
+  | 'NO_SHIFT'
+  | 'NO_FREE_SLOT'
+  | 'SLOT_TAKEN'
+  | 'MULTIPLE_JOURNAL_CANDIDATES';
 
 export interface SpaAdoptJournalErrorBody {
   statusCode: number;
   message: string;
   code: SpaAdoptJournalErrorCode;
   day: string;
-  specialistId: string;
-  durationMin: number;
+  specialistId?: string;
+  durationMin?: number;
+  candidates?: SpaAdoptJournalCandidate[];
+}
+
+/** One journal card the 1C visit may be attached to (operator picks). */
+export interface SpaAdoptJournalCandidate {
+  bookingId: string;
+  startAt: string;
+  endAt: string;
+  serviceName: string;
+  clientName: string;
 }
 
 export interface BookingControlDetail extends BookingControlListItem {
@@ -376,6 +394,12 @@ export interface BookingControlDetail extends BookingControlListItem {
   /** Last performer revise / rereview comment (PT/SPA). */
   returnComment?: string;
   returnedAt?: string;
+  /** SPA: FitGO journal card time when a 1C visit is linked to it. */
+  journalStartAt?: string;
+  journalEndAt?: string;
+  /** SPA: 1C visit time — may differ from the journal card. */
+  visitStartAt?: string;
+  visitEndAt?: string;
   /** SPA only: quota write-off / payment fact from 1C. */
   spaSettlement?: SpaSettlementInfo;
   /** Admin-only: soft match to a sale/visit that needs a click. */

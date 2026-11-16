@@ -133,6 +133,31 @@ export function preferredSaleBasisId(row: {
 }
 
 /**
+ * Stable key for ONE nomenclature line of a sale document.
+ * Basis (sale doc) + product, so two SKUs of the same Document.Продажа stay
+ * separate candidates instead of collapsing into one max-amount row.
+ */
+export function spaSaleLineKey(row: {
+  externalId: string;
+  documentId?: string | null;
+  productExternalId?: string | null;
+  productName?: string | null;
+}): string {
+  const basis = preferredSaleBasisId({
+    externalId: row.externalId,
+    documentId: row.documentId ?? null,
+  });
+  const byId = row.productExternalId?.trim().toLowerCase();
+  if (byId) return `${basis}#${byId}`;
+  const byName = (row.productName ?? '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return byName ? `${basis}#name:${byName}` : basis;
+}
+
+/**
  * Pick SaleTransaction lines for a revenue row.
  * Prefer Регистратор (documentId) when it has nomenclature — PA shop sales —
  * otherwise cash/debt основание.

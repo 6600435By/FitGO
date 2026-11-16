@@ -16,6 +16,7 @@ import {
   awaitingPaymentLabel,
   buildSpaDayMergePairs,
   collapseSpaSalesByBasis,
+  collapseSpaSalesByLine,
   matchSpaSale,
   matchSpaVisitByDay,
   minskDayKey,
@@ -28,8 +29,11 @@ import {
   saleIsDebtWriteOff,
   saleIsPaid,
   saleIsSpaLinkCandidate,
+  saleLineTotalMajor,
   saleTakenBlocksSpaLink,
   serviceNamesMatch,
+  serviceNamesMatchForSaleLink,
+  spaSaleLineKey,
   spaTitleHasDurationMin,
   type SpaBookingMatchInput,
   type SpaOnexCandidate,
@@ -187,7 +191,7 @@ function sale(
   }
 }
 
-// --- Kishkis: 25 мин ≠ 40 мин; same-day unpaid wins over stale list ---
+// --- Kishkis: 25 мин ≠ 40 мин; same-day unpaid ranked first, but no auto ---
 {
   assert.equal(
     serviceNamesMatch('Массаж классический 25 мин', 'Массаж классический 40 мин'),
@@ -233,10 +237,22 @@ function sale(
     booking: b,
     sales: [stale, unpaidSameDay, wrongDur],
   });
-  assert.equal(r.kind, 'auto');
-  if (r.kind === 'auto') {
-    assert.equal(r.sale.externalId, 'sale-30863');
-    assert.equal(r.paymentStatus, 'DEBT');
+  // Two sales fit client+performer+service → admin picks, nearest day first.
+  assert.equal(r.kind, 'hint');
+  if (r.kind === 'hint') {
+    assert.equal(r.hint.kind, 'SALE_MULTIPLE');
+    assert.match(r.hint.message, /Несколько продаж \(2\) — выберите строку/);
+    assert.deepEqual(
+      r.hint.candidates.map((c) => c.externalId),
+      ['sale-30863', 'sale-sept'],
+    );
+  }
+  // Alone, the same-day unpaid still auto-links.
+  const solo = matchSpaSale({ booking: b, sales: [unpaidSameDay, wrongDur] });
+  assert.equal(solo.kind, 'auto');
+  if (solo.kind === 'auto') {
+    assert.equal(solo.sale.externalId, 'sale-30863');
+    assert.equal(solo.paymentStatus, 'DEBT');
   }
 }
 
@@ -928,6 +944,190 @@ assert.equal(namesMatch('Бирюкова Екатерина', 'Бирюкова
     humanDocumentNumber('54b0d2e2-cb8a-11f1-0dec-a45d36e32cf1'),
     undefined,
   );
+}
+
+// Two nomenclature lines in one Документ.Продажа stay two candidates.
+{
+  const doc = 'c0ffee00-1111-2222-3333-444455556666';
+  const face = sale({
+    externalId: `${doc}:1`,
+    documentId: doc,
+    occurredAt: new Date('2026-10-02T12:00:00.000Z'),
+    saleAmount: 27.5,
+    paidAmount: 0,
+    operationType: 'unpaid',
+    productName: 'Массаж лица 25 мин',
+    productExternalId: 'svc-face-25',
+  });
+  const wrap = sale({
+    externalId: `${doc}:2`,
+    documentId: doc,
+    occurredAt: new Date('2026-10-02T12:00:00.000Z'),
+    saleAmount: 75,
+    paidAmount: 75,
+    operationType: 'sale',
+    productName: 'Обертывание шоколадное 50 мин',
+    productExternalId: 'svc-wrap-50',
+  });
+  const payFace = sale({
+    externalId: `payf:cash:Долг:cli-gur:${doc}:20261004120000:payment`,
+    documentId: 'payf',
+    occurredAt: new Date('2026-10-04T12:00:00.000Z'),
+    paidAt: new Date('2026-10-04T12:00:00.000Z'),
+    saleAmount: 27.5,
+    paidAmount: 27.5,
+    cash: 27.5,
+    operationType: 'payment',
+    productName: 'Массаж лица 25 мин',
+    productExternalId: 'svc-face-25',
+  });
+
+  assert.notEqual(spaSaleLineKey(face), spaSaleLineKey(wrap));
+  // Document collapse loses the second line; line collapse keeps both.
+  assert.equal(collapseSpaSalesByBasis([face, wrap, payFace]).length, 1);
+  const lines = collapseSpaSalesByLine([face, wrap, payFace]);
+  assert.equal(lines.length, 2);
+  const faceLine = lines.find((l) => l.externalId === `${doc}:1`)!;
+  assert.equal(saleLineTotalMajor(faceLine), 27.5);
+  assert.equal(saleIsPaid(faceLine), true);
+
+  const b = booking({
+    id: 'b-two-lines',
+    startAt: new Date('2026-10-02T12:00:00.000Z'),
+    serviceName: 'Массаж лица 25 мин',
+    serviceExternalId: 'svc-face-25',
+  });
+  const r = matchSpaSale({ booking: b, sales: [face, wrap, payFace] });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.sale.externalId, `${doc}:1`);
+    assert.equal(saleLineTotalMajor(r.sale), 27.5);
+    assert.equal(r.paymentStatus, 'PAID');
+  }
+}
+
+// Stale sticky link (service changed) must not keep the wrong document.
+{
+  const visit = new Date('2026-10-19T07:00:00.000Z');
+  const b = booking({
+    id: 'b-stale-link',
+    startAt: visit,
+    linkedSaleExternalId: 'sale-sport-link',
+  });
+  const wrong = sale({
+    externalId: 'sale-sport-link',
+    occurredAt: visit,
+    productName: 'Массаж спортивный 40 мин',
+    productExternalId: 'svc-sport',
+  });
+  const r = matchSpaSale({ booking: b, sales: [wrong] });
+  assert.notEqual(r.kind, 'auto');
+  if (r.kind === 'hint') {
+    assert.equal(r.hint.kind, 'SALE_OTHER_NOMENCLATURE');
+  }
+}
+
+// Two equally exact sales → always a pick list, never same-day guessing.
+{
+  const visit = new Date('2026-10-19T07:00:00.000Z');
+  const b = booking({ id: 'b-two-exact', startAt: visit });
+  const sameDay = sale({
+    externalId: 'sale-same-day',
+    occurredAt: new Date('2026-10-19T06:50:00.000Z'),
+  });
+  const nextDay = sale({
+    externalId: 'sale-next-day',
+    occurredAt: new Date('2026-10-20T09:00:00.000Z'),
+  });
+  const r = matchSpaSale({ booking: b, sales: [sameDay, nextDay] });
+  assert.equal(r.kind, 'hint');
+  if (r.kind === 'hint') {
+    assert.equal(r.hint.kind, 'SALE_MULTIPLE');
+    assert.equal(r.hint.message, 'Несколько продаж (2) — выберите строку');
+    assert.equal(r.hint.candidates[0]?.externalId, 'sale-same-day');
+    assert.equal(r.hint.candidates[0]?.amountMajor, 90);
+  }
+}
+
+// Block pack purchase is never a spa link target.
+{
+  const block = sale({
+    externalId: 'sale-block-10',
+    occurredAt: new Date('2026-10-19T07:00:00.000Z'),
+    saleAmount: 450,
+    paidAmount: 450,
+    productName: 'Блок массажа 10',
+    productExternalId: 'block-10',
+  });
+  assert.equal(saleIsSpaLinkCandidate(block), false);
+  assert.equal(
+    saleIsSpaLinkCandidate(block, new Map([['block-10', 'svc-x']])),
+    false,
+  );
+}
+
+// Joined cache row («A, B») is not one nomenclature.
+{
+  const visit = new Date('2026-10-19T07:00:00.000Z');
+  const b = booking({ id: 'b-joined', startAt: visit });
+  const joined = sale({
+    externalId: 'sale-joined',
+    occurredAt: visit,
+    productName: 'Массаж классический 50 мин, Капучино',
+    productExternalId: null,
+  });
+  assert.equal(saleIsSpaLinkCandidate(joined), false);
+  assert.equal(
+    serviceNamesMatchForSaleLink(
+      'Массаж классический 50 мин, Капучино',
+      'Массаж классический 50 мин',
+    ),
+    false,
+  );
+  const r = matchSpaSale({ booking: b, sales: [joined] });
+  assert.equal(r.kind, 'hint');
+  if (r.kind === 'hint') {
+    assert.equal(r.hint.kind, 'SALE_JOINED_PRODUCT');
+  }
+}
+
+// Timed SKU must not link to an untimed («общий») title.
+{
+  assert.equal(
+    serviceNamesMatch('Массаж классический общий', 'Массаж классический 50 мин'),
+    true,
+  );
+  assert.equal(
+    serviceNamesMatchForSaleLink(
+      'Массаж классический общий',
+      'Массаж классический 50 мин',
+    ),
+    false,
+  );
+  assert.equal(
+    serviceNamesMatchForSaleLink(
+      'Массаж классический 50 мин',
+      'Массаж классический общий 50 мин',
+    ),
+    true,
+  );
+}
+
+// Same FIO, different 1C client card → explicit hint, no silent link.
+{
+  const visit = new Date('2026-10-19T07:00:00.000Z');
+  const b = booking({ id: 'b-dup-card', startAt: visit });
+  const s = sale({
+    externalId: 'sale-other-card',
+    occurredAt: visit,
+    clientExternalId: 'cli-gur-duplicate',
+  });
+  const r = matchSpaSale({ booking: b, sales: [s] });
+  assert.equal(r.kind, 'hint');
+  if (r.kind === 'hint') {
+    assert.equal(r.hint.kind, 'SALE_CLIENT_MISMATCH');
+    assert.equal(r.hint.message, 'Разные карточки клиента в 1С');
+  }
 }
 
 console.log('spa-document-match.test.ts: ok');

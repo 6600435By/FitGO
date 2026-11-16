@@ -672,6 +672,24 @@ export class ServiceUsageService {
         },
       });
     } else {
+      // Only a confirmed 1C amount may be pushed back: the catalog list price
+      // is not what reception charged (discounts, packs, partner tariffs).
+      const confirmedPriceMinor =
+        booking.priceMinor != null && booking.priceMinor > 0
+          ? booking.priceMinor
+          : null;
+      if (confirmedPriceMinor == null) {
+        // No linked sale / no fact amount — leave the sale to reception and
+        // keep the card retryable once the document is linked.
+        await this.prisma.spaBooking.update({
+          where: { id: bookingId },
+          data: {
+            consumeState: null,
+            eligibleForMotivation: false,
+          },
+        });
+        return;
+      }
       const sell = provider.sellSpaService;
       if (!sell) {
         await this.prisma.spaBooking.update({
@@ -685,7 +703,7 @@ export class ServiceUsageService {
         serviceId: booking.serviceId,
         bookingRef: booking.id,
         occurredAt: booking.startAt.toISOString(),
-        priceMinor: booking.priceMinor ?? booking.service.priceMinor,
+        priceMinor: confirmedPriceMinor,
         currency: booking.service.currency,
         durationMin: booking.service.durationMin,
         employeeName: employeeName || undefined,

@@ -9,7 +9,12 @@ import {
   isServiceBlockPackageName,
   isSpaLikeSessionTitle,
 } from '@fitgo/shared-types';
-import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
+import {
+  preferredSaleBasisId,
+  spaSaleLineKey,
+} from '../admin-sales/payment-basis-products';
+
+export { spaSaleLineKey };
 
 /** Days before visit to look for a paid/debt sale. */
 export const SPA_SALE_LOOKBACK_DAYS = 21;
@@ -88,6 +93,91 @@ export function collapseSpaSalesByBasis(
     else groups.set(key, [s]);
   }
   return [...groups.values()].map(mergeSpaSaleGroup);
+}
+
+/** Cache row that already joined several SKUs of one document («A, B»). */
+export function isJoinedProductName(
+  name: string | null | undefined,
+): boolean {
+  return (name ?? '').includes(', ');
+}
+
+function saleBasisId(sale: SpaSaleCandidate): string {
+  return (
+    preferredSaleBasisId({
+      externalId: sale.externalId,
+      documentId: sale.documentId ?? null,
+    }) || sale.externalId
+  );
+}
+
+/**
+ * Collapse to ONE candidate per nomenclature line of a sale document.
+ * Non-cash rows (sale / unpaid / write-off) are the line anchors; cash slices
+ * join the line they pay for (product id, then product name, then the single
+ * line of their basis). A cash row with joined product names never invents a
+ * line — it stays on its own and is filtered out of «Привязать».
+ */
+export function collapseSpaSalesByLine(
+  sales: SpaSaleCandidate[],
+): SpaSaleCandidate[] {
+  const groups = new Map<string, SpaSaleCandidate[]>();
+  const order: string[] = [];
+  const push = (key: string, s: SpaSaleCandidate) => {
+    const list = groups.get(key);
+    if (list) {
+      list.push(s);
+      return;
+    }
+    groups.set(key, [s]);
+    order.push(key);
+  };
+
+  const anchors = sales.filter((s) => !isCashOp(s.operationType));
+  const cashRows = sales.filter((s) => isCashOp(s.operationType));
+
+  const keysByBasis = new Map<string, string[]>();
+  for (const s of anchors) {
+    const key = spaSaleLineKey(s);
+    push(key, s);
+    const basis = saleBasisId(s);
+    const keys = keysByBasis.get(basis) ?? [];
+    if (!keys.includes(key)) keys.push(key);
+    keysByBasis.set(basis, keys);
+  }
+
+  const anchorOf = (key: string) => groups.get(key)?.[0];
+
+  for (const c of cashRows) {
+    const keys = keysByBasis.get(saleBasisId(c)) ?? [];
+    if (keys.length === 1) {
+      push(keys[0]!, c);
+      continue;
+    }
+    if (keys.length > 1) {
+      const byId = c.productExternalId?.trim()
+        ? keys.find((k) =>
+            idsMatch(anchorOf(k)?.productExternalId, c.productExternalId),
+          )
+        : undefined;
+      if (byId) {
+        push(byId, c);
+        continue;
+      }
+      if (!isJoinedProductName(c.productName)) {
+        const byName = keys.filter((k) =>
+          serviceNamesMatch(anchorOf(k)?.productName, c.productName),
+        );
+        if (byName.length === 1) {
+          push(byName[0]!, c);
+          continue;
+        }
+      }
+    }
+    push(spaSaleLineKey(c), c);
+  }
+
+  return order.map((key) => mergeSpaSaleGroup(groups.get(key)!));
 }
 
 function mergeSpaSaleGroup(rows: SpaSaleCandidate[]): SpaSaleCandidate {
@@ -228,6 +318,15 @@ function formatMajor(n: number): string {
 export function saleAmountMajor(sale: SpaSaleCandidate): number {
   const paid = salePaidCoverage(sale);
   if (paid > 0.009) return paid;
+  return positiveMajor(sale.saleAmount);
+}
+
+/**
+ * Price of this nomenclature line (sale / unpaid / write-off anchor).
+ * Never tender coverage — a mixed payment of a two-line document must not
+ * push the other line's money onto this card.
+ */
+export function saleLineTotalMajor(sale: SpaSaleCandidate): number {
   return positiveMajor(sale.saleAmount);
 }
 
@@ -420,6 +519,25 @@ export function serviceNamesMatch(
   return false;
 }
 
+/**
+ * Stricter name rule for «продажа ↔ визит» links.
+ * Joined cache rows («A, B») are never one service, and a timed SKU must not
+ * link to an untimed title (quota «общий» pays from write-offs, not sales).
+ */
+export function serviceNamesMatchForSaleLink(
+  a?: string | null,
+  b?: string | null,
+): boolean {
+  if (isJoinedProductName(a) || isJoinedProductName(b)) return false;
+  const durA = serviceDurationMin(a);
+  const durB = serviceDurationMin(b);
+  if (durA != null || durB != null) {
+    if (durA == null || durB == null) return false;
+    if (durA !== durB) return false;
+  }
+  return serviceNamesMatch(a, b);
+}
+
 export {
   isMembershipIncludedSpaTitle,
   spaTitleHasDurationMin,
@@ -589,7 +707,18 @@ export function nomenclatureMatches(
   ) {
     return true;
   }
-  return serviceNamesMatch(sale.productName, booking.serviceName);
+  return serviceNamesMatchForSaleLink(sale.productName, booking.serviceName);
+}
+
+/** Both sides have a 1C client card and they are different people. */
+export function saleClientIdConflict(
+  sale: SpaSaleCandidate,
+  booking: SpaBookingMatchInput,
+): boolean {
+  const a = booking.clientExternalId?.trim();
+  const b = sale.clientExternalId?.trim();
+  if (!a || !b) return false;
+  return !idsMatch(a, b);
 }
 
 /**
@@ -604,6 +733,8 @@ export function saleIsSpaLinkCandidate(
 ): boolean {
   if (isMultiVisitPackSale(sale.productName)) return false;
   if (isServiceBlockPackageName(sale.productName)) return false;
+  // Joined cache row («A, B») is not one nomenclature — re-sync from 1C first.
+  if (isJoinedProductName(sale.productName)) return false;
   if (isSpaLikeSessionTitle(sale.productName)) return true;
   if (!serviceIdByProduct) return false;
   if (sale.productExternalId?.trim()) {
@@ -647,7 +778,7 @@ export function debtSearchWindow(visitAt: Date): { from: Date; to: Date } {
 
 function formatSaleLabel(sale: SpaSaleCandidate): string {
   const name = (sale.productName ?? 'Продажа').trim();
-  const amt = Number(sale.saleAmount) || Number(sale.paidAmount) || 0;
+  const amt = saleLineTotalMajor(sale);
   const money = amt > 0 ? ` · ${amt.toFixed(2)} BYN` : '';
   return `${name}${money}`;
 }
@@ -660,7 +791,7 @@ export function toSaleCandidate(
     kind: 'sale',
     externalId: sale.externalId,
     label: formatSaleLabel(sale),
-    amountMajor: Number(sale.saleAmount) || Number(sale.paidAmount) || 0,
+    amountMajor: saleLineTotalMajor(sale),
     occurredAt: sale.occurredAt.toISOString(),
     paymentStatus: salePaymentStatus(sale),
     productName: sale.productName ?? undefined,
@@ -710,36 +841,48 @@ export function matchSpaSale(input: {
   blockAutoLink?: boolean;
 }): SpaSaleMatchResult {
   const { booking, takenSaleIds, serviceIdByProduct, blockAutoLink } = input;
-  // Sale + later card payment of the same document → one candidate.
-  const sales = collapseSpaSalesByBasis(input.sales);
+  // One candidate per nomenclature line: sale + its later payments collapse,
+  // two SKUs of the same document stay apart.
+  const sales = collapseSpaSalesByLine(input.sales);
   if (!blockAutoLink && booking.linkedSaleExternalId?.trim()) {
     const linkedId = booking.linkedSaleExternalId.trim();
     const linkedBasis = preferredSaleBasisId({
       externalId: linkedId,
       documentId: null,
     });
+    const sameBasis = (s: SpaSaleCandidate) => {
+      const basis = preferredSaleBasisId({
+        externalId: s.externalId,
+        documentId: s.documentId ?? null,
+      });
+      return (
+        basis === linkedBasis ||
+        s.documentId?.trim().toLowerCase() === linkedBasis ||
+        s.externalId.startsWith(`${linkedBasis}:`)
+      );
+    };
     const findLinked = (list: SpaSaleCandidate[]) =>
       list.find((s) => s.externalId === linkedId) ??
-      list.find((s) => {
-        const basis = preferredSaleBasisId({
-          externalId: s.externalId,
-          documentId: s.documentId ?? null,
-        });
-        return (
-          basis === linkedBasis ||
-          s.documentId?.trim().toLowerCase() === linkedBasis ||
-          s.externalId.startsWith(`${linkedBasis}:`)
-        );
-      });
+      // Several lines of the linked document → keep the booking's own service.
+      list.find((s) => sameBasis(s) && nomenclatureMatches(s, booking)) ??
+      list.find(sameBasis);
     const linked = findLinked(sales) ?? findLinked(input.sales);
     if (linked) {
       const collapsed =
         sales.find((s) => s.externalId === linked.externalId) ?? linked;
-      return {
-        kind: 'auto',
-        sale: collapsed,
-        paymentStatus: salePaymentStatus(collapsed),
-      };
+      // Stale pointer (service / client / performer changed since the link) —
+      // fall through to normal matching instead of showing a wrong document.
+      const stillValid =
+        clientMatchesSale(collapsed, booking) &&
+        performerMatchesBooking(collapsed, booking) &&
+        nomenclatureMatches(collapsed, booking);
+      if (stillValid) {
+        return {
+          kind: 'auto',
+          sale: collapsed,
+          paymentStatus: salePaymentStatus(collapsed),
+        };
+      }
     }
   }
 
@@ -767,17 +910,29 @@ export function matchSpaSale(input: {
     return false;
   };
 
-  const forClient = sales.filter((s) => {
-    if (saleTakenBlocksSpaLink(s, takenSaleIds)) return false;
-    if (!inWindow(s)) return false;
-    if (!clientMatchesSale(s, booking)) return false;
-    if (!saleIsSpaLinkCandidate(s, serviceIdByProduct)) return false;
+  const forClient: SpaSaleCandidate[] = [];
+  /** Same FIO, different 1C client card — reception likely used a duplicate. */
+  const otherClientCard: SpaSaleCandidate[] = [];
+  /** Cache row with several SKUs in one name — needs a 1C re-sync, not a link. */
+  const joinedProduct: SpaSaleCandidate[] = [];
+  for (const s of sales) {
+    if (saleTakenBlocksSpaLink(s, takenSaleIds)) continue;
+    if (!inWindow(s)) continue;
+    if (!clientMatchesSale(s, booking)) continue;
+    if (saleClientIdConflict(s, booking)) {
+      otherClientCard.push(s);
+      continue;
+    }
+    if (isJoinedProductName(s.productName)) {
+      joinedProduct.push(s);
+      continue;
+    }
+    if (!saleIsSpaLinkCandidate(s, serviceIdByProduct)) continue;
     // Multi-visit pack purchases («Блок массажа 10») are not visit payment docs —
     // motivation comes from 1C write-offs. Do not offer them as «Привязать».
-    if (isMultiVisitPackSale(s.productName)) return false;
-    return true;
-  });
-  if (forClient.length === 0) return { kind: 'none' };
+    if (isMultiVisitPackSale(s.productName)) continue;
+    forClient.push(s);
+  }
 
   const resolveServiceId = (s: SpaSaleCandidate): string | undefined => {
     if (!serviceIdByProduct) return undefined;
@@ -796,6 +951,33 @@ export function matchSpaSale(input: {
   /** Prefer same calendar day / closest sale; drop far stale duplicates from the pick list. */
   const rankByVisit = (list: SpaSaleCandidate[]) =>
     [...list].sort((a, b) => dayDist(a) - dayDist(b));
+
+  if (forClient.length === 0) {
+    if (otherClientCard.length > 0) {
+      const pick = rankByVisit(otherClientCard).slice(0, 5);
+      return {
+        kind: 'hint',
+        hint: {
+          kind: 'SALE_CLIENT_MISMATCH',
+          message: 'Разные карточки клиента в 1С',
+          candidates: pick.map((s) => toSaleCandidate(s, resolveServiceId(s))),
+        },
+      };
+    }
+    if (joinedProduct.length > 0) {
+      const pick = rankByVisit(joinedProduct).slice(0, 5);
+      return {
+        kind: 'hint',
+        hint: {
+          kind: 'SALE_JOINED_PRODUCT',
+          message:
+            'В документе несколько номенклатур — обновите продажи из 1С',
+          candidates: pick.map((s) => toSaleCandidate(s, resolveServiceId(s))),
+        },
+      };
+    }
+    return { kind: 'none' };
+  }
 
   const exact = rankByVisit(
     forClient.filter(
@@ -822,25 +1004,14 @@ export function matchSpaSale(input: {
     };
   }
   if (exact.length > 1) {
-    // Same Minsk day as visit → auto when unique; else show nearest first.
-    const visitKey = minskDayKey(visitDay);
-    const sameDay = exact.filter((s) => minskDayKey(s.occurredAt) === visitKey);
-    if (sameDay.length === 1 && !blockAutoLink) {
-      const only = sameDay[0]!;
-      return {
-        kind: 'auto',
-        sale: only,
-        paymentStatus: salePaymentStatus(only),
-      };
-    }
-    const nearMs = 3 * 86400000;
-    const near = exact.filter((s) => dayDist(s) <= nearMs);
-    const pick = near.length > 0 ? near : exact.slice(0, 8);
+    // Two документа / строки fit equally well — the admin must pick the line.
+    // Same-day guessing linked the wrong sale too often.
+    const pick = exact.slice(0, 8);
     return {
       kind: 'hint',
       hint: {
         kind: 'SALE_MULTIPLE',
-        message: `Несколько продаж клиента (${pick.length}) — выберите документ`,
+        message: `Несколько продаж (${pick.length}) — выберите строку`,
         candidates: pick.map((s) => toSaleCandidate(s, resolveServiceId(s))),
       },
     };
@@ -858,8 +1029,8 @@ export function matchSpaSale(input: {
       hint: {
         kind: 'SALE_OTHER_NOMENCLATURE',
         message: `Продажа «${(top.productName ?? 'услуга').trim()}»${
-          (Number(top.saleAmount) || 0) > 0
-            ? ` · ${(Number(top.saleAmount) || 0).toFixed(2)} BYN`
+          saleLineTotalMajor(top) > 0
+            ? ` · ${saleLineTotalMajor(top).toFixed(2)} BYN`
             : ''
         }`,
         candidates: otherNom.map((s) => toSaleCandidate(s, resolveServiceId(s))),
@@ -955,6 +1126,23 @@ export function onexMatchesClient(
 }
 
 /**
+ * Onex title ↔ FitGO service name.
+ * Tiebreak only: 1C titles drift from the catalog, so a mismatch never drops a
+ * lone candidate — it only separates two procedures of one client in a day.
+ */
+export function onexMatchesService(
+  onex: SpaOnexCandidate,
+  booking: SpaBookingMatchInput,
+): boolean {
+  const title = onex.title?.trim();
+  const name = booking.serviceName?.trim();
+  if (!title || !name) return false;
+  return (
+    serviceNamesMatchForSaleLink(title, name) || serviceNamesMatch(title, name)
+  );
+}
+
+/**
  * Same calendar day (Europe/Minsk), same specialist + client.
  * Auto when exactly one living onex session remains.
  */
@@ -978,6 +1166,11 @@ export function matchSpaVisitByDay(input: {
   if (candidates.length === 0) return { kind: 'none' };
   if (candidates.length === 1) {
     return { kind: 'auto', onex: candidates[0]! };
+  }
+  // Two procedures of the same client in one day — the service title decides.
+  const byService = candidates.filter((o) => onexMatchesService(o, booking));
+  if (byService.length === 1) {
+    return { kind: 'auto', onex: byService[0]! };
   }
   return {
     kind: 'hint',
@@ -1036,6 +1229,14 @@ export function buildSpaDayMergePairs(input: {
         takenOnexIds: new Set(),
       });
       if (otherHit.kind === 'auto') {
+        // Not contested when only this booking's service matches the visit —
+        // two services of one client in a day are different cards.
+        if (
+          onexMatchesService(result.onex, b) &&
+          !onexMatchesService(result.onex, other)
+        ) {
+          continue;
+        }
         contested = true;
         break;
       }
