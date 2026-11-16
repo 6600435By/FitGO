@@ -266,8 +266,8 @@ export class ClubRevenueService {
             }
         : null;
 
-    // Summary always covers the full period (cards stay fixed when drilling into a metric).
-    // operationType / paymentMethod / employee / q filter only the table lines.
+    // Summary covers the full period by default; segment recalculates cards.
+    // operationType / paymentMethod / employee / q still filter only the table.
     const summaryReceiptWhere = {
       ...baseWhere,
       OR: [
@@ -459,12 +459,41 @@ export class ClubRevenueService {
       createdAt: m.createdAt.toISOString(),
     }));
 
+    const segment = params.segment?.trim().toLowerCase();
+    const segmentActive =
+      !!segment && segment !== 'all' && segment !== 'corporate';
+    const payrollSegs = segmentActive
+      ? await loadPayrollSegmentSets(this.config)
+      : null;
+
+    const rowMatchesSegment = (r: Row): boolean => {
+      if (!segmentActive || !segment) return true;
+      const classified = classifyAnalyticsSegment(
+        r.saleType ?? undefined,
+        r.productName,
+        r.productExternalId,
+        payrollSegs,
+      );
+      if (segment === 'other') {
+        return classified === 'other' || classified === 'unclassified';
+      }
+      return classified === segment;
+    };
+
+    // Segment recalculates cards; manuals (корпо/прочие) are not product segments.
     const summary = this.buildSummary({
-      receipts: normalizedSummary,
+      receipts: segmentActive
+        ? normalizedSummary.filter(rowMatchesSegment)
+        : normalizedSummary,
       soldInPeriod: [],
-      openDebt: enrichedOpenDebt,
-      formedSalesMinor: toMinor(formedSales._sum.amount ?? 0),
-      manuals: manualDtos,
+      openDebt: segmentActive
+        ? enrichedOpenDebt.filter(rowMatchesSegment)
+        : enrichedOpenDebt,
+      // Unsegmented SaleTransaction total would skew the card — fall back to paid.
+      formedSalesMinor: segmentActive
+        ? 0
+        : toMinor(formedSales._sum.amount ?? 0),
+      manuals: segmentActive ? [] : manualDtos,
     });
 
     // Lines for UI: by filter chip / clickable card metric
@@ -533,13 +562,9 @@ export class ClubRevenueService {
       lineRows = lineRows.filter((r) => !isStaffDebtorName(r.clientName));
     }
 
-    const segment = params.segment?.trim().toLowerCase();
-    const segmentActive =
-      !!segment && segment !== 'all' && segment !== 'corporate';
     // Segment filter aligned with analytics bars: same classifier; for money
     // (non-unpaid) keep only ops that feed aggregateAnalyticsMoney.
     if (segmentActive) {
-      const payrollSegs = await loadPayrollSegmentSets(this.config);
       if (op !== 'unpaid') {
         lineRows = lineRows.filter((r) => {
           if (r.operationType === 'refund') return false;
@@ -561,20 +586,7 @@ export class ClubRevenueService {
           return false;
         });
       }
-      lineRows = lineRows.filter((r) => {
-        const classified = classifyAnalyticsSegment(
-          r.saleType ?? undefined,
-          r.productName,
-          r.productExternalId,
-          payrollSegs,
-        );
-        if (segment === 'other') {
-          return (
-            classified === 'other' || classified === 'unclassified'
-          );
-        }
-        return classified === segment;
-      });
+      lineRows = lineRows.filter(rowMatchesSegment);
     }
 
     const lineAmountMinor = (r: Row): number => {
@@ -650,14 +662,14 @@ export class ClubRevenueService {
     let hint =
       lines.length === 0
         ? 'Нет данных за период. Нажмите «Обновить из 1С».'
-        : 'Итоги в карточках — за весь выбранный период. Клик по цифре фильтрует только таблицу.';
+        : 'Итоги в карточках — за весь выбранный период (или сегмент). Клик по цифре фильтрует только таблицу.';
     if (segmentActive) {
       const major = (filteredLinesTotalMinor / 100).toLocaleString('ru-RU', {
         maximumFractionDigits: 2,
       });
       hint = `Сегмент: сумма строк ${major} BYN (${lineRows.length} шт.)${
         truncated ? `, в таблице первые ${lineLimit}` : ''
-      }. Карточки сверху — за весь период.`;
+      }. Карточки сверху пересчитаны по сегменту.`;
     }
 
     return {
@@ -666,7 +678,8 @@ export class ClubRevenueService {
       summary,
       lines,
       employees: employeeOpts,
-      manualEntries: manualDtos,
+      // Корпо/прочие не относятся к товарным сегментам — скрываем при фильтре.
+      manualEntries: segmentActive ? [] : manualDtos,
       currency: club?.currency ?? 'BYN',
       hint,
       filteredLinesTotalMinor: segmentActive
