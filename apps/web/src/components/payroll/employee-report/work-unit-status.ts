@@ -231,8 +231,8 @@ export function isReformerWorkUnit(u: WorkUnit): boolean {
   return Boolean(u.isReformerPersonal) || u.roomKey === 'REFORMER';
 }
 
-export function tabForAttention(kind: AttentionKind): ReportTabId {
-  if (kind === 'anomaly') return 'overview';
+/** All attention chips open the «Внимание» tab (including «Подсказки»). */
+export function tabForAttention(_kind: AttentionKind): ReportTabId {
   return 'attention';
 }
 

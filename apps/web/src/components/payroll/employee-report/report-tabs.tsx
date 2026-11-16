@@ -6,6 +6,7 @@ import type { ControlMiss } from '@/components/payroll/employee-report/use-contr
 import { WorkUnitsTable } from '@/components/payroll/employee-report/work-units-table';
 import {
   attentionFromUnits,
+  classifyWorkUnit,
   filterUnitsByKind,
   money,
   sumEarn,
@@ -346,13 +347,24 @@ export function ReportTabs({
 
       {active === 'attention' ? (
         <AttentionTab
-          units={filterAttentionUnits(unitsNeedingCheck, attentionFocus)}
-          misses={
+          focus={attentionFocus}
+          // Chip counts use all work units; focused filters must too.
+          // Deduped unitsNeedingCheck only for the default / controlMiss view.
+          units={filterAttentionUnits(
             attentionFocus === 'excluded' ||
-            attentionFocus === 'noEarn' ||
-            attentionFocus === 'catalog'
-              ? []
-              : controlMisses
+              attentionFocus === 'noEarn' ||
+              attentionFocus === 'catalog'
+              ? units
+              : unitsNeedingCheck,
+            attentionFocus,
+          )}
+          misses={
+            !attentionFocus || attentionFocus === 'controlMiss'
+              ? controlMisses
+              : []
+          }
+          anomalyHints={
+            attentionFocus === 'anomaly' ? summary.anomalyHints : undefined
           }
           controlLoading={controlLoading}
           bookingControlHref={bookingControlHref}
@@ -406,24 +418,32 @@ function filterAttentionUnits(
   units: WorkUnit[],
   focus?: AttentionKind | null,
 ): WorkUnit[] {
-  if (!focus || focus === 'controlMiss' || focus === 'anomaly') return units;
-  if (focus === 'excluded') return units.filter((u) => !u.payrollTrusted);
+  if (!focus || focus === 'controlMiss') return units;
+  // Hints are text, not work-unit rows.
+  if (focus === 'anomaly') return [];
+  if (focus === 'excluded') {
+    return units.filter((u) => classifyWorkUnit(u).level === 'excluded');
+  }
   if (focus === 'catalog') {
     return units.filter((u) => u.spaBlockPriceSource === 'CATALOG');
   }
   if (focus === 'noEarn') {
     return units.filter((u) => {
-      const pay = u.kind === 'PT' || u.kind === 'SPA' || u.kind === 'GROUP';
-      return (
-        pay &&
-        u.payrollTrusted &&
-        !u.isComplimentary &&
-        (u.priceMinor ?? 0) > 0 &&
-        (u.earnMinor == null || u.earnMinor === 0)
-      );
+      const st = classifyWorkUnit(u);
+      return st.level === 'check' && st.reason?.includes('нет начисления');
     });
   }
   return units;
+}
+
+function attentionUnitsTitle(
+  focus: AttentionKind | null | undefined,
+  count: number,
+): string {
+  if (focus === 'excluded') return `Не в ЗП (${count})`;
+  if (focus === 'catalog') return `Цена из каталога (${count})`;
+  if (focus === 'noEarn') return `Нет начисления (${count})`;
+  return `В расчёте, но требуют проверки (${count})`;
 }
 
 function OverviewTab({
@@ -592,8 +612,10 @@ function MiniStats({
 }
 
 function AttentionTab({
+  focus,
   units,
   misses,
+  anomalyHints,
   controlLoading,
   bookingControlHref,
   currency,
@@ -604,8 +626,10 @@ function AttentionTab({
   onToggleSpaPartner,
   saleDetailLoading,
 }: {
+  focus?: AttentionKind | null;
   units: WorkUnit[];
   misses: ControlMiss[];
+  anomalyHints?: string[];
   controlLoading?: boolean;
   bookingControlHref: string;
   currency: string;
@@ -616,6 +640,13 @@ function AttentionTab({
   onToggleSpaPartner: (unitId: string, next: string | null) => void;
   saleDetailLoading?: boolean;
 }) {
+  const hints = anomalyHints ?? [];
+  const empty =
+    !controlLoading &&
+    misses.length === 0 &&
+    units.length === 0 &&
+    hints.length === 0;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -630,7 +661,7 @@ function AttentionTab({
         </Link>
       </div>
 
-      {misses.length > 0 || controlLoading ? (
+      {misses.length > 0 || (controlLoading && (!focus || focus === 'controlMiss')) ? (
         <section className="space-y-2">
           <h3 className="text-xs font-medium uppercase tracking-wide text-amber-200/80">
             Не прошли контроль ({misses.length})
@@ -676,10 +707,28 @@ function AttentionTab({
         </section>
       ) : null}
 
+      {hints.length > 0 ? (
+        <section className="space-y-2">
+          <h3 className="text-xs font-medium uppercase tracking-wide text-amber-200/80">
+            Подсказки ({hints.length})
+          </h3>
+          <ul className="space-y-1.5">
+            {hints.map((h) => (
+              <li
+                key={h}
+                className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2.5 text-sm text-amber-100"
+              >
+                {h}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {units.length > 0 ? (
         <section className="space-y-2">
           <h3 className="text-xs font-medium uppercase tracking-wide text-slate-500">
-            В расчёте, но требуют проверки ({units.length})
+            {attentionUnitsTitle(focus, units.length)}
           </h3>
           <WorkUnitsTable
             units={units}
@@ -695,7 +744,7 @@ function AttentionTab({
         </section>
       ) : null}
 
-      {!controlLoading && misses.length === 0 && units.length === 0 ? (
+      {empty ? (
         <p className="text-sm text-slate-500">Нечего проверять</p>
       ) : null}
     </div>

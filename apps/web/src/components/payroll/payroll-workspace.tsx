@@ -1007,6 +1007,7 @@ export function PayrollWorkspace({ mode }: Props) {
               <AttentionBar
                 chips={attentionChips}
                 anomalyHints={summary.anomalyHints}
+                activeKind={attentionFocus}
                 onOpen={(tab, kind) => {
                   setAttentionFocus(kind);
                   setReportTab(tab);
