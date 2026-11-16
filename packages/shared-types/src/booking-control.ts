@@ -454,7 +454,7 @@ export function fitgoSessionKey(
   return `fitgo:${kind}:${bookingId}`;
 }
 
-export function saleSessionKey(kind: 'PT', docRef: string): string {
+export function saleSessionKey(kind: 'PT' | 'SPA', docRef: string): string {
   return `sale:${kind}:${encodeURIComponent(docRef)}`;
 }
 
@@ -466,7 +466,7 @@ export function parseSessionKey(sessionKey: string): {
   if (sessionKey.startsWith('1c:')) {
     return { source: '1C', id: sessionKey.slice(3) };
   }
-  const sale = /^sale:(PT):(.+)$/.exec(sessionKey);
+  const sale = /^sale:(PT|SPA):(.+)$/.exec(sessionKey);
   if (sale) {
     return {
       source: 'SALE',

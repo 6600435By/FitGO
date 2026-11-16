@@ -89,6 +89,8 @@ import {
 } from './pt-document-match';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import {
+  clubRevenueHasPaidMoney,
+  clubRevenueIsDebtWriteOff,
   dropPrePayOnPaymentEpochPtSales,
   isExcludedFromPtBookingControl,
   isGymFloorSessionTitle,
@@ -247,6 +249,7 @@ export class BookingControlService {
     }
 
     const wantPtSales = !kindFilter || kindFilter === OnexClassKind.PT;
+    const wantSpaSales = !kindFilter || kindFilter === OnexClassKind.SPA;
 
     const items: BookingControlListItem[] = [];
     const matchedPtIds = new Set<string>();
@@ -524,6 +527,129 @@ export class BookingControlService {
           payTag: 'SALE',
           needsReview: openKeys.has(sessionKey),
           priceMinor: Math.round((Number(sale.amount) || 0) * 100),
+        });
+      }
+    }
+
+    // SPA retail Продажа with Исполнитель (no salon visit / onex row).
+    if (wantSpaSales) {
+      const spaSales = await this.prisma.clubRevenueEntry.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          occurredAt: { gte: fromD, lte: toD },
+          operationType: {
+            in: ['sale', 'payment', 'unpaid', 'debt_writeoff'],
+          },
+        },
+        orderBy: { occurredAt: 'asc' },
+      });
+      const seenSpaSaleDocs = new Set<string>();
+      // Onex SPA already listed — skip same client+day to avoid twin rows.
+      const onexSpaDayClient = new Set(
+        items
+          .filter((i) => i.kind === 'SPA' && i.source === '1C')
+          .map((i) => {
+            const day = minskDayKey(new Date(i.startAt));
+            const client = (i.clientName ?? '').trim().toLowerCase();
+            return `${day}|${client}`;
+          }),
+      );
+      for (const sale of spaSales) {
+        const product = sale.productName ?? '';
+        if (!isSpaLikeSessionTitle(product)) continue;
+        if (isMultiVisitPackSale(product)) continue;
+        if (
+          isSpaAllSportsBioimpedance({
+            serviceExternalId: sale.productExternalId,
+            title: product,
+          })
+        ) {
+          continue;
+        }
+        if (isPlaceholderClassEmployeeName(sale.performerName)) continue;
+        if (!sale.performerName?.trim() && !sale.performerExternalId?.trim()) {
+          continue;
+        }
+        const perfOk = this.saleMatchesPerformerFilter(
+          {
+            externalId: sale.externalId || sale.id,
+            clientName: sale.clientName || '',
+            serviceName: product,
+            occurredAt: sale.occurredAt.toISOString(),
+            amount: Number(sale.saleAmount) || Number(sale.paidAmount) || 0,
+            currency: 'BYN',
+            employeeCode: sale.performerExternalId?.trim() || '',
+            employeeName: sale.performerName?.trim() || '',
+            docRef: sale.documentId?.trim() || sale.externalId || sale.id,
+            paymentStatus: 'PAID',
+          },
+          performerFilterId,
+          performerCodes,
+          performerName,
+          staffByExt,
+        );
+        if (!perfOk) continue;
+        const docKey = (
+          sale.documentId?.trim() ||
+          sale.externalId?.split(':')[0] ||
+          sale.externalId ||
+          sale.id
+        ).toLowerCase();
+        if (seenSpaSaleDocs.has(docKey)) continue;
+        const startAt = this.normalizeOccurredAt(
+          sale.occurredAt.toISOString(),
+        );
+        const day = minskDayKey(new Date(startAt));
+        const client = (sale.clientName ?? '').trim().toLowerCase();
+        if (client && onexSpaDayClient.has(`${day}|${client}`)) continue;
+        const debtWriteOff = clubRevenueIsDebtWriteOff(sale);
+        const paid = clubRevenueHasPaidMoney(sale) || debtWriteOff;
+        const op = (sale.operationType ?? '').toLowerCase();
+        if (!paid && op === 'unpaid') {
+          // show unpaid debt
+        } else if (!paid && op !== 'sale' && op !== 'unpaid') {
+          continue;
+        }
+        const amountMajor =
+          Math.abs(Number(sale.saleAmount) || 0) ||
+          Math.abs(Number(sale.paidAmount) || 0) ||
+          Math.abs(Number(sale.amount) || 0);
+        if (amountMajor <= 0.009 && !debtWriteOff && paid) continue;
+        seenSpaSaleDocs.add(docKey);
+        const sessionKey = saleSessionKey('SPA', docKey);
+        const payment: BookingControlPayment = paid ? 'PAID' : 'DEBT';
+        const performerId =
+          (sale.performerExternalId &&
+            staffByExt.get(sale.performerExternalId)?.id) ||
+          this.findStaffIdByName(
+            staffByExt,
+            sale.performerName ?? undefined,
+          ) ||
+          sale.performerExternalId?.trim() ||
+          undefined;
+        const saleCounts = this.singleClientCounts('COMPLETED', {
+          arrived: payment === 'PAID',
+        });
+        items.push({
+          sessionKey,
+          kind: 'SPA',
+          source: 'SALE',
+          title: product || 'SPA (продажа)',
+          startAt,
+          status: 'COMPLETED',
+          performerName: sale.performerName?.trim() || '—',
+          performerId,
+          clientName: sale.clientName || '—',
+          number: humanDocumentNumber(sale.externalId) || undefined,
+          attendeeCount: saleCounts.arrivedCount,
+          bookedCount: saleCounts.bookedCount,
+          arrivedCount: saleCounts.arrivedCount,
+          noShowCount: saleCounts.noShowCount,
+          payment,
+          payTag: 'SALE',
+          needsReview: openKeys.has(sessionKey),
+          priceMinor: Math.round(amountMajor * 100),
         });
       }
     }

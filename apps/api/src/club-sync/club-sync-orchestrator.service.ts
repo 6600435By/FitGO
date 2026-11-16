@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import {
   GROUP_SCHEDULE_HORIZON_DAYS,
+  LIGHT_CLASS_SESSIONS_LOOKBACK_DAYS,
   LIGHT_GROUP_ROSTER_AHEAD_DAYS,
 } from '@fitgo/shared-types';
 import { AdminSalesSyncService } from '../admin-sales/admin-sales-sync.service';
@@ -466,14 +467,14 @@ export class ClubSyncOrchestrator {
             today,
             isFull ? GROUP_SCHEDULE_HORIZON_DAYS : LIGHT_GROUP_ROSTER_AHEAD_DAYS,
           );
-      // LIGHT: roster +1d back / +5d ahead so staff GP «Состав» matches 1C
-      // for the near week without waiting for nightly FULL. Hall visits stay
-      // on a tighter window below (no future hall traffic).
+      // LIGHT: class-sessions −14d…+5d — SPA/salon write-offs are often
+      // posted or backdated days later; −1 left mid-month visits out of
+      // Контроль/ЗП until FULL. Hall visits stay on a tighter window.
       const classFrom = isToday
         ? today
         : isFull
           ? undefined
-          : addMoscowDays(today, -1);
+          : addMoscowDays(today, -LIGHT_CLASS_SESSIONS_LOOKBACK_DAYS);
       const classTo = isToday
         ? today
         : isFull

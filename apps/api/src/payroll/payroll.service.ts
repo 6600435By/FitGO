@@ -27,6 +27,7 @@ import {
   isMultiVisitPackSale,
   isPtAllSportsSession,
   extractPackDateIsoFromBasis,
+  isPlaceholderClassEmployeeName,
   isSpaAllSportsBioimpedance,
   isSpaLikeSessionTitle,
   resolveGroupRoomKey,
@@ -351,22 +352,31 @@ function revenueMatchesSpaPerformer(
   codes: string[],
   performerName: string,
 ): boolean {
+  const rawPerfName = (sale.performerName ?? '').trim();
+  const perfNameUsable = !isPlaceholderClassEmployeeName(rawPerfName);
   // Prefer Исполнитель (line), not manager/author on the document header.
   if (
+    perfNameUsable &&
     sale.performerExternalId &&
     codes.some((c) => codesMatch(c, sale.performerExternalId))
   ) {
     return true;
   }
-  const perfName = (sale.performerName ?? '').trim().toLowerCase();
+  const perfName = rawPerfName.toLowerCase();
   const name = performerName.trim().toLowerCase();
-  if (name && perfName && (name === perfName || perfName.startsWith(name.split(' ')[0]!))) {
+  if (
+    perfNameUsable &&
+    name &&
+    perfName &&
+    (name === perfName || perfName.startsWith(name.split(' ')[0]!))
+  ) {
     return true;
   }
-  // Fallback when 1C left performer empty — only if employee is the specialist.
+  // Fallback when 1C left performer empty / «Универсальный» — only if
+  // employee (author) is the specialist.
   if (
     !sale.performerExternalId?.trim() &&
-    !sale.performerName?.trim() &&
+    !perfNameUsable &&
     sale.employeeExternalId &&
     codes.some((c) => codesMatch(c, sale.employeeExternalId))
   ) {
@@ -1137,6 +1147,96 @@ export class PayrollService {
         });
         remarkKeys.push(fitgoSessionKey('SPA', unitId));
         spaPaidViaOnex.add(unitId);
+        if (saleExt) takenSaleExt.add(saleExt);
+        if (client) takenDayClient.add(dayClient);
+      }
+
+      // Paid / written-off SPA retail sales (Продажа with Исполнитель, no
+      // Документ.Занятие). Reception often sells massage without a salon visit
+      // — still must hit Контроль/ЗП for the performer.
+      const spaRetailRevenue = await this.prisma.clubRevenueEntry.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          occurredAt: { gte: fromD, lte: toD },
+          operationType: {
+            in: ['sale', 'payment', 'unpaid', 'debt_writeoff'],
+          },
+        },
+      });
+      const seenSpaRetailDocs = new Set<string>();
+      for (const sale of spaRetailRevenue) {
+        const product = sale.productName ?? '';
+        if (!isSpaLikeSessionTitle(product)) continue;
+        if (isMultiVisitPackSale(product)) continue;
+        if (
+          isSpaAllSportsBioimpedance({
+            serviceExternalId: sale.productExternalId,
+            title: product,
+          })
+        ) {
+          continue;
+        }
+        if (!revenueMatchesSpaPerformer(sale, performerCodes, performerName)) {
+          continue;
+        }
+        if (isPlaceholderClassEmployeeName(sale.performerName)) continue;
+        const debtWriteOff = clubRevenueIsDebtWriteOff(sale);
+        const paid = clubRevenueHasPaidMoney(sale) || debtWriteOff;
+        const op = (sale.operationType ?? '').toLowerCase();
+        // Open unpaid without money stays visible as debt via overlay below;
+        // earn only settled / written-off lines here.
+        if (!paid && op === 'unpaid') continue;
+        if (!paid && op !== 'sale') continue;
+        const saleExt = sale.externalId?.trim();
+        const docKey = (
+          sale.documentId?.trim() ||
+          saleExt?.split(':')[0] ||
+          saleExt ||
+          sale.id
+        ).toLowerCase();
+        if (seenSpaRetailDocs.has(docKey)) continue;
+        if (saleExt && takenSaleExt.has(saleExt)) continue;
+        const day = sale.occurredAt.toISOString().slice(0, 10);
+        const client = (sale.clientName ?? '').trim().toLowerCase();
+        const dayClient = `${day}|${client}`;
+        // Same client+day already paid from Onex visit / linked booking.
+        if (client && takenDayClient.has(dayClient)) continue;
+        const amountMajor =
+          Math.abs(Number(sale.saleAmount) || 0) ||
+          Math.abs(Number(sale.paidAmount) || 0) ||
+          Math.abs(Number(sale.amount) || 0) ||
+          Math.abs(Number(sale.cash) || 0) +
+            Math.abs(Number(sale.card) || 0) +
+            Math.abs(Number(sale.cashless) || 0) +
+            Math.abs(Number(sale.personalAccount) || 0);
+        if (amountMajor <= 0.009 && !debtWriteOff) continue;
+        const unitId = `revsale:${docKey}`;
+        if (spaPaidViaOnex.has(unitId)) continue;
+        const priceMinor = Math.round(amountMajor * 100);
+        const spaUnit: WorkUnit = {
+          id: unitId,
+          kind: 'SPA',
+          performerId,
+          title: product || 'SPA',
+          occurredAt: sale.occurredAt.toISOString(),
+          quantity: 1,
+          priceMinor,
+          trustBand: 'GREEN',
+          trustResolution: 'NONE',
+          payrollTrusted: paid,
+          clientName: sale.clientName ?? undefined,
+          serviceExternalId: sale.productExternalId ?? undefined,
+          sessionKey: fitgoSessionKey('SPA', unitId),
+          saleExternalId: saleExt || undefined,
+        };
+        if (!paid) {
+          markSpaUnitAsUnpaidDebt(spaUnit);
+        }
+        units.push(spaUnit);
+        remarkKeys.push(fitgoSessionKey('SPA', unitId));
+        spaPaidViaOnex.add(unitId);
+        seenSpaRetailDocs.add(docKey);
         if (saleExt) takenSaleExt.add(saleExt);
         if (client) takenDayClient.add(dayClient);
       }

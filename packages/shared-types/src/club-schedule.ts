@@ -14,6 +14,13 @@ export const GROUP_SCHEDULE_HORIZON_DAYS = 21;
  */
 export const LIGHT_GROUP_ROSTER_AHEAD_DAYS = 5;
 
+/**
+ * Daytime LIGHT class-sessions lookback (days before today).
+ * SPA / salon visits are often posted or backdated days after the visit;
+ * −1 left mid-month write-offs missing until nightly FULL finished the month.
+ */
+export const LIGHT_CLASS_SESSIONS_LOOKBACK_DAYS = 14;
+
 /** Unified club calendar event status. */
 export type ClubScheduleStatus = 'planned' | 'done' | 'cancelled';
 

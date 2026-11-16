@@ -16,6 +16,7 @@ import {
 import type { FitgoClassSessionRow } from '@fitgo/1c-adapter';
 import {
   GROUP_SCHEDULE_HORIZON_DAYS,
+  LIGHT_CLASS_SESSIONS_LOOKBACK_DAYS,
   LIGHT_GROUP_ROSTER_AHEAD_DAYS,
   isSpaLikeSessionTitle,
   normalizeClassEmployeeName,
@@ -128,10 +129,11 @@ export class ClassSessionsSyncService {
   }
 
   /**
-   * LIGHT daytime sync: near window (today−1…+5) plus days that still have
+   * LIGHT daytime sync: near window (today−14…+5) plus days that still have
    * open GroupClassBooking rows — only inside the app booking horizon
    * (`GROUP_SCHEDULE_HORIZON_DAYS` = 21). 1C may list classes a year ahead;
    * we never pull those days here (site≈14d / app=21d).
+   * Lookback covers late/backdated SPA salon visits for Контроль/ЗП.
    */
   async syncClubOpenBookingDays(
     clubId: string,
@@ -139,7 +141,9 @@ export class ClassSessionsSyncService {
   ): Promise<ClassSyncResult> {
     const today = moscowDayKey();
     const horizonEnd = addMoscowDays(today, GROUP_SCHEDULE_HORIZON_DAYS);
-    const nearFrom = opts?.nearFrom ?? addMoscowDays(today, -1);
+    const nearFrom =
+      opts?.nearFrom ??
+      addMoscowDays(today, -LIGHT_CLASS_SESSIONS_LOOKBACK_DAYS);
     // nearTo must not exceed app booking horizon
     const nearToRaw =
       opts?.nearTo ?? addMoscowDays(today, LIGHT_GROUP_ROSTER_AHEAD_DAYS);
