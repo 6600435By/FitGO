@@ -4279,6 +4279,7 @@ export class PayrollService {
     if (!input.reason?.trim()) {
       throw new BadRequestException('Укажите причину корректировки');
     }
+    const amountMinor = this.assertAdjustmentAmount(input.amountMinor);
     this.assertPeriod(input.periodFrom, input.periodTo);
 
     let periodFrom = input.periodFrom;
@@ -4311,7 +4312,7 @@ export class PayrollService {
       data: {
         clubId,
         userId: input.userId,
-        amountMinor: input.amountMinor,
+        amountMinor,
         reason,
         periodFrom: new Date(`${periodFrom}T00:00:00`),
         periodTo: new Date(`${periodTo}T00:00:00`),
@@ -4344,12 +4345,14 @@ export class PayrollService {
     if (input.reason !== undefined && !input.reason.trim()) {
       throw new BadRequestException('Укажите причину корректировки');
     }
+    const amountMinor =
+      input.amountMinor !== undefined
+        ? this.assertAdjustmentAmount(input.amountMinor)
+        : undefined;
     const row = await this.prisma.payrollAdjustment.update({
       where: { id },
       data: {
-        ...(input.amountMinor !== undefined
-          ? { amountMinor: input.amountMinor }
-          : {}),
+        ...(amountMinor !== undefined ? { amountMinor } : {}),
         ...(input.reason !== undefined
           ? { reason: input.reason.trim() }
           : {}),
@@ -6342,6 +6345,17 @@ export class PayrollService {
     if (days > 31) {
       throw new BadRequestException('Период не больше 31 дня');
     }
+  }
+
+  /** Reject null/NaN from JSON so Prisma does not 500 as «через минуту». */
+  private assertAdjustmentAmount(raw: unknown): number {
+    const n = typeof raw === 'number' ? raw : Number(raw);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n === 0) {
+      throw new BadRequestException(
+        'Укажите сумму премии или штрафа в копейках (не ноль)',
+      );
+    }
+    return n;
   }
 
   private sectionForStaff(

@@ -42,7 +42,7 @@ import type {
   StaffPaySummary,
   WorkUnit,
 } from '@fitgo/shared-types';
-import { UserRole } from '@fitgo/shared-types';
+import { parseMoneyToMinor, UserRole } from '@fitgo/shared-types';
 import { UserRound } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
@@ -563,38 +563,80 @@ export function PayrollWorkspace({ mode }: Props) {
     if (!canEdit) return;
     const token = getToken();
     const id = reportUserId;
-    if (!token || !id || !adjReason.trim()) return;
+    if (!token || !id) return;
+    if (!adjReason.trim()) {
+      setMessage('Укажите причину корректировки');
+      return;
+    }
+    const amountMinor = parseMoneyToMinor(adjAmount || '0');
+    if (!adjAmount.trim() || amountMinor === 0) {
+      setMessage('Укажите сумму премии или штрафа (не ноль)');
+      return;
+    }
     if (id !== userId) setUserId(id);
+    const successMsg = editingAdjId
+      ? 'Корректировка обновлена'
+      : 'Корректировка добавлена';
     setMessage('');
     try {
+      let skipRefresh = false;
       if (editingAdjId) {
         await api.payrollUpdateAdjustment(token, editingAdjId, {
-          amountMinor: Math.round(Number(adjAmount || 0) * 100),
+          amountMinor,
           reason: adjReason.trim(),
         });
-        setMessage('Корректировка обновлена');
+        setMessage(successMsg);
       } else {
         const created = await api.payrollAdjustment(token, {
           userId: id,
-          amountMinor: Math.round(Number(adjAmount || 0) * 100),
+          amountMinor,
           reason: adjReason.trim(),
           periodFrom: from,
           periodTo: to,
         });
-        setMessage(
-          created.redirectedFrom
-            ? `Период закрыт — корректировка в открытый ${created.periodFrom}–${created.periodTo} (из ${created.redirectedFrom})`
-            : 'Корректировка добавлена',
-        );
         if (created.redirectedFrom) {
+          setMessage(
+            `Период закрыт — корректировка в открытый ${created.periodFrom}–${created.periodTo} (из ${created.redirectedFrom})`,
+          );
           setFrom(created.periodFrom);
           setTo(created.periodTo);
+          // Period change triggers auto-load; don't refresh stale range.
+          skipRefresh = true;
+        } else {
+          setMessage(successMsg);
+          if (summary) {
+            // Keep list visible if reload fails (heavy summary can 5xx).
+            setSummary({
+              ...summary,
+              adjustments: [...summary.adjustments, created],
+              adjustmentsMinor: summary.adjustmentsMinor + created.amountMinor,
+              totalMinor: summary.totalMinor + created.amountMinor,
+            });
+          }
         }
       }
       setAdjAmount('');
       setAdjReason('');
       setEditingAdjId(null);
-      await load();
+      if (skipRefresh) return;
+      const token2 = getToken();
+      if (!token2) return;
+      try {
+        const s =
+          mode === 'super'
+            ? await api.payrollSummary(token2, { userId: id, from, to })
+            : await api.adminPayrollSummary(token2, { userId: id, from, to });
+        setSummary(s);
+        const at = Date.now();
+        setSummaryCalculatedAt(at);
+        if (ownerId) {
+          setPayrollSummaryCache(ownerId, { mode, userId: id, from, to }, s);
+        }
+      } catch {
+        setMessage(
+          `${successMsg}. Пересчёт отчёта не удался — нажмите «Пересчитать».`,
+        );
+      }
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Ошибка');
     }
