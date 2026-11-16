@@ -2704,47 +2704,78 @@ export function BookingControlPanel({
       // Through hoster WP proxy a request often dies ~60s (php/proxy hard cap),
       // while Nest+Next allow 150–300s. One chunk does classes + PT sales + SPA
       // revenue day-by-day — ≤2 calendar days keeps each call under that cap.
-      // (5-day chunks timed out on October month refresh → generic 502 toast.)
+      // Heavy days (e.g. Oct 5–6) still time out as a pair → retry each failed
+      // multi-day chunk as single days before reporting.
       const chunks = splitIsoRangeInclusive(from, to, 2);
       let sessions = 0;
       let pt = 0;
       let revenue = 0;
       let lastMsg = '';
-      const failed: string[] = [];
-      for (let i = 0; i < chunks.length; i++) {
-        const label = `${chunks[i].from} – ${chunks[i].to}`;
-        if (chunks.length > 1) {
-          setMessage(
-            `Обновляем из 1С… ${i + 1}/${chunks.length} (${label})`,
-          );
-        }
+      const failedMulti: Array<{ from: string; to: string }> = [];
+
+      const pullChunk = async (
+        chunkFrom: string,
+        chunkTo: string,
+        progress: string,
+      ): Promise<boolean> => {
+        const label =
+          chunkFrom === chunkTo ? chunkFrom : `${chunkFrom} – ${chunkTo}`;
+        if (progress) setMessage(`Обновляем из 1С… ${progress} (${label})`);
         try {
-          const res = await api.refreshFrom1c(chunks[i].from, chunks[i].to);
+          const res = await api.refreshFrom1c!(chunkFrom, chunkTo);
           sessions += res.sessionsUpserted ?? 0;
           pt += res.ptSalesUpserted ?? 0;
           revenue += res.revenueUpserted ?? 0;
           lastMsg = res.message || lastMsg;
+          return true;
         } catch (e) {
-          failed.push(label);
           const timedOut =
             e instanceof ApiError &&
             (e.status === 502 || e.status === 503 || e.status === 504);
           if (timedOut) {
-            setMessage(
-              `Таймаут на ${label} (${i + 1}/${chunks.length}). Продолжаем…`,
-            );
+            setMessage(`Таймаут на ${label}. Продолжаем…`);
           }
+          return false;
+        }
+      };
+
+      for (let i = 0; i < chunks.length; i++) {
+        const progress =
+          chunks.length > 1 ? `${i + 1}/${chunks.length}` : '';
+        const ok = await pullChunk(chunks[i].from, chunks[i].to, progress);
+        if (!ok) failedMulti.push(chunks[i]);
+      }
+
+      const failedDays: string[] = [];
+      if (failedMulti.length) {
+        const dayChunks = failedMulti.flatMap((c) =>
+          c.from === c.to
+            ? [c]
+            : splitIsoRangeInclusive(c.from, c.to, 1),
+        );
+        for (let i = 0; i < dayChunks.length; i++) {
+          const d = dayChunks[i];
+          const ok = await pullChunk(
+            d.from,
+            d.to,
+            `повтор ${i + 1}/${dayChunks.length}`,
+          );
+          if (!ok) failedDays.push(d.from);
         }
       }
+
       await load();
-      if (failed.length) {
+      if (failedDays.length) {
         setMessage(
           `Обновлено частично: занятий ${sessions}, ПТ ${pt}, SPA ${revenue}. ` +
-            `Не удалось: ${failed.join('; ')}. Нажмите «Обновить из 1С» ещё раз.`,
+            `Не удалось: ${failedDays.join('; ')}. Нажмите «Обновить из 1С» ещё раз.`,
         );
-      } else if (chunks.length > 1) {
+      } else if (chunks.length > 1 || failedMulti.length) {
+        const retryNote = failedMulti.length
+          ? ` (тяжёлые дни добраны по 1 дню)`
+          : '';
         setMessage(
-          `Период обновлён из 1С (${chunks.length} частей): занятий ${sessions}, ПТ ${pt}, продажи SPA ${revenue}.`,
+          `Период обновлён из 1С${retryNote}: занятий ${sessions}, ПТ ${pt}, продажи SPA ${revenue}.`,
         );
       } else {
         setMessage(lastMsg || 'Период обновлён из 1С');
