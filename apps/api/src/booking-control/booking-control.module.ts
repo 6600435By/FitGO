@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AdminSalesModule } from '../admin-sales/admin-sales.module';
 import { ManagerOriginTasksModule } from '../admin-tasks/manager-origin-tasks.module';
 import { AuthModule } from '../auth/auth.module';
 import { ClassSyncModule } from '../class-sync/class-sync.module';
@@ -7,7 +8,12 @@ import { BookingControlService } from './booking-control.service';
 import { SessionApprovalService } from './session-approval.service';
 
 @Module({
-  imports: [AuthModule, ClassSyncModule, ManagerOriginTasksModule],
+  imports: [
+    AuthModule,
+    ClassSyncModule,
+    AdminSalesModule,
+    ManagerOriginTasksModule,
+  ],
   controllers: [BookingControlController],
   providers: [BookingControlService, SessionApprovalService],
   exports: [BookingControlService, SessionApprovalService],

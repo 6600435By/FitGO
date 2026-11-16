@@ -30,6 +30,7 @@ import {
   VisitVerification,
 } from '@prisma/client';
 import { requireClubId } from '../auth/require-club-id';
+import { ClubRevenueSyncService } from '../admin-sales/club-revenue-sync.service';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
 import { TrainerPtSalesSyncService } from '../club-sync/trainer-pt-sales-sync.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -112,9 +113,11 @@ import {
 import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { allocateStaffLogin } from '../auth/staff-login';
+import { preferredSaleBasisId } from '../admin-sales/payment-basis-products';
 import {
   awaitingPaymentLabel,
   buildSpaDayMergePairs,
+  collapseSpaSalesByBasis,
   debtSearchWindow,
   autoSaleAsHint,
   matchSpaSale,
@@ -126,6 +129,7 @@ import {
   preferredServiceDurationMin,
   saleAmountMajor,
   saleIsComplimentaryPartner,
+  saleIsPaid,
   saleIsSpaLinkCandidate,
   salePaymentStatus,
   saleTakenBlocksSpaLink,
@@ -189,6 +193,7 @@ export class BookingControlService {
     private readonly fitness: FitnessService,
     private readonly classSessions: ClassSessionsSyncService,
     private readonly trainerPtSalesSync: TrainerPtSalesSyncService,
+    private readonly clubRevenueSync: ClubRevenueSyncService,
     private readonly sessionApproval: SessionApprovalService,
     private readonly managerTasks: ManagerOriginTasksService,
   ) {}
@@ -1721,7 +1726,10 @@ export class BookingControlService {
     throw new BadRequestException('Групповые FitGO-only строки не поддерживаются');
   }
 
-  /** Re-pull Документ.Занятие + разовые ПТ из продаж for the selected period. */
+  /**
+   * Re-pull Документ.Занятие + разовые ПТ + ClubRevenue (SPA sales / write-offs)
+   * for the selected period.
+   */
   async refreshFrom1c(clubId: string, from: string, to: string) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
       throw new BadRequestException('Некорректные даты from/to');
@@ -1756,6 +1764,20 @@ export class BookingControlService {
     } catch (e) {
       ptError = e instanceof Error ? e.message : String(e);
     }
+    let revenueUpserted = 0;
+    let revenueError: string | undefined;
+    try {
+      // skipDebt: past `to` debt snapshot would revive already-written-off
+      // unpaid (e.g. Loyko 13.10 sale written off 22.10). Cash + stub enrich
+      // fills «Продажа N…» / performer from /sales for SPA control.
+      const rev = await this.clubRevenueSync.syncClubRange(clubId, from, to, {
+        skipDebt: true,
+        skipChangeLog: true,
+      });
+      revenueUpserted = rev.upserted;
+    } catch (e) {
+      revenueError = e instanceof Error ? e.message : String(e);
+    }
     const parts: string[] = [];
     if (sync.endpointMissing) {
       parts.push('Шаблон GET /v1/class-sessions ещё не опубликован в 1С.');
@@ -1771,9 +1793,15 @@ export class BookingControlService {
     } else {
       parts.push(`ПТ из продаж: ${ptUpserted}.`);
     }
+    if (revenueError) {
+      parts.push(`Продажи SPA: ошибка (${revenueError}).`);
+    } else {
+      parts.push(`Продажи SPA: ${revenueUpserted}.`);
+    }
     return {
       ...sync,
       ptSalesUpserted: ptUpserted,
+      revenueUpserted,
       message: parts.join(' '),
     };
   }
@@ -6072,6 +6100,8 @@ export class BookingControlService {
   /**
    * Resolve a previously linked ClubRevenue row even if sync deactivated it
    * or the externalId key changed (cash/debt twin of the same document).
+   * Loads all payment / unpaid / write-off siblings for the sale basis and
+   * collapses them so mixed pays across days settle as one document.
    */
   private async loadLinkedSpaSale(
     clubId: string,
@@ -6080,6 +6110,12 @@ export class BookingControlService {
     const id = linkedId.trim();
     if (!id) return null;
     const head = (id.split(/[:#]/)[0] ?? '').trim();
+    const basis = preferredSaleBasisId({
+      externalId: id,
+      documentId: /^[0-9a-f-]{36}$/i.test(head) ? head : null,
+    });
+    const basisUuid =
+      basis && /^[0-9a-f-]{36}$/i.test(basis) ? basis : null;
     const aliases =
       head && /^[0-9a-f-]{36}$/i.test(head)
         ? [
@@ -6088,14 +6124,37 @@ export class BookingControlService {
             { documentId: head },
           ]
         : [];
-    const row = await this.prisma.clubRevenueEntry.findFirst({
+    const siblingOr =
+      basisUuid && basisUuid !== head
+        ? [
+            { externalId: { contains: basisUuid } },
+            { documentId: basisUuid },
+          ]
+        : basisUuid
+          ? [{ externalId: { contains: basisUuid } }, { documentId: basisUuid }]
+          : [];
+    const rows = await this.prisma.clubRevenueEntry.findMany({
       where: {
         clubId,
-        OR: [{ externalId: id }, ...aliases],
+        OR: [{ externalId: id }, ...aliases, ...siblingOr],
       },
-      orderBy: [{ isActive: 'desc' }, { occurredAt: 'desc' }],
+      orderBy: [{ isActive: 'desc' }, { occurredAt: 'asc' }],
+      take: 40,
     });
-    return row ? this.mapRevenueToSaleCandidate(row) : null;
+    if (!rows.length) return null;
+    const mapped = rows.map((r) => this.mapRevenueToSaleCandidate(r));
+    const collapsed = collapseSpaSalesByBasis(mapped);
+    const exact =
+      collapsed.find((s) => s.externalId === id) ??
+      collapsed.find((s) => {
+        const b = preferredSaleBasisId({
+          externalId: s.externalId,
+          documentId: s.documentId ?? null,
+        });
+        return b === basis || s.documentId?.toLowerCase() === basis;
+      }) ??
+      collapsed[0];
+    return exact ?? null;
   }
 
   private async loadSpaSaleCandidates(
@@ -6135,14 +6194,60 @@ export class BookingControlService {
       take: 80,
     });
     const mapped = rows.map((r) => this.mapRevenueToSaleCandidate(r));
+    // Pull cash/unpaid siblings for each sale basis so mixed pays collapse
+    // (payment on day D+N must join unpaid from sale day).
+    const expanded = await this.expandSpaSaleBasisSiblings(clubId, mapped);
     if (
       linkedId &&
-      !mapped.some((s) => s.externalId === linkedId)
+      !expanded.some((s) => s.externalId === linkedId)
     ) {
       const linked = await this.loadLinkedSpaSale(clubId, linkedId);
-      if (linked) mapped.unshift(linked);
+      if (linked) {
+        const stillMissing = !expanded.some(
+          (s) => s.externalId === linked.externalId,
+        );
+        if (stillMissing) expanded.unshift(linked);
+      }
     }
-    return mapped;
+    return expanded;
+  }
+
+  /** Load all ClubRevenue rows that share a sale-document basis with `seeds`. */
+  private async expandSpaSaleBasisSiblings(
+    clubId: string,
+    seeds: SpaSaleCandidate[],
+  ): Promise<SpaSaleCandidate[]> {
+    if (!seeds.length) return seeds;
+    const byExt = new Map(seeds.map((s) => [s.externalId, s]));
+    const basisIds = new Set<string>();
+    for (const s of seeds) {
+      const b = preferredSaleBasisId({
+        externalId: s.externalId,
+        documentId: s.documentId ?? null,
+      });
+      if (b && /^[0-9a-f-]{36}$/i.test(b)) basisIds.add(b.toLowerCase());
+    }
+    if (!basisIds.size) return seeds;
+    const basisList = [...basisIds];
+    const extra = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        operationType: {
+          in: ['payment', 'unpaid', 'sale', 'debt_writeoff'],
+        },
+        OR: basisList.flatMap((b) => [
+          { externalId: { contains: b } },
+          { documentId: b },
+        ]),
+      },
+      take: 120,
+    });
+    for (const r of extra) {
+      if (byExt.has(r.externalId)) continue;
+      byExt.set(r.externalId, this.mapRevenueToSaleCandidate(r));
+    }
+    return [...byExt.values()];
   }
 
   private async spaServiceIdByProduct(
@@ -6362,7 +6467,10 @@ export class BookingControlService {
             sale.productExternalId ?? booking.service?.externalId,
           title: sale.productName ?? booking.service?.name,
         });
-      const amountMajor = saleAmountMajor(sale);
+      // Fact document total (or paid coverage when fully settled) — not a cash slice.
+      const amountMajor = saleIsPaid(sale)
+        ? saleAmountMajor(sale) || Number(sale.saleAmount) || 0
+        : Number(sale.saleAmount) || saleAmountMajor(sale) || 0;
       const amountMinor =
         amountMajor > 0 ? Math.round(amountMajor * 100) : undefined;
       if (booking.linkedSaleExternalId !== sale.externalId) {
@@ -6751,14 +6859,13 @@ export class BookingControlService {
     if (!booking) throw new NotFoundException('Запись не найдена');
     const saleId = saleExternalId.trim();
     if (!saleId) throw new BadRequestException('Укажите продажу');
-    const sale = await this.prisma.clubRevenueEntry.findFirst({
-      where: { clubId, externalId: saleId, isActive: true },
-    });
+    const sale = await this.loadLinkedSpaSale(clubId, saleId);
     if (!sale) throw new NotFoundException('Продажа не найдена');
+    const linkId = sale.externalId;
     const taken = await this.prisma.spaBooking.findFirst({
       where: {
         clubId,
-        linkedSaleExternalId: saleId,
+        linkedSaleExternalId: linkId,
         id: { not: bookingId },
       },
       select: { id: true },
@@ -6766,26 +6873,17 @@ export class BookingControlService {
     if (taken) {
       throw new BadRequestException('Эта продажа уже привязана к другой записи');
     }
-    const writeOff = sale.operationType === 'debt_writeoff';
-    const paid =
-      writeOff ||
-      (sale.operationType !== 'unpaid' &&
-        (sale.paidAmount > 0.009 || sale.operationType === 'payment'));
-    const amountMajor = writeOff
-      ? Number(sale.saleAmount) || 0
-      : Number(sale.paidAmount) ||
-        Number(sale.personalAccount) ||
-        (Number(sale.cash) || 0) +
-          (Number(sale.card) || 0) +
-          (Number(sale.cashless) || 0) ||
-        Number(sale.saleAmount) ||
-        0;
+    const paid = saleIsPaid(sale);
+    const amountMajor = saleIsPaid(sale)
+      ? saleAmountMajor(sale) || Number(sale.saleAmount) || 0
+      : Number(sale.saleAmount) || saleAmountMajor(sale) || 0;
     const amountMinor =
       amountMajor > 0.009 ? Math.round(amountMajor * 100) : undefined;
     await this.prisma.spaBooking.update({
       where: { id: bookingId },
       data: {
-        linkedSaleExternalId: saleId,
+        // Persist collapsed basis (sale/unpaid/write-off), not a single cash slice.
+        linkedSaleExternalId: linkId,
         oneCLinkStatus: SpaOneCLinkStatus.LINKED,
         saleAutoLinkBlocked: false,
         ...(opts?.applyServiceId

@@ -47,14 +47,35 @@ function isCashOp(op: string): boolean {
   return o === 'payment' || o === 'refund';
 }
 
+function positiveMajor(n: number | null | undefined): number {
+  const v = Number(n) || 0;
+  return v > 0.009 ? v : 0;
+}
+
+function roundMajor(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** Cash/card/PA coverage for one ClubRevenue slice (tenders win over paidAmount). */
+export function salePaidCoverage(sale: SpaSaleCandidate): number {
+  const split =
+    positiveMajor(sale.cash) +
+    positiveMajor(sale.card) +
+    positiveMajor(sale.cashless) +
+    positiveMajor(sale.personalAccount);
+  if (split > 0.009) return roundMajor(split);
+  return positiveMajor(sale.paidAmount);
+}
+
 /**
- * Collapse sale + later card payment of the same 1C document into one candidate.
- * Keeps sale date/amount; payment only marks PAID. Avoids SALE_MULTIPLE noise.
+ * Collapse sale + mixed payments of the same 1C document into one candidate.
+ * SUMs tender splits across payment days; keeps sale/visit day on the non-cash
+ * anchor. Partial pay stays underpaid until coverage ≥ document total (or write-off).
  */
 export function collapseSpaSalesByBasis(
   sales: SpaSaleCandidate[],
 ): SpaSaleCandidate[] {
-  const byBasis = new Map<string, SpaSaleCandidate>();
+  const groups = new Map<string, SpaSaleCandidate[]>();
   let anon = 0;
   for (const s of sales) {
     const basis = preferredSaleBasisId({
@@ -62,98 +83,152 @@ export function collapseSpaSalesByBasis(
       documentId: s.documentId ?? null,
     });
     const key = basis || s.externalId || `anon:${anon++}`;
-    const prev = byBasis.get(key);
-    if (!prev) {
-      byBasis.set(key, { ...s });
-      continue;
-    }
-    const prevCash = isCashOp(prev.operationType);
-    const nextCash = isCashOp(s.operationType);
-    // Prefer non-cash row as the link target (sale / unpaid / write-off).
-    const preferNext = prevCash && !nextCash;
-    const base = preferNext ? s : prev;
-    const other = preferNext ? prev : s;
-    const paidAmount = Math.max(
-      Number(base.paidAmount) || 0,
-      Number(other.paidAmount) || 0,
-    );
-    const saleAmount = Math.max(
-      Number(base.saleAmount) || 0,
-      Number(other.saleAmount) || 0,
-    );
-    // Keep visit/sale day — do not shift to cash settlement day.
-    const occurredAt =
-      !isCashOp(base.operationType)
-        ? base.occurredAt
-        : !isCashOp(other.operationType)
-          ? other.occurredAt
-          : base.occurredAt.getTime() <= other.occurredAt.getTime()
-            ? base.occurredAt
-            : other.occurredAt;
-    const paidAtCandidates = [base.paidAt, other.paidAt].filter(
-      (d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()),
-    );
-    const paidAt =
-      paidAtCandidates.length > 0
-        ? new Date(Math.max(...paidAtCandidates.map((d) => d.getTime())))
-        : base.paidAt ?? other.paidAt ?? null;
-    let operationType = base.operationType;
-    if ((base.operationType ?? '').toLowerCase() === 'debt_writeoff') {
-      operationType = 'debt_writeoff';
-    } else if (
-      paidAmount > 0.009 ||
-      isCashOp(other.operationType) ||
-      isCashOp(base.operationType)
-    ) {
-      operationType = 'payment';
-    }
-    byBasis.set(key, {
-      ...base,
-      occurredAt,
-      paidAt,
-      paidAmount,
-      saleAmount,
-      operationType,
-      cash: Math.max(Number(base.cash) || 0, Number(other.cash) || 0) || base.cash,
-      card: Math.max(Number(base.card) || 0, Number(other.card) || 0) || base.card,
-      cashless:
-        Math.max(Number(base.cashless) || 0, Number(other.cashless) || 0) ||
-        base.cashless,
-      personalAccount:
-        Math.max(
-          Number(base.personalAccount) || 0,
-          Number(other.personalAccount) || 0,
-        ) || base.personalAccount,
-      productName: base.productName || other.productName,
-      productExternalId: base.productExternalId || other.productExternalId,
-      performerExternalId: base.performerExternalId || other.performerExternalId,
-      performerName: base.performerName || other.performerName,
-      clientExternalId: base.clientExternalId || other.clientExternalId,
-      clientName: base.clientName || other.clientName,
-      documentId: base.documentId || other.documentId,
-    });
+    const list = groups.get(key);
+    if (list) list.push(s);
+    else groups.set(key, [s]);
   }
-  return [...byBasis.values()];
+  return [...groups.values()].map(mergeSpaSaleGroup);
 }
 
-function positiveMajor(n: number | null | undefined): number {
-  const v = Number(n) || 0;
-  return v > 0.009 ? v : 0;
+function mergeSpaSaleGroup(rows: SpaSaleCandidate[]): SpaSaleCandidate {
+  if (rows.length === 1) return { ...rows[0]! };
+
+  const cashRows = rows.filter((r) => isCashOp(r.operationType));
+  const nonCash = rows.filter((r) => !isCashOp(r.operationType));
+  const writeOff = nonCash.find((r) => saleIsDebtWriteOff(r));
+  const unpaid = nonCash.find(
+    (r) => (r.operationType ?? '').toLowerCase() === 'unpaid',
+  );
+  const saleRow = nonCash.find(
+    (r) => (r.operationType ?? '').toLowerCase() === 'sale',
+  );
+  // Prefer sale/unpaid/write-off as the persisted link target — not a cash slice.
+  const anchor = writeOff ?? unpaid ?? saleRow ?? nonCash[0] ?? cashRows[0]!;
+
+  const paidAmount = roundMajor(
+    cashRows.reduce((s, r) => s + salePaidCoverage(r), 0),
+  );
+  const cash = roundMajor(
+    cashRows.reduce((s, r) => s + positiveMajor(r.cash), 0),
+  );
+  const card = roundMajor(
+    cashRows.reduce((s, r) => s + positiveMajor(r.card), 0),
+  );
+  const cashless = roundMajor(
+    cashRows.reduce((s, r) => s + positiveMajor(r.cashless), 0),
+  );
+  const personalAccount = roundMajor(
+    cashRows.reduce((s, r) => s + positiveMajor(r.personalAccount), 0),
+  );
+
+  // Document total vs mixed pays:
+  // - unpaid twin still at full price next to full payment → max (don't double)
+  // - residual unpaid after partial → residual + paid ≈ original
+  // - write-off alone → max(write-off, paid); status stays write-off
+  let saleAmount: number;
+  if (unpaid) {
+    const residual = Number(unpaid.saleAmount) || 0;
+    if (paidAmount <= 0.009) {
+      saleAmount = roundMajor(residual);
+    } else if (
+      Math.abs(residual - paidAmount) <= 0.02 ||
+      residual <= paidAmount + 0.009
+    ) {
+      // Full unpaid twin of the payment, or residual already covered by pays.
+      saleAmount = roundMajor(Math.max(residual, paidAmount));
+    } else if (residual >= paidAmount * 2) {
+      // Unpaid still looks like the full document price (not reconciled down).
+      saleAmount = roundMajor(residual);
+    } else {
+      saleAmount = roundMajor(residual + paidAmount);
+    }
+  } else if (writeOff) {
+    saleAmount = roundMajor(
+      Math.max(Number(writeOff.saleAmount) || 0, paidAmount),
+    );
+  } else {
+    saleAmount = roundMajor(
+      Math.max(
+        paidAmount,
+        ...rows.map((r) => Number(r.saleAmount) || 0),
+      ),
+    );
+  }
+
+  let operationType = anchor.operationType;
+  if (writeOff && !unpaid) {
+    operationType = 'debt_writeoff';
+  } else if (unpaid && paidAmount <= 0.009) {
+    operationType = 'unpaid';
+  } else if (paidAmount > 0.009) {
+    operationType = 'payment';
+  }
+
+  const nonCashDates = nonCash.map((r) => r.occurredAt);
+  const occurredAt =
+    nonCashDates.length > 0
+      ? new Date(Math.min(...nonCashDates.map((d) => d.getTime())))
+      : new Date(
+          Math.min(...rows.map((r) => r.occurredAt.getTime())),
+        );
+
+  const paidAtCandidates = rows
+    .map((r) => r.paidAt)
+    .filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()));
+  const paidAt =
+    paidAtCandidates.length > 0
+      ? new Date(Math.max(...paidAtCandidates.map((d) => d.getTime())))
+      : anchor.paidAt ?? null;
+
+  const pickProduct = [...nonCash, ...cashRows].find(
+    (r) => r.productName?.trim() && !/^продажа\s+\d+/i.test(r.productName.trim()),
+  );
+  const pickPerf = [...nonCash, ...cashRows].find(
+    (r) => r.performerExternalId?.trim() || r.performerName?.trim(),
+  );
+
+  return {
+    ...anchor,
+    occurredAt,
+    paidAt,
+    paidAmount,
+    saleAmount,
+    operationType,
+    cash: cash || null,
+    card: card || null,
+    cashless: cashless || null,
+    personalAccount: personalAccount || null,
+    productName: pickProduct?.productName || anchor.productName,
+    productExternalId:
+      pickProduct?.productExternalId || anchor.productExternalId,
+    performerExternalId:
+      pickPerf?.performerExternalId || anchor.performerExternalId,
+    performerName: pickPerf?.performerName || anchor.performerName,
+    clientExternalId:
+      nonCash.find((r) => r.clientExternalId?.trim())?.clientExternalId ||
+      cashRows.find((r) => r.clientExternalId?.trim())?.clientExternalId ||
+      anchor.clientExternalId,
+    clientName:
+      nonCash.find((r) => r.clientName?.trim())?.clientName ||
+      cashRows.find((r) => r.clientName?.trim())?.clientName ||
+      anchor.clientName,
+    documentId:
+      nonCash.find((r) => r.documentId?.trim())?.documentId ||
+      anchor.documentId ||
+      cashRows.find((r) => r.documentId?.trim())?.documentId ||
+      null,
+  };
 }
 
 function formatMajor(n: number): string {
   return `${n.toFixed(2)} BYN`;
 }
 
-/** Sum of tender splits, else paid / sale amount. */
+/** Sum of tender splits, else paid / sale amount (document total). */
 export function saleAmountMajor(sale: SpaSaleCandidate): number {
-  const split =
-    positiveMajor(sale.cash) +
-    positiveMajor(sale.card) +
-    positiveMajor(sale.cashless) +
-    positiveMajor(sale.personalAccount);
-  if (split > 0.009) return Math.round(split * 100) / 100;
-  return positiveMajor(sale.paidAmount) || positiveMajor(sale.saleAmount);
+  const paid = salePaidCoverage(sale);
+  if (paid > 0.009) return paid;
+  return positiveMajor(sale.saleAmount);
 }
 
 /** «Оплачено · наличные 90.00 BYN» — never the revenue externalId. */
@@ -433,13 +508,19 @@ export function saleIsDebtWriteOff(sale: SpaSaleCandidate): boolean {
   return (sale.operationType ?? '').toLowerCase() === 'debt_writeoff';
 }
 
+/**
+ * Fully settled for SPA control / motivation.
+ * Mixed payments across days count only after collapse (SUM ≥ document total).
+ * Partial cash/card alone must stay DEBT until the sale is closed or written off.
+ */
 export function saleIsPaid(sale: SpaSaleCandidate): boolean {
-  if (sale.operationType === 'unpaid') return false;
+  if ((sale.operationType ?? '').toLowerCase() === 'unpaid') return false;
   if (saleIsDebtWriteOff(sale)) return true;
   if (saleIsComplimentaryPartner(sale)) return true;
-  if (sale.paidAmount > 0.009) return true;
-  if (sale.operationType === 'payment' && sale.saleAmount > 0) return true;
-  return false;
+  const paid = salePaidCoverage(sale);
+  const due = Number(sale.saleAmount) || 0;
+  if (due > 0.009) return paid + 0.009 >= due;
+  return paid > 0.009;
 }
 
 export function salePaymentStatus(
@@ -968,12 +1049,17 @@ export function buildSpaDayMergePairs(input: {
 }
 
 export function awaitingPaymentLabel(sale: SpaSaleCandidate): string {
-  const amt = Number(sale.saleAmount) || 0;
+  const due = Number(sale.saleAmount) || 0;
+  const paid = salePaidCoverage(sale);
+  const rest = due > 0.009 ? roundMajor(Math.max(0, due - paid)) : due;
   const day = minskDayKey(sale.occurredAt);
   const [y, m, d] = day.split('-');
   const dateRu = d && m && y ? `${d}.${m}.${y}` : day;
-  if (amt > 0) {
-    return `Ждёт оплаты · долг ${amt.toFixed(2)} BYN от ${dateRu}`;
+  if (paid > 0.009 && rest > 0.009) {
+    return `Частично оплачено · остаток ${rest.toFixed(2)} BYN от ${dateRu}`;
+  }
+  if (rest > 0.009 || due > 0.009) {
+    return `Ждёт оплаты · долг ${(rest || due).toFixed(2)} BYN от ${dateRu}`;
   }
   return `Ждёт оплаты · долг от ${dateRu}`;
 }

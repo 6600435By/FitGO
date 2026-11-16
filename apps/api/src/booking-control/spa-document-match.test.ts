@@ -15,6 +15,7 @@ import {
 import {
   awaitingPaymentLabel,
   buildSpaDayMergePairs,
+  collapseSpaSalesByBasis,
   matchSpaSale,
   matchSpaVisitByDay,
   minskDayKey,
@@ -302,6 +303,109 @@ function sale(
     assert.match(paidSaleSettlementLabel(r.sale), /Списание задолженности/);
     assert.equal(saleAmountMajor(r.sale), 30);
   }
+}
+
+// --- Khodanovich: mixed pays across days — SUM, unpaid until full ---
+{
+  const saleUuid = 'b1b7cad3-33cb-4c57-8336-f5b0828a0f90';
+  const client = '51f155c2-610e-11ee-8dd1-a45d36c32cf1';
+  const visit = new Date('2026-10-02T12:00:00.000Z');
+  const unpaid = sale({
+    externalId: `${saleUuid}:debt:${client}:u2026-10-08`,
+    documentId: saleUuid,
+    occurredAt: new Date('2026-10-08T16:10:15.000Z'),
+    saleAmount: 27.5,
+    paidAmount: 0,
+    operationType: 'unpaid',
+    productName: 'Массаж лица 25 мин',
+    clientExternalId: client,
+    clientName: 'Ходанович Мария Михайловна (Сотрудник)',
+    performerExternalId: '000000162',
+    performerName: 'Абрамчик Егор Викторович',
+  });
+  const pay1 = sale({
+    externalId: `76e6658e-c54c-11f1-8dec-a45d36c32cf1:cash:Долг:${client}:${saleUuid}:20261011205418:payment:p2026-10-11`,
+    documentId: '76e6658e-c54c-11f1-8dec-a45d36c32cf1',
+    occurredAt: new Date('2026-10-11T17:54:18.000Z'),
+    paidAt: new Date('2026-10-11T17:54:18.000Z'),
+    saleAmount: 7.5,
+    paidAmount: 7.5,
+    operationType: 'payment',
+    cash: 7.5,
+    productName: 'Массаж лица 25 мин',
+    clientExternalId: client,
+    clientName: 'Ходанович Мария Михайловна (Сотрудник)',
+    performerExternalId: '000000162',
+    performerName: 'Абрамчик Егор Викторович',
+  });
+  const pay2 = sale({
+    externalId: `pay2:cash:Долг:${client}:${saleUuid}:20261016000000:payment:p2026-10-16`,
+    documentId: 'pay2',
+    occurredAt: new Date('2026-10-16T12:00:00.000Z'),
+    paidAt: new Date('2026-10-16T12:00:00.000Z'),
+    saleAmount: 1,
+    paidAmount: 1,
+    operationType: 'payment',
+    cash: 1,
+    productName: 'Массаж лица 25 мин',
+    clientExternalId: client,
+    clientName: 'Ходанович Мария Михайловна (Сотрудник)',
+  });
+  const pay3 = sale({
+    externalId: `da91b3ec-cecc-11f1-8dec-a45d36c32cf1:cash:Долг:${client}:${saleUuid}:20261023133107:payment:p2026-10-23`,
+    documentId: 'da91b3ec-cecc-11f1-8dec-a45d36c32cf1',
+    occurredAt: new Date('2026-10-23T10:31:07.000Z'),
+    paidAt: new Date('2026-10-23T10:31:07.000Z'),
+    saleAmount: 19,
+    paidAmount: 19,
+    operationType: 'payment',
+    card: 19,
+    productName: 'Массаж лица 25 мин',
+    clientExternalId: client,
+    clientName: 'Ходанович Мария Михайловна (Сотрудник)',
+    performerExternalId: '000000162',
+    performerName: 'Абрамчик Егор Викторович',
+  });
+
+  const partial = collapseSpaSalesByBasis([unpaid, pay1]);
+  assert.equal(partial.length, 1);
+  assert.equal(saleIsPaid(partial[0]!), false);
+  assert.ok((partial[0]!.paidAmount || 0) >= 7.4 && (partial[0]!.paidAmount || 0) <= 7.6);
+  assert.match(awaitingPaymentLabel(partial[0]!), /Частично оплачено|остаток|Ждёт оплаты/);
+
+  const full = collapseSpaSalesByBasis([unpaid, pay1, pay2, pay3]);
+  assert.equal(full.length, 1);
+  assert.equal(roundMajorForTest(full[0]!.paidAmount), 27.5);
+  assert.equal(saleIsPaid(full[0]!), true);
+  assert.match(paidSaleSettlementLabel(full[0]!), /наличные|карта/);
+
+  const b = booking({
+    id: 'b-face',
+    startAt: visit,
+    clientExternalId: client,
+    clientName: 'Ходанович Мария',
+    specialistName: 'Абрамчик Егор Викторович',
+    specialistEmployeeCode: '000000162',
+    serviceName: 'Массаж лица 25 мин',
+  });
+  const mid = matchSpaSale({ booking: b, sales: [unpaid, pay1] });
+  assert.equal(mid.kind, 'auto');
+  if (mid.kind === 'auto') {
+    assert.equal(mid.paymentStatus, 'DEBT');
+  }
+  const done = matchSpaSale({
+    booking: b,
+    sales: [unpaid, pay1, pay2, pay3],
+  });
+  assert.equal(done.kind, 'auto');
+  if (done.kind === 'auto') {
+    assert.equal(done.paymentStatus, 'PAID');
+    assert.equal(done.sale.occurredAt.toISOString().slice(0, 10), '2026-10-08');
+  }
+}
+
+function roundMajorForTest(n: number | null | undefined): number {
+  return Math.round((Number(n) || 0) * 100) / 100;
 }
 
 // --- No performer → hint ---

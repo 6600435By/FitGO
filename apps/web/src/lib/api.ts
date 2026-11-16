@@ -3903,6 +3903,7 @@ export const api = {
       journalsTouched: number;
       endpointMissing: boolean;
       ptSalesUpserted?: number;
+      revenueUpserted?: number;
       message: string;
     }>(
       `/${base}/booking-control/refresh-from-1c`,

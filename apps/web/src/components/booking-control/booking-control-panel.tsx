@@ -187,6 +187,7 @@ export type BookingControlApi = {
     message: string;
     sessionsUpserted?: number;
     ptSalesUpserted?: number;
+    revenueUpserted?: number;
   }>;
   /** Mark GROUP member arrived / no-show in 1C. */
   setAttendance?: (
@@ -2705,6 +2706,7 @@ export function BookingControlPanel({
       const chunks = splitIsoRangeInclusive(from, to, 5);
       let sessions = 0;
       let pt = 0;
+      let revenue = 0;
       let lastMsg = '';
       for (let i = 0; i < chunks.length; i++) {
         if (chunks.length > 1) {
@@ -2715,12 +2717,13 @@ export function BookingControlPanel({
         const res = await api.refreshFrom1c(chunks[i].from, chunks[i].to);
         sessions += res.sessionsUpserted ?? 0;
         pt += res.ptSalesUpserted ?? 0;
+        revenue += res.revenueUpserted ?? 0;
         lastMsg = res.message || lastMsg;
       }
       await load();
       if (chunks.length > 1) {
         setMessage(
-          `Период обновлён из 1С (${chunks.length} частей): занятий ${sessions}, ПТ ${pt}.`,
+          `Период обновлён из 1С (${chunks.length} частей): занятий ${sessions}, ПТ ${pt}, продажи SPA ${revenue}.`,
         );
       } else {
         setMessage(lastMsg || 'Период обновлён из 1С');

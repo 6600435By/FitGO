@@ -56,7 +56,7 @@ export class BookingControlController {
     private readonly managerTasks: ManagerOriginTasksService,
   ) {}
 
-  /** Period-scoped pull of Документ.Занятие + PT sales (not club-wide LIGHT). */
+  /** Period-scoped pull of Занятие + PT + ClubRevenue SPA sales (not club-wide LIGHT). */
   private refreshPeriodFrom1c(
     user: JwtPayload,
     body: { from?: string; to?: string },

@@ -40,10 +40,23 @@ function saleDocumentUuid(item: {
   return key.split(':')[0]?.trim() || '';
 }
 
-function itemHasPerformer(item: FitgoAnalyticsSalesItem): boolean {
+function itemHasPerformer(item: {
+  performerExternalId?: string | null;
+  performerName?: string | null;
+}): boolean {
   return Boolean(
     item.performerExternalId?.trim() || item.performerName?.trim(),
   );
+}
+
+/** Debt / write-off stub still needs SKU or performer from /sales. */
+export function debtRowNeedsSalesEnrich(row: {
+  productName?: string | null;
+  performerName?: string | null;
+  performerExternalId?: string | null;
+}): boolean {
+  if (isGenericPaymentProduct(row.productName)) return true;
+  return !itemHasPerformer(row);
 }
 
 /**
@@ -58,7 +71,8 @@ function debtPerformerEnrichDays(
   const days = new Set(syncDays);
   const missingSoldAt: string[] = [];
   for (const item of unpaidDebt) {
-    if (itemHasPerformer(item)) continue;
+    // Missing performer OR placeholder «Продажа N…» — need /sales day.
+    if (!debtRowNeedsSalesEnrich(item)) continue;
     const day = (item.soldAt ?? '').trim().slice(0, 10);
     if (/^\d{4}-\d{2}-\d{2}$/.test(day)) missingSoldAt.push(day);
   }
@@ -70,8 +84,13 @@ function debtPerformerEnrichDays(
     ? uniqueMissing
         .filter((d) => {
           const sample = unpaidDebt.find(
-            (i) => (i.soldAt ?? '').slice(0, 10) === d && !itemHasPerformer(i),
+            (i) =>
+              (i.soldAt ?? '').slice(0, 10) === d && debtRowNeedsSalesEnrich(i),
           );
+          // «Продажа 31354…» stubs must enrich too (Loyko write-off case).
+          if (sample && isGenericPaymentProduct(sample.productName)) {
+            return true;
+          }
           const title = `${sample?.productName ?? ''}`.toLowerCase();
           return /массаж|спа|solarium|солярий|обёрт|пилинг|эпиляц|биоимпеданс|реформер|тренир/i.test(
             title,
@@ -83,14 +102,13 @@ function debtPerformerEnrichDays(
   return [...days].sort();
 }
 
-/** Copy performer (+ placeholder product) from /sales unpaid onto scope=debt rows. */
-function enrichDebtItemsFromSalesUnpaid(
-  unpaidDebt: FitgoAnalyticsSalesItem[],
+/** Build /sales unpaid index by Document.Продажа UUID. */
+export function indexSalesUnpaidByDocument(
   sales: FitgoAnalyticsSalesItem[],
-): void {
+): Map<string, FitgoAnalyticsSalesItem> {
   const byDoc = new Map<string, FitgoAnalyticsSalesItem>();
   for (const s of sales) {
-    if (s.operationType !== 'unpaid') continue;
+    if (s.operationType !== 'unpaid' && s.operationType !== 'sale') continue;
     if (!itemHasPerformer(s) && !s.productName?.trim()) continue;
     const doc = saleDocumentUuid(s);
     if (!doc) continue;
@@ -99,12 +117,16 @@ function enrichDebtItemsFromSalesUnpaid(
       byDoc.set(doc, s);
     }
   }
-  if (!byDoc.size) return;
+  return byDoc;
+}
 
-  const placeholderProduct = (name: string | null | undefined) => {
-    const t = (name ?? '').trim();
-    return !t || t === 'Долг' || /^продажа\s+\d+/i.test(t);
-  };
+/** Copy performer (+ placeholder product) from /sales unpaid onto scope=debt rows. */
+export function enrichDebtItemsFromSalesUnpaid(
+  unpaidDebt: FitgoAnalyticsSalesItem[],
+  sales: FitgoAnalyticsSalesItem[],
+): void {
+  const byDoc = indexSalesUnpaidByDocument(sales);
+  if (!byDoc.size) return;
 
   for (const d of unpaidDebt) {
     const doc = saleDocumentUuid(d);
@@ -114,7 +136,7 @@ function enrichDebtItemsFromSalesUnpaid(
       d.performerExternalId = src.performerExternalId;
       d.performerName = src.performerName;
     }
-    if (placeholderProduct(d.productName) && src.productName?.trim()) {
+    if (isGenericPaymentProduct(d.productName) && src.productName?.trim()) {
       d.productName = src.productName;
       if (src.productExternalId) d.productExternalId = src.productExternalId;
       if (src.productCode) d.productCode = src.productCode;
@@ -495,7 +517,8 @@ export class ClubRevenueSyncService {
       (r) =>
         r.operationType === 'payment' ||
         r.operationType === 'refund' ||
-        r.operationType === 'unpaid',
+        r.operationType === 'unpaid' ||
+        r.operationType === 'debt_writeoff',
     );
     if (genericPay.length) {
       const ids = genericPay.map((r) => r.externalId);
@@ -656,6 +679,24 @@ export class ClubRevenueSyncService {
       }
     }
 
+    // Write-offs / open debt often keep «Продажа N…» + empty performer from
+    // scope=debt. Re-read /sales so SPA control can soft-match (Loyko 31354).
+    // Runs even with skipDebt — Control period refresh uses cash+enrich only.
+    {
+      const stubEnriched = await this.enrichDebtStubRowsFromSales(
+        clubId,
+        provider,
+        fromStr,
+        toStr,
+        options.delayMsBetweenDays ?? 0,
+      );
+      if (stubEnriched) {
+        this.logger.log(
+          `Club revenue debt stubs enriched club=${clubId} rows=${stubEnriched}`,
+        );
+      }
+    }
+
     if (!options.skipLegacyCleanup) {
       // Old payment/deposit rows without :cash: (pre-scope export).
       // Never touch unpaid, :free: partner sales, or operationType=sale
@@ -689,6 +730,124 @@ export class ClubRevenueSyncService {
       `Club revenue range club=${clubId} upserted=${upserted} deactivated=${deactivated} unpaid=${unpaidExternalIds.size} debtSnapshot=${debtSnapshot} skipDebt=${!!options.skipDebt} window=${fromStr}..${toStr}`,
     );
     return { upserted, deactivated, from: fromStr, to: toStr };
+  }
+
+  /**
+   * Fill placeholder «Продажа N…» / missing performer on unpaid + debt_writeoff
+   * from /sales for sold days in (or near) the sync window.
+   */
+  async enrichDebtStubRowsFromSales(
+    clubId: string,
+    provider: FitgoAnalyticsHttpProvider,
+    fromStr: string,
+    toStr: string,
+    delayMsBetweenDays = 0,
+  ): Promise<number> {
+    const rangeGte = new Date(`${fromStr}T00:00:00.000Z`);
+    const rangeLte = new Date(`${toStr}T23:59:59.999Z`);
+    // Also catch write-offs whose occurredAt is in range but synced earlier.
+    const rows = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        operationType: { in: ['unpaid', 'debt_writeoff'] },
+        occurredAt: { gte: rangeGte, lte: rangeLte },
+      },
+      select: {
+        id: true,
+        documentId: true,
+        externalId: true,
+        productName: true,
+        productExternalId: true,
+        productCode: true,
+        productGroupName: true,
+        saleType: true,
+        performerName: true,
+        performerExternalId: true,
+        occurredAt: true,
+      },
+      take: 500,
+    });
+    const stubs = rows.filter((r) => debtRowNeedsSalesEnrich(r));
+    if (!stubs.length) return 0;
+
+    const days = new Set<string>();
+    for (const r of stubs) {
+      const day = moscowDayKey(r.occurredAt);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(day)) days.add(day);
+    }
+    const dayList = [...days].sort().slice(-DEBT_PERFORMER_ENRICH_MAX_DAYS);
+    const sales: FitgoAnalyticsSalesItem[] = [];
+    for (let i = 0; i < dayList.length; i++) {
+      const day = dayList[i]!;
+      if (i > 0 && delayMsBetweenDays > 0) await sleep(delayMsBetweenDays);
+      try {
+        sales.push(
+          ...(await fetchSalesOnce(provider, { from: day, to: day })),
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.logger.warn(
+          `Debt stub enrich /sales failed club=${clubId} day=${day}: ${msg}`,
+        );
+      }
+    }
+    const byDoc = indexSalesUnpaidByDocument(sales);
+    if (!byDoc.size) return 0;
+
+    let updated = 0;
+    const now = new Date();
+    for (const row of stubs) {
+      const doc =
+        row.documentId?.trim() ||
+        saleDocumentUuid({ saleDocumentId: row.externalId });
+      const src = doc ? byDoc.get(doc) : undefined;
+      if (!src) continue;
+      const data: {
+        productName?: string;
+        productExternalId?: string | null;
+        productCode?: string | null;
+        productGroupName?: string | null;
+        saleType?: string | null;
+        performerName?: string | null;
+        performerExternalId?: string | null;
+        syncedAt: Date;
+      } = { syncedAt: now };
+      let changed = false;
+      if (
+        isGenericPaymentProduct(row.productName) &&
+        src.productName?.trim()
+      ) {
+        data.productName = src.productName.trim();
+        if (src.productExternalId) {
+          data.productExternalId = src.productExternalId;
+        }
+        if (src.productCode) data.productCode = src.productCode;
+        if (src.productGroupName) {
+          data.productGroupName = src.productGroupName;
+        }
+        if (src.saleType) data.saleType = src.saleType;
+        changed = true;
+      }
+      if (
+        !itemHasPerformer({
+          performerExternalId: row.performerExternalId,
+          performerName: row.performerName,
+        }) &&
+        itemHasPerformer(src)
+      ) {
+        data.performerName = src.performerName?.trim() || null;
+        data.performerExternalId = src.performerExternalId?.trim() || null;
+        changed = true;
+      }
+      if (!changed) continue;
+      await this.prisma.clubRevenueEntry.update({
+        where: { id: row.id },
+        data,
+      });
+      updated += 1;
+    }
+    return updated;
   }
 
   /**
