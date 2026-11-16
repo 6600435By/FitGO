@@ -2701,27 +2701,48 @@ export function BookingControlPanel({
     setRefreshBusy(true);
     setMessage('');
     try {
-      // Month-long pull ≈ 800 занятий; one Nest call exceeds Next proxy (~150s)
-      // → HTTP 500. Chunk into ≤5-day windows (backend also day-by-day vs 1C).
-      const chunks = splitIsoRangeInclusive(from, to, 5);
+      // Through hoster WP proxy a request often dies ~60s (php/proxy hard cap),
+      // while Nest+Next allow 150–300s. One chunk does classes + PT sales + SPA
+      // revenue day-by-day — ≤2 calendar days keeps each call under that cap.
+      // (5-day chunks timed out on October month refresh → generic 502 toast.)
+      const chunks = splitIsoRangeInclusive(from, to, 2);
       let sessions = 0;
       let pt = 0;
       let revenue = 0;
       let lastMsg = '';
+      const failed: string[] = [];
       for (let i = 0; i < chunks.length; i++) {
+        const label = `${chunks[i].from} – ${chunks[i].to}`;
         if (chunks.length > 1) {
           setMessage(
-            `Обновляем из 1С… ${i + 1}/${chunks.length} (${chunks[i].from} – ${chunks[i].to})`,
+            `Обновляем из 1С… ${i + 1}/${chunks.length} (${label})`,
           );
         }
-        const res = await api.refreshFrom1c(chunks[i].from, chunks[i].to);
-        sessions += res.sessionsUpserted ?? 0;
-        pt += res.ptSalesUpserted ?? 0;
-        revenue += res.revenueUpserted ?? 0;
-        lastMsg = res.message || lastMsg;
+        try {
+          const res = await api.refreshFrom1c(chunks[i].from, chunks[i].to);
+          sessions += res.sessionsUpserted ?? 0;
+          pt += res.ptSalesUpserted ?? 0;
+          revenue += res.revenueUpserted ?? 0;
+          lastMsg = res.message || lastMsg;
+        } catch (e) {
+          failed.push(label);
+          const timedOut =
+            e instanceof ApiError &&
+            (e.status === 502 || e.status === 503 || e.status === 504);
+          if (timedOut) {
+            setMessage(
+              `Таймаут на ${label} (${i + 1}/${chunks.length}). Продолжаем…`,
+            );
+          }
+        }
       }
       await load();
-      if (chunks.length > 1) {
+      if (failed.length) {
+        setMessage(
+          `Обновлено частично: занятий ${sessions}, ПТ ${pt}, SPA ${revenue}. ` +
+            `Не удалось: ${failed.join('; ')}. Нажмите «Обновить из 1С» ещё раз.`,
+        );
+      } else if (chunks.length > 1) {
         setMessage(
           `Период обновлён из 1С (${chunks.length} частей): занятий ${sessions}, ПТ ${pt}, продажи SPA ${revenue}.`,
         );

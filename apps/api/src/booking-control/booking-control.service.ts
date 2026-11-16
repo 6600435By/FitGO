@@ -1740,11 +1740,12 @@ export class BookingControlService {
     let sync: Awaited<ReturnType<ClassSessionsSyncService['syncClub']>>;
     try {
       // ClassSessionsSyncService pulls day-by-day (1C loads all refs in window).
-      // Wait up to 2 min if background club-sync holds the lock (was silent 0).
+      // Short wait only: hoster WP proxy often kills the HTTP call ~60s, so a
+      // 120s lock wait alone caused «Не удалось выполнить действие» on month refresh.
       sync = await this.classSessions.syncClub(clubId, {
         from,
         to,
-        waitIfBusyMs: 120_000,
+        waitIfBusyMs: 12_000,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

@@ -1,6 +1,9 @@
 import { addMoscowDays } from './moscow-time';
 
-/** Same ≤5-day windows as booking-control «Обновить из 1С» (avoids 1C/proxy timeouts). */
+/**
+ * Internal PT pull windows (booking-control UI chunks ≤2 days for hoster ~60s;
+ * backend may still split wider ranges when club-sync calls syncClub alone).
+ */
 export const TRAINER_PT_SALES_CHUNK_DAYS = 5;
 
 /**
