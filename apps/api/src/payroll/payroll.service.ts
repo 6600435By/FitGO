@@ -1942,13 +1942,14 @@ export class PayrollService {
     const adjustments = await this.listAdjustments(clubId, performerId, from, to);
     const adjustmentsMinor = adjustments.reduce((s, a) => s + a.amountMinor, 0);
 
-    const fromD = new Date(`${from}T00:00:00`);
-    const toD = new Date(`${to}T00:00:00`);
-    const monthDays = new Date(
-      fromD.getFullYear(),
-      fromD.getMonth() + 1,
-      0,
-    ).getDate();
+    // Calendar math from ISO — never local T00:00:00 (Minsk shifts @db.Date).
+    const fromD = dateOnly(from);
+    const toD = dateOnly(to);
+    const monthDays = (() => {
+      const y = Number(from.slice(0, 4));
+      const m = Number(from.slice(5, 7));
+      return new Date(Date.UTC(y, m, 0)).getUTCDate();
+    })();
     const slices = allPaySlices(profile);
     // Monthly оклад → only MONTH_SETTLEMENT (15th). ADVANCE_HALF pays hours /
     // SPA% / GP rates for days 1–15, never a prorated share of оклад.
@@ -2400,8 +2401,8 @@ export class PayrollService {
           : `Сначала закройте очередь админа: открытых исключений ${summary.openExceptions}`,
       );
     }
-    const fromD = new Date(`${from}T00:00:00`);
-    const toD = new Date(`${to}T00:00:00`);
+    const fromD = dateOnly(from);
+    const toD = dateOnly(to);
     await this.prisma.payrollPeriodLock.create({
       data: {
         clubId,
@@ -3028,12 +3029,27 @@ export class PayrollService {
       note: null as string | null,
     };
 
+    // Draft / «Сохранено» must not leave a hard period lock — otherwise Staff
+    // rates fail with «период закрыт» while the employee report still shows open.
+    const clearDraftLocks = async () => {
+      await this.prisma.payrollPeriodLock.deleteMany({
+        where: {
+          clubId,
+          userId: input.userId,
+          periodFrom,
+          periodTo,
+        },
+      });
+    };
+
     if (existing) {
       const row = await this.prisma.payrollPayout.update({
         where: { id: existing.id },
         data,
         include: { user: true },
       });
+      await clearDraftLocks();
+      this.invalidateClubSummaryCache(clubId);
       return this.mapPayout(row);
     }
 
@@ -3048,6 +3064,8 @@ export class PayrollService {
         },
         include: { user: true },
       });
+      await clearDraftLocks();
+      this.invalidateClubSummaryCache(clubId);
       return this.mapPayout(row);
     } catch (e) {
       if (
@@ -3688,8 +3706,10 @@ export class PayrollService {
   }
 
   /**
-   * Hard freeze for rate versions: paid MONTH_SETTLEMENT, or a period lock
-   * that is not merely the ADVANCE_HALF wave (оклад is paid on the 15th).
+   * Hard freeze for rate versions — must match employee-report «Период закрыт»:
+   * - paid MONTH_SETTLEMENT covering the day, or
+   * - an explicit period lock that is not merely the ADVANCE_HALF wave.
+   * ADVANCE_HALF / «Сохранено» (DRAFT) must not block Staff rate corrections.
    */
   private async compensationDayFrozen(
     clubId: string,
@@ -3713,6 +3733,31 @@ export class PayrollService {
       return { frozen: true, until: utcDateKey(monthSettled.periodTo) };
     }
 
+    // «Сохранено» (DRAFT) settlement covering this day: drop a stale lock on
+    // the same wave (confirm → draft without lock cleanup) so rates can be
+    // fixed while the report still shows «Период открыт».
+    const openDraft = await this.prisma.payrollPayout.findFirst({
+      where: {
+        clubId,
+        userId,
+        status: PayrollPayoutStatus.DRAFT,
+        kind: PrismaPayoutKind.MONTH_SETTLEMENT,
+        periodFrom: { lte: day },
+        periodTo: { gte: day },
+      },
+      select: { periodFrom: true, periodTo: true },
+    });
+    if (openDraft) {
+      await this.prisma.payrollPeriodLock.deleteMany({
+        where: {
+          clubId,
+          userId,
+          periodFrom: openDraft.periodFrom,
+          periodTo: openDraft.periodTo,
+        },
+      });
+    }
+
     const locks = await this.prisma.payrollPeriodLock.findMany({
       where: {
         clubId,
@@ -3724,30 +3769,44 @@ export class PayrollService {
     });
     if (!locks.length) return { frozen: false };
 
-    const advanceCovering = await this.prisma.payrollPayout.findFirst({
+    const advances = await this.prisma.payrollPayout.findMany({
       where: {
         clubId,
         userId,
         status: PayrollPayoutStatus.PAID,
         kind: PrismaPayoutKind.ADVANCE_HALF,
-        periodFrom: { lte: day },
-        periodTo: { gte: day },
       },
-      orderBy: { periodTo: 'desc' },
+      select: { periodFrom: true, periodTo: true },
     });
-    if (advanceCovering) {
-      const advFrom = utcDateKey(advanceCovering.periodFrom);
-      const advTo = utcDateKey(advanceCovering.periodTo);
-      const onlyAdvanceLocks = locks.every((locked) => {
-        const from = utcDateKey(locked.periodFrom);
-        const to = utcDateKey(locked.periodTo);
-        return from >= advFrom && to <= advTo;
-      });
-      // Paid advance wave alone must not freeze rate edits.
-      if (onlyAdvanceLocks) return { frozen: false };
-    }
 
-    return { frozen: true, until: utcDateKey(locks[0]!.periodTo) };
+    const hardLocks = locks.filter((locked) => {
+      const from = utcDateKey(locked.periodFrom);
+      const to = utcDateKey(locked.periodTo);
+      // Advance wave locks never freeze оклад / motivation edits.
+      if (
+        advances.some((a) => {
+          const af = utcDateKey(a.periodFrom);
+          const at = utcDateKey(a.periodTo);
+          return from >= af && to <= at;
+        })
+      ) {
+        return false;
+      }
+      // Same-range DRAFT settlement ⇒ period still open for corrections.
+      if (
+        openDraft &&
+        from === utcDateKey(openDraft.periodFrom) &&
+        to === utcDateKey(openDraft.periodTo)
+      ) {
+        return false;
+      }
+      // Any DRAFT settlement covering this day ⇒ allow rate fix (UI open).
+      if (openDraft) return false;
+      return true;
+    });
+
+    if (!hardLocks.length) return { frozen: false };
+    return { frozen: true, until: utcDateKey(hardLocks[0]!.periodTo) };
   }
 
   async listPayTemplates(clubId: string): Promise<StaffPayTemplateDto[]> {
@@ -4292,8 +4351,8 @@ export class PayrollService {
         clubId_userId_periodFrom_periodTo: {
           clubId,
           userId: input.userId,
-          periodFrom: new Date(`${input.periodFrom}T00:00:00`),
-          periodTo: new Date(`${input.periodTo}T00:00:00`),
+          periodFrom: dateOnly(input.periodFrom),
+          periodTo: dateOnly(input.periodTo),
         },
       },
     });
@@ -4314,8 +4373,8 @@ export class PayrollService {
         userId: input.userId,
         amountMinor,
         reason,
-        periodFrom: new Date(`${periodFrom}T00:00:00`),
-        periodTo: new Date(`${periodTo}T00:00:00`),
+        periodFrom: dateOnly(periodFrom),
+        periodTo: dateOnly(periodTo),
         createdById: actor.sub,
       },
     });
