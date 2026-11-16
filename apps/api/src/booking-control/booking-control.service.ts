@@ -4185,6 +4185,10 @@ export class BookingControlService {
    * `wide` = existing admin ±7/+31 window.
    * On narrow miss: one wider ±7d pull (timezone / future publish), then
    * inactive row — avoids trainer 404 when the doc exists but soft-deactivated.
+   *
+   * Today/future GROUP: always re-pull the day window even when a Postgres
+   * row already exists — 1C roster changes (new bookings) would otherwise
+   * stay invisible until the next LIGHT/FULL.
    */
   private async findOnexSessionForControl(
     clubId: string,
@@ -4220,9 +4224,22 @@ export class BookingControlService {
       return (await loadActive(id)) ?? null;
     };
 
+    const today = minskDayKey(new Date());
+    const needsGroupRosterRefresh = (
+      row: {
+        kind: OnexClassKind;
+        payrollLocked: boolean;
+        startAt: Date;
+      } | null,
+    ) =>
+      !!row &&
+      row.kind === OnexClassKind.GROUP &&
+      !row.payrollLocked &&
+      minskDayKey(row.startAt) >= today;
+
     let id = await resolveId();
     let session = await loadActive(id);
-    if (session) return session;
+    if (session && !needsGroupRosterRefresh(session)) return session;
 
     const window = await this.syncWindowForCandidate(
       clubId,

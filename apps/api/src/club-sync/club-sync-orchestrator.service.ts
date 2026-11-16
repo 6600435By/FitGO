@@ -6,7 +6,10 @@ import {
   ClubSyncTrigger,
   Prisma,
 } from '@prisma/client';
-import { GROUP_SCHEDULE_HORIZON_DAYS } from '@fitgo/shared-types';
+import {
+  GROUP_SCHEDULE_HORIZON_DAYS,
+  LIGHT_GROUP_ROSTER_AHEAD_DAYS,
+} from '@fitgo/shared-types';
 import { AdminSalesSyncService } from '../admin-sales/admin-sales-sync.service';
 import { ClubRevenueSyncService } from '../admin-sales/club-revenue-sync.service';
 import { ClassSessionsSyncService } from '../class-sync/class-sessions-sync.service';
@@ -459,13 +462,29 @@ export class ClubSyncOrchestrator {
       const schedFrom = today;
       const schedTo = isToday
         ? today
-        : addMoscowDays(today, isFull ? GROUP_SCHEDULE_HORIZON_DAYS : 2);
+        : addMoscowDays(
+            today,
+            isFull ? GROUP_SCHEDULE_HORIZON_DAYS : LIGHT_GROUP_ROSTER_AHEAD_DAYS,
+          );
+      // LIGHT: roster +1d back / +5d ahead so staff GP «Состав» matches 1C
+      // for the near week without waiting for nightly FULL. Hall visits stay
+      // on a tighter window below (no future hall traffic).
       const classFrom = isToday
         ? today
         : isFull
           ? undefined
           : addMoscowDays(today, -1);
       const classTo = isToday
+        ? today
+        : isFull
+          ? undefined
+          : addMoscowDays(today, LIGHT_GROUP_ROSTER_AHEAD_DAYS);
+      const visitsFrom = isToday
+        ? today
+        : isFull
+          ? undefined
+          : addMoscowDays(today, -1);
+      const visitsTo = isToday
         ? today
         : isFull
           ? undefined
@@ -571,9 +590,9 @@ export class ClubSyncOrchestrator {
         });
       } else {
         const runClassSessions = async () => {
-          // LIGHT: near window + days with open FitGO group bookings (admin
-          // cancel in 1C → clear GroupClassBooking). Must run early in LIGHT —
-          // sales/revenue often burn the 3min budget before ±1 alone finishes.
+          // LIGHT: near window (−1…+5) + days with open FitGO group bookings
+          // (admin cancel in 1C → clear GroupClassBooking). Must run early —
+          // sales/revenue often burn the 3min budget before the near window.
           // FULL: operational window via syncClub() when classFrom/to unset.
           const r =
             isFull || !classFrom || !classTo
@@ -626,8 +645,8 @@ export class ClubSyncOrchestrator {
 
         await runStep('hall_visits', async () => {
           const r = await this.hallVisits.syncClub(clubId, {
-            from: classFrom,
-            to: classTo,
+            from: visitsFrom,
+            to: visitsTo,
           });
           if (r.endpointMissing) {
             throw new Error('GET /v1/visits (club) not published (1C)');

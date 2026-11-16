@@ -6,6 +6,14 @@ import type { GroupApprovalPhase } from './booking-control';
  */
 export const GROUP_SCHEDULE_HORIZON_DAYS = 21;
 
+/**
+ * Daytime LIGHT / manual «Обновить из 1С»: how far ahead to pull GROUP
+ * document roster (`class_sessions`) and schedule slot shells.
+ * Staff «Расписание» shows booked clients from Postgres — without this
+ * window, D+2…D+N stays stale until nightly FULL.
+ */
+export const LIGHT_GROUP_ROSTER_AHEAD_DAYS = 5;
+
 /** Unified club calendar event status. */
 export type ClubScheduleStatus = 'planned' | 'done' | 'cancelled';
 

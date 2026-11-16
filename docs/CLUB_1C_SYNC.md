@@ -13,8 +13,9 @@ Staff screens read **only FitGO Postgres**. Live 1C reads happen in:
 | | Manual LIGHT (кнопка) | AUTO LIGHT (daytime) | AUTO TODAY (trainer screens) | Nightly FULL (03:00–04:00 MSK) |
 |--|------------------------|----------------------|--------------------------------|--------------------------------|
 | Sales / revenue | yesterday–today, no change-log | same as LIGHT | **skipped** | incremental window + `scope=changes` |
-| Classes / visits | today ±1 day | same as LIGHT | **today only** | provider default (wider) |
-| Schedule slots | today + 2 days | same as LIGHT | **today only** | today + 14 days |
+| Classes (GP roster) | today −1 … **+5** days | same as LIGHT | **today only** | provider default (wider) |
+| Hall visits | today ±1 day | same as LIGHT | **today only** | provider default (wider) |
+| Schedule slots | today + **5** days | same as LIGHT | **today only** | today + 21 days (`GROUP_SCHEDULE_HORIZON_DAYS`) |
 | PT sales | today ±1 day | same as LIGHT | **skipped** | 45 days (≤5-day chunks; no wipe on empty/timeout) |
 | Specialist debts / memberships | **skipped** | **skipped** | **skipped** | full (rate-limited membership walk) |
 | Run budget | 3 min → PARTIAL | 3 min → PARTIAL | 60 s → PARTIAL | 40 min → PARTIAL |

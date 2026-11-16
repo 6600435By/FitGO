@@ -16,6 +16,7 @@ import {
 import type { FitgoClassSessionRow } from '@fitgo/1c-adapter';
 import {
   GROUP_SCHEDULE_HORIZON_DAYS,
+  LIGHT_GROUP_ROSTER_AHEAD_DAYS,
   isSpaLikeSessionTitle,
   normalizeClassEmployeeName,
 } from '@fitgo/shared-types';
@@ -127,8 +128,8 @@ export class ClassSessionsSyncService {
   }
 
   /**
-   * LIGHT daytime sync: near window (today±1) plus days that still have open
-   * GroupClassBooking rows — only inside the app booking horizon
+   * LIGHT daytime sync: near window (today−1…+5) plus days that still have
+   * open GroupClassBooking rows — only inside the app booking horizon
    * (`GROUP_SCHEDULE_HORIZON_DAYS` = 21). 1C may list classes a year ahead;
    * we never pull those days here (site≈14d / app=21d).
    */
@@ -140,7 +141,8 @@ export class ClassSessionsSyncService {
     const horizonEnd = addMoscowDays(today, GROUP_SCHEDULE_HORIZON_DAYS);
     const nearFrom = opts?.nearFrom ?? addMoscowDays(today, -1);
     // nearTo must not exceed app booking horizon
-    const nearToRaw = opts?.nearTo ?? addMoscowDays(today, 1);
+    const nearToRaw =
+      opts?.nearTo ?? addMoscowDays(today, LIGHT_GROUP_ROSTER_AHEAD_DAYS);
     const nearTo = nearToRaw > horizonEnd ? horizonEnd : nearToRaw;
     const nearDays = eachUtcDay(nearFrom, nearTo).filter(
       (d) => d <= horizonEnd,
@@ -172,7 +174,7 @@ export class ClassSessionsSyncService {
     }
 
     // Open-booking days first (e.g. 21.11 cancel) so a short LIGHT budget
-    // still clears stale ЛК rows before spending time on today±1 alone.
+    // still clears stale ЛК rows before spending time on the near window alone.
     const openDays = [...openDaySet].sort();
     const nearOnly = nearDays.filter((d) => !openDaySet.has(d));
     const days = [...openDays, ...nearOnly];
