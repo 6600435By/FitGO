@@ -6,7 +6,7 @@
   Runs Backup-1C-Forma-SQL.ps1 as NT AUTHORITY\SYSTEM.
   Does NOT modify 1s-backup (DumpIB) or FitGO-Backup.
 
-  Schedule: daily 00:40 — before 1s-backup (~00:55) and FitGO-Backup (01:30).
+  Schedule: daily 00:40 - before 1s-backup (~00:55) and FitGO-Backup (01:30).
 
 .EXAMPLE
   .\Register-1C-SQLBackupTask.ps1
@@ -40,7 +40,7 @@ if (-not (Test-Path -LiteralPath $BackupScript)) {
 
 $secret = Join-Path $BackupRoot 'backup-1c.secret.ps1'
 if (-not (Test-Path -LiteralPath $secret)) {
-  throw ("Secret missing: {0} — add SqlUser/SqlPassword (see backup-1c.secret.ps1.example)" -f $secret)
+  throw ("Secret missing: {0} - add SqlUser/SqlPassword (see backup-1c.secret.ps1.example)" -f $secret)
 }
 
 $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'

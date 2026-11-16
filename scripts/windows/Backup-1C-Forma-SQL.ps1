@@ -15,7 +15,7 @@
     3) Only then: .bak -> .bak.prev, .new -> .bak, delete .prev
     On failure the previous forma_full.bak is left untouched.
 
-  Secrets: C:\BackUp\backup-1c.secret.ps1 — SqlUser / SqlPassword
+  Secrets: C:\BackUp\backup-1c.secret.ps1 - SqlUser / SqlPassword
   (see backup-1c.secret.ps1.example). Does not stop Apache; does not touch 1s-backup.
 
 .EXAMPLE
