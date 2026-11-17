@@ -12,6 +12,7 @@ import {
   OnexClassKind,
   OnexClassMemberAttendance,
   OnexClassStatus,
+  PersonalBookingOrigin,
   PersonalBookingStatus,
   Prisma,
   Role,
@@ -143,6 +144,8 @@ import {
   salePaymentStatus,
   saleSearchWindow,
   saleTakenBlocksSpaLink,
+  spaAnchoredLineKeys,
+  spaRetailLineHasAnchor,
   spaSaleLineKey,
   namesMatch,
   serviceNamesMatch,
@@ -650,11 +653,15 @@ export class BookingControlService {
           .map((s) => spaSaleLineKey(s)),
       );
       const seenSpaSaleLines = new Set<string>();
+      const spaRetailAnchors = spaAnchoredLineKeys(spaRetailCandidates);
       // One card per nomenclature line: two SKUs of one document = two rows.
       for (const sale of collapseSpaSalesByLine(spaRetailCandidates)) {
         const product = sale.productName ?? '';
         const lineKey = spaSaleLineKey(sale);
         if (!lineKey || seenSpaSaleLines.has(lineKey)) continue;
+        // :cash:Долг: slices for older SPA sales (anchor outside period) must
+        // not invent visits — Ходанович classic massages in Oct 2026.
+        if (!spaRetailLineHasAnchor(sale, spaRetailAnchors)) continue;
         if (
           linkedSaleIds.has(sale.externalId) ||
           linkedSaleLineKeys.has(lineKey)
@@ -728,6 +735,11 @@ export class BookingControlService {
 
     // FitGO-only PT/SPA
     if (!kindFilter || kindFilter === OnexClassKind.PT) {
+      const visitGluedIds = new Set(
+        onex
+          .filter((o) => o.kind === OnexClassKind.PT && o.fitgoBookingRef?.trim())
+          .map((o) => o.fitgoBookingRef!.trim()),
+      );
       for (const b of allPt) {
         if (matchedPtIds.has(b.id)) continue;
         const personal = isPersonalPtBooking(
@@ -758,16 +770,24 @@ export class BookingControlService {
             : b.status === PersonalBookingStatus.COMPLETED
               ? 'COMPLETED'
               : 'SCHEDULED';
-        const payment: BookingControlPayment = b.isComplimentary
-          ? 'GIFT'
-          : b.paymentStatus === 'PAID'
-            ? 'PAID'
-            : b.paymentStatus === 'DEBT'
-              ? 'DEBT'
-              : 'UNKNOWN';
+        const payment: BookingControlPayment =
+          b.isComplimentary || b.payKind === 'GIFT'
+            ? 'GIFT'
+            : b.payKind === 'BLOCK'
+              ? 'QUOTA'
+              : b.paymentStatus === 'PAID'
+                ? 'PAID'
+                : b.paymentStatus === 'DEBT'
+                  ? 'DEBT'
+                  : 'UNKNOWN';
         const counts = this.singleClientCounts(status, {
           arrived: this.paymentImpliesArrived(payment),
         });
+        const writeOffBasis =
+          payment === 'GIFT' ||
+          payment === 'QUOTA' ||
+          b.origin === PersonalBookingOrigin.CLIENT_BOOKED;
+        const visitGlued = visitGluedIds.has(b.id);
         items.push({
           sessionKey,
           kind: 'PT',
@@ -795,7 +815,12 @@ export class BookingControlService {
           fitgoBookingId: b.id,
           linkedDocExternalId: b.linkedDocExternalId ?? undefined,
           docAutoLinkBlocked: b.docAutoLinkBlocked,
-          oneCLinked: Boolean(b.linkedDocExternalId || b.crmDocRef),
+          // Gift/block basis = Onex visit glue; cash = sale line id.
+          oneCLinked: Boolean(
+            b.linkedDocExternalId ||
+              b.crmDocRef ||
+              (writeOffBasis && visitGlued),
+          ),
           number: b.crmDocRef ?? undefined,
           trainerClubPersonal: personal || undefined,
         });
@@ -864,6 +889,68 @@ export class BookingControlService {
     }
 
     if (!kindFilter || kindFilter === OnexClassKind.SPA) {
+      // List skips full settlement; still honour linked 1C sales so a card
+      // that shows «Оплачено · списание» is not stuck in «Нет оплаты».
+      const linkedSalePay = new Map<string, 'PAID' | 'DEBT'>();
+      const linkedIds = [
+        ...new Set(
+          allSpa
+            .map((b) => b.linkedSaleExternalId?.trim())
+            .filter((x): x is string => Boolean(x)),
+        ),
+      ];
+      if (linkedIds.length) {
+        const linkedRows = await this.prisma.clubRevenueEntry.findMany({
+          where: {
+            clubId,
+            OR: linkedIds.flatMap((id) => {
+              const head = (id.split(/[:#]/)[0] ?? '').trim();
+              const ors: Array<Record<string, unknown>> = [
+                { externalId: id },
+              ];
+              if (head && /^[0-9a-f-]{36}$/i.test(head)) {
+                ors.push({ externalId: { startsWith: `${head}:` } });
+                ors.push({ documentId: head });
+              }
+              return ors;
+            }),
+          },
+          orderBy: [{ isActive: 'desc' }, { occurredAt: 'asc' }],
+          take: Math.min(400, linkedIds.length * 12),
+        });
+        const byBasis = new Map<string, SpaSaleCandidate[]>();
+        for (const r of linkedRows) {
+          const c = this.mapRevenueToSaleCandidate(r);
+          const basis = preferredSaleBasisId({
+            externalId: c.externalId,
+            documentId: c.documentId ?? null,
+          });
+          const list = byBasis.get(basis);
+          if (list) list.push(c);
+          else byBasis.set(basis, [c]);
+        }
+        for (const id of linkedIds) {
+          const basis = preferredSaleBasisId({
+            externalId: id,
+            documentId: null,
+          });
+          const group = byBasis.get(basis) ?? [];
+          if (!group.length) continue;
+          const collapsed = collapseSpaSalesByLine(group);
+          const hit =
+            collapsed.find((s) => s.externalId === id) ??
+            collapsed.find(
+              (s) =>
+                preferredSaleBasisId({
+                  externalId: s.externalId,
+                  documentId: s.documentId ?? null,
+                }) === basis,
+            ) ??
+            collapsed[0];
+          if (!hit) continue;
+          linkedSalePay.set(id, salePaymentStatus(hit));
+        }
+      }
       for (const b of allSpa) {
         if (matchedSpaIds.has(b.id)) continue;
         if (
@@ -889,7 +976,9 @@ export class BookingControlService {
         const oneCLinked = Boolean(
           b.crmDocRef?.trim() || b.linkedSaleExternalId?.trim(),
         );
-        const payment: BookingControlPayment =
+        const linkedId = b.linkedSaleExternalId?.trim();
+        const linkedPay = linkedId ? linkedSalePay.get(linkedId) : undefined;
+        let payment: BookingControlPayment =
           b.partnerSource?.toUpperCase() === 'ALLSPORTS' ||
           isSpaAllSportsBioimpedance({
             serviceExternalId: b.service.externalId,
@@ -903,12 +992,29 @@ export class BookingControlService {
                 : b.paymentStatus === 'DEBT'
                   ? 'DEBT'
                   : 'UNKNOWN';
+        // Prefer live ClubRevenue over a stale SpaBooking.paymentStatus
+        // (link was saved, status never repaired → false «На контроле»).
+        if (linkedPay === 'PAID' && payment !== 'PARTNER' && payment !== 'QUOTA') {
+          payment = 'PAID';
+        } else if (
+          linkedPay === 'DEBT' &&
+          (payment === 'UNKNOWN' || payment === 'DEBT')
+        ) {
+          payment = 'DEBT';
+        } else if (
+          payment === 'UNKNOWN' &&
+          linkedId &&
+          !linkedPay &&
+          b.paymentStatus !== ServicePaymentStatus.DEBT
+        ) {
+          // Link present, cache miss for this period — do not show «Нет оплаты».
+          payment = 'PAID';
+        }
         // Paid sale / partner ⇒ client came (even if booking still SCHEDULED).
         const counts = this.singleClientCounts(status, {
           arrived:
             this.paymentImpliesArrived(payment) ||
-            (Boolean(b.linkedSaleExternalId?.trim()) &&
-              b.paymentStatus === ServicePaymentStatus.PAID),
+            (Boolean(linkedId) && payment === 'PAID'),
         });
         items.push({
           sessionKey,
@@ -1720,13 +1826,16 @@ export class BookingControlService {
           : b.status === PersonalBookingStatus.CANCELLED
             ? 'CANCELLED'
             : 'SCHEDULED';
-      const payment: BookingControlPayment = b.isComplimentary
-        ? 'GIFT'
-        : b.paymentStatus === 'PAID'
-          ? 'PAID'
-          : b.paymentStatus === 'DEBT'
-            ? 'DEBT'
-            : 'UNKNOWN';
+      const payment: BookingControlPayment =
+        b.isComplimentary || b.payKind === 'GIFT'
+          ? 'GIFT'
+          : b.payKind === 'BLOCK'
+            ? 'QUOTA'
+            : b.paymentStatus === 'PAID'
+              ? 'PAID'
+              : b.paymentStatus === 'DEBT'
+                ? 'DEBT'
+                : 'UNKNOWN';
       const counts = this.singleClientCounts(status, {
         arrived: this.paymentImpliesArrived(payment),
       });
@@ -1771,6 +1880,21 @@ export class BookingControlService {
         noShowCount: counts.noShowCount,
         linkedDocExternalId: b.linkedDocExternalId ?? b.crmDocRef,
       });
+      const writeOffBasis =
+        payment === 'GIFT' ||
+        payment === 'QUOTA' ||
+        b.origin === PersonalBookingOrigin.CLIENT_BOOKED;
+      const visitGlued = writeOffBasis
+        ? Boolean(
+            await this.prisma.onexClassSession.findFirst({
+              where: { clubId, fitgoBookingRef: b.id },
+              select: { id: true },
+            }),
+          )
+        : false;
+      const oneCLinked = Boolean(
+        b.linkedDocExternalId || b.crmDocRef || visitGlued,
+      );
 
       return {
         sessionKey,
@@ -1807,7 +1931,7 @@ export class BookingControlService {
         crmDocRef: b.crmDocRef ?? undefined,
         linkedDocExternalId: b.linkedDocExternalId ?? undefined,
         docAutoLinkBlocked: b.docAutoLinkBlocked,
-        oneCLinked: Boolean(b.linkedDocExternalId || b.crmDocRef),
+        oneCLinked,
         number: b.crmDocRef ?? undefined,
         priceMinor: b.priceMinor ?? undefined,
         history,
@@ -6829,8 +6953,16 @@ export class BookingControlService {
       const amountMinor =
         amountMajor > 0 ? Math.round(amountMajor * 100) : undefined;
       const paymentStatus = salePaymentStatus(stickySale);
-      // Repair booking pointer onto the live twin key when sync renamed it.
-      if (!stickyFrozen && booking.linkedSaleExternalId !== stickySale.externalId) {
+      const wantPay =
+        paymentStatus === 'PAID'
+          ? ServicePaymentStatus.PAID
+          : ServicePaymentStatus.DEBT;
+      const linkDrift =
+        booking.linkedSaleExternalId !== stickySale.externalId;
+      const payDrift = booking.paymentStatus !== wantPay;
+      // Repair pointer and/or stale paymentStatus (list used DB status →
+      // «Нет оплаты» while the card already showed the linked write-off).
+      if (!stickyFrozen && (linkDrift || payDrift)) {
         await this.prisma.spaBooking
           .update({
             where: { id: booking.id },
@@ -6841,16 +6973,15 @@ export class BookingControlService {
               ...(amountMinor != null && amountMinor > 0
                 ? { priceMinor: amountMinor }
                 : {}),
-              paymentStatus:
-                paymentStatus === 'PAID'
-                  ? ServicePaymentStatus.PAID
-                  : ServicePaymentStatus.DEBT,
+              paymentStatus: wantPay,
               ...(paymentStatus === 'PAID'
                 ? { paidAt: new Date(), eligibleForMotivation: true }
                 : { eligibleForMotivation: false }),
             },
           })
           .catch(() => undefined);
+        booking.paymentStatus = wantPay;
+        booking.linkedSaleExternalId = stickySale.externalId;
       }
       if (paymentStatus === 'PAID') {
         return {
@@ -6945,7 +7076,13 @@ export class BookingControlService {
         booking.startAt,
         booking.specialistId,
       );
-      if (!periodClosed && booking.linkedSaleExternalId !== sale.externalId) {
+      const wantPay =
+        result.paymentStatus === 'PAID'
+          ? ServicePaymentStatus.PAID
+          : ServicePaymentStatus.DEBT;
+      const linkDrift = booking.linkedSaleExternalId !== sale.externalId;
+      const payDrift = booking.paymentStatus !== wantPay;
+      if (!periodClosed && (linkDrift || payDrift)) {
         await this.prisma.spaBooking
           .update({
             where: { id: booking.id },
@@ -6963,16 +7100,15 @@ export class BookingControlService {
               sale.clientExternalId?.trim()
                 ? { clientExternalId: sale.clientExternalId.trim() }
                 : {}),
-              paymentStatus:
-                result.paymentStatus === 'PAID'
-                  ? ServicePaymentStatus.PAID
-                  : ServicePaymentStatus.DEBT,
+              paymentStatus: wantPay,
               ...(result.paymentStatus === 'PAID'
                 ? { paidAt: new Date(), eligibleForMotivation: true }
                 : { eligibleForMotivation: false }),
             },
           })
           .catch(() => undefined);
+        booking.paymentStatus = wantPay;
+        booking.linkedSaleExternalId = sale.externalId;
       }
       if (result.paymentStatus === 'PAID') {
         return {
@@ -8726,6 +8862,7 @@ export class BookingControlService {
         ...(sale?.paymentStatus !== 'DEBT' ? { paidAt: new Date() } : {}),
       },
     });
+    await this.closePtSaleLinkAdminTasks(clubId, bookingId);
     return this.detail(clubId, fitgoSessionKey('PT', bookingId));
   }
 
@@ -8743,6 +8880,23 @@ export class BookingControlService {
         linkedDocExternalId: null,
       },
     });
+    await this.closePtSaleLinkAdminTasks(clubId, bookingId);
     return this.detail(clubId, fitgoSessionKey('PT', bookingId));
+  }
+
+  private async closePtSaleLinkAdminTasks(clubId: string, bookingId: string) {
+    await this.prisma.adminTask.updateMany({
+      where: {
+        clubId,
+        source: 'TRAINING_SALE_NO_PERFORMER',
+        dedupeKey: `pt-sale-link:${bookingId}`,
+        status: { notIn: ['DONE', 'CANCELLED'] },
+      },
+      data: {
+        status: 'DONE',
+        completedAt: new Date(),
+        nextActionAt: null,
+      },
+    });
   }
 }

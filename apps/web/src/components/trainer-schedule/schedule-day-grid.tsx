@@ -39,11 +39,13 @@ export function ScheduleDayGrid({
   events,
   availabilityBlocks,
   onSelectEvent,
+  onManageEvent,
 }: {
   date: Date;
   events: TrainerCalendarEvent[];
   availabilityBlocks: TrainerAvailabilityBlock[];
   onSelectEvent?: (event: TrainerCalendarEvent) => void;
+  onManageEvent?: (event: TrainerCalendarEvent) => void;
 }) {
   const dateStr = dateKey(date);
 
@@ -175,44 +177,69 @@ export function ScheduleDayGrid({
               const caption = eventStateCaption(event);
               const note = eventRelationNote(event);
 
+              const canManage =
+                Boolean(onManageEvent) &&
+                event.kind === 'PERSONAL' &&
+                Boolean(event.bookingId);
+
               return (
-                <button
+                <div
                   key={event.id}
-                  type="button"
                   data-event-block
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelectEvent?.(event);
-                  }}
-                  className={`absolute left-1 right-1 z-10 overflow-hidden rounded px-1.5 py-1 text-left text-[10px] leading-tight shadow-sm transition hover:ring-1 hover:ring-slate-500 ${calendarEventBlockClass(event)}`}
+                  className={`absolute left-1 right-1 z-10 overflow-hidden rounded text-left text-[10px] leading-tight shadow-sm ${calendarEventBlockClass(event)}`}
                   style={{ top: layout.top, height: layout.height }}
-                  title={`${event.title} · ${caption}`}
                 >
-                  <div className="flex items-center gap-1">
-                    <span
-                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${calendarEventDotClass(event)}`}
-                    />
-                    <span className="font-semibold">
-                      {formatTime(event.startAt)}
-                      {endMin !== null ? ` – ${minutesToTime(endMin)}` : ''}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectEvent?.(event);
+                    }}
+                    className="block h-full w-full px-1.5 py-1 text-left hover:ring-1 hover:ring-slate-500"
+                    title={`${event.title} · ${caption}`}
+                  >
+                    <div className="flex items-center gap-1">
+                      <span
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${calendarEventDotClass(event)}`}
+                      />
+                      <span className="font-semibold">
+                        {formatTime(event.startAt)}
+                        {endMin !== null ? ` – ${minutesToTime(endMin)}` : ''}
+                      </span>
+                      {canManage ? (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          className="ml-auto shrink-0 text-[9px] font-medium text-forma-400 underline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onManageEvent?.(event);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.stopPropagation();
+                              onManageEvent?.(event);
+                            }
+                          }}
+                        >
+                          Изменить
+                        </span>
+                      ) : null}
+                    </div>
+                    <span className="block truncate font-medium">
+                      {event.title}
                     </span>
-                  </div>
-                  <span className="block truncate font-medium">{event.title}</span>
-                  <span className="block truncate opacity-90">{caption}</span>
-                  {note ? (
-                    <span className="block truncate opacity-70">{note}</span>
-                  ) : null}
-                  {event.clientIssue && event.clientIssue !== 'NONE' ? (
-                    <span className="block truncate text-amber-300/90">
-                      Нет в 1С — ждёт привязки
-                    </span>
-                  ) : null}
-                  {event.ptControlLabel && event.ptFlow !== 'PERSONAL' ? (
-                    <span className="block truncate text-slate-400/90">
-                      {event.ptControlLabel}
-                    </span>
-                  ) : null}
-                </button>
+                    <span className="block truncate opacity-90">{caption}</span>
+                    {note ? (
+                      <span className="block truncate opacity-70">{note}</span>
+                    ) : null}
+                    {event.clientIssue && event.clientIssue !== 'NONE' ? (
+                      <span className="block truncate text-amber-300/90">
+                        Клиент не в 1С
+                      </span>
+                    ) : null}
+                  </button>
+                </div>
               );
             })}
           </div>

@@ -665,7 +665,8 @@ export type BookingControlIssueReason =
   | 'review'
   | 'unpaid'
   | 'not1c'
-  | 'journal';
+  | 'journal'
+  | 'ptsale';
 
 const BOOKING_CONTROL_PENDING_PHASES = new Set([
   'PENDING_TRAINER',
@@ -692,6 +693,27 @@ export function bookingControlIsNotIn1c(
   return item.kind === 'SPA' && item.source === 'FITGO' && !item.oneCLinked;
 }
 
+/** Staff PT FitGO row past end without sale / write-off link. */
+export function bookingControlIsPtMissingSale(
+  item: Pick<
+    BookingControlListItem,
+    | 'kind'
+    | 'source'
+    | 'oneCLinked'
+    | 'docAutoLinkBlocked'
+    | 'payment'
+    | 'startAt'
+  > & { endAt?: string; trainerClubPersonal?: boolean },
+  nowMs: number = Date.now(),
+): boolean {
+  if (item.kind !== 'PT' || item.source !== 'FITGO') return false;
+  if (item.trainerClubPersonal) return false;
+  if (item.oneCLinked || item.docAutoLinkBlocked) return false;
+  const due = item.endAt ? Date.parse(item.endAt) : Date.parse(item.startAt);
+  if (Number.isNaN(due) || due > nowMs) return false;
+  return true;
+}
+
 export function bookingControlIssueReasons(
   item: Pick<
     BookingControlListItem,
@@ -701,13 +723,17 @@ export function bookingControlIssueReasons(
     | 'needsReview'
     | 'oneCLinked'
     | 'missingJournal'
-  >,
+    | 'docAutoLinkBlocked'
+    | 'startAt'
+  > & { endAt?: string; trainerClubPersonal?: boolean },
+  nowMs: number = Date.now(),
 ): BookingControlIssueReason[] {
   const out: BookingControlIssueReason[] = [];
   if (item.needsReview) out.push('review');
   if (bookingControlIsUnpaid(item)) out.push('unpaid');
   if (bookingControlIsNotIn1c(item)) out.push('not1c');
   if (item.missingJournal) out.push('journal');
+  if (bookingControlIsPtMissingSale(item, nowMs)) out.push('ptsale');
   return out;
 }
 
@@ -761,12 +787,13 @@ export function bookingControlHasControlWork(
     | 'needsReview'
     | 'oneCLinked'
     | 'missingJournal'
+    | 'docAutoLinkBlocked'
     | 'approvalPhase'
     | 'startAt'
-  > & { endAt?: string },
+  > & { endAt?: string; trainerClubPersonal?: boolean },
   nowMs: number,
 ): boolean {
-  if (bookingControlIssueReasons(item).length > 0) return true;
+  if (bookingControlIssueReasons(item, nowMs).length > 0) return true;
   if (bookingControlApprovalDueMs(item) > nowMs) return false;
   return bookingControlApprovalPending(item.approvalPhase);
 }
@@ -784,9 +811,10 @@ export function bookingControlQueueSegment(
     | 'needsReview'
     | 'oneCLinked'
     | 'missingJournal'
+    | 'docAutoLinkBlocked'
     | 'approvalPhase'
     | 'startAt'
-  > & { endAt?: string },
+  > & { endAt?: string; trainerClubPersonal?: boolean },
   nowMs: number,
 ): BookingControlQueueSegment | null {
   if (item.status === 'CANCELLED') return null;
@@ -829,10 +857,13 @@ export function bookingControlMatchesSelectedReasons(
     | 'needsReview'
     | 'oneCLinked'
     | 'missingJournal'
-  >,
+    | 'docAutoLinkBlocked'
+    | 'startAt'
+  > & { endAt?: string; trainerClubPersonal?: boolean },
   selected: readonly BookingControlIssueReason[],
+  nowMs: number = Date.now(),
 ): boolean {
   if (selected.length === 0) return true;
-  const have = new Set(bookingControlIssueReasons(item));
+  const have = new Set(bookingControlIssueReasons(item, nowMs));
   return selected.some((r) => have.has(r));
 }

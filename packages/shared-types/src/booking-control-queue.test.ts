@@ -8,6 +8,7 @@ import {
   bookingControlHasControlWork,
   bookingControlIssueReasons,
   bookingControlIsNotIn1c,
+  bookingControlIsPtMissingSale,
   bookingControlIsUnpaid,
   bookingControlMatchesSelectedReasons,
   bookingControlQueueSegment,
@@ -86,6 +87,48 @@ describe('bookingControlIssueReasons', () => {
         }),
       ),
       ['not1c', 'journal'],
+    );
+    assert.equal(
+      bookingControlIsPtMissingSale(
+        row({
+          sessionKey: '4',
+          kind: 'PT',
+          source: 'FITGO',
+          oneCLinked: false,
+          startAt: '2026-10-28T10:00:00.000Z',
+          endAt: '2026-10-28T11:00:00.000Z',
+        }),
+        NOW,
+      ),
+      true,
+    );
+    assert.deepEqual(
+      bookingControlIssueReasons(
+        row({
+          sessionKey: '5',
+          kind: 'PT',
+          source: 'FITGO',
+          oneCLinked: false,
+          startAt: '2026-10-28T10:00:00.000Z',
+          endAt: '2026-10-28T11:00:00.000Z',
+        }),
+        NOW,
+      ),
+      ['ptsale'],
+    );
+    assert.equal(
+      bookingControlIsPtMissingSale(
+        row({
+          sessionKey: '6',
+          kind: 'PT',
+          source: 'FITGO',
+          oneCLinked: false,
+          startAt: '2026-10-30T10:00:00.000Z',
+          endAt: '2026-10-30T11:00:00.000Z',
+        }),
+        NOW,
+      ),
+      false,
     );
   });
 });

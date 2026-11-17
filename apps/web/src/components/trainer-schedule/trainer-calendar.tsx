@@ -23,6 +23,7 @@ export function TrainerCalendar({
   onNavigate,
   onViewChange,
   onSelectEvent,
+  onManageEvent,
   onMoveBooking,
 }: {
   events: TrainerCalendarEvent[];
@@ -34,6 +35,8 @@ export function TrainerCalendar({
   onNavigate: (date: Date) => void;
   onViewChange: (view: ScheduleView) => void;
   onSelectEvent?: (event: TrainerCalendarEvent) => void;
+  /** Open booking edit sheet without navigating to the workout. */
+  onManageEvent?: (event: TrainerCalendarEvent) => void;
   onMoveBooking?: (event: TrainerCalendarEvent, newStartAt: string) => void;
 }) {
   const router = useRouter();
@@ -64,15 +67,16 @@ export function TrainerCalendar({
   return (
     <div className="space-y-3">
       <p className="hidden text-xs text-slate-500 md:block">
-        Клик — открыть сессию, перетаскивание в неделе — перенести (с
-        подтверждением). Черновик и свободное окно подписаны текстом; отмены —
-        по фильтру «Отмены».
+        Клик — открыть сессию, «Изменить» — время и отмена, перетаскивание в
+        неделе — перенести. Черновик и свободное окно подписаны текстом; отмены
+        — по фильтру «Отмены».
       </p>
 
       <div className="md:hidden">
         <ScheduleMobileList
           events={visibleEvents}
           onSelectEvent={handleSelectEvent}
+          onManageEvent={onManageEvent}
         />
       </div>
 
@@ -83,6 +87,7 @@ export function TrainerCalendar({
             events={visibleEvents}
             availabilityBlocks={availabilityBlocks}
             onSelectEvent={handleSelectEvent}
+            onManageEvent={onManageEvent}
           />
         )}
         {view === 'week' && (
@@ -91,6 +96,7 @@ export function TrainerCalendar({
             events={visibleEvents}
             availabilityBlocks={availabilityBlocks}
             onSelectEvent={handleSelectEvent}
+            onManageEvent={onManageEvent}
             onMoveBooking={onMoveBooking}
           />
         )}
@@ -100,6 +106,7 @@ export function TrainerCalendar({
             events={visibleEvents}
             availabilityBlocks={availabilityBlocks}
             onSelectEvent={handleSelectEvent}
+            onManageEvent={onManageEvent}
             onSelectDay={(day) => {
               onNavigate(day);
               onViewChange('day');

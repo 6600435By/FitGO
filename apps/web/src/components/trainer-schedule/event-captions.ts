@@ -11,6 +11,7 @@ export function eventStateCaption(event: TrainerCalendarEvent): string {
   if (event.kind === 'PERSONAL_BLOCK') return eventKindLabel('PERSONAL_BLOCK');
   if (event.kind === 'GROUP' || event.kind === 'PERSONAL') {
     if (event.outsideShift) return 'Вне смены · разрешено';
+    if (event.ptControlLabel?.trim()) return event.ptControlLabel.trim();
     return 'Запись';
   }
   return eventKindLabel(event.kind);
@@ -29,6 +30,30 @@ export function eventRelationNote(event: TrainerCalendarEvent): string | null {
   }
   if (event.kind === 'OPEN_SLOT') {
     return 'опубликовано';
+  }
+  if (
+    event.clientIssue &&
+    event.clientIssue !== 'NONE' &&
+    event.kind === 'PERSONAL'
+  ) {
+    return 'Клиент не в 1С';
+  }
+  return null;
+}
+
+/** Amber wait-state for sale / write-off captions. */
+export function eventSaleWaitTone(
+  event: TrainerCalendarEvent,
+): 'wait' | 'ok' | null {
+  const label = event.ptControlLabel?.trim() ?? '';
+  if (!label) return null;
+  if (
+    /ждёт|нет продажи|нет списания|выберите|списание есть/i.test(label)
+  ) {
+    return 'wait';
+  }
+  if (/есть продажа|списано|подтверждена|документ/i.test(label)) {
+    return 'ok';
   }
   return null;
 }

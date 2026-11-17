@@ -1,137 +1,19 @@
 'use client';
 
-import type {
-  TrainerCalendarEvent,
-  TrainerLedgerClientSnapshot,
-} from '@fitgo/shared-types';
-import { Button, ResponsiveSheet, SegmentedControl } from '@fitgo/forma-ui';
+import type { TrainerCalendarEvent } from '@fitgo/shared-types';
+import { Button, ResponsiveSheet } from '@fitgo/forma-ui';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
 
 const BUFFER_OPTS = [0, 15, 30, 60] as const;
-
-type StatusOpt = 'CONFIRMED' | 'COMPLETED' | 'CANCELLED';
 
 function moneyMinor(minor: number) {
   return `${(minor / 100).toLocaleString('ru-RU', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   })} BYN`;
-}
-
-function SettlePreviewBlock({
-  event,
-  isPersonalLedger,
-  controlledByAdmin,
-  ledger,
-  ledgerLoading,
-  ledgerError,
-}: {
-  event: TrainerCalendarEvent;
-  isPersonalLedger: boolean;
-  controlledByAdmin: boolean;
-  ledger: TrainerLedgerClientSnapshot | null;
-  ledgerLoading: boolean;
-  ledgerError: string;
-}) {
-  if (event.isComplimentary) {
-    return (
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-        <p className="font-medium">Расчёт</p>
-        <p className="mt-1 text-xs text-amber-100/80">
-          Подарочная ПТ — локальную сумму не считаем. Оплату и основание
-          подтвердит администратор по 1С / контролю записей.
-        </p>
-      </div>
-    );
-  }
-
-  if (controlledByAdmin || !isPersonalLedger) {
-    return (
-      <div className="rounded-xl border border-white/10 bg-ink-raised/50 px-3 py-2 text-sm text-forma-200">
-        <p className="font-medium text-forma-100">Расчёт</p>
-        <p className="mt-1 text-xs text-forma-400">
-          Клубный контур / 1С — цену и оплату подтвердит администратор по данным
-          1С и контролю записей. Локальную сумму не подставляем.
-        </p>
-        {event.linkedDocExternalId ? (
-          <p className="mt-1 text-[11px] text-forma-500">
-            Есть документ 1С — списание не из личного пакета FitGO.
-          </p>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (ledgerLoading) {
-    return (
-      <div className="rounded-xl border border-forma-500/20 bg-forma-500/5 px-3 py-2 text-sm text-forma-300">
-        Загрузка расчёта…
-      </div>
-    );
-  }
-
-  if (ledgerError) {
-    return (
-      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-        <p className="font-medium">Расчёт</p>
-        <p className="mt-1 text-xs">{ledgerError}</p>
-      </div>
-    );
-  }
-
-  const pkg = ledger?.activePackage;
-  if (pkg && pkg.sessionsRemaining > 0) {
-    return (
-      <div className="rounded-xl border border-forma-500/20 bg-forma-500/5 px-3 py-2 text-sm text-forma-200">
-        <p className="font-medium text-forma-100">Расчёт</p>
-        <p className="mt-1">
-          Пакет персональных тренировок: спишется 1 из «{pkg.title}»; останется{' '}
-          {Math.max(0, pkg.sessionsRemaining - 1)} из {pkg.sessionsTotal}.
-        </p>
-        <p className="mt-1 text-xs text-forma-400">
-          Подтвердит локальный учёт FitGO (тренер), не касса клуба.
-        </p>
-      </div>
-    );
-  }
-
-  const price = ledger?.effectiveSessionPriceMinor ?? null;
-  const basis =
-    ledger?.sessionPriceMinor != null
-      ? 'индивидуальная цена клиента'
-      : ledger?.defaultSessionPriceMinor != null
-        ? 'цена из настроек «Расчёты»'
-        : null;
-
-  if (price != null && price > 0 && basis) {
-    return (
-      <div className="rounded-xl border border-forma-500/20 bg-forma-500/5 px-3 py-2 text-sm text-forma-200">
-        <p className="font-medium text-forma-100">Расчёт</p>
-        <p className="mt-1">
-          Разовая оплата / долг тренеру: {moneyMinor(price)}
-        </p>
-        <p className="mt-1 text-xs text-forma-400">
-          Основание: {basis}. Подтвердит локальный учёт FitGO (тренер).
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
-      <p className="font-medium">Расчёт</p>
-      <p className="mt-1 text-xs">
-        Нет активного пакета и цена неизвестна — сумму не выдумываем; долг с
-        суммой не создастся. Задайте цену в карточке клиента или в «Расчёты».
-      </p>
-      <p className="mt-1 text-[11px] text-amber-100/70">
-        Подтверждение всё равно локальное (тренер), без кассы клуба.
-      </p>
-    </div>
-  );
 }
 
 export function BookingActionSheet({
@@ -177,11 +59,6 @@ export function BookingActionSheet({
   const [seriesScope, setSeriesScope] = useState<'one' | 'future'>('one');
   const [clientId, setClientId] = useState(event.clientId ?? '');
   const [clientQ, setClientQ] = useState('');
-  const [status, setStatus] = useState<StatusOpt>(() => {
-    const s = event.bookingStatus;
-    if (s === 'COMPLETED' || s === 'CANCELLED' || s === 'CONFIRMED') return s;
-    return 'CONFIRMED';
-  });
   const [moveAt, setMoveAt] = useState(() => {
     const d = new Date(event.startAt);
     const local = new Date(d.getTime() - d.getTimezoneOffset() * 60_000);
@@ -189,51 +66,6 @@ export function BookingActionSheet({
   });
   const [bufferBefore, setBufferBefore] = useState(event.bufferBeforeMin ?? 0);
   const [bufferAfter, setBufferAfter] = useState(event.bufferAfterMin ?? 0);
-  const [ledger, setLedger] = useState<TrainerLedgerClientSnapshot | null>(
-    null,
-  );
-  const [ledgerLoading, setLedgerLoading] = useState(false);
-  const [ledgerError, setLedgerError] = useState('');
-
-  useEffect(() => {
-    if (status !== 'COMPLETED') return;
-    if (!isPersonalLedger || controlledByAdmin) return;
-    const token = getToken();
-    const cid = clientId || event.clientId;
-    if (!token || !cid) {
-      setLedger(null);
-      setLedgerError('Клиент не выбран — расчёт недоступен');
-      return;
-    }
-    let cancelled = false;
-    setLedgerLoading(true);
-    setLedgerError('');
-    api
-      .trainerLedgerClient(token, cid)
-      .then((snap) => {
-        if (!cancelled) setLedger(snap);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setLedger(null);
-          setLedgerError(
-            err instanceof Error ? err.message : 'Не удалось загрузить учёт',
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLedgerLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    status,
-    isPersonalLedger,
-    controlledByAdmin,
-    clientId,
-    event.clientId,
-  ]);
 
   const filteredClients = useMemo(() => {
     const needle = clientQ.trim().toLowerCase();
@@ -264,70 +96,41 @@ export function BookingActionSheet({
   return (
     <ResponsiveSheet open onOpenChange={(o) => !o && onClose()} title={event.title}>
       <div className="space-y-4 pb-2">
-        {event.ptControlLabel ? (
-          <p className="text-sm text-zinc-400">{event.ptControlLabel}</p>
+        {!isPersonalLedger && event.ptFlow !== 'PERSONAL' ? (
+          <div className="rounded-xl border border-forma-500/20 bg-forma-500/5 px-3 py-2 text-sm text-forma-200">
+            <p className="font-medium text-forma-100">
+              {event.ptControlLabel?.trim() ||
+                (event.linkedDocExternalId ? 'Есть продажа' : 'Ждёт продажу')}
+            </p>
+            <p className="mt-1 text-xs text-forma-400">
+              {event.linkedDocExternalId
+                ? `Документ: ${event.linkedDocExternalId}`
+                : event.isComplimentary || event.origin === 'CLIENT_BOOKED'
+                  ? 'Списание с абонемента подтянется само — нажимать не нужно.'
+                  : 'Оплата подтянется сама — нажимать не нужно. Если после занятия продажи нет, администратор увидит это в контроле.'}
+            </p>
+          </div>
         ) : null}
         {event.isComplimentary ? (
           <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-            Подарочная ПТ — на контроле у админа. Удаление недоступно.
+            Подарочная ПТ — основание с абонемента. Удаление недоступно.
           </p>
         ) : null}
         {event.clientIssue && event.clientIssue !== 'NONE' ? (
           <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-            Нет в 1С — ждёт привязки.
+            Клиент не в 1С — ждёт привязки в справочнике.
           </p>
         ) : null}
 
-        <div className="space-y-2">
-          <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-            Статус
-          </p>
-          <SegmentedControl<StatusOpt>
-            size="sm"
-            layoutId="booking-status"
-            className="w-full"
-            value={status}
-            onChange={setStatus}
-            options={[
-              { value: 'CONFIRMED', label: 'План' },
-              { value: 'COMPLETED', label: 'Выполнено' },
-              { value: 'CANCELLED', label: 'Отмена' },
-            ]}
-          />
-          {status === 'COMPLETED' ? (
-            <SettlePreviewBlock
-              event={event}
-              isPersonalLedger={isPersonalLedger}
-              controlledByAdmin={controlledByAdmin}
-              ledger={ledger}
-              ledgerLoading={ledgerLoading}
-              ledgerError={ledgerError}
-            />
-          ) : null}
-          <Button
-            type="button"
-            variant="secondary"
-            className="w-full"
-            disabled={busy || status === (event.bookingStatus as StatusOpt)}
-            onClick={() =>
-              run(() =>
-                api.trainerUpdatePersonalBooking(getToken()!, event.bookingId!, {
-                  status,
-                  cancelReason:
-                    status === 'CANCELLED'
-                      ? reason || 'Отменено тренером'
-                      : undefined,
-                  debitPackage:
-                    status === 'CANCELLED' && isPersonalLedger
-                      ? debitPackage
-                      : undefined,
-                }),
-              )
-            }
+        {event.bookingId && event.clientId ? (
+          <Link
+            href={`/trainer/sessions/${encodeURIComponent(event.bookingId)}?clientId=${encodeURIComponent(event.clientId)}`}
+            onClick={onClose}
+            className="inline-flex w-full items-center justify-center rounded-2xl border border-white/10 bg-ink-raised px-4 py-3.5 text-[15px] font-medium text-white hover:bg-white/[0.06]"
           >
-            Сохранить статус
-          </Button>
-        </div>
+            Открыть тренировку
+          </Link>
+        ) : null}
 
         <div className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">

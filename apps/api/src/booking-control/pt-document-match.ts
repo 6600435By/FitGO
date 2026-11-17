@@ -3,6 +3,9 @@
  * No Prisma / Nest — unit-testable.
  */
 
+import { isMultiVisitPackSale } from '@fitgo/shared-types';
+import { minskDayKey } from './spa-document-match';
+
 export const PT_DOC_LOOKBACK_DAYS = 7;
 export const PT_DOC_LOOKAHEAD_DAYS = 14;
 
@@ -71,6 +74,8 @@ export type PtSaleCandidate = {
   paymentStatus?: string | null;
   amount?: number | null;
   serviceName?: string | null;
+  /** Shared 1C sale document UUID when several lines share one receipt. */
+  saleDocumentId?: string | null;
 };
 
 export type PtBookingMatchInput = {
@@ -83,12 +88,34 @@ export type PtBookingMatchInput = {
   trainerName?: string | null;
   linkedDocExternalId?: string | null;
   crmDocRef?: string | null;
+  /** Gift / membership write-off — no cash sale match. */
   isComplimentary?: boolean;
+  /** CLIENT_BOOKED also expects membership write-off, not cash sale. */
+  origin?: string | null;
+  payKind?: string | null;
 };
 
 export type PtDocMatchResult =
   | { kind: 'auto'; sale: PtSaleCandidate }
   | { kind: 'ambiguous'; sales: PtSaleCandidate[] }
+  | { kind: 'none' };
+
+/** Onex / class visit candidate for same-day journal glue. */
+export type PtVisitCandidate = {
+  externalId: string;
+  startAt: Date;
+  employeeExternalId?: string | null;
+  clientExternalId?: string | null;
+  clientName?: string | null;
+  status?: string | null;
+  title?: string | null;
+  paymentBasis?: string | null;
+  number?: string | null;
+};
+
+export type PtVisitMatchResult =
+  | { kind: 'auto'; visit: PtVisitCandidate }
+  | { kind: 'ambiguous'; visits: PtVisitCandidate[] }
   | { kind: 'none' };
 
 function dayMs(d: Date): number {
@@ -141,17 +168,26 @@ export function saleTakenByOther(
   return ptDocIdAliases(sale).some((id) => takenIds.has(id));
 }
 
+/** Cash sale is not the basis for gift / membership write-off bookings. */
+export function bookingSkipsCashSale(booking: PtBookingMatchInput): boolean {
+  if (booking.isComplimentary) return true;
+  if (booking.payKind === 'GIFT' || booking.payKind === 'BLOCK') return true;
+  if (booking.origin === 'CLIENT_BOOKED') return true;
+  return false;
+}
+
 export function filterPtSaleCandidates(
   booking: PtBookingMatchInput,
   sales: PtSaleCandidate[],
   takenDocIds: ReadonlySet<string>,
 ): PtSaleCandidate[] {
-  if (booking.isComplimentary) return [];
+  if (bookingSkipsCashSale(booking)) return [];
   if (booking.linkedDocExternalId?.trim()) return [];
 
   return sales.filter((sale) => {
     if (!canonicalPtDocId(sale)) return false;
     if (saleTakenByOther(sale, takenDocIds)) return false;
+    if (isMultiVisitPackSale(sale.serviceName)) return false;
     if (!withinWindow(sale.occurredAt, booking.startAt)) return false;
 
     const clientOk =
@@ -173,7 +209,12 @@ export function filterPtSaleCandidates(
   });
 }
 
+function sameMinskDay(a: Date, b: Date): boolean {
+  return minskDayKey(a) === minskDayKey(b);
+}
+
 /**
+ * Prefer a single same-day cash sale over wider-window ambiguous hits.
  * Exactly one free candidate → auto; several → admin chooses; else none.
  */
 export function matchPtDocument(
@@ -182,9 +223,88 @@ export function matchPtDocument(
   takenDocIds: ReadonlySet<string>,
 ): PtDocMatchResult {
   const hits = filterPtSaleCandidates(booking, sales, takenDocIds);
-  if (hits.length === 1) return { kind: 'auto', sale: hits[0]! };
-  if (hits.length > 1) return { kind: 'ambiguous', sales: hits };
+  if (hits.length === 0) return { kind: 'none' };
+
+  const sameDay = hits.filter((s) => sameMinskDay(s.occurredAt, booking.startAt));
+  const pool = sameDay.length > 0 ? sameDay : hits;
+
+  if (pool.length === 1) return { kind: 'auto', sale: pool[0]! };
+
+  // Several lines of one receipt with equal open bookings → pair by time/line.
+  const paired = tryPairSameSaleDocument(booking, pool, takenDocIds);
+  if (paired) return paired;
+
+  if (pool.length > 1) return { kind: 'ambiguous', sales: pool };
   return { kind: 'none' };
+}
+
+/**
+ * When N free lines share one saleDocumentId and we only know this booking,
+ * do not auto-pick — caller must pass sibling bookings for pairing.
+ * Single-booking path: if only one free line on a multi-line receipt remains, auto.
+ */
+function tryPairSameSaleDocument(
+  booking: PtBookingMatchInput,
+  pool: PtSaleCandidate[],
+  _takenDocIds: ReadonlySet<string>,
+): PtDocMatchResult | null {
+  const byDoc = new Map<string, PtSaleCandidate[]>();
+  for (const s of pool) {
+    const key =
+      s.saleDocumentId?.trim() ||
+      saleDocumentKeyFromDocRef(s.docRef) ||
+      '';
+    if (!key) continue;
+    const list = byDoc.get(key) ?? [];
+    list.push(s);
+    byDoc.set(key, list);
+  }
+  // Only useful when all candidates share one receipt and we have exactly one
+  // free line left for this booking (others already taken elsewhere).
+  for (const lines of byDoc.values()) {
+    if (lines.length === 1 && pool.length === 1) {
+      return { kind: 'auto', sale: lines[0]! };
+    }
+  }
+  void booking;
+  return null;
+}
+
+function saleDocumentKeyFromDocRef(docRef?: string | null): string | null {
+  const ref = docRef?.trim();
+  if (!ref) return null;
+  const hash = ref.indexOf('#');
+  if (hash <= 0) return ref;
+  return ref.slice(0, hash);
+}
+
+/** Line number from `000123#2` → 2; missing → 0. */
+export function ptSaleLineNumber(sale: {
+  docRef?: string | null;
+  externalId?: string | null;
+}): number {
+  const ref = sale.docRef?.trim() || sale.externalId?.trim() || '';
+  const m = ref.match(/#(\d+)\s*$/);
+  return m ? Number(m[1]) : 0;
+}
+
+/**
+ * Pair N unlinked bookings with N free lines of the same sale document.
+ * Bookings by startAt asc, lines by #line asc. Equal counts only.
+ */
+export function pairPtSalesToBookings(input: {
+  bookings: Array<{ id: string; startAt: Date }>;
+  sales: PtSaleCandidate[];
+}): Array<{ bookingId: string; sale: PtSaleCandidate }> | null {
+  const bookings = [...input.bookings].sort(
+    (a, b) => a.startAt.getTime() - b.startAt.getTime(),
+  );
+  const sales = [...input.sales].sort(
+    (a, b) => ptSaleLineNumber(a) - ptSaleLineNumber(b),
+  );
+  if (bookings.length === 0 || sales.length === 0) return null;
+  if (bookings.length !== sales.length) return null;
+  return bookings.map((b, i) => ({ bookingId: b.id, sale: sales[i]! }));
 }
 
 /** Prefer closer date, then higher amount. */
@@ -199,4 +319,110 @@ export function rankPtSaleCandidates(
     if (da !== db) return da - db;
     return (Number(b.amount) || 0) - (Number(a.amount) || 0);
   });
+}
+
+function visitClientOk(
+  booking: PtBookingMatchInput,
+  visit: PtVisitCandidate,
+): boolean {
+  if (
+    booking.clientExternalId?.trim() &&
+    visit.clientExternalId?.trim() &&
+    booking.clientExternalId.trim() === visit.clientExternalId.trim()
+  ) {
+    return true;
+  }
+  return namesMatch(booking.clientName, visit.clientName);
+}
+
+function visitTrainerOk(
+  booking: PtBookingMatchInput,
+  visit: PtVisitCandidate,
+): boolean {
+  const emp = visit.employeeExternalId?.trim();
+  if (!emp) {
+    return !(
+      booking.trainerEmployeeCode?.trim() || booking.trainerExternalId?.trim()
+    );
+  }
+  return (
+    codesMatch(booking.trainerEmployeeCode, emp) ||
+    codesMatch(booking.trainerExternalId, emp)
+  );
+}
+
+/**
+ * Same Minsk day, same client + trainer. Auto when exactly one living visit.
+ * Contested visits (another open booking would also claim) stay ambiguous.
+ */
+export function matchPtVisitByDay(input: {
+  booking: PtBookingMatchInput;
+  visits: PtVisitCandidate[];
+  takenVisitIds?: ReadonlySet<string>;
+  /** Other open FitGO bookings that could claim the same visit. */
+  siblingBookings?: PtBookingMatchInput[];
+}): PtVisitMatchResult {
+  const { booking, visits, takenVisitIds, siblingBookings } = input;
+  const day = minskDayKey(booking.startAt);
+  const candidates = visits.filter((v) => {
+    if (takenVisitIds?.has(v.externalId)) return false;
+    if ((v.status || '').toUpperCase() === 'CANCELLED') return false;
+    if (minskDayKey(v.startAt) !== day) return false;
+    if (!visitTrainerOk(booking, v)) return false;
+    if (!visitClientOk(booking, v)) return false;
+    return true;
+  });
+
+  if (candidates.length === 0) return { kind: 'none' };
+  if (candidates.length > 1) {
+    return { kind: 'ambiguous', visits: candidates };
+  }
+
+  const only = candidates[0]!;
+  const siblings = siblingBookings ?? [];
+  for (const other of siblings) {
+    if (other.id === booking.id) continue;
+    if (other.linkedDocExternalId?.trim()) continue;
+    const otherHit = matchPtVisitByDay({
+      booking: other,
+      visits: [only],
+      takenVisitIds: new Set(),
+    });
+    if (otherHit.kind === 'auto') {
+      return { kind: 'ambiguous', visits: [only] };
+    }
+  }
+  return { kind: 'auto', visit: only };
+}
+
+/**
+ * Build day-merge pairs booking ↔ onex for list dedup / fitgoBookingRef write.
+ */
+export function buildPtDayMergePairs(input: {
+  bookings: PtBookingMatchInput[];
+  visits: PtVisitCandidate[];
+  alreadyMatchedBookingIds?: Set<string>;
+  alreadyMatchedVisitIds?: Set<string>;
+}): Array<{ bookingId: string; visitExternalId: string }> {
+  const pairs: Array<{ bookingId: string; visitExternalId: string }> = [];
+  const takenVisit = new Set(input.alreadyMatchedVisitIds ?? []);
+  const takenBooking = new Set(input.alreadyMatchedBookingIds ?? []);
+  const open = input.bookings.filter((b) => !takenBooking.has(b.id));
+
+  for (const b of open) {
+    const result = matchPtVisitByDay({
+      booking: b,
+      visits: input.visits,
+      takenVisitIds: takenVisit,
+      siblingBookings: open,
+    });
+    if (result.kind !== 'auto') continue;
+    pairs.push({
+      bookingId: b.id,
+      visitExternalId: result.visit.externalId,
+    });
+    takenVisit.add(result.visit.externalId);
+    takenBooking.add(b.id);
+  }
+  return pairs;
 }

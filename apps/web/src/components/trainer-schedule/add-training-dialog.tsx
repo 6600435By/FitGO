@@ -1,12 +1,19 @@
 'use client';
 
 import type { TrainerClientLookupResult } from '@fitgo/shared-types';
-import { ResponsiveSheet } from '@fitgo/forma-ui';
+import { Chip, ResponsiveSheet } from '@fitgo/forma-ui';
 import { useEffect, useMemo, useState } from 'react';
 import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
+
+type BasisOpt = {
+  payKind: 'BLOCK' | 'PAID' | 'GIFT';
+  label: string;
+  basisServiceName?: string;
+  remaining?: number;
+};
 
 export function AddTrainingDialog({
   clients,
@@ -31,12 +38,48 @@ export function AddTrainingDialog({
   const [looking, setLooking] = useState(false);
   const [hint, setHint] = useState('');
   const [ptFlow, setPtFlow] = useState<'CLUB' | 'PERSONAL'>('CLUB');
+  const [basisOptions, setBasisOptions] = useState<BasisOpt[]>([]);
+  const [basisKey, setBasisKey] = useState<string>('PAID');
+  const [basisMessage, setBasisMessage] = useState('');
   const [date, setDate] = useState(
     defaultDate ?? new Date().toLocaleDateString('fr-CA'),
   );
   const [time, setTime] = useState('10:00');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token || !clientId || !forma) {
+      setBasisOptions([]);
+      setBasisMessage('');
+      setBasisKey('PAID');
+      return;
+    }
+    let cancelled = false;
+    api
+      .trainerClientPtBasis(token, clientId)
+      .then((res) => {
+        if (cancelled) return;
+        setBasisOptions(res.options);
+        setBasisMessage(res.message ?? '');
+        const first = res.options[0];
+        setBasisKey(
+          first
+            ? `${first.payKind}:${first.basisServiceName ?? ''}`
+            : 'PAID',
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBasisOptions([{ payKind: 'PAID', label: 'Разовая оплата' }]);
+          setBasisKey('PAID');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, forma]);
 
   useEffect(() => {
     if (clients[0]) setClientId(clients[0].id);
@@ -112,12 +155,19 @@ export function AddTrainingDialog({
 
     setSaving(true);
     setError('');
+    const selected =
+      basisOptions.find(
+        (o) => `${o.payKind}:${o.basisServiceName ?? ''}` === basisKey,
+      ) ?? basisOptions.find((o) => o.payKind === 'PAID');
     try {
       if (clientId) {
         await api.trainerAssignPersonalBooking(token, {
           clientId,
           startAt: startAt.toISOString(),
           ptFlow: canChooseFlow ? ptFlow : undefined,
+          payKind: selected?.payKind,
+          basisServiceName: selected?.basisServiceName,
+          isComplimentary: selected?.payKind === 'GIFT' || undefined,
         });
       } else {
         await api.trainerAssignPersonalBooking(token, {
@@ -127,6 +177,9 @@ export function AddTrainingDialog({
           startAt: startAt.toISOString(),
           clientExternalId: lookup?.externalId,
           ptFlow: canChooseFlow ? ptFlow : undefined,
+          payKind: selected?.payKind,
+          basisServiceName: selected?.basisServiceName,
+          isComplimentary: selected?.payKind === 'GIFT' || undefined,
         });
       }
       onAdded();
@@ -217,6 +270,29 @@ export function AddTrainingDialog({
             <option value="CLUB">Клубная (контроль и ЗП)</option>
             <option value="PERSONAL">Личная (Расчёты)</option>
           </select>
+        </div>
+      ) : null}
+
+      {forma && clientId && basisOptions.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-400">Основание</p>
+          {basisMessage ? (
+            <p className="text-xs text-amber-300">{basisMessage}</p>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            {basisOptions.map((o) => {
+              const key = `${o.payKind}:${o.basisServiceName ?? ''}`;
+              return (
+                <Chip
+                  key={key}
+                  active={basisKey === key}
+                  onClick={() => setBasisKey(key)}
+                >
+                  {o.label}
+                </Chip>
+              );
+            })}
+          </div>
         </div>
       ) : null}
 

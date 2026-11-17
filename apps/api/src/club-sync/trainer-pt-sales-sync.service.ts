@@ -4,6 +4,7 @@ import {
   saleDocumentIdFromPtExternalId,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { FitnessService } from '../fitness/fitness.service';
+import { PersonalTrainingService } from '../personal-training/personal-training.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { addMoscowDays, moscowDayKey } from './moscow-time';
 import {
@@ -21,6 +22,7 @@ export class TrainerPtSalesSyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
+    private readonly personalTraining: PersonalTrainingService,
   ) {}
 
   async syncClub(
@@ -59,6 +61,31 @@ export class TrainerPtSalesSyncService {
         upserted += await this.syncChunk(clubId, chunk.from, chunk.to);
       }
       await this.mark(clubId, 'ok', null);
+      const fromD = new Date(`${from}T00:00:00.000`);
+      const toD = new Date(`${to}T23:59:59.999`);
+      if (
+        !Number.isNaN(fromD.getTime()) &&
+        !Number.isNaN(toD.getTime())
+      ) {
+        try {
+          const linked = await this.personalTraining.relinkClubBookingsInRange(
+            clubId,
+            fromD,
+            toD,
+          );
+          if (linked > 0) {
+            this.logger.log(
+              `Trainer PT sales ${clubId}: auto-linked ${linked} bookings`,
+            );
+          }
+        } catch (linkErr) {
+          this.logger.warn(
+            `PT auto-link after sales sync failed: ${
+              linkErr instanceof Error ? linkErr.message : String(linkErr)
+            }`,
+          );
+        }
+      }
       this.logger.log(`Trainer PT sales ${clubId}: ${upserted} (${from}…${to})`);
       return { from, to, upserted };
     } catch (err) {

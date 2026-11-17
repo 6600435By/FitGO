@@ -1,11 +1,18 @@
 'use client';
 
 import type { TrainerClientLookupResult } from '@fitgo/shared-types';
-import { ResponsiveSheet } from '@fitgo/forma-ui';
+import { Chip, ResponsiveSheet } from '@fitgo/forma-ui';
 import { useEffect, useMemo, useState } from 'react';
 import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
+
+type BasisOpt = {
+  payKind: 'BLOCK' | 'PAID' | 'GIFT';
+  label: string;
+  basisServiceName?: string;
+  remaining?: number;
+};
 
 export function AssignClientDialog({
   startAt,
@@ -32,6 +39,9 @@ export function AssignClientDialog({
   const [error, setError] = useState('');
   const [hint, setHint] = useState('');
   const [ptFlow, setPtFlow] = useState<'CLUB' | 'PERSONAL'>('CLUB');
+  const [basisOptions, setBasisOptions] = useState<BasisOpt[]>([]);
+  const [basisKey, setBasisKey] = useState('PAID');
+  const [basisMessage, setBasisMessage] = useState('');
 
   useEffect(() => {
     if (clients[0]) setClientId(clients[0].id);
@@ -46,6 +56,37 @@ export function AssignClientDialog({
       return name.includes(q) || (p && p.includes(q.replace(/\D/g, '')));
     });
   }, [clients, nameQuery]);
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token || !clientId || !forma) {
+      setBasisOptions([]);
+      setBasisMessage('');
+      setBasisKey('PAID');
+      return;
+    }
+    let cancelled = false;
+    api
+      .trainerClientPtBasis(token, clientId)
+      .then((res) => {
+        if (cancelled) return;
+        setBasisOptions(res.options);
+        setBasisMessage(res.message ?? '');
+        const first = res.options[0];
+        setBasisKey(
+          first ? `${first.payKind}:${first.basisServiceName ?? ''}` : 'PAID',
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBasisOptions([{ payKind: 'PAID', label: 'Разовая оплата' }]);
+          setBasisKey('PAID');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId, forma]);
 
   const phoneDigits = phone.replace(/\D/g, '');
   const phoneReady = phoneDigits.length >= 12;
@@ -98,11 +139,18 @@ export function AssignClientDialog({
     setSaving(true);
     setError('');
     try {
+      const selected =
+        basisOptions.find(
+          (o) => `${o.payKind}:${o.basisServiceName ?? ''}` === basisKey,
+        ) ?? basisOptions.find((o) => o.payKind === 'PAID');
       if (clientId) {
         await api.trainerAssignPersonalBooking(token, {
           clientId,
           startAt,
           ptFlow: canChooseFlow ? ptFlow : undefined,
+          payKind: selected?.payKind,
+          basisServiceName: selected?.basisServiceName,
+          isComplimentary: selected?.payKind === 'GIFT' || undefined,
         });
       } else {
         await api.trainerAssignPersonalBooking(token, {
@@ -112,6 +160,9 @@ export function AssignClientDialog({
           startAt,
           clientExternalId: lookup?.externalId,
           ptFlow: canChooseFlow ? ptFlow : undefined,
+          payKind: selected?.payKind,
+          basisServiceName: selected?.basisServiceName,
+          isComplimentary: selected?.payKind === 'GIFT' || undefined,
         });
       }
       onAssigned();
@@ -195,7 +246,31 @@ export function AssignClientDialog({
           </select>
         )}
 
+        {forma && clientId && basisOptions.length > 0 ? (
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400">Основание</p>
+            {basisMessage ? (
+              <p className="text-xs text-amber-300">{basisMessage}</p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              {basisOptions.map((o) => {
+                const key = `${o.payKind}:${o.basisServiceName ?? ''}`;
+                return (
+                  <Chip
+                    key={key}
+                    active={basisKey === key}
+                    onClick={() => setBasisKey(key)}
+                  >
+                    {o.label}
+                  </Chip>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
         {canChooseFlow && (
+
           <div className="space-y-1">
             <p className="text-xs text-slate-400">Схема записи</p>
             <select

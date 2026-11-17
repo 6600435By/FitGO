@@ -80,12 +80,14 @@ export function ScheduleWeekGrid({
   events,
   availabilityBlocks,
   onSelectEvent,
+  onManageEvent,
   onMoveBooking,
 }: {
   date: Date;
   events: TrainerCalendarEvent[];
   availabilityBlocks: TrainerAvailabilityBlock[];
   onSelectEvent?: (event: TrainerCalendarEvent) => void;
+  onManageEvent?: (event: TrainerCalendarEvent) => void;
   onMoveBooking?: (event: TrainerCalendarEvent, newStartAt: string) => void;
 }) {
   const dayKeys = useMemo(() => weekDayKeys(date), [date]);
@@ -495,6 +497,23 @@ export function ScheduleWeekGrid({
                         <span className="truncate font-semibold">
                           {formatTime(event.startAt)}
                         </span>
+                        {onManageEvent &&
+                        event.kind === 'PERSONAL' &&
+                        event.bookingId ? (
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            aria-label="Изменить запись"
+                            className="ml-auto shrink-0 text-[8px] font-medium text-forma-400"
+                            onPointerDown={(ev) => ev.stopPropagation()}
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              onManageEvent(event);
+                            }}
+                          >
+                            ✎
+                          </span>
+                        ) : null}
                       </div>
                       <span className="block truncate opacity-90">{caption}</span>
                       {layout.height >= 40 && (
@@ -507,7 +526,7 @@ export function ScheduleWeekGrid({
                       event.clientIssue &&
                       event.clientIssue !== 'NONE' ? (
                         <span className="block truncate text-amber-300/90">
-                          Нет в 1С
+                          Клиент не в 1С
                         </span>
                       ) : null}
                       {layout.height >= 64 && endMin !== null && (

@@ -22,6 +22,7 @@ import {
   normalizeClassEmployeeName,
 } from '@fitgo/shared-types';
 import { FitnessService } from '../fitness/fitness.service';
+import { PersonalTrainingService } from '../personal-training/personal-training.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { addMoscowDays, moscowDayKey } from '../club-sync/moscow-time';
@@ -56,6 +57,7 @@ export class ClassSessionsSyncService {
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
     private readonly serviceUsage: ServiceUsageService,
+    private readonly personalTraining: PersonalTrainingService,
   ) {}
 
   /** Past calendar month start → today+31d (schedule + open payroll window). */
@@ -348,6 +350,26 @@ export class ClassSessionsSyncService {
           : null,
       },
     });
+
+    if (!endpointMissing) {
+      const fromD = new Date(`${from}T00:00:00.000`);
+      const toD = new Date(`${to}T23:59:59.999`);
+      if (!Number.isNaN(fromD.getTime()) && !Number.isNaN(toD.getTime())) {
+        try {
+          await this.personalTraining.relinkClubBookingsInRange(
+            clubId,
+            fromD,
+            toD,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `PT visit auto-link after class sync failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+    }
 
     return {
       from,

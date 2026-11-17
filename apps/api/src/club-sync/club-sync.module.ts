@@ -17,6 +17,7 @@ import { NightlySyncScheduler } from './nightly-sync-scheduler.service';
 import { ScheduleSlotsSyncService } from './schedule-slots-sync.service';
 import { SpecialistDebtSyncService } from './specialist-debt-sync.service';
 import { TrainerPtSalesSyncService } from './trainer-pt-sales-sync.service';
+import { PersonalTrainingModule } from '../personal-training/personal-training.module';
 
 /**
  * Global so sales / class-sync / booking-control controllers can inject
@@ -30,6 +31,7 @@ import { TrainerPtSalesSyncService } from './trainer-pt-sales-sync.service';
     PrismaModule,
     AuthModule,
     FitnessModule,
+    PersonalTrainingModule,
     // One-way only: ClubSync → AdminSales / ClassSync (never the reverse).
     forwardRef(() => AdminSalesModule),
     forwardRef(() => ClassSyncModule),

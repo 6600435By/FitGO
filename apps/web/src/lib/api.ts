@@ -967,6 +967,23 @@ export const api = {
       token,
     ),
 
+  trainerClientPtBasis: (token: string, clientId: string) =>
+    request<{
+      snapshot: boolean;
+      message?: string;
+      syncedAt?: string;
+      options: Array<{
+        payKind: 'BLOCK' | 'PAID' | 'GIFT';
+        label: string;
+        basisServiceName?: string;
+        remaining?: number;
+      }>;
+    }>(
+      `/trainer/clients/${encodeURIComponent(clientId)}/pt-basis`,
+      {},
+      token,
+    ),
+
   trainerAssignPersonalBooking: (
     token: string,
     data:
@@ -975,6 +992,8 @@ export const api = {
           startAt: string;
           isComplimentary?: boolean;
           ptFlow?: 'CLUB' | 'PERSONAL';
+          payKind?: 'PAID' | 'GIFT' | 'BLOCK' | 'UNKNOWN';
+          basisServiceName?: string;
         }
       | {
           phone: string;
@@ -984,6 +1003,8 @@ export const api = {
           clientExternalId?: string;
           isComplimentary?: boolean;
           ptFlow?: 'CLUB' | 'PERSONAL';
+          payKind?: 'PAID' | 'GIFT' | 'BLOCK' | 'UNKNOWN';
+          basisServiceName?: string;
         },
   ) =>
     request<{

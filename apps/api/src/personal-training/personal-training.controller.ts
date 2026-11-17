@@ -185,6 +185,15 @@ export class PersonalTrainingController {
     );
   }
 
+  @Get('trainer/clients/:clientId/pt-basis')
+  @Roles(UserRole.TRAINER)
+  clientPtBasis(
+    @CurrentUser() user: JwtPayload,
+    @Param('clientId') clientId: string,
+  ) {
+    return this.personalTraining.getClientPtBasisOptions(user, clientId);
+  }
+
   @Post('trainer/personal-bookings')
   @Roles(UserRole.TRAINER)
   assignPersonalBooking(
@@ -200,6 +209,8 @@ export class PersonalTrainingController {
       startAt: dto.startAt,
       isComplimentary: dto.isComplimentary ?? false,
       ptFlow: dto.ptFlow,
+      payKind: dto.payKind,
+      basisServiceName: dto.basisServiceName,
     });
   }
 

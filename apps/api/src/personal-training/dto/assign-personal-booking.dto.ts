@@ -49,4 +49,14 @@ export class AssignPersonalBookingDto {
   @IsOptional()
   @IsIn(['CLUB', 'PERSONAL'])
   ptFlow?: 'CLUB' | 'PERSONAL';
+
+  /** Basis chosen at assign: cash / gift / block. */
+  @IsOptional()
+  @IsIn(['PAID', 'GIFT', 'BLOCK', 'UNKNOWN'])
+  payKind?: 'PAID' | 'GIFT' | 'BLOCK' | 'UNKNOWN';
+
+  /** Membership / pack line name for GIFT or BLOCK. */
+  @IsOptional()
+  @IsString()
+  basisServiceName?: string;
 }

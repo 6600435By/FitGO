@@ -378,19 +378,33 @@ function DayTimeline({
               s.status === 'DONE' && s.sessionKey && controlHref
                 ? controlHref(s)
                 : plan ?? scheduleHref;
+            const manageHref =
+              s.kind === 'PT' && s.sessionKey?.startsWith('fitgo:PT:')
+                ? `/trainer/schedule?manage=${encodeURIComponent(s.id)}`
+                : null;
             return (
               <TimelineItem
                 key={s.id}
                 time={timeHm(s.startAt)}
                 title={
-                  <Link href={href} className="hover:text-forma-300">
-                    {s.kind === 'PT' || s.kind === 'GROUP' ? (
-                      <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                        {s.kind === 'PT' ? 'ПТ' : 'ГП'}
-                      </span>
+                  <span className="inline-flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <Link href={href} className="hover:text-forma-300">
+                      {s.kind === 'PT' || s.kind === 'GROUP' ? (
+                        <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                          {s.kind === 'PT' ? 'ПТ' : 'ГП'}
+                        </span>
+                      ) : null}
+                      {s.title}
+                    </Link>
+                    {manageHref ? (
+                      <Link
+                        href={manageHref}
+                        className="text-[11px] font-medium text-zinc-500 hover:text-forma-300"
+                      >
+                        Изменить
+                      </Link>
                     ) : null}
-                    {s.title}
-                  </Link>
+                  </span>
                 }
                 meta={
                   <>

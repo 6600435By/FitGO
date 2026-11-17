@@ -3,6 +3,7 @@
 import type { TrainerCalendarEvent } from '@fitgo/shared-types';
 import {
   eventRelationNote,
+  eventSaleWaitTone,
   eventStateCaption,
 } from './event-captions';
 import {
@@ -13,9 +14,11 @@ import {
 export function ScheduleMobileList({
   events,
   onSelectEvent,
+  onManageEvent,
 }: {
   events: TrainerCalendarEvent[];
   onSelectEvent?: (event: TrainerCalendarEvent) => void;
+  onManageEvent?: (event: TrainerCalendarEvent) => void;
 }) {
   const sorted = [...events].sort((a, b) => a.startAt.localeCompare(b.startAt));
 
@@ -41,6 +44,11 @@ export function ScheduleMobileList({
         lastDay = day;
         const caption = eventStateCaption(event);
         const note = eventRelationNote(event);
+        const waitTone = eventSaleWaitTone(event);
+        const canManage =
+          Boolean(onManageEvent) &&
+          event.kind === 'PERSONAL' &&
+          Boolean(event.bookingId);
 
         return (
           <li key={event.id}>
@@ -49,47 +57,64 @@ export function ScheduleMobileList({
                 {day}
               </p>
             )}
-            <button
-              type="button"
-              onClick={() => onSelectEvent?.(event)}
-              className={`card w-full text-left ${calendarEventBlockClass(event)} border-l-4`}
+            <div
+              className={`card flex w-full items-stretch gap-2 ${calendarEventBlockClass(event)} border-l-4`}
             >
-              <div className="flex items-start gap-2">
-                <span
-                  className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${calendarEventDotClass(event)}`}
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">{event.title}</p>
-                  <p className="mt-0.5 text-xs opacity-80">
-                    {new Date(event.startAt).toLocaleTimeString('ru-RU', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                    {' — '}
-                    {new Date(event.endAt).toLocaleTimeString('ru-RU', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </p>
-                  <p className="mt-1 text-[10px] font-medium uppercase tracking-wide opacity-80">
-                    {caption}
-                  </p>
-                  {note ? (
-                    <p className="mt-0.5 text-xs opacity-70">{note}</p>
-                  ) : null}
-                  {event.clientIssue && event.clientIssue !== 'NONE' ? (
-                    <p className="mt-1 text-xs text-amber-300">
-                      Нет в 1С — ждёт привязки
+              <button
+                type="button"
+                onClick={() => onSelectEvent?.(event)}
+                className="min-w-0 flex-1 text-left"
+              >
+                <div className="flex items-start gap-2">
+                  <span
+                    className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${calendarEventDotClass(event)}`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">{event.title}</p>
+                    <p className="mt-0.5 text-xs opacity-80">
+                      {new Date(event.startAt).toLocaleTimeString('ru-RU', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                      {' — '}
+                      {new Date(event.endAt).toLocaleTimeString('ru-RU', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
                     </p>
-                  ) : null}
-                  {event.ptControlLabel && event.ptFlow !== 'PERSONAL' ? (
-                    <p className="mt-1 text-xs text-slate-400">
-                      {event.ptControlLabel}
+                    <p
+                      className={`mt-1 text-[10px] font-medium uppercase tracking-wide ${
+                        waitTone === 'wait'
+                          ? 'text-amber-300'
+                          : 'opacity-80'
+                      }`}
+                    >
+                      {caption}
                     </p>
-                  ) : null}
+                    {note ? (
+                      <p className="mt-0.5 text-xs opacity-70">{note}</p>
+                    ) : null}
+                    {event.clientIssue && event.clientIssue !== 'NONE' ? (
+                      <p className="mt-1 text-xs text-amber-300">
+                        Клиент не в 1С
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            </button>
+              </button>
+              {canManage ? (
+                <button
+                  type="button"
+                  className="shrink-0 self-center px-2 text-xs font-medium text-forma-400 underline-offset-2 hover:underline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onManageEvent?.(event);
+                  }}
+                >
+                  Изменить
+                </button>
+              ) : null}
+            </div>
           </li>
         );
       })}

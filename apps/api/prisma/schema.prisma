@@ -1257,6 +1257,8 @@ model PersonalTrainingBooking {
   clientIssue        PtClientIssue         @default(NONE)
   clientIssueEscalated Boolean             @default(false)
   payKind            PtSessionPayKind      @default(UNKNOWN)
+  /// Membership / pack line the trainer chose at assign (gift / block basis).
+  basisServiceName   String?
   priceMinor         Int?
   forceIncludeInPayroll Boolean            @default(false)
   /// 1C sale / write-off id linked for payroll (trainer_pt_control). Unique when set.

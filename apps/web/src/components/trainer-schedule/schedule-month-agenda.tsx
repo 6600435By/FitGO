@@ -51,12 +51,14 @@ export function ScheduleMonthAgenda({
   events,
   availabilityBlocks,
   onSelectEvent,
+  onManageEvent,
   onSelectDay,
 }: {
   date: Date;
   events: TrainerCalendarEvent[];
   availabilityBlocks: TrainerAvailabilityBlock[];
   onSelectEvent?: (event: TrainerCalendarEvent) => void;
+  onManageEvent?: (event: TrainerCalendarEvent) => void;
   onSelectDay?: (day: Date) => void;
 }) {
   const monthStart = startOfMonth(date);
@@ -230,27 +232,42 @@ export function ScheduleMonthAgenda({
               .sort((a, b) => a.startAt.localeCompare(b.startAt))
               .map((event) => (
                 <li key={event.id}>
-                  <button
-                    type="button"
-                    onClick={() => onSelectEvent?.(event)}
-                    className={`card w-full text-left ${calendarEventBlockClass(event)} border-l-4`}
+                  <div
+                    className={`card flex w-full items-center gap-2 ${calendarEventBlockClass(event)} border-l-4`}
                   >
-                    <p className="text-sm font-medium">{event.title}</p>
-                    <p className="mt-0.5 text-xs text-slate-400">
-                      {format(new Date(event.startAt), 'd MMM, HH:mm', {
-                        locale: ru,
-                      })}
-                      {' — '}
-                      {format(new Date(event.endAt), 'HH:mm', { locale: ru })}
-                      {' · '}
-                      {eventStateCaption(event)}
-                    </p>
-                    {eventRelationNote(event) ? (
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        {eventRelationNote(event)}
+                    <button
+                      type="button"
+                      onClick={() => onSelectEvent?.(event)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <p className="text-sm font-medium">{event.title}</p>
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        {format(new Date(event.startAt), 'd MMM, HH:mm', {
+                          locale: ru,
+                        })}
+                        {' — '}
+                        {format(new Date(event.endAt), 'HH:mm', { locale: ru })}
+                        {' · '}
+                        {eventStateCaption(event)}
                       </p>
+                      {eventRelationNote(event) ? (
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          {eventRelationNote(event)}
+                        </p>
+                      ) : null}
+                    </button>
+                    {onManageEvent &&
+                    event.kind === 'PERSONAL' &&
+                    event.bookingId ? (
+                      <button
+                        type="button"
+                        className="shrink-0 px-2 text-xs font-medium text-forma-400 underline-offset-2 hover:underline"
+                        onClick={() => onManageEvent(event)}
+                      >
+                        Изменить
+                      </button>
                     ) : null}
-                  </button>
+                  </div>
                 </li>
               ))}
           </ul>

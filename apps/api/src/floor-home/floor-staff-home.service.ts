@@ -824,19 +824,47 @@ export class FloorStaffHomeService {
       };
     });
 
-    // Prefer Onex row when the same PT is also in FitGO (crmDocRef link).
-    const onexExtToday = new Set(
-      todaySessions
-        .filter((s) => s.kind === OnexClassKind.PT)
-        .map((s) => s.externalId),
-    );
-    const fitgoTodayDedup = fitgoTodayRaw.filter((s) => {
-      const booking = todayFitgoPt.find((b) => b.id === s.id);
-      const ref = booking?.crmDocRef?.trim();
-      if (!ref) return true;
+    // Prefer FitGO journal when glued to Onex (fitgoBookingRef) or crmDocRef.
+    // «Тренер клуб» (club, not staff): PT only from FitGO journal — drop Onex PT.
+    const clubOnlyPt = Boolean(me?.trainerClub) && !me?.trainerStaff;
+    const onexPtToday = todaySessions.filter((s) => s.kind === OnexClassKind.PT);
+    const fitgoIdsToday = new Set(todayFitgoPt.map((b) => b.id));
+    const onexExtLinkedByCrm = new Set<string>();
+    for (const b of todayFitgoPt) {
+      const ref = b.crmDocRef?.trim();
+      if (!ref) continue;
       const bare = ref.startsWith('1c:') ? ref.slice(3) : ref;
-      return !onexExtToday.has(bare) && !onexExtToday.has(ref);
-    });
+      onexExtLinkedByCrm.add(bare);
+      onexExtLinkedByCrm.add(ref);
+    }
+
+    const onexTodayDedup = clubOnlyPt
+      ? onexTodayRaw.filter((s) => s.kind !== 'PT')
+      : onexTodayRaw
+          .filter((s) => {
+            if (s.kind !== 'PT') return true;
+            const row = onexPtToday.find(
+              (o) => `1c:${o.externalId}` === s.sessionKey,
+            );
+            if (
+              row?.fitgoBookingRef &&
+              fitgoIdsToday.has(row.fitgoBookingRef)
+            ) {
+              return false;
+            }
+            if (onexExtLinkedByCrm.has(row?.externalId ?? '')) return false;
+            return true;
+          })
+          .map((s) =>
+            s.kind === 'PT'
+              ? {
+                  ...s,
+                  subtitle: s.subtitle
+                    ? `${s.subtitle} · Только в 1С`
+                    : 'Только в 1С',
+                }
+              : s,
+          );
 
     const pendingMeItems = [
       ...groupPending.pendingMeItems,
@@ -847,7 +875,7 @@ export class FloorStaffHomeService {
     const pendingMeKeys = new Set(
       pendingMeItems.map((i) => i.sessionKey),
     );
-    const sessions = [...onexTodayRaw, ...fitgoTodayDedup]
+    const sessions = [...onexTodayDedup, ...fitgoTodayRaw]
       .sort((a, b) => a.startAt.localeCompare(b.startAt))
       .map((s) =>
         annotateSession(

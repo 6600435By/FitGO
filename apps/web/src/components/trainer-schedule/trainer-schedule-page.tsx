@@ -145,6 +145,25 @@ export function TrainerSchedulePage() {
   } = useTrainerCalendar(date, view);
 
   useEffect(() => {
+    const manageId = searchParams.get('manage');
+    if (!manageId || loading) return;
+    const hit = events.find(
+      (e) =>
+        e.kind === 'PERSONAL' &&
+        e.bookingId === manageId,
+    );
+    if (hit) {
+      setSelectedEvent(hit);
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('manage');
+      router.replace(
+        `${pathname}${params.toString() ? `?${params.toString()}` : ''}`,
+        { scroll: false },
+      );
+    }
+  }, [events, loading, searchParams, pathname, router]);
+
+  useEffect(() => {
     const token = getToken();
     if (!token) return;
     api
@@ -414,6 +433,15 @@ export function TrainerSchedulePage() {
             onNavigate={setDate}
             onViewChange={setView}
             onSelectEvent={handleSelectEvent}
+            onManageEvent={
+              forma
+                ? (event) => {
+                    if (event.kind === 'PERSONAL' && event.bookingId) {
+                      setSelectedEvent(event);
+                    }
+                  }
+                : undefined
+            }
             onMoveBooking={forma ? handleMoveBooking : undefined}
           />
         </>

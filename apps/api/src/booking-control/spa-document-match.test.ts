@@ -33,6 +33,8 @@ import {
   saleTakenBlocksSpaLink,
   serviceNamesMatch,
   serviceNamesMatchForSaleLink,
+  spaAnchoredLineKeys,
+  spaRetailLineHasAnchor,
   spaSaleLineKey,
   spaTitleHasDurationMin,
   type SpaBookingMatchInput,
@@ -990,6 +992,68 @@ assert.equal(namesMatch('Бирюкова Екатерина', 'Бирюкова
   const faceLine = lines.find((l) => l.externalId === `${doc}:1`)!;
   assert.equal(saleLineTotalMajor(faceLine), 27.5);
   assert.equal(saleIsPaid(faceLine), true);
+  const anchors = spaAnchoredLineKeys([face, wrap, payFace]);
+  assert.equal(spaRetailLineHasAnchor(faceLine, anchors), true);
+
+  // Debt repayment slices for OLD SPA sales (anchor outside the loaded
+  // window) must not invent retail visits — Ходанович Oct 2026.
+  const oldDebtPay = sale({
+    externalId: `17c18cb5-d351-11f1-8dec-a45d36c32cf1:cash:Долг:cli:44fc4edb-a5e3-4892-b892-c0e0c51d386c:20261029072747:payment`,
+    documentId: '17c18cb5-d351-11f1-8dec-a45d36c32cf1',
+    occurredAt: new Date('2026-10-29T04:27:47.000Z'),
+    paidAt: new Date('2026-10-29T04:27:47.000Z'),
+    saleAmount: 5.26,
+    paidAmount: 5.26,
+    cash: 5.26,
+    operationType: 'payment',
+    productName: 'Массаж классический 25 мин',
+    productExternalId: '7223308a',
+    performerName: 'Абрамчик Егор Викторович',
+    clientName: 'Ходанович Мария Михайловна (Сотрудник)',
+  });
+  const classic40Pay = sale({
+    externalId: `76e6658e-c54c-11f1-8dec-a45d36c32cf1:cash:Долг:cli:879bd05a-93e5-4774-ade4-e1f1672f5260:20261011205418:payment`,
+    documentId: '76e6658e-c54c-11f1-8dec-a45d36c32cf1',
+    occurredAt: new Date('2026-10-11T17:54:18.000Z'),
+    paidAt: new Date('2026-10-11T17:54:18.000Z'),
+    saleAmount: 2.5,
+    paidAmount: 2.5,
+    cash: 2.5,
+    operationType: 'payment',
+    productName: 'Массаж классический 40 мин',
+    productExternalId: 'e370fe03',
+    performerName: 'Бирюкова Екатерина',
+    clientName: 'Ходанович Мария Михайловна (Сотрудник)',
+  });
+  const classic50Pay = sale({
+    externalId: `76e6658e-c54c-11f1-8dec-a45d36c32cf1:cash:Долг:cli:0dc408f7-c3d0-4dd1-94af-7a5b72a545f7:20261011205418:payment`,
+    documentId: '76e6658e-c54c-11f1-8dec-a45d36c32cf1',
+    occurredAt: new Date('2026-10-11T17:54:18.000Z'),
+    paidAt: new Date('2026-10-11T17:54:18.000Z'),
+    saleAmount: 5,
+    paidAmount: 5,
+    cash: 5,
+    operationType: 'payment',
+    productName: 'Массаж классический 50 мин',
+    productExternalId: '72233086',
+    performerName: 'Абрамчик Егор',
+    clientName: 'Ходанович Мария Михайловна (Сотрудник)',
+  });
+  const orphanPays = collapseSpaSalesByLine([
+    oldDebtPay,
+    classic40Pay,
+    classic50Pay,
+  ]);
+  assert.equal(orphanPays.length, 3);
+  const emptyAnchors = spaAnchoredLineKeys([
+    oldDebtPay,
+    classic40Pay,
+    classic50Pay,
+  ]);
+  assert.equal(emptyAnchors.size, 0);
+  for (const row of orphanPays) {
+    assert.equal(spaRetailLineHasAnchor(row, emptyAnchors), false);
+  }
 
   const b = booking({
     id: 'b-two-lines',

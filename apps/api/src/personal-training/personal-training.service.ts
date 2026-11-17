@@ -17,6 +17,7 @@ import {
   SessionApprovalKind,
   ServiceUsageStatus,
   TrainerOwnPackageStatus,
+  OnexClassKind,
 } from '@prisma/client';
 import {
   PERSONAL_TRAINING_GOAL_TEMPLATES,
@@ -41,12 +42,18 @@ import {
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
 import {
+  buildPtDayMergePairs,
+  bookingSkipsCashSale,
   canonicalPtDocId,
   expandTakenPtDocIds,
   matchPtDocument,
+  pairPtSalesToBookings,
   PT_DOC_LOOKAHEAD_DAYS,
   PT_DOC_LOOKBACK_DAYS,
+  saleTakenByOther,
+  type PtBookingMatchInput,
   type PtSaleCandidate,
+  type PtVisitCandidate,
 } from '../booking-control/pt-document-match';
 import { SessionApprovalService } from '../booking-control/session-approval.service';
 import { FormaScheduleCacheService } from '../club-schedule/forma-schedule-cache.service';
@@ -153,9 +160,169 @@ export class PersonalTrainingService {
     return true;
   }
 
+  private toPtBookingMatchInput(booking: {
+    id: string;
+    startAt: Date;
+    linkedDocExternalId: string | null;
+    crmDocRef: string | null;
+    isComplimentary: boolean;
+    origin: string;
+    payKind?: string | null;
+    client: {
+      externalId: string | null;
+      firstName: string;
+      lastName: string;
+    };
+    trainer: {
+      employeeCode: string | null;
+      externalId: string | null;
+      firstName: string;
+      lastName: string;
+    };
+  }): PtBookingMatchInput {
+    return {
+      id: booking.id,
+      startAt: booking.startAt,
+      clientExternalId: booking.client.externalId,
+      clientName:
+        `${booking.client.lastName} ${booking.client.firstName}`.trim(),
+      trainerEmployeeCode: booking.trainer.employeeCode,
+      trainerExternalId: booking.trainer.externalId,
+      trainerName:
+        `${booking.trainer.lastName} ${booking.trainer.firstName}`.trim(),
+      linkedDocExternalId: booking.linkedDocExternalId,
+      crmDocRef: booking.crmDocRef,
+      isComplimentary: booking.isComplimentary,
+      origin: booking.origin,
+      payKind: booking.payKind,
+    };
+  }
+
+  /** Close next-morning «нет продажи/списания» admin tasks for this booking. */
+  private async closePtSaleLinkAdminTasks(clubId: string, bookingId: string) {
+    await this.prisma.adminTask.updateMany({
+      where: {
+        clubId,
+        source: 'TRAINING_SALE_NO_PERFORMER',
+        dedupeKey: `pt-sale-link:${bookingId}`,
+        status: { notIn: ['DONE', 'CANCELLED'] },
+      },
+      data: {
+        status: 'DONE',
+        completedAt: new Date(),
+        nextActionAt: null,
+      },
+    });
+  }
+
   /**
-   * Auto-link a free 1C PT sale / payment probe when exactly one candidate.
-   * No-op when flag off, complimentary, already linked, or blocked.
+   * Glue Onex PT visit → FitGO journal (fitgoBookingRef) for the same Minsk day.
+   * Does not write visit id into crmDocRef (that stays the sale document number).
+   */
+  async tryAutoLinkPtVisit(bookingId: string, clubId: string) {
+    const booking = await this.prisma.personalTrainingBooking.findFirst({
+      where: { id: bookingId },
+      include: { client: true, trainer: true },
+    });
+    if (!booking) return null;
+    if (booking.docAutoLinkBlocked) return null;
+    if (!(await this.shouldApplyPtControl(booking.trainerId, booking.ptFlow))) {
+      return null;
+    }
+
+    const dayStart = this.startOfDay(booking.startAt);
+    const dayEnd = this.endOfDay(booking.startAt);
+    const [sessions, siblings] = await Promise.all([
+      this.prisma.onexClassSession.findMany({
+        where: {
+          clubId,
+          isActive: true,
+          kind: OnexClassKind.PT,
+          startAt: { gte: dayStart, lte: dayEnd },
+        },
+        include: { members: true },
+      }),
+      this.prisma.personalTrainingBooking.findMany({
+        where: {
+          trainerId: booking.trainerId,
+          status: {
+            in: [
+              PersonalBookingStatus.CONFIRMED,
+              PersonalBookingStatus.COMPLETED,
+            ],
+          },
+          startAt: { gte: dayStart, lte: dayEnd },
+          id: { not: bookingId },
+        },
+        include: { client: true, trainer: true },
+      }),
+    ]);
+
+    const visits: PtVisitCandidate[] = sessions.map((s) => {
+      const member =
+        s.members.find((m) => !m.cancelled) ?? s.members[0] ?? null;
+      return {
+        externalId: s.externalId,
+        startAt: s.startAt,
+        employeeExternalId: s.employeeExternalId,
+        clientExternalId: member?.externalId ?? null,
+        clientName: member?.clientName ?? null,
+        status: s.status,
+        title: s.title,
+        paymentBasis: member?.paymentBasis ?? null,
+        number: s.number,
+      };
+    });
+
+    const alreadyMatchedVisitIds = new Set(
+      sessions
+        .filter((s) => s.fitgoBookingRef?.trim())
+        .map((s) => s.externalId),
+    );
+    // This booking already glued?
+    if (sessions.some((s) => s.fitgoBookingRef === bookingId)) {
+      return booking;
+    }
+
+    const pairs = buildPtDayMergePairs({
+      bookings: [
+        this.toPtBookingMatchInput(booking),
+        ...siblings.map((s) => this.toPtBookingMatchInput(s)),
+      ],
+      visits,
+      alreadyMatchedVisitIds,
+      alreadyMatchedBookingIds: new Set(
+        sessions
+          .map((s) => s.fitgoBookingRef?.trim())
+          .filter((id): id is string => Boolean(id)),
+      ),
+    });
+    const mine = pairs.find((p) => p.bookingId === bookingId);
+    if (!mine) return null;
+
+    await this.prisma.onexClassSession.updateMany({
+      where: {
+        clubId,
+        externalId: mine.visitExternalId,
+        OR: [{ fitgoBookingRef: null }, { fitgoBookingRef: '' }],
+      },
+      data: { fitgoBookingRef: bookingId },
+    });
+    const waitsWriteOff =
+      booking.isComplimentary ||
+      booking.payKind === 'GIFT' ||
+      booking.payKind === 'BLOCK' ||
+      booking.origin === PersonalBookingOrigin.CLIENT_BOOKED;
+    if (waitsWriteOff) {
+      await this.closePtSaleLinkAdminTasks(clubId, bookingId);
+    }
+    return booking;
+  }
+
+  /**
+   * Auto-link a free 1C PT sale when exactly one candidate.
+   * Gift / CLIENT_BOOKED / BLOCK payKind skip cash sales (visit glue only).
+   * PERSONAL / trainer club ledger — no-op.
    */
   async tryAutoLinkPtDocument(bookingId: string, clubId: string) {
     const booking = await this.prisma.personalTrainingBooking.findFirst({
@@ -166,17 +333,23 @@ export class PersonalTrainingService {
       },
     });
     if (!booking) return null;
-    if (booking.isComplimentary) return null;
-    if (booking.linkedDocExternalId || booking.docAutoLinkBlocked) return null;
-    if (!(await this.shouldApplyPtControl(booking.trainerId, booking.ptFlow)))
+    if (booking.docAutoLinkBlocked) return null;
+    if (!(await this.shouldApplyPtControl(booking.trainerId, booking.ptFlow))) {
       return null;
+    }
+
+    await this.tryAutoLinkPtVisit(bookingId, clubId);
+
+    const matchInput = this.toPtBookingMatchInput(booking);
+    if (bookingSkipsCashSale(matchInput)) return null;
+    if (booking.linkedDocExternalId) return null;
 
     const from = new Date(booking.startAt);
     from.setUTCDate(from.getUTCDate() - PT_DOC_LOOKBACK_DAYS);
     const to = new Date(booking.startAt);
     to.setUTCDate(to.getUTCDate() + PT_DOC_LOOKAHEAD_DAYS);
 
-    const [sales, taken] = await Promise.all([
+    const [sales, taken, openSiblings] = await Promise.all([
       this.prisma.trainerPtSale.findMany({
         where: {
           clubId,
@@ -187,6 +360,23 @@ export class PersonalTrainingService {
       this.prisma.personalTrainingBooking.findMany({
         where: { linkedDocExternalId: { not: null } },
         select: { linkedDocExternalId: true },
+      }),
+      this.prisma.personalTrainingBooking.findMany({
+        where: {
+          trainerId: booking.trainerId,
+          clientId: booking.clientId,
+          linkedDocExternalId: null,
+          docAutoLinkBlocked: false,
+          isComplimentary: false,
+          status: {
+            in: [
+              PersonalBookingStatus.CONFIRMED,
+              PersonalBookingStatus.COMPLETED,
+            ],
+          },
+          startAt: { gte: from, lte: to },
+        },
+        select: { id: true, startAt: true },
       }),
     ]);
     const candidates: PtSaleCandidate[] = sales.map((s) => ({
@@ -199,6 +389,7 @@ export class PersonalTrainingService {
       paymentStatus: s.paymentStatus,
       amount: s.amount,
       serviceName: s.serviceName,
+      saleDocumentId: s.saleDocumentId,
     }));
 
     const takenIds = expandTakenPtDocIds(
@@ -208,30 +399,59 @@ export class PersonalTrainingService {
       candidates,
     );
 
-    const match = matchPtDocument(
-      {
-        id: booking.id,
-        startAt: booking.startAt,
-        clientExternalId: booking.client.externalId,
-        clientName:
-          `${booking.client.lastName} ${booking.client.firstName}`.trim(),
-        trainerEmployeeCode: booking.trainer.employeeCode,
-        trainerExternalId: booking.trainer.externalId,
-        trainerName:
-          `${booking.trainer.lastName} ${booking.trainer.firstName}`.trim(),
-        linkedDocExternalId: booking.linkedDocExternalId,
-        crmDocRef: booking.crmDocRef,
-        isComplimentary: booking.isComplimentary,
-      },
-      candidates,
-      takenIds,
-    );
+    // Same-receipt multi-line: pair all open sibling bookings when counts match.
+    const bySaleDoc = new Map<string, PtSaleCandidate[]>();
+    for (const s of candidates) {
+      if (saleTakenByOther(s, takenIds)) continue;
+      const key = s.saleDocumentId?.trim();
+      if (!key) continue;
+      const list = bySaleDoc.get(key) ?? [];
+      list.push(s);
+      bySaleDoc.set(key, list);
+    }
+    for (const lines of bySaleDoc.values()) {
+      if (lines.length < 2) continue;
+      const paired = pairPtSalesToBookings({
+        bookings: openSiblings,
+        sales: lines,
+      });
+      if (!paired) continue;
+      for (const p of paired) {
+        const docId = canonicalPtDocId(p.sale);
+        if (!docId) continue;
+        try {
+          await this.prisma.personalTrainingBooking.update({
+            where: { id: p.bookingId },
+            data: {
+              linkedDocExternalId: docId,
+              crmDocRef: p.sale.docRef ?? docId,
+              paymentStatus:
+                p.sale.paymentStatus === 'DEBT' ? 'DEBT' : 'PAID',
+              ...(p.sale.paymentStatus !== 'DEBT'
+                ? { paidAt: new Date() }
+                : {}),
+            },
+          });
+          await this.closePtSaleLinkAdminTasks(clubId, p.bookingId);
+        } catch {
+          /* unique conflict */
+        }
+      }
+      const mine = paired.find((p) => p.bookingId === bookingId);
+      if (mine) {
+        return this.prisma.personalTrainingBooking.findUnique({
+          where: { id: bookingId },
+        });
+      }
+    }
+
+    const match = matchPtDocument(matchInput, candidates, takenIds);
 
     if (match.kind === 'auto') {
       const docId = canonicalPtDocId(match.sale);
       if (!docId) return null;
       try {
-        return await this.prisma.personalTrainingBooking.update({
+        const updated = await this.prisma.personalTrainingBooking.update({
           where: { id: bookingId },
           data: {
             linkedDocExternalId: docId,
@@ -243,13 +463,13 @@ export class PersonalTrainingService {
               : {}),
           },
         });
+        await this.closePtSaleLinkAdminTasks(clubId, bookingId);
+        return updated;
       } catch {
-        // Unique conflict — another booking grabbed the doc.
         return null;
       }
     }
 
-    // Several sales → leave for admin (ptLinkHint on detail). Do not auto-pick.
     if (match.kind === 'ambiguous') return null;
 
     if (match.kind === 'none') {
@@ -263,10 +483,8 @@ export class PersonalTrainingService {
           undefined,
         occurredAt: booking.startAt.toISOString(),
       });
-      // Ambiguous live probe — admin chooses; never store a guess.
       if (live?.candidates && live.candidates.length > 1) return null;
 
-      // Prefer UUID#line; resolve docRef → TrainerPtSale.externalId when possible.
       let docId =
         canonicalPtDocId({
           externalId: live?.externalId,
@@ -290,7 +508,7 @@ export class PersonalTrainingService {
       }
       if (docId && !takenIds.has(docId)) {
         try {
-          return await this.prisma.personalTrainingBooking.update({
+          const updated = await this.prisma.personalTrainingBooking.update({
             where: { id: bookingId },
             data: {
               linkedDocExternalId: docId,
@@ -303,6 +521,8 @@ export class PersonalTrainingService {
               ...(live?.paymentStatus === 'PAID' ? { paidAt: new Date() } : {}),
             },
           });
+          await this.closePtSaleLinkAdminTasks(clubId, bookingId);
+          return updated;
         } catch {
           return null;
         }
@@ -310,6 +530,66 @@ export class PersonalTrainingService {
     }
 
     return null;
+  }
+
+  /**
+   * After PT sales / class sync: re-link unlinked CLUB bookings in the window.
+   */
+  async relinkClubBookingsInRange(
+    clubId: string,
+    from: Date,
+    to: Date,
+  ): Promise<number> {
+    const bookings = await this.prisma.personalTrainingBooking.findMany({
+      where: {
+        trainer: { clubId },
+        status: {
+          in: [
+            PersonalBookingStatus.CONFIRMED,
+            PersonalBookingStatus.COMPLETED,
+          ],
+        },
+        startAt: { gte: from, lte: to },
+        docAutoLinkBlocked: false,
+        OR: [
+          { linkedDocExternalId: null },
+          // Always retry visit glue via tryAutoLink (idempotent).
+          { linkedDocExternalId: { not: null } },
+        ],
+        NOT: { ptFlow: 'PERSONAL' },
+      },
+      include: {
+        trainer: {
+          select: {
+            id: true,
+            trainerClub: true,
+            trainerStaff: true,
+            clubId: true,
+          },
+        },
+      },
+      take: 500,
+    });
+
+    let linked = 0;
+    for (const b of bookings) {
+      if (
+        isPersonalPtBooking(
+          { ptFlow: b.ptFlow },
+          {
+            trainerClub: b.trainer.trainerClub,
+            trainerStaff: b.trainer.trainerStaff,
+          },
+        )
+      ) {
+        continue;
+      }
+      if (!(await this.shouldApplyPtControl(b.trainerId, b.ptFlow))) continue;
+      const before = b.linkedDocExternalId;
+      const result = await this.tryAutoLinkPtDocument(b.id, clubId);
+      if (result && !before && result.linkedDocExternalId) linked += 1;
+    }
+    return linked;
   }
 
   async getTrainerWorkSchedule(user: JwtPayload) {
@@ -476,14 +756,32 @@ export class PersonalTrainingService {
       );
     };
 
+    const visitLinkedIds = new Set<string>();
+    if (ptControlOn && liveBookings.length) {
+      const glued = await this.prisma.onexClassSession.findMany({
+        where: {
+          clubId: requireClubId(user),
+          fitgoBookingRef: { in: liveBookings.map((b) => b.id) },
+        },
+        select: { fitgoBookingRef: true },
+      });
+      for (const g of glued) {
+        if (g.fitgoBookingRef) visitLinkedIds.add(g.fitgoBookingRef);
+      }
+    }
+
     for (const booking of bookings) {
       let ptControlStatus: TrainerCalendarEvent['ptControlStatus'];
       let ptControlLabel: string | undefined;
       const isCancelled = booking.status === PersonalBookingStatus.CANCELLED;
       if (ptControlOn && !isCancelled) {
-        if (booking.docAutoLinkBlocked) {
+        // PERSONAL stream has no 1C sale badges (trainer club ledger).
+        if (booking.ptFlow === 'PERSONAL') {
+          ptControlStatus = undefined;
+          ptControlLabel = undefined;
+        } else if (booking.docAutoLinkBlocked) {
           ptControlStatus = 'NO_BASIS';
-          ptControlLabel = 'Нет основания в 1С';
+          ptControlLabel = 'Без основания';
         } else if (booking.linkedDocExternalId) {
           const appr = approvalByBooking.get(booking.id);
           if (appr?.adminApprovedAt || appr?.overrideApprovedAt) {
@@ -491,22 +789,38 @@ export class PersonalTrainingService {
             ptControlLabel = 'Подтверждена';
           } else {
             ptControlStatus = 'LINKED';
-            ptControlLabel = 'Документ привязан';
+            ptControlLabel =
+              booking.payKind === 'GIFT' || booking.isComplimentary
+                ? 'Списано с абонемента'
+                : booking.payKind === 'BLOCK'
+                  ? 'Списано с блока'
+                  : 'Есть продажа';
           }
         } else {
-          const appr = approvalByBooking.get(booking.id);
-          const phase = appr
-            ? this.sessionApproval.phase(appr)
-            : 'PENDING_PERFORMER';
-          if (phase === 'APPROVED') {
-            ptControlStatus = 'APPROVED';
-            ptControlLabel = 'Подтверждена';
-          } else if (phase === 'PENDING_ADMIN') {
-            ptControlStatus = 'PENDING_ADMIN';
-            ptControlLabel = 'На проверке';
+          const ended = booking.endAt.getTime() <= Date.now();
+          const waitsWriteOff =
+            booking.isComplimentary ||
+            booking.payKind === 'GIFT' ||
+            booking.payKind === 'BLOCK' ||
+            booking.origin === PersonalBookingOrigin.CLIENT_BOOKED;
+          const visitGlued = visitLinkedIds.has(booking.id);
+          if (waitsWriteOff && visitGlued) {
+            ptControlStatus = 'LINKED';
+            ptControlLabel =
+              booking.payKind === 'BLOCK'
+                ? 'Списано с блока'
+                : 'Списано с абонемента';
+          } else if (waitsWriteOff) {
+            ptControlStatus = 'PENDING_PERFORMER';
+            ptControlLabel = ended
+              ? 'Нет списания'
+              : 'Ждёт списание';
+          } else if (visitGlued) {
+            ptControlStatus = 'PENDING_PERFORMER';
+            ptControlLabel = ended ? 'Нет продажи' : 'Списание есть';
           } else {
             ptControlStatus = 'PENDING_PERFORMER';
-            ptControlLabel = 'Ждёт подтверждения';
+            ptControlLabel = ended ? 'Нет продажи' : 'Ждёт продажу';
           }
         }
       }
@@ -932,6 +1246,132 @@ export class PersonalTrainingService {
     );
   }
 
+  /**
+   * Basis chips for assign dialog: gift / block lines with remaining > 0
+   * from ClubMembershipSnapshot, plus one-shot cash for staff PT.
+   */
+  async getClientPtBasisOptions(user: JwtPayload, clientId: string) {
+    const clubId = requireClubId(user);
+    const trainer = await this.prisma.user.findUnique({
+      where: { id: user.sub },
+      select: { trainerClub: true, trainerStaff: true },
+    });
+    const personalOnly = Boolean(
+      trainer?.trainerClub && !trainer?.trainerStaff,
+    );
+
+    if (personalOnly) {
+      const pkg = await this.prisma.trainerClientPackage.findFirst({
+        where: {
+          trainerId: user.sub,
+          clientId,
+          status: TrainerOwnPackageStatus.ACTIVE,
+          sessionsRemaining: { gt: 0 },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      const options: Array<{
+        payKind: 'BLOCK' | 'PAID' | 'GIFT';
+        label: string;
+        basisServiceName?: string;
+        remaining?: number;
+      }> = [];
+      if (pkg) {
+        options.push({
+          payKind: 'BLOCK',
+          label: `Пакет · ${pkg.title} · осталось ${pkg.sessionsRemaining}`,
+          basisServiceName: pkg.title,
+          remaining: pkg.sessionsRemaining,
+        });
+      }
+      options.push({
+        payKind: 'PAID',
+        label: 'Разовая / долг',
+      });
+      return { snapshot: true, options };
+    }
+
+    const client = await this.prisma.user.findFirst({
+      where: { id: clientId, clubId },
+      select: { externalId: true },
+    });
+    if (!client?.externalId) {
+      return {
+        snapshot: false,
+        options: [
+          { payKind: 'PAID' as const, label: 'Разовая оплата' },
+        ],
+      };
+    }
+
+    const snap = await this.prisma.clubMembershipSnapshot.findUnique({
+      where: {
+        clubId_clientExternalId: {
+          clubId,
+          clientExternalId: client.externalId,
+        },
+      },
+      select: { servicesJson: true, syncedAt: true },
+    });
+    if (!snap) {
+      return {
+        snapshot: false,
+        options: [
+          { payKind: 'PAID' as const, label: 'Разовая оплата' },
+        ],
+        message: 'Карта не подгружена',
+      };
+    }
+
+    const {
+      findMembershipIncludedService,
+      isMultiVisitPackSale,
+    } = await import('@fitgo/shared-types');
+
+    const options: Array<{
+      payKind: 'BLOCK' | 'PAID' | 'GIFT';
+      label: string;
+      basisServiceName?: string;
+      remaining?: number;
+    }> = [];
+    const services = Array.isArray(snap.servicesJson)
+      ? (snap.servicesJson as Array<{ name?: string; remaining?: number }>)
+      : [];
+    for (const row of services) {
+      const name = row.name?.trim();
+      if (!name) continue;
+      const rem =
+        typeof row.remaining === 'number' && Number.isFinite(row.remaining)
+          ? row.remaining
+          : 0;
+      if (rem <= 0) continue;
+      const included = findMembershipIncludedService(name);
+      if (included?.kind === 'PT') {
+        options.push({
+          payKind: 'GIFT',
+          label: `Подарочные · осталось ${rem}`,
+          basisServiceName: name,
+          remaining: rem,
+        });
+        continue;
+      }
+      if (isMultiVisitPackSale(name)) {
+        options.push({
+          payKind: 'BLOCK',
+          label: `Блок · ${name} · осталось ${rem}`,
+          basisServiceName: name,
+          remaining: rem,
+        });
+      }
+    }
+    options.push({ payKind: 'PAID', label: 'Разовая оплата' });
+    return {
+      snapshot: true,
+      syncedAt: snap.syncedAt.toISOString(),
+      options,
+    };
+  }
+
   async assignPersonalBooking(
     user: JwtPayload,
     input: {
@@ -943,6 +1383,8 @@ export class PersonalTrainingService {
       startAt: string;
       isComplimentary?: boolean;
       ptFlow?: PtBookingFlowValue | null;
+      payKind?: 'PAID' | 'GIFT' | 'BLOCK' | 'UNKNOWN' | null;
+      basisServiceName?: string | null;
     },
   ) {
     const start = new Date(input.startAt);
@@ -959,8 +1401,11 @@ export class PersonalTrainingService {
       lastName: input.lastName,
       clientExternalId: input.clientExternalId,
     });
-    const isComplimentary = input.isComplimentary ?? false;
+    const payKindInput = input.payKind?.trim() || null;
+    const isComplimentary =
+      input.isComplimentary === true || payKindInput === 'GIFT';
     const ptFlowRequest = input.ptFlow;
+    const basisServiceName = input.basisServiceName?.trim() || null;
 
     await this.ensureNoBookingConflict(user.sub, start, end);
 
@@ -1051,7 +1496,14 @@ export class PersonalTrainingService {
         eligibleForMotivation: personal ? false : control.eligibleForMotivation,
         bookedByUserId: control.bookedByUserId,
         clientIssue: clientIssue as never,
-        payKind: isComplimentary ? 'GIFT' : 'UNKNOWN',
+        payKind: isComplimentary
+          ? 'GIFT'
+          : payKindInput === 'BLOCK'
+            ? 'BLOCK'
+            : payKindInput === 'PAID'
+              ? 'PAID'
+              : 'UNKNOWN',
+        ...(basisServiceName ? { basisServiceName } : {}),
         ...(priceMinor != null ? { priceMinor } : {}),
         ...(clientIssue !== 'NONE' && !personal
           ? { trustBand: 'AMBER' as never }
@@ -1075,17 +1527,21 @@ export class PersonalTrainingService {
       });
     }
 
+    const clubId = requireClubId(user);
     // Gift / membership complimentary always goes to admin control.
     if (
       isComplimentary ||
       (await this.shouldApplyPtControl(user.sub, ptFlow))
     ) {
-      const clubId = requireClubId(user);
       await this.sessionApproval.ensureApproval(
         SessionApprovalKind.PT,
         booking.id,
         clubId,
       );
+    }
+
+    if (!personal && (await this.shouldApplyPtControl(user.sub, ptFlow))) {
+      await this.tryAutoLinkPtDocument(booking.id, clubId);
     }
 
     return {

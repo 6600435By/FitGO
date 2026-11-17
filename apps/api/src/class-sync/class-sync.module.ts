@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
 import { EngagementModule } from '../engagement/engagement.module';
 import { FitnessModule } from '../fitness/fitness.module';
+import { PersonalTrainingModule } from '../personal-training/personal-training.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import {
   AdminClassSyncController,
@@ -19,6 +20,7 @@ import { HallVisitsSyncService } from './hall-visits-sync.service';
     FitnessModule,
     EngagementModule,
     ServiceUsageModule,
+    PersonalTrainingModule,
   ],
   controllers: [ClassSyncController, AdminClassSyncController],
   providers: [

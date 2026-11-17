@@ -73,6 +73,7 @@ const ISSUE_REASON_ALL: BookingControlIssueReason[] = [
   'unpaid',
   'not1c',
   'journal',
+  'ptsale',
 ];
 
 function parseIssueReasons(raw: string | null | undefined): BookingControlIssueReason[] {
@@ -1417,10 +1418,11 @@ export function BookingControlPanel({
       unpaid: 0,
       not1c: 0,
       journal: 0,
+      ptsale: 0,
     };
     for (const i of filteredForCounts) {
       if (bookingControlQueueSegment(i, nowMs) !== 'pending') continue;
-      for (const r of bookingControlIssueReasons(i)) {
+      for (const r of bookingControlIssueReasons(i, nowMs)) {
         counts[r] += 1;
       }
     }
@@ -1439,7 +1441,7 @@ export function BookingControlPanel({
       }
       if (queue === 'pending' && reasons.length > 0) {
         rows = rows.filter((i) =>
-          bookingControlMatchesSelectedReasons(i, reasons),
+          bookingControlMatchesSelectedReasons(i, reasons, nowMs),
         );
       }
     }
@@ -3103,6 +3105,7 @@ export function BookingControlPanel({
                       ['journal', 'Нет в журнале', 'orange'],
                     ] as const)
                   : []),
+                ['ptsale', 'Нет продажи', 'orange'],
               ] as const
             ).map(([id, label, tone]) => (
               <button
@@ -3547,9 +3550,42 @@ export function BookingControlPanel({
                             продажа
                           </span>
                         ) : null}
-                        {item.source === 'FITGO' && !item.oneCLinked ? (
+                        {item.source === 'FITGO' &&
+                        item.kind === 'SPA' &&
+                        !item.oneCLinked ? (
                           <span className={hintBadgeClass('notIn1c')}>
                             нет в 1С
+                          </span>
+                        ) : null}
+                        {item.source === 'FITGO' &&
+                        item.kind === 'PT' &&
+                        !item.oneCLinked &&
+                        !item.docAutoLinkBlocked &&
+                        !item.trainerClubPersonal &&
+                        new Date(item.endAt ?? item.startAt).getTime() <=
+                          Date.now() ? (
+                          <span className={hintBadgeClass('notIn1c')}>
+                            {item.payment === 'GIFT' || item.payment === 'QUOTA'
+                              ? 'нет списания'
+                              : 'нет продажи'}
+                          </span>
+                        ) : null}
+                        {item.source === 'FITGO' &&
+                        item.kind === 'PT' &&
+                        item.oneCLinked &&
+                        (item.payment === 'GIFT' ||
+                          item.payment === 'QUOTA') ? (
+                          <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                            {item.payment === 'GIFT'
+                              ? 'списано с абонемента'
+                              : 'списано с блока'}
+                          </span>
+                        ) : null}
+                        {item.source === 'FITGO' &&
+                        item.kind === 'PT' &&
+                        item.docAutoLinkBlocked ? (
+                          <span className="rounded bg-slate-500/20 px-1.5 py-0.5 text-[10px] text-slate-300">
+                            без основания
                           </span>
                         ) : null}
                         {item.missingJournal ? (
@@ -3660,9 +3696,42 @@ export function BookingControlPanel({
                             продажа
                           </span>
                         ) : null}
-                        {item.source === 'FITGO' && !item.oneCLinked ? (
+                        {item.source === 'FITGO' &&
+                        item.kind === 'SPA' &&
+                        !item.oneCLinked ? (
                           <span className={hintBadgeClass('notIn1c', true)}>
                             нет в 1С
+                          </span>
+                        ) : null}
+                        {item.source === 'FITGO' &&
+                        item.kind === 'PT' &&
+                        !item.oneCLinked &&
+                        !item.docAutoLinkBlocked &&
+                        !item.trainerClubPersonal &&
+                        new Date(item.endAt ?? item.startAt).getTime() <=
+                          Date.now() ? (
+                          <span className={hintBadgeClass('notIn1c', true)}>
+                            {item.payment === 'GIFT' || item.payment === 'QUOTA'
+                              ? 'нет списания'
+                              : 'нет продажи'}
+                          </span>
+                        ) : null}
+                        {item.source === 'FITGO' &&
+                        item.kind === 'PT' &&
+                        item.docAutoLinkBlocked ? (
+                          <span className="ml-1 rounded bg-slate-500/20 px-1 py-0.5 text-[10px] text-slate-300">
+                            без основания
+                          </span>
+                        ) : null}
+                        {item.source === 'FITGO' &&
+                        item.kind === 'PT' &&
+                        item.oneCLinked &&
+                        (item.payment === 'GIFT' ||
+                          item.payment === 'QUOTA') ? (
+                          <span className="ml-1 rounded bg-emerald-500/15 px-1 py-0.5 text-[10px] text-emerald-300">
+                            {item.payment === 'GIFT'
+                              ? 'списано с абонемента'
+                              : 'списано с блока'}
                           </span>
                         ) : null}
                         {item.missingJournal ? (

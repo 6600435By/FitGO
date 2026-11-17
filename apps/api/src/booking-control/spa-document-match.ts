@@ -174,10 +174,38 @@ export function collapseSpaSalesByLine(
         }
       }
     }
+    // Keep cash-only groups for journal↔sale matching (same-day cash row).
+    // Retail Контроль/ЗП must drop them via {@link spaRetailLineHasAnchor}.
     push(spaSaleLineKey(c), c);
   }
 
   return order.map((key) => mergeSpaSaleGroup(groups.get(key)!));
+}
+
+/**
+ * True when this collapsed line includes a sale / unpaid / write-off row.
+ * Cash-only groups are debt-repayment slices (often for older SPA sales
+ * outside the period) — never invent a retail visit from them alone.
+ */
+export function spaRetailLineHasAnchor(
+  sale: SpaSaleCandidate,
+  anchoredLineKeys: Set<string>,
+): boolean {
+  const key = spaSaleLineKey(sale);
+  return Boolean(key && anchoredLineKeys.has(key));
+}
+
+/** Line keys of non-cash ClubRevenue rows (sale / unpaid / debt_writeoff). */
+export function spaAnchoredLineKeys(
+  sales: SpaSaleCandidate[],
+): Set<string> {
+  const keys = new Set<string>();
+  for (const s of sales) {
+    if (isCashOp(s.operationType)) continue;
+    const key = spaSaleLineKey(s);
+    if (key) keys.add(key);
+  }
+  return keys;
 }
 
 function mergeSpaSaleGroup(rows: SpaSaleCandidate[]): SpaSaleCandidate {

@@ -139,6 +139,8 @@ import {
   saleLineTotalMajor,
   saleSearchWindow,
   serviceNamesMatch,
+  spaAnchoredLineKeys,
+  spaRetailLineHasAnchor,
   spaSaleLineKey,
   type SpaSaleCandidate,
 } from '../booking-control/spa-document-match';
@@ -1234,6 +1236,7 @@ export class PayrollService {
       // One unit per nomenclature line — two procedures in one document are
       // two paid visits, not a single max-amount row.
       const collapsedSpaRetail = collapseSpaSalesByLine(spaRetailCandidates);
+      const spaRetailAnchors = spaAnchoredLineKeys(spaRetailCandidates);
       const seenSpaRetailLines = new Set<string>();
       for (const sale of collapsedSpaRetail) {
         const product = sale.productName ?? '';
@@ -1252,6 +1255,9 @@ export class PayrollService {
         });
         const lineKey = spaSaleLineKey(sale);
         if (!lineKey || seenSpaRetailLines.has(lineKey)) continue;
+        // Debt-repayment cash slices without a sale/write-off in this period
+        // are not new SPA visits (wrong amounts in ЗП).
+        if (!spaRetailLineHasAnchor(sale, spaRetailAnchors)) continue;
         if (spaVisitSaleLines.has(lineKey)) continue;
         // Basis covered by a visit whose exact line is unknown (pack docs) —
         // suppress the whole document, otherwise only the paid line.

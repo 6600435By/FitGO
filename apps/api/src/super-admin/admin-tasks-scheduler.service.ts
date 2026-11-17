@@ -184,6 +184,12 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     ))
       ? await this.syncTrainingSalesNoPerformer(clubId, systemUser.id)
       : 0;
+    const ptMissingSale = (await this.isRuleEnabled(
+      clubId,
+      'TRAINING_SALE_NO_PERFORMER',
+    ))
+      ? await this.syncPtMissingSaleLinks(clubId, systemUser.id)
+      : 0;
     const fromTemplates = await this.generateFromTemplates(
       clubId,
       systemUser.id,
@@ -191,7 +197,7 @@ export class AdminTasksSchedulerService implements OnModuleInit {
     );
 
     this.logger.log(
-      `Club ${clubId}: debt +${debtCreated}, installment +${installment}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}, birthday +${birthdays.created} skip ${birthdays.skipped}, confirm +${confirmations.created}, ptNoPerformer +${ptNoPerformer}, templates +${fromTemplates}`,
+      `Club ${clubId}: debt +${debtCreated}, installment +${installment}, membership +${membership.created}, renewed ${membership.closedRenewed}, lost ${membership.closedLost}, birthday +${birthdays.created} skip ${birthdays.skipped}, confirm +${confirmations.created}, ptNoPerformer +${ptNoPerformer}, ptMissingSale +${ptMissingSale}, templates +${fromTemplates}`,
     );
     return {
       debt: debtCreated,
@@ -1417,6 +1423,185 @@ export class AdminTasksSchedulerService implements OnModuleInit {
           comment: 'Авто: исполнитель проставлен',
         },
       });
+    }
+
+    return created;
+  }
+
+  /**
+   * Next-morning reminder: FitGO staff PT booking finished yesterday+ without a
+   * linked 1C sale / write-off. Same source as performer-check
+   * (`TRAINING_SALE_NO_PERFORMER`), dedupe `pt-sale-link:{bookingId}`.
+   */
+  private async syncPtMissingSaleLinks(clubId: string, systemUserId: string) {
+    let created = 0;
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+    const lookback = new Date(startOfToday);
+    lookback.setDate(lookback.getDate() - 14);
+
+    // Close resolved: sale linked, no-basis, cancelled, or PERSONAL stream.
+    const openTasks = await this.prisma.adminTask.findMany({
+      where: {
+        clubId,
+        source: 'TRAINING_SALE_NO_PERFORMER',
+        status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
+        dedupeKey: { startsWith: 'pt-sale-link:' },
+      },
+      take: 500,
+      select: { id: true, dedupeKey: true, suppressAutoClose: true, meta: true },
+    });
+    for (const task of openTasks) {
+      if (task.suppressAutoClose) continue;
+      const meta =
+        task.meta && typeof task.meta === 'object'
+          ? (task.meta as { bookingId?: unknown })
+          : null;
+      const bookingId =
+        (typeof meta?.bookingId === 'string' ? meta.bookingId : null) ||
+        task.dedupeKey?.replace(/^pt-sale-link:/, '') ||
+        null;
+      if (!bookingId) continue;
+      const b = await this.prisma.personalTrainingBooking.findUnique({
+        where: { id: bookingId },
+        select: {
+          linkedDocExternalId: true,
+          docAutoLinkBlocked: true,
+          status: true,
+          ptFlow: true,
+        },
+      });
+      const resolved =
+        !b ||
+        b.status === 'CANCELLED' ||
+        b.ptFlow === 'PERSONAL' ||
+        b.docAutoLinkBlocked ||
+        Boolean(b.linkedDocExternalId?.trim());
+      if (!resolved) continue;
+      await this.prisma.adminTask.update({
+        where: { id: task.id },
+        data: {
+          status: AdminTaskStatus.DONE,
+          completedAt: now,
+          nextActionAt: null,
+        },
+      });
+    }
+
+    const bookings = await this.prisma.personalTrainingBooking.findMany({
+      where: {
+        trainer: { clubId },
+        status: { not: 'CANCELLED' },
+        endAt: { gte: lookback, lt: startOfToday },
+        OR: [{ linkedDocExternalId: null }, { linkedDocExternalId: '' }],
+        docAutoLinkBlocked: false,
+        NOT: { ptFlow: 'PERSONAL' },
+      },
+      take: 500,
+      select: {
+        id: true,
+        endAt: true,
+        startAt: true,
+        payKind: true,
+        isComplimentary: true,
+        origin: true,
+        client: {
+          select: {
+            firstName: true,
+            lastName: true,
+            phone: true,
+            externalId: true,
+          },
+        },
+        trainer: { select: { firstName: true, lastName: true } },
+      },
+    });
+
+    // Gift/block with visit already glued → skip (basis resolved without cash).
+    const giftIds = bookings
+      .filter(
+        (b) =>
+          b.isComplimentary ||
+          b.payKind === 'GIFT' ||
+          b.payKind === 'BLOCK' ||
+          b.origin === 'CLIENT_BOOKED',
+      )
+      .map((b) => b.id);
+    const visitGlued = new Set<string>();
+    if (giftIds.length) {
+      const glued = await this.prisma.onexClassSession.findMany({
+        where: { clubId, fitgoBookingRef: { in: giftIds } },
+        select: { fitgoBookingRef: true },
+      });
+      for (const g of glued) {
+        if (g.fitgoBookingRef) visitGlued.add(g.fitgoBookingRef);
+      }
+    }
+
+    for (const b of bookings) {
+      const waitsWriteOff =
+        b.isComplimentary ||
+        b.payKind === 'GIFT' ||
+        b.payKind === 'BLOCK' ||
+        b.origin === 'CLIENT_BOOKED';
+      if (waitsWriteOff && visitGlued.has(b.id)) continue;
+
+      const clientName =
+        `${b.client.lastName} ${b.client.firstName}`.trim() || 'клиент';
+      const clientPhone = b.client.phone?.trim() || null;
+      const dedupeKey = `pt-sale-link:${b.id}`;
+      const existing = await this.prisma.adminTask.findFirst({
+        where: {
+          clubId,
+          source: 'TRAINING_SALE_NO_PERFORMER',
+          dedupeKey,
+          status: { in: [AdminTaskStatus.OPEN, AdminTaskStatus.IN_PROGRESS] },
+        },
+      });
+      if (existing) continue;
+
+      const trainerName = [b.trainer?.lastName, b.trainer?.firstName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      const when = b.endAt.toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const title = waitsWriteOff
+        ? `Нет списания к ПТ · ${clientName} · ${trainerName || 'тренер'} (${when})`
+        : `Нет продажи к ПТ · ${clientName} · ${trainerName || 'тренер'} (${when})`;
+
+      await this.prisma.adminTask.create({
+        data: {
+          clubId,
+          createdById: systemUserId,
+          source: 'TRAINING_SALE_NO_PERFORMER',
+          title,
+          description: waitsWriteOff
+            ? 'Проверить списание с абонемента / блока в 1С.'
+            : 'Проверить продажу или основание в 1С.',
+          priority: 'NORMAL',
+          status: AdminTaskStatus.OPEN,
+          clientExternalId: b.client.externalId?.trim() || null,
+          nextActionAt: now,
+          dueAt: b.endAt,
+          dedupeKey,
+          meta: {
+            bookingId: b.id,
+            kind: waitsWriteOff
+              ? 'pt_missing_writeoff'
+              : 'pt_missing_sale_link',
+            clientName,
+            clientPhone,
+            trainerName,
+          },
+        },
+      });
+      created += 1;
     }
 
     return created;
