@@ -12,10 +12,15 @@ import {
 import { addDays, format, parseISO } from 'date-fns';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BookingControlPanel } from '@/components/booking-control/booking-control-panel';
 import { FormaMonthNav } from '@/components/trainer-shell/forma-month-nav';
 import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
+import {
+  createTrainerBookingControlApi,
+  trainerDeletePtBookingFromControl,
+} from '@/lib/trainer-booking-control-api';
 import { AddTrainingDialog } from './add-training-dialog';
 import { AssignClientDialog } from './assign-client-dialog';
 import { BookingActionSheet } from './booking-action-sheet';
@@ -131,7 +136,13 @@ export function TrainerSchedulePage() {
   const [selectedEvent, setSelectedEvent] = useState<TrainerCalendarEvent | null>(
     null,
   );
+  const [openSession, setOpenSession] = useState<{
+    sessionKey: string;
+    from: string;
+    to: string;
+  } | null>(null);
   const [draftSlot, setDraftSlot] = useState<TrainerCalendarEvent | null>(null);
+  const panelApi = useMemo(() => createTrainerBookingControlApi(), []);
 
   const {
     events,
@@ -245,6 +256,15 @@ export function TrainerSchedulePage() {
       const token = getToken();
       if (!token) return;
       void api.trainerDeleteScheduleHold(token, event.blockId).then(reload);
+      return;
+    }
+    if (event.kind === 'GROUP' && event.sessionKey) {
+      const eventDay = format(parseISO(event.startAt), 'yyyy-MM-dd');
+      setOpenSession({
+        sessionKey: event.sessionKey,
+        from: eventDay,
+        to: eventDay,
+      });
       return;
     }
     setSelectedEvent(event);
@@ -535,6 +555,32 @@ export function TrainerSchedulePage() {
           event={selectedEvent}
           onClose={() => setSelectedEvent(null)}
           onCancelBooking={handleCancelBooking}
+        />
+      ) : null}
+
+      {openSession ? (
+        <BookingControlPanel
+          key={openSession.sessionKey}
+          api={panelApi}
+          canResolve={false}
+          canMarkAttendance={false}
+          canTrainerSeen
+          canApproveGroup
+          approvalActor="performer"
+          canBulkApprove={false}
+          canReturnApproval={false}
+          canManagerRework={false}
+          canExcludePayroll={false}
+          canViewHallPhotos
+          detailOnly
+          initialSessionKey={openSession.sessionKey}
+          initialFrom={openSession.from}
+          initialTo={openSession.to}
+          deletePtBooking={trainerDeletePtBookingFromControl}
+          onDetailClose={() => {
+            setOpenSession(null);
+            void reload();
+          }}
         />
       ) : null}
     </div>

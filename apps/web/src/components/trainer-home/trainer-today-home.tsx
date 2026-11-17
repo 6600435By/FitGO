@@ -347,6 +347,24 @@ function AssistantBlock({
   );
 }
 
+function sessionRowHref(
+  s: FloorStaffHomeSession,
+  scheduleHref: string,
+  controlHref?: ((s: FloorStaffHomeSession) => string) | null,
+): string {
+  const plan = planHref(s);
+  if (plan) return plan;
+  if (s.sessionKey && controlHref) {
+    return controlHref(s);
+  }
+  const day = s.startAt?.slice(0, 10);
+  if (day && /^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    const sep = scheduleHref.includes('?') ? '&' : '?';
+    return `${scheduleHref}${sep}date=${day}`;
+  }
+  return scheduleHref;
+}
+
 function DayTimeline({
   sessions,
   scheduleHref,
@@ -373,11 +391,7 @@ function DayTimeline({
       ) : (
         <Timeline>
           {sessions.map((s) => {
-            const plan = planHref(s);
-            const href =
-              s.status === 'DONE' && s.sessionKey && controlHref
-                ? controlHref(s)
-                : plan ?? scheduleHref;
+            const href = sessionRowHref(s, scheduleHref, controlHref);
             const manageHref =
               s.kind === 'PT' && s.sessionKey?.startsWith('fitgo:PT:')
                 ? `/trainer/schedule?manage=${encodeURIComponent(s.id)}`
@@ -386,24 +400,15 @@ function DayTimeline({
               <TimelineItem
                 key={s.id}
                 time={timeHm(s.startAt)}
+                href={href}
                 title={
                   <span className="inline-flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                    <Link href={href} className="hover:text-forma-300">
-                      {s.kind === 'PT' || s.kind === 'GROUP' ? (
-                        <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                          {s.kind === 'PT' ? 'ПТ' : 'ГП'}
-                        </span>
-                      ) : null}
-                      {s.title}
-                    </Link>
-                    {manageHref ? (
-                      <Link
-                        href={manageHref}
-                        className="text-[11px] font-medium text-zinc-500 hover:text-forma-300"
-                      >
-                        Изменить
-                      </Link>
+                    {s.kind === 'PT' || s.kind === 'GROUP' ? (
+                      <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                        {s.kind === 'PT' ? 'ПТ' : 'ГП'}
+                      </span>
                     ) : null}
+                    {s.title}
                   </span>
                 }
                 meta={
@@ -414,6 +419,17 @@ function DayTimeline({
                       : ''}
                     {s.stateLabel ? ` · ${s.stateLabel}` : ''}
                   </>
+                }
+                action={
+                  manageHref ? (
+                    <Link
+                      href={manageHref}
+                      onClick={(e) => e.stopPropagation()}
+                      className="shrink-0 text-[11px] font-medium text-zinc-500 hover:text-forma-300"
+                    >
+                      Изменить
+                    </Link>
+                  ) : null
                 }
                 tone={sessionTone(s)}
               />

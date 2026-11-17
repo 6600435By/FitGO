@@ -906,6 +906,8 @@ export interface TrainerCalendarEvent {
   available?: boolean;
   capacity?: number;
   booked?: number;
+  /** GROUP: booking-control key (`1c:…`) when linked to Onex. */
+  sessionKey?: string;
 }
 
 export interface TrainerAvailabilityBlock {

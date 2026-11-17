@@ -401,7 +401,7 @@ export class TrainerInsightsService {
             priority: 28,
             action: {
               label: 'Расписание',
-              href: '/trainer/gp-schedule',
+              href: `/trainer/gp-schedule?date=${tomorrow}`,
             },
           });
         }

@@ -4617,7 +4617,17 @@ export class BookingControlService {
 
     let id = await resolveId();
     let session = await loadActive(id);
-    if (session && !needsGroupRosterRefresh(session)) return session;
+    // Already in DB: open immediately. Refresh roster from 1C in the background.
+    if (session) {
+      if (needsGroupRosterRefresh(session)) {
+        void this.syncWindowForCandidate(clubId, candidateId, syncMode)
+          .then((window) =>
+            this.classSessions.syncRange(clubId, window.from, window.to),
+          )
+          .catch(() => undefined);
+      }
+      return session;
+    }
 
     const window = await this.syncWindowForCandidate(
       clubId,

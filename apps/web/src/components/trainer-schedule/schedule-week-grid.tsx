@@ -100,6 +100,7 @@ export function ScheduleWeekGrid({
     x: number;
     y: number;
     timer: number | null;
+    target: HTMLElement | null;
   } | null>(null);
   /** True only after an actual drag started — suppresses the following click. */
   const suppressClickRef = useRef(false);
@@ -180,6 +181,14 @@ export function ScheduleWeekGrid({
   const beginDrag = (event: TrainerCalendarEvent) => {
     if (!onMoveBooking || !canDragEvent(event)) return;
     if (dragEventRef.current?.id === event.id) return;
+    const pending = pendingRef.current;
+    if (pending?.target && pending.pointerId != null) {
+      try {
+        pending.target.setPointerCapture(pending.pointerId);
+      } catch {
+        /* ignore */
+      }
+    }
     clearPending();
     dragEventRef.current = event;
     suppressClickRef.current = true;
@@ -286,9 +295,9 @@ export function ScheduleWeekGrid({
   }, [preview]);
 
   return (
-    <div className="relative overflow-x-auto rounded-xl border border-slate-700/80 bg-slate-900/40 shadow-lg [-webkit-overflow-scrolling:touch]">
+    <div className="relative max-h-[min(70dvh,720px)] overflow-auto overscroll-contain rounded-xl border border-slate-700/80 bg-slate-900/40 shadow-lg [-webkit-overflow-scrolling:touch]">
       {onMoveBooking ? (
-        <p className="border-b border-slate-800 px-3 py-1.5 text-[11px] text-slate-500">
+        <p className="sticky top-0 z-40 border-b border-slate-800 bg-slate-900/95 px-3 py-1.5 text-[11px] text-slate-500">
           Клик — открыть, перетаскивание — перенести (сдвиг или удержание; шаг
           15 мин; перед сохранением спросим подтверждение)
         </p>
@@ -385,7 +394,7 @@ export function ScheduleWeekGrid({
                   if (el) colEls.current.set(dayStr, el);
                   else colEls.current.delete(dayStr);
                 }}
-                className="relative touch-none"
+                className="relative"
                 style={{ height: gridHeight }}
               >
                 {timeLabels.map((m) => (
@@ -452,21 +461,16 @@ export function ScheduleWeekGrid({
                       onPointerDown={(ev) => {
                         if (!draggable) return;
                         if (ev.button !== 0) return;
-                        ev.stopPropagation();
-                        // Do not begin drag here — wait for threshold or hold
-                        // so a short click can open the workout sheet.
+                        // Do not begin drag / capture here — wait for threshold
+                        // or hold so scroll and short click stay responsive.
                         suppressClickRef.current = false;
                         clearPending();
-                        try {
-                          ev.currentTarget.setPointerCapture(ev.pointerId);
-                        } catch {
-                          /* ignore */
-                        }
                         pendingRef.current = {
                           event,
                           pointerId: ev.pointerId,
                           x: ev.clientX,
                           y: ev.clientY,
+                          target: ev.currentTarget,
                           timer: window.setTimeout(() => {
                             const still =
                               pendingRef.current?.pointerId === ev.pointerId &&

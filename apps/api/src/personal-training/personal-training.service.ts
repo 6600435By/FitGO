@@ -37,6 +37,7 @@ import {
   type SchedulePublishSummary,
   type PersonalBookingSeriesView,
   type SeriesGenerateResult,
+  onexSessionKey,
   toUsageControl,
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
@@ -57,7 +58,10 @@ import {
 } from '../booking-control/pt-document-match';
 import { SessionApprovalService } from '../booking-control/session-approval.service';
 import { FormaScheduleCacheService } from '../club-schedule/forma-schedule-cache.service';
-import { staffOwnsScheduleSlot } from '../club-schedule/trainer-schedule.helpers';
+import {
+  matchOnexToScheduleSlots,
+  staffOwnsScheduleSlot,
+} from '../club-schedule/trainer-schedule.helpers';
 import { moscowDayKey } from '../club-sync/moscow-time';
 import { VisitSyncService } from '../engagement/visit-sync.service';
 import { FeaturesService } from '../features/features.service';
@@ -721,7 +725,43 @@ export class PersonalTrainingService {
 
     const events: TrainerCalendarEvent[] = [];
 
+    const onexInRange =
+      groupSlots.length > 0
+        ? await this.prisma.onexClassSession.findMany({
+            where: {
+              clubId: requireClubId(user),
+              kind: OnexClassKind.GROUP,
+              isActive: true,
+              startAt: { gte: rangeStart, lt: rangeEnd },
+            },
+            select: {
+              externalId: true,
+              title: true,
+              startAt: true,
+              employeeName: true,
+              roomTitle: true,
+            },
+          })
+        : [];
+    const groupLink = matchOnexToScheduleSlots(
+      groupSlots.map((slot) => ({
+        id: slot.id,
+        title: slot.title,
+        startAt: slot.startAt,
+        trainerName: slot.trainerName,
+        roomTitle: slot.roomTitle,
+      })),
+      onexInRange.map((row) => ({
+        externalId: row.externalId,
+        title: row.title,
+        startAt: row.startAt,
+        employeeName: row.employeeName,
+        roomTitle: row.roomTitle,
+      })),
+    );
+
     for (const slot of groupSlots) {
+      const onexId = groupLink.slotOnexId.get(slot.id);
       events.push({
         id: `group-${slot.id}`,
         kind: 'GROUP',
@@ -731,6 +771,7 @@ export class PersonalTrainingService {
         available: slot.available,
         capacity: slot.capacity,
         booked: slot.booked,
+        ...(onexId ? { sessionKey: onexSessionKey(onexId) } : {}),
       });
     }
 

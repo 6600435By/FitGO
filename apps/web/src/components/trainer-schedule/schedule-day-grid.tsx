@@ -95,7 +95,7 @@ export function ScheduleDayGrid({
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-700/80 bg-slate-900/40 shadow-lg">
+    <div className="max-h-[min(70dvh,720px)] overflow-auto overscroll-contain rounded-xl border border-slate-700/80 bg-slate-900/40 shadow-lg [-webkit-overflow-scrolling:touch]">
       {dayOffWithBooking ? (
         <p className="border-b border-violet-500/25 bg-violet-500/10 px-3 py-2 text-xs text-violet-100">
           {DAY_OFF_WITH_BOOKING_POLICY}

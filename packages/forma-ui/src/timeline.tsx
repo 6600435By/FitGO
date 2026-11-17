@@ -30,6 +30,7 @@ export function TimelineItem({
   meta,
   tone = 'muted',
   action,
+  href,
   className,
 }: {
   time: string;
@@ -37,8 +38,19 @@ export function TimelineItem({
   meta?: ReactNode;
   tone?: TimelineItemTone;
   action?: ReactNode;
+  /** Makes the whole card open this URL (title stays plain text). */
+  href?: string;
   className?: string;
 }) {
+  const text = (
+    <div className="min-w-0">
+      <p className="truncate text-sm font-medium text-white">{title}</p>
+      {meta ? (
+        <p className="mt-0.5 truncate text-xs text-zinc-500">{meta}</p>
+      ) : null}
+    </div>
+  );
+
   return (
     <li className={cn('relative flex gap-3 pb-4 last:pb-0', className)}>
       <div className="flex w-12 shrink-0 flex-col items-end pt-0.5">
@@ -55,16 +67,20 @@ export function TimelineItem({
         />
         <span className="mt-1 w-px flex-1 bg-white/[0.08]" aria-hidden />
       </div>
-      <div className="min-w-0 flex-1 rounded-2xl border border-white/[0.06] bg-ink-raised/60 px-3 py-2.5">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-white">{title}</p>
-            {meta ? (
-              <p className="mt-0.5 truncate text-xs text-zinc-500">{meta}</p>
-            ) : null}
-          </div>
-          {action}
-        </div>
+      <div
+        className={cn(
+          'flex min-w-0 flex-1 items-start gap-2 rounded-2xl border border-white/[0.06] bg-ink-raised/60 px-3 py-2.5',
+          href && 'transition hover:border-forma-500/40 hover:bg-ink-raised',
+        )}
+      >
+        {href ? (
+          <a href={href} className="min-w-0 flex-1">
+            {text}
+          </a>
+        ) : (
+          text
+        )}
+        {action}
       </div>
     </li>
   );
