@@ -4435,7 +4435,13 @@ export function BookingControlPanel({
                 showSpaLinkHints &&
                 selected.spaLinkHint &&
                 selected.spaLinkHint.kind !== 'LINKED' ? (
-                  <div className="space-y-2 rounded-xl border border-slate-700 bg-slate-900/60 p-3 text-sm">
+                  <div
+                    className={
+                      selected.spaLinkHint.kind === 'SALE_OTHER_PERFORMER'
+                        ? 'space-y-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm'
+                        : 'space-y-2 rounded-xl border border-slate-700 bg-slate-900/60 p-3 text-sm'
+                    }
+                  >
                     <p className="text-slate-200">
                       {selected.spaLinkHint.message}
                     </p>

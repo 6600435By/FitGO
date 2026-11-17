@@ -338,4 +338,47 @@ import {
   assert.equal(orphan!.unitPriceMinor, 5415); // 57 × 0.95
 }
 
+{
+  // Селифонтова, блок 5 от 29.09.2026. Живая продажа 200 (не разовый массаж),
+  // неактивный снимок 380 с обрезанным годом в id. Доля = 200 / 5 = 40.
+  const docs = groupMassageSalesToDocs([
+    {
+      externalSaleId:
+        '3de8d6a1-ec28-46d8-9347-0d27d6c3efe2:e370fe03-dd0b-11e8-80ea-7085c20c362e:20260929150109:u202…-09-29',
+      clientName: 'Селифонтова Ольга Викторовна',
+      soldAt: new Date('2026-09-29T15:01:09Z'),
+      amount: 380,
+      productName: 'Массаж классический 40 мин',
+      productExternalId: null,
+      isActive: false,
+    },
+    {
+      externalSaleId:
+        '3de8d6a1-ec28-46d8-9347-0d27d6c3efe2:e370fe03-dd0b-11e8-80ea-7085c20c362e:20260929150109:p2026-10-07',
+      clientName: 'Селифонтова Ольга Викторовна',
+      soldAt: new Date('2026-09-29T12:01:09Z'),
+      amount: 200,
+      productName: 'Массаж классический 40 мин',
+      productExternalId: 'e370fe03-dd0b-11e8-80ea-7085c20c362e',
+      isActive: true,
+    },
+  ]);
+  assert.equal(docs.length, 1);
+  assert.equal(docs[0]!.amountMinor, 20000);
+
+  const match = resolveSpaBlockUnitPrice({
+    sales: docs,
+    clientName: 'Селифонтова Ольга Викторовна',
+    paymentBasis:
+      'Пакет услуг "Блок массажа 5 новый" 73914 от 29.09.2026',
+    sessionTitle: 'Массаж классический 40 мин',
+    catalogUnitMinor: 8000,
+    serviceExternalId: 'e370fe03-dd0b-11e8-80ea-7085c20c362e',
+  });
+  assert.ok(match);
+  assert.equal(match!.source, 'SALE');
+  assert.equal(match!.unitPriceMinor, 4000);
+  assert.equal(match!.packQty, 5);
+}
+
 console.log('spa-block-unit-price.test.ts: ok');

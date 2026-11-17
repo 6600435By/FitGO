@@ -12,7 +12,11 @@ import type { PrismaService } from '../prisma/prisma.service';
 
 const SPA_BLOCK_SALE_LOOKBACK_DAYS = 180;
 
-/** Single-visit catalog band (BYN major) — packs are typically ≥200. */
+/**
+ * Single-visit catalog band (BYN major). A pack total is ≥200
+ * (блок 5 × 40 мин у Селифонтовой = 200). 200 inclusive was dropped
+ * as a one-shot, so sale/N never ran.
+ */
 const ONE_SHOT_MIN_MAJOR = 20;
 const ONE_SHOT_MAX_MAJOR = 200;
 
@@ -80,7 +84,7 @@ export function isLikelyOneShotMassageAmount(
   productName?: string | null,
 ): boolean {
   const a = Number(amountMajor) || 0;
-  if (a < ONE_SHOT_MIN_MAJOR || a > ONE_SHOT_MAX_MAJOR) return false;
+  if (a < ONE_SHOT_MIN_MAJOR || a >= ONE_SHOT_MAX_MAJOR) return false;
   const qty = parsePackVisitCountFromTitle(productName);
   if (qty != null && qty > 1) return false;
   return true;
@@ -136,7 +140,8 @@ function saleIdSuffix(externalSaleId: string): string | null {
   const i = s.lastIndexOf(':');
   if (i < 0) return null;
   const tail = s.slice(i + 1);
-  if (/^[up]\d{4}-\d{2}-\d{2}$/i.test(tail)) return tail;
+  // p2026-10-07, u2026-09-29, and the truncated sync form u202…-09-29.
+  if (/^[up](?:\d{4}|\d{3}…|\d{3}\.{3})-\d{2}-\d{2}$/i.test(tail)) return tail;
   return null;
 }
 
@@ -164,6 +169,8 @@ export function groupMassageSalesToDocs(
     productExternalId?: string;
     /** Bare externalSaleId (no :u/:p) — preferred full sale amount. */
     baseAmount?: number;
+    /** Largest active :u/:p snapshot when the document has no bare id. */
+    activeSnapshotMax?: number;
     /** Max amount seen on any snapshot (u often = full sale; p = paid slice). */
     maxAmount: number;
   };
@@ -179,8 +186,11 @@ export function groupMassageSalesToDocs(
     if (amount <= 0) continue;
     const productExternalId = (r.productExternalId ?? '').trim() || undefined;
     const productName = (r.productName ?? '').trim() || undefined;
-    // Keep face vs classic lines apart even when 1C shares one sale UUID.
-    const lineKey = `${documentId}|${productExternalId ?? productName ?? ''}`;
+    // Same service name on one sale is one line (sku row + snapshot without sku).
+    // Face vs classic stay apart because the names differ.
+    const lineKey = `${documentId}|${
+      productName ? normName(productName) : (productExternalId ?? '')
+    }`;
 
     let acc = byLine.get(lineKey);
     if (!acc) {
@@ -207,13 +217,23 @@ export function groupMassageSalesToDocs(
       if (acc.baseAmount == null || amount > acc.baseAmount) {
         acc.baseAmount = amount;
       }
+    } else if (r.isActive) {
+      if (
+        acc.activeSnapshotMax == null ||
+        amount > acc.activeSnapshotMax
+      ) {
+        acc.activeSnapshotMax = amount;
+      }
     }
   }
 
   const out: SpaBlockSaleDoc[] = [];
   for (const acc of byLine.values()) {
-    // Prefer bare-id row; else largest snapshot (unpaid u often holds full pack).
-    const amountMajor = acc.baseAmount ?? acc.maxAmount;
+    // Bare id is the full pack (even if a later p-row is only the paid slice).
+    // Without a bare id, the active snapshot wins over a cancelled u-row
+    // (Селифонтова: живая продажа 200, неактивный снимок 380).
+    const amountMajor =
+      acc.baseAmount ?? acc.activeSnapshotMax ?? acc.maxAmount;
     if (amountMajor <= 0) continue;
     if (isLikelyOneShotMassageAmount(amountMajor, acc.productName)) continue;
     out.push({

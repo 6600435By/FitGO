@@ -323,6 +323,119 @@ function sale(
   }
 }
 
+// --- Loyko 34221: guest without 1C id, write-off 45 after 50% discount.
+// Coffee debts of the same surname must not steal the massage line.
+{
+  const visit = new Date('2026-11-04T10:00:00.000Z');
+  const b = booking({
+    id: 'b-loyko-34221',
+    startAt: visit,
+    clientName: 'Лойко Алексей',
+    clientExternalId: null,
+    serviceName: 'Массаж классический 50 мин',
+    serviceExternalId: null,
+    specialistExternalId: 'staff-bir',
+    specialistEmployeeCode: '000000154',
+  });
+  const writeOff = sale({
+    externalId:
+      '91749625-fe20-4f0a-87a9-d2b85e616c0e:debt:a6b05b09-ac7c-11e8-80e8-7085c20c362e:u2026-11-04',
+    documentId: '91749625-fe20-4f0a-87a9-d2b85e616c0e',
+    occurredAt: new Date('2026-11-04T20:13:01.000Z'),
+    saleAmount: 45,
+    paidAmount: 0,
+    cash: 0,
+    card: 0,
+    operationType: 'debt_writeoff',
+    productName: 'Массаж классический 50 мин',
+    productExternalId: '72233086-a555-11e8-80e8-7085c20c362e',
+    clientExternalId: 'a6b05b09-ac7c-11e8-80e8-7085c20c362e',
+    clientName: 'Лойко Алексей Евгеньевич (Сотрудник)',
+    performerExternalId: '000000154',
+    performerName: 'Бирюкова Екатерина',
+  });
+  const coffee = Array.from({ length: 40 }, (_, i) =>
+    sale({
+      externalId: `coffee-${i}`,
+      occurredAt: new Date('2026-11-16T08:00:00.000Z'),
+      saleAmount: 3.5,
+      paidAmount: 0,
+      operationType: 'unpaid',
+      productName: 'Лунго',
+      productExternalId: 'sku-lungo',
+      clientExternalId: 'a6b05b09-ac7c-11e8-80e8-7085c20c362e',
+      clientName: 'Лойко Алексей Евгеньевич (Сотрудник)',
+      performerExternalId: '',
+      performerName: '',
+    }),
+  );
+  const r = matchSpaSale({ booking: b, sales: [writeOff, ...coffee] });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.paymentStatus, 'PAID');
+    assert.equal(saleLineTotalMajor(r.sale), 45);
+    assert.match(paidSaleSettlementLabel(r.sale), /45\.00 BYN/);
+  }
+}
+
+// --- Dubovik: client's sale is on another specialist. Do not offer the
+// booking specialist's other massages as if they were the document.
+{
+  const visit = new Date('2026-10-07T12:00:00.000Z');
+  const b = booking({
+    id: 'b-dubovik',
+    startAt: visit,
+    clientName: 'Дубовик Дмитрий',
+    clientExternalId: 'cli-dub',
+    specialistName: 'Абрамчик Егор',
+    specialistExternalId: 'staff-abr',
+    serviceName: 'Массаж классический 50 мин',
+  });
+  const telica = sale({
+    externalId: 'sale-33742',
+    occurredAt: new Date('2026-11-01T11:00:00.000Z'),
+    saleAmount: 90,
+    paidAmount: 90,
+    productName: 'Массаж классический 50 мин',
+    clientExternalId: 'cli-dub',
+    clientName: 'Дубовик Дмитрий Сергеевич',
+    performerExternalId: 'staff-tel',
+    performerName: 'Телица Вадим',
+  });
+  const abramSep = sale({
+    externalId: 'sale-abr-sep',
+    occurredAt: new Date('2026-09-25T13:59:00.000Z'),
+    productName: 'Массаж классический 50 мин',
+    clientExternalId: 'cli-dub',
+    clientName: 'Дубовик Дмитрий Сергеевич',
+    performerExternalId: 'staff-abr',
+    performerName: 'Абрамчик Егор',
+  });
+  const abramOct = sale({
+    externalId: 'sale-abr-oct',
+    occurredAt: new Date('2026-10-16T17:05:00.000Z'),
+    productName: 'Массаж классический 50 мин',
+    clientExternalId: 'cli-dub',
+    clientName: 'Дубовик Дмитрий Сергеевич',
+    performerExternalId: 'staff-abr',
+    performerName: 'Абрамчик Егор',
+  });
+  const r = matchSpaSale({
+    booking: b,
+    sales: [abramSep, abramOct, telica],
+  });
+  assert.equal(r.kind, 'hint');
+  if (r.kind === 'hint') {
+    assert.equal(r.hint.kind, 'SALE_OTHER_PERFORMER');
+    assert.match(r.hint.message, /Телица Вадим/);
+    assert.match(r.hint.message, /Абрамчик Егор/);
+    assert.match(r.hint.message, /записи FitGO/);
+    assert.match(r.hint.message, /документе 1С/);
+    assert.equal(r.hint.candidates[0]?.externalId, 'sale-33742');
+    assert.equal(r.hint.candidates[0]?.performerName, 'Телица Вадим');
+  }
+}
+
 // --- Khodanovich: mixed pays across days — SUM, unpaid until full ---
 {
   const saleUuid = 'b1b7cad3-33cb-4c57-8336-f5b0828a0f90';

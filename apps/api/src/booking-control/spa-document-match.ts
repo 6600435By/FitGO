@@ -870,6 +870,40 @@ export function autoSaleAsHint(
   };
 }
 
+/** Status line when the client's sale is on another specialist. */
+export const OTHER_PERFORMER_SETTLEMENT_LABEL =
+  'Продажа есть у другого специалиста';
+
+/**
+ * Admin text: unlinked sale exists, but the executor is not the booking specialist.
+ * Names both sides so it is clear what to edit and where.
+ */
+export function otherPerformerSaleMessage(
+  bookingSpecialist: string | null | undefined,
+  sales: SpaSaleCandidate[],
+  sameSpecialistCount: number,
+): string {
+  const names = [
+    ...new Set(
+      sales
+        .map((s) => s.performerName?.trim())
+        .filter((n): n is string => Boolean(n)),
+    ),
+  ];
+  const who = names.length ? names.join(', ') : 'другой специалист';
+  const here = bookingSpecialist?.trim() || 'специалист этой записи';
+  const head =
+    sales.length === 1
+      ? `Непривязанная продажа этого клиента есть, но она на другого специалиста — ${who}.`
+      : `Непривязанные продажи этого клиента (${sales.length}) есть, но они на другого специалиста — ${who}.`;
+  const where = `В записи указан ${here}. Поправьте специалиста в записи FitGO или исполнителя в документе 1С.`;
+  const extra =
+    sameSpecialistCount > 0
+      ? ` Ниже также продажи ${here} — не выбирайте их, если визит вёл ${who}.`
+      : '';
+  return `${head} ${where}${extra}`;
+}
+
 /**
  * Rank sales for a FitGO SPA booking.
  * Auto only when exactly one candidate has client + performer + same service.
@@ -1026,12 +1060,39 @@ export function matchSpaSale(input: {
     return { kind: 'none' };
   }
 
+  const sameService = forClient.filter((s) => nomenclatureMatches(s, booking));
+  const otherPerf = rankByVisit(
+    sameService.filter(
+      (s) => performerPresent(s) && !performerMatchesBooking(s, booking),
+    ),
+  );
   const exact = rankByVisit(
     forClient.filter(
       (s) =>
         performerMatchesBooking(s, booking) && nomenclatureMatches(s, booking),
     ),
   );
+  // Client's sale is on another specialist. Say so even when the booking
+  // specialist has other lines of the same service — those were the «чужие»
+  // rows (Дубовик: массажи Абрамчика вместо продажи Телицы).
+  if (otherPerf.length >= 1 && exact.length !== 1) {
+    const seen = new Set(otherPerf.map((s) => s.externalId));
+    const rest = exact.filter((s) => !seen.has(s.externalId));
+    return {
+      kind: 'hint',
+      hint: {
+        kind: 'SALE_OTHER_PERFORMER',
+        message: otherPerformerSaleMessage(
+          booking.specialistName,
+          otherPerf,
+          rest.length,
+        ),
+        candidates: [...otherPerf, ...rest].map((s) =>
+          toSaleCandidate(s, resolveServiceId(s)),
+        ),
+      },
+    };
+  }
   if (exact.length === 1) {
     const only = exact[0]!;
     if (blockAutoLink) {
@@ -1085,8 +1146,7 @@ export function matchSpaSale(input: {
     };
   }
 
-  // Same client + same service, no / wrong performer
-  const sameService = forClient.filter((s) => nomenclatureMatches(s, booking));
+  // Same client + same service, performer missing on the sale.
   if (sameService.length >= 1) {
     const noPerf = sameService.filter((s) => !performerPresent(s));
     if (noPerf.length >= 1) {
@@ -1097,22 +1157,6 @@ export function matchSpaSale(input: {
           message:
             'В продаже не указан исполнитель — в ЗП не попадёт',
           candidates: noPerf.map((s) => toSaleCandidate(s, resolveServiceId(s))),
-        },
-      };
-    }
-    const otherPerf = sameService.filter(
-      (s) => performerPresent(s) && !performerMatchesBooking(s, booking),
-    );
-    if (otherPerf.length >= 1) {
-      const name = otherPerf[0]!.performerName?.trim() || 'другой';
-      return {
-        kind: 'hint',
-        hint: {
-          kind: 'SALE_OTHER_PERFORMER',
-          message: `Исполнитель в продаже — ${name}`,
-          candidates: otherPerf.map((s) =>
-            toSaleCandidate(s, resolveServiceId(s)),
-          ),
         },
       };
     }
