@@ -58,9 +58,11 @@ import {
   isServiceBlockPackageName,
   isSpaAllSportsBioimpedance,
   isSpaLikeSessionTitle,
+  isSpaStaffTimeBlock,
   isMembershipIncludedSpaTitle,
   membershipNameFromPaymentBasis,
   resolvePackageUnitPriceMinor,
+  SPA_BOOKING_EXCLUDE_TIME_BLOCK,
   spaSettlementLabelRu,
   type BookingControlDetail,
   type BookingControlHistoryEvent,
@@ -434,6 +436,7 @@ export class BookingControlService {
             clubId,
             status: { not: SpaBookingStatus.CANCELLED },
             startAt: { gte: fromD, lte: toD },
+            ...SPA_BOOKING_EXCLUDE_TIME_BLOCK,
             ...(fitgoPerformerUserId
               ? { specialistId: fitgoPerformerUserId }
               : performerFilterId
@@ -2135,6 +2138,11 @@ export class BookingControlService {
         include: { client: true, specialist: true, service: true },
       });
       if (!b) throw new NotFoundException('Запись не найдена');
+      if (isSpaStaffTimeBlock(b)) {
+        throw new NotFoundException(
+          'Резерв времени специалиста — не в контроле',
+        );
+      }
       if (viewer?.ownOnly && b.specialistId !== viewer.userId) {
         throw new ForbiddenException('Чужое занятие');
       }
@@ -2378,6 +2386,7 @@ export class BookingControlService {
         startAt: { gte: fromAt, lte: toAt },
         status: { not: SpaBookingStatus.CANCELLED },
         saleAutoLinkBlocked: false,
+        ...SPA_BOOKING_EXCLUDE_TIME_BLOCK,
         AND: [
           {
             OR: [{ crmDocRef: null }, { crmDocRef: '' }],
@@ -4384,6 +4393,7 @@ export class BookingControlService {
         clubId,
         status: { not: SpaBookingStatus.CANCELLED },
         startAt: { gte: fromD, lte: toD },
+        ...SPA_BOOKING_EXCLUDE_TIME_BLOCK,
       },
       include: {
         specialist: { select: { firstName: true, lastName: true } },
@@ -8613,6 +8623,7 @@ export class BookingControlService {
           status: {
             notIn: [SpaBookingStatus.CANCELLED, SpaBookingStatus.FAILED],
           },
+          ...SPA_BOOKING_EXCLUDE_TIME_BLOCK,
         },
         include: { client: true, service: true },
         orderBy: { startAt: 'asc' },
@@ -9442,6 +9453,7 @@ export class BookingControlService {
         startAt: { gte: dayStart, lte: dayEnd },
         status: { not: SpaBookingStatus.CANCELLED },
         crmDocRef: null,
+        ...SPA_BOOKING_EXCLUDE_TIME_BLOCK,
         ...(session.employeeExternalId
           ? {
               specialist: {

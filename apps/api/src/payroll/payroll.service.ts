@@ -30,6 +30,8 @@ import {
   isPlaceholderClassEmployeeName,
   isSpaAllSportsBioimpedance,
   isSpaLikeSessionTitle,
+  isSpaStaffTimeBlock,
+  SPA_BOOKING_EXCLUDE_TIME_BLOCK,
   resolveGroupRoomKey,
   resolveGroupSessionRateMinor,
   resolvePackageUnitPriceMinor,
@@ -642,6 +644,7 @@ export class PayrollService {
             where: {
               clubId,
               specialistId: performerId,
+              ...SPA_BOOKING_EXCLUDE_TIME_BLOCK,
               OR: [
                 ...(spaFitgoRefs.length
                   ? [{ id: { in: spaFitgoRefs } }]
@@ -865,6 +868,7 @@ export class PayrollService {
         linkedSaleExternalId: { not: null },
         startAt: { gte: fromD, lte: toD },
         status: { not: 'CANCELLED' },
+        ...SPA_BOOKING_EXCLUDE_TIME_BLOCK,
       },
       include: { service: true, client: true },
     });
@@ -1009,10 +1013,12 @@ export class PayrollService {
         specialistId: performerId,
         startAt: { gte: fromD, lte: toD },
         status: { not: 'CANCELLED' },
+        ...SPA_BOOKING_EXCLUDE_TIME_BLOCK,
       },
       include: { service: true, client: true },
     });
     for (const b of partnerSpaBookings) {
+      if (isSpaStaffTimeBlock(b)) continue;
       if (spaPaidViaOnex.has(b.id)) continue;
       const bioimpedance = isSpaAllSportsBioimpedance({
         serviceExternalId: b.service.externalId,

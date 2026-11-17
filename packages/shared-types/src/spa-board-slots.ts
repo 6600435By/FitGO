@@ -8,6 +8,11 @@ export const SPA_FREE_GAP_MIN = 15;
 export const SPA_TIME_BLOCK_GUEST_NAME = 'Закрыто';
 export const SPA_TIME_BLOCK_ALIAS = '__TIME_BLOCK__';
 
+/**
+ * Board UI: staff closed a gap (alias) or display label is «Закрыто».
+ * Prefer {@link isSpaStaffTimeBlock} for control / payroll exclusion — guestName
+ * alone can be polluted by phone→1C FIO sync.
+ */
 export function isSpaTimeBlock(booking: {
   guestAlias?: string | null;
   guestName?: string | null;
@@ -17,6 +22,21 @@ export function isSpaTimeBlock(booking: {
     booking.guestName === SPA_TIME_BLOCK_GUEST_NAME
   );
 }
+
+/** Staff self-reserved slot — not a client visit (control / payroll). */
+export function isSpaStaffTimeBlock(booking: {
+  guestAlias?: string | null;
+}): boolean {
+  return booking.guestAlias === SPA_TIME_BLOCK_ALIAS;
+}
+
+/**
+ * Prisma `where` fragment: keep normal SPA rows (null alias) and drop
+ * staff time blocks. Use with spread: `{ ...SPA_BOOKING_EXCLUDE_TIME_BLOCK }`.
+ */
+export const SPA_BOOKING_EXCLUDE_TIME_BLOCK = {
+  NOT: { guestAlias: SPA_TIME_BLOCK_ALIAS },
+} as const;
 
 export type SpaIntervalMs = {
   startMs: number;

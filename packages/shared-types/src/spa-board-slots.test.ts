@@ -6,8 +6,12 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   computeSpaFreeWindows,
+  isSpaStaffTimeBlock,
+  isSpaTimeBlock,
   listRoundSpaClientSlots,
   snapSpaClientReserveEnd,
+  SPA_TIME_BLOCK_ALIAS,
+  SPA_TIME_BLOCK_GUEST_NAME,
 } from './spa-board-slots';
 
 /** Minsk wall time → UTC ms (Minsk = UTC+3). */
@@ -168,5 +172,32 @@ describe('staff free window includes soft client reserve', () => {
     });
     assert.equal(clientSlots[0]?.startMs, minsk('2026-11-11T10:30:00'));
     assert.ok(windows[0]!.startMs < clientSlots[0]!.startMs);
+  });
+});
+
+describe('isSpaStaffTimeBlock', () => {
+  it('matches only the staff alias, not a polluted guestName', () => {
+    assert.equal(
+      isSpaStaffTimeBlock({ guestAlias: SPA_TIME_BLOCK_ALIAS }),
+      true,
+    );
+    assert.equal(
+      isSpaStaffTimeBlock({ guestAlias: null }),
+      false,
+    );
+    assert.equal(
+      isSpaTimeBlock({
+        guestAlias: null,
+        guestName: SPA_TIME_BLOCK_GUEST_NAME,
+      }),
+      true,
+    );
+    assert.equal(
+      isSpaStaffTimeBlock({
+        guestAlias: null,
+        guestName: SPA_TIME_BLOCK_GUEST_NAME,
+      } as { guestAlias?: string | null }),
+      false,
+    );
   });
 });
