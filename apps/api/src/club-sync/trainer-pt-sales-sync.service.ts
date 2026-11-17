@@ -1,10 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import {
   overlayPtSaleDebtFromRevenue,
   saleDocumentIdFromPtExternalId,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { FitnessService } from '../fitness/fitness.service';
-import { PersonalTrainingService } from '../personal-training/personal-training.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { addMoscowDays, moscowDayKey } from './moscow-time';
 import {
@@ -22,7 +22,8 @@ export class TrainerPtSalesSyncService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
-    private readonly personalTraining: PersonalTrainingService,
+    /** Lazy: avoids CJS TDZ cycle personal-training → ledger → payroll → booking-control → this. */
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   async syncClub(
@@ -68,7 +69,12 @@ export class TrainerPtSalesSyncService {
         !Number.isNaN(toD.getTime())
       ) {
         try {
-          const linked = await this.personalTraining.relinkClubBookingsInRange(
+          // Lazy require — do not import PersonalTrainingService at file top (boot TDZ).
+          const { PersonalTrainingService } = require('../personal-training/personal-training.service') as typeof import('../personal-training/personal-training.service');
+          const personalTraining = this.moduleRef.get(PersonalTrainingService, {
+            strict: false,
+          });
+          const linked = await personalTraining.relinkClubBookingsInRange(
             clubId,
             fromD,
             toD,

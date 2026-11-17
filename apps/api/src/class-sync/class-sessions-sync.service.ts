@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import {
   GroupClassBookingStatus,
   GroupClassSessionStatus,
@@ -22,7 +23,6 @@ import {
   normalizeClassEmployeeName,
 } from '@fitgo/shared-types';
 import { FitnessService } from '../fitness/fitness.service';
-import { PersonalTrainingService } from '../personal-training/personal-training.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ServiceUsageService } from '../service-usage/service-usage.service';
 import { addMoscowDays, moscowDayKey } from '../club-sync/moscow-time';
@@ -57,7 +57,8 @@ export class ClassSessionsSyncService {
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
     private readonly serviceUsage: ServiceUsageService,
-    private readonly personalTraining: PersonalTrainingService,
+    /** Lazy: avoids CJS TDZ cycle via personal-training → ledger → payroll → booking-control. */
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   /** Past calendar month start → today+31d (schedule + open payroll window). */
@@ -356,11 +357,12 @@ export class ClassSessionsSyncService {
       const toD = new Date(`${to}T23:59:59.999`);
       if (!Number.isNaN(fromD.getTime()) && !Number.isNaN(toD.getTime())) {
         try {
-          await this.personalTraining.relinkClubBookingsInRange(
-            clubId,
-            fromD,
-            toD,
-          );
+          // Lazy require — do not import PersonalTrainingService at file top (boot TDZ).
+          const { PersonalTrainingService } = require('../personal-training/personal-training.service') as typeof import('../personal-training/personal-training.service');
+          const personalTraining = this.moduleRef.get(PersonalTrainingService, {
+            strict: false,
+          });
+          await personalTraining.relinkClubBookingsInRange(clubId, fromD, toD);
         } catch (err) {
           this.logger.warn(
             `PT visit auto-link after class sync failed: ${

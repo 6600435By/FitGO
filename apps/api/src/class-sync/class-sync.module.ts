@@ -3,7 +3,6 @@ import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
 import { EngagementModule } from '../engagement/engagement.module';
 import { FitnessModule } from '../fitness/fitness.module';
-import { PersonalTrainingModule } from '../personal-training/personal-training.module';
 import { ServiceUsageModule } from '../service-usage/service-usage.module';
 import {
   AdminClassSyncController,
@@ -13,6 +12,11 @@ import { ClassSessionsSyncService } from './class-sessions-sync.service';
 import { ClassSyncSchedulerService } from './class-sync-scheduler.service';
 import { HallVisitsSyncService } from './hall-visits-sync.service';
 
+/**
+ * Do not import PersonalTrainingModule here: BookingControlModule → ClassSyncModule
+ * → PersonalTrainingModule → ClubScheduleModule → BookingControlModule is a CJS TDZ cycle.
+ * ClassSessionsSyncService resolves PersonalTrainingService via ModuleRef at runtime.
+ */
 @Module({
   imports: [
     ConfigModule,
@@ -20,7 +24,6 @@ import { HallVisitsSyncService } from './hall-visits-sync.service';
     FitnessModule,
     EngagementModule,
     ServiceUsageModule,
-    PersonalTrainingModule,
   ],
   controllers: [ClassSyncController, AdminClassSyncController],
   providers: [
