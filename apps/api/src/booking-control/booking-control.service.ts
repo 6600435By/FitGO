@@ -106,6 +106,7 @@ import {
   type TrainerPtSaleRow,
 } from '../admin-sales/trainer-pt-sales-from-revenue';
 import { sessionMatchesFlag } from '../discrepancies/discrepancies-predicates';
+import { ClientPhoneLookupService } from '../common/client-phone-lookup.service';
 import { FitnessService } from '../fitness/fitness.service';
 import { matchOnexToScheduleSlots } from '../club-schedule/trainer-schedule.helpers';
 import { SessionApprovalService } from './session-approval.service';
@@ -206,6 +207,7 @@ export class BookingControlService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fitness: FitnessService,
+    private readonly phoneLookup: ClientPhoneLookupService,
     private readonly classSessions: ClassSessionsSyncService,
     private readonly trainerPtSalesSync: TrainerPtSalesSyncService,
     private readonly clubRevenueSync: ClubRevenueSyncService,
@@ -973,9 +975,6 @@ export class BookingControlService {
             : b.status === SpaBookingStatus.COMPLETED
               ? 'COMPLETED'
               : 'SCHEDULED';
-        const oneCLinked = Boolean(
-          b.crmDocRef?.trim() || b.linkedSaleExternalId?.trim(),
-        );
         const linkedId = b.linkedSaleExternalId?.trim();
         const linkedPay = linkedId ? linkedSalePay.get(linkedId) : undefined;
         let payment: BookingControlPayment =
@@ -1010,6 +1009,9 @@ export class BookingControlService {
           // Link present, cache miss for this period — do not show «Нет оплаты».
           payment = 'PAID';
         }
+        // Badge «нет в 1С» only when there is no visit/sale document pointer.
+        // PARTNER without a free-sale link must still show the gap.
+        const oneCLinked = Boolean(b.crmDocRef?.trim() || linkedId);
         // Paid sale / partner ⇒ client came (even if booking still SCHEDULED).
         const counts = this.singleClientCounts(status, {
           arrived:
@@ -1611,6 +1613,7 @@ export class BookingControlService {
                       externalId: true,
                       firstName: true,
                       lastName: true,
+                      phone: true,
                     },
                   },
                   specialist: {
@@ -1629,7 +1632,12 @@ export class BookingControlService {
             : null;
         const settled = await this.resolveSpaSettlement({
           clubId,
-          booking: spaBooking,
+          booking: spaBooking
+            ? {
+                ...spaBooking,
+                guestPhone: spaBooking.guestPhone,
+              }
+            : null,
           onex: s,
           paySource: primary?.paySource,
           paymentBasis: primary?.paymentBasis,
@@ -1765,9 +1773,11 @@ export class BookingControlService {
         serviceId: spaServiceId,
         oneCLinked: Boolean(
           spaLinkedSaleId ||
+            matched?.crmDocRef ||
             spaSettlement?.status === 'QUOTA_CONSUMED' ||
-            spaSettlement?.status === 'PAID' ||
-            spaSettlement?.status === 'AWAITING_PAYMENT',
+            spaSettlement?.status === 'AWAITING_PAYMENT' ||
+            (spaSettlement?.status === 'PAID' &&
+              spaSettlement.source === 'sale'),
         ),
         missingJournal: kind === 'SPA' && !matched?.id,
         history,
@@ -1977,6 +1987,7 @@ export class BookingControlService {
           specialist: b.specialist,
           service: b.service,
           guestName: b.guestName,
+          guestPhone: b.guestPhone,
         },
       });
       // Paid sale / quota write-off ⇒ прибыло 1 even while status is SCHEDULED.
@@ -2065,8 +2076,9 @@ export class BookingControlService {
           linkedSale ||
             b.crmDocRef ||
             settled.settlement.status === 'QUOTA_CONSUMED' ||
-            settled.settlement.status === 'PAID' ||
-            settled.settlement.status === 'AWAITING_PAYMENT',
+            settled.settlement.status === 'AWAITING_PAYMENT' ||
+            (settled.settlement.status === 'PAID' &&
+              settled.settlement.source === 'sale'),
         ),
         history,
       };
@@ -2148,12 +2160,296 @@ export class BookingControlService {
     } else {
       parts.push(`Продажи SPA: ${revenueUpserted}.`);
     }
+    let spaRelinked = 0;
+    try {
+      spaRelinked = await this.relinkUnlinkedSpaInRange(clubId, from, to);
+      if (spaRelinked > 0) {
+        parts.push(`Привязано SPA: ${spaRelinked}.`);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      parts.push(`Привязка SPA: ошибка (${msg}).`);
+    }
     return {
       ...sync,
       ptSalesUpserted: ptUpserted,
       revenueUpserted,
+      spaRelinked,
       message: parts.join(' '),
     };
+  }
+
+  /**
+   * After 1C refresh: soft-link FitGO SPA rows that still lack crmDocRef / sale.
+   * Live phone→1C with short timeout, concurrency 4, one identity per booking.
+   */
+  private async relinkUnlinkedSpaInRange(
+    clubId: string,
+    from: string,
+    to: string,
+  ): Promise<number> {
+    const fromAt = new Date(`${from}T00:00:00.000Z`);
+    const toAt = new Date(`${to}T23:59:59.999Z`);
+    if (Number.isNaN(fromAt.getTime()) || Number.isNaN(toAt.getTime())) {
+      return 0;
+    }
+    await this.syncSpecialistNamesFromOneCSnapshots(clubId, fromAt, toAt);
+    const bookings = await this.prisma.spaBooking.findMany({
+      where: {
+        clubId,
+        startAt: { gte: fromAt, lte: toAt },
+        status: { not: SpaBookingStatus.CANCELLED },
+        saleAutoLinkBlocked: false,
+        AND: [
+          {
+            OR: [{ crmDocRef: null }, { crmDocRef: '' }],
+          },
+          {
+            OR: [{ linkedSaleExternalId: null }, { linkedSaleExternalId: '' }],
+          },
+        ],
+      },
+      include: {
+        client: {
+          select: {
+            id: true,
+            externalId: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
+        specialist: {
+          select: {
+            externalId: true,
+            employeeCode: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+        service: {
+          select: { id: true, name: true, externalId: true },
+        },
+      },
+      orderBy: { startAt: 'asc' },
+      take: 250,
+    });
+
+    const concurrency = 4;
+    let linked = 0;
+    let cursor = 0;
+    const workers = Array.from({ length: concurrency }, async () => {
+      while (cursor < bookings.length) {
+        const i = cursor;
+        cursor += 1;
+        const b = bookings[i]!;
+        const identity = await this.resolveSpaMatchIdentity(clubId, b, {
+          livePhoneLookup: true,
+          cacheOnly: false,
+          timeoutMs: 2_000,
+          allowUserFioWrite: true,
+        });
+        const matchOpts = {
+          identity,
+          livePhoneLookup: true,
+          timeoutMs: 2_000,
+          allowUserFioWrite: true,
+        };
+        const dayHit = await this.tryLinkSpaVisitByDay(b, clubId, matchOpts);
+        if (dayHit && dayHit.payment === 'QUOTA') {
+          linked += 1;
+          continue;
+        }
+        const saleHit = await this.tryResolveSpaSale(b, clubId, matchOpts);
+        if (
+          saleHit &&
+          saleHit.settlement.status !== 'NOT_IN_1C' &&
+          (saleHit.linkedSaleExternalId ||
+            saleHit.settlement.status === 'PAID' ||
+            saleHit.settlement.status === 'AWAITING_PAYMENT')
+        ) {
+          linked += 1;
+          continue;
+        }
+        if (dayHit) linked += 1;
+      }
+    });
+    await Promise.all(workers);
+    return linked;
+  }
+
+  /**
+   * 1C employee FIO is authoritative for staff cards. When a snapshot in the
+   * refreshed period has a different name for the same employee code, rename
+   * the User card and rewrite Onex / ClubRevenue name snapshots that still
+   * carry the old string. SpaBooking rows read the card — no per-row patch.
+   */
+  private async syncSpecialistNamesFromOneCSnapshots(
+    clubId: string,
+    fromAt: Date,
+    toAt: Date,
+  ): Promise<void> {
+    const staff = await this.prisma.user.findMany({
+      where: {
+        clubId,
+        OR: [
+          { externalId: { not: null } },
+          { employeeCode: { not: null } },
+        ],
+        roles: {
+          some: {
+            role: {
+              in: [Role.SPECIALIST, Role.TRAINER, Role.ADMIN, Role.MANAGER],
+            },
+          },
+        },
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        externalId: true,
+        employeeCode: true,
+      },
+      take: 400,
+    });
+    if (!staff.length) return;
+
+    const codeToStaff = new Map<
+      string,
+      { id: string; firstName: string; lastName: string; display: string }
+    >();
+    for (const s of staff) {
+      const display = `${s.lastName} ${s.firstName}`.trim();
+      const entry = {
+        id: s.id,
+        firstName: s.firstName,
+        lastName: s.lastName,
+        display,
+      };
+      for (const raw of [s.externalId, s.employeeCode]) {
+        const t = raw?.trim();
+        if (t) codeToStaff.set(t.toLowerCase(), entry);
+      }
+    }
+
+    const sessions = await this.prisma.onexClassSession.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        startAt: { gte: fromAt, lte: toAt },
+        employeeExternalId: { not: null },
+        employeeName: { not: null },
+      },
+      select: {
+        employeeExternalId: true,
+        employeeName: true,
+      },
+      take: 2_000,
+    });
+    const sales = await this.prisma.clubRevenueEntry.findMany({
+      where: {
+        clubId,
+        isActive: true,
+        occurredAt: { gte: fromAt, lte: toAt },
+        OR: [
+          { performerExternalId: { not: null }, performerName: { not: null } },
+          { employeeExternalId: { not: null }, employeeName: { not: null } },
+        ],
+      },
+      select: {
+        performerExternalId: true,
+        performerName: true,
+        employeeExternalId: true,
+        employeeName: true,
+      },
+      take: 2_000,
+    });
+
+    type Rename = {
+      userId: string;
+      oldDisplay: string;
+      newFirst: string;
+      newLast: string;
+      newDisplay: string;
+      codes: string[];
+    };
+    const renames = new Map<string, Rename>();
+
+    const consider = (codeRaw: string | null | undefined, nameRaw: string | null | undefined) => {
+      const code = codeRaw?.trim();
+      const name = nameRaw?.trim();
+      if (!code || !name) return;
+      const staffHit = codeToStaff.get(code.toLowerCase());
+      if (!staffHit) return;
+      const oneCNorm = normalizeLabel(name);
+      const appNorm = normalizeLabel(staffHit.display);
+      if (!oneCNorm || oneCNorm === appNorm) return;
+      const parts = name.split(/\s+/).filter(Boolean);
+      if (parts.length < 2) return;
+      const newLast = parts[0]!;
+      const newFirst = parts.slice(1).join(' ');
+      const existing = renames.get(staffHit.id);
+      if (existing) {
+        existing.codes.push(code);
+        return;
+      }
+      renames.set(staffHit.id, {
+        userId: staffHit.id,
+        oldDisplay: staffHit.display,
+        newFirst,
+        newLast,
+        newDisplay: `${newLast} ${newFirst}`.trim(),
+        codes: [code],
+      });
+    };
+
+    for (const s of sessions) {
+      consider(s.employeeExternalId, s.employeeName);
+    }
+    for (const s of sales) {
+      consider(s.performerExternalId, s.performerName);
+      consider(s.employeeExternalId, s.employeeName);
+    }
+
+    for (const r of renames.values()) {
+      await this.prisma.user
+        .update({
+          where: { id: r.userId },
+          data: { firstName: r.newFirst, lastName: r.newLast },
+        })
+        .catch(() => undefined);
+      await this.prisma.onexClassSession
+        .updateMany({
+          where: {
+            clubId,
+            employeeName: r.oldDisplay,
+            OR: r.codes.map((c) => ({ employeeExternalId: c })),
+          },
+          data: { employeeName: r.newDisplay },
+        })
+        .catch(() => undefined);
+      await this.prisma.clubRevenueEntry
+        .updateMany({
+          where: {
+            clubId,
+            performerName: r.oldDisplay,
+            OR: r.codes.map((c) => ({ performerExternalId: c })),
+          },
+          data: { performerName: r.newDisplay },
+        })
+        .catch(() => undefined);
+      await this.prisma.clubRevenueEntry
+        .updateMany({
+          where: {
+            clubId,
+            employeeName: r.oldDisplay,
+            OR: r.codes.map((c) => ({ employeeExternalId: c })),
+          },
+          data: { employeeName: r.newDisplay },
+        })
+        .catch(() => undefined);
+    }
   }
 
   /**
@@ -6029,15 +6325,29 @@ export class BookingControlService {
     });
   }
 
+  /**
+   * Prefer guestName when it holds 1C FIO after phone link.
+   * Fall back to linked client User (also rewritten from 1C on link).
+   */
   private spaClientLabel(b: {
     guestName?: string | null;
+    clientExternalId?: string | null;
+    oneCLinkStatus?: string | null;
     client: { firstName: string; lastName: string } | null;
   }) {
+    const fromGuest = b.guestName?.trim();
+    if (
+      fromGuest &&
+      (b.oneCLinkStatus === SpaOneCLinkStatus.LINKED ||
+        Boolean(b.clientExternalId?.trim()))
+    ) {
+      return fromGuest;
+    }
     if (b.client) {
       const name = `${b.client.lastName} ${b.client.firstName}`.trim();
       if (name) return name;
     }
-    return b.guestName?.trim() || 'Гость';
+    return fromGuest || 'Гость';
   }
 
   /**
@@ -6065,6 +6375,7 @@ export class BookingControlService {
         externalId: string | null;
         firstName?: string | null;
         lastName?: string | null;
+        phone?: string | null;
       } | null;
       specialist?: {
         externalId: string | null;
@@ -6078,6 +6389,7 @@ export class BookingControlService {
         externalId?: string | null;
       } | null;
       guestName?: string | null;
+      guestPhone?: string | null;
     } | null;
     onex?: {
       externalId: string;
@@ -6120,8 +6432,16 @@ export class BookingControlService {
       booking?.partnerSource?.toUpperCase() === 'ALLSPORTS' || bioimpedance;
     // Partner / AllSports биоимпеданс: сначала цепляем бесплатную продажу из 1С,
     // иначе помечаем PARTNER (тариф из профиля), без «Нет документа в 1С».
-    if (partner && booking && !onex) {
-      const saleHit = await this.tryResolveSpaSale(booking, input.clubId);
+    if (partner && booking && !onex && input.clubId) {
+      const identity = await this.resolveSpaMatchIdentity(
+        input.clubId,
+        booking,
+        { cacheOnly: true },
+      );
+      const saleHit = await this.tryResolveSpaSale(booking, input.clubId, {
+        identity,
+        cacheOnly: true,
+      });
       if (saleHit) {
         return {
           ...saleHit,
@@ -6184,20 +6504,43 @@ export class BookingControlService {
       !booking.consumedInCrmAt &&
       booking.oneCLinkStatus !== 'LINKED'
     ) {
-      // Paid guest / unlinked client: still soft-match ClubRevenue by FIO.
-      // Matching ignores catalog vs sale amount (manual % discounts etc.).
-      if (!isQuota) {
-        const saleHit = await this.tryResolveSpaSale(booking, input.clubId);
-        if (saleHit && saleHit.settlement.status !== 'NOT_IN_1C') {
-          return saleHit;
+      // Paid guest / unlinked client: soft-match Onex write-off first (VIP),
+      // then ClubRevenue sale by FIO. Catalog vs sale amount ignored.
+      {
+        const identity = await this.resolveSpaMatchIdentity(
+          input.clubId!,
+          booking,
+          {
+            // Detail GET: cache only — live 1C on refresh / Save-and-link.
+            cacheOnly: true,
+          },
+        );
+        const matchOpts = { identity, cacheOnly: true as const };
+        if (!isQuota) {
+          const dayHit = await this.tryLinkSpaVisitByDay(
+            booking,
+            input.clubId,
+            matchOpts,
+          );
+          if (dayHit && dayHit.payment === 'QUOTA') return dayHit;
+          const saleHit = await this.tryResolveSpaSale(
+            booking,
+            input.clubId,
+            matchOpts,
+          );
+          if (saleHit && saleHit.settlement.status !== 'NOT_IN_1C') {
+            return saleHit;
+          }
+          if (dayHit) return dayHit;
+          if (saleHit) return saleHit;
+        } else {
+          const dayHit = await this.tryLinkSpaVisitByDay(
+            booking,
+            input.clubId,
+            matchOpts,
+          );
+          if (dayHit) return dayHit;
         }
-        // VIP / pack write-off in Onex by FIO — before asking to link client.
-        const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId);
-        if (dayHit) return dayHit;
-        if (saleHit) return saleHit;
-      } else {
-        const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId);
-        if (dayHit) return dayHit;
       }
       return {
         settlement: {
@@ -6324,10 +6667,11 @@ export class BookingControlService {
             payTag: 'PACKAGE',
           };
         }
-        if (booking) {
+        if (booking && input.clubId) {
           const dayHit = await this.tryLinkSpaVisitByDay(
             booking,
             input.clubId,
+            { cacheOnly: true },
           );
           if (dayHit) return dayHit;
         }
@@ -6358,13 +6702,28 @@ export class BookingControlService {
 
     // Linked / soft-matched ClubRevenueEntry sale (reception без bookingRef).
     // Skip when this detail is already a 1C visit row — pay from the visit.
-    // Soft sale hints (pack leftovers) must not block VIP/абонемент day-merge.
-    if (booking && !onex) {
-      const saleHit = await this.tryResolveSpaSale(booking, input.clubId);
+    // VIP/абонемент day-merge first: FitGO often marks the slot as «продажа».
+    if (booking && !onex && input.clubId) {
+      const identity = await this.resolveSpaMatchIdentity(
+        input.clubId,
+        booking,
+        { cacheOnly: true },
+      );
+      const matchOpts = { identity, cacheOnly: true as const };
+      const dayHit = await this.tryLinkSpaVisitByDay(
+        booking,
+        input.clubId,
+        matchOpts,
+      );
+      if (dayHit && dayHit.payment === 'QUOTA') return dayHit;
+      const saleHit = await this.tryResolveSpaSale(
+        booking,
+        input.clubId,
+        matchOpts,
+      );
       if (saleHit && saleHit.settlement.status !== 'NOT_IN_1C') {
         return saleHit;
       }
-      const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId);
       if (dayHit) return dayHit;
       if (saleHit) return saleHit;
     }
@@ -6498,8 +6857,10 @@ export class BookingControlService {
     }
 
     // FitGO slot marked PAID/sale but 1C posted VIP / pack write-off same day.
-    if (booking) {
-      const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId);
+    if (booking && input.clubId) {
+      const dayHit = await this.tryLinkSpaVisitByDay(booking, input.clubId, {
+        cacheOnly: true,
+      });
       if (dayHit) return dayHit;
     }
 
@@ -6522,7 +6883,10 @@ export class BookingControlService {
     crmDocRef?: string | null;
     linkedSaleExternalId?: string | null;
     clientExternalId?: string | null;
+    alternateClientExternalIds?: string[];
     guestName?: string | null;
+    /** When set (phone→1C), wins over local User / guest FIO for matching. */
+    matchClientName?: string | null;
     client?: {
       externalId?: string | null;
       firstName?: string | null;
@@ -6536,15 +6900,16 @@ export class BookingControlService {
     };
     service: { name: string; externalId?: string | null };
   }): SpaBookingMatchInput {
-    const clientName =
-      b.client
-        ? `${b.client.lastName ?? ''} ${b.client.firstName ?? ''}`.trim()
-        : b.guestName?.trim() || null;
+    const localName = b.client
+      ? `${b.client.lastName ?? ''} ${b.client.firstName ?? ''}`.trim()
+      : b.guestName?.trim() || null;
+    const clientName = b.matchClientName?.trim() || localName;
     return {
       id: b.id,
       startAt: b.startAt,
       paymentType: String(b.paymentType),
-      clientExternalId: b.client?.externalId ?? b.clientExternalId,
+      clientExternalId: b.clientExternalId ?? b.client?.externalId,
+      alternateClientExternalIds: b.alternateClientExternalIds,
       clientName,
       specialistExternalId: b.specialist.externalId,
       specialistEmployeeCode: b.specialist.employeeCode,
@@ -6557,12 +6922,125 @@ export class BookingControlService {
     };
   }
 
+  /**
+   * Phone → 1C card is the identity for SPA soft-match.
+   * Local specialist DB FIO is only a fallback when phone/1C is missing.
+   */
+  private async resolveSpaMatchIdentity(
+    clubId: string,
+    booking: {
+      id: string;
+      clientId?: string | null;
+      clientExternalId?: string | null;
+      guestName?: string | null;
+      guestPhone?: string | null;
+      oneCLinkStatus?: string | null;
+      client?: {
+        id?: string;
+        externalId?: string | null;
+        firstName?: string | null;
+        lastName?: string | null;
+        phone?: string | null;
+      } | null;
+    },
+    options?: {
+      /** GET detail: cache + stored ids only (no live 1C). */
+      cacheOnly?: boolean;
+      /** Refresh / Save-and-link: allow short live 1C + write client User FIO. */
+      livePhoneLookup?: boolean;
+      timeoutMs?: number;
+      allowUserFioWrite?: boolean;
+    },
+  ): Promise<{
+    clientExternalId: string | null;
+    alternateClientExternalIds: string[];
+    matchClientName: string | null;
+    phoneResolved: boolean;
+  }> {
+    const localExt =
+      booking.client?.externalId?.trim() ||
+      booking.clientExternalId?.trim() ||
+      '';
+    const localName = booking.client
+      ? `${booking.client.lastName ?? ''} ${booking.client.firstName ?? ''}`.trim()
+      : booking.guestName?.trim() || '';
+    const phoneRaw =
+      booking.guestPhone?.trim() || booking.client?.phone?.trim() || '';
+
+    const alternate = new Set<string>();
+    if (localExt) alternate.add(localExt);
+
+    let phoneExt = '';
+    let phoneName = '';
+    const cacheOnly =
+      options?.cacheOnly === true || options?.livePhoneLookup === false;
+    if (phoneRaw.length >= 9) {
+      try {
+        const hit = await this.phoneLookup.lookupByPhoneInClub(
+          clubId,
+          phoneRaw,
+          {
+            cacheOnly,
+            timeoutMs: options?.timeoutMs,
+            // Control never rewrites User.externalId (CRM / membership).
+            allowUserExternalIdWrite: false,
+            allowUserFioWrite: Boolean(options?.allowUserFioWrite),
+          },
+        );
+        if (hit.externalId?.trim()) {
+          phoneExt = hit.externalId.trim();
+          alternate.add(phoneExt);
+          phoneName =
+            `${hit.lastName ?? ''} ${hit.firstName ?? ''}`.trim() || '';
+        }
+      } catch {
+        // Invalid / short phone — keep local identity.
+      }
+    }
+
+    const preferredExt = phoneExt || localExt || null;
+    const preferredName = phoneName || localName || null;
+
+    // Persist phone→1C on SpaBooking only (not User.externalId).
+    if (phoneExt) {
+      const wantGuest = phoneName || undefined;
+      const needsLink =
+        booking.clientExternalId?.trim() !== phoneExt ||
+        booking.oneCLinkStatus !== SpaOneCLinkStatus.LINKED;
+      const needsName =
+        Boolean(wantGuest) &&
+        (booking.guestName?.trim() || '') !== wantGuest;
+      if (needsLink || needsName) {
+        await this.prisma.spaBooking
+          .update({
+            where: { id: booking.id },
+            data: {
+              clientExternalId: phoneExt,
+              oneCLinkStatus: SpaOneCLinkStatus.LINKED,
+              ...(wantGuest ? { guestName: wantGuest } : {}),
+            },
+          })
+          .catch(() => undefined);
+        booking.clientExternalId = phoneExt;
+        if (wantGuest) booking.guestName = wantGuest;
+      }
+    }
+
+    return {
+      clientExternalId: preferredExt,
+      alternateClientExternalIds: [...alternate],
+      matchClientName: preferredName,
+      phoneResolved: Boolean(phoneExt),
+    };
+  }
+
   private toSpaOnexCandidate(o: {
     externalId: string;
     number: string | null;
     startAt: Date;
     title: string;
     employeeExternalId: string | null;
+    employeeName?: string | null;
     status: OnexClassStatus | string;
     fitgoBookingRef?: string | null;
     members: Array<{
@@ -6579,6 +7057,7 @@ export class BookingControlService {
       startAt: o.startAt,
       title: o.title,
       employeeExternalId: o.employeeExternalId,
+      employeeName: o.employeeName ?? null,
       status: String(o.status),
       fitgoBookingRef: o.fitgoBookingRef,
       members: o.members,
@@ -6690,8 +7169,26 @@ export class BookingControlService {
     booking: SpaBookingMatchInput,
   ): Promise<SpaSaleCandidate[]> {
     const win = debtSearchWindow(booking.startAt);
-    const clientExt = booking.clientExternalId?.trim();
     const linkedId = booking.linkedSaleExternalId?.trim();
+    const surname = (booking.clientName ?? '').trim().split(/\s+/)[0] ?? '';
+    const clientIds = new Set<string>();
+    const primary = booking.clientExternalId?.trim();
+    if (primary) clientIds.add(primary);
+    for (const alt of booking.alternateClientExternalIds ?? []) {
+      const t = alt?.trim();
+      if (t) clientIds.add(t);
+    }
+    const clientOr: Array<Record<string, unknown>> = [];
+    for (const id of clientIds) {
+      clientOr.push({ clientExternalId: id });
+    }
+    // Surname OR — sale may sit on «Сотрудник» card while phone linked the
+    // client card (same person, different UUID).
+    if (surname.length >= 2) {
+      clientOr.push({
+        clientName: { contains: surname, mode: 'insensitive' as const },
+      });
+    }
     // Linked id must load even when isActive=false (sync cleanup) — otherwise
     // control shows «Нет документа в 1С» and looks like the sale was unlinked.
     const rows = await this.prisma.clubRevenueEntry.findMany({
@@ -6705,16 +7202,7 @@ export class BookingControlService {
             operationType: {
               in: ['payment', 'unpaid', 'sale', 'debt_writeoff'],
             },
-            ...(clientExt
-              ? { clientExternalId: clientExt }
-              : booking.clientName
-                ? {
-                    clientName: {
-                      contains: booking.clientName.split(/\s+/)[0] ?? '',
-                      mode: 'insensitive' as const,
-                    },
-                  }
-                : { id: '__none__' }),
+            ...(clientOr.length > 0 ? { OR: clientOr } : { id: '__none__' }),
           },
         ],
       },
@@ -6843,12 +7331,15 @@ export class BookingControlService {
       startAt: Date;
       specialistId?: string | null;
       clientExternalId?: string | null;
+      oneCLinkStatus?: string | null;
       membershipServiceName?: string | null;
       guestName?: string | null;
+      guestPhone?: string | null;
       client?: {
         externalId: string | null;
         firstName?: string | null;
         lastName?: string | null;
+        phone?: string | null;
       } | null;
       specialist?: {
         externalId: string | null;
@@ -6863,6 +7354,18 @@ export class BookingControlService {
       } | null;
     },
     clubId?: string,
+    opts?: {
+      identity?: {
+        clientExternalId: string | null;
+        alternateClientExternalIds: string[];
+        matchClientName: string | null;
+        phoneResolved: boolean;
+      };
+      cacheOnly?: boolean;
+      livePhoneLookup?: boolean;
+      timeoutMs?: number;
+      allowUserFioWrite?: boolean;
+    },
   ): Promise<{
     settlement: SpaSettlementInfo;
     payment: BookingControlPayment;
@@ -6873,13 +7376,23 @@ export class BookingControlService {
     if (!clubId || !booking?.id) return null;
     const blockAuto = Boolean(booking.saleAutoLinkBlocked);
     const existingLink = booking.linkedSaleExternalId?.trim() || '';
+    const identity =
+      opts?.identity ??
+      (await this.resolveSpaMatchIdentity(clubId, booking, {
+        cacheOnly: opts?.cacheOnly ?? true,
+        livePhoneLookup: opts?.livePhoneLookup,
+        timeoutMs: opts?.timeoutMs,
+        allowUserFioWrite: opts?.allowUserFioWrite,
+      }));
     const matchInput = this.toSpaMatchInput({
       id: booking.id,
       startAt: booking.startAt,
       paymentType: booking.paymentType,
       crmDocRef: booking.crmDocRef,
       linkedSaleExternalId: blockAuto ? null : booking.linkedSaleExternalId,
-      clientExternalId: booking.clientExternalId,
+      clientExternalId: identity.clientExternalId,
+      alternateClientExternalIds: identity.alternateClientExternalIds,
+      matchClientName: identity.matchClientName,
       guestName: booking.guestName,
       client: booking.client,
       specialist: booking.specialist ?? {
@@ -7317,12 +7830,15 @@ export class BookingControlService {
       linkedSaleExternalId?: string | null;
       startAt: Date;
       clientExternalId?: string | null;
+      oneCLinkStatus?: string | null;
       membershipServiceName?: string | null;
       guestName?: string | null;
+      guestPhone?: string | null;
       client?: {
         externalId: string | null;
         firstName?: string | null;
         lastName?: string | null;
+        phone?: string | null;
       } | null;
       specialist?: {
         externalId: string | null;
@@ -7337,6 +7853,18 @@ export class BookingControlService {
       } | null;
     },
     clubId?: string,
+    opts?: {
+      identity?: {
+        clientExternalId: string | null;
+        alternateClientExternalIds: string[];
+        matchClientName: string | null;
+        phoneResolved: boolean;
+      };
+      cacheOnly?: boolean;
+      livePhoneLookup?: boolean;
+      timeoutMs?: number;
+      allowUserFioWrite?: boolean;
+    },
   ): Promise<{
     settlement: SpaSettlementInfo;
     payment: BookingControlPayment;
@@ -7345,13 +7873,23 @@ export class BookingControlService {
     oneCTitle?: string;
   } | null> {
     if (!clubId || !booking?.id) return null;
+    const identity =
+      opts?.identity ??
+      (await this.resolveSpaMatchIdentity(clubId, booking, {
+        cacheOnly: opts?.cacheOnly ?? true,
+        livePhoneLookup: opts?.livePhoneLookup,
+        timeoutMs: opts?.timeoutMs,
+        allowUserFioWrite: opts?.allowUserFioWrite,
+      }));
     const matchInput = this.toSpaMatchInput({
       id: booking.id,
       startAt: booking.startAt,
       paymentType: booking.paymentType,
       crmDocRef: booking.crmDocRef,
       linkedSaleExternalId: booking.linkedSaleExternalId,
-      clientExternalId: booking.clientExternalId,
+      clientExternalId: identity.clientExternalId,
+      alternateClientExternalIds: identity.alternateClientExternalIds,
+      matchClientName: identity.matchClientName,
       guestName: booking.guestName,
       client: booking.client,
       specialist: booking.specialist ?? {
@@ -7381,11 +7919,40 @@ export class BookingControlService {
         OR: [
           { kind: OnexClassKind.SPA },
           // 1C sometimes tags VIP massage as PT until re-sync.
-          { kind: OnexClassKind.PT, title: { contains: 'массаж', mode: 'insensitive' } },
+          {
+            kind: OnexClassKind.PT,
+            title: { contains: 'массаж', mode: 'insensitive' },
+          },
+          {
+            kind: OnexClassKind.PT,
+            title: { contains: 'анализ', mode: 'insensitive' },
+          },
+          {
+            kind: OnexClassKind.PT,
+            title: { contains: 'состав', mode: 'insensitive' },
+          },
         ],
       },
       include: { members: true },
     });
+    const takenRefs = await this.prisma.spaBooking.findMany({
+      where: {
+        clubId,
+        id: { not: booking.id },
+        crmDocRef: { not: null },
+      },
+      select: { crmDocRef: true },
+    });
+    const takenOnexIds = new Set(
+      takenRefs
+        .map((r) => r.crmDocRef?.trim())
+        .filter((x): x is string => Boolean(x)),
+    );
+    for (const o of sessions) {
+      if (o.fitgoBookingRef && o.fitgoBookingRef !== booking.id) {
+        takenOnexIds.add(o.externalId);
+      }
+    }
     const onexSessions = sessions
       .filter(
         (o) =>
@@ -7395,6 +7962,7 @@ export class BookingControlService {
     const result = matchSpaVisitByDay({
       booking: matchInput,
       onexSessions,
+      takenOnexIds,
     });
     if (result.kind === 'auto') {
       const o = result.onex;
@@ -7424,23 +7992,56 @@ export class BookingControlService {
                     ? { membershipServiceName: membershipName }
                     : {}),
                 }
-              : {}),
+              : {
+                  paymentStatus: ServicePaymentStatus.PAID,
+                  paidAt: new Date(),
+                }),
           },
         })
         .catch(() => undefined);
+      // Glue 1C visit → FitGO so list day-merge / payroll see the link.
+      await this.prisma.onexClassSession
+        .updateMany({
+          where: {
+            clubId,
+            externalId: o.externalId,
+            OR: [{ fitgoBookingRef: null }, { fitgoBookingRef: '' }],
+          },
+          data: { fitgoBookingRef: booking.id },
+        })
+        .catch(() => undefined);
       const serviceTitle = booking.service?.name?.trim();
+      if (asQuota) {
+        return {
+          settlement: {
+            status: 'QUOTA_CONSUMED',
+            label: spaSettlementLabelRu('QUOTA_CONSUMED', membershipName),
+            source: 'onex',
+            visitPosted: true,
+            visitNum: humanDocumentNumber(o.number),
+            membershipName,
+            editableInApp: false,
+          },
+          payment: 'QUOTA',
+          payTag: 'PACKAGE',
+          oneCTitle:
+            serviceTitle &&
+            normalizeLabel(o.title) !== normalizeLabel(serviceTitle)
+              ? o.title
+              : undefined,
+        };
+      }
       return {
         settlement: {
-          status: 'QUOTA_CONSUMED',
-          label: spaSettlementLabelRu('QUOTA_CONSUMED', membershipName),
+          status: 'PAID',
+          label: spaSettlementLabelRu('PAID'),
           source: 'onex',
           visitPosted: true,
           visitNum: humanDocumentNumber(o.number),
-          membershipName,
           editableInApp: false,
         },
-        payment: 'QUOTA',
-        payTag: 'PACKAGE',
+        payment: 'PAID',
+        payTag: 'SALE',
         oneCTitle:
           serviceTitle &&
           normalizeLabel(o.title) !== normalizeLabel(serviceTitle)

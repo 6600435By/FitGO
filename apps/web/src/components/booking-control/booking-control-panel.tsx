@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  bookingControlIsNotIn1c,
   bookingControlIssueReasons,
   bookingControlMatchesSelectedReasons,
   bookingControlQueueSegment,
@@ -3550,9 +3551,7 @@ export function BookingControlPanel({
                             продажа
                           </span>
                         ) : null}
-                        {item.source === 'FITGO' &&
-                        item.kind === 'SPA' &&
-                        !item.oneCLinked ? (
+                        {bookingControlIsNotIn1c(item) ? (
                           <span className={hintBadgeClass('notIn1c')}>
                             нет в 1С
                           </span>
@@ -3696,9 +3695,7 @@ export function BookingControlPanel({
                             продажа
                           </span>
                         ) : null}
-                        {item.source === 'FITGO' &&
-                        item.kind === 'SPA' &&
-                        !item.oneCLinked ? (
+                        {bookingControlIsNotIn1c(item) ? (
                           <span className={hintBadgeClass('notIn1c', true)}>
                             нет в 1С
                           </span>

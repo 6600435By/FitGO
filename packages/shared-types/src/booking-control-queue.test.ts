@@ -76,6 +76,18 @@ describe('bookingControlIssueReasons', () => {
       ),
       true,
     );
+    assert.equal(
+      bookingControlIsNotIn1c(
+        row({
+          sessionKey: '2b',
+          kind: 'SPA',
+          source: 'FITGO',
+          oneCLinked: false,
+          payment: 'PARTNER',
+        }),
+      ),
+      true,
+    );
     assert.deepEqual(
       bookingControlIssueReasons(
         row({

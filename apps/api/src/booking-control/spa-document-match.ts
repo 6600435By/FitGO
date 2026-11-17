@@ -390,6 +390,8 @@ export type SpaOnexCandidate = {
   startAt: Date;
   title: string;
   employeeExternalId: string | null;
+  /** 1C employee FIO — fallback when staff.externalId ≠ employee code. */
+  employeeName?: string | null;
   status: string;
   fitgoBookingRef?: string | null;
   members: Array<{
@@ -406,6 +408,11 @@ export type SpaBookingMatchInput = {
   startAt: Date;
   paymentType: 'QUOTA' | 'PAID' | string;
   clientExternalId?: string | null;
+  /**
+   * Extra 1C client UUIDs for the same person (phone → client card + sale on
+   * «Сотрудник» card). Used only when loading ClubRevenue candidates.
+   */
+  alternateClientExternalIds?: string[];
   clientName?: string | null;
   specialistExternalId?: string | null;
   specialistEmployeeCode?: string | null;
@@ -738,7 +745,11 @@ export function nomenclatureMatches(
   return serviceNamesMatchForSaleLink(sale.productName, booking.serviceName);
 }
 
-/** Both sides have a 1C client card and they are different people. */
+/**
+ * Both sides have a 1C client card and they are different people.
+ * Same FIO on two cards (клиент vs «Сотрудник») is not a conflict — reception
+ * often sells on the employee card while FitGO linked the client card by phone.
+ */
 export function saleClientIdConflict(
   sale: SpaSaleCandidate,
   booking: SpaBookingMatchInput,
@@ -746,7 +757,15 @@ export function saleClientIdConflict(
   const a = booking.clientExternalId?.trim();
   const b = sale.clientExternalId?.trim();
   if (!a || !b) return false;
-  return !idsMatch(a, b);
+  if (idsMatch(a, b)) return false;
+  if (
+    booking.clientName &&
+    sale.clientName &&
+    namesMatch(booking.clientName, sale.clientName)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -1132,6 +1151,10 @@ export function onexMatchesSpecialist(
   if (onex.employeeExternalId?.trim()) {
     if (codes.some((c) => idsMatch(c, onex.employeeExternalId))) return true;
   }
+  // Staff card code ≠ 1C employeeExternalId — match by FIO (VIP write-offs).
+  if (onex.employeeName?.trim() && booking.specialistName?.trim()) {
+    if (namesMatch(onex.employeeName, booking.specialistName)) return true;
+  }
   // no employee on either side → allow day match only if booking has no code
   if (!onex.employeeExternalId?.trim() && codes.length === 0) return true;
   return false;
@@ -1141,12 +1164,21 @@ export function onexMatchesClient(
   onex: SpaOnexCandidate,
   booking: SpaBookingMatchInput,
 ): boolean {
-  const memberExt = onexClientExternalId(onex);
-  if (booking.clientExternalId?.trim() && memberExt) {
-    return idsMatch(booking.clientExternalId, memberExt);
-  }
   const member =
     onex.members.find((x) => !x.cancelled) ?? onex.members[0];
+  const memberExt = onexClientExternalId(onex);
+  if (booking.clientExternalId?.trim() && memberExt) {
+    if (idsMatch(booking.clientExternalId, memberExt)) return true;
+    // Duplicate 1C cards (phone → client, visit → employee): trust FIO.
+    if (
+      booking.clientName &&
+      member?.clientName &&
+      namesMatch(booking.clientName, member.clientName)
+    ) {
+      return true;
+    }
+    return false;
+  }
   if (booking.clientName && member?.clientName) {
     return namesMatch(booking.clientName, member.clientName);
   }

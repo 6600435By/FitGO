@@ -1177,7 +1177,7 @@ assert.equal(namesMatch('Бирюкова Екатерина', 'Бирюкова
   );
 }
 
-// Same FIO, different 1C client card → explicit hint, no silent link.
+// Same FIO, different 1C client cards (клиент vs «Сотрудник») → auto-link.
 {
   const visit = new Date('2026-10-19T07:00:00.000Z');
   const b = booking({ id: 'b-dup-card', startAt: visit });
@@ -1187,10 +1187,124 @@ assert.equal(namesMatch('Бирюкова Екатерина', 'Бирюкова
     clientExternalId: 'cli-gur-duplicate',
   });
   const r = matchSpaSale({ booking: b, sales: [s] });
-  assert.equal(r.kind, 'hint');
-  if (r.kind === 'hint') {
-    assert.equal(r.hint.kind, 'SALE_CLIENT_MISMATCH');
-    assert.equal(r.hint.message, 'Разные карточки клиента в 1С');
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.sale.externalId, 'sale-other-card');
+  }
+}
+
+// Different FIO + different client cards → mismatch hint (no silent link).
+{
+  const visit = new Date('2026-10-19T07:00:00.000Z');
+  const b = booking({ id: 'b-wrong-person', startAt: visit });
+  const s = sale({
+    externalId: 'sale-other-person',
+    occurredAt: visit,
+    clientExternalId: 'cli-other',
+    clientName: 'Иванов Пётр',
+  });
+  const r = matchSpaSale({ booking: b, sales: [s] });
+  // clientMatchesSale fails on FIO → not even otherClientCard; none or other path
+  assert.equal(r.kind, 'none');
+}
+
+// VIP write-off: specialist code mismatch, FIO match → auto day-link.
+{
+  const fitgo = booking({
+    id: 'b-vip-fio',
+    startAt: new Date('2026-11-04T07:00:00.000Z'),
+    paymentType: 'PAID',
+    clientExternalId: 'cli-mal-phone',
+    clientName: 'Малышев Сергей',
+    specialistExternalId: 'staff-uuid-bir',
+    specialistName: 'Бирюкова Екатерина',
+    serviceName: 'Массаж классический 50 мин',
+  });
+  const onex: SpaOnexCandidate = {
+    externalId: 'onex-vip-mal',
+    number: '112856',
+    startAt: new Date('2026-11-04T07:55:00.000Z'),
+    title: 'Массаж классический общий',
+    employeeExternalId: '000000099',
+    employeeName: 'Бирюкова Екатерина',
+    status: 'COMPLETED',
+    members: [
+      {
+        externalId: 'cli-mal-employee',
+        clientName: 'Малышев Сергей Михайлович',
+        paySource: 'PACKAGE',
+        paymentBasis: 'Членство: "VIP (6 месяцев)" до 31.08.2026',
+      },
+    ],
+  };
+  const day = matchSpaVisitByDay({
+    booking: fitgo,
+    onexSessions: [onex],
+  });
+  assert.equal(day.kind, 'auto');
+  if (day.kind === 'auto') {
+    assert.equal(day.onex.externalId, 'onex-vip-mal');
+  }
+}
+
+// Phone-first: local FIO garbage, official 1C FIO on match input → auto.
+{
+  const visit = new Date('2026-11-09T07:00:00.000Z');
+  const b = booking({
+    id: 'b-phone-fio',
+    startAt: visit,
+    // Specialist typed wrong local name; phone→1C filled matchClientName.
+    clientExternalId: 'cli-mal-1c',
+    clientName: 'Малышев Сергей Михайлович',
+    specialistName: 'Бирюкова Екатерина',
+    specialistExternalId: '42',
+    serviceName: 'Массаж классический 50 мин',
+  });
+  const s = sale({
+    externalId: 'sale-mal-phone',
+    occurredAt: visit,
+    clientExternalId: 'cli-mal-employee',
+    clientName: 'Малышев Сергей Михайлович (Сотрудник)',
+    performerExternalId: '42',
+    performerName: 'Бирюкова Екатерина',
+    productName: 'Массаж классический 50 мин',
+    saleAmount: 45,
+    paidAmount: 45,
+  });
+  const r = matchSpaSale({ booking: b, sales: [s] });
+  assert.equal(r.kind, 'auto');
+}
+
+// Free AllSports биоимпеданс: complimentary 0 BYN → auto when roles match.
+{
+  const visit = new Date('2026-11-02T13:00:00.000Z');
+  const b = booking({
+    id: 'b-bio',
+    startAt: visit,
+    clientExternalId: 'cli-kosova',
+    clientName: 'Косова Ольга',
+    specialistExternalId: 'emp-abram',
+    specialistName: 'Абрамчик Егор',
+    serviceName: 'Allsports БИОИМПЕДАНС',
+    serviceExternalId: 'bio-1',
+  });
+  const s = sale({
+    externalId: 'sale-33827:u2026-11-02',
+    occurredAt: visit,
+    saleAmount: 0,
+    paidAmount: 0,
+    operationType: 'sale',
+    productName: 'Allsports БИОИМПЕДАНС',
+    productExternalId: 'bio-1',
+    clientExternalId: 'cli-kosova',
+    clientName: 'Косова Ольга',
+    performerExternalId: 'emp-abram',
+    performerName: 'Абрамчик Егор',
+  });
+  const r = matchSpaSale({ booking: b, sales: [s] });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(r.paymentStatus, 'PAID');
   }
 }
 

@@ -961,33 +961,15 @@ export class SpaBookingService {
       ? SpaOneCLinkStatus.LINKED
       : SpaOneCLinkStatus.NOT_LINKED;
 
-    if (!clientId && guestPhone) {
-      const found = await this.lookupClientByPhone(actor, guestPhone);
-      guestPhone = found.phone;
-      if (found.clientId) {
-        clientId = found.clientId;
-        clientExternalId = found.externalId ?? clientExternalId;
-        if (found.externalId) oneCLinkStatus = SpaOneCLinkStatus.LINKED;
-      } else if (found.externalId) {
-        const fromCrm = `${found.lastName ?? ''} ${found.firstName ?? ''}`.trim();
-        // Prefer 1C FIO for display once linked; keep typedAlias separately.
-        guestName = fromCrm || guestName || undefined;
-        clientExternalId = found.externalId;
-        oneCLinkStatus = SpaOneCLinkStatus.LINKED;
-      }
-    }
-
-    if (!clientId && !guestName && !typedAlias) {
-      throw new BadRequestException('Укажите клиента из базы или ФИО');
-    }
-
     let client: {
       id: string;
       externalId: string | null;
       firstName: string;
       lastName: string;
+      phone: string | null;
+      phoneNormalized: string | null;
     } | null = null;
-    let externalId: string | undefined = clientExternalId;
+
     if (clientId) {
       client = await this.prisma.user.findFirst({
         where: {
@@ -999,9 +981,57 @@ export class SpaBookingService {
           externalId: true,
           firstName: true,
           lastName: true,
+          phone: true,
+          phoneNormalized: true,
         },
       });
       if (!client) throw new NotFoundException('Клиент не найден');
+      // Always keep phone on the booking so later control can soft-match.
+      if (!guestPhone) {
+        guestPhone =
+          client.phoneNormalized?.trim() ||
+          client.phone?.trim() ||
+          undefined;
+      }
+    }
+
+    // Phone → 1C even when a local client card was picked (specialist DB
+    // often has mistyped FIO). Prefer official 1C name on the booking.
+    if (guestPhone) {
+      const found = await this.lookupClientByPhone(actor, guestPhone);
+      guestPhone = found.phone;
+      if (found.clientId && !clientId) {
+        clientId = found.clientId;
+        client = await this.prisma.user.findFirst({
+          where: {
+            id: found.clientId,
+            roles: { some: { role: Role.CLIENT } },
+          },
+          select: {
+            id: true,
+            externalId: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            phoneNormalized: true,
+          },
+        });
+      }
+      if (found.externalId) {
+        clientExternalId = found.externalId;
+        oneCLinkStatus = SpaOneCLinkStatus.LINKED;
+        const fromCrm =
+          `${found.lastName ?? ''} ${found.firstName ?? ''}`.trim();
+        if (fromCrm) guestName = fromCrm;
+      }
+    }
+
+    if (!clientId && !guestName && !typedAlias) {
+      throw new BadRequestException('Укажите клиента из базы или ФИО');
+    }
+
+    let externalId: string | undefined = clientExternalId;
+    if (clientId && client) {
       if (input.paymentType === 'QUOTA' || client.externalId || clientExternalId) {
         try {
           const resolved = await this.resolveExternalId(
@@ -1020,20 +1050,27 @@ export class SpaBookingService {
       }
     }
 
-    const crmDisplayName =
-      !client && guestName ? guestName : undefined;
     const guestAlias =
       typedAlias ||
       (client
         ? `${client.lastName} ${client.firstName}`.trim() || undefined
         : undefined);
 
+    // Prefer 1C FIO on the booking once linked; else typed / local name.
+    const displayName =
+      oneCLinkStatus === SpaOneCLinkStatus.LINKED && guestName
+        ? guestName
+        : guestName ||
+          (client
+            ? `${client.lastName} ${client.firstName}`.trim() || undefined
+            : typedAlias);
+
     return {
-      clientId: client?.id,
+      clientId: client?.id ?? clientId,
       client,
-      guestName: client ? undefined : crmDisplayName ?? typedAlias,
+      guestName: displayName,
       guestAlias,
-      guestPhone: client ? guestPhone : guestPhone,
+      guestPhone,
       clientExternalId: externalId,
       oneCLinkStatus,
       externalId,
