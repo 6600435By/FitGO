@@ -35,6 +35,23 @@ export function isGenericPaymentProduct(
 }
 
 /**
+ * ЛС deposit / credit / burn nomenclature — must not be rewritten to a sale
+ * SKU (else card top-up collapses into the massage line as «190»).
+ * Uses {@link normNom} (spaces stripped): «лицевойсчет», not «лицевой счет».
+ */
+export function isPersonalAccountLedgerProduct(
+  name: string | null | undefined,
+): boolean {
+  const n = normNom(name ?? '');
+  if (!n) return false;
+  if (n.includes('лицевойсчет') || n.includes('лицевогосчета')) return true;
+  if (n.includes('прочиепоступления')) return true;
+  if (n.startsWith('взносна')) return true;
+  if (n.includes('сгорание')) return true;
+  return false;
+}
+
+/**
  * Whether ClubRevenueEntry.productName should be replaced with sale lines.
  * True for placeholders and when the cash label does not match any basis SKU
  * (e.g. membership title on a personal-account shop payment).
@@ -44,6 +61,8 @@ export function shouldReplaceProductWithBasis(
   lines: BasisProductLine[],
 ): boolean {
   if (!lines.length) return false;
+  // Keep «Взнос на лицевой счет» as-is — never map onto Document.Продажа lines.
+  if (isPersonalAccountLedgerProduct(productName)) return false;
   if (isGenericPaymentProduct(productName)) return true;
   const raw = (productName ?? '').trim();
   if (!raw) return true;

@@ -17,6 +17,8 @@ import {
   buildSpaDayMergePairs,
   collapseSpaSalesByBasis,
   collapseSpaSalesByLine,
+  filterSpaSaleLinkRows,
+  isSpaPersonalAccountNoise,
   matchSpaSale,
   matchSpaVisitByDay,
   minskDayKey,
@@ -24,6 +26,7 @@ import {
   paidSaleSettlementLabel,
   isMembershipIncludedSpaTitle,
   pickBestServiceByDuration,
+  pickCollapsedSpaSaleForLink,
   preferredServiceDurationMin,
   saleAmountMajor,
   saleIsDebtWriteOff,
@@ -1419,6 +1422,150 @@ assert.equal(namesMatch('Бирюкова Екатерина', 'Бирюкова
   if (r.kind === 'auto') {
     assert.equal(r.paymentStatus, 'PAID');
   }
+}
+
+// --- Myasnikova: ЛС top-up + massage pay must not collapse to 190 ---
+{
+  const doc = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+  // Cash intake for ЛС may arrive as personal_deposit OR as payment with
+  // «Взнос на лицевой счет» — both must stay out of visit linking.
+  const depositOp = sale({
+    externalId: `${doc}:cash:Карта:cli:pa:20261110222000:personal_deposit`,
+    documentId: doc,
+    occurredAt: new Date('2026-11-10T19:20:00.000Z'),
+    paidAt: new Date('2026-11-10T19:20:00.000Z'),
+    saleAmount: 130,
+    paidAmount: 130,
+    card: 130,
+    operationType: 'personal_deposit',
+    productName: 'Взнос на лицевой счет',
+    productExternalId: 'pa-dep',
+    clientName: 'Мясникова Екатерина Дмитриевна',
+    performerName: 'Дашук Полина Ивановна',
+  });
+  const depositPay = sale({
+    externalId: `${doc}:cash:Карта:cli:${doc}:20261110222000:payment`,
+    documentId: doc,
+    occurredAt: new Date('2026-11-10T19:20:00.000Z'),
+    paidAt: new Date('2026-11-10T19:20:00.000Z'),
+    saleAmount: 130,
+    paidAmount: 130,
+    card: 130,
+    operationType: 'payment',
+    productName: 'Взнос на лицевой счет',
+    productExternalId: 'pa-dep',
+    clientName: 'Мясникова Екатерина Дмитриевна',
+    performerName: 'Дашук Полина Ивановна',
+  });
+  const massageSale = sale({
+    externalId: `${doc}:1`,
+    documentId: doc,
+    occurredAt: new Date('2026-11-10T14:00:00.000Z'),
+    saleAmount: 60,
+    paidAmount: 0,
+    operationType: 'sale',
+    productName: 'Массаж классический 25 мин',
+    productExternalId: 'svc-classic-25',
+    clientName: 'Мясникова Екатерина Дмитриевна',
+    performerName: 'Бирюкова Екатерина',
+    performerExternalId: '42',
+  });
+  const massagePay = sale({
+    externalId: `${doc}:cash:ЛицевойСчет:cli:${doc}:20261110222100:payment`,
+    documentId: 'pay-m',
+    occurredAt: new Date('2026-11-10T19:21:00.000Z'),
+    paidAt: new Date('2026-11-10T19:21:00.000Z'),
+    saleAmount: 60,
+    paidAmount: 60,
+    personalAccount: 60,
+    operationType: 'payment',
+    productName: 'Массаж классический 25 мин',
+    productExternalId: 'svc-classic-25',
+    clientName: 'Мясникова Екатерина Дмитриевна',
+    performerName: 'Бирюкова Екатерина',
+    performerExternalId: '42',
+  });
+
+  assert.equal(isSpaPersonalAccountNoise(depositOp), true);
+  assert.equal(isSpaPersonalAccountNoise(depositPay), true);
+  assert.equal(isSpaPersonalAccountNoise(massageSale), false);
+  assert.equal(saleIsSpaLinkCandidate(depositOp), false);
+  assert.equal(saleIsSpaLinkCandidate(depositPay), false);
+
+  const filtered = filterSpaSaleLinkRows([
+    depositOp,
+    depositPay,
+    massageSale,
+    massagePay,
+  ]);
+  assert.equal(filtered.length, 2);
+  assert.ok(
+    !filtered.some(
+      (s) =>
+        s.operationType === 'personal_deposit' ||
+        (s.productName ?? '').toLowerCase().includes('лицевой'),
+    ),
+  );
+
+  // collapseSpaSalesByLine itself drops ЛС noise (same as filter).
+  const lines = collapseSpaSalesByLine([
+    depositOp,
+    depositPay,
+    massageSale,
+    massagePay,
+  ]);
+  assert.equal(lines.length, 1);
+  const line = pickCollapsedSpaSaleForLink(
+    lines,
+    massageSale.externalId,
+    massageSale,
+  )!;
+  assert.equal(saleLineTotalMajor(line), 60);
+  assert.equal(positiveOrZero(line.card), 0);
+  assert.equal(positiveOrZero(line.personalAccount), 60);
+  assert.equal(paidSaleSettlementLabel(line).includes('130'), false);
+
+  const visit = new Date('2026-11-10T14:00:00.000Z');
+  const b = booking({
+    id: 'b-myas',
+    startAt: visit,
+    serviceName: 'Массаж классический 25 мин',
+    serviceExternalId: 'svc-classic-25',
+    clientName: 'Мясникова Екатерина Дмитриевна',
+    clientExternalId: 'cli-myas',
+    specialistName: 'Бирюкова Екатерина',
+  });
+  const r = matchSpaSale({
+    booking: b,
+    sales: [depositOp, depositPay, massageSale, massagePay],
+  });
+  assert.equal(r.kind, 'auto');
+  if (r.kind === 'auto') {
+    assert.equal(saleLineTotalMajor(r.sale), 60);
+    assert.equal(r.paymentStatus, 'PAID');
+  }
+
+  // Already-enriched DB row: deposit payment renamed to massage SKU — tender
+  // cap must still drop the 130 card vs 60 line price.
+  const enrichedDepositPay = sale({
+    ...depositPay,
+    productName: 'Массаж классический 25 мин',
+    productExternalId: 'svc-classic-25',
+  });
+  const capped = collapseSpaSalesByLine([
+    massageSale,
+    enrichedDepositPay,
+    massagePay,
+  ]);
+  assert.equal(capped.length, 1);
+  assert.equal(saleLineTotalMajor(capped[0]!), 60);
+  assert.equal(positiveOrZero(capped[0]!.card), 0);
+  assert.equal(positiveOrZero(capped[0]!.personalAccount), 60);
+}
+
+function positiveOrZero(n: number | null | undefined): number {
+  const v = Number(n) || 0;
+  return v > 0.009 ? v : 0;
 }
 
 console.log('spa-document-match.test.ts: ok');

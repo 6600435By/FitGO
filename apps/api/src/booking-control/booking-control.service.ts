@@ -133,11 +133,13 @@ import {
   awaitingPaymentLabel,
   buildSpaDayMergePairs,
   clientMatchesSale,
-  collapseSpaSalesByBasis,
   collapseSpaSalesByLine,
   debtSearchWindow,
   autoSaleAsHint,
+  filterSpaSaleLinkRows,
   idsMatch,
+  isSpaPersonalAccountNoise,
+  isSpaSaleLinkableOperation,
   nomenclatureMatches,
   performerMatchesBooking,
   matchSpaSale,
@@ -146,6 +148,7 @@ import {
   normalizeLabel,
   paidSaleSettlementLabel,
   pickBestServiceByDuration,
+  pickCollapsedSpaSaleForLink,
   preferredServiceDurationMin,
   saleAmountMajor,
   saleIsComplimentaryPartner,
@@ -1095,6 +1098,17 @@ export class BookingControlService {
         });
         const byBasis = new Map<string, SpaSaleCandidate[]>();
         for (const r of linkedRows) {
+          if (
+            isSpaPersonalAccountNoise({
+              operationType: r.operationType,
+              productName: r.productName,
+              externalId: r.externalId,
+            })
+          ) {
+            continue;
+          }
+          if (!isSpaSaleLinkableOperation(r.operationType)) continue;
+          if (!r.isActive) continue;
           const c = this.mapRevenueToSaleCandidate(r);
           const basis = preferredSaleBasisId({
             externalId: c.externalId,
@@ -1112,16 +1126,7 @@ export class BookingControlService {
           const group = byBasis.get(basis) ?? [];
           if (!group.length) continue;
           const collapsed = collapseSpaSalesByLine(group);
-          const hit =
-            collapsed.find((s) => s.externalId === id) ??
-            collapsed.find(
-              (s) =>
-                preferredSaleBasisId({
-                  externalId: s.externalId,
-                  documentId: s.documentId ?? null,
-                }) === basis,
-            ) ??
-            collapsed[0];
+          const hit = pickCollapsedSpaSaleForLink(collapsed, id);
           if (!hit) continue;
           linkedSalePay.set(id, salePaymentStatus(hit));
         }
@@ -7295,8 +7300,8 @@ export class BookingControlService {
   /**
    * Resolve a previously linked ClubRevenue row even if sync deactivated it
    * or the externalId key changed (cash/debt twin of the same document).
-   * Loads all payment / unpaid / write-off siblings for the sale basis and
-   * collapses them so mixed pays across days settle as one document.
+   * Loads payment / unpaid / write-off siblings for the sale basis, drops
+   * ЛС deposits, and collapses by nomenclature line (not the whole document).
    */
   private async loadLinkedSpaSale(
     clubId: string,
@@ -7337,19 +7342,41 @@ export class BookingControlService {
       take: 40,
     });
     if (!rows.length) return null;
-    const mapped = rows.map((r) => this.mapRevenueToSaleCandidate(r));
-    const collapsed = collapseSpaSalesByBasis(mapped);
-    const exact =
-      collapsed.find((s) => s.externalId === id) ??
-      collapsed.find((s) => {
-        const b = preferredSaleBasisId({
-          externalId: s.externalId,
-          documentId: s.documentId ?? null,
-        });
-        return b === basis || s.documentId?.toLowerCase() === basis;
-      }) ??
-      collapsed[0];
-    return exact ?? null;
+    const exactRow = rows.find((r) => r.externalId === id);
+    // Linkable ops only — never fold personal_deposit / credit / burn into the
+    // visit amount. Inactive siblings stay out (sync deleted the line); the
+    // exact linked id may still seed the line key when re-resolving.
+    const usable = rows.filter((r) => {
+      if (
+        isSpaPersonalAccountNoise({
+          operationType: r.operationType,
+          productName: r.productName,
+          externalId: r.externalId,
+        })
+      ) {
+        return false;
+      }
+      if (!isSpaSaleLinkableOperation(r.operationType)) return false;
+      if (!r.isActive && r.externalId !== id) return false;
+      return true;
+    });
+    if (!usable.length) return null;
+    const mapped = usable.map((r) => this.mapRevenueToSaleCandidate(r));
+    const collapsed = collapseSpaSalesByLine(mapped);
+    const seed = mapped.find((s) => s.externalId === id) ?? null;
+    const hit = pickCollapsedSpaSaleForLink(collapsed, id, seed);
+    if (!hit) return null;
+    // Exact link row gone from 1C and no active twin on the same line → stale.
+    if (exactRow && !exactRow.isActive) {
+      const hitKey = spaSaleLineKey(hit);
+      const hasActiveTwin = usable.some(
+        (r) =>
+          r.isActive &&
+          spaSaleLineKey(this.mapRevenueToSaleCandidate(r)) === hitKey,
+      );
+      if (!hasActiveTwin) return null;
+    }
+    return hit;
   }
 
   private async loadSpaSaleCandidates(
@@ -7437,7 +7464,9 @@ export class BookingControlService {
       seenExt.add(extra.externalId);
       rows.push(extra);
     }
-    const mapped = rows.map((r) => this.mapRevenueToSaleCandidate(r));
+    const mapped = filterSpaSaleLinkRows(
+      rows.map((r) => this.mapRevenueToSaleCandidate(r)),
+    );
     // Pull cash/unpaid siblings for each sale basis so mixed pays collapse
     // (payment on day D+N must join unpaid from sale day).
     const expanded = await this.expandSpaSaleBasisSiblings(clubId, mapped);
@@ -7489,9 +7518,19 @@ export class BookingControlService {
     });
     for (const r of extra) {
       if (byExt.has(r.externalId)) continue;
+      if (
+        isSpaPersonalAccountNoise({
+          operationType: r.operationType,
+          productName: r.productName,
+          externalId: r.externalId,
+        })
+      ) {
+        continue;
+      }
+      if (!isSpaSaleLinkableOperation(r.operationType)) continue;
       byExt.set(r.externalId, this.mapRevenueToSaleCandidate(r));
     }
-    return [...byExt.values()];
+    return filterSpaSaleLinkRows([...byExt.values()]);
   }
 
   private async spaServiceIdByProduct(
@@ -7642,25 +7681,45 @@ export class BookingControlService {
     if (!blockAuto && existingLink) {
       const linkedSale = await this.loadLinkedSpaSale(clubId, existingLink);
       if (!linkedSale) {
-        // Keep the link visible — do not fall through to «Нет документа в 1С».
-        return {
-          settlement: {
-            status: 'UNKNOWN',
-            label: 'Продажа привязана (нет строки в кэше — обновите из 1С)',
-            source: 'sale',
-            editableInApp: true,
-          },
-          payment: 'UNKNOWN',
-          payTag: 'SALE',
-          linkedSaleExternalId: existingLink,
-          hint: {
-            kind: 'SALE_MULTIPLE',
-            message: 'Привязанный документ не найден в кэше — выберите продажу',
-            candidates: [],
-          },
-        };
-      }
-      if (this.spaLinkStillValid(linkedSale, matchInput)) {
+        // Stale link (deleted line / ЛС twin / deactivated) — drop and re-match
+        // unless ЗП for that day is closed.
+        const closed = await this.isPayrollPeriodClosed(
+          clubId,
+          booking.startAt,
+          booking.specialistId,
+        );
+        if (closed) {
+          return {
+            settlement: {
+              status: 'UNKNOWN',
+              label: 'Продажа привязана (нет строки в кэше — обновите из 1С)',
+              source: 'sale',
+              editableInApp: true,
+            },
+            payment: 'UNKNOWN',
+            payTag: 'SALE',
+            linkedSaleExternalId: existingLink,
+            hint: {
+              kind: 'SALE_MULTIPLE',
+              message:
+                'Привязанный документ не найден в кэше — выберите продажу',
+              candidates: [],
+            },
+          };
+        }
+        await this.prisma.spaBooking
+          .update({
+            where: { id: booking.id },
+            data: {
+              linkedSaleExternalId: null,
+              priceMinor: null,
+              eligibleForMotivation: false,
+            },
+          })
+          .catch(() => undefined);
+        booking.linkedSaleExternalId = null;
+        matchInput.linkedSaleExternalId = null;
+      } else if (this.spaLinkStillValid(linkedSale, matchInput)) {
         stickySale = linkedSale;
       } else {
         // Client / performer / nomenclature changed since the link — drop the
@@ -8311,6 +8370,11 @@ export class BookingControlService {
     if (!saleId) throw new BadRequestException('Укажите продажу');
     const sale = await this.loadLinkedSpaSale(clubId, saleId);
     if (!sale) throw new NotFoundException('Продажа не найдена');
+    if (isSpaPersonalAccountNoise(sale)) {
+      throw new BadRequestException(
+        'Пополнение лицевого счёта нельзя привязать к записи',
+      );
+    }
     // Pack purchases pay motivation through 1C write-offs, not through a visit.
     if (
       isMultiVisitPackSale(sale.productName) ||

@@ -10,6 +10,7 @@ import {
   isSpaLikeSessionTitle,
 } from '@fitgo/shared-types';
 import {
+  isPersonalAccountLedgerProduct,
   preferredSaleBasisId,
   spaSaleLineKey,
 } from '../admin-sales/payment-basis-products';
@@ -50,6 +51,105 @@ export type SpaSaleCandidate = {
 function isCashOp(op: string): boolean {
   const o = (op ?? '').toLowerCase();
   return o === 'payment' || o === 'refund';
+}
+
+const SPA_LINKABLE_OPS = new Set([
+  'payment',
+  'refund',
+  'unpaid',
+  'sale',
+  'debt_writeoff',
+]);
+
+/** ClubRevenue ops that may participate in SPA visit ↔ sale linking. */
+export function isSpaSaleLinkableOperation(
+  operationType?: string | null,
+): boolean {
+  return SPA_LINKABLE_OPS.has((operationType ?? '').toLowerCase());
+}
+
+/**
+ * Personal-account deposit / credit / burn — never a visit payment document.
+ * Same day as a massage sale (top-up then pay from ЛС) must not inflate the
+ * linked amount (card 130 deposit + PA 60 service → false 190).
+ */
+export function isSpaPersonalAccountNoise(sale: {
+  operationType?: string | null;
+  productName?: string | null;
+  externalId?: string | null;
+}): boolean {
+  const op = (sale.operationType ?? '').toLowerCase();
+  if (
+    op === 'personal_deposit' ||
+    op === 'personal_credit' ||
+    op === 'personal_burn'
+  ) {
+    return true;
+  }
+  const id = (sale.externalId ?? '').toLowerCase();
+  if (
+    id.includes(':pa:') ||
+    id.includes('personal_deposit') ||
+    id.includes('personal_credit') ||
+    id.includes('personal_burn')
+  ) {
+    return true;
+  }
+  return isPersonalAccountLedgerProduct(sale.productName);
+}
+
+/** Drop ЛС noise before collapse / match / link. */
+export function filterSpaSaleLinkRows(
+  sales: SpaSaleCandidate[],
+): SpaSaleCandidate[] {
+  return sales.filter(
+    (s) =>
+      isSpaSaleLinkableOperation(s.operationType) &&
+      !isSpaPersonalAccountNoise(s),
+  );
+}
+
+/**
+ * After {@link collapseSpaSalesByLine}, pick the nomenclature line for a
+ * stored linkedSaleExternalId (exact id, then same line key, then sole basis).
+ */
+export function pickCollapsedSpaSaleForLink(
+  collapsed: SpaSaleCandidate[],
+  linkedId: string,
+  seed?: SpaSaleCandidate | null,
+): SpaSaleCandidate | null {
+  if (!collapsed.length) return null;
+  const id = linkedId.trim();
+  if (!id) return collapsed[0] ?? null;
+  const exact = collapsed.find((s) => s.externalId === id);
+  if (exact) return exact;
+  const seedKey = seed ? spaSaleLineKey(seed) : '';
+  if (seedKey) {
+    const byLine = collapsed.find((s) => spaSaleLineKey(s) === seedKey);
+    if (byLine) return byLine;
+  }
+  const basis = preferredSaleBasisId({
+    externalId: id,
+    documentId: (() => {
+      const head = (id.split(/[:#]/)[0] ?? '').trim();
+      return /^[0-9a-f-]{36}$/i.test(head) ? head : null;
+    })(),
+  });
+  const sameBasis = collapsed.filter((s) => {
+    const b = preferredSaleBasisId({
+      externalId: s.externalId,
+      documentId: s.documentId ?? null,
+    });
+    return b === basis || s.documentId?.toLowerCase() === basis;
+  });
+  if (sameBasis.length === 1) return sameBasis[0]!;
+  if (sameBasis.length > 1) {
+    const anchored = sameBasis.find(
+      (s) => !isCashOp(s.operationType ?? ''),
+    );
+    return anchored ?? sameBasis[0]!;
+  }
+  return collapsed[0] ?? null;
 }
 
 function positiveMajor(n: number | null | undefined): number {
@@ -121,6 +221,8 @@ function saleBasisId(sale: SpaSaleCandidate): string {
 export function collapseSpaSalesByLine(
   sales: SpaSaleCandidate[],
 ): SpaSaleCandidate[] {
+  // Never let ЛС top-ups join a service line (card deposit + PA pay → 190).
+  const linkable = filterSpaSaleLinkRows(sales);
   const groups = new Map<string, SpaSaleCandidate[]>();
   const order: string[] = [];
   const push = (key: string, s: SpaSaleCandidate) => {
@@ -133,8 +235,8 @@ export function collapseSpaSalesByLine(
     order.push(key);
   };
 
-  const anchors = sales.filter((s) => !isCashOp(s.operationType));
-  const cashRows = sales.filter((s) => isCashOp(s.operationType));
+  const anchors = linkable.filter((s) => !isCashOp(s.operationType));
+  const cashRows = linkable.filter((s) => isCashOp(s.operationType));
 
   const keysByBasis = new Map<string, string[]>();
   for (const s of anchors) {
@@ -223,21 +325,47 @@ function mergeSpaSaleGroup(rows: SpaSaleCandidate[]): SpaSaleCandidate {
   // Prefer sale/unpaid/write-off as the persisted link target — not a cash slice.
   const anchor = writeOff ?? unpaid ?? saleRow ?? nonCash[0] ?? cashRows[0]!;
 
-  const paidAmount = roundMajor(
+  let paidAmount = roundMajor(
     cashRows.reduce((s, r) => s + salePaidCoverage(r), 0),
   );
-  const cash = roundMajor(
+  let cash = roundMajor(
     cashRows.reduce((s, r) => s + positiveMajor(r.cash), 0),
   );
-  const card = roundMajor(
+  let card = roundMajor(
     cashRows.reduce((s, r) => s + positiveMajor(r.card), 0),
   );
-  const cashless = roundMajor(
+  let cashless = roundMajor(
     cashRows.reduce((s, r) => s + positiveMajor(r.cashless), 0),
   );
-  const personalAccount = roundMajor(
+  let personalAccount = roundMajor(
     cashRows.reduce((s, r) => s + positiveMajor(r.personalAccount), 0),
   );
+
+  // Cap tenders to the sale/unpaid line price. A same-day ЛС top-up (card)
+  // wrongly joined after enrich can inflate 60 → 190; keep the service total.
+  const lineDue = roundMajor(
+    Math.max(
+      0,
+      Number(unpaid?.saleAmount) || 0,
+      Number(saleRow?.saleAmount) || 0,
+      Number(writeOff?.saleAmount) || 0,
+    ),
+  );
+  if (lineDue > 0.009 && paidAmount > lineDue + 0.02) {
+    let remain = lineDue;
+    const take = (v: number) => {
+      const use = Math.min(positiveMajor(v), remain);
+      remain = roundMajor(Math.max(0, remain - use));
+      return use;
+    };
+    // Prefer PA / cashless (how SPA is usually settled after a top-up), then
+    // cash/card for the leftover service price — drop excess deposit card.
+    personalAccount = take(personalAccount);
+    cashless = take(cashless);
+    cash = take(cash);
+    card = take(card);
+    paidAmount = roundMajor(cash + card + cashless + personalAccount);
+  }
 
   // Document total vs mixed pays:
   // - unpaid twin still at full price next to full payment → max (don't double)
@@ -271,6 +399,10 @@ function mergeSpaSaleGroup(rows: SpaSaleCandidate[]): SpaSaleCandidate {
         ...rows.map((r) => Number(r.saleAmount) || 0),
       ),
     );
+    // After tender cap, never keep a deposit-inflated max from cash rows.
+    if (lineDue > 0.009) {
+      saleAmount = roundMajor(Math.min(saleAmount, Math.max(lineDue, paidAmount)));
+    }
   }
 
   let operationType = anchor.operationType;
@@ -778,6 +910,8 @@ export function saleIsSpaLinkCandidate(
   sale: SpaSaleCandidate,
   serviceIdByProduct?: Map<string, string>,
 ): boolean {
+  if (isSpaPersonalAccountNoise(sale)) return false;
+  if (!isSpaSaleLinkableOperation(sale.operationType)) return false;
   if (isMultiVisitPackSale(sale.productName)) return false;
   if (isServiceBlockPackageName(sale.productName)) return false;
   // Joined cache row («A, B») is not one nomenclature — re-sync from 1C first.
@@ -923,8 +1057,8 @@ export function matchSpaSale(input: {
 }): SpaSaleMatchResult {
   const { booking, takenSaleIds, serviceIdByProduct, blockAutoLink } = input;
   // One candidate per nomenclature line: sale + its later payments collapse,
-  // two SKUs of the same document stay apart.
-  const sales = collapseSpaSalesByLine(input.sales);
+  // two SKUs of the same document stay apart. Never fold ЛС top-ups in.
+  const sales = collapseSpaSalesByLine(filterSpaSaleLinkRows(input.sales));
   if (!blockAutoLink && booking.linkedSaleExternalId?.trim()) {
     const linkedId = booking.linkedSaleExternalId.trim();
     const linkedBasis = preferredSaleBasisId({
