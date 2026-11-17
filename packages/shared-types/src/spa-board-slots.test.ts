@@ -10,6 +10,7 @@ import {
   isSpaTimeBlock,
   listRoundSpaClientSlots,
   snapSpaClientReserveEnd,
+  SPA_BOOKING_EXCLUDE_TIME_BLOCK,
   SPA_TIME_BLOCK_ALIAS,
   SPA_TIME_BLOCK_GUEST_NAME,
 } from './spa-board-slots';
@@ -197,6 +198,26 @@ describe('isSpaStaffTimeBlock', () => {
         guestAlias: null,
         guestName: SPA_TIME_BLOCK_GUEST_NAME,
       } as { guestAlias?: string | null }),
+      false,
+    );
+  });
+});
+
+describe('SPA_BOOKING_EXCLUDE_TIME_BLOCK', () => {
+  it('uses NOT+AND so null guestAlias is kept (SQL three-valued logic)', () => {
+    // Shape must stay NOT-top-level (spreads collide with OR/AND elsewhere)
+    // and must not be `NOT: { guestAlias: alias }` (drops NULL rows in PG).
+    assert.deepEqual(SPA_BOOKING_EXCLUDE_TIME_BLOCK, {
+      NOT: {
+        AND: [
+          { guestAlias: { not: null } },
+          { guestAlias: SPA_TIME_BLOCK_ALIAS },
+        ],
+      },
+    });
+    assert.equal(
+      'OR' in SPA_BOOKING_EXCLUDE_TIME_BLOCK ||
+        'AND' in SPA_BOOKING_EXCLUDE_TIME_BLOCK,
       false,
     );
   });

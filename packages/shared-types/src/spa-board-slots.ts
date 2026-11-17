@@ -31,11 +31,23 @@ export function isSpaStaffTimeBlock(booking: {
 }
 
 /**
- * Prisma `where` fragment: keep normal SPA rows (null alias) and drop
- * staff time blocks. Use with spread: `{ ...SPA_BOOKING_EXCLUDE_TIME_BLOCK }`.
+ * Prisma `where` fragment: keep normal SPA rows (including null alias) and
+ * drop staff time blocks.
+ *
+ * Do **not** use `NOT: { guestAlias: alias }` — in SQL that is
+ * `NOT (guestAlias = alias)`, which also drops `guestAlias IS NULL`
+ * (three-valued logic). Keep top-level key `NOT` so spreads do not collide
+ * with existing `OR` / `AND` on the same where object.
+ *
+ * Use with spread: `{ ...SPA_BOOKING_EXCLUDE_TIME_BLOCK }`.
  */
 export const SPA_BOOKING_EXCLUDE_TIME_BLOCK = {
-  NOT: { guestAlias: SPA_TIME_BLOCK_ALIAS },
+  NOT: {
+    AND: [
+      { guestAlias: { not: null } },
+      { guestAlias: SPA_TIME_BLOCK_ALIAS },
+    ],
+  },
 } as const;
 
 export type SpaIntervalMs = {
