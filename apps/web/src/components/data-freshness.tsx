@@ -55,6 +55,9 @@ function formatSyncError(raw: string): string {
   if (/Orphaned RUNNING|heartbeat stale|no worker|API process restarted/i.test(t)) {
     return 'Выгрузка оборвалась (перезапуск API). Нажмите «Обновить из 1С» ещё раз.';
   }
+  if (/Step timed out \(run budget|Run budget exceeded/i.test(t)) {
+    return 'Синхронизация не успела за отведённое время (часть данных обновилась). Нажмите «Обновить из 1С» ещё раз.';
+  }
   if (/class-sessions not published/i.test(t)) {
     return '1С: не опубликован GET /v1/class-sessions (FitGOIntegration).';
   }

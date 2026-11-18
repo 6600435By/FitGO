@@ -35,12 +35,20 @@ import { TrainerPtSalesSyncService } from './trainer-pt-sales-sync.service';
 const ORPHAN_MS = 3 * 60 * 1000;
 const HEARTBEAT_MS = 20_000;
 const MANUAL_COOLDOWN_MS = 10 * 60 * 1000;
-/** Manual LIGHT must finish fast so staff don't hammer 1C. */
-const LIGHT_RUN_BUDGET_MS = 3 * 60 * 1000;
+/**
+ * Manual/AUTO LIGHT must finish before staff hammer 1C again.
+ * −5…+5 class_sessions + sales/revenue need headroom beyond the old 3 min.
+ */
+const LIGHT_RUN_BUDGET_MS = 5 * 60 * 1000;
 /** Nightly FULL has the whole night window; hard cap avoids orphan forever. */
 const FULL_RUN_BUDGET_MS = 40 * 60 * 1000;
 /** TODAY profile: classes + visits + slots for one day. */
 const TODAY_RUN_BUDGET_MS = 60 * 1000;
+/**
+ * Do not start a step with a useless sliver of budget (e.g. 12s) — that only
+ * produces «Step timed out» noise. Skip instead; next LIGHT/FULL will catch up.
+ */
+const MIN_STEP_BUDGET_MS = 45 * 1000;
 /** Min gap between AUTO TODAY retries after FAILED/PARTIAL (same Moscow day). */
 const TODAY_FAILURE_COOLDOWN_MS = 25 * 60 * 1000;
 
@@ -467,8 +475,8 @@ export class ClubSyncOrchestrator {
             today,
             isFull ? GROUP_SCHEDULE_HORIZON_DAYS : LIGHT_GROUP_ROSTER_AHEAD_DAYS,
           );
-      // LIGHT: class-sessions −14d…+5d — SPA/salon write-offs are often
-      // posted or backdated days later; −1 left mid-month visits out of
+      // LIGHT: class-sessions −5d…+5d — SPA/salon write-offs are often
+      // posted or backdated a few days later; −1 left recent visits out of
       // Контроль/ЗП until FULL. Hall visits stay on a tighter window.
       const classFrom = isToday
         ? today
@@ -499,7 +507,7 @@ export class ClubSyncOrchestrator {
         // started, finish within FULL_RUN_BUDGET_MS — aborting at 04:00 left
         // PARTIAL + nightKey and blocked same-night retry / catch-up.
         const remaining = deadline - Date.now();
-        if (remaining <= 0) {
+        if (remaining < MIN_STEP_BUDGET_MS) {
           steps.push({
             resource,
             skipped: true,
@@ -591,9 +599,9 @@ export class ClubSyncOrchestrator {
         });
       } else {
         const runClassSessions = async () => {
-          // LIGHT: near window (−1…+5) + days with open FitGO group bookings
-          // (admin cancel in 1C → clear GroupClassBooking). Must run early —
-          // sales/revenue often burn the 3min budget before the near window.
+          // LIGHT: −5…+5 + open FitGO booking days (admin cancel in 1C →
+          // clear GroupClassBooking). Must run early — sales/revenue often
+          // burn the LIGHT budget before the near window finishes.
           // FULL: operational window via syncClub() when classFrom/to unset.
           const r =
             isFull || !classFrom || !classTo
@@ -615,9 +623,31 @@ export class ClubSyncOrchestrator {
           };
         };
 
-        // LIGHT: clear stale ЛК bookings before heavy sales steps.
+        const runHallVisits = async () => {
+          const r = await this.hallVisits.syncClub(clubId, {
+            from: visitsFrom,
+            to: visitsTo,
+          });
+          if (r.endpointMissing) {
+            throw new Error('GET /v1/visits (club) not published (1C)');
+          }
+          return { rows: r.upserted, from: r.from, to: r.to };
+        };
+
+        const runScheduleSlots = async () => {
+          const r = await this.scheduleSlots.syncClub(clubId, {
+            from: schedFrom,
+            to: schedTo,
+          });
+          return { rows: r.upserted, from: r.from, to: r.to };
+        };
+
+        // LIGHT: ops first (Контроль / расписание), then heavy sales.
+        // FULL: sales/revenue first (60d), then class_sessions + visits/slots.
         if (!isFull) {
           await runStep('class_sessions', runClassSessions);
+          await runStep('hall_visits', runHallVisits);
+          await runStep('schedule_slots', runScheduleSlots);
         }
 
         await runStep('admin_sales', async () => {
@@ -642,26 +672,9 @@ export class ClubSyncOrchestrator {
 
         if (isFull) {
           await runStep('class_sessions', runClassSessions);
+          await runStep('hall_visits', runHallVisits);
+          await runStep('schedule_slots', runScheduleSlots);
         }
-
-        await runStep('hall_visits', async () => {
-          const r = await this.hallVisits.syncClub(clubId, {
-            from: visitsFrom,
-            to: visitsTo,
-          });
-          if (r.endpointMissing) {
-            throw new Error('GET /v1/visits (club) not published (1C)');
-          }
-          return { rows: r.upserted, from: r.from, to: r.to };
-        });
-
-        await runStep('schedule_slots', async () => {
-          const r = await this.scheduleSlots.syncClub(clubId, {
-            from: schedFrom,
-            to: schedTo,
-          });
-          return { rows: r.upserted, from: r.from, to: r.to };
-        });
 
         // Full: ~1.5 months so «ЗП по тренерам» can fall back to DB when live 1C is slow.
         const ptFrom = isFull

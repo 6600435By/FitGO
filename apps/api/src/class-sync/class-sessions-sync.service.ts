@@ -132,7 +132,7 @@ export class ClassSessionsSyncService {
   }
 
   /**
-   * LIGHT daytime sync: near window (today−14…+5) plus days that still have
+   * LIGHT daytime sync: near window (today−5…+5) plus days that still have
    * open GroupClassBooking rows — only inside the app booking horizon
    * (`GROUP_SCHEDULE_HORIZON_DAYS` = 21). 1C may list classes a year ahead;
    * we never pull those days here (site≈14d / app=21d).
