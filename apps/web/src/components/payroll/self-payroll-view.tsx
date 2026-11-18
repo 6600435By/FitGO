@@ -93,6 +93,22 @@ function payoutKindRu(kind: string) {
   return kind === 'ADVANCE_HALF' ? 'аванс' : 'расчёт';
 }
 
+/** Фамилия Имя from 1C FIO (отчество отбрасываем). */
+function clientShortName(full?: string | null): string | null {
+  const parts = (full ?? '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return null;
+  return parts.slice(0, 2).join(' ');
+}
+
+/** PT rows: client name; other kinds keep nomenclature title. */
+function workUnitLabel(u: WorkUnit): string {
+  if (u.kind === 'PT') {
+    const name = clientShortName(u.clientName);
+    if (name) return name;
+  }
+  return u.title;
+}
+
 /** Selected date window vs club pay halves. */
 function periodSlice(
   from: string,
@@ -1088,7 +1104,7 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
                           <span className="text-slate-500">
                             {u.kind === 'PT' ? 'ПТ' : 'ГП'}
                           </span>{' '}
-                          · {u.title}
+                          · {workUnitLabel(u)}
                           {u.roomTitle ? (
                             <span className="text-slate-500">
                               {' '}
@@ -1178,7 +1194,7 @@ export function SelfPayrollView({ role, formaSkin = false }: Props) {
                         <span className="text-slate-500">
                           {formatDateTime(u.occurredAt).slice(0, 10)}
                         </span>{' '}
-                        · {u.title}
+                        · {workUnitLabel(u)}
                         {showWaveTags ? (
                           <PayWaveBadge wave={u.payWave} />
                         ) : null}
