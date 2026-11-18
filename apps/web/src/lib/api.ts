@@ -2148,7 +2148,7 @@ export const api = {
     data: {
       firstName: string;
       lastName: string;
-      phone: string;
+      phone?: string;
       notes?: string;
       clientExternalId?: string;
     },
@@ -2416,6 +2416,14 @@ export const api = {
   chatUnreadCount: (token: string) =>
     request<{ chat: number }>('/chat/unread-count', {}, token),
 
+  chatUnreadSummary: (token: string) =>
+    request<{
+      total: number;
+      clients: number;
+      admin: number;
+      staff: number;
+    }>('/chat/unread-summary', {}, token),
+
   chatStaffRecipients: (token: string) =>
     request<
       Array<{
@@ -2483,11 +2491,21 @@ export const api = {
       token,
     ),
 
-  chatMessages: (token: string, conversationId: string) =>
-    request<{
+  chatMessages: (
+    token: string,
+    conversationId: string,
+    after?: string,
+  ) => {
+    const query = after ? `?after=${encodeURIComponent(after)}` : '';
+    return request<{
       conversation: ConversationSummary;
       messages: ChatMessageItem[];
-    }>(`/chat/conversations/${conversationId}/messages`, {}, token),
+    }>(
+      `/chat/conversations/${conversationId}/messages${query}`,
+      {},
+      token,
+    );
+  },
 
   chatSendMessage: (token: string, conversationId: string, body: string) =>
     request<ChatMessageItem>(

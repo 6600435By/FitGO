@@ -86,9 +86,9 @@ export function ScheduleDayGrid({
   if (!hasWorkSchedule && dayEvents.length === 0) {
     return (
       <div className="rounded-xl border border-slate-700/80 bg-slate-900/40 px-4 py-12 text-center">
-        <p className="text-slate-400">На этот день график не задан</p>
+        <p className="text-slate-400">На этот день время не указано</p>
         <p className="mt-2 text-sm text-slate-500">
-          Смену ставит администратор. Тренер может добавить ПТ в любое время.
+          Укажите рабочее время или запишите клиента на любое удобное время.
         </p>
       </div>
     );

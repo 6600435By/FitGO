@@ -87,6 +87,7 @@ import {
 import {
   canonicalPtDocId,
   expandTakenPtDocIds,
+  isUniqueSameDayPtPair,
   matchPtDocument,
   PT_DOC_LOOKAHEAD_DAYS,
   PT_DOC_LOOKBACK_DAYS,
@@ -501,7 +502,21 @@ export class BookingControlService {
       let fitgoBookingId: string | undefined;
       let fitgoClientId: string | undefined;
       if (kind === 'PT') {
-        const hit = this.matchPtInMemory(allPt, s, primaryMember?.externalId);
+        const hit = this.matchPtInMemory(
+          allPt,
+          {
+            externalId: s.externalId,
+            number: s.number,
+            startAt: s.startAt,
+            employeeExternalId: s.employeeExternalId,
+            employeeName: s.employeeName,
+            members: s.members.map((m) => ({
+              externalId: m.externalId,
+              clientName: m.clientName,
+            })),
+          },
+          primaryMember?.externalId,
+        );
         if (hit) {
           fitgoBookingId = hit.id;
           fitgoClientId = hit.clientId;
@@ -593,6 +608,11 @@ export class BookingControlService {
     // One-time PT from 1C sale lines (Исполнитель + сумма), no class doc required
     if (wantPtSales) {
       this.indexTrainerPtSales(ptSales);
+      const pendingSaleLinks: Array<{
+        bookingId: string;
+        docId: string;
+        docRef?: string;
+      }> = [];
       for (const sale of ptSales) {
         if (isExcludedFromPtBookingControl(sale.serviceName)) {
           continue;
@@ -613,6 +633,66 @@ export class BookingControlService {
         ) {
           continue;
         }
+
+        // Same-day journal 1C visit already covers this client+trainer+service → skip SALE twin.
+        const journalTwins = items.filter((i) => {
+          if (i.kind !== 'PT' || i.source !== '1C') return false;
+          if (
+            sale.serviceName &&
+            i.title &&
+            !serviceNamesMatch(i.title, sale.serviceName)
+          ) {
+            return false;
+          }
+          return isUniqueSameDayPtPair({
+            aStart: new Date(i.startAt),
+            bStart: new Date(sale.occurredAt),
+            aClientName: i.clientName,
+            bClientName: sale.clientName,
+            aTrainerName: i.performerName,
+            bTrainerCode: sale.employeeCode,
+            bTrainerName: sale.employeeName,
+          });
+        });
+        if (journalTwins.length === 1) continue;
+
+        // Pair uniquely with FitGO booking same day → hide FitGO twin, keep SALE.
+        const fitgoCandidates = allPt.filter((b) => {
+          if (matchedPtIds.has(b.id)) return false;
+          if (b.linkedDocExternalId?.trim()) return false;
+          const personal = isPersonalPtBooking(
+            { ptFlow: b.ptFlow },
+            {
+              trainerClub: b.trainer.trainerClub,
+              trainerStaff: b.trainer.trainerStaff,
+            },
+          );
+          if (personal && !b.isComplimentary) return false;
+          return isUniqueSameDayPtPair({
+            aStart: b.startAt,
+            bStart: new Date(sale.occurredAt),
+            aClientExternalId: b.client.externalId,
+            aClientName:
+              `${b.client.lastName} ${b.client.firstName}`.trim(),
+            bClientName: sale.clientName,
+            aTrainerCode: b.trainer.employeeCode ?? b.trainer.externalId,
+            aTrainerName:
+              `${b.trainer.lastName} ${b.trainer.firstName}`.trim(),
+            bTrainerCode: sale.employeeCode,
+            bTrainerName: sale.employeeName,
+          });
+        });
+        if (fitgoCandidates.length === 1) {
+          const hit = fitgoCandidates[0]!;
+          matchedPtIds.add(hit.id);
+          const docId = canonicalPtDocId(sale) ?? sale.externalId;
+          pendingSaleLinks.push({
+            bookingId: hit.id,
+            docId,
+            docRef: sale.docRef ?? undefined,
+          });
+        }
+
         const sessionKey = saleSessionKey('PT', sale.docRef || sale.externalId);
         const payment: BookingControlPayment =
           sale.paymentStatus === 'PAID' ? 'PAID' : 'DEBT';
@@ -641,9 +721,25 @@ export class BookingControlService {
           noShowCount: saleCounts.noShowCount,
           payment,
           payTag: 'SALE',
-          needsReview: openKeys.has(sessionKey),
+          // Unpaid sale stays visible but does not demand admin confirm.
+          needsReview: payment === 'PAID' ? openKeys.has(sessionKey) : false,
           priceMinor: Math.round((Number(sale.amount) || 0) * 100),
         });
+      }
+      if (pendingSaleLinks.length) {
+        await Promise.all(
+          pendingSaleLinks.map(({ bookingId, docId, docRef }) =>
+            this.prisma.personalTrainingBooking
+              .update({
+                where: { id: bookingId },
+                data: {
+                  linkedDocExternalId: docId,
+                  ...(docRef ? { crmDocRef: docRef } : {}),
+                },
+              })
+              .catch(() => undefined),
+          ),
+        );
       }
     }
 
@@ -920,6 +1016,8 @@ export class BookingControlService {
       );
       for (const b of allPt) {
         if (matchedPtIds.has(b.id)) continue;
+        // Already linked to a 1C sale/doc — SALE or journal card is the master.
+        if (b.linkedDocExternalId?.trim()) continue;
         const personal = isPersonalPtBooking(
           { ptFlow: b.ptFlow },
           {
@@ -937,6 +1035,7 @@ export class BookingControlService {
             b.trainer.externalId,
             b.client.externalId,
             b.crmDocRef,
+            b.id,
           )
         ) {
           continue;
@@ -6478,24 +6577,61 @@ export class BookingControlService {
       clientId: string;
       startAt: Date;
       crmDocRef: string | null;
-      trainer: { externalId: string | null };
-      client: { externalId: string | null };
+      linkedDocExternalId?: string | null;
+      trainer: {
+        externalId: string | null;
+        employeeCode?: string | null;
+        firstName?: string;
+        lastName?: string;
+      };
+      client: {
+        externalId: string | null;
+        firstName?: string;
+        lastName?: string;
+      };
     }>,
     session: {
       externalId: string;
       number: string | null;
       startAt: Date;
       employeeExternalId: string | null;
+      employeeName?: string | null;
+      members?: Array<{ externalId: string; clientName?: string | null }>;
     },
     clientExternalId: string | undefined,
   ) {
     const byRef = bookings.find(
       (b) =>
-        b.crmDocRef &&
-        (b.crmDocRef === session.externalId ||
-          b.crmDocRef === session.number),
+        (b.crmDocRef &&
+          (b.crmDocRef === session.externalId ||
+            b.crmDocRef === session.number)) ||
+        (b.linkedDocExternalId &&
+          (b.linkedDocExternalId === session.externalId ||
+            b.linkedDocExternalId === session.number)),
     );
     if (byRef) return byRef;
+
+    const primaryName =
+      session.members?.find((m) => m.externalId === clientExternalId)
+        ?.clientName ?? session.members?.[0]?.clientName;
+
+    const sameDay = bookings.filter((b) =>
+      isUniqueSameDayPtPair({
+        aStart: b.startAt,
+        bStart: session.startAt,
+        aClientExternalId: b.client.externalId,
+        aClientName: `${b.client.lastName ?? ''} ${b.client.firstName ?? ''}`.trim(),
+        bClientExternalId: clientExternalId,
+        bClientName: primaryName,
+        aTrainerCode: b.trainer.employeeCode ?? b.trainer.externalId,
+        aTrainerName:
+          `${b.trainer.lastName ?? ''} ${b.trainer.firstName ?? ''}`.trim(),
+        bTrainerCode: session.employeeExternalId,
+        bTrainerName: session.employeeName,
+      }),
+    );
+    if (sameDay.length === 1) return sameDay[0];
+
     const windowMs = 3 * 60 * 1000;
     return bookings.find((b) => {
       const dt = Math.abs(b.startAt.getTime() - session.startAt.getTime());

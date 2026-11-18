@@ -80,8 +80,15 @@ export async function syncAppBadgeFromUnread() {
   if (!token) return;
 
   try {
-    const data = await api.chatUnreadCount(token);
-    const count = data.chat ?? 0;
+    // Prefer cheap per-scope summary; fall back to legacy total.
+    let count = 0;
+    try {
+      const summary = await api.chatUnreadSummary(token);
+      count = summary.total ?? 0;
+    } catch {
+      const data = await api.chatUnreadCount(token);
+      count = data.chat ?? 0;
+    }
     if ('setAppBadge' in navigator) {
       if (count > 0) {
         await navigator.setAppBadge(count);

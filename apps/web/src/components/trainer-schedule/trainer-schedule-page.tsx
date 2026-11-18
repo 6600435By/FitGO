@@ -16,7 +16,7 @@ import { BookingControlPanel } from '@/components/booking-control/booking-contro
 import { FormaMonthNav } from '@/components/trainer-shell/forma-month-nav';
 import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { api } from '@/lib/api';
-import { getToken, getUser } from '@/lib/auth';
+import { getToken } from '@/lib/auth';
 import {
   createTrainerBookingControlApi,
   trainerDeletePtBookingFromControl,
@@ -26,6 +26,10 @@ import { AssignClientDialog } from './assign-client-dialog';
 import { BookingActionSheet } from './booking-action-sheet';
 import { defaultCalendarDate } from './calendar-period';
 import { type ScheduleTypeFilter } from './calendar-utils';
+import {
+  computeDayFreeHint,
+  formatFreeHours,
+} from './day-free-hint';
 import {
   DraftSlotSheet,
   PublishScheduleBar,
@@ -76,8 +80,6 @@ function LegacyEventDialog({
 
 export function TrainerSchedulePage() {
   const forma = useTrainerUiV2();
-  const me = getUser();
-  const freeSchedule = Boolean(me?.trainerClub && !me?.trainerStaff);
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -131,7 +133,13 @@ export function TrainerSchedulePage() {
   const [reserveAt, setReserveAt] = useState<string | null>(null);
   const [showSeries, setShowSeries] = useState(false);
   const [clients, setClients] = useState<
-    Array<{ id: string; firstName: string; lastName: string; phone?: string }>
+    Array<{
+      id: string;
+      firstName: string;
+      lastName: string;
+      phone?: string;
+      externalId?: string | null;
+    }>
   >([]);
   const [selectedEvent, setSelectedEvent] = useState<TrainerCalendarEvent | null>(
     null,
@@ -186,6 +194,7 @@ export function TrainerSchedulePage() {
             firstName: c.firstName,
             lastName: c.lastName,
             phone: c.phone,
+            externalId: c.externalId,
           })),
         ),
       )
@@ -207,9 +216,60 @@ export function TrainerSchedulePage() {
       const count = events.filter(
         (e) => format(new Date(e.startAt), 'yyyy-MM-dd') === key,
       ).length;
-      return { key, count: count || undefined, highlight: count > 0 };
+      const hasDraft = availabilityBlocks.some(
+        (b) =>
+          b.status === 'DRAFT' &&
+          b.kind === 'OPEN' &&
+          format(new Date(b.startAt), 'yyyy-MM-dd') === key,
+      );
+      return {
+        key,
+        count: count || undefined,
+        highlight: count > 0 || hasDraft,
+      };
     });
-  }, [date, events]);
+  }, [date, events, availabilityBlocks]);
+
+  const dayHint = useMemo(
+    () => computeDayFreeHint(date, availabilityBlocks, events),
+    [date, availabilityBlocks, events],
+  );
+
+  const [publishBusy, setPublishBusy] = useState(false);
+
+  const openAssignForDay = () => {
+    if (dayHint.firstFreeSlotStart) {
+      setAssignAt(dayHint.firstFreeSlotStart);
+      return;
+    }
+    setShowAddTraining(true);
+  };
+
+  const publishDayDrafts = async () => {
+    if (dayHint.draftIds.length === 0) return;
+    const token = getToken();
+    if (!token) return;
+    setPublishBusy(true);
+    try {
+      const dayStart = new Date(date);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(date);
+      dayEnd.setHours(23, 59, 59, 999);
+      await api.trainerPublishSchedule(
+        token,
+        dayStart.toISOString(),
+        dayEnd.toISOString(),
+        dayHint.draftIds,
+      );
+      await reload();
+    } catch (err) {
+      window.alert(
+        err instanceof Error ? err.message : 'Не удалось открыть клиентам',
+      );
+    } finally {
+      setPublishBusy(false);
+    }
+  };
 
   const handleCancelBooking = async (bookingId: string) => {
     const token = getToken();
@@ -301,19 +361,9 @@ export function TrainerSchedulePage() {
               className="w-full sm:w-auto"
               onClick={() => setShowWorkSchedule(true)}
             >
-              График
+              Время
             </Button>
           </div>
-          <PublishScheduleBar
-            draftBlockCount={draftBlockCount}
-            periodStart={period.periodStart}
-            periodEnd={period.periodEnd}
-            selectedDate={date}
-            summary={publishSummary}
-            availabilityBlocks={availabilityBlocks}
-            events={events}
-            onPublished={reload}
-          />
         </div>
       ) : (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -351,6 +401,73 @@ export function TrainerSchedulePage() {
               value={format(date, 'yyyy-MM-dd')}
               onChange={(key) => updateDate(new Date(`${key}T12:00:00`))}
             />
+            <div className="rounded-2xl border border-white/10 bg-ink-raised px-3 py-2.5">
+              {dayHint.allocatedMin <= 0 ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm text-zinc-400">
+                    На этот день время не указано
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setShowWorkSchedule(true)}
+                    >
+                      Указать время
+                    </Button>
+                    <Button size="sm" onClick={openAssignForDay}>
+                      Записать
+                    </Button>
+                  </div>
+                </div>
+              ) : dayHint.freeMin <= 0 ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm text-zinc-300">
+                    Свободного времени нет
+                  </p>
+                  <Button size="sm" onClick={openAssignForDay}>
+                    Записать
+                  </Button>
+                </div>
+              ) : dayHint.hasUnpublished ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm text-zinc-300">
+                    Свободно {formatFreeHours(dayHint.freeMin)}
+                    {dayHint.allocatedMin > dayHint.freeMin
+                      ? ` из ${formatFreeHours(dayHint.allocatedMin)}`
+                      : ''}
+                    {' · '}
+                    <span className="text-zinc-500">клиенты пока не видят</span>
+                  </p>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={openAssignForDay}>
+                      Записать
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={publishBusy}
+                      onClick={() => void publishDayDrafts()}
+                    >
+                      Открыть клиентам
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm text-zinc-300">
+                    Свободно {formatFreeHours(dayHint.freeMin)}
+                    {' · '}
+                    <span className="text-zinc-500">
+                      клиенты могут записаться
+                    </span>
+                  </p>
+                  <Button size="sm" onClick={openAssignForDay}>
+                    Записать
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3">
             <SegmentedControl<ScheduleTypeFilter>
@@ -498,8 +615,6 @@ export function TrainerSchedulePage() {
           periodStart={period.periodStart}
           periodEnd={period.periodEnd}
           availabilityBlocks={availabilityBlocks}
-          dutyEvents={events.filter((event) => event.kind === 'DUTY')}
-          freeSchedule={freeSchedule}
           onClose={() => setShowWorkSchedule(false)}
           onUpdated={reload}
         />

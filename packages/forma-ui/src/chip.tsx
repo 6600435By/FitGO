@@ -34,7 +34,9 @@ export function Chip({
         <span
           className={cn(
             'rounded-full px-1.5 text-[11px] tabular-nums',
-            active ? 'bg-ink/15 text-ink' : 'bg-white/10 text-zinc-400',
+            active
+              ? 'bg-ink/15 text-ink'
+              : 'bg-forma-500/20 text-forma-500',
           )}
         >
           {count}

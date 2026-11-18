@@ -86,38 +86,116 @@ export class ChatService {
     if (user.roles.includes(UserRole.ADMIN)) {
       await this.ensureAdminCanMessage(user);
     }
-    return { chat: await this.sumUnreadConversations(user) };
+    const summary = await this.computeUnreadSummary(user);
+    return { chat: summary.total };
   }
 
-  /** Unread total for push badge — skips admin permission gate. */
-  private async sumUnreadConversations(user: JwtPayload) {
-    let conversations;
+  /** Per-scope unread for trainer shell / message tabs. */
+  async getUnreadSummary(user: JwtPayload) {
+    if (user.roles.includes(UserRole.ADMIN)) {
+      await this.ensureAdminCanMessage(user);
+    }
+    return this.computeUnreadSummary(user);
+  }
+
+  /** Unread totals — aggregate counts, no full conversation lists. */
+  private async computeUnreadSummary(user: JwtPayload): Promise<{
+    total: number;
+    clients: number;
+    admin: number;
+    staff: number;
+  }> {
     if (user.roles.includes(UserRole.TRAINER)) {
       const [clients, admin, staff] = await Promise.all([
-        this.listConversationsSkippingAdminGate(user, 'clients'),
-        this.listConversationsSkippingAdminGate(user, 'admin'),
-        this.listConversationsSkippingAdminGate(user, 'staff'),
+        this.countUnreadForWhere(
+          user.sub,
+          this.buildConversationListWhere(user, 'clients'),
+        ),
+        this.countUnreadForWhere(
+          user.sub,
+          this.buildConversationListWhere(user, 'admin'),
+        ),
+        this.countUnreadForWhere(
+          user.sub,
+          this.buildConversationListWhere(user, 'staff'),
+        ),
       ]);
-      conversations = [...clients, ...admin, ...staff];
-    } else if (user.roles.includes(UserRole.SPECIALIST)) {
+      return { total: clients + admin + staff, clients, admin, staff };
+    }
+    if (user.roles.includes(UserRole.SPECIALIST)) {
       const [admin, staff] = await Promise.all([
-        this.listConversationsSkippingAdminGate(user, 'admin'),
-        this.listConversationsSkippingAdminGate(user, 'staff'),
+        this.countUnreadForWhere(
+          user.sub,
+          this.buildConversationListWhere(user, 'admin'),
+        ),
+        this.countUnreadForWhere(
+          user.sub,
+          this.buildConversationListWhere(user, 'staff'),
+        ),
       ]);
-      conversations = [...admin, ...staff];
-    } else if (
+      return { total: admin + staff, clients: 0, admin, staff };
+    }
+    if (
       user.roles.includes(UserRole.MANAGER) ||
       user.roles.includes(UserRole.SUPER_ADMIN) ||
       user.roles.includes(UserRole.TECH)
     ) {
-      conversations = await this.listConversationsSkippingAdminGate(
-        user,
-        'staff',
+      const staff = await this.countUnreadForWhere(
+        user.sub,
+        this.buildConversationListWhere(user, 'staff'),
       );
-    } else {
-      conversations = await this.listConversationsSkippingAdminGate(user);
+      return { total: staff, clients: 0, admin: 0, staff };
     }
-    return conversations.reduce((sum, c) => sum + c.unreadCount, 0);
+    if (user.roles.includes(UserRole.ADMIN)) {
+      const [clients, staff] = await Promise.all([
+        this.countUnreadForWhere(
+          user.sub,
+          this.buildConversationListWhere(user, 'clients'),
+        ),
+        this.countUnreadForWhere(
+          user.sub,
+          this.buildConversationListWhere(user, 'staff'),
+        ),
+      ]);
+      // trainers scope overlaps staff; keep clients + staff (+ trainer-admin in trainers)
+      const trainers = await this.countUnreadForWhere(
+        user.sub,
+        this.buildConversationListWhere(user, 'trainers'),
+      );
+      const total = await this.countUnreadForWhere(
+        user.sub,
+        this.buildConversationListWhere(user),
+      );
+      return {
+        total,
+        clients,
+        admin: Math.max(0, trainers - staff),
+        staff,
+      };
+    }
+    const total = await this.countUnreadForWhere(
+      user.sub,
+      this.buildConversationListWhere(user),
+    );
+    return { total, clients: 0, admin: 0, staff: 0 };
+  }
+
+  private async countUnreadForWhere(
+    userId: string,
+    where: ReturnType<ChatService['buildConversationListWhere']>,
+  ) {
+    const conversations = await this.prisma.conversation.findMany({
+      where,
+      select: { id: true, kind: true },
+    });
+    if (conversations.length === 0) return 0;
+    const counts = await this.unreadCountsByConversationIds(
+      conversations,
+      userId,
+    );
+    let sum = 0;
+    for (const n of counts.values()) sum += n;
+    return sum;
   }
 
   private async listConversationsSkippingAdminGate(
@@ -130,19 +208,19 @@ export class ChatService {
       include: conversationListInclude,
       orderBy: { lastMessageAt: 'desc' },
     });
-
-    return Promise.all(
-      conversations.map(async (conversation) => {
-        const unreadCount = await this.countUnread(conversation, user.sub);
-        const lastMessage = conversation.messages[0];
-        return this.toConversationSummary(
-          conversation,
-          user,
-          lastMessage?.body,
-          unreadCount,
-        );
-      }),
+    const unreadMap = await this.unreadCountsByConversationIds(
+      conversations,
+      user.sub,
     );
+    return conversations.map((conversation) => {
+      const lastMessage = conversation.messages[0];
+      return this.toConversationSummary(
+        conversation,
+        user,
+        lastMessage?.body,
+        unreadMap.get(conversation.id) ?? 0,
+      );
+    });
   }
 
   async listConversations(
@@ -160,54 +238,80 @@ export class ChatService {
       orderBy: { lastMessageAt: 'desc' },
     });
 
-    const summaries = await Promise.all(
-      conversations.map(async (conversation) => {
-        const unreadCount = await this.countUnread(conversation, user.sub);
-        const lastMessage = conversation.messages[0];
-        return this.toConversationSummary(
-          conversation,
-          user,
-          lastMessage?.body,
-          unreadCount,
-        );
-      }),
+    const unreadMap = await this.unreadCountsByConversationIds(
+      conversations,
+      user.sub,
     );
 
-    return summaries;
+    return conversations.map((conversation) => {
+      const lastMessage = conversation.messages[0];
+      return this.toConversationSummary(
+        conversation,
+        user,
+        lastMessage?.body,
+        unreadMap.get(conversation.id) ?? 0,
+      );
+    });
   }
 
-  private async countUnread(
-    conversation: { id: string; kind: ConversationKind },
+  /** Batch unread: one groupBy for 1:1, memberships + counts for groups. */
+  private async unreadCountsByConversationIds(
+    conversations: Array<{ id: string; kind: ConversationKind }>,
     userId: string,
-  ) {
-    if (conversation.kind === ConversationKind.GROUP) {
-      const membership = await this.prisma.conversationMember.findUnique({
+  ): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (conversations.length === 0) return map;
+
+    const ones = conversations.filter((c) => c.kind !== ConversationKind.GROUP);
+    const groups = conversations.filter(
+      (c) => c.kind === ConversationKind.GROUP,
+    );
+
+    if (ones.length > 0) {
+      const rows = await this.prisma.chatMessage.groupBy({
+        by: ['conversationId'],
         where: {
-          conversationId_userId: {
-            conversationId: conversation.id,
-            userId,
-          },
-        },
-        select: { lastReadAt: true },
-      });
-      return this.prisma.chatMessage.count({
-        where: {
-          conversationId: conversation.id,
+          conversationId: { in: ones.map((c) => c.id) },
           senderId: { not: userId },
-          ...(membership?.lastReadAt
-            ? { createdAt: { gt: membership.lastReadAt } }
-            : {}),
+          readAt: null,
         },
+        _count: { _all: true },
       });
+      for (const row of rows) {
+        map.set(row.conversationId, row._count._all);
+      }
+      for (const c of ones) {
+        if (!map.has(c.id)) map.set(c.id, 0);
+      }
     }
 
-    return this.prisma.chatMessage.count({
-      where: {
-        conversationId: conversation.id,
-        senderId: { not: userId },
-        readAt: null,
-      },
-    });
+    if (groups.length > 0) {
+      const memberships = await this.prisma.conversationMember.findMany({
+        where: {
+          conversationId: { in: groups.map((c) => c.id) },
+          userId,
+        },
+        select: { conversationId: true, lastReadAt: true },
+      });
+      const lastReadById = new Map(
+        memberships.map((m) => [m.conversationId, m.lastReadAt] as const),
+      );
+      await Promise.all(
+        groups.map(async (g) => {
+          const lastReadAt = lastReadById.get(g.id);
+          const count = await this.prisma.chatMessage.count({
+            where: {
+              conversationId: g.id,
+              senderId: { not: userId },
+              ...(lastReadAt ? { createdAt: { gt: lastReadAt } } : {}),
+            },
+          });
+          map.set(g.id, count);
+        }),
+      );
+    }
+
+    return map;
   }
 
   async createConversation(user: JwtPayload, kind: 'admin' | 'trainer', trainerId?: string) {
@@ -245,50 +349,102 @@ export class ChatService {
     return this.toConversationSummary(conversation, user, undefined, 0);
   }
 
-  async getMessages(user: JwtPayload, conversationId: string) {
+  async getMessages(
+    user: JwtPayload,
+    conversationId: string,
+    after?: string,
+  ) {
     if (user.roles.includes(UserRole.ADMIN)) {
       await this.ensureAdminCanMessage(user);
     }
 
-    const conversation = await this.ensureConversationAccess(user, conversationId);
+    const conversation = await this.ensureConversationAccess(
+      user,
+      conversationId,
+    );
 
-    const messages = await this.prisma.chatMessage.findMany({
-      where: { conversationId },
-      include: {
-        sender: {
-          select: { id: true, firstName: true, lastName: true },
-        },
-      },
-      orderBy: { createdAt: 'asc' },
-      take: 200,
-    });
+    const afterDate = after ? new Date(after) : null;
+    const afterOk =
+      afterDate && !Number.isNaN(afterDate.getTime()) ? afterDate : null;
+
+    const messages = afterOk
+      ? await this.prisma.chatMessage.findMany({
+          where: {
+            conversationId,
+            createdAt: { gt: afterOk },
+          },
+          include: {
+            sender: {
+              select: { id: true, firstName: true, lastName: true },
+            },
+          },
+          orderBy: { createdAt: 'asc' },
+          take: 200,
+        })
+      : await this.prisma.chatMessage.findMany({
+          where: { conversationId },
+          include: {
+            sender: {
+              select: { id: true, firstName: true, lastName: true },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 200,
+        }).then((rows) => rows.reverse());
+
+    const hasUnreadFromOthers = messages.some(
+      (m) => m.senderId !== user.sub && !m.readAt,
+    );
+    const needsGroupRead =
+      conversation.kind === ConversationKind.GROUP &&
+      (messages.some((m) => m.senderId !== user.sub) || !afterOk);
 
     if (conversation.kind === ConversationKind.GROUP) {
-      await this.prisma.conversationMember.updateMany({
-        where: {
-          conversationId,
-          userId: user.sub,
-        },
-        data: { lastReadAt: new Date() },
-      });
-    } else {
-      await this.prisma.chatMessage.updateMany({
-        where: {
-          conversationId,
-          senderId: { not: user.sub },
-          readAt: null,
-        },
-        data: { readAt: new Date() },
-      });
+      if (needsGroupRead) {
+        await this.prisma.conversationMember.updateMany({
+          where: {
+            conversationId,
+            userId: user.sub,
+          },
+          data: { lastReadAt: new Date() },
+        });
+      }
+    } else if (hasUnreadFromOthers || !afterOk) {
+      // Full open always clears unread; delta only writes when new foreign msgs.
+      const unreadCheck = afterOk
+        ? hasUnreadFromOthers
+        : await this.prisma.chatMessage.count({
+            where: {
+              conversationId,
+              senderId: { not: user.sub },
+              readAt: null,
+            },
+          });
+      if (unreadCheck) {
+        await this.prisma.chatMessage.updateMany({
+          where: {
+            conversationId,
+            senderId: { not: user.sub },
+            readAt: null,
+          },
+          data: { readAt: new Date() },
+        });
+      }
     }
 
     return {
-      conversation: this.toConversationSummary(conversation, user, undefined, 0),
+      conversation: this.toConversationSummary(
+        conversation,
+        user,
+        undefined,
+        0,
+      ),
       messages: messages.map((message) => ({
         id: message.id,
         body: message.body,
         senderId: message.senderId,
-        senderName: `${message.sender.firstName} ${message.sender.lastName}`.trim(),
+        senderName:
+          `${message.sender.firstName} ${message.sender.lastName}`.trim(),
         isMine: message.senderId === user.sub,
         readAt: message.readAt?.toISOString(),
         createdAt: message.createdAt.toISOString(),
@@ -970,12 +1126,13 @@ export class ChatService {
     const roles = user.roles.map((r) => r.role as UserRole);
     let badge = 0;
     try {
-      badge = await this.sumUnreadConversations({
+      const summary = await this.computeUnreadSummary({
         sub: userId,
         email: user.email,
         clubId: user.clubId ?? undefined,
         roles,
       });
+      badge = summary.total;
     } catch {
       badge = 0;
     }

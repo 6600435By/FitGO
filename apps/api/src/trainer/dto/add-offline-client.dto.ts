@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MinLength } from 'class-validator';
+import { IsOptional, IsString, MinLength, ValidateIf } from 'class-validator';
 
 export class AddOfflineClientDto {
   @IsString()
@@ -9,9 +9,12 @@ export class AddOfflineClientDto {
   @MinLength(1)
   lastName!: string;
 
+  /** Optional — client can be added by name; phone linked later. */
+  @IsOptional()
+  @ValidateIf((_, v) => v != null && String(v).trim() !== '')
   @IsString()
   @MinLength(5)
-  phone!: string;
+  phone?: string;
 
   @IsOptional()
   @IsString()

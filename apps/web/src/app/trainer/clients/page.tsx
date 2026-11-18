@@ -272,10 +272,12 @@ function TrainerClientsInner() {
     setFormError('');
     setFormSuccess('');
     try {
+      const phoneTrim = phone.trim();
+      const digits = phoneTrim.replace(/\D/g, '');
       await api.trainerAddOfflineClient(token, {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
-        phone: phone.trim(),
+        ...(digits.length >= 9 ? { phone: phoneTrim } : {}),
         notes: notes.trim() || undefined,
         clientExternalId: lookup?.externalId,
       });
@@ -317,10 +319,11 @@ function TrainerClientsInner() {
     setFormError('');
     setFormSuccess('');
     try {
+      const digits = phone.replace(/\D/g, '');
       await api.trainerUpdateClient(token, editClientId, {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
-        phone: phone.trim(),
+        ...(digits.length >= 9 ? { phone: phone.trim() } : {}),
         notes: notes.trim(),
       });
       setFormSuccess('Данные клиента сохранены');
@@ -419,27 +422,10 @@ function TrainerClientsInner() {
           }
         }}
         title="Добавить клиента"
-        description="Телефон и ФИО — сразу в вашу базу, без подтверждения в приложении"
+        description="ФИО — сразу в вашу базу. Телефон можно добавить позже."
         desktop="dialog"
       >
         <form onSubmit={handleOfflineSubmit} className="space-y-3">
-          <input
-            className="input w-full"
-            inputMode="tel"
-            autoComplete="tel"
-            placeholder="+375…"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            required
-          />
-          {looking && (
-            <p className="text-xs text-zinc-400">Ищем клиента…</p>
-          )}
-          {badge && (
-            <p className="rounded-lg bg-ink-raised px-3 py-2 text-sm text-zinc-200">
-              {badge}
-            </p>
-          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <input
               className="input"
@@ -456,6 +442,28 @@ function TrainerClientsInner() {
               required
             />
           </div>
+          <div>
+            <input
+              className="input w-full"
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder="Телефон (необязательно)"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+            />
+            <p className="mt-1.5 text-xs text-zinc-500">
+              Номер можно добавить позже. С ним появятся абонемент и данные
+              клиента из 1С и приложения.
+            </p>
+          </div>
+          {looking && (
+            <p className="text-xs text-zinc-400">Ищем клиента…</p>
+          )}
+          {badge && (
+            <p className="rounded-lg bg-ink-raised px-3 py-2 text-sm text-zinc-200">
+              {badge}
+            </p>
+          )}
           <input
             className="input w-full"
             placeholder="Заметка (необязательно)"
@@ -684,8 +692,10 @@ function ClientListRow({
         <p className="font-medium">
           {client.firstName} {client.lastName}
         </p>
-        {client.phone && (
+        {client.phone ? (
           <p className="text-sm text-slate-400">{client.phone}</p>
+        ) : (
+          <p className="text-sm text-zinc-500">Без телефона</p>
         )}
         {client.membershipName && (
           <p className="mt-1 text-sm text-slate-300">

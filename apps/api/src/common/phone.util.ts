@@ -25,3 +25,8 @@ export function phonesMatch(a: string, b: string): boolean {
 export function shadowEmailForPhone(phoneNormalized: string): string {
   return `shadow+${phoneNormalized}@fitgo.internal`;
 }
+
+/** Unique email for shadow clients created without a phone. */
+export function shadowEmailForLocalId(id: string): string {
+  return `shadow+local.${id}@fitgo.internal`;
+}

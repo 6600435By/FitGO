@@ -24,6 +24,10 @@ import { AppPresenceBridge } from '@/components/app-presence-bridge';
 import { DataFreshness } from '@/components/data-freshness';
 import { useFeatures } from '@/components/features-provider';
 import { PushBridge } from '@/components/push-bridge';
+import {
+  ChatUnreadProvider,
+  useChatUnread,
+} from '@/components/trainer-shell/chat-unread-context';
 import { api, type AuthUser } from '@/lib/api';
 import { getToken, getUser, saveAuth } from '@/lib/auth';
 import {
@@ -63,12 +67,21 @@ function useBreakpoint(): Breakpoint {
 }
 
 export function TrainerShell({ children }: { children: ReactNode }) {
+  return (
+    <ChatUnreadProvider>
+      <TrainerShellInner>{children}</TrainerShellInner>
+    </ChatUnreadProvider>
+  );
+}
+
+function TrainerShellInner({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { isEnabled } = useFeatures();
   const bp = useBreakpoint();
   const [user, setUser] = useState<AuthUser | null>(() => getUser());
-  const [unread, setUnread] = useState(0);
+  const { summary: unreadSummary } = useChatUnread();
+  const unread = unreadSummary.total;
   const [quickOpen, setQuickOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
@@ -145,15 +158,6 @@ export function TrainerShell({ children }: { children: ReactNode }) {
         saveAuth(token, fresh);
       })
       .catch(() => undefined);
-
-    if (isEnabled('messaging')) {
-      api
-        .chatUnreadCount(token)
-        .then((data) => {
-          if (!cancelled) setUnread(data.chat ?? 0);
-        })
-        .catch(() => undefined);
-    }
 
     return () => {
       cancelled = true;

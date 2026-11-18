@@ -903,13 +903,8 @@ export class PersonalTrainingService {
       });
     }
 
-    const freeAvailability = await this.allowsFreeAvailability(user.sub);
     const openBlocks = blocks.filter(
-      (block) =>
-        block.kind === AvailabilityBlockKind.OPEN &&
-        (block.status === AvailabilityBlockStatus.DRAFT ||
-          freeAvailability ||
-          extraBesideDuty(block.startAt, block.endAt, duties) === 'ok'),
+      (block) => block.kind === AvailabilityBlockKind.OPEN,
     );
 
     for (const block of openBlocks) {
@@ -1045,14 +1040,6 @@ export class PersonalTrainingService {
       }
     }
 
-    await this.assertExtraBesideDuty(
-      user.sub,
-      blocks.map((block) => ({
-        startAt: new Date(block.startAt),
-        endAt: new Date(block.endAt),
-      })),
-    );
-
     await this.prisma.$transaction(async (tx) => {
       // Only wipe OPEN draft windows — holds/blocks stay.
       await tx.trainerAvailabilityBlock.deleteMany({
@@ -1165,8 +1152,6 @@ export class PersonalTrainingService {
         'Часть слотов не найдена или уже опубликована',
       );
     }
-
-    await this.assertExtraBesideDuty(user.sub, drafts);
 
     const rangeStart =
       ids.length > 0
@@ -1471,11 +1456,6 @@ export class PersonalTrainingService {
     if (!client) {
       throw new NotFoundException('Клиент не найден');
     }
-    if (!client.phoneNormalized && !client.phone) {
-      throw new BadRequestException(
-        'У клиента нет телефона — укажите номер перед записью',
-      );
-    }
 
     const link = await this.prisma.trainerClientLink.findUnique({
       where: { trainerId_clientId: { trainerId: user.sub, clientId } },
@@ -1491,8 +1471,11 @@ export class PersonalTrainingService {
       ? client.clubMemberships[0]
       : undefined;
     const ext = client.externalId ?? membership?.externalId;
-    const clientIssue =
-      !client.phoneNormalized && !client.phone
+    // PERSONAL (trainer club): keep off admin phone queue — quiet UI hint only.
+    // CLUB: WRONG_PHONE / CRM_UNMATCHED → admin control.
+    const clientIssue = personal
+      ? 'NONE'
+      : !client.phoneNormalized && !client.phone
         ? 'WRONG_PHONE'
         : !ext || membership?.crmStatus === 'PENDING_CRM'
           ? 'CRM_UNMATCHED'
@@ -1874,14 +1857,12 @@ export class PersonalTrainingService {
       orderBy: { startAt: 'asc' },
     });
     const duties = await this.dutyWindows(trainerId, rangeStart, rangeEnd);
-    const freeAvailability = await this.allowsFreeAvailability(trainerId);
     const bookable = [
       ...duties.map((d) => ({ startAt: d.startAt, endAt: d.endAt })),
-      ...publishedBlocks.filter(
-        (block) =>
-          freeAvailability ||
-          extraBesideDuty(block.startAt, block.endAt, duties) === 'ok',
-      ),
+      ...publishedBlocks.map((block) => ({
+        startAt: block.startAt,
+        endAt: block.endAt,
+      })),
     ];
 
     if (bookable.length === 0) {
@@ -3507,6 +3488,40 @@ export class PersonalTrainingService {
       select: { trainerClub: true, trainerStaff: true },
     });
     const ptFlow = resolvePtFlow(trainerFlags ?? {}, data.ptFlow);
+
+    if (ptFlow === 'CLUB') {
+      const client = await this.prisma.user.findUnique({
+        where: { id: data.clientId },
+        select: {
+          phoneNormalized: true,
+          phone: true,
+          externalId: true,
+          clubMemberships: user.clubId
+            ? {
+                where: { clubId: user.clubId },
+                take: 1,
+                select: { externalId: true, crmStatus: true },
+              }
+            : false,
+        },
+      });
+      if (!client) throw new NotFoundException('Клиент не найден');
+      const membership = Array.isArray(client.clubMemberships)
+        ? client.clubMemberships[0]
+        : undefined;
+      const ext = client.externalId ?? membership?.externalId;
+      const hasPhone = Boolean(client.phoneNormalized || client.phone);
+      if (!hasPhone) {
+        throw new BadRequestException(
+          'Серию пока нельзя: клиент не привязан к 1С по телефону. Разовую запись сделать можно. Когда администратор привяжет номер из 1С, серия откроется.',
+        );
+      }
+      if (!ext || membership?.crmStatus === 'PENDING_CRM') {
+        throw new BadRequestException(
+          'Серию пока нельзя: номер не найден в 1С. Она откроется, когда клиент синхронизируется.',
+        );
+      }
+    }
 
     const series = await this.prisma.personalBookingSeries.create({
       data: {

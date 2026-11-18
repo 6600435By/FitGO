@@ -42,6 +42,11 @@ export class ChatController {
     return this.chatService.getUnreadCount(user);
   }
 
+  @Get('unread-summary')
+  getUnreadSummary(@CurrentUser() user: JwtPayload) {
+    return this.chatService.getUnreadSummary(user);
+  }
+
   @Get('conversations')
   listConversations(
     @CurrentUser() user: JwtPayload,
@@ -122,8 +127,9 @@ export class ChatController {
   getMessages(
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
+    @Query('after') after?: string,
   ) {
-    return this.chatService.getMessages(user, id);
+    return this.chatService.getMessages(user, id, after);
   }
 
   @Post('conversations/:id/messages')

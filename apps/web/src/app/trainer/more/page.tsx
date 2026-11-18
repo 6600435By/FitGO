@@ -3,6 +3,7 @@
 import { ListGroup, ListRow, PageHeader, Skeleton } from '@fitgo/forma-ui';
 import { useEffect, useMemo, useState } from 'react';
 import { useFeatures } from '@/components/features-provider';
+import { useChatUnread } from '@/components/trainer-shell/chat-unread-context';
 import { QuickActionsSheet } from '@/components/trainer-shell/quick-actions-sheet';
 import { NoteMeasurementSheet } from '@/components/trainer-shell/note-measurement-sheet';
 import {
@@ -15,7 +16,8 @@ import { getToken, getUser } from '@/lib/auth';
 export default function TrainerMorePage() {
   const { isEnabled } = useFeatures();
   const [user, setUser] = useState<AuthUser | null>(() => getUser());
-  const [unread, setUnread] = useState(0);
+  const { summary: unreadSummary } = useChatUnread();
+  const unread = unreadSummary.total;
   const [loading, setLoading] = useState(true);
   const [quickOpen, setQuickOpen] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
@@ -27,17 +29,16 @@ export default function TrainerMorePage() {
       return;
     }
     let cancelled = false;
-    Promise.all([
-      api.me(token).catch(() => null),
-      isEnabled('messaging')
-        ? api.chatUnreadCount(token).catch(() => ({ chat: 0 }))
-        : Promise.resolve({ chat: 0 }),
-    ]).then(([me, counts]) => {
-      if (cancelled) return;
-      if (me) setUser(me);
-      setUnread(counts.chat ?? 0);
-      setLoading(false);
-    });
+    api
+      .me(token)
+      .then((me) => {
+        if (cancelled) return;
+        if (me) setUser(me);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };

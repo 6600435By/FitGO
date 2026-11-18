@@ -18,6 +18,7 @@ import { randomBytes } from 'crypto';
 import { ClientPhoneLookupService } from '../common/client-phone-lookup.service';
 import {
   normalizePhone,
+  shadowEmailForLocalId,
   shadowEmailForPhone,
 } from '../common/phone.util';
 import type { JwtPayload } from '../auth/jwt.strategy';
@@ -115,17 +116,26 @@ export class TrainerRosterService {
       return clientId;
     }
 
-    const phoneRaw = input.phone?.trim() ?? '';
-    const phoneNormalized = normalizePhone(phoneRaw);
-    if (phoneNormalized.length < 9) {
-      throw new BadRequestException(
-        'Укажите клиента из базы или телефон с именем и фамилией',
-      );
-    }
-
     let firstName = (input.firstName ?? '').trim();
     let lastName = (input.lastName ?? '').trim();
     let externalId = input.clientExternalId?.trim() || undefined;
+    const phoneRaw = input.phone?.trim() ?? '';
+    const phoneNormalized = phoneRaw ? normalizePhone(phoneRaw) : '';
+
+    if (phoneNormalized.length < 9) {
+      if (!firstName || !lastName) {
+        throw new BadRequestException(
+          'Укажите клиента из базы или имя и фамилию',
+        );
+      }
+      const created = await this.addOfflineClient(trainerId, {
+        firstName,
+        lastName,
+        phone: '',
+        clientExternalId: externalId,
+      });
+      return created.id;
+    }
 
     const found = await this.phoneLookup.lookupByPhone(actor, phoneRaw);
     if (found.clientId) {
@@ -418,13 +428,15 @@ export class TrainerRosterService {
     dto: {
       firstName: string;
       lastName: string;
-      phone: string;
+      phone?: string;
       notes?: string;
       clientExternalId?: string;
     },
   ) {
-    const phoneNormalized = normalizePhone(dto.phone);
-    if (phoneNormalized.length < 9) {
+    const phoneRaw = dto.phone?.trim() ?? '';
+    const phoneNormalized = phoneRaw ? normalizePhone(phoneRaw) : '';
+    const hasPhone = phoneNormalized.length >= 9;
+    if (phoneRaw && !hasPhone) {
       throw new BadRequestException('Некорректный номер телефона');
     }
 
@@ -433,82 +445,97 @@ export class TrainerRosterService {
     const lastName = dto.lastName.trim();
     const now = new Date();
 
-    const existing = await this.prisma.user.findFirst({
-      where: { phoneNormalized },
-    });
-
-    if (existing) {
-      const userPatch: {
-        externalId?: string;
-        firstName?: string;
-        lastName?: string;
-      } = {};
-      if (externalId && !existing.externalId) userPatch.externalId = externalId;
-      if (firstName && existing.firstName !== firstName) {
-        userPatch.firstName = firstName;
-      }
-      if (lastName && existing.lastName !== lastName) {
-        userPatch.lastName = lastName;
-      }
-      if (Object.keys(userPatch).length > 0) {
-        await this.prisma.user.update({
-          where: { id: existing.id },
-          data: userPatch,
-        });
-      }
-
-      const link = await this.prisma.trainerClientLink.upsert({
-        where: {
-          trainerId_clientId: { trainerId, clientId: existing.id },
-        },
-        create: {
-          trainerId,
-          clientId: existing.id,
-          status: TrainerClientLinkStatus.CONFIRMED,
-          source: TrainerClientSource.MANUAL,
-          notes: dto.notes,
-          confirmedAt: now,
-          clientAcceptedAt: now,
-        },
-        update: {
-          status: TrainerClientLinkStatus.CONFIRMED,
-          source: TrainerClientSource.MANUAL,
-          notes: dto.notes ?? undefined,
-          confirmedAt: now,
-          clientAcceptedAt: now,
-        },
+    if (hasPhone) {
+      const existing = await this.prisma.user.findFirst({
+        where: { phoneNormalized },
       });
 
-      return {
-        id: existing.id,
-        firstName: userPatch.firstName ?? existing.firstName,
-        lastName: userPatch.lastName ?? existing.lastName,
-        phone: existing.phone ?? undefined,
-        externalId: userPatch.externalId ?? existing.externalId ?? externalId,
-        rosterStatus: TrainerClientLinkStatus.CONFIRMED,
-        hasApp: existing.accountStatus === AccountStatus.ACTIVE,
-        clientAccepted: true,
-        inRosterSince: link.createdAt.toISOString(),
-        source: TrainerClientSource.MANUAL,
-      };
+      if (existing) {
+        const userPatch: {
+          externalId?: string;
+          firstName?: string;
+          lastName?: string;
+        } = {};
+        if (externalId && !existing.externalId) {
+          userPatch.externalId = externalId;
+        }
+        if (firstName && existing.firstName !== firstName) {
+          userPatch.firstName = firstName;
+        }
+        if (lastName && existing.lastName !== lastName) {
+          userPatch.lastName = lastName;
+        }
+        if (Object.keys(userPatch).length > 0) {
+          await this.prisma.user.update({
+            where: { id: existing.id },
+            data: userPatch,
+          });
+        }
+
+        const link = await this.prisma.trainerClientLink.upsert({
+          where: {
+            trainerId_clientId: { trainerId, clientId: existing.id },
+          },
+          create: {
+            trainerId,
+            clientId: existing.id,
+            status: TrainerClientLinkStatus.CONFIRMED,
+            source: TrainerClientSource.MANUAL,
+            notes: dto.notes,
+            confirmedAt: now,
+            clientAcceptedAt: now,
+          },
+          update: {
+            status: TrainerClientLinkStatus.CONFIRMED,
+            source: TrainerClientSource.MANUAL,
+            notes: dto.notes ?? undefined,
+            confirmedAt: now,
+            clientAcceptedAt: now,
+          },
+        });
+
+        return {
+          id: existing.id,
+          firstName: userPatch.firstName ?? existing.firstName,
+          lastName: userPatch.lastName ?? existing.lastName,
+          phone: existing.phone ?? undefined,
+          externalId: userPatch.externalId ?? existing.externalId ?? externalId,
+          rosterStatus: TrainerClientLinkStatus.CONFIRMED,
+          hasApp: existing.accountStatus === AccountStatus.ACTIVE,
+          clientAccepted: true,
+          inRosterSince: link.createdAt.toISOString(),
+          source: TrainerClientSource.MANUAL,
+        };
+      }
     }
 
     const passwordHash = await bcrypt.hash(randomBytes(32).toString('hex'), 10);
+    const tempId = randomBytes(8).toString('hex');
 
     const client = await this.prisma.user.create({
       data: {
-        email: shadowEmailForPhone(phoneNormalized),
+        email: hasPhone
+          ? shadowEmailForPhone(phoneNormalized)
+          : shadowEmailForLocalId(tempId),
         password: passwordHash,
         firstName,
         lastName,
-        phone: dto.phone.trim(),
-        phoneNormalized,
+        ...(hasPhone
+          ? { phone: phoneRaw, phoneNormalized }
+          : {}),
         externalId,
         accountStatus: AccountStatus.SHADOW,
         createdByTrainerId: trainerId,
         roles: { create: { role: Role.CLIENT } },
       },
     });
+
+    if (!hasPhone) {
+      await this.prisma.user.update({
+        where: { id: client.id },
+        data: { email: shadowEmailForLocalId(client.id) },
+      });
+    }
 
     await this.prisma.trainerClientLink.create({
       data: {

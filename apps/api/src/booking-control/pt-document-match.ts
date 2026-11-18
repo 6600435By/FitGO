@@ -154,9 +154,38 @@ export function namesMatch(
   return left.includes(right) || right.includes(left);
 }
 
-function codesMatch(a?: string | null, b?: string | null): boolean {
+export function codesMatch(a?: string | null, b?: string | null): boolean {
   if (!a?.trim() || !b?.trim()) return false;
   return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+/**
+ * Same Minsk calendar day + client + trainer — unique pair only.
+ * Used to collapse FitGO PT card vs 1C sale / journal twin.
+ */
+export function isUniqueSameDayPtPair(input: {
+  aStart: Date;
+  bStart: Date;
+  aClientExternalId?: string | null;
+  aClientName?: string | null;
+  bClientExternalId?: string | null;
+  bClientName?: string | null;
+  aTrainerCode?: string | null;
+  aTrainerName?: string | null;
+  bTrainerCode?: string | null;
+  bTrainerName?: string | null;
+}): boolean {
+  if (!sameMinskDay(input.aStart, input.bStart)) return false;
+  const clientOk =
+    (input.aClientExternalId &&
+      input.bClientExternalId &&
+      input.aClientExternalId === input.bClientExternalId) ||
+    namesMatch(input.aClientName, input.bClientName);
+  if (!clientOk) return false;
+  const trainerOk =
+    codesMatch(input.aTrainerCode, input.bTrainerCode) ||
+    namesMatch(input.aTrainerName, input.bTrainerName);
+  return trainerOk;
 }
 
 /** Sale already linked to another FitGO PT booking (any alias). */

@@ -1535,15 +1535,15 @@ export class PayrollService {
         include: { client: true },
       });
       if (!matched && ptControlOn && fitgoPtControlIds.size > 0) {
-        const windowMs = 3 * 60_000;
-        const byTime = await this.prisma.personalTrainingBooking.findFirst({
+        const dayStart = new Date(o.startAt);
+        dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = new Date(o.startAt);
+        dayEnd.setHours(23, 59, 59, 999);
+        const byDay = await this.prisma.personalTrainingBooking.findMany({
           where: {
             trainerId: performerId,
             id: { in: [...fitgoPtControlIds] },
-            startAt: {
-              gte: new Date(o.startAt.getTime() - windowMs),
-              lte: new Date(o.startAt.getTime() + windowMs),
-            },
+            startAt: { gte: dayStart, lte: dayEnd },
             status: {
               in: [
                 PersonalBookingStatus.CONFIRMED,
@@ -1553,7 +1553,16 @@ export class PayrollService {
           },
           include: { client: true },
         });
-        if (byTime) matched = byTime;
+        if (byDay.length === 1) {
+          matched = byDay[0]!;
+        } else {
+          const windowMs = 3 * 60_000;
+          const byTime = byDay.find(
+            (b) =>
+              Math.abs(b.startAt.getTime() - o.startAt.getTime()) <= windowMs,
+          );
+          if (byTime) matched = byTime;
+        }
       }
       // trainer_pt_control owns this session — paid via FitGO unit above (or waiting).
       if (ptControlOn && matched && fitgoPtControlIds.has(matched.id)) {

@@ -30,21 +30,13 @@ export function getCalendarPeriod(
     rangeEnd = endOfWeek(date, { weekStartsOn: 1 });
   }
 
-  const periodStart = startOfDay(date);
-  let periodEnd: Date;
-  if (view === 'month') {
-    periodEnd = endOfMonth(date);
-  } else if (view === 'day') {
-    periodEnd = endOfDay(date);
-  } else {
-    periodEnd = endOfWeek(date, { weekStartsOn: 1 });
-  }
-
+  // period bounds match the loaded calendar range so draft replace
+  // does not drop/dupe blocks outside the selected day.
   return {
     from: rangeStart.toISOString(),
     to: addDays(rangeEnd, 1).toISOString(),
-    periodStart: periodStart.toISOString(),
-    periodEnd: periodEnd.toISOString(),
+    periodStart: startOfDay(rangeStart).toISOString(),
+    periodEnd: endOfDay(rangeEnd).toISOString(),
   };
 }
 

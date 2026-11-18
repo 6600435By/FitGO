@@ -29,6 +29,7 @@ import {
 } from '@fitgo/shared-types';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { requireClubId } from '../auth/require-club-id';
+import { ClientPhoneLookupService } from '../common/client-phone-lookup.service';
 import { normalizePhone } from '../common/phone.util';
 import { FitnessService } from '../fitness/fitness.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -71,6 +72,7 @@ export class PtTimesheetService {
     private readonly fitness: FitnessService,
     private readonly sessionApproval: SessionApprovalService,
     private readonly config: ConfigService,
+    private readonly phoneLookup: ClientPhoneLookupService,
   ) {}
 
   // ── Shifts ──────────────────────────────────────────────────────────
@@ -165,11 +167,11 @@ export class PtTimesheetService {
     return this.toSheetDto(row.id);
   }
 
-  /** Late-add: create booking with phone, then refresh sheet. */
+  /** Late-add: create booking (phone optional for club PT control path). */
   async lateAddBooking(
     actor: JwtPayload,
     input: {
-      phone: string;
+      phone?: string;
       firstName: string;
       lastName: string;
       startAt: string;
@@ -178,8 +180,9 @@ export class PtTimesheetService {
     },
   ) {
     const clubId = requireClubId(actor);
-    const phoneNormalized = normalizePhone(input.phone);
-    if (phoneNormalized.length < 9) {
+    const phoneRaw = input.phone?.trim() ?? '';
+    const phoneNormalized = phoneRaw ? normalizePhone(phoneRaw) : '';
+    if (phoneRaw && phoneNormalized.length < 9) {
       throw new BadRequestException('Некорректный номер телефона');
     }
     const start = new Date(input.startAt);
@@ -188,34 +191,28 @@ export class PtTimesheetService {
     }
     const end = new Date(start.getTime() + SESSION_DURATION_MIN * 60_000);
 
-    let client = await this.prisma.user.findFirst({
-      where: { phoneNormalized },
-      include: {
-        clubMemberships: { where: { clubId }, take: 1 },
-      },
-    });
+    let client =
+      phoneNormalized.length >= 9
+        ? await this.prisma.user.findFirst({
+            where: { phoneNormalized },
+            include: {
+              clubMemberships: { where: { clubId }, take: 1 },
+            },
+          })
+        : null;
 
     if (!client) {
       const created = await this.roster.addOfflineClient(actor.sub, {
         firstName: input.firstName,
         lastName: input.lastName,
-        phone: input.phone,
+        phone: phoneRaw || undefined,
       });
-      if (!('id' in created) || !created.id) {
-        client = await this.prisma.user.findFirst({
-          where: { phoneNormalized },
-          include: {
-            clubMemberships: { where: { clubId }, take: 1 },
-          },
-        });
-      } else {
-        client = await this.prisma.user.findFirst({
-          where: { id: created.id },
-          include: {
-            clubMemberships: { where: { clubId }, take: 1 },
-          },
-        });
-      }
+      client = await this.prisma.user.findFirst({
+        where: { id: created.id },
+        include: {
+          clubMemberships: { where: { clubId }, take: 1 },
+        },
+      });
     } else {
       await this.roster.ensureConfirmedLink(actor.sub, client.id).catch(async () => {
         await this.prisma.trainerClientLink.upsert({
@@ -456,6 +453,15 @@ export class PtTimesheetService {
       throw new BadRequestException('Некорректный номер телефона');
     }
 
+    const found = await this.phoneLookup.lookupByPhone(actor, phone, {
+      allowUserExternalIdWrite: true,
+      allowUserFioWrite: true,
+    });
+    if (!found.found && !found.externalId) {
+      throw new BadRequestException('В 1С такого номера нет');
+    }
+
+    const shadowId = booking.clientId;
     let target = await this.prisma.user.findFirst({
       where: { phoneNormalized },
       include: { clubMemberships: { where: { clubId }, take: 1 } },
@@ -463,23 +469,76 @@ export class PtTimesheetService {
 
     if (!target) {
       await this.prisma.user.update({
-        where: { id: booking.clientId },
-        data: { phone: phone.trim(), phoneNormalized },
+        where: { id: shadowId },
+        data: {
+          phone: phone.trim(),
+          phoneNormalized,
+          ...(found.externalId ? { externalId: found.externalId } : {}),
+          ...(found.firstName ? { firstName: found.firstName } : {}),
+          ...(found.lastName ? { lastName: found.lastName } : {}),
+        },
       });
       target = await this.prisma.user.findFirst({
-        where: { id: booking.clientId },
+        where: { id: shadowId },
         include: { clubMemberships: { where: { clubId }, take: 1 } },
       });
-    } else if (target.id !== booking.clientId) {
-      await this.prisma.personalTrainingBooking.update({
-        where: { id: bookingId },
+    } else if (target.id !== shadowId) {
+      const oldLink = await this.prisma.trainerClientLink.findUnique({
+        where: {
+          trainerId_clientId: {
+            trainerId: booking.trainerId,
+            clientId: shadowId,
+          },
+        },
+      });
+      await this.prisma.trainerClientLink.upsert({
+        where: {
+          trainerId_clientId: {
+            trainerId: booking.trainerId,
+            clientId: target.id,
+          },
+        },
+        create: {
+          trainerId: booking.trainerId,
+          clientId: target.id,
+          status: TrainerClientLinkStatus.CONFIRMED,
+          source: TrainerClientSource.MANUAL,
+          notes: oldLink?.notes,
+          confirmedAt: new Date(),
+          clientAcceptedAt: new Date(),
+        },
+        update: {
+          status: TrainerClientLinkStatus.CONFIRMED,
+          notes: oldLink?.notes ?? undefined,
+        },
+      });
+      await this.prisma.personalTrainingBooking.updateMany({
+        where: { trainerId: booking.trainerId, clientId: shadowId },
         data: { clientId: target.id },
       });
+      await this.prisma.personalBookingSeries.updateMany({
+        where: { trainerId: booking.trainerId, clientId: shadowId },
+        data: { clientId: target.id },
+      });
+      if (found.externalId && !target.externalId) {
+        await this.prisma.user.update({
+          where: { id: target.id },
+          data: { externalId: found.externalId },
+        });
+      }
     }
 
-    const issue = this.detectClientIssue(target!);
-    await this.prisma.personalTrainingBooking.update({
-      where: { id: bookingId },
+    const fresh = await this.prisma.user.findFirst({
+      where: { id: target!.id },
+      include: { clubMemberships: { where: { clubId }, take: 1 } },
+    });
+    const issue = this.detectClientIssue(fresh!);
+    await this.prisma.personalTrainingBooking.updateMany({
+      where: {
+        trainerId: booking.trainerId,
+        clientId: fresh!.id,
+        clientIssue: { not: PtClientIssue.NONE },
+      },
       data: {
         clientIssue: issue,
         clientIssueEscalated: false,

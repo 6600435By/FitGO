@@ -15,6 +15,7 @@ import {
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { ChatInbox } from '@/components/chat/chat-inbox';
+import { useChatUnread } from '@/components/trainer-shell/chat-unread-context';
 import { useTrainerUiV2 } from '@/components/trainer-shell/trainer-ui-v2';
 import { api, type NotificationItem } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -122,6 +123,7 @@ export default function TrainerMessagesPage() {
 
   const alertItems = notifications.filter((n) => isCancellation(n));
   const unreadAlerts = alertItems.filter((n) => !n.read).length;
+  const chatUnread = useChatUnread().summary;
 
   const tabs: Array<{
     id: MessagesTab;
@@ -134,6 +136,7 @@ export default function TrainerMessagesPage() {
       id: 'clients',
       label: 'Клиенты',
       icon: <MessageCircle className="h-3.5 w-3.5" />,
+      count: chatUnread.clients || undefined,
     });
   }
   tabs.push(
@@ -141,11 +144,13 @@ export default function TrainerMessagesPage() {
       id: 'admin',
       label: 'Админ',
       icon: <Building2 className="h-3.5 w-3.5" />,
+      count: chatUnread.admin || undefined,
     },
     {
       id: 'team',
       label: 'Команда',
       icon: <UsersRound className="h-3.5 w-3.5" />,
+      count: chatUnread.staff || undefined,
     },
     {
       id: 'alerts',

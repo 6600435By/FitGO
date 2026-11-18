@@ -1,7 +1,7 @@
 'use client';
 
-import type { TrainerAvailabilityBlock, TrainerCalendarEvent } from '@fitgo/shared-types';
-import { format } from 'date-fns';
+import type { TrainerAvailabilityBlock } from '@fitgo/shared-types';
+import { addDays, format, startOfWeek } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { X } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -14,16 +14,14 @@ export function WorkScheduleSheet({
   periodStart,
   periodEnd,
   availabilityBlocks,
-  dutyEvents,
-  freeSchedule = false,
   onClose,
   onUpdated,
 }: {
   periodStart: string;
   periodEnd: string;
   availabilityBlocks: TrainerAvailabilityBlock[];
-  dutyEvents: TrainerCalendarEvent[];
-  /** «Тренер клуб» without staff: own hours, no admin duty required. */
+  /** @deprecated duty no longer required — kept for call-site compat */
+  dutyEvents?: unknown;
   freeSchedule?: boolean;
   onClose: () => void;
   onUpdated: () => void;
@@ -31,16 +29,24 @@ export function WorkScheduleSheet({
   const [selectedDate, setSelectedDate] = useState(
     format(new Date(periodStart), 'yyyy-MM-dd'),
   );
-  const [side, setSide] = useState<'before' | 'after'>('after');
-  const [edgeTime, setEdgeTime] = useState('23:30');
   const [fromTime, setFromTime] = useState('09:00');
   const [toTime, setToTime] = useState('18:00');
-  const [dutyId, setDutyId] = useState('');
+  const [copyDays, setCopyDays] = useState<string[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
   const draftBlocks = availabilityBlocks.filter((b) => b.status === 'DRAFT');
-  const publishedBlocks = availabilityBlocks.filter((b) => b.status === 'PUBLISHED');
+  const publishedBlocks = availabilityBlocks.filter(
+    (b) => b.status === 'PUBLISHED',
+  );
+
+  const draftsForDate = useMemo(
+    () =>
+      draftBlocks.filter(
+        (b) => dateKey(new Date(b.startAt)) === selectedDate,
+      ),
+    [draftBlocks, selectedDate],
+  );
 
   const publishedForDate = useMemo(
     () =>
@@ -50,27 +56,18 @@ export function WorkScheduleSheet({
     [publishedBlocks, selectedDate],
   );
 
-  const dutiesForDate = useMemo(
-    () => dutyEvents.filter((event) => dateKey(new Date(event.startAt)) === selectedDate),
-    [dutyEvents, selectedDate],
-  );
-  const duty = dutiesForDate.find((event) => event.id === dutyId) ?? dutiesForDate[0];
-
-  const timeOf = (iso: string) => format(new Date(iso), 'HH:mm');
-
-  const saveDraftBlocks = async (
-    blocks: Array<{ startAt: string; endAt: string }>,
-  ) => {
-    const token = getToken();
-    if (!token) return;
-
-    await api.trainerSetAvailabilityBlocks(token, {
-      periodStart,
-      periodEnd,
-      blocks,
+  const weekDays = useMemo(() => {
+    const start = startOfWeek(new Date(`${selectedDate}T12:00:00`), {
+      weekStartsOn: 1,
     });
-    onUpdated();
-  };
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = addDays(start, i);
+      return {
+        key: format(d, 'yyyy-MM-dd'),
+        label: format(d, 'EEE d', { locale: ru }),
+      };
+    });
+  }, [selectedDate]);
 
   const buildBlock = (dateStr: string, from: string, to: string) => {
     const startAt = new Date(`${dateStr}T${from}:00`);
@@ -83,7 +80,20 @@ export function WorkScheduleSheet({
     endAt: b.endAt,
   }));
 
-  const handleSaveFreeDay = async () => {
+  const saveDraftBlocks = async (
+    blocks: Array<{ startAt: string; endAt: string }>,
+  ) => {
+    const token = getToken();
+    if (!token) return;
+    await api.trainerSetAvailabilityBlocks(token, {
+      periodStart,
+      periodEnd,
+      blocks,
+    });
+    onUpdated();
+  };
+
+  const handleAddInterval = async () => {
     if (fromTime >= toTime) {
       setMessage('Начало должно быть раньше конца');
       return;
@@ -91,50 +101,15 @@ export function WorkScheduleSheet({
     setBusy(true);
     setMessage('');
     try {
-      const withoutSameDay = existingDraftPayload.filter(
-        (block) => dateKey(new Date(block.startAt)) !== selectedDate,
-      );
-      await saveDraftBlocks([
-        ...withoutSameDay,
-        buildBlock(selectedDate, fromTime, toTime),
-      ]);
-      setMessage('Сохранено в черновик. Опубликуйте, чтобы клиенты увидели запись.');
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Ошибка');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleSaveDay = async () => {
-    if (!duty) {
-      setMessage('В этот день дежурства нет. Его ставит администратор.');
-      return;
-    }
-    const boundary = side === 'before' ? timeOf(duty.startAt) : timeOf(duty.endAt);
-    const from = side === 'before' ? edgeTime : boundary;
-    const to = side === 'before' ? boundary : edgeTime;
-    if (from >= to) {
+      const dates = [selectedDate, ...copyDays.filter((d) => d !== selectedDate)];
+      const added = dates.map((d) => buildBlock(d, fromTime, toTime));
+      await saveDraftBlocks([...existingDraftPayload, ...added]);
       setMessage(
-        side === 'before'
-          ? 'Начало должно быть раньше дежурства'
-          : 'Конец должен быть позже дежурства',
+        copyDays.length
+          ? 'Время сохранено на выбранные дни. Откройте клиентам, когда будете готовы.'
+          : 'Время сохранено. Клиенты его не видят, пока не нажмёте «Открыть клиентам».',
       );
-      return;
-    }
-    setBusy(true);
-    setMessage('');
-    try {
-      const withoutSameSide = existingDraftPayload.filter((block) => {
-        if (dateKey(new Date(block.startAt)) !== selectedDate) return true;
-        const sameSide =
-          side === 'before'
-            ? timeOf(block.endAt) === timeOf(duty.startAt)
-            : timeOf(block.startAt) === timeOf(duty.endAt);
-        return !sameSide;
-      });
-      await saveDraftBlocks([...withoutSameSide, buildBlock(selectedDate, from, to)]);
-      setMessage('Сохранено в черновик. Опубликуйте, чтобы клиенты увидели запись.');
+      setCopyDays([]);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Ошибка');
     } finally {
@@ -146,36 +121,31 @@ export function WorkScheduleSheet({
     const next = draftBlocks
       .filter((b) => b.id !== blockId)
       .map((b) => ({ startAt: b.startAt, endAt: b.endAt }));
-    await saveDraftBlocks(next);
-  };
-
-  const handlePublish = async () => {
-    const token = getToken();
-    if (!token) return;
     setBusy(true);
-    setMessage('');
     try {
-      const result = await api.trainerPublishSchedule(token, periodStart, periodEnd);
-      setMessage(`Опубликовано слотов: ${result.publishedBlocks}`);
-      onUpdated();
+      await saveDraftBlocks(next);
     } catch (err) {
-      setMessage(err instanceof Error ? err.message : 'Ошибка публикации');
+      setMessage(err instanceof Error ? err.message : 'Ошибка');
     } finally {
       setBusy(false);
     }
+  };
+
+  const toggleCopyDay = (key: string) => {
+    if (key === selectedDate) return;
+    setCopyDays((prev) =>
+      prev.includes(key) ? prev.filter((d) => d !== key) : [...prev, key],
+    );
   };
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-ink text-zinc-100">
       <header className="flex items-start justify-between gap-3 border-b border-white/10 px-4 py-3">
         <div className="min-w-0">
-          <h2 className="text-lg font-semibold">
-            {freeSchedule ? 'Рабочее время' : 'Время вне дежурства'}
-          </h2>
+          <h2 className="text-lg font-semibold">Рабочее время</h2>
           <p className="text-sm text-zinc-400">
-            {freeSchedule
-              ? 'Откройте часы приёма на день и опубликуйте — клиенты смогут записаться.'
-              : 'Только сразу до или после дежурства. Клиенты могут записаться, ставка за эти часы не начисляется.'}
+            Это ваше время. Клиенты его не увидят, пока не нажмёте «Открыть
+            клиентам».
           </p>
         </div>
         <button
@@ -196,97 +166,55 @@ export function WorkScheduleSheet({
         ) : null}
 
         <div className="card space-y-3">
-          <p className="font-medium">
-            {freeSchedule ? 'Часы на день' : 'До или после дежурства'}
-          </p>
+          <p className="font-medium">Часы на день</p>
           <DateField
             label="Дата"
             value={selectedDate}
             onChange={setSelectedDate}
           />
-
-          {freeSchedule ? (
-            <>
-              <div className="grid grid-cols-2 items-start gap-3">
-                <TimeField label="С" value={fromTime} onChange={setFromTime} />
-                <TimeField label="По" value={toTime} onChange={setToTime} />
-              </div>
-              <button
-                type="button"
-                onClick={handleSaveFreeDay}
-                disabled={busy}
-                className="btn-primary text-sm disabled:opacity-50"
-              >
-                Сохранить в черновик
-              </button>
-            </>
-          ) : dutiesForDate.length === 0 ? (
-            <p className="text-sm text-zinc-400">
-              В этот день дежурства нет. Его ставит администратор в графике смен.
-            </p>
-          ) : (
-            <>
-              {dutiesForDate.length > 1 && (
-                <select
-                  className="input w-full"
-                  value={duty?.id ?? ''}
-                  onChange={(e) => setDutyId(e.target.value)}
-                >
-                  {dutiesForDate.map((event) => (
-                    <option key={event.id} value={event.id}>
-                      Дежурство {timeOf(event.startAt)}–{timeOf(event.endAt)}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {duty && dutiesForDate.length === 1 && (
-                <p className="text-sm text-sky-200">
-                  Дежурство {timeOf(duty.startAt)}–{timeOf(duty.endAt)}. Его меняет только администратор.
-                </p>
-              )}
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className={side === 'before' ? 'btn-primary text-sm' : 'btn-secondary text-sm'}
-                  onClick={() => setSide('before')}
-                >
-                  До
-                </button>
-                <button
-                  type="button"
-                  className={side === 'after' ? 'btn-primary text-sm' : 'btn-secondary text-sm'}
-                  onClick={() => setSide('after')}
-                >
-                  После
-                </button>
-              </div>
-              <TimeField
-                label={side === 'before' ? 'Начать приём с' : 'Принимать до'}
-                value={edgeTime}
-                onChange={setEdgeTime}
-              />
-              {duty && (
-                <p className="text-xs text-zinc-500">
-                  {side === 'before'
-                    ? `Запись ${edgeTime}–${timeOf(duty.startAt)}. Ставка не начисляется.`
-                    : `Запись ${timeOf(duty.endAt)}–${edgeTime}. Ставка не начисляется.`}
-                </p>
-              )}
-              <button
-                type="button"
-                onClick={handleSaveDay}
-                disabled={busy || !duty}
-                className="btn-primary text-sm disabled:opacity-50"
-              >
-                Сохранить в черновик
-              </button>
-            </>
-          )}
+          <div className="grid grid-cols-2 items-start gap-3">
+            <TimeField label="С" value={fromTime} onChange={setFromTime} />
+            <TimeField label="По" value={toTime} onChange={setToTime} />
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-zinc-500">Так же на другие дни недели</p>
+            <div className="flex flex-wrap gap-1.5">
+              {weekDays.map((d) => {
+                const active =
+                  d.key === selectedDate || copyDays.includes(d.key);
+                return (
+                  <button
+                    key={d.key}
+                    type="button"
+                    disabled={d.key === selectedDate}
+                    onClick={() => toggleCopyDay(d.key)}
+                    className={`rounded-full px-2.5 py-1 text-xs ${
+                      active
+                        ? 'bg-forma-500 text-ink'
+                        : 'border border-white/10 text-zinc-400'
+                    }`}
+                  >
+                    {d.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleAddInterval}
+            disabled={busy}
+            className="btn-primary text-sm disabled:opacity-50"
+          >
+            Добавить время
+          </button>
         </div>
 
         {publishedForDate.length > 0 && (
           <div className="space-y-2">
-            <p className="text-sm font-medium text-zinc-300">Опубликовано на этот день</p>
+            <p className="text-sm font-medium text-zinc-300">
+              Уже открыто клиентам
+            </p>
             {publishedForDate.map((block) => (
               <div key={block.id} className="card text-sm text-emerald-300/90">
                 {format(new Date(block.startAt), 'HH:mm', { locale: ru })} —{' '}
@@ -298,18 +226,20 @@ export function WorkScheduleSheet({
 
         <div className="space-y-2">
           <p className="text-sm font-medium text-zinc-300">
-            Черновики ({draftBlocks.length})
+            Ещё не открыто ({draftsForDate.length})
           </p>
-          {draftBlocks.length === 0 ? (
-            <p className="text-sm text-zinc-500">Нет черновиков — сохраните день и опубликуйте</p>
+          {draftsForDate.length === 0 ? (
+            <p className="text-sm text-zinc-500">
+              На этот день нет сохранённого времени
+            </p>
           ) : (
-            draftBlocks.map((block) => (
+            draftsForDate.map((block) => (
               <div
                 key={block.id}
                 className="card flex items-center justify-between gap-2 text-sm"
               >
                 <span>
-                  {format(new Date(block.startAt), 'd MMM, HH:mm', { locale: ru })} —{' '}
+                  {format(new Date(block.startAt), 'HH:mm', { locale: ru })} —{' '}
                   {format(new Date(block.endAt), 'HH:mm', { locale: ru })}
                 </span>
                 <button
@@ -323,17 +253,6 @@ export function WorkScheduleSheet({
             ))
           )}
         </div>
-      </div>
-
-      <div className="border-t border-white/10 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-        <button
-          type="button"
-          onClick={handlePublish}
-          disabled={busy || draftBlocks.length === 0}
-          className="btn-primary w-full disabled:opacity-50"
-        >
-          {busy ? 'Публикация...' : `Опубликовать (${draftBlocks.length})`}
-        </button>
       </div>
     </div>
   );

@@ -241,10 +241,11 @@ export default function TrainerClientDetailPage() {
     setEditSaving(true);
     setEditError('');
     try {
+      const digits = editPhone.replace(/\D/g, '');
       await api.trainerUpdateClient(token, id, {
         firstName: editFirstName.trim(),
         lastName: editLastName.trim(),
-        phone: editPhone.trim(),
+        ...(digits.length >= 9 ? { phone: editPhone.trim() } : {}),
         notes: editNotes.trim(),
       });
       setEditOpen(false);
@@ -291,8 +292,16 @@ export default function TrainerClientDetailPage() {
             <h2 className="text-xl font-semibold">
               {client.firstName} {client.lastName}
             </h2>
-            {client.phone && (
+            {client.phone ? (
               <p className="text-sm text-slate-400">{client.phone}</p>
+            ) : (
+              <button
+                type="button"
+                className="text-sm text-zinc-500 underline decoration-zinc-600 underline-offset-2 hover:text-forma-400"
+                onClick={openEdit}
+              >
+                Добавить телефон
+              </button>
             )}
             {client.rosterNotes ? (
               <p className="mt-1 text-sm text-forma-400">{client.rosterNotes}</p>
@@ -345,11 +354,14 @@ export default function TrainerClientDetailPage() {
               className="input w-full"
               inputMode="tel"
               autoComplete="tel"
-              placeholder="+375…"
+              placeholder="+375… (необязательно)"
               value={editPhone}
               onChange={(e) => setEditPhone(e.target.value)}
-              required
             />
+            <p className="text-xs text-zinc-500">
+              Номер можно добавить позже. С ним появятся абонемент и данные из
+              1С и приложения.
+            </p>
             <div className="grid gap-3 sm:grid-cols-2">
               <input
                 className="input"

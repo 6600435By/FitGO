@@ -1,7 +1,7 @@
 'use client';
 
 import { Button, ResponsiveSheet } from '@fitgo/forma-ui';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { DateField, TimeField } from '@/components/ui/date-field';
 import { api } from '@/lib/api';
 import { getToken, getUser } from '@/lib/auth';
@@ -16,21 +16,45 @@ const DAYS = [
   { value: 0, label: 'Вс' },
 ];
 
+type SeriesClient = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  /** 1C external id when linked */
+  externalId?: string | null;
+};
+
+function clubSeriesBlocked(client: SeriesClient | undefined): string | null {
+  if (!client) return null;
+  const hasPhone = Boolean(client.phone?.trim());
+  if (!hasPhone) {
+    return 'Серию пока нельзя: клиент не привязан к 1С по телефону. Разовую запись сделать можно. Когда администратор привяжет номер из 1С, серия откроется.';
+  }
+  if (!client.externalId?.trim()) {
+    return 'Серию пока нельзя: номер не найден в 1С. Она откроется, когда клиент синхронизируется.';
+  }
+  return null;
+}
+
 export function SeriesSheet({
   clients,
   defaultDate,
   onClose,
   onSaved,
 }: {
-  clients: Array<{ id: string; firstName: string; lastName: string }>;
+  clients: SeriesClient[];
   defaultDate: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const me = getUser();
   const canChooseFlow = Boolean(me?.trainerClub && me?.trainerStaff);
+  const staffOnly = Boolean(me?.trainerStaff && !me?.trainerClub);
   const [clientId, setClientId] = useState(clients[0]?.id ?? '');
-  const [dayOfWeek, setDayOfWeek] = useState(new Date(`${defaultDate}T12:00:00`).getDay());
+  const [dayOfWeek, setDayOfWeek] = useState(
+    new Date(`${defaultDate}T12:00:00`).getDay(),
+  );
   const [startTime, setStartTime] = useState('10:00');
   const [fromDate, setFromDate] = useState(defaultDate);
   const [toDate, setToDate] = useState('');
@@ -39,9 +63,27 @@ export function SeriesSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  const effectiveFlow: 'CLUB' | 'PERSONAL' = canChooseFlow
+    ? ptFlow
+    : staffOnly || me?.trainerStaff
+      ? 'CLUB'
+      : 'PERSONAL';
+
+  const selected = useMemo(
+    () => clients.find((c) => c.id === clientId),
+    [clients, clientId],
+  );
+
+  const blockHint =
+    effectiveFlow === 'CLUB' ? clubSeriesBlocked(selected) : null;
+
   const save = async () => {
     const token = getToken();
     if (!token || !clientId) return;
+    if (blockHint) {
+      setError(blockHint);
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -83,10 +125,17 @@ export function SeriesSheet({
             {clients.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.firstName} {c.lastName}
+                {!c.phone ? ' · без телефона' : ''}
               </option>
             ))}
           </select>
         </label>
+
+        {blockHint ? (
+          <p className="rounded-xl border border-forma-500/20 bg-forma-500/5 px-3 py-2 text-sm text-zinc-300">
+            {blockHint}
+          </p>
+        ) : null}
 
         <div className="flex flex-wrap gap-1.5">
           {DAYS.map((d) => (
@@ -157,7 +206,7 @@ export function SeriesSheet({
         <Button
           type="button"
           className="w-full"
-          disabled={busy || !clientId}
+          disabled={busy || !clientId || Boolean(blockHint)}
           loading={busy}
           onClick={save}
         >

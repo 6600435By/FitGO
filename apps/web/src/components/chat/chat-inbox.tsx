@@ -3,9 +3,9 @@
 import type { ChatMessageItem, ConversationSummary } from '@fitgo/shared-types';
 import { ArrowLeft, Plus, Send } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useChatUnread } from '@/components/trainer-shell/chat-unread-context';
 import { api } from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import { syncAppBadgeFromUnread } from '@/lib/push';
 import { cn, formatDateTime } from '@/lib/utils';
 
 type ChatRole = 'client' | 'trainer' | 'admin' | 'staff';
@@ -78,6 +78,7 @@ export function ChatInbox({
   className,
 }: ChatInboxProps) {
   const shellClass = [CHAT_SHELL, className].filter(Boolean).join(' ');
+  const { summary: unreadSummary, adjust: adjustUnread } = useChatUnread();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessageItem[]>([]);
@@ -101,8 +102,10 @@ export function ChatInbox({
   const [showGroupEdit, setShowGroupEdit] = useState(false);
   const [editGroupTitle, setEditGroupTitle] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<ChatMessageItem[]>([]);
   const initialClientHandled = useRef(false);
   const deepLinkHandled = useRef(false);
+  const bootstrapped = useRef(false);
   const [deepLinkConversationId] = useState(() => {
     if (typeof window === 'undefined') return null;
     return new URLSearchParams(window.location.search).get('c');
@@ -116,31 +119,76 @@ export function ChatInbox({
     return list;
   }, [scope]);
 
-  const loadMessages = useCallback(async (conversationId: string) => {
-    const token = getToken();
-    if (!token) return;
-    const data = await api.chatMessages(token, conversationId);
-    setMessages(data.messages);
-    setConversations((prev) =>
-      prev.map((c) =>
-        c.id === conversationId
-          ? { ...c, ...data.conversation, unreadCount: 0 }
-          : c,
-      ),
-    );
-    void syncAppBadgeFromUnread();
-  }, []);
+  const loadMessages = useCallback(
+    async (conversationId: string, after?: string) => {
+      const token = getToken();
+      if (!token) return;
+      const data = await api.chatMessages(token, conversationId, after);
+      if (after) {
+        if (data.messages.length > 0) {
+          setMessages((prev) => {
+            const seen = new Set(prev.map((m) => m.id));
+            const next = [...prev];
+            for (const m of data.messages) {
+              if (!seen.has(m.id)) next.push(m);
+            }
+            return next;
+          });
+        }
+      } else {
+        setMessages(data.messages);
+      }
+      let cleared = 0;
+      setConversations((prev) => {
+        const prior = prev.find((c) => c.id === conversationId);
+        cleared = prior?.unreadCount ?? 0;
+        return prev.map((c) =>
+          c.id === conversationId
+            ? { ...c, ...data.conversation, unreadCount: 0 }
+            : c,
+        );
+      });
+      if (cleared > 0 && !after) {
+        if (scope === 'clients') {
+          adjustUnread({
+            clients: Math.max(0, unreadSummary.clients - cleared),
+          });
+        } else if (scope === 'admin') {
+          adjustUnread({
+            admin: Math.max(0, unreadSummary.admin - cleared),
+          });
+        } else if (scope === 'staff') {
+          adjustUnread({
+            staff: Math.max(0, unreadSummary.staff - cleared),
+          });
+        } else {
+          adjustUnread({
+            total: Math.max(0, unreadSummary.total - cleared),
+          });
+        }
+      }
+      return data;
+    },
+    [adjustUnread, scope, unreadSummary],
+  );
 
-  const refresh = useCallback(async () => {
+  const refreshList = useCallback(async () => {
     try {
       await loadConversations();
-      if (activeId) {
-        await loadMessages(activeId);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки');
     }
-  }, [activeId, loadConversations, loadMessages]);
+  }, [loadConversations]);
+
+  const pollThread = useCallback(async () => {
+    if (!activeId) return;
+    try {
+      const last = messagesRef.current[messagesRef.current.length - 1];
+      await loadMessages(activeId, last?.createdAt);
+    } catch {
+      // soft fail on poll
+    }
+  }, [activeId, loadMessages]);
 
   useEffect(() => {
     if (!directThread) return;
@@ -165,10 +213,16 @@ export function ChatInbox({
   }, [directThread, loadMessages]);
 
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
     if (directThread) return;
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
     setLoading(true);
-    refresh().finally(() => setLoading(false));
-  }, [refresh, directThread]);
+    refreshList().finally(() => setLoading(false));
+  }, [refreshList, directThread]);
 
   useEffect(() => {
     if (role !== 'client') return;
@@ -235,12 +289,23 @@ export function ChatInbox({
   }, [deepLinkConversationId, directThread, loadMessages, loading]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    const listMs = activeId ? 20_000 : 12_000;
+    const listInterval = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
-      void refresh();
-    }, 8000);
-    return () => clearInterval(interval);
-  }, [refresh]);
+      if (directThread) return;
+      void refreshList();
+    }, listMs);
+    return () => clearInterval(listInterval);
+  }, [activeId, directThread, refreshList]);
+
+  useEffect(() => {
+    if (!activeId) return;
+    const threadInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void pollThread();
+    }, 5_000);
+    return () => clearInterval(threadInterval);
+  }, [activeId, pollThread]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -277,7 +342,18 @@ export function ChatInbox({
       const message = await api.chatSendMessage(token, activeId, draft.trim());
       setMessages((prev) => [...prev, message]);
       setDraft('');
-      await loadConversations();
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === activeId
+            ? {
+                ...c,
+                lastMessage: message.body,
+                lastMessageAt: message.createdAt,
+                unreadCount: 0,
+              }
+            : c,
+        ),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось отправить');
     } finally {
