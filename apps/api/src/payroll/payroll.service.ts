@@ -1434,10 +1434,24 @@ export class PayrollService {
                     { docRef: id },
                   ]),
                 },
-                select: { externalId: true, docRef: true },
+                select: {
+                  externalId: true,
+                  docRef: true,
+                  paymentStatus: true,
+                },
               });
         const linkedExpanded = expandTakenPtDocIds(linkedIds, salesForAliases);
         for (const id of linkedExpanded) fitgoLinkedPtDocIds.add(id);
+        const salePayByDoc = new Map<string, string>();
+        for (const s of salesForAliases) {
+          const status = (s.paymentStatus ?? '').toUpperCase();
+          for (const a of ptDocIdAliases({
+            externalId: s.externalId,
+            docRef: s.docRef,
+          })) {
+            salePayByDoc.set(a, status);
+          }
+        }
 
         for (const b of controlBookings) {
           const approval = approvalByBooking.get(b.id);
@@ -1449,10 +1463,13 @@ export class PayrollService {
             `${b.client.lastName} ${b.client.firstName}`.trim();
           const day = clubDayIso(b.startAt);
           const dayClient = `${day}|${clientName.toLowerCase()}`;
-          fitgoPtPaidDayClient.add(dayClient);
+          const unpaidLinked = ptDocIdAliases({
+            externalId: b.linkedDocExternalId,
+            docRef: b.linkedDocExternalId,
+          }).some((a) => salePayByDoc.get(a) === 'DEBT');
           const sk = fitgoSessionKey('PT', b.id);
           remarkKeys.push(sk);
-          units.push({
+          const fitgoUnit: WorkUnit = {
             id: b.id,
             kind: 'PT',
             performerId,
@@ -1460,13 +1477,19 @@ export class PayrollService {
             occurredAt: b.startAt.toISOString(),
             quantity: 1,
             priceMinor: b.priceMinor ?? undefined,
-            trustBand: 'GREEN',
+            trustBand: unpaidLinked ? 'RED' : 'GREEN',
             trustResolution: 'NONE',
-            payrollTrusted: true,
+            payrollTrusted: !unpaidLinked,
             clientName,
             sessionKey: sk,
             saleExternalId: b.linkedDocExternalId,
-          });
+          };
+          if (unpaidLinked) {
+            markSpaUnitAsUnpaidDebt(fitgoUnit);
+          } else {
+            fitgoPtPaidDayClient.add(dayClient);
+          }
+          units.push(fitgoUnit);
         }
       }
     }
@@ -1812,26 +1835,60 @@ export class PayrollService {
     );
     for (const sale of trainerPtSales) {
       if (!saleMatchesTrainer(sale, performerCodes, performerName)) continue;
-      if (sale.paymentStatus !== 'PAID') continue;
+      const isPaid = (sale.paymentStatus ?? '').toUpperCase() === 'PAID';
       const amountMinor = Math.round((Number(sale.amount) || 0) * 100);
       const isPtAllSports = isPtAllSportsSession({
         title: sale.serviceName,
         serviceName: sale.serviceName,
       });
-      // Ordinary one-shots need money; ALL SPORTS pays the profile fix even at 0 BYN.
-      if (!isPtAllSports && amountMinor <= 0) continue;
+      // Ordinary paid one-shots need money; ALL SPORTS pays the profile fix even at 0 BYN.
+      // Unpaid (DEBT) still appear as «не в ЗП» — same idea as SPA debt stubs.
+      if (isPaid && !isPtAllSports && amountMinor <= 0) continue;
       const day = sale.occurredAt ? clubDayIso(sale.occurredAt) : '';
-      const clientKey = `${day}|${(sale.clientName ?? '').trim().toLowerCase()}`;
-      if (coveredSaleDays.has(clientKey)) continue;
-      if (isPtAllSports && coveredAllSportsKeys.has(clientKey)) continue;
-      if (ptControlOn) {
+      const clientNorm = (sale.clientName ?? '').trim().toLowerCase();
+      const clientKey = `${day}|${clientNorm}`;
+      if (isPaid && coveredSaleDays.has(clientKey)) continue;
+      if (isPaid && isPtAllSports && coveredAllSportsKeys.has(clientKey)) continue;
+      // Multi-visit packs (N ПТ, реформер N, …) — only conducted write-offs.
+      if (!isPtAllSports && isMultiVisitPackSale(sale.serviceName, sale.quantity))
+        continue;
+      // Massage / SPA one-shots are paid via SPA scheme, not PT%.
+      if (isSpaLikeSessionTitle(sale.serviceName)) continue;
+
+      const aliases = ptDocIdAliases({
+        externalId: sale.externalId,
+        docRef: sale.docRef,
+      });
+      if (ptControlOn && isPaid) {
         if (fitgoPtPaidDayClient.has(clientKey)) continue;
-        const aliases = ptDocIdAliases({
-          externalId: sale.externalId,
-          docRef: sale.docRef,
-        });
         if (aliases.some((a) => fitgoLinkedPtDocIds.has(a))) continue;
       }
+
+      // Unpaid: overlay debt onto FitGO / Onex twin when present (no double row).
+      if (!isPaid) {
+        const existing = units.find(
+          (u) =>
+            u.kind === 'PT' &&
+            clubDayIso(u.occurredAt) === day &&
+            (u.clientName ?? '').trim().toLowerCase() === clientNorm,
+        );
+        if (existing) {
+          markSpaUnitAsUnpaidDebt(existing);
+          if (!existing.saleExternalId) {
+            existing.saleExternalId =
+              (sale.externalId || sale.docRef || '').trim() || undefined;
+          }
+          if ((existing.priceMinor ?? 0) <= 0 && amountMinor > 0) {
+            existing.priceMinor = amountMinor;
+          }
+          continue;
+        }
+        if (ptControlOn && aliases.some((a) => fitgoLinkedPtDocIds.has(a))) {
+          // FitGO owns the doc but unit was not emitted (not eligible) — skip twin.
+          continue;
+        }
+      }
+
       const docKey =
         trainerPtSaleDocKey(sale) ||
         sale.externalId ||
@@ -1841,17 +1898,12 @@ export class PayrollService {
       seenPtSaleUnits.add(unitId);
       const sk = saleSessionKey('PT', docKey);
       remarkKeys.push(sk);
-      // Multi-visit packs (N ПТ, реформер N, …) — only conducted write-offs.
-      if (!isPtAllSports && isMultiVisitPackSale(sale.serviceName, sale.quantity))
-        continue;
-      // Massage / SPA one-shots are paid via SPA scheme, not PT%.
-      if (isSpaLikeSessionTitle(sale.serviceName)) continue;
       const isReformerPersonal = isReformerPersonalNomenclature(
         sale.serviceName,
         null,
         payrollSegments,
       );
-      units.push({
+      const ptSaleUnit: WorkUnit = {
         id: unitId,
         kind: 'PT',
         performerId,
@@ -1860,19 +1912,44 @@ export class PayrollService {
           ? sale.occurredAt
           : `${day}T12:00:00.000Z`,
         quantity: 1,
-        priceMinor: amountMinor,
-        trustBand: 'GREEN',
+        priceMinor: amountMinor > 0 ? amountMinor : undefined,
+        trustBand: isPaid ? 'GREEN' : 'RED',
         trustResolution: 'NONE',
-        payrollTrusted: true,
+        payrollTrusted: isPaid,
         clientName: sale.clientName,
         isPtAllSports,
         isReformerPersonal: isPtAllSports ? false : isReformerPersonal,
         sessionKey: sk,
         saleExternalId:
           (sale.externalId || sale.docRef || docKey || '').trim() || undefined,
-      });
+      };
+      if (!isPaid) {
+        markSpaUnitAsUnpaidDebt(ptSaleUnit);
+      }
+      units.push(ptSaleUnit);
       ptSaleUnitKeys.set(unitId, sk);
-      if (isPtAllSports) coveredAllSportsKeys.add(clientKey);
+      if (isPaid && isPtAllSports) coveredAllSportsKeys.add(clientKey);
+    }
+
+    // One-shot PT is paid from sale lines; Onex SALE write-offs stay untrusted
+    // twins — drop them when a ptsale (paid or debt) covers the same day+client
+    // so «Не в ЗП» is not flooded with duplicates of paid sales.
+    const ptSaleDayClients = new Set(
+      units
+        .filter((u) => u.kind === 'PT' && String(u.id).startsWith('ptsale:'))
+        .map(
+          (u) =>
+            `${clubDayIso(u.occurredAt)}|${(u.clientName ?? '').trim().toLowerCase()}`,
+        ),
+    );
+    if (ptSaleDayClients.size > 0) {
+      for (let i = units.length - 1; i >= 0; i--) {
+        const u = units[i]!;
+        if (u.kind !== 'PT' || u.payrollTrusted) continue;
+        if (String(u.id).startsWith('ptsale:')) continue;
+        const key = `${clubDayIso(u.occurredAt)}|${(u.clientName ?? '').trim().toLowerCase()}`;
+        if (ptSaleDayClients.has(key)) units.splice(i, 1);
+      }
     }
 
     // ── GROUP from journal + Onex fallback (dedupe) ─────────────────────────

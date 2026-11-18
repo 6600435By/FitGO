@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  bookingControlInPayrollCalc,
   bookingControlIsNotIn1c,
   bookingControlIssueReasons,
   bookingControlMatchesSelectedReasons,
@@ -346,6 +347,11 @@ type Props = {
   canManagerRework?: boolean;
   /** Manager / SA: permanently remove session from payroll */
   canExcludePayroll?: boolean;
+  /**
+   * Admin / manager / SA: third queue chip «В расчет ЗП»
+   * (sessions that enter employee payroll). Hidden for trainer/specialist.
+   */
+  showInPayrollFilter?: boolean;
   /** Manager / super-admin: bulk confirm unapproved GROUP in the period */
   canBulkApprove?: boolean;
   /** Admin/manager/SA/trainer: show Photo button on GROUP detail */
@@ -661,6 +667,7 @@ export function BookingControlPanel({
   canReturnApproval = false,
   canManagerRework = false,
   canExcludePayroll = false,
+  showInPayrollFilter = false,
   canBulkApprove = false,
   canViewHallPhotos = false,
   initialSessionKey,
@@ -774,7 +781,9 @@ export function BookingControlPanel({
           ? (['review'] as BookingControlIssueReason[])
           : [];
     const queue: BookingControlQueueSegment =
-      saved.queue === 'done' || saved.queue === 'upcoming'
+      saved.queue === 'done' ||
+      saved.queue === 'upcoming' ||
+      saved.queue === 'in_payroll'
         ? saved.queue
         : 'pending';
     return { ...defaults, ...saved, queue, reasons };
@@ -816,9 +825,11 @@ export function BookingControlPanel({
   const [performers, setPerformers] = useState<BookingControlPerformerOption[]>(
     [],
   );
-  const [queue, setQueue] = useState<BookingControlQueueSegment>(
-    boot.queue === 'done' || boot.queue === 'upcoming' ? boot.queue : 'pending',
-  );
+  const [queue, setQueue] = useState<BookingControlQueueSegment>(() => {
+    if (boot.queue === 'done' || boot.queue === 'upcoming') return boot.queue;
+    if (boot.queue === 'in_payroll' && showInPayrollFilter) return 'in_payroll';
+    return 'pending';
+  });
   const [reasons, setReasons] = useState<BookingControlIssueReason[]>(
     Array.isArray(boot.reasons) ? boot.reasons : [],
   );
@@ -879,7 +890,8 @@ export function BookingControlPanel({
     if (
       queueL === 'done' ||
       queueL === 'upcoming' ||
-      queueL === 'pending'
+      queueL === 'pending' ||
+      queueL === 'in_payroll'
     ) {
       setQueue(queueL);
     } else if (needsReviewL || unpaidDeep) {
@@ -1413,6 +1425,16 @@ export function BookingControlPanel({
     [filteredForCounts, nowMs],
   );
 
+  const inPayrollCount = useMemo(
+    () =>
+      showInPayrollFilter
+        ? filteredForCounts.filter((i) =>
+            bookingControlInPayrollCalc(i, nowMs),
+          ).length
+        : 0,
+    [filteredForCounts, nowMs, showInPayrollFilter],
+  );
+
   const reasonCounts = useMemo(() => {
     const counts: Record<BookingControlIssueReason, number> = {
       review: 0,
@@ -1436,9 +1458,13 @@ export function BookingControlPanel({
     if (showQueue) {
       // Status «Отменено» bypasses queue so cancelled rows stay reachable.
       if (status !== 'CANCELLED') {
-        rows = rows.filter(
-          (i) => bookingControlQueueSegment(i, nowMs) === queue,
-        );
+        if (queue === 'in_payroll') {
+          rows = rows.filter((i) => bookingControlInPayrollCalc(i, nowMs));
+        } else {
+          rows = rows.filter(
+            (i) => bookingControlQueueSegment(i, nowMs) === queue,
+          );
+        }
       }
       if (queue === 'pending' && reasons.length > 0) {
         rows = rows.filter((i) =>
@@ -2943,7 +2969,11 @@ export function BookingControlPanel({
       <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/60 p-3">
         {showQueue ? (
           <div className="sticky top-0 z-20 -mx-3 -mt-3 space-y-1 border-b border-slate-800/80 bg-slate-950/95 px-3 pb-3 pt-3 backdrop-blur-sm">
-            <div className="grid grid-cols-2 gap-2">
+            <div
+              className={`grid gap-2 ${
+                showInPayrollFilter ? 'grid-cols-3' : 'grid-cols-2'
+              }`}
+            >
               <button
                 type="button"
                 onClick={() => setQueue('pending')}
@@ -2977,6 +3007,23 @@ export function BookingControlPanel({
                   {doneCount}
                 </span>
               </button>
+              {showInPayrollFilter ? (
+                <button
+                  type="button"
+                  onClick={() => setQueue('in_payroll')}
+                  className={`min-h-11 min-w-0 rounded-2xl px-3 py-2 text-center text-sm leading-tight ${
+                    queue === 'in_payroll'
+                      ? 'bg-fitgo-500 text-white'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}
+                  title="Занятия и услуги, которые входят в расчёт ЗП сотрудника"
+                >
+                  <span className="block font-medium">В расчет ЗП</span>
+                  <span className="mt-0.5 block text-xs opacity-90">
+                    {inPayrollCount}
+                  </span>
+                </button>
+              ) : null}
             </div>
             {upcomingCount > 0 ? (
               <button
@@ -3472,9 +3519,11 @@ export function BookingControlPanel({
               ? 'На контроле за период пусто'
               : showQueue && queue === 'done'
                 ? 'Прошедших контроль за период нет'
-                : showQueue && queue === 'upcoming'
-                  ? 'В периоде нет записей, которые ещё не начались'
-                  : 'Нет записей за период'}
+                : showQueue && queue === 'in_payroll'
+                  ? 'Нет занятий, которые входят в расчёт ЗП за период'
+                  : showQueue && queue === 'upcoming'
+                    ? 'В периоде нет записей, которые ещё не начались'
+                    : 'Нет записей за период'}
           {items.length === 0 &&
           showQueue &&
           queue === 'pending' &&

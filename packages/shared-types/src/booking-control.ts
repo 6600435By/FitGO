@@ -654,7 +654,12 @@ export function normalizeClassEmployeeName(
 }
 
 /** Queue segment on «Контроль записей» filter bar. */
-export type BookingControlQueueSegment = 'pending' | 'done' | 'upcoming';
+export type BookingControlQueueSegment =
+  | 'pending'
+  | 'done'
+  | 'upcoming'
+  /** Admin/manager/SA: sessions that enter employee payroll calc. */
+  | 'in_payroll';
 
 /**
  * Why a row is still in «На контроле» (chips).
@@ -800,6 +805,8 @@ export function bookingControlHasControlWork(
 
 /**
  * Queue bucket for a list row. Cancelled → null (hidden unless status filter).
+ * «В расчет ЗП» (`in_payroll`) is a separate filter — see
+ * {@link bookingControlInPayrollCalc}; not returned here.
  */
 export function bookingControlQueueSegment(
   item: Pick<
@@ -821,6 +828,64 @@ export function bookingControlQueueSegment(
   if (bookingControlHasControlWork(item, nowMs)) return 'pending';
   if (new Date(item.startAt).getTime() > nowMs) return 'upcoming';
   return 'done';
+}
+
+/**
+ * Sessions / sales that enter employee ЗП (same idea as `payrollTrusted`
+ * work units): paid / quota / partner / gift PT·SPA, approved GROUP.
+ * Unpaid, missing 1C sale, open remarks, and solarium are out.
+ */
+export function bookingControlInPayrollCalc(
+  item: Pick<
+    BookingControlListItem,
+    | 'kind'
+    | 'source'
+    | 'status'
+    | 'payment'
+    | 'needsReview'
+    | 'oneCLinked'
+    | 'missingJournal'
+    | 'docAutoLinkBlocked'
+    | 'approvalPhase'
+    | 'startAt'
+  > & { endAt?: string; trainerClubPersonal?: boolean },
+  nowMs: number = Date.now(),
+): boolean {
+  if (item.status === 'CANCELLED') return false;
+  if (item.kind === 'SOLARIUM') return false;
+  if (new Date(item.startAt).getTime() > nowMs) return false;
+
+  if (item.kind === 'GROUP') {
+    // Same gate as payroll listWorkUnits / groupApprovalPayrollEligible.
+    return item.approvalPhase === 'APPROVED';
+  }
+
+  // Open remark / review holds payroll (mirrors openRemarkKeys in listWorkUnits).
+  if (item.needsReview) return false;
+  if (bookingControlIsUnpaid(item)) return false;
+  if (bookingControlIsNotIn1c(item)) return false;
+  if (bookingControlIsPtMissingSale(item, nowMs)) return false;
+
+  if (
+    item.payment !== 'PAID' &&
+    item.payment !== 'QUOTA' &&
+    item.payment !== 'PARTNER' &&
+    item.payment !== 'GIFT'
+  ) {
+    return false;
+  }
+
+  // FitGO PT under trainer_pt_control: only after admin/override confirm.
+  if (
+    item.kind === 'PT' &&
+    item.source === 'FITGO' &&
+    item.approvalPhase &&
+    item.approvalPhase !== 'APPROVED'
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 /**

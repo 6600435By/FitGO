@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   bookingControlHasControlWork,
+  bookingControlInPayrollCalc,
   bookingControlIssueReasons,
   bookingControlIsNotIn1c,
   bookingControlIsPtMissingSale,
@@ -257,6 +258,93 @@ describe('bookingControlQueueSegment', () => {
         NOW,
       ),
       'done',
+    );
+  });
+});
+
+describe('bookingControlInPayrollCalc', () => {
+  it('includes paid completed PT', () => {
+    assert.equal(
+      bookingControlInPayrollCalc(
+        row({
+          sessionKey: 'pay',
+          status: 'COMPLETED',
+          payment: 'PAID',
+          approvalPhase: 'APPROVED',
+        }),
+        NOW,
+      ),
+      true,
+    );
+  });
+
+  it('excludes unpaid PT (Нет оплаты)', () => {
+    assert.equal(
+      bookingControlInPayrollCalc(
+        row({
+          sessionKey: 'debt',
+          status: 'COMPLETED',
+          payment: 'DEBT',
+          approvalPhase: 'APPROVED',
+        }),
+        NOW,
+      ),
+      false,
+    );
+  });
+
+  it('excludes open remark / needsReview', () => {
+    assert.equal(
+      bookingControlInPayrollCalc(
+        row({
+          sessionKey: 'rev',
+          payment: 'PAID',
+          needsReview: true,
+        }),
+        NOW,
+      ),
+      false,
+    );
+  });
+
+  it('GROUP only when APPROVED', () => {
+    assert.equal(
+      bookingControlInPayrollCalc(
+        row({
+          sessionKey: 'g1',
+          kind: 'GROUP',
+          payment: 'PAID',
+          approvalPhase: 'PENDING_ADMIN',
+        }),
+        NOW,
+      ),
+      false,
+    );
+    assert.equal(
+      bookingControlInPayrollCalc(
+        row({
+          sessionKey: 'g2',
+          kind: 'GROUP',
+          payment: 'PAID',
+          approvalPhase: 'APPROVED',
+        }),
+        NOW,
+      ),
+      true,
+    );
+  });
+
+  it('excludes upcoming', () => {
+    assert.equal(
+      bookingControlInPayrollCalc(
+        row({
+          sessionKey: 'fut',
+          startAt: '2026-10-30T10:00:00.000Z',
+          payment: 'PAID',
+        }),
+        NOW,
+      ),
+      false,
     );
   });
 });

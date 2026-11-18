@@ -57,6 +57,7 @@ function AdminBookingControlInner() {
       canReturnApproval
       canManagerRework={isManagerOrSa}
       canExcludePayroll={isManagerOrSa}
+      showInPayrollFilter
       canViewHallPhotos
       initialSessionKey={initialSessionKey}
       initialFrom={initialFrom}
