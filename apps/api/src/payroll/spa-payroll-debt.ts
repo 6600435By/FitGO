@@ -1,5 +1,5 @@
 import type { WorkUnit } from '@fitgo/shared-types';
-import { namesMatch } from '../booking-control/spa-document-match';
+import { namesMatch, serviceNamesMatch } from '../booking-control/spa-document-match';
 
 /** SPA / PT debt row: shown in period detail, never counted in ЗП totals. */
 export const PAYROLL_DEBT_HINT = 'Долг, в расчёт не входит';
@@ -88,8 +88,57 @@ export function preferSpaPayrollUnit(a: WorkUnit, b: WorkUnit): WorkUnit {
 }
 
 /**
+ * Determine if two SPA work units are true duplicates (e.g. FitGO debt stub vs 1C visit).
+ * Distinct 1C sessions, distinct sales, or different services for the same client must NOT be dropped.
+ */
+export function areSpaUnitsDuplicates(a: WorkUnit, b: WorkUnit): boolean {
+  if (a.id === b.id) return true;
+  if (a.sessionKey && b.sessionKey && a.sessionKey === b.sessionKey) return true;
+
+  const aDebt = !a.payrollTrusted || spaUnitHasDebtHint(a);
+  const bDebt = !b.payrollTrusted || spaUnitHasDebtHint(b);
+
+  // Unpaid/debt stub vs trusted visit for the same client and time -> duplicate
+  if (aDebt !== bDebt) {
+    return true;
+  }
+
+  // Two distinct 1C sessions (different Onex / session IDs) -> both are legitimate appointments
+  const aOnex = a.id.startsWith('onex:') || Boolean(a.sessionId);
+  const bOnex = b.id.startsWith('onex:') || Boolean(b.sessionId);
+  if (aOnex && bOnex) {
+    return false;
+  }
+
+  // Two retail sales -> different lines
+  if (a.id.startsWith('revsale:') && b.id.startsWith('revsale:')) {
+    return false;
+  }
+
+  // Both are trusted: if services differ, they are distinct procedures (e.g. back massage + face massage)
+  if (a.payrollTrusted && b.payrollTrusted && !aDebt && !bDebt) {
+    if (a.title && b.title && !serviceNamesMatch(a.title, b.title)) {
+      return false;
+    }
+  }
+
+  // Both trusted with same service: one is FitGO booking and one is 1C session/sale
+  if ((aOnex && !bOnex) || (!aOnex && bOnex)) {
+    return true;
+  }
+  const aSale = a.id.startsWith('revsale:') || Boolean(a.saleExternalId?.trim());
+  const bSale = b.id.startsWith('revsale:') || Boolean(b.saleExternalId?.trim());
+  if ((aSale && !bSale) || (!aSale && bSale)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Collapse SPA twins (same client + close time): keep one unit.
  * Drops FitGO «не оплачено» when 1C already has the membership/block write-off.
+ * Never drops distinct 1C sessions or different services.
  */
 export function dedupeSpaPayrollUnits(units: WorkUnit[]): WorkUnit[] {
   const spaIdx: number[] = [];
@@ -114,6 +163,7 @@ export function dedupeSpaPayrollUnits(units: WorkUnit[]): WorkUnit[] {
       const tb = new Date(ub.occurredAt).getTime();
       if (!Number.isFinite(tb)) continue;
       if (Math.abs(ta - tb) > SPA_VISIT_COVER_WINDOW_MS) continue;
+      if (!areSpaUnitsDuplicates(ua, ub)) continue;
       const keep = preferSpaPayrollUnit(ua, ub);
       if (keep === ua) drop.add(ib);
       else {

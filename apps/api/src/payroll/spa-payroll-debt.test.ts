@@ -118,4 +118,48 @@ function spa(
   assert.equal(dedupeSpaPayrollUnits([a, b]).length, 2);
 }
 
+{
+  // Two distinct 1C sessions for same client within 90 min (e.g. 14:00 and 14:50) must both be kept
+  const s1 = spa({
+    id: 'onex:doc1',
+    sessionId: 'doc1',
+    occurredAt: '2026-11-13T14:00:00.000Z',
+    title: 'Массаж классический общий (абонемент)',
+    clientName: 'Иванова Мария',
+    payrollTrusted: true,
+    spaMembershipQuota: true,
+  });
+  const s2 = spa({
+    id: 'onex:doc2',
+    sessionId: 'doc2',
+    occurredAt: '2026-11-13T14:50:00.000Z',
+    title: 'Массаж классический общий (абонемент)',
+    clientName: 'Иванова Мария',
+    payrollTrusted: true,
+    spaMembershipQuota: true,
+  });
+  assert.equal(dedupeSpaPayrollUnits([s1, s2]).length, 2);
+}
+
+{
+  // Two different services for same client within 90 min must both be kept
+  const s1 = spa({
+    id: 's1',
+    occurredAt: '2026-11-13T14:00:00.000Z',
+    title: 'Массаж классический 50 мин',
+    clientName: 'Иванова Мария',
+    payrollTrusted: true,
+    priceMinor: 9000,
+  });
+  const s2 = spa({
+    id: 's2',
+    occurredAt: '2026-11-13T14:50:00.000Z',
+    title: 'Массаж шейно-воротниковой зоны 30 мин',
+    clientName: 'Иванова Мария',
+    payrollTrusted: true,
+    priceMinor: 5000,
+  });
+  assert.equal(dedupeSpaPayrollUnits([s1, s2]).length, 2);
+}
+
 console.log('spa-payroll-debt.test.ts: ok');

@@ -74,6 +74,8 @@ import {
   type StaffSalesBreakdown,
   type WorkUnit,
   bookingControlHasControlWork,
+  bookingControlInPayrollCalc,
+  isMembershipIncludedSpaTitle,
   worstTrustBand,
 } from '@fitgo/shared-types';
 import type { TrustBand as SharedTrustBand } from '@fitgo/shared-types';
@@ -358,7 +360,7 @@ function workUnitIsSpaPartnerBio(u: WorkUnit): boolean {
   );
 }
 
-function revenueMatchesSpaPerformer(
+export function revenueMatchesSpaPerformer(
   sale: {
     performerExternalId?: string | null;
     performerName?: string | null;
@@ -380,23 +382,42 @@ function revenueMatchesSpaPerformer(
   }
   const perfName = rawPerfName.toLowerCase();
   const name = performerName.trim().toLowerCase();
-  if (
-    perfNameUsable &&
-    name &&
-    perfName &&
-    (name === perfName || perfName.startsWith(name.split(' ')[0]!))
-  ) {
-    return true;
+  if (perfNameUsable && name && perfName) {
+    if (name === perfName || perfName.startsWith(name.split(' ')[0]!)) {
+      return true;
+    }
+    const wantParts = name.split(' ').filter(Boolean);
+    if (
+      wantParts.length >= 2 &&
+      wantParts.every((part) => perfName.includes(part))
+    ) {
+      return true;
+    }
   }
   // Fallback when 1C left performer empty / «Универсальный» — only if
   // employee (author) is the specialist.
-  if (
-    !sale.performerExternalId?.trim() &&
-    !perfNameUsable &&
-    sale.employeeExternalId &&
-    codes.some((c) => codesMatch(c, sale.employeeExternalId))
-  ) {
-    return true;
+  if (!sale.performerExternalId?.trim() || !perfNameUsable) {
+    if (
+      sale.employeeExternalId &&
+      codes.some((c) => codesMatch(c, sale.employeeExternalId))
+    ) {
+      return true;
+    }
+    const rawEmpName = (sale.employeeName ?? '').trim();
+    const empNameUsable = !isPlaceholderClassEmployeeName(rawEmpName);
+    if (empNameUsable && name && rawEmpName) {
+      const empLower = rawEmpName.toLowerCase();
+      if (empLower === name || empLower.startsWith(name.split(' ')[0]!)) {
+        return true;
+      }
+      const wantParts = name.split(' ').filter(Boolean);
+      if (
+        wantParts.length >= 2 &&
+        wantParts.every((part) => empLower.includes(part))
+      ) {
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -569,7 +590,25 @@ export class PayrollService {
         ? {
             OR: [
               ...performerCodes.map((c) => ({ employeeExternalId: c })),
-              ...(performerName ? [{ employeeName: performerName }] : []),
+              ...(performerName
+                ? [
+                    { employeeName: performerName },
+                    ...(performer
+                      ? [
+                          {
+                            employeeName: {
+                              startsWith: `${performer.lastName} ${performer.firstName}`,
+                            },
+                          },
+                          {
+                            employeeName: {
+                              startsWith: `${performer.firstName} ${performer.lastName}`,
+                            },
+                          },
+                        ]
+                      : []),
+                  ]
+                : []),
             ],
           }
         : { employeeExternalId: '__none__' };
@@ -605,7 +644,7 @@ export class PayrollService {
       where: {
         clubId,
         kind: 'SPA',
-        status: 'COMPLETED',
+        status: { not: 'CANCELLED' },
         isActive: true,
         startAt: { gte: fromD, lte: toD },
         ...performerOr,
@@ -673,6 +712,7 @@ export class PayrollService {
      */
     const spaVisitSaleLines = new Set<string>();
     for (const o of onexSpa) {
+      if (o.startAt.getTime() > Date.now()) continue;
       const key = onexSessionKey(o.externalId);
       remarkKeys.push(key);
       const primary = o.members.find((m) => !m.cancelled) ?? o.members[0];
@@ -841,6 +881,19 @@ export class PayrollService {
             ? 'Долг, в расчёт не входит'
             : 'Оплата не в расчёте',
         );
+      } else if (o.status !== 'COMPLETED') {
+        const memberAttended =
+          primary?.attendance === 'ATTENDED' ||
+          (o.attendedCount ?? 0) > 0 ||
+          (o.headerAttendedCount ?? 0) > 0;
+        if (!memberAttended) {
+          spaUnit.payrollTrusted = false;
+          pushWorkUnitTrust(
+            spaUnit,
+            'AMBER',
+            'Статус в 1С: Запланировано (не Выполнено)',
+          );
+        }
       }
       units.push(spaUnit);
       const pkgDoc = primary?.packageDocId?.trim();
@@ -865,10 +918,13 @@ export class PayrollService {
       where: {
         clubId,
         specialistId: performerId,
-        linkedSaleExternalId: { not: null },
         startAt: { gte: fromD, lte: toD },
         status: { not: 'CANCELLED' },
         ...SPA_BOOKING_EXCLUDE_TIME_BLOCK,
+        OR: [
+          { linkedSaleExternalId: { not: null } },
+          { crmDocRef: { not: null } },
+        ],
       },
       include: { service: true, client: true },
     });
@@ -902,6 +958,41 @@ export class PayrollService {
             o.externalId === b.crmDocRef || o.number === b.crmDocRef,
         )
       ) {
+        continue;
+      }
+      if (!b.linkedSaleExternalId?.trim()) {
+        const clientName = b.client
+          ? `${b.client.lastName} ${b.client.firstName}`.trim()
+          : b.guestName ?? undefined;
+        if (spaUnitCoversVisit(units, clientName, b.startAt)) continue;
+        const isQuota =
+          b.paymentType === 'QUOTA' ||
+          isMembershipIncludedSpaTitle(b.service?.name);
+        const spaUnit: WorkUnit = {
+          id: b.id,
+          kind: 'SPA',
+          performerId,
+          title: isQuota
+            ? `${b.service?.name || 'SPA'} (абонемент)`
+            : b.service?.name || 'SPA',
+          occurredAt: b.startAt.toISOString(),
+          quantity: 1,
+          priceMinor: isQuota
+            ? 0
+            : (b.priceMinor ?? b.service?.priceMinor ?? undefined),
+          trustBand: 'GREEN',
+          trustResolution: 'NONE',
+          payrollTrusted: true,
+          clientName,
+          serviceId: b.serviceId,
+          serviceExternalId: b.service?.externalId ?? undefined,
+          partnerSource: b.partnerSource ?? undefined,
+          sessionKey: fitgoSessionKey('SPA', b.id),
+          spaMembershipQuota: isQuota || undefined,
+        };
+        units.push(spaUnit);
+        remarkKeys.push(fitgoSessionKey('SPA', b.id));
+        spaPaidViaOnex.add(b.id);
         continue;
       }
       const saleExt = b.linkedSaleExternalId!.trim();
@@ -1500,7 +1591,7 @@ export class PayrollService {
       where: {
         clubId,
         kind: 'PT',
-        status: 'COMPLETED',
+        status: { not: 'CANCELLED' },
         isActive: true,
         startAt: { gte: fromD, lte: toD },
         ...performerOr,
@@ -1530,6 +1621,7 @@ export class PayrollService {
         : [];
     const coveredSaleDays = new Set<string>();
     for (const o of onexPt) {
+      if (o.startAt.getTime() > Date.now()) continue;
       const key = onexSessionKey(o.externalId);
       remarkKeys.push(key);
       const primary = o.members.find((m) => !m.cancelled) ?? o.members[0];
@@ -1606,8 +1698,7 @@ export class PayrollService {
       const isServiceBlockEarly = writeOffOriginEarly === 'BLOCK';
       const asSpaEarly =
         isSpecialist &&
-        (bioimpedanceEarly ||
-          (!isGift && isSpaLikeSessionTitle(o.title)));
+        (bioimpedanceEarly || isSpaLikeSessionTitle(o.title));
       const spaBlockHasPackageAmountEarly =
         (primary?.packageAmountMinor ?? 0) > 0;
       // SPA-like block as PT: ignore bare 1C catalog unit (same as kind=SPA).
@@ -1673,8 +1764,7 @@ export class PayrollService {
       const asSpa =
         isSpecialist &&
         !isReformerPersonal &&
-        (bioimpedanceEarly ||
-          (!isGift && isSpaLikeSessionTitle(o.title)));
+        (bioimpedanceEarly || isSpaLikeSessionTitle(o.title));
       const bioimpedance = asSpa && bioimpedanceEarly;
       const writeOffOrigin = writeOffOriginEarly;
       const isServiceBlock = writeOffOrigin === 'BLOCK';
@@ -1792,6 +1882,19 @@ export class PayrollService {
             ? 'Долг, в расчёт не входит'
             : 'Оплата не в расчёте',
         );
+      } else if (o.status !== 'COMPLETED') {
+        const memberAttended =
+          primary?.attendance === 'ATTENDED' ||
+          (o.attendedCount ?? 0) > 0 ||
+          (o.headerAttendedCount ?? 0) > 0;
+        if (!memberAttended && !isGift) {
+          ptSpaUnit.payrollTrusted = false;
+          pushWorkUnitTrust(
+            ptSpaUnit,
+            'AMBER',
+            'Статус в 1С: Запланировано (не Выполнено)',
+          );
+        }
       }
       // Personal reformer before pay-on-payment epoch: already settled as debt.
       if (isReformerPersonal && isBeforePayOnPaymentEpoch(o.startAt)) {
@@ -2089,6 +2192,106 @@ export class PayrollService {
       for (const o of onexGroupRows) {
         unitKey.set(`onex:${o.id}`, onexSessionKey(o.externalId));
       }
+    }
+
+    // ── Reconcile with Booking Control («В расчет ЗП») ─────────────────────
+    // Both screens must use one shared source of truth so numbers always match.
+    // Every session counted in «В расчет ЗП» must appear in payroll lines,
+    // or be shown in «Требует внимания» / «Не в ЗП» with a clear reason. Never silently drop a session.
+    try {
+      const controlItems = await this.bookingControl.list(clubId, {
+        from,
+        to,
+        performerId,
+        skipExternal: true,
+      });
+      const nowMs = Date.now();
+      const inPayrollItems = controlItems.filter((i) =>
+        bookingControlInPayrollCalc(i, nowMs),
+      );
+
+      if (inPayrollItems.length > 0) {
+        const representedKeys = new Set<string>();
+        for (const u of units) {
+          if (u.sessionKey?.trim()) representedKeys.add(u.sessionKey.trim());
+          if (u.id?.trim()) representedKeys.add(u.id.trim());
+          if (u.sessionId?.trim()) {
+            representedKeys.add(u.sessionId.trim());
+            representedKeys.add(onexSessionKey(u.sessionId.trim()));
+          }
+          if (u.saleExternalId?.trim()) {
+            representedKeys.add(u.saleExternalId.trim());
+          }
+        }
+
+        for (const item of inPayrollItems) {
+          const itemKey = item.sessionKey?.trim();
+          const itemFitgoId = item.fitgoBookingId?.trim();
+          const itemOnexId = itemKey?.startsWith('1c:')
+            ? itemKey.slice(3)
+            : undefined;
+
+          const isRepresented =
+            (itemKey && representedKeys.has(itemKey)) ||
+            (itemFitgoId && representedKeys.has(itemFitgoId)) ||
+            (itemOnexId && representedKeys.has(itemOnexId)) ||
+            (itemFitgoId &&
+              representedKeys.has(fitgoSessionKey('SPA', itemFitgoId))) ||
+            (itemFitgoId &&
+              representedKeys.has(fitgoSessionKey('PT', itemFitgoId)));
+
+          if (isRepresented) continue;
+
+          // Missing session from Booking Control «В расчет ЗП»: add to work units!
+          const isQuota =
+            item.payment === 'QUOTA' ||
+            isMembershipIncludedSpaTitle(item.title) ||
+            /\(абонемент\)/i.test(item.title);
+          const isGift = item.payment === 'GIFT';
+          const isBio = isSpaAllSportsBioimpedance({ title: item.title });
+
+          const titleWithSuffix =
+            isQuota && !item.title.includes('(абонемент)')
+              ? `${item.title} (абонемент)`
+              : item.title || 'SPA';
+
+          const reconciledUnit: WorkUnit = {
+            id: itemFitgoId ?? itemKey ?? `ctrl:${Date.now()}`,
+            kind:
+              item.kind === 'PT' && !isSpaLikeSessionTitle(item.title)
+                ? 'PT'
+                : 'SPA',
+            performerId,
+            title: titleWithSuffix,
+            occurredAt: item.startAt,
+            quantity: item.arrivedCount > 0 ? item.arrivedCount : 1,
+            priceMinor:
+              isQuota || isGift || isBio ? 0 : (item.priceMinor ?? 0),
+            trustBand: 'GREEN',
+            trustResolution: 'NONE',
+            payrollTrusted: true,
+            clientName: item.clientName,
+            sessionId: itemOnexId,
+            sessionKey: itemKey,
+            isComplimentary: isGift || undefined,
+            spaMembershipQuota: isQuota || undefined,
+            partnerSource:
+              item.payment === 'PARTNER' || isBio ? 'ALLSPORTS' : undefined,
+            isSpaAllSportsBioimpedance: isBio || undefined,
+            trustHints: ['В расчёте (контроль занятий)'],
+          };
+
+          units.push(reconciledUnit);
+          if (itemKey) {
+            representedKeys.add(itemKey);
+            unitKey.set(reconciledUnit.id, itemKey);
+          }
+          if (itemFitgoId) representedKeys.add(itemFitgoId);
+          if (itemOnexId) representedKeys.add(itemOnexId);
+        }
+      }
+    } catch {
+      // Best-effort: keep raw units if control list fails
     }
 
     for (const u of units) {
