@@ -330,6 +330,7 @@ export class BookingControlService {
 
     let performerCodes: string[] = [];
     let performerName: string | undefined;
+    let performerUser: { firstName: string; lastName: string } | undefined;
     /** FitGO user id when filter resolved to a staff user (not a raw 1C code). */
     let fitgoPerformerUserId: string | undefined;
     if (performerFilterId) {
@@ -339,6 +340,7 @@ export class BookingControlService {
       const codeSet = new Set<string>();
       if (u) {
         fitgoPerformerUserId = u.id;
+        performerUser = { firstName: u.firstName, lastName: u.lastName };
         for (const raw of [u.externalId, u.employeeCode]) {
           const t = raw?.trim();
           if (!t) continue;
@@ -391,7 +393,23 @@ export class BookingControlService {
                         employeeExternalId: c,
                       })),
                       ...(performerName
-                        ? [{ employeeName: performerName }]
+                        ? [
+                            { employeeName: performerName },
+                            ...(performerUser
+                              ? [
+                                  {
+                                    employeeName: {
+                                      startsWith: `${performerUser.lastName} ${performerUser.firstName}`,
+                                    },
+                                  },
+                                  {
+                                    employeeName: {
+                                      startsWith: `${performerUser.firstName} ${performerUser.lastName}`,
+                                    },
+                                  },
+                                ]
+                              : []),
+                          ]
                         : []),
                     ],
                   }

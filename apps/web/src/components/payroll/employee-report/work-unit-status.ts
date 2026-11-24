@@ -86,10 +86,15 @@ export function classifyWorkUnit(u: WorkUnit): WorkUnitStatus {
       };
     }
     if (!hasPrice && u.kind !== 'GROUP' && u.earnMinor == null) {
+      const cleanTitle = (u.title ?? '')
+        .replace(/\s*\((?:абонемент|блок)\)\s*$/i, '')
+        .trim();
       return {
         level: 'check',
         label: 'проверить',
-        reason: 'нет цены / основы для %',
+        reason: u.spaMembershipQuota
+          ? `нет ставки для услуги "${cleanTitle || 'SPA'}"`
+          : 'нет цены / основы для %',
       };
     }
   }
@@ -159,7 +164,8 @@ export function attentionFromUnits(units: WorkUnit[]): {
     }
     if (
       st.level === 'check' &&
-      st.reason?.includes('нет начисления')
+      (st.reason?.includes('нет начисления') ||
+        st.reason?.includes('нет ставки'))
     ) {
       noEarn.push(u);
     }
